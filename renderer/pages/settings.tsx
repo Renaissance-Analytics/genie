@@ -42,7 +42,18 @@ import {
     type WorkspaceRow,
     type ToolUpdate,
     type HostToolName,
+    type EngineInstall,
+    type LanguageTool,
+    type ToolchainInstallsInfo,
 } from '../lib/genie';
+import {
+    agentCliRows,
+    defaultChangeNotice,
+    devToolRows,
+    formatBytes,
+    languageSections,
+    removeConfirmation,
+} from '../lib/toolchain-page';
 import { isolationNote } from '../lib/dev-server';
 import { ToolchainSetupWizard } from '../components/Master/ToolchainSetupWizard';
 import { checkedAgoLabel, pluginSummaryLine } from '../lib/plugins-view';
@@ -58,6 +69,7 @@ import {
     stopEngineWarning,
     toolUpdateCount,
     toolUpdateRows,
+    type ToolUpdateRow,
     type ToolUpdateTone,
 } from '../lib/workstation-dev-server';
 import {
@@ -641,6 +653,13 @@ export default function SettingsPage() {
                 persistSettings={save}
             />
             <RemoteHostCard />
+
+                            </SearchGroup>
+                        )}
+                        {show('toolchain') && (
+                            <SearchGroup label="Toolchain" searching={searching}>
+
+            <ToolchainSection />
 
                             </SearchGroup>
                         )}
@@ -3554,31 +3573,292 @@ function toolToneBadge(tone: ToolUpdateTone): { color: 'amber' | 'emerald' | 'zi
 }
 
 /**
- * The Dev Tools section of the Toolchain Manager (#242 P2). Lists the host tools
- * Genie builds and runs work with (git, node, php, …) with their installed
- * version and, when a newer version is known, a one-click Update. The read is
- * pure (`toolchainUpdates`); an Update runs the single-tool upgrade in main. The
- * row model + badge tone are decided in workstation-dev-server (pure, unit-
- * tested) — this is the wiring, same split the rest of the page uses.
+ * One single-version tool's rows — the shared body of the Dev tools and Agent
+ * CLIs tabs. Presentational only: the row model and badge tone are decided in
+ * `workstation-dev-server.ts`, and which tools belong on which tab in
+ * `toolchain-page.ts`, both pure and unit-tested.
  */
-function DevToolsSection() {
+function ToolUpdateList({
+    rows,
+    busy,
+    onUpdate,
+    empty,
+}: {
+    rows: ToolUpdateRow[];
+    busy: HostToolName | null;
+    onUpdate: (name: HostToolName) => void;
+    empty: string;
+}) {
+    if (rows.length === 0) return <div className="set-note">{empty}</div>;
+    return (
+        <div className="ws-tools" data-testid="dev-tools">
+            {rows.map((row) => {
+                const badge = toolToneBadge(row.tone);
+                return (
+                    <div className="ws-engine" key={row.name} data-testid={`devtool-${row.name}`}>
+                        <div className="ws-engine-head">
+                            <div className="ws-engine-name">
+                                <Text size="sm" style={{ fontWeight: 600 }}>
+                                    {row.label}
+                                </Text>
+                                <Text size="xs" className="text-zinc-500">
+                                    {row.installed ? `Installed ${row.installed}` : 'Not installed'}
+                                    {row.tone === 'update-available' && row.latest
+                                        ? ` — ${row.latest} available`
+                                        : ''}
+                                </Text>
+                            </div>
+                            <Badge color={badge.color}>{badge.label}</Badge>
+                            <div className="ws-engine-actions">
+                                {row.action === 'update' && (
+                                    <Action
+                                        size="sm"
+                                        variant="ghost"
+                                        disabled={busy !== null}
+                                        onClick={() => onUpdate(row.name)}
+                                    >
+                                        {busy === row.name ? 'Updating…' : 'Update'}
+                                    </Action>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                );
+            })}
+        </div>
+    );
+}
+
+/** What an Add / Remove is currently asking about. Both are modals because both
+ *  cost something real — a download, or a directory that is gone. */
+type VersionAsk =
+    | { kind: 'add'; tool: LanguageTool; label: string; versions: string[] }
+    | { kind: 'remove'; install: EngineInstall; label: string; message: string };
+
+/**
+ * The Languages tab: php / node / python / go / rust, each with every version on
+ * this machine.
+ *
+ * Two kinds of row, and telling them apart is the whole point. A GENIE row is a
+ * directory Genie installed under `<userData>/toolchain` — it can be made the
+ * default, and removed. A FOREIGN row (Herd, XAMPP, nvm, a system package) is
+ * there so the machine is legible: "yes, Genie knows Herd has PHP 8.4", without
+ * implying a site can use it. Every row states its SOURCE and its DIRECTORY,
+ * because "which php is this?" is the actual question on a machine carrying
+ * three of them.
+ */
+function LanguagesTab({
+    info,
+    busy,
+    onAsk,
+    onSetDefault,
+}: {
+    info: ToolchainInstallsInfo | null;
+    busy: string | null;
+    onAsk: (ask: VersionAsk) => void;
+    onSetDefault: (tool: LanguageTool, version: string) => void;
+}) {
+    if (!info) return <div className="set-note">Reading this machine&apos;s toolchain…</div>;
+    const sections = languageSections({
+        installs: info.installs,
+        defaults: info.defaults,
+        addable: info.addable,
+        sites: info.sites,
+    });
+    return (
+        <div className="tc-langs">
+            {sections.map((section) => (
+                <div
+                    className="tc-lang"
+                    key={section.tool}
+                    data-testid={`toolchain-lang-${section.tool}`}
+                >
+                    <div className="tc-lang-head">
+                        <Text size="sm" style={{ fontWeight: 600 }}>
+                            {section.label}
+                        </Text>
+                        {section.defaultVersion ? (
+                            <Badge color="emerald">default {section.defaultVersion}</Badge>
+                        ) : (
+                            <Badge color="zinc">no default</Badge>
+                        )}
+                        <div className="ws-engine-actions">
+                            {section.canAdd && (
+                                <Action
+                                    size="sm"
+                                    variant="ghost"
+                                    icon="plus"
+                                    disabled={busy !== null}
+                                    onClick={() =>
+                                        onAsk({
+                                            kind: 'add',
+                                            tool: section.tool,
+                                            label: section.label,
+                                            versions: section.addable,
+                                        })
+                                    }
+                                    title={`Download and install a ${section.label} version into Genie's own toolchain directory.`}
+                                >
+                                    Add a version
+                                </Action>
+                            )}
+                        </div>
+                    </div>
+
+                    {section.rows.length === 0 ? (
+                        <div className="set-note">{section.emptyNote}</div>
+                    ) : (
+                        <div className="ws-engines">
+                            {section.rows.map((row) => (
+                                <div
+                                    className="ws-engine"
+                                    key={row.key}
+                                    data-testid={`toolchain-install-${row.tool}-${row.version}`}
+                                >
+                                    <div className="ws-engine-head">
+                                        <div className="ws-engine-name">
+                                            <Text size="sm" style={{ fontWeight: 600 }}>
+                                                {section.label} {row.version}
+                                            </Text>
+                                            {/* SOURCE and PATH, always. An install is a
+                                                DIRECTORY, and which directory is the
+                                                difference between a site that serves and
+                                                genie#206. */}
+                                            <Text
+                                                size="xs"
+                                                className="text-zinc-500"
+                                                title={row.path}
+                                            >
+                                                {row.sourceLabel} · {row.path}
+                                                {row.sizeLabel ? ` · ${row.sizeLabel}` : ''}
+                                            </Text>
+                                        </div>
+                                        {row.isDefault && <Badge color="emerald">Default</Badge>}
+                                        {!row.managed && <Badge color="zinc">Not managed</Badge>}
+                                        <div className="ws-engine-actions">
+                                            {row.canSetDefault && (
+                                                <Action
+                                                    size="sm"
+                                                    variant="ghost"
+                                                    disabled={busy !== null}
+                                                    onClick={() =>
+                                                        onSetDefault(row.tool, row.version)
+                                                    }
+                                                >
+                                                    Set default
+                                                </Action>
+                                            )}
+                                            {row.canRemove && (
+                                                <Action
+                                                    size="sm"
+                                                    variant="ghost"
+                                                    icon="trash-2"
+                                                    disabled={busy !== null}
+                                                    onClick={() => {
+                                                        const install = info.installs.find(
+                                                            (i) =>
+                                                                i.tool === row.tool &&
+                                                                i.version === row.version &&
+                                                                i.dir === row.path,
+                                                        );
+                                                        if (!install) return;
+                                                        onAsk({
+                                                            kind: 'remove',
+                                                            install,
+                                                            label: section.label,
+                                                            message: removeConfirmation(install, {
+                                                                freedBytes: install.sizeBytes,
+                                                            }),
+                                                        });
+                                                    }}
+                                                >
+                                                    Remove
+                                                </Action>
+                                            )}
+                                        </div>
+                                    </div>
+                                    {row.note && (
+                                        <Text size="xs" className="text-zinc-500">
+                                            {row.note}
+                                        </Text>
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
+                    {/* Who this language's default actually moves. */}
+                    {section.usedBy && <div className="set-note">{section.usedBy}</div>}
+                </div>
+            ))}
+        </div>
+    );
+}
+
+/**
+ * Settings → **Toolchain**: THIS MACHINE's languages, dev tools and agent CLIs.
+ *
+ * ## Why it is its own page
+ *
+ * It used to be a section inside the Hosting Manager, sitting directly below a
+ * chip row reading `Node 24 · PHP 8.4 · Python 3.13 · …`. Those chips describe
+ * the CONTAINER DEV-BASE IMAGE — a constant mirrored from its Dockerfile, which
+ * nothing on that page can change — and they looked exactly like the rows below
+ * them that describe this computer. Two unrelated machines sharing one surface
+ * is most of the reason the page read as "I see no UX at all for my toolchain".
+ * The chips now live beside the image they describe, on the Hosting page, and
+ * the toolchain has a page of its own: it is the MACHINE's concern, and hosting
+ * merely consumes it.
+ *
+ * ## Three tabs, because there are three genuinely different models
+ *
+ *  - **Languages** — MULTI-version. Many installs side by side, one machine
+ *    default, and a site follows that default unless it pins a version.
+ *  - **Dev tools** — git / docker / composer. One install, update-to-latest.
+ *  - **Agent CLIs** — claude-code / codex. Their own group because updating one
+ *    is the single action Genie REFUSES mid-turn, so that rule is stated once.
+ *
+ * The guided first-run wizard stays a separate thing this page can OPEN: the
+ * wizard is the front door, the page is where you live afterwards.
+ *
+ * Every judgement (tab membership, row actions, the sentence a default change
+ * prints) is a pure function in `lib/toolchain-page.ts` — the renderer test env
+ * has no DOM, so a decision inside a component is a decision nobody checks.
+ */
+export function ToolchainSection() {
+    const [tab, setTab] = useState('languages');
+    const [info, setInfo] = useState<ToolchainInstallsInfo | null>(null);
     const [updates, setUpdates] = useState<ToolUpdate[] | null>(null);
-    /** The tool whose Update is in flight — disables every Update while one runs. */
-    const [busy, setBusy] = useState<HostToolName | null>(null);
+    /** The tool or version with an action in flight — one at a time, because
+     *  these are installs. */
+    const [busy, setBusy] = useState<string | null>(null);
+    const [toolBusy, setToolBusy] = useState<HostToolName | null>(null);
     const [error, setError] = useState<string | null>(null);
-    /** Re-entry into the first-run wizard. It is otherwise offered ONCE and the
-     *  dismissal is remembered forever, so a machine that was skipped (or where
-     *  a tool failed to install) had no way back to it. */
+    /** What just happened. Setting a default, adding and removing a version all
+     *  change something invisible (a directory, a machine-wide pointer), so each
+     *  one says what it did and what it affects. */
+    const [notice, setNotice] = useState<string | null>(null);
+    const [ask, setAsk] = useState<VersionAsk | null>(null);
+    /** The version chosen in the Add dialog. */
+    const [addVersion, setAddVersion] = useState('');
     const [wizardOpen, setWizardOpen] = useState(false);
-    /** An update main held back because live work would be hit — held until the
-     *  human sees WHAT and says go. */
+    /** An update main held back because live work would be hit. */
     const [confirmUpdate, setConfirmUpdate] = useState<{ tool: HostToolName; reason: string } | null>(
         null,
     );
 
-    /** `force` is the explicit Refresh: it re-runs the (slow, network-touching)
-     *  package-manager scan instead of reusing main's cached answer. */
-    const refresh = useCallback((force = false) => {
+    const refreshInstalls = useCallback(() => {
+        void api()
+            .devServer.toolchainInstalls()
+            .then(setInfo)
+            .catch(() =>
+                setInfo({ installs: [], defaults: {}, addable: {}, sites: [], root: '' }),
+            );
+    }, []);
+
+    /** `force` re-runs the (slow, network-touching) package-manager scan instead
+     *  of reusing main's cached answer. */
+    const refreshUpdates = useCallback((force = false) => {
         void api()
             .devServer.toolchainUpdates(force)
             .then(setUpdates)
@@ -3586,21 +3866,90 @@ function DevToolsSection() {
     }, []);
 
     useEffect(() => {
-        refresh();
-        // Same push-driven refresh as the engines below — a finished install or a
-        // detected change repaints the versions without reopening the page. Wrapped
-        // so the event payload can never arrive as `force` and turn every change
-        // notification into a fresh package-manager scan.
-        return api().on.devServerChanged(() => refresh());
-    }, [refresh]);
+        refreshInstalls();
+        refreshUpdates();
+        // Push-driven, like every other live surface: main fires this when an
+        // install finishes or a default moves. Wrapped so the event payload can
+        // never arrive as `force` and turn a notification into a fresh scan.
+        return api().on.devServerChanged(() => {
+            refreshInstalls();
+            refreshUpdates();
+        });
+    }, [refreshInstalls, refreshUpdates]);
+
+    const setDefault = async (tool: LanguageTool, version: string) => {
+        setBusy(`${tool}:${version}`);
+        setError(null);
+        setNotice(null);
+        try {
+            const res = await api().devServer.toolchainSetDefault(tool, version);
+            if (!res.ok) setError(res.error ?? 'The default did not change.');
+            // NAME what moved. "Default" is a live link, not a snapshot, so the
+            // moment it moves is the moment to say which sites go with it.
+            else setNotice(defaultChangeNotice(tool, version, info?.sites ?? []));
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+        } finally {
+            setBusy(null);
+            refreshInstalls();
+        }
+    };
+
+    const addVersionNow = async (tool: LanguageTool, label: string, version: string) => {
+        setAsk(null);
+        setBusy(`${tool}:${version}`);
+        setError(null);
+        setNotice(null);
+        try {
+            const res = await api().devServer.toolchainAddVersion(tool, version);
+            if (!res.ok) setError(res.error ?? `${label} ${version} could not be installed.`);
+            else setNotice(`${label} ${version} is installed and ready for sites to use.`);
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+        } finally {
+            setBusy(null);
+            refreshInstalls();
+        }
+    };
+
+    const removeVersionNow = async (install: EngineInstall, label: string) => {
+        setAsk(null);
+        setBusy(`${install.tool}:${install.version}`);
+        setError(null);
+        setNotice(null);
+        try {
+            const res = await api().devServer.toolchainRemoveVersion(
+                install.tool,
+                install.version,
+            );
+            if (!res.ok) {
+                setError(res.error ?? `${label} ${install.version} could not be removed.`);
+                return;
+            }
+            const freed =
+                res.freedBytes !== undefined ? `, freeing ${formatBytes(res.freedBytes)}` : '';
+            const moved =
+                res.nextDefault === null
+                    ? ` Genie now manages no ${label}.`
+                    : res.nextDefault
+                      ? ` ${label} ${res.nextDefault} is now the default.`
+                      : '';
+            setNotice(`Removed ${label} ${install.version}${freed}.${moved}`);
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+        } finally {
+            setBusy(null);
+            refreshInstalls();
+        }
+    };
 
     const update = async (name: HostToolName, confirmed = false) => {
-        setBusy(name);
+        setToolBusy(name);
         setError(null);
         try {
             const res = await api().devServer.toolchainUpdate(name, confirmed);
             // Main REFUSED because live work would be hit. `blocked` is final —
-            // replacing the binary an agent is mid-turn on fails on Windows and
+            // replacing a binary an agent is mid-turn on fails on Windows and
             // corrupts the turn elsewhere, so there is no "do it anyway". `warn`
             // is a real choice, so it gets a dialog that NAMES the cost.
             if (!res.ok && res.risk) {
@@ -3615,125 +3964,198 @@ function DevToolsSection() {
         } catch (e) {
             setError(e instanceof Error ? e.message : String(e));
         } finally {
-            setBusy(null);
-            refresh();
+            setToolBusy(null);
+            refreshUpdates();
         }
     };
 
-    const rows = updates ? toolUpdateRows(updates) : [];
-    const count = updates ? toolUpdateCount(updates) : 0;
+    const devRows = updates ? toolUpdateRows(devToolRows(updates)) : [];
+    const agentRows = updates ? toolUpdateRows(agentCliRows(updates)) : [];
+    const pendingUpdates = updates ? toolUpdateCount(devToolRows(updates)) : 0;
+    const managedCount = info
+        ? info.installs.filter((i) => i.source === 'genie').length
+        : 0;
 
     return (
         <SetSection
-            title="Dev tools"
-            desc="The host tools Genie builds and runs your work with — with a one-click update when a newer version is out"
-            // The entry-point badge (#242 P4): the count is the whole reason to
-            // look, so it rides the section heading rather than making someone
-            // scan the rows to find out there is nothing to do.
-            {...(count > 0
-                ? { status: `${count} update${count === 1 ? '' : 's'}`, statusColor: '#f59e0b' }
+            title="Toolchain"
+            desc="The languages and tools on THIS machine — the ones Genie installs and owns, and the ones other installers left here"
+            {...(pendingUpdates > 0
+                ? {
+                      status: `${pendingUpdates} update${pendingUpdates === 1 ? '' : 's'}`,
+                      statusColor: '#f59e0b',
+                  }
                 : {})}
         >
             {error && <div className="set-note bad">{error}</div>}
-            {updates === null ? (
-                <div className="set-note">Checking for updates…</div>
-            ) : rows.length === 0 ? (
-                <div className="set-note">
-                    No dev tools detected on this machine yet — the first-run setup installs them.
-                </div>
-            ) : (
-                <div className="ws-tools" data-testid="dev-tools">
-                    {rows.map((row) => {
-                        const badge = toolToneBadge(row.tone);
-                        return (
-                            <div
-                                className="ws-engine"
-                                key={row.name}
-                                data-testid={`devtool-${row.name}`}
-                            >
-                                <div className="ws-engine-head">
-                                    <div className="ws-engine-name">
-                                        <Text size="sm" style={{ fontWeight: 600 }}>
-                                            {row.label}
-                                        </Text>
-                                        <Text size="xs" className="text-zinc-500">
-                                            {row.installed
-                                                ? `Installed ${row.installed}`
-                                                : 'Not installed'}
-                                            {row.tone === 'update-available' && row.latest
-                                                ? ` — ${row.latest} available`
-                                                : ''}
-                                        </Text>
-                                    </div>
-                                    <Badge color={badge.color}>{badge.label}</Badge>
-                                    <div className="ws-engine-actions">
-                                        {row.action === 'update' && (
-                                            <Action
-                                                size="sm"
-                                                variant="ghost"
-                                                disabled={busy !== null}
-                                                onClick={() => void update(row.name)}
-                                            >
-                                                {busy === row.name ? 'Updating…' : 'Update'}
-                                            </Action>
-                                        )}
-                                    </div>
-                                </div>
-                            </div>
-                        );
-                    })}
+            {notice && (
+                <div className="set-note" role="status" data-testid="toolchain-notice">
+                    {notice}
                 </div>
             )}
-            {count > 0 && (
-                <div className="set-note">
-                    {count} update{count === 1 ? '' : 's'} available. Updating installs the latest
-                    and may prompt for permission.
-                </div>
-            )}
-            {/* The answer is CACHED (a scan queries winget/brew/npm, so opening
-                this page twice is not two scans) — which means there has to be a
-                way to ask again on purpose. */}
-            {updates !== null && (
-                <div className="set-actions">
-                    <Action
-                        size="sm"
-                        variant="ghost"
-                        icon="refresh-cw"
-                        disabled={busy !== null}
-                        onClick={() => refresh(true)}
-                        title="Re-query the package managers for newer versions now, instead of reusing the last answer."
-                    >
-                        Check again
-                    </Action>
-                    {/* The way BACK to the first-run wizard. It is auto-offered
-                        once and the dismissal is remembered, so without this a
-                        machine that skipped it — or where a tool failed — could
-                        never reach it again. */}
-                    <Action
-                        size="sm"
-                        variant="ghost"
-                        icon="sparkles"
-                        disabled={busy !== null}
-                        onClick={() => setWizardOpen(true)}
-                        title="Re-run the guided setup: re-detect what this machine has and install anything still missing."
-                    >
-                        Set up toolchain
-                    </Action>
-                </div>
-            )}
+            {busy && <div className="set-note">Working on {busy.replace(':', ' ')}…</div>}
+
+            {/* Grouped, never a flat list: three different management models
+                would otherwise read as one confusing table. */}
+            <Tabs activeTab={tab} onTabChange={setTab}>
+                <Tabs.List>
+                    <Tabs.Tab value="languages">Languages ({managedCount})</Tabs.Tab>
+                    <Tabs.Tab value="tools">Dev tools ({devRows.length})</Tabs.Tab>
+                    <Tabs.Tab value="agents">Agent CLIs ({agentRows.length})</Tabs.Tab>
+                </Tabs.List>
+                <Tabs.Panels>
+                    <Tabs.Panel value="languages">
+                        <div className="set-note">
+                            Genie installs languages — and their config — into its own folder
+                            {info?.root ? ` (${info.root})` : ''}, so a site always runs on a
+                            version nothing else can change underneath it. Versions other
+                            installers put on this machine are listed for reference and cannot
+                            be used by a site.
+                        </div>
+                        <LanguagesTab
+                            info={info}
+                            busy={busy}
+                            onAsk={(next) => {
+                                setAsk(next);
+                                setAddVersion(next.kind === 'add' ? (next.versions[0] ?? '') : '');
+                            }}
+                            onSetDefault={(tool, version) => void setDefault(tool, version)}
+                        />
+                    </Tabs.Panel>
+
+                    <Tabs.Panel value="tools">
+                        {updates === null ? (
+                            <div className="set-note">Checking for updates…</div>
+                        ) : (
+                            <ToolUpdateList
+                                rows={devRows}
+                                busy={toolBusy}
+                                onUpdate={(name) => void update(name)}
+                                empty="No dev tools detected on this machine yet — the guided setup installs them."
+                            />
+                        )}
+                    </Tabs.Panel>
+
+                    <Tabs.Panel value="agents">
+                        <div className="set-note">
+                            Genie refuses to update an agent CLI while that agent is mid-turn:
+                            replacing the binary under a running turn fails outright on Windows
+                            and corrupts the turn elsewhere. Finish the turn, then update.
+                        </div>
+                        {updates === null ? (
+                            <div className="set-note">Checking for updates…</div>
+                        ) : (
+                            <ToolUpdateList
+                                rows={agentRows}
+                                busy={toolBusy}
+                                onUpdate={(name) => void update(name)}
+                                empty="No agent CLIs on this machine yet."
+                            />
+                        )}
+                    </Tabs.Panel>
+                </Tabs.Panels>
+            </Tabs>
+
+            {/* The update scan is CACHED (it queries winget/brew/npm), so there
+                has to be a way to ask again on purpose — and the way BACK into
+                the first-run wizard, which is otherwise offered once and its
+                dismissal remembered forever. */}
+            <div className="set-actions">
+                <Action
+                    size="sm"
+                    variant="ghost"
+                    icon="refresh-cw"
+                    disabled={busy !== null || toolBusy !== null}
+                    onClick={() => {
+                        refreshInstalls();
+                        refreshUpdates(true);
+                    }}
+                    title="Re-read this machine's toolchain and re-query the package managers now, instead of reusing the last answer."
+                >
+                    Check again
+                </Action>
+                <Action
+                    size="sm"
+                    variant="ghost"
+                    icon="sparkles"
+                    disabled={busy !== null || toolBusy !== null}
+                    onClick={() => setWizardOpen(true)}
+                    title="Re-run the guided setup: re-detect what this machine has and install anything still missing."
+                >
+                    Set up toolchain
+                </Action>
+            </div>
+
             <ToolchainSetupWizard
                 open={wizardOpen}
                 onClose={() => {
                     setWizardOpen(false);
-                    // It may have installed something — re-read rather than
-                    // leaving the rows showing the pre-setup machine.
-                    refresh(true);
+                    refreshInstalls();
+                    refreshUpdates(true);
                 }}
             />
 
+            {/* Add: a download and a few hundred megabytes, so it says WHAT it
+                will fetch and WHERE it lands before it starts. */}
+            {ask?.kind === 'add' && (
+                <Modal open onClose={() => setAsk(null)} size="sm">
+                    <div className="ws-confirm">
+                        <Heading as="h3" size="xs">
+                            Add a {ask.label} version
+                        </Heading>
+                        <Select
+                            value={addVersion}
+                            onValueChange={setAddVersion}
+                            list={ask.versions.map((v) => ({ value: v, label: `${ask.label} ${v}` }))}
+                        />
+                        <Text size="xs" className="text-zinc-500">
+                            Genie downloads it from the official source and installs it into its
+                            own toolchain folder. Nothing already on this machine is changed, and
+                            removing it later is deleting that one folder.
+                        </Text>
+                        <div className="ws-confirm-actions">
+                            <Action variant="ghost" onClick={() => setAsk(null)}>
+                                Cancel
+                            </Action>
+                            <Action
+                                disabled={!addVersion}
+                                onClick={() => void addVersionNow(ask.tool, ask.label, addVersion)}
+                            >
+                                Install
+                            </Action>
+                        </div>
+                    </div>
+                </Modal>
+            )}
+
+            {/* Remove: names the directory, the disk it frees and the default
+                that takes over — the same rule as stopping a shared engine. */}
+            {ask?.kind === 'remove' && (
+                <Modal open onClose={() => setAsk(null)} size="sm">
+                    <div className="ws-confirm">
+                        <Heading as="h3" size="xs">
+                            Remove {ask.label} {ask.install.version}?
+                        </Heading>
+                        <Callout color="amber" icon={<Icon name="triangle-alert" size="sm" />}>
+                            <span data-testid="toolchain-remove-risk">{ask.message}</span>
+                        </Callout>
+                        <div className="ws-confirm-actions">
+                            <Action variant="ghost" onClick={() => setAsk(null)}>
+                                Keep it
+                            </Action>
+                            <Action
+                                color="amber"
+                                onClick={() => void removeVersionNow(ask.install, ask.label)}
+                            >
+                                Remove
+                            </Action>
+                        </div>
+                    </div>
+                </Modal>
+            )}
+
             {/* The update would hit live work. Not "are you sure" — the sentence
-                NAMES the containers or sites at stake, the same way a machine-
-                level engine stop names the workspaces it would take down. */}
+                NAMES the containers or sites at stake. */}
             {confirmUpdate && (
                 <Modal open onClose={() => setConfirmUpdate(null)} size="sm">
                     <div className="ws-confirm">
@@ -3764,6 +4186,7 @@ function DevToolsSection() {
         </SetSection>
     );
 }
+
 
 export function DevServerSection({
     genieBrowserEnabled,
@@ -3908,7 +4331,7 @@ export function DevServerSection({
 
             <SetSection
                 title="Workspace dev image"
-                desc="The one image every workspace's containers are built on, and the language runtimes it brings"
+                desc="The one image every workspace's containers are built on, and the language runtimes baked into it"
             >
                 <SettingRow
                     label={info?.devBase.image || 'Dev base image'}
@@ -3917,36 +4340,55 @@ export function DevServerSection({
                             ? 'On this machine — a workspace starts without downloading anything.'
                             : 'Not downloaded yet. Genie fetches it the first time a workspace serves a site, and asks before it does.'
                     }
-                    keywords="dev base image node php python go rust toolchain runtime versions"
+                    keywords="dev base image container toolchain runtime versions"
                 >
                     <Badge color={info?.devBase.installed ? 'emerald' : 'zinc'}>
                         {info?.devBase.installed ? 'Downloaded' : 'Not downloaded'}
                     </Badge>
                 </SettingRow>
 
-                {/* The versions are a CONSTANT mirrored from the image's
-                    Dockerfile (a drift test keeps them honest), because asking
-                    the image itself would mean pulling gigabytes to render a
-                    settings page. */}
+                {/* These chips describe the IMAGE, not this computer — and for a
+                    long time they sat directly above rows that described the
+                    computer, with nothing saying which was which. That single
+                    ambiguity is most of why the page read as "I see no UX at all
+                    for my toolchain": the only versions on screen were ones
+                    nothing here could change. They stay beside the image they
+                    belong to, they say so, and they point at the page that DOES
+                    manage this machine.
+
+                    The versions themselves are a CONSTANT mirrored from the
+                    image's Dockerfile (a drift test keeps them honest) — asking
+                    the image would mean pulling gigabytes to render a settings
+                    page. */}
                 {!!info?.devBase.toolchain.length && (
-                    <div className="ws-toolchain">
-                        {info.devBase.toolchain.map((tool) => (
-                            <div className="ws-tool" key={tool.id}>
-                                <Text size="sm" style={{ fontWeight: 600 }}>
-                                    {tool.label} {tool.version}
-                                </Text>
-                                {tool.extras?.length ? (
-                                    <Text size="xs" className="text-zinc-500">
-                                        {tool.extras.join(' · ')}
+                    <>
+                        <div className="set-note" data-testid="dev-base-toolchain-caption">
+                            Inside this container image — <strong>not this machine</strong>. These
+                            versions ship with the image and change only when it is rebuilt. To
+                            install and choose the versions on THIS computer, use Settings →
+                            Toolchain.
+                        </div>
+                        <div
+                            className="ws-toolchain"
+                            data-testid="dev-base-toolchain"
+                            aria-label="Language runtimes inside the workspace dev image"
+                        >
+                            {info.devBase.toolchain.map((tool) => (
+                                <div className="ws-tool" key={tool.id}>
+                                    <Text size="sm" style={{ fontWeight: 600 }}>
+                                        {tool.label} {tool.version}
                                     </Text>
-                                ) : null}
-                            </div>
-                        ))}
-                    </div>
+                                    {tool.extras?.length ? (
+                                        <Text size="xs" className="text-zinc-500">
+                                            {tool.extras.join(' · ')}
+                                        </Text>
+                                    ) : null}
+                                </div>
+                            ))}
+                        </div>
+                    </>
                 )}
             </SetSection>
-
-            <DevToolsSection />
 
             <SetSection
                 title="Service engines"

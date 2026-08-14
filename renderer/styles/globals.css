@@ -1826,6 +1826,34 @@ button.m-card:disabled {
     gap: 8px;
     padding-top: 8px;
 }
+/* Settings → Toolchain, Languages tab. One block per language (php, node, …),
+   each holding that language's installed versions. Grouped rather than one flat
+   table because the five languages are five independent decisions — which
+   version is the default for THIS language is meaningless across the list. */
+.tc-langs {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    padding-top: 8px;
+}
+.tc-lang {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+.tc-lang-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    padding-bottom: 2px;
+    border-bottom: 1px solid var(--border-1);
+}
+/* The head's actions sit hard right, like an engine row's. */
+.tc-lang-head > .ws-engine-actions {
+    margin-left: auto;
+}
 .ws-engine {
     display: flex;
     flex-direction: column;

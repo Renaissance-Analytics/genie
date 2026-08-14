@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { DevServerSection } from './settings';
+import { DevServerSection, ToolchainSection } from './settings';
 import WorkspaceSiteManager from '../components/Master/WorkspaceSiteManager';
 import type { WorkspaceRow } from '../lib/genie';
 
@@ -75,6 +75,12 @@ export default function E2EHosting() {
                 Open the workspace Hosting panel
             </button>
             {!panelOpen && <span data-testid="panel-closed">Hosting panel closed</span>}
+
+            {/* Settings → Toolchain. Its own PAGE in the product (the toolchain
+                is the machine's concern; hosting merely consumes it), mounted
+                here beside the Hosting Manager because both drive the same
+                faked `toolchain:*` / `dev:*` channels in main. */}
+            <ToolchainSection />
 
             <DevServerSection
                 genieBrowserEnabled={genieBrowser}

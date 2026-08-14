@@ -186,9 +186,33 @@ export interface HostingE2EState {
         service: string[];
         /** Tools whose Update was clicked, in order (Toolchain Manager, #242 P2). */
         toolchainUpdate: string[];
+        /** `<tool>:<version>` per Set-default that reached main (Toolchain page). */
+        toolchainSetDefault: string[];
+        /** `<tool>:<version>` per Remove that reached main (Toolchain page). */
+        toolchainRemove: string[];
     };
     /** The Dev Tools section's update rows (#242 P2). */
     toolchainUpdates: ToolUpdate[];
+    /** The Toolchain page's Languages tab: what this "machine" has installed. */
+    toolchainInstalls: ToolchainInstallsFixture;
+}
+
+/** Mirrors `ToolchainInstallsInfo` from the toolchain manager, restated here so
+ *  the harness stays a plain fixture with no import into the real scanner. */
+interface ToolchainInstallsFixture {
+    installs: Array<{
+        tool: string;
+        version: string;
+        dir: string;
+        exe: string;
+        source: string;
+        removable: boolean;
+        sizeBytes?: number;
+    }>;
+    defaults: Record<string, string>;
+    addable: Record<string, string[]>;
+    sites: Array<{ genName: string; tool: string; version?: string }>;
+    root: string;
 }
 
 // --- the fixture ------------------------------------------------------------
@@ -416,7 +440,59 @@ export function defaultHostingE2EState(): HostingE2EState {
                 needs: 'the port was defaulted rather than read from the repo',
             },
         ],
-        calls: { workstation: 0, engine: [], site: [], service: [], toolchainUpdate: [] },
+        calls: {
+            workstation: 0,
+            engine: [],
+            site: [],
+            service: [],
+            toolchainUpdate: [],
+            toolchainSetDefault: [],
+            toolchainRemove: [],
+        },
+        // The Toolchain page's Languages tab. Deliberately the machine that
+        // caused genie#206: Genie owns two PHPs under its own toolchain folder
+        // AND Herd has a third one level down in `bin/php84`. The foreign row
+        // must render as informational — no Set default, no Remove — or a site
+        // could be pointed at an install another app upgrades underneath it.
+        toolchainInstalls: {
+            root: 'C:\\Users\\e2e\\AppData\\Roaming\\Genie\\toolchain',
+            installs: [
+                {
+                    tool: 'php',
+                    version: '8.3.33',
+                    dir: 'C:\\Users\\e2e\\AppData\\Roaming\\Genie\\toolchain\\php\\8.3.33',
+                    exe: 'C:\\Users\\e2e\\AppData\\Roaming\\Genie\\toolchain\\php\\8.3.33\\php.exe',
+                    source: 'genie',
+                    removable: true,
+                    sizeBytes: 94_371_840,
+                },
+                {
+                    tool: 'php',
+                    version: '8.2.33',
+                    dir: 'C:\\Users\\e2e\\AppData\\Roaming\\Genie\\toolchain\\php\\8.2.33',
+                    exe: 'C:\\Users\\e2e\\AppData\\Roaming\\Genie\\toolchain\\php\\8.2.33\\php.exe',
+                    source: 'genie',
+                    removable: true,
+                    sizeBytes: 92_274_688,
+                },
+                {
+                    tool: 'php',
+                    version: '8.4.1',
+                    dir: 'C:\\Users\\e2e\\.config\\herd\\bin\\php84',
+                    exe: 'C:\\Users\\e2e\\.config\\herd\\bin\\php84\\php.exe',
+                    source: 'herd',
+                    removable: false,
+                },
+            ],
+            defaults: { php: '8.3.33' },
+            addable: { php: ['8.4.24'], node: ['26.7.0', '24.19.0'] },
+            // One site follows the default and one pins — so a default change
+            // must name the first and leave the second alone.
+            sites: [
+                { genName: 'web.hosting-e2e.gen', tool: 'php' },
+                { genName: 'api.hosting-e2e.gen', tool: 'php', version: '8.2.33' },
+            ],
+        },
         // Dev Tools (#242 P2): one tool with an update, one current, one whose
         // latest could not be learned — the three tones the row model renders.
         toolchainUpdates: [
@@ -518,6 +594,35 @@ export function registerHostingE2EMocks(): void {
             restartRequired: false,
             skipped: [],
         };
+    });
+
+    // The Toolchain page's Languages tab. The real read walks
+    // `<userData>/toolchain` and Herd/XAMPP/nvm; here it is a fixture, so the
+    // spec drives the SHIPPED component against a machine that has both a
+    // Genie-owned php and a Herd one — the case the page exists to disambiguate.
+    override('toolchain:installs', async () => hostingE2EState.toolchainInstalls);
+
+    override('toolchain:set-default', async (_e, tool: string, version: string) => {
+        hostingE2EState.calls.toolchainSetDefault.push(`${tool}:${version}`);
+        const owned = hostingE2EState.toolchainInstalls.installs.some(
+            (i) => i.tool === tool && i.version === version && i.source === 'genie',
+        );
+        // Same refusal as the real handler: only a GENIE-managed install can be
+        // the default, so a spec can prove a foreign row offers no way in.
+        if (!owned) return { ok: false, error: `Genie does not manage ${tool} ${version}.` };
+        hostingE2EState.toolchainInstalls.defaults[tool] = version;
+        return { ok: true };
+    });
+
+    override('toolchain:remove-version', async (_e, tool: string, version: string) => {
+        hostingE2EState.calls.toolchainRemove.push(`${tool}:${version}`);
+        const fixture = hostingE2EState.toolchainInstalls;
+        const target = fixture.installs.find((i) => i.tool === tool && i.version === version);
+        if (!target || target.source !== 'genie') {
+            return { ok: false, error: `Genie did not install ${tool} ${version}.` };
+        }
+        fixture.installs = fixture.installs.filter((i) => i !== target);
+        return { ok: true, freedBytes: target.sizeBytes };
     });
 
     override('dev:engine', async (_e, req: EngineRequest) => {
