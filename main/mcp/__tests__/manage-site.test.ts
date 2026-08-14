@@ -174,6 +174,40 @@ describe('tools/call dispatch', () => {
         );
     });
 
+    it('forwards a PINNED php version, and the schema tells an agent what omitting it means', async () => {
+        // genie#207: the agent-facing half of "which PHP does this site run on".
+        // A pin the tool accepts but drops would be worse than none — the site would
+        // silently follow the machine default while its config claims otherwise.
+        const manageSite = vi.fn().mockResolvedValue({ ok: true, sites: [] });
+        await call(
+            {
+                action: 'create',
+                name: 'moic',
+                repo: 'moicsuite',
+                hostServe: { mode: 'php', root: '.', version: '8.3' },
+            },
+            { manageSite },
+        );
+        expect(manageSite).toHaveBeenCalledWith(
+            'term-1',
+            expect.objectContaining({ hostServe: { mode: 'php', root: '.', version: '8.3' } }),
+        );
+
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 3, method: 'tools/list' },
+            ctx({ devServerAvailable: async () => true }),
+        );
+        const tool = (
+            res?.result as { tools: Array<{ name: string; inputSchema: Record<string, unknown> }> }
+        ).tools.find((t) => t.name === 'manageSite');
+        const props = (tool?.inputSchema.properties ?? {}) as Record<string, { properties?: Record<string, { description?: string }> }>;
+        const version = props.hostServe?.properties?.version?.description ?? '';
+        // The two facts an agent cannot guess: what omitting it does, and that a
+        // missing pinned version FAILS the start rather than falling back.
+        expect(version).toMatch(/machine default/i);
+        expect(version).toMatch(/fail/i);
+    });
+
     it('forwards `hostPort` — pointing .gen at a dev server the agent already runs (was silently dropped)', async () => {
         const manageSite = vi.fn().mockResolvedValue({ ok: true, sites: [] });
         await call(

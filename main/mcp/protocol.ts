@@ -596,7 +596,7 @@ export interface DevSiteInfo {
     upstreamHost?: string;
     /** How Genie serves this host-native site (static/php), when it does — so the
      *  Edit form's serve-mode picker prefills. Absent ⇒ the repo's own dev server. */
-    hostServe?: { mode: 'static' | 'php'; root: string; spa?: boolean };
+    hostServe?: { mode: 'static' | 'php'; root: string; spa?: boolean; version?: string };
     /** The transient start stage, present ONLY while a start is in flight:
      *  `pulling` → `building` → `starting` → `ready`|`failed`. A settled row omits
      *  it — read `state`/`ready` then. Surfaces observable startup (Gap 2). */
@@ -683,10 +683,14 @@ export interface ManageSiteRequest {
      * you already run, use `command`+`port` or `hostPort` instead (a reverse-proxy,
      * no generated config).
      *
+     * `version` (php only) PINS the engine version — omitted, the site follows the
+     * machine default and moves with it; pinned to something Genie does not manage,
+     * the start FAILS naming it rather than serving on a different runtime.
+     *
      * update: pass `null` to CLEAR it — switch a static/php site back to running the
      * repo's own dev server (proxy). Omit the field to leave the serve mode untouched.
      */
-    hostServe?: { mode: 'static' | 'php'; root: string; spa?: boolean } | null;
+    hostServe?: { mode: 'static' | 'php'; root: string; spa?: boolean; version?: string } | null;
     /** create: extra BROWSER-FACING surfaces. Backend services never go here. */
     exposed?: Array<{ name: string; port: number; protocol: string; reason: string }>;
     env?: Record<string, string>;
@@ -1604,6 +1608,11 @@ const MANAGE_SITE_TOOL = {
                         type: 'boolean',
                         description:
                             'static only: fall back to index.html for unmatched paths so client-side routes (deep links, refresh) resolve.',
+                    },
+                    version: {
+                        type: 'string',
+                        description:
+                            'php only: PIN the engine version this site runs on (`8.3`, or an exact `8.3.33`) — one Genie manages, as listed in Settings → Toolchain → Languages. OMITTED = the machine default, and the site MOVES with it when the default changes. A pinned version Genie does not manage FAILS the start naming what to install — never a silent fallback to another runtime.',
                     },
                 },
                 required: ['mode', 'root'],

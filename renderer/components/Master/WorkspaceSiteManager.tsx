@@ -23,13 +23,17 @@ import {
     type DevSiteInfo,
     type DevSitePhase,
     type DevSiteRunOption,
+    type LanguageTool,
+    type ToolchainInstallsInfo,
     type WorkspaceRow,
 } from '../../lib/genie';
 import {
     buildHostServe,
     canOpenInBrowser,
+    engineVersionField,
     holdersNote,
     hostServePatch,
+    pinnableVersions,
     isolationNote,
     optionCaveat,
     optionLabel,
@@ -711,6 +715,11 @@ function EditSiteForm({
     const [serveSpa, setServeSpa] = useState(
         row.hostServe?.mode === 'static' ? Boolean(row.hostServe.spa) : true,
     );
+    // The PINNED php version, '' = follow the machine default (genie#207).
+    const [serveVersion, setServeVersion] = useState(
+        row.hostServe?.mode === 'php' ? (row.hostServe.version ?? '') : '',
+    );
+    const php = usePinnableVersions('php');
     // The USER-CONTROLLED startup argv — the canonical way to start a site.
     const [command, setCommand] = useState((row.command ?? []).join(' '));
     const [env, setEnv] = useState(
@@ -746,7 +755,7 @@ function EditSiteForm({
         if (isHostNative) {
             const servePatch = hostServePatch(
                 row.hostServe,
-                buildHostServe(serveMode, serveRoot, serveSpa),
+                buildHostServe(serveMode, serveRoot, serveSpa, serveVersion),
             );
             if (servePatch !== undefined) patch.hostServe = servePatch;
         }
@@ -836,9 +845,13 @@ function EditSiteForm({
                             mode={serveMode}
                             root={serveRoot}
                             spa={serveSpa}
+                            version={serveVersion}
+                            versions={php.versions}
+                            {...(php.defaultVersion ? { defaultVersion: php.defaultVersion } : {})}
                             onMode={setServeMode}
                             onRoot={setServeRoot}
                             onSpa={setServeSpa}
+                            onVersion={setServeVersion}
                         />
                     )}
                     {/* A host-native site's port is host-owned (allocated at start),
@@ -969,6 +982,28 @@ const SERVE_MODES: { value: ServeMode; label: string }[] = [
 ];
 
 /**
+ * The engine versions a site may pin, read once when a form opens.
+ *
+ * A READ of the machine's toolchain — it never installs anything, so opening the
+ * form cannot make a machine download a runtime. A failed read leaves the picker
+ * hidden rather than empty: a select with no options is worse than no select.
+ */
+function usePinnableVersions(tool: LanguageTool): { versions: string[]; defaultVersion?: string } {
+    const [info, setInfo] = useState<ToolchainInstallsInfo | null>(null);
+    useEffect(() => {
+        void api()
+            .devServer.toolchainInstalls()
+            .then(setInfo)
+            .catch(() => setInfo(null));
+    }, []);
+    const defaultVersion = info?.defaults[tool];
+    return {
+        versions: pinnableVersions(info?.installs ?? [], tool),
+        ...(defaultVersion ? { defaultVersion } : {}),
+    };
+}
+
+/**
  * The serve-mode picker's fields, shared by the Add and Edit forms so a human
  * declares a MODE exactly as an agent does via `hostServe` — and Genie writes the
  * web-server config, instead of anyone hand-rolling an nginx/Caddy block. `proxy`
@@ -979,17 +1014,34 @@ function ServeModeFields({
     mode,
     root,
     spa,
+    version,
+    versions,
+    defaultVersion,
     onMode,
     onRoot,
     onSpa,
+    onVersion,
 }: {
     mode: ServeMode;
     root: string;
     spa: boolean;
+    /** php only: the PINNED engine version, '' = follow the machine default. */
+    version: string;
+    /** The versions Genie manages for php, newest first. */
+    versions: string[];
+    defaultVersion?: string;
     onMode: (mode: ServeMode) => void;
     onRoot: (root: string) => void;
     onSpa: (spa: boolean) => void;
+    onVersion: (version: string) => void;
 }) {
+    // Shown only when there is a real choice — two managed versions, or a site
+    // that already pins one (genie#207).
+    const versionField = engineVersionField({
+        versions,
+        ...(defaultVersion ? { defaultVersion } : {}),
+        ...(version ? { pinned: version } : {}),
+    });
     return (
         <>
             <label className="site-field">
@@ -1014,6 +1066,23 @@ function ServeModeFields({
                         {mode === 'php'
                             ? "Repo-relative app root — Genie serves its public/ over a FastCGI PHP worker (the nginx/Valet model). No command, no hand-written web-server config."
                             : 'Repo-relative built folder — Genie serves it with its own file server. No dev command, no hand-written web-server config.'}
+                    </small>
+                </label>
+            )}
+            {mode === 'php' && versionField.show && (
+                <label className="site-field">
+                    <span>PHP version</span>
+                    <Select
+                        value={version}
+                        onValueChange={onVersion}
+                        list={versionField.options}
+                        aria-label="Which PHP version this site runs on"
+                    />
+                    <small className="site-field-hint">
+                        Which PHP Genie runs the FastCGI worker on. Following the machine default
+                        means this site moves with it (Settings → Toolchain); pinning a version
+                        keeps it where it is — and if that version is ever removed, the site says
+                        so instead of quietly running on another one.
                     </small>
                 </label>
             )}
@@ -1067,7 +1136,10 @@ function AddSiteForm({
     const [serveMode, setServeMode] = useState<ServeMode>('proxy');
     const [serveRoot, setServeRoot] = useState('');
     const [serveSpa, setServeSpa] = useState(true);
-    const hostServe = buildHostServe(serveMode, serveRoot, serveSpa);
+    // A NEW site follows the machine default unless the human picks a version.
+    const [serveVersion, setServeVersion] = useState('');
+    const php = usePinnableVersions('php');
+    const hostServe = buildHostServe(serveMode, serveRoot, serveSpa, serveVersion);
     // A chosen static/php mode with no directory yet is not startable — Genie has
     // nothing to serve. Guard submit rather than ship an empty root (the same
     // predicate the Edit form uses — genie #198).
@@ -1125,9 +1197,13 @@ function AddSiteForm({
                     mode={serveMode}
                     root={serveRoot}
                     spa={serveSpa}
+                    version={serveVersion}
+                    versions={php.versions}
+                    {...(php.defaultVersion ? { defaultVersion: php.defaultVersion } : {})}
                     onMode={setServeMode}
                     onRoot={setServeRoot}
                     onSpa={setServeSpa}
+                    onVersion={setServeVersion}
                 />
                 {/* proxy only: Genie owns the port for a static/php site it serves. */}
                 {serveMode === 'proxy' && (

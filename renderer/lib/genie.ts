@@ -275,10 +275,13 @@ export interface DevSiteRunOption {
  *   - `static` — serve a built directory, `spa` adding the index.html fallback;
  *   - `php`    — serve `public/` via a FastCGI PHP worker (the nginx/Valet model).
  * Absent ⇒ the site runs the repo's OWN dev server, reverse-proxied (proxy mode).
+ *
+ * `version` PINS the engine (genie#207); omitted, the site follows the machine
+ * default set in Settings → Toolchain and moves with it.
  */
 export type HostServeConfig =
     | { mode: 'static'; root: string; spa?: boolean }
-    | { mode: 'php'; root: string };
+    | { mode: 'php'; root: string; version?: string };
 
 /** One configured dev site plus whatever is currently true about it. */
 export interface DevSiteInfo {

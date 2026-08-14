@@ -6,6 +6,8 @@ import {
     devServerGuidance,
     holdersNote,
     hostServePatch,
+    engineVersionField,
+    pinnableVersions,
     isolationNote,
     optionCaveat,
     optionLabel,
@@ -25,7 +27,7 @@ import {
     siteStatusLabel,
     siteStatusTone,
 } from '../dev-server';
-import type { DevServiceInfo, DevSiteInfo } from '../genie';
+import type { DevServiceInfo, DevSiteInfo, EngineInstall } from '../genie';
 
 /**
  * The Site Manager's DECISIONS (Tynn #234 P4), separated from its wiring.
@@ -317,6 +319,88 @@ describe('the serve-mode picker (proxy | static | php)', () => {
         expect(buildHostServe('php', '', false)).toBeUndefined();
     });
 
+    it('carries a PINNED php version, and only for php (genie#207)', () => {
+        expect(buildHostServe('php', 'public', false, '8.3')).toEqual({
+            mode: 'php',
+            root: 'public',
+            version: '8.3',
+        });
+        // The "machine default" choice is the ABSENCE of a pin, not a pin to the
+        // version that happens to be default today — the site must keep following
+        // the default when it moves.
+        expect(buildHostServe('php', 'public', false, '')).toEqual({ mode: 'php', root: 'public' });
+        expect(buildHostServe('php', 'public', false)).toEqual({ mode: 'php', root: 'public' });
+        // A static folder runs no engine, so a stale version in form state (the user
+        // switched php → static) must never ride along.
+        expect(buildHostServe('static', 'dist', false, '8.3')).toEqual({
+            mode: 'static',
+            root: 'dist',
+        });
+    });
+
+    it('offers only the versions GENIE manages — Herd’s is visible, not pinnable', () => {
+        const install = (over: Partial<EngineInstall>): EngineInstall => ({
+            tool: 'php',
+            version: '8.4.24',
+            dir: 'd',
+            exe: 'd/php',
+            source: 'genie',
+            removable: true,
+            ...over,
+        });
+        expect(
+            pinnableVersions(
+                [
+                    install({ version: '8.4.24' }),
+                    install({ version: '8.3.33' }),
+                    // Herd can upgrade or remove this underneath a running site, so a
+                    // site may never depend on it (the owner's decision).
+                    install({ version: '8.4.11', source: 'herd', removable: false }),
+                    install({ tool: 'node', version: '24.19.0' }),
+                ],
+                'php',
+            ),
+        ).toEqual(['8.4.24', '8.3.33']);
+    });
+
+    it('offers the version picker ONLY when there is a real choice', () => {
+        const opts = (versions: string[], pinned?: string) =>
+            engineVersionField({
+                versions,
+                defaultVersion: versions[0],
+                ...(pinned ? { pinned } : {}),
+            });
+        // Nothing installed, or one version: no choice to make, so no control — the
+        // same rule as the "in use" badge, don't decorate a machine with one PHP.
+        expect(opts([]).show).toBe(false);
+        expect(opts(['8.4.24']).show).toBe(false);
+        // Two or more: a real choice, led by following the machine default.
+        const two = opts(['8.4.24', '8.3.33']);
+        expect(two.show).toBe(true);
+        expect(two.options).toEqual([
+            { value: '', label: 'Machine default (8.4.24)' },
+            { value: '8.4.24', label: '8.4.24' },
+            { value: '8.3.33', label: '8.3.33' },
+        ]);
+        // A site that ALREADY pins one always shows the control, even on a machine
+        // with a single install — otherwise the pin is invisible and unremovable.
+        const pinnedAlone = opts(['8.4.24'], '8.3.33');
+        expect(pinnedAlone.show).toBe(true);
+        // …and the pinned version is listed even though it is not installed, marked
+        // as missing rather than silently replaced by the default.
+        expect(pinnedAlone.options).toContainEqual({
+            value: '8.3.33',
+            label: '8.3.33 — not installed',
+        });
+        // With NO list at all — a remote window, where the toolchain belongs to the
+        // other machine — "not installed" would be a claim about a machine this
+        // window cannot see. Say what is known instead.
+        expect(opts([], '8.3.33').options).toContainEqual({
+            value: '8.3.33',
+            label: '8.3.33 — pinned',
+        });
+    });
+
     it('flags a serve mode that still needs a directory — the guard BOTH forms owe', () => {
         // proxy runs the repo's own dev server: nothing else to fill.
         expect(serveConfigIncomplete('proxy', '', false)).toBe(false);
@@ -488,6 +572,17 @@ describe('siteRunLine', () => {
         expect(line).toMatch(/php/i);
         // The root is the thing the user chose, so it has to appear.
         expect(line).toContain('public');
+    });
+
+    it('names the PINNED php version — a card must not hide which runtime it runs', () => {
+        // "Genie serves it as PHP" is not enough on a machine with three PHPs: the
+        // version is the fact someone debugging a version-specific failure needs.
+        expect(
+            siteRunLine(site({ hostServe: { mode: 'php', root: 'public', version: '8.3' } })),
+        ).toContain('8.3');
+        // Unpinned says nothing about a version rather than inventing one — the site
+        // follows whatever the machine default is at its next start.
+        expect(siteRunLine(site({ hostServe: { mode: 'php', root: 'public' } }))).not.toMatch(/\d\.\d/);
     });
 
     it('describes static serving, and says when it is an SPA', () => {

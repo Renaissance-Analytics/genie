@@ -118,7 +118,7 @@ interface SiteInfo {
     origin?: string;
     localOrigin?: string;
     command?: string[];
-    hostServe?: { mode: 'static' | 'php'; root: string; spa?: boolean };
+    hostServe?: { mode: 'static' | 'php'; root: string; spa?: boolean; version?: string };
     browserExposed?: boolean;
 }
 
@@ -528,7 +528,7 @@ interface SiteRequest {
     runMode?: string;
     command?: string[];
     port?: number;
-    hostServe?: { mode: 'static' | 'php'; root: string; spa?: boolean } | null;
+    hostServe?: { mode: 'static' | 'php'; root: string; spa?: boolean; version?: string } | null;
     browserExposed?: boolean;
 }
 

@@ -424,6 +424,62 @@ test('the site Edit form prefills the serve mode and switches a static site back
     expect((await readHostingState(app))?.calls.site).toContain('update');
 });
 
+test('the site Edit form PINS a php version — and offers only the ones Genie manages', async () => {
+    // genie#207. The machine has two Genie-owned PHPs and a Herd one; the picker
+    // must offer the two and never the third — a runtime Herd can upgrade or
+    // uninstall underneath a running site is not one a site may depend on.
+    //
+    // This is also the only place the component itself is exercised: the renderer
+    // has no DOM in unit tests, so "the select appears, and what it saves" is
+    // assertable nowhere else.
+    await seedHostingSites(app, [
+        {
+            id: 'site-moic',
+            name: 'moic',
+            genName: 'moic.hosting-e2e.gen',
+            repo: '',
+            runMode: 'host',
+            kind: 'http',
+            enabled: true,
+            state: 'running',
+            ready: true,
+            hostPort: 49021,
+            hostServe: { mode: 'php', root: 'public' },
+        },
+    ]);
+    await page.reload();
+    await page.waitForLoadState('domcontentloaded');
+    const modal = await openPanel(page);
+
+    await modal.getByRole('button', { name: 'Edit' }).click();
+    const edit = page.locator(MODAL);
+    await expect(edit.getByRole('heading', { name: 'Edit moic' })).toBeVisible();
+
+    const version = edit
+        .locator('label.site-field', { hasText: 'PHP version' })
+        .locator('select');
+    // Unpinned ⇒ the site FOLLOWS the machine default, and the control says so
+    // rather than showing a version that could move under it.
+    await expect(version).toHaveValue('');
+    await expect(version.locator('option')).toHaveText([
+        /Machine default/,
+        '8.3.33',
+        '8.2.33',
+    ]);
+    // Herd's 8.4.1 is on this machine and on the Toolchain page — never here.
+    await expect(version.locator('option')).not.toContainText(['8.4.1']);
+
+    await version.selectOption('8.2.33');
+    await edit.getByRole('button', { name: 'Save changes' }).click();
+    await expect(page.locator(MODAL).getByRole('heading', { name: 'Edit moic' })).toHaveCount(0);
+
+    // THE state assertion: the pin is STORED, so the next start resolves php-cgi
+    // out of that install instead of asking PATH (genie#206/#207).
+    await expect
+        .poll(async () => (await readHostingSites(app)).find((s) => s.id === 'site-moic')?.hostServe)
+        .toEqual({ mode: 'php', root: 'public', version: '8.2.33' });
+});
+
 test('the Services view shows what this workspace uses, and what a stop would really do', async () => {
     const modal = await openPanel(page);
     await expect(modal).toContainText('Nothing hosted here yet.');

@@ -4,7 +4,9 @@ import type {
     DevSiteInfo,
     DevSitePhase,
     DevSiteRunOption,
+    EngineInstall,
     HostServeConfig,
+    LanguageTool,
 } from './genie';
 
 /**
@@ -170,11 +172,78 @@ export function serveModeOf(site: DevSiteInfo): ServeMode {
  * the SPA fallback). A blank root yields nothing — the form guards submit, and
  * this is the backstop so a half-filled static never ships an empty root.
  */
-export function buildHostServe(mode: ServeMode, root: string, spa: boolean): HostServeConfig | undefined {
+export function buildHostServe(
+    mode: ServeMode,
+    root: string,
+    spa: boolean,
+    /** php only: the PINNED engine version. Empty ⇒ follow the machine default,
+     *  which is the ABSENCE of a pin rather than a pin to today's default. */
+    version?: string,
+): HostServeConfig | undefined {
     const dir = root.trim();
     if (mode === 'proxy' || !dir) return undefined;
-    if (mode === 'php') return { mode: 'php', root: dir };
+    if (mode === 'php') {
+        const pinned = version?.trim();
+        return { mode: 'php', root: dir, ...(pinned ? { version: pinned } : {}) };
+    }
     return { mode: 'static', root: dir, ...(spa ? { spa: true } : {}) };
+}
+
+/**
+ * The versions of a language a SITE may pin — Genie-managed installs only.
+ *
+ * A foreign install (Herd, XAMPP, nvm) is listed on the Toolchain page for
+ * awareness and is never offered here: another app can upgrade, reconfigure or
+ * uninstall it underneath a running site, which is the opposite of what pinning
+ * a version is for. Mirrors main's `selectableInstalls`; the order the scan
+ * returned (Genie's own, newest first) is preserved.
+ */
+export function pinnableVersions(installs: EngineInstall[], tool: LanguageTool): string[] {
+    return installs.filter((i) => i.tool === tool && i.source === 'genie').map((i) => i.version);
+}
+
+/** The version picker's options, and whether the form should show it at all. */
+export interface EngineVersionField {
+    show: boolean;
+    options: { value: string; label: string }[];
+}
+
+/**
+ * The per-site engine-version control (genie#207).
+ *
+ * Shown only when there is a REAL choice — two or more managed versions, or a
+ * site that already pins one. The same rule as the "in use" badge: a machine with
+ * one PHP has no decision to offer, and a select with a single option is noise
+ * that makes the form look more complicated than the machine is.
+ *
+ * A pin the machine no longer has is still LISTED, marked missing — dropping it
+ * would silently reset the site to the default when someone opened Edit, which is
+ * exactly the quiet runtime change the pin exists to prevent.
+ */
+export function engineVersionField(opts: {
+    /** The versions Genie MANAGES for this language, newest first. */
+    versions: string[];
+    defaultVersion?: string;
+    pinned?: string;
+}): EngineVersionField {
+    const { versions, pinned } = opts;
+    const options = [
+        {
+            value: '',
+            label: opts.defaultVersion ? `Machine default (${opts.defaultVersion})` : 'Machine default',
+        },
+        ...versions.map((v) => ({ value: v, label: v })),
+    ];
+    if (pinned && !versions.includes(pinned)) {
+        // An EMPTY list is "this window cannot see that machine's toolchain" (a
+        // remote window reads no local installs) as much as it is "nothing is
+        // installed" — so only call a version missing when there was a list to miss
+        // from. Claiming "not installed" about a machine we did not read is the kind
+        // of confident wrong answer that sends someone reinstalling a working PHP.
+        const known = versions.length > 0;
+        options.push({ value: pinned, label: `${pinned} — ${known ? 'not installed' : 'pinned'}` });
+    }
+    return { show: versions.length > 1 || Boolean(pinned), options };
 }
 
 /**
@@ -465,7 +534,11 @@ export function siteRunLine(site: DevSiteInfo): string | null {
     if (serve) {
         const root = serve.root || '.';
         return serve.mode === 'php'
-            ? `Genie serves ${root}/ as a PHP app (FastCGI worker)`
+            ? // The VERSION when the site pins one (genie#207): on a machine with
+              // three PHPs, "as a PHP app" is not the fact someone debugging a
+              // version-specific failure needs. Unpinned says nothing rather than
+              // naming a default that can move before the site next starts.
+              `Genie serves ${root}/ as a PHP${serve.version ? ` ${serve.version}` : ''} app (FastCGI worker)`
             : `Genie serves ${root}/ as static files${serve.spa ? ' (SPA fallback)' : ''}`;
     }
     const argv = site.command ?? site.serve;

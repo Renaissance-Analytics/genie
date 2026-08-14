@@ -101,6 +101,12 @@ writes the config itself — nobody hand-rolls an nginx/Caddy block. A PHP/Larav
 app points at the app root and Genie serves its \`public/\`; a built front end
 points at \`dist\` (SPA-aware). No \`command\`, no \`port\`.
 
+A php site runs on the machine's DEFAULT PHP unless it pins one
+(\`hostServe.version\`, e.g. \`'8.3'\` — a version Genie manages, listed in
+Settings → Toolchain). Genie spawns that install's own \`php-cgi\`, never a PATH
+lookup, and a pinned version it does not manage FAILS the start naming what to
+install rather than quietly serving on a different runtime.
+
 **Running the repo's OWN dev server is the FALLBACK** — for a stack Genie cannot
 serve yet, or when you specifically want HMR against live source. It is what a
 bare \`create {name}\` still infers (host-native, story #238: a HOST process

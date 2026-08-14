@@ -193,11 +193,13 @@ function toOption(option: HostingOption): DevSiteRunOption {
  * `sanitizeDevSitePatch`, so this only picks the branch.
  */
 function narrowHostServe(
-    hs: { mode: 'static' | 'php'; root: string; spa?: boolean } | null | undefined,
+    hs: { mode: 'static' | 'php'; root: string; spa?: boolean; version?: string } | null | undefined,
 ): HostServeConfig | undefined {
     if (!hs) return undefined;
     return hs.mode === 'php'
-        ? { mode: 'php', root: hs.root }
+        ? // The pin rides through as given; `sanitizeDevSitePatch` is what decides a
+          // string is a version, so one validator owns that rule (genie#207).
+          { mode: 'php', root: hs.root, ...(hs.version ? { version: hs.version } : {}) }
         : { mode: 'static', root: hs.root, ...(hs.spa ? { spa: true } : {}) };
 }
 
