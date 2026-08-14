@@ -87,13 +87,30 @@ export function serveCaddyfile(opts: { sitePort: number; serve: SiteServe }): st
 }
 
 /**
- * The PHP FastCGI worker command: `php-cgi -b 127.0.0.1:<port>` runs php-cgi as a
- * FastCGI server. `php-cgi` ships with PHP on every OS (unlike `php-fpm`, which is
- * Unix-only), so this is the portable worker Caddy's `php_fastcgi` connects to.
+ * The PHP FastCGI worker command: `<php-cgi> -b 127.0.0.1:<port>` runs php-cgi as
+ * a FastCGI server. `php-cgi` ships with PHP on every OS (unlike `php-fpm`, which
+ * is Unix-only), so this is the portable worker Caddy's `php_fastcgi` connects to.
+ *
+ * `phpCgiExe` is an ABSOLUTE path, resolved from the site's toolchain version
+ * (`engine-resolve.ts`) — never a bare name. A bare `php-cgi` is genie#206
+ * itself: PATH on the reporting machine held only Herd's `php.bat` shim (the real
+ * binaries sat one directory down in `bin/php84`), and because a win32 spawn goes
+ * through a shell, the missing binary still produced a pid. The worker was dead,
+ * the start reported success, and the site said "Serving." while every request
+ * 502'd. So a name with no directory in it is refused HERE too, where any future
+ * caller must walk past it.
  */
-export function phpFastcgiWorkerCommand(fcgiPort: number): string[] {
+export function phpFastcgiWorkerCommand(phpCgiExe: string, fcgiPort: number): string[] {
+    if (typeof phpCgiExe !== 'string' || phpCgiExe.length === 0) {
+        throw new Error('serve-config: missing php-cgi executable');
+    }
+    if (!/[\\/]/.test(phpCgiExe)) {
+        throw new Error(
+            `serve-config: refusing a bare php-cgi name ${JSON.stringify(phpCgiExe)} — the FastCGI worker must be a resolved path (genie#207)`,
+        );
+    }
     assertPort(fcgiPort, 'fcgi port');
-    return ['php-cgi', '-b', `127.0.0.1:${fcgiPort}`];
+    return [phpCgiExe, '-b', `127.0.0.1:${fcgiPort}`];
 }
 
 /**

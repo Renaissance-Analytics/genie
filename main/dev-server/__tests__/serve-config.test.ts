@@ -70,8 +70,23 @@ describe('serveCaddyfile — php', () => {
 });
 
 describe('phpFastcgiWorkerCommand', () => {
-    it('runs php-cgi as a FastCGI server bound to the worker port (portable — ships with PHP)', () => {
-        expect(phpFastcgiWorkerCommand(5322)).toEqual(['php-cgi', '-b', '127.0.0.1:5322']);
+    it('runs the RESOLVED php-cgi as a FastCGI server bound to the worker port', () => {
+        // The executable comes from the site's toolchain resolution (genie#207) —
+        // an absolute path inside the install Genie owns, so the worker is THE php
+        // the site names rather than whatever PATH answers today.
+        expect(phpFastcgiWorkerCommand('C:\\gd\\toolchain\\php\\8.3.33\\php-cgi.exe', 5322)).toEqual([
+            'C:\\gd\\toolchain\\php\\8.3.33\\php-cgi.exe',
+            '-b',
+            '127.0.0.1:5322',
+        ]);
+    });
+
+    it('REFUSES a bare binary name — that PATH lookup is genie#206 itself', () => {
+        // On the reporting machine PATH held only Herd's `php.bat` shim, so a bare
+        // `php-cgi` started cmd.exe, printed "not recognized", and exited — with a
+        // pid, so the start looked fine. Nothing may reintroduce it by accident.
+        expect(() => phpFastcgiWorkerCommand('php-cgi', 5322)).toThrow(/bare/i);
+        expect(() => phpFastcgiWorkerCommand('', 5322)).toThrow();
     });
 });
 

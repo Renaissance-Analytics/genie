@@ -129,6 +129,18 @@ describe('hostSpawnInvocation', () => {
         expect(inv.file).toBe('php artisan serve "--path=C:/My Repos/app"');
     });
 
+    it('quotes the BINARY itself — a resolved php-cgi lives under a user profile', () => {
+        // Since genie#207 command[0] is an absolute path into Genie's toolchain, not
+        // a bare `php-cgi`. That path runs through `<userData>`, so on any machine
+        // whose account name has a space an unquoted command[0] would be split and
+        // cmd.exe would report "not recognized" — genie#206's symptom exactly, from a
+        // brand new cause.
+        const exe = 'C:\\Users\\Wish Born\\AppData\\Roaming\\Genie\\toolchain\\php\\8.3.33\\php-cgi.exe';
+        expect(hostSpawnInvocation([exe, '-b', '127.0.0.1:5322'], 'win32').file).toBe(
+            `"${exe}" -b 127.0.0.1:5322`,
+        );
+    });
+
     it('runs the binary DIRECTLY on posix, detached as its own group leader', () => {
         // No shell (so the dev server itself is the process-GROUP leader the `-pid`
         // SIGTERM in stopHostSite reaches); detached to make that group. There is no

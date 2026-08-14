@@ -191,20 +191,18 @@ function toolchainManagerDeps(): ToolchainManagerDeps {
             setSettings({ toolchain_defaults: raw });
         },
         // Which sites consume which language, across EVERY workspace — the input
-        // to "changing the default moves these sites". A site's `stack` is what
-        // Genie detected it is; `static` sites run no engine, so they are not
-        // moved by a default change and are left out.
+        // to "changing the default moves these sites". `siteEngineUse` owns that
+        // judgement: a Genie-SERVED php site runs php whatever its detected stack
+        // says, a static site runs no engine, and a site that PINS a version is
+        // reported with it so the notice does not claim to move it (genie#207).
         listSiteUsage: (): ToolchainSiteUsage[] => {
             const manager = devSiteManager();
             if (!manager) return [];
             try {
-                return manager
-                    .list()
-                    .flatMap((row) =>
-                        isLanguageTool(row.stack)
-                            ? [{ genName: row.genName, tool: row.stack }]
-                            : [],
-                    );
+                return manager.list().flatMap((row) => {
+                    const use = siteEngineUse(row);
+                    return use ? [use] : [];
+                });
             } catch {
                 return [];
             }
@@ -260,6 +258,7 @@ import {
     type ToolchainSiteUsage,
 } from './dev-server/toolchain-manager';
 import { isLanguageTool } from './dev-server/toolchain-versions';
+import { siteEngineUse } from './dev-server/sites-config';
 import { devSiteManager } from './dev-server/site-manager';
 import type { EngineActionRequest } from './dev-server/services/service-manager';
 import type { ManageServiceRequest, ManageSiteRequest } from './mcp/protocol';

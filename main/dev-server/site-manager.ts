@@ -21,6 +21,8 @@ import { effectiveCommand, hostNativeRoute, sandboxCommandFor, type HostNativeRo
 import type { ContainerRuntime, RuntimeDetection } from './container-runtime';
 import type { HostIds } from './host-ids';
 import type { DevSiteConfig, DevSites, HostServeConfig } from './sites-config';
+import type { EngineResolution } from './engine-resolve';
+import type { LanguageTool } from './toolchain-versions';
 import type { ImagePullConsent } from './workspace-sandbox';
 
 /**
@@ -272,6 +274,25 @@ export interface DevSiteManagerDeps {
      * version + a host `<engine> --version` probe.
      */
     engineMismatchNote?: (cwd: string, stack?: string) => Promise<string | null>;
+    /**
+     * WHICH runtime a Genie-served site spawns (genie#207) — the site's pinned
+     * version, else the machine default, resolved to the ABSOLUTE executable
+     * inside the toolchain install Genie owns (`engine-resolve.ts`, wired to the
+     * real scan in the host layer).
+     *
+     * Absent ⇒ a `hostServe` mode that needs an engine FAILS. It deliberately does
+     * not degrade to a bare `php-cgi`: that PATH lookup is genie#206 — on a Herd
+     * machine PATH holds a `php.bat` shim, the win32 spawn goes through a shell,
+     * and the missing binary still returns a pid, so the site reports "Serving."
+     * while every request 502s.
+     */
+    resolveEngine?: (req: {
+        tool: LanguageTool;
+        /** The binary inside the install to spawn — `php-cgi` for the worker. */
+        bin: string;
+        /** The site's pin. Omitted ⇒ the machine default. */
+        version?: string;
+    }) => Promise<EngineResolution>;
     /**
      * Run a HOST-NATIVE site's dev server as a real HOST process (story #238).
      * Absent ⇒ a `runMode: 'host'` site fails with a clear "not available" status
@@ -902,7 +923,10 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         cwd: string,
         sitePort: number,
         siteId: string,
-    ): Promise<{ ok: true; command: string[]; worker?: string[] } | { ok: false; error: string }> {
+    ): Promise<
+        | { ok: true; command: string[]; worker?: string[]; workerRuns?: string }
+        | { ok: false; error: string }
+    > {
         if (!deps.caddyBin || !deps.writeServeConfig) {
             const which = hostServe.mode === 'php' ? 'PHP' : 'Static';
             return {
@@ -915,6 +939,22 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             return { ok: false, error: `Invalid serve root ${JSON.stringify(hostServe.root)}.` };
         }
         if (hostServe.mode === 'php') {
+            // WHICH php (genie#207): the site's pin, else the machine default,
+            // resolved to the real `php-cgi` inside a Genie-owned install. Resolved
+            // FIRST — before a port is taken or a config written — so a site that
+            // cannot name its runtime fails having changed nothing.
+            if (!deps.resolveEngine) {
+                return {
+                    ok: false,
+                    error: 'PHP serving is not available in this build (Genie cannot resolve a managed PHP here).',
+                };
+            }
+            const engine = await deps.resolveEngine({
+                tool: 'php',
+                bin: 'php-cgi',
+                ...(hostServe.version ? { version: hostServe.version } : {}),
+            });
+            if (!engine.ok) return { ok: false, error: engine.error };
             // A SECOND guaranteed-free port for the FastCGI worker — never the site
             // port or one a live site holds.
             const fcgiPort = await allocateFreePort(new Set([...livePortSet(), sitePort]));
@@ -923,7 +963,8 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             return {
                 ok: true,
                 command: caddyServeArgv(deps.caddyBin, configPath),
-                worker: phpFastcgiWorkerCommand(fcgiPort),
+                worker: phpFastcgiWorkerCommand(engine.exe, fcgiPort),
+                workerRuns: `PHP ${engine.version} (${engine.exe})`,
             };
         }
         const caddyfile = serveCaddyfile({
@@ -985,12 +1026,17 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         //   - otherwise → the repo's OWN dev server, reverse-proxied (Phase 1).
         let command: string[];
         let worker: string[] | undefined;
+        /** WHICH runtime the worker is, for the failure text — a message blaming
+         *  PATH would send someone to fix the wrong thing now that the version is
+         *  resolved through the toolchain (genie#207). */
+        let workerRuns: string | undefined;
         let portEnv: Record<string, string> = {};
         if (config.hostServe) {
             const planned = await planHostServe(config.hostServe, cwd, port, siteId);
             if (!planned.ok) return failed(workspaceId, siteId, config, planned.error);
             command = planned.command;
             worker = planned.worker;
+            workerRuns = planned.workerRuns;
         } else {
             const baseCommand = effectiveCommand(config);
             if (!baseCommand) {
@@ -1076,7 +1122,9 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                     config,
                     `The PHP FastCGI worker exited immediately, so this site cannot serve PHP.${
                         why ? `\n\n${why}` : ''
-                    }\n\nServing a PHP app needs \`php-cgi\` on Genie's PATH — add a PHP version in Settings → Toolchain → Languages, then start the site again.`,
+                    }${
+                        workerRuns ? `\n\nGenie ran ${workerRuns}.` : ''
+                    }\n\nCheck that install in Settings → Toolchain → Languages, or point the site at another version.`,
                 );
             }
         }

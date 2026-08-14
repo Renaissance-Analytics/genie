@@ -112,19 +112,30 @@ describe('REAL static serve mode — the bundled Caddy actually serves the folde
     });
 });
 
-/** Is `php-cgi` on PATH (the exact binary production's worker command spawns)? The
- *  CI hosting job installs it; a bare dev box may not, so the php test is gated on
- *  it rather than failing where PHP is simply absent. */
-const hasPhpCgi = (() => {
+/**
+ * The ABSOLUTE `php-cgi` on this machine, or '' when there is none.
+ *
+ * Resolved rather than assumed, because production spawns a resolved path now
+ * (genie#207) — the worker command refuses a bare name outright. The CI hosting
+ * job installs php-cgi; a bare dev box may not, so the php test is gated on this
+ * rather than failing where PHP is simply absent.
+ */
+const phpCgiExe = (() => {
     try {
-        return spawnSync('php-cgi', ['--version'], { stdio: 'ignore' }).status === 0;
+        const which = spawnSync(process.platform === 'win32' ? 'where' : 'which', ['php-cgi'], {
+            encoding: 'utf8',
+        });
+        if (which.status !== 0) return '';
+        const first = (which.stdout || '').split(/\r?\n/).map((l) => l.trim()).find(Boolean) ?? '';
+        if (!first) return '';
+        return spawnSync(first, ['--version'], { stdio: 'ignore' }).status === 0 ? first : '';
     } catch {
-        return false;
+        return '';
     }
 })();
 
 describe('REAL php serve mode — the bundled Caddy + php-cgi actually EXECUTE PHP', () => {
-    it.skipIf(!hasPhpCgi)('serves executed PHP from public/ over the FastCGI worker', async () => {
+    it.skipIf(!phpCgiExe)('serves executed PHP from public/ over the FastCGI worker', async () => {
         const dir = mkdtempSync(path.join(tmpdir(), 'genie-real-php-'));
         dirs.push(dir);
         const root = path.join(dir, 'public');
@@ -136,7 +147,7 @@ describe('REAL php serve mode — the bundled Caddy + php-cgi actually EXECUTE P
 
         const sitePort = await allocateFreePort();
         const fcgiPort = await allocateFreePort(new Set([sitePort]));
-        const [wbin, ...wargs] = phpFastcgiWorkerCommand(fcgiPort);
+        const [wbin, ...wargs] = phpFastcgiWorkerCommand(phpCgiExe, fcgiPort);
         procs.push(spawn(wbin!, wargs, { stdio: 'ignore' }));
 
         const configPath = path.join(dir, 'Caddyfile');

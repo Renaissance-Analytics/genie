@@ -1131,6 +1131,10 @@ app.whenReady().then(async () => {
             process.platform === 'win32' ? 'caddy.exe' : 'caddy',
         ),
         writeServeConfig: (siteId, content) => writeHostServeConfig(siteId, content),
+        // Which php/node version this machine defaults to (Settings → Toolchain).
+        // A Genie-served site follows it unless it pins one, and the spawn resolves
+        // THAT install's real executable instead of asking PATH (genie#207).
+        readToolchainDefaults: () => getAllSettings().toolchain_defaults,
         confirmImagePull: confirmContainerImagePull,
         // The `.gen` change event, so the header popover, the rail icon, the Site
         // Manager and the Testing Browser's resolver all re-pull when a container

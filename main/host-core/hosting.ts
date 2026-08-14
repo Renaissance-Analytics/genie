@@ -36,6 +36,7 @@ import type {
 } from '../dev-server/services/service-manager';
 import { createHostProcessRun } from '../dev-server/host-process-run';
 import { createEngineMismatchNote } from '../dev-server/host-engine-probe';
+import { createSiteEngineResolver } from '../dev-server/toolchain-manager';
 import { initDevLifecycle } from '../dev-server/lifecycle';
 import type { DevServerLifecycle, DevServerLifecycleDeps } from '../dev-server/lifecycle';
 import { registerDevSiteTools } from '../mcp/dev-site-tools';
@@ -87,6 +88,13 @@ export interface HostingPorts {
      *  seam the shell owns (desktop writes under its data dir). Absent ⇒ generated
      *  serve modes are unavailable. */
     writeServeConfig?: (siteId: string, content: string) => string;
+    /** The persisted `toolchain_defaults` blob — which version of each language is
+     *  this machine's DEFAULT, the choice a site follows unless it pins one
+     *  (genie#207). Read through a port because the store is the shell's (desktop:
+     *  genie.db settings). Absent ⇒ no explicit default, so a site follows the
+     *  newest Genie-managed install, which is what `defaultVersionFor` already
+     *  means by "default". */
+    readToolchainDefaults?: () => string | undefined;
     /** Consent for fetching a missing image. Absent ⇒ no pull. */
     confirmImagePull?: (req: ImagePullConsent) => Promise<boolean> | boolean;
     /** The `.gen` change event — desktop broadcasts to the renderer, the cloud
@@ -202,6 +210,12 @@ export function buildHostingDeps(ports: HostingPorts): HostingDeps {
         // serve mode off with a clear status.
         ...(ports.caddyBin ? { caddyBin: ports.caddyBin } : {}),
         ...(ports.writeServeConfig ? { writeServeConfig: ports.writeServeConfig } : {}),
+        // WHICH runtime a Genie-served site spawns (genie#207): the site's pin, else
+        // the machine default, resolved to the absolute executable inside the
+        // toolchain install Genie owns. Always wired — the alternative is the bare
+        // PATH lookup that produced genie#206 — and a host with no stored default
+        // still resolves, to the newest managed install.
+        resolveEngine: createSiteEngineResolver(ports.readToolchainDefaults ?? (() => undefined)),
         // Engine-version validation (goal item 4, interim): warn at a host-native
         // start when the repo declares a php/node/go/python version the host runtime
         // doesn't match. Composed from the repo's declared version + a host probe.

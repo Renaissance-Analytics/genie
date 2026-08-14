@@ -183,6 +183,32 @@ function manager(
     });
 }
 
+/**
+ * A Genie-owned PHP install, shaped as `scanToolchain` reports one.
+ *
+ * The manager never scans the machine — it asks the injected resolver which
+ * version this site runs on (genie#207) — so this is only ever the answer a test
+ * hands back. `exe` is the primary binary; the worker spawns `php-cgi` beside it.
+ */
+const PHP_83 = {
+    tool: 'php' as const,
+    version: '8.3.33',
+    dir: '/gd/toolchain/php/8.3.33',
+    exe: '/gd/toolchain/php/8.3.33/bin/php',
+    source: 'genie' as const,
+    removable: true,
+};
+
+const PHP_83_CGI = '/gd/toolchain/php/8.3.33/bin/php-cgi';
+
+/** The engine resolver the host layer injects, answering with {@link PHP_83}. */
+const resolvesPhp83 = async () => ({
+    ok: true as const,
+    version: PHP_83.version,
+    install: PHP_83,
+    exe: PHP_83_CGI,
+});
+
 /** The `sh -c` script of the exec that STARTED a site (positional argv carries
  *  `genie-site <cwd> <command…>`). */
 function startExec(runtime: Fake) {
@@ -1156,6 +1182,7 @@ describe('service env injection (#234 P3)', () => {
                 hostServe: { mode: 'php', root: 'public' },
             },
         };
+        const asked: Array<{ tool: string; bin: string; version?: string }> = [];
         const m = manager(runtime, sites, {
             hostSpawn,
             probeReady: async () => true,
@@ -1165,6 +1192,15 @@ describe('service env injection (#234 P3)', () => {
             writeServeConfig: (siteId, content) => {
                 written.push({ siteId, content });
                 return `/cfg/${siteId}.caddyfile`;
+            },
+            resolveEngine: async (req) => {
+                asked.push(req);
+                return {
+                    ok: true as const,
+                    version: '8.3.33',
+                    install: PHP_83,
+                    exe: '/gd/toolchain/php/8.3.33/bin/php-cgi',
+                };
             },
             serviceHostEnvReportFor: async () => ({
                 env: { DB_HOST: '127.0.0.1', DB_PORT: '58783' },
@@ -1182,9 +1218,16 @@ describe('service env injection (#234 P3)', () => {
         expect(spawned).toHaveLength(2);
         const worker = spawned.find((s) => s.siteId === `${SITE_ID}-fcgi`);
         const caddy = spawned.find((s) => s.siteId === SITE_ID);
-        // The worker is php-cgi bound to a loopback FastCGI port, run in the repo cwd,
-        // with the DB env so PHP reaches the managed database.
-        expect(worker?.command).toEqual(['php-cgi', '-b', expect.stringMatching(/^127\.0\.0\.1:\d+$/)]);
+        // The worker is the TOOLCHAIN'S php-cgi (genie#207) — the absolute executable
+        // inside the version this site resolves to, never a bare name PATH decides —
+        // bound to a loopback FastCGI port, run in the repo cwd with the DB env so
+        // PHP reaches the managed database.
+        expect(asked).toEqual([{ tool: 'php', bin: 'php-cgi' }]);
+        expect(worker?.command).toEqual([
+            '/gd/toolchain/php/8.3.33/bin/php-cgi',
+            '-b',
+            expect.stringMatching(/^127\.0\.0\.1:\d+$/),
+        ]);
         expect(worker?.env.DB_HOST).toBe('127.0.0.1');
         const fcgiPort = worker?.command[2]?.split(':')[1];
         // Genie's Caddy serves public/ and routes PHP to that same worker port.
@@ -1245,19 +1288,151 @@ describe('service env injection (#234 P3)', () => {
             allocateFreePort: async () => (nextPort += 1),
             caddyBin: '/opt/genie/caddy',
             writeServeConfig: (siteId: string) => `/cfg/${siteId}.caddyfile`,
+            resolveEngine: resolvesPhp83,
         });
 
         const status = await m.start('acme', SITE_ID);
 
         expect(status.state).toBe('failed');
         // The actual reason, verbatim from the worker — not "the site failed".
-        expect(status.error).toContain('php-cgi');
+        expect(status.error).toContain('is not recognized');
+        // ...WHICH php it ran (genie#207 — PATH is no longer the story, so a message
+        // blaming PATH would send someone to fix the wrong thing)...
+        expect(status.error).toContain('8.3.33');
+        expect(status.error).toContain(PHP_83_CGI);
         // ...and what to do about it.
-        expect(status.error).toMatch(/Dev tools|toolchain/i);
+        expect(status.error).toMatch(/Toolchain/i);
         // Caddy was NEVER started in front of a backend that cannot answer.
         expect(spawned).toEqual([`${SITE_ID}-fcgi`]);
         // The dead worker is cleaned up rather than left tracked.
         expect(stopped).toContain(`${SITE_ID}-fcgi`);
+    });
+
+    it('asks the toolchain for the site’s PINNED php version (genie#207)', async () => {
+        // The Toolchain page lets a site name its runtime; the spawn has to READ it.
+        // A pin that is honoured nowhere is a UI promising a choice it never makes.
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const asked: Array<{ tool: string; bin: string; version?: string }> = [];
+        const hostSpawn = {
+            start: async () => ({ ok: true as const, pid: 4242 }),
+            stop: async () => {},
+            alive: async () => true,
+            readLog: async () => '',
+        };
+        let nextPort = 5500;
+        const sites: DevSites = {
+            [SITE_ID]: {
+                name: 'moic',
+                genName: 'moic.acme.gen',
+                repo: 'moicsuite',
+                runMode: 'host',
+                kind: 'http',
+                enabled: true,
+                hostServe: { mode: 'php', root: 'public', version: '8.4' },
+            },
+        };
+        const m = manager(runtime, sites, {
+            hostSpawn,
+            probeReady: async () => true,
+            allocateFreePort: async () => (nextPort += 1),
+            caddyBin: '/opt/genie/caddy',
+            writeServeConfig: (siteId: string) => `/cfg/${siteId}.caddyfile`,
+            resolveEngine: async (req) => {
+                asked.push(req);
+                return resolvesPhp83();
+            },
+        });
+        await m.start('acme', SITE_ID);
+        expect(asked).toEqual([{ tool: 'php', bin: 'php-cgi', version: '8.4' }]);
+    });
+
+    it('FAILS a php site whose version cannot be resolved — BEFORE spawning anything (genie#207)', async () => {
+        // Never a silent fallback to another runtime, and never a bare `php-cgi`
+        // handed to PATH: a site quietly serving on the wrong PHP is the failure this
+        // whole feature exists to prevent. The resolver's message IS the status.
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const spawned: string[] = [];
+        const written: string[] = [];
+        const hostSpawn = {
+            start: async (i: { siteId: string }) => {
+                spawned.push(i.siteId);
+                return { ok: true as const, pid: 4242 };
+            },
+            stop: async () => {},
+            alive: async () => true,
+            readLog: async () => '',
+        };
+        const sites: DevSites = {
+            [SITE_ID]: {
+                name: 'moic',
+                genName: 'moic.acme.gen',
+                repo: 'moicsuite',
+                runMode: 'host',
+                kind: 'http',
+                enabled: true,
+                hostServe: { mode: 'php', root: 'public', version: '8.2' },
+            },
+        };
+        const m = manager(runtime, sites, {
+            hostSpawn,
+            probeReady: async () => true,
+            allocateFreePort: async () => 5321,
+            caddyBin: '/opt/genie/caddy',
+            writeServeConfig: (siteId: string) => {
+                written.push(siteId);
+                return `/cfg/${siteId}.caddyfile`;
+            },
+            resolveEngine: async () => ({
+                ok: false as const,
+                error: 'This site is pinned to PHP 8.2, which Genie does not manage on this machine. Add it in Settings → Toolchain → Languages.',
+            }),
+        });
+
+        const status = await m.start('acme', SITE_ID);
+        expect(status.state).toBe('failed');
+        expect(status.error).toContain('PHP 8.2');
+        expect(status.error).toContain('Settings → Toolchain');
+        // Nothing ran, and no Caddyfile was written for a site that cannot serve.
+        expect(spawned).toEqual([]);
+        expect(written).toEqual([]);
+    });
+
+    it('a php serve fails CLEARLY when the build wires no engine resolver — never a bare php-cgi', async () => {
+        // The absent dep must NOT degrade to the old PATH lookup: that lookup is
+        // genie#206, and a "fallback" here would put it back the first time a caller
+        // forgot to wire the resolver.
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const spawned: string[] = [];
+        const hostSpawn = {
+            start: async (i: { siteId: string }) => {
+                spawned.push(i.siteId);
+                return { ok: true as const, pid: 4242 };
+            },
+            stop: async () => {},
+            alive: async () => true,
+            readLog: async () => '',
+        };
+        const sites: DevSites = {
+            [SITE_ID]: {
+                name: 'moic',
+                genName: 'moic.acme.gen',
+                repo: 'moicsuite',
+                runMode: 'host',
+                kind: 'http',
+                enabled: true,
+                hostServe: { mode: 'php', root: 'public' },
+            },
+        };
+        const m = manager(runtime, sites, {
+            hostSpawn,
+            probeReady: async () => true,
+            allocateFreePort: async () => 5321,
+            caddyBin: '/opt/genie/caddy',
+            writeServeConfig: (siteId: string) => `/cfg/${siteId}.caddyfile`,
+        });
+        const status = await m.start('acme', SITE_ID);
+        expect(status.state).toBe('failed');
+        expect(spawned).toEqual([]);
     });
 
     it('warns in the site log when the repo declares an engine version the host does not match (item 4)', async () => {

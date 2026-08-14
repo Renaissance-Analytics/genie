@@ -26,6 +26,7 @@ import {
     planVersionRemoval,
     type VersionInstallEffects,
 } from './toolchain-version-install';
+import { resolveEngineExe, type EngineResolution } from './engine-resolve';
 
 /**
  * The COMPOSITION ROOT for the Toolchain page — the one module that touches a
@@ -207,6 +208,30 @@ function invalidateToolchainScan(): void {
 /** Exported for tests + for anything that changes the toolchain out of band. */
 export { invalidateToolchainScan };
 
+/** Every language install on this machine, reusing the cache while it is fresh. */
+async function machineInstalls(opts: { force?: boolean } = {}): Promise<EngineInstall[]> {
+    if (
+        !shouldRescanToolchain({
+            lastScanAt: scanCache?.at ?? null,
+            now: Date.now(),
+            ...(opts.force ? { force: true } : {}),
+        })
+    ) {
+        return scanCache!.installs;
+    }
+    const installs = await scanToolchain({
+        fs: realFs,
+        platform: process.platform,
+        root: toolchainRoot(),
+        home: homedir(),
+        env: process.env,
+        probeVersion: probeEngineVersion,
+        resolveOnPath,
+    });
+    scanCache = { at: Date.now(), installs };
+    return installs;
+}
+
 /**
  * Everything the Toolchain page renders from.
  *
@@ -220,27 +245,7 @@ export async function toolchainInstallsInfo(
 ): Promise<ToolchainInstallsInfo> {
     const root = toolchainRoot();
     const ctx = machineContext();
-    let installs: EngineInstall[];
-    if (
-        shouldRescanToolchain({
-            lastScanAt: scanCache?.at ?? null,
-            now: Date.now(),
-            ...(opts.force ? { force: true } : {}),
-        })
-    ) {
-        installs = await scanToolchain({
-            fs: realFs,
-            platform: process.platform,
-            root,
-            home: homedir(),
-            env: process.env,
-            probeVersion: probeEngineVersion,
-            resolveOnPath,
-        });
-        scanCache = { at: Date.now(), installs };
-    } else {
-        installs = scanCache!.installs;
-    }
+    const installs = await machineInstalls(opts);
 
     const stored = parseToolchainDefaults(deps.readDefaults());
     const defaults: ToolchainDefaults = {};
@@ -252,6 +257,37 @@ export async function toolchainInstallsInfo(
     }
 
     return { installs, defaults, addable, sites: deps.listSiteUsage(), root };
+}
+
+/**
+ * The resolver a SITE START uses to decide which runtime it spawns (genie#207).
+ *
+ * The site manager owns no machine facts, so it asks this: pin → machine default
+ * → a failure naming what to install. The judgement is `resolveEngineExe`; all
+ * that happens here is handing it the scan and the stored defaults.
+ *
+ * A MISS re-scans once before failing. The in-process cache is dropped by every
+ * toolchain write, so a stale miss means the directory changed out of band — and
+ * telling someone their PHP is not installed while it sits on disk is the kind of
+ * wrong answer that makes the whole feature untrustworthy. One extra directory
+ * walk on a start that was about to fail costs nothing.
+ */
+export function createSiteEngineResolver(
+    readDefaults: () => string | undefined,
+): (req: { tool: LanguageTool; bin: string; version?: string }) => Promise<EngineResolution> {
+    return async (req) => {
+        const ask = async (force: boolean): Promise<EngineResolution> =>
+            resolveEngineExe({
+                tool: req.tool,
+                bin: req.bin,
+                ...(req.version ? { pinned: req.version } : {}),
+                installs: await machineInstalls(force ? { force: true } : {}),
+                defaults: parseToolchainDefaults(readDefaults()),
+                platform: process.platform,
+            });
+        const first = await ask(false);
+        return first.ok ? first : ask(true);
+    };
 }
 
 // --- the writes -------------------------------------------------------------
