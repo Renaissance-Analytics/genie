@@ -7,6 +7,7 @@ import {
     withoutPersistedEnv,
     devSiteReconfigureNeedsRestart,
     hostNativeRoute,
+    siteEngineUse,
     type DevSiteConfig,
 } from '../sites-config';
 
@@ -288,6 +289,69 @@ describe('host-native serve mode — Genie serves it, the agent writes no config
             mode: 'php',
             root: 'public',
         });
+    });
+
+    it('keeps a PINNED php version, and stores nothing when the site follows the default', () => {
+        // A pin is what makes "this app needs 8.3" survive somebody flipping the
+        // machine default (genie#207). Absent ⇒ the site FOLLOWS the default, which
+        // is a different state from "pinned to today's default" and must not be
+        // silently upgraded into one.
+        expect(
+            sanitizeDevSitePatch({ ...base(), hostServe: { mode: 'php', root: 'public', version: '8.3' } })
+                .hostServe,
+        ).toEqual({ mode: 'php', root: 'public', version: '8.3' });
+        expect(
+            sanitizeDevSitePatch({ ...base(), hostServe: { mode: 'php', root: 'public', version: '' } })
+                .hostServe,
+        ).toEqual({ mode: 'php', root: 'public' });
+    });
+
+    it('drops a version that is not one — it is matched against installs, not trusted', () => {
+        for (const version of ['8.3; rm -rf /', 'latest', '../../etc', 'v8.3', '8.3.33.7.2']) {
+            expect(
+                sanitizeDevSitePatch({
+                    ...base(),
+                    hostServe: { mode: 'php', root: 'public', version } as never,
+                }).hostServe,
+            ).toEqual({ mode: 'php', root: 'public' });
+        }
+    });
+
+    it('reports which ENGINE a site uses, and whether it PINS one', () => {
+        // Feeds the Toolchain page's "used by" line and the default-change notice.
+        // A Genie-SERVED php site runs php whatever its detected `stack` says — the
+        // serve mode is the fact, the stack is a guess — and a PINNED site must not
+        // be counted among the ones a default change moves.
+        expect(siteEngineUse({ genName: 'a.gen', hostServe: { mode: 'php', root: 'public' } })).toEqual(
+            { genName: 'a.gen', tool: 'php' },
+        );
+        expect(
+            siteEngineUse({
+                genName: 'b.gen',
+                stack: 'static',
+                hostServe: { mode: 'php', root: 'public', version: '8.3' },
+            }),
+        ).toEqual({ genName: 'b.gen', tool: 'php', version: '8.3' });
+        // A repo running its OWN dev server still consumes its stack's engine.
+        expect(siteEngineUse({ genName: 'c.gen', stack: 'node' })).toEqual({
+            genName: 'c.gen',
+            tool: 'node',
+        });
+        // A static site runs no engine, so a default change does not move it.
+        expect(siteEngineUse({ genName: 'd.gen', stack: 'static' })).toBeNull();
+        expect(
+            siteEngineUse({ genName: 'e.gen', hostServe: { mode: 'static', root: 'dist' } }),
+        ).toBeNull();
+        expect(siteEngineUse({ genName: 'f.gen' })).toBeNull();
+    });
+
+    it('a version change needs a restart — the running worker is the OLD php', () => {
+        expect(
+            devSiteReconfigureNeedsRestart(
+                base({ hostServe: { mode: 'php', root: 'public', version: '8.3' } }),
+                base({ hostServe: { mode: 'php', root: 'public', version: '8.4' } }),
+            ),
+        ).toBe(true);
     });
 
     it('normalises Windows separators and a trailing slash', () => {

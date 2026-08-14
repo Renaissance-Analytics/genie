@@ -3,6 +3,7 @@ import { isDevFramework } from './host-allowlist';
 import type { DevFramework } from './host-allowlist';
 import type { BuildStep, HostingRunMode, HostingStack, ProductionServer } from './serve-recipe';
 import type { BrowserProtocol, ExposedSurface } from './exposure';
+import { isLanguageTool, type LanguageTool } from './toolchain-versions';
 
 /**
  * PURE. The persisted per-workspace HOSTED SITE model.
@@ -166,10 +167,15 @@ export interface DevSiteConfig {
  *   - `php`    — serve `public/` with a FastCGI PHP worker (the nginx/Valet model).
  * Absent ⇒ the host-native site runs the repo's OWN dev server, reverse-proxied
  * (the config-less path). See `serve-config.ts`.
+ *
+ * `version` PINS the engine (genie#207): the site runs on THAT toolchain version
+ * — and fails to start, naming it, if Genie no longer manages it. Omitted ⇒ the
+ * site follows the machine default and moves with it, which is what the Toolchain
+ * page's "changes on their next start" promises.
  */
 export type HostServeConfig =
     | { mode: 'static'; root: string; spa?: boolean }
-    | { mode: 'php'; root: string };
+    | { mode: 'php'; root: string; version?: string };
 
 /** A workspace's dev sites, keyed by {@link devSiteIdFor}. */
 export type DevSites = Record<string, DevSiteConfig>;
@@ -328,7 +334,25 @@ function cleanServeRoot(root: unknown): string | null {
     return r;
 }
 
-/** Validate a {@link HostServeConfig}: a known mode + an in-repo root. */
+/**
+ * An ENGINE VERSION a site pins: `8.3`, `8.3.33`, `24`. Dotted numbers only.
+ *
+ * It is matched against the versions the toolchain scan found, so an unknown
+ * string can never become a path — but a value that is not a version is not a pin
+ * either, and storing one would produce a start that fails on a typo nobody can
+ * see in the config. Anything else is DROPPED, which leaves the site following
+ * the machine default: the state it was in before the bad value.
+ */
+const ENGINE_VERSION = /^\d+(?:\.\d+){0,2}$/;
+
+function cleanEngineVersion(v: unknown): string | null {
+    if (typeof v !== 'string') return null;
+    const t = v.trim();
+    return t && ENGINE_VERSION.test(t) ? t : null;
+}
+
+/** Validate a {@link HostServeConfig}: a known mode + an in-repo root (+ for php,
+ *  an optional pinned engine version). */
 function cleanHostServe(hs: unknown): HostServeConfig | null {
     if (!hs || typeof hs !== 'object') return null;
     const candidate = hs as HostServeConfig;
@@ -337,7 +361,10 @@ function cleanHostServe(hs: unknown): HostServeConfig | null {
     if (candidate.mode === 'static') {
         return { mode: 'static', root, ...(candidate.spa ? { spa: true } : {}) };
     }
-    if (candidate.mode === 'php') return { mode: 'php', root };
+    if (candidate.mode === 'php') {
+        const version = cleanEngineVersion(candidate.version);
+        return { mode: 'php', root, ...(version ? { version } : {}) };
+    }
     return null;
 }
 
@@ -539,6 +566,35 @@ export function devSiteReconfigureNeedsRestart(
     return RECONFIGURE_KEYS.some(
         (k) => JSON.stringify(before[k] ?? null) !== JSON.stringify(after[k] ?? null),
     );
+}
+
+/**
+ * Which LANGUAGE a site consumes, and whether it PINS a version — the input to
+ * the Toolchain page's "used by" line and to the sentence a default change shows
+ * ("these sites follow the default and change on their next start").
+ *
+ * The SERVE MODE outranks `stack`: a site Genie serves as php runs php, whatever
+ * the detector guessed the repo is. A site that pins a version is reported with
+ * it, because it is exactly the site a default change does NOT move — counting it
+ * would make that sentence a lie (genie#207).
+ *
+ * `null` for a site that runs no managed engine (a static folder, a proxy to
+ * something with no detected stack) — those are not moved by a default at all.
+ */
+export function siteEngineUse(site: {
+    genName: string;
+    stack?: string;
+    hostServe?: HostServeConfig;
+}): { genName: string; tool: LanguageTool; version?: string } | null {
+    if (site.hostServe) {
+        if (site.hostServe.mode !== 'php') return null;
+        return {
+            genName: site.genName,
+            tool: 'php',
+            ...(site.hostServe.version ? { version: site.hostServe.version } : {}),
+        };
+    }
+    return isLanguageTool(site.stack) ? { genName: site.genName, tool: site.stack } : null;
 }
 
 /**
