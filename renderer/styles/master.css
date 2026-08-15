@@ -5639,3 +5639,23 @@ body.gutter-dragging .grid-gutter {
     padding-top: 8px;
     border-top: 1px solid var(--border-1);
 }
+
+/* A settings section whose HEAD + tab band stay put while its body scrolls
+   (the Toolchain page). A long version list otherwise scrolls the tabs and the
+   running-install note out of view, so you lose both which tab you are in and
+   the fact that something is installing — the owner hit exactly that. */
+.set-section--sticky .set-section-head {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    background: var(--bg-0, #0a0a0c);
+    padding-bottom: 6px;
+}
+.set-section--sticky .set-sticky-band {
+    position: sticky;
+    /* Below the head, which is ~52px with its padding. */
+    top: 52px;
+    z-index: 2;
+    background: var(--bg-0, #0a0a0c);
+    padding-top: 2px;
+}

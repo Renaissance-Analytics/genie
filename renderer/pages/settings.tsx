@@ -810,6 +810,7 @@ function SetSection({
     statusColor,
     statusIcon,
     host,
+    className,
     children,
 }: {
     title: string;
@@ -818,10 +819,12 @@ function SetSection({
     statusColor?: string;
     statusIcon?: string;
     host?: boolean;
+    /** Extra class on the section — e.g. to make its head stick while scrolling. */
+    className?: string;
     children: ReactNode;
 }) {
     return (
-        <section className="set-section">
+        <section className={`set-section${className ? ` ${className}` : ''}`}>
             <div className="set-section-head">
                 <h2>{title}</h2>
                 {host && <HostBadge />}
@@ -3984,6 +3987,7 @@ export function ToolchainSection() {
 
     return (
         <SetSection
+            className="set-section--sticky"
             title="Toolchain"
             desc="The languages and tools on THIS machine — the ones Genie installs and owns, and the ones other installers left here"
             {...(pendingUpdates > 0
@@ -3999,16 +4003,23 @@ export function ToolchainSection() {
                     {notice}
                 </div>
             )}
-            {busy && <div className="set-note">Working on {busy.replace(':', ' ')}…</div>}
-
             {/* Grouped, never a flat list: three different management models
                 would otherwise read as one confusing table. */}
             <Tabs activeTab={tab} onTabChange={setTab}>
-                <Tabs.List>
-                    <Tabs.Tab value="languages">Languages ({managedCount})</Tabs.Tab>
-                    <Tabs.Tab value="tools">Dev tools ({devRows.length})</Tabs.Tab>
-                    <Tabs.Tab value="agents">Agent CLIs ({agentRows.length})</Tabs.Tab>
-                </Tabs.List>
+                {/* The tab list AND the in-flight install travel with the sticky
+                    head, so scrolling a long version list never hides which tab
+                    you are in, or the fact that something is installing. Tabs
+                    context flows through this wrapper. */}
+                <div className="set-sticky-band">
+                    {busy && (
+                        <div className="set-note">Working on {busy.replace(':', ' ')}…</div>
+                    )}
+                    <Tabs.List>
+                        <Tabs.Tab value="languages">Languages ({managedCount})</Tabs.Tab>
+                        <Tabs.Tab value="tools">Dev tools ({devRows.length})</Tabs.Tab>
+                        <Tabs.Tab value="agents">Agent CLIs ({agentRows.length})</Tabs.Tab>
+                    </Tabs.List>
+                </div>
                 <Tabs.Panels>
                     <Tabs.Panel value="languages">
                         <div className="set-note">
