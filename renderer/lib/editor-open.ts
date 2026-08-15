@@ -1,12 +1,15 @@
 import { SYSTEM_WORKSPACE_ID, type TerminalSpec, type ViewMeta, type WorkspaceRow } from './genie';
 
 /**
- * Reuse-vs-new arbitration + a tiny "open this file in THIS panel" bus for the
- * `openFileForUser` MCP tool. The MCP handler (main) resolves the workspace +
- * path and pushes `editor:open-file`; master.tsx decides whether an already-open
- * CodePanel can be REUSED (this module's pure `pickReusePanel`) or a new panel is
- * needed, then either signals the live panel via `emitOpenInPanel` or creates a
- * fresh seeded spec.
+ * The renderer half of the `openFileForUser` MCP tool: reuse-vs-new arbitration,
+ * the handler that acts on it, and a tiny "open this file in THIS panel" bus.
+ * The MCP handler (main) resolves the workspace + path and pushes
+ * `editor:open-file`; master.tsx hands the request straight to
+ * `openFileInEditor`, which picks an already-open CodePanel to REUSE
+ * (`pickReusePanel`) or creates a fresh seeded spec, and then either signals the
+ * live panel via `emitOpenInPanel` or seeds a hidden one's meta and surfaces it.
+ * Everything but the effects themselves lives here so it is unit-testable — the
+ * renderer has no jsdom, so nothing inside a React component can be.
  */
 
 /** A code panel's effective workspace id (system specs → `__system__`). */
@@ -299,7 +302,8 @@ export async function openFileInEditor(
 // --- "open this file in panel <id>" bus ------------------------------------
 // A CodePanel seeds its tabs from spec.meta only on mount, so reusing a LIVE
 // panel needs a side channel. Each mounted CodePanel subscribes by its spec id;
-// master.tsx emits to the chosen panel after arbitration.
+// `openFileInEditor` emits to the chosen panel after arbitration. A HIDDEN panel
+// has no subscriber — it is reopened through its meta seed instead.
 
 type OpenInPanelListener = (relPath: string, line?: number) => void;
 const panelListeners = new Map<string, Set<OpenInPanelListener>>();
