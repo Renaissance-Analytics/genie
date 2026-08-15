@@ -52,7 +52,7 @@ import {
     type WorkspaceViewState,
 } from '../lib/view-state';
 import { planCommitStep, shouldDriveRestart } from '../lib/updater-flow';
-import { pickReusePanel, emitOpenInPanel, newPanelAttachment } from '../lib/editor-open';
+import { emitOpenInPanel, openFileInEditor, surfaceMaximized } from '../lib/editor-open';
 import { pluginPanelSpecMeta } from '../lib/panel-routing';
 import {
     workstationConnectState,
@@ -1512,72 +1512,37 @@ function MasterInner() {
     const activateWorkspaceRef = useRef(activateWorkspace);
     activateWorkspaceRef.current = activateWorkspace;
     useEffect(() => {
-        return api().on.editorOpenFile?.(({ requestId, workspaceId, root, relPath, line }) => {
-            const system = workspaceId === SYSTEM_WORKSPACE_ID;
-            // Every file — plugin-claimed included — opens as a TAB in a code
-            // Editor panel; CodePanel routes claimed extensions to a plugin tab
-            // itself (§6.1), so there is exactly ONE open path here.
-            const reuseId = pickReusePanel(
-                specsRef.current,
-                { workspaceId, root },
-                focusIdRef.current,
-                selectedRef.current,
-                workspacesByIdRef.current,
-            );
-            if (reuseId) {
-                if (system) setSystemRevealed(true);
-                activateWorkspaceRef.current(workspaceId);
-                setFocusId(reuseId);
-                // Forward the target line so the live panel scrolls to + reveals
-                // it (re-revealing if the file is already open at another line).
-                emitOpenInPanel(reuseId, relPath, line);
-                void api().editor.openFileResult(requestId, { reused: true, opened: false });
-                return;
-            }
-            // No open editor panel for this workspace → create one seeded with the
-            // file (its mount-seed opens the tab), select + surface it. The panel
-            // is ATTACHED to the workspace only when it roots at that workspace's
-            // own path — an attached panel resolves its tabs against the WORKSPACE
-            // root, so a panel rooted elsewhere (the System workspace, or a file
-            // no workspace owns) must be unattached + system, rooting at the
-            // file's directory (its cwd) so its tab resolves under the panel root.
+        return api().on.editorOpenFile?.(({ requestId, ...req }) => {
+            // The whole decision (reuse vs new, and the ORDER of the effects)
+            // lives in `openFileInEditor` so it can be unit-tested; this page
+            // only supplies the live state + the effects themselves.
             void (async () => {
-                try {
-                    const wsRow = workspacesByIdRef.current.get(workspaceId);
-                    const attach = newPanelAttachment({ workspaceId, root }, wsRow?.path);
-                    const panelWorkspaceId = attach.workspaceId ?? SYSTEM_WORKSPACE_ID;
-                    const base = (attach.system ? 'system' : wsRow?.project_name ?? 'system')
-                        .toLowerCase()
-                        .replace(/\s+/g, '-');
-                    const existingCode = specsRef.current.filter(
-                        (s) => specWorkspaceId(s) === panelWorkspaceId && s.type === 'code',
-                    ).length;
-                    const label =
-                        existingCode === 0 ? `${base}-files` : `${base}-files-${existingCode + 1}`;
-                    const created = await api().terminalSpec.create({
-                        id: ulid(),
-                        workspace_id: attach.workspaceId,
-                        label,
-                        cwd: root,
-                        type: 'code',
-                        meta: {
-                            ...(attach.system ? { system: true } : {}),
-                            open_files: [relPath],
-                            active_file: relPath,
-                            file_path: relPath,
-                            // Transient: the new panel reveals this line on mount,
-                            // then clears it (see CodePanel's mount-seed).
-                            ...(typeof line === 'number' ? { reveal_line: line } : {}),
-                        },
-                    });
-                    setSpecs((prev) => [...prev, created]);
-                    setSelected((prev) => new Set(prev).add(created.id));
-                    if (attach.system) setSystemRevealed(true);
-                    activateWorkspaceRef.current(panelWorkspaceId);
-                    void api().editor.openFileResult(requestId, { reused: false, opened: true });
-                } catch {
-                    void api().editor.openFileResult(requestId, { reused: false, opened: false });
-                }
+                const result = await openFileInEditor(req, {
+                    specs: () => specsRef.current,
+                    focusId: () => focusIdRef.current,
+                    selected: () => selectedRef.current,
+                    workspacesById: () => workspacesByIdRef.current,
+                    updateMeta: (id, meta) =>
+                        api()
+                            .terminalSpec.update(id, { meta })
+                            .catch(() => null),
+                    createPanel: (input) => api().terminalSpec.create({ id: ulid(), ...input }),
+                    putSpec: (spec) =>
+                        setSpecs((prev) =>
+                            prev.some((s) => s.id === spec.id)
+                                ? prev.map((s) => (s.id === spec.id ? spec : s))
+                                : [...prev, spec],
+                        ),
+                    activateWorkspace: (id) => activateWorkspaceRef.current(id),
+                    surface: (id) => {
+                        setSelected((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
+                        setFocusId(id);
+                        setMaximizedId((cur) => surfaceMaximized(cur, id));
+                    },
+                    revealSystem: () => setSystemRevealed(true),
+                    emitOpenInPanel,
+                });
+                void api().editor.openFileResult(requestId, result);
             })();
         });
         // eslint-disable-next-line react-hooks/exhaustive-deps
