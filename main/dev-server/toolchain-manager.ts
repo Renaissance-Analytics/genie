@@ -3,7 +3,11 @@ import { basename, dirname, join } from 'node:path';
 import { cp, mkdir, mkdtemp, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { defaultCommandRunner } from './seams';
-import { download } from './toolchain-primitives';
+import { createToolchainPrimitives, download } from './toolchain-primitives';
+import { createToolchainPerformDeps } from './toolchain-effects';
+import { createPerformInstall } from './toolchain-perform';
+import type { PerformInstall } from './toolchain-install';
+import type { AdapterContext } from './toolchain-adapters';
 import { parseToolVersion } from './toolchain-detect';
 import { scanToolchain, shouldRescanToolchain, type ToolchainFs } from './toolchain-scan';
 import {
@@ -226,6 +230,24 @@ function invalidateToolchainScan(): void {
 
 /** Exported for tests + for anything that changes the toolchain out of band. */
 export { invalidateToolchainScan };
+
+/**
+ * The ONE way to get an install effect — and the reason the wizard's installs
+ * are no longer invisible to this page (genie#209).
+ *
+ * `createToolchainPerformDeps` demands a machine-changed callback, so no install
+ * path can be assembled without one; this hands out the right one. Building it
+ * here rather than at each IPC handler puts the wiring in the module that OWNS
+ * the cache, where "what invalidates this?" is answerable by reading one screen
+ * instead of grepping for callers — which is exactly the grep that came back
+ * empty when the wizard's install path was added.
+ */
+export function createToolchainInstallEffect(ctx: AdapterContext): PerformInstall {
+    return createPerformInstall(
+        createToolchainPerformDeps(createToolchainPrimitives(), invalidateToolchainScan),
+        ctx,
+    );
+}
 
 /** Every language install on this machine, reusing the cache while it is fresh. */
 async function machineInstalls(opts: { force?: boolean } = {}): Promise<EngineInstall[]> {

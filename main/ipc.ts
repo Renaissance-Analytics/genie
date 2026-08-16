@@ -246,11 +246,9 @@ import { runInstallPlan } from './dev-server/toolchain-install';
 import { planToolUpdate } from './dev-server/toolchain-plan';
 import { DEFAULT_TOOLCHAIN } from './dev-server/toolchain-detect';
 import type { HostToolName } from './dev-server/toolchain-detect';
-import { createPerformInstall } from './dev-server/toolchain-perform';
-import { createToolchainPerformDeps } from './dev-server/toolchain-effects';
-import { createToolchainPrimitives } from './dev-server/toolchain-primitives';
 import {
     addToolchainVersion,
+    createToolchainInstallEffect,
     removeToolchainVersion,
     setToolchainDefault,
     toolchainInstallsInfo,
@@ -685,10 +683,7 @@ export function registerIpcHandlers(): void {
             ...ctx,
             ...(pmChoice ? { pmChoice: pmChoice as never } : {}),
         });
-        const perform = createPerformInstall(
-            createToolchainPerformDeps(createToolchainPrimitives()),
-            ctx,
-        );
+        const perform = createToolchainInstallEffect(ctx);
         return runInstallPlan({
             steps: insp.plan,
             ctx,
@@ -731,10 +726,7 @@ export function registerIpcHandlers(): void {
         }
         const ctx = { os: process.platform, arch: process.arch };
         const insp = await inspectToolchain({ runner: hostToolCommandRunner, ...ctx });
-        const perform = createPerformInstall(
-            createToolchainPerformDeps(createToolchainPrimitives()),
-            ctx,
-        );
+        const perform = createToolchainInstallEffect(ctx);
         const result = await runInstallPlan({
             steps: [planToolUpdate(tool as HostToolName, ctx.os, insp.pmChoice)],
             ctx,
