@@ -3,6 +3,7 @@ import { probeRuntime } from './runtime-detect';
 import { detectToolchain, probeHostTool, TOOL_SPECS } from './toolchain-detect';
 import type { FileExists, HostToolName } from './toolchain-detect';
 import type { AdapterContext, DirectSource, DownloadInstallCommand } from './toolchain-adapters';
+import type { LanguageTool } from './toolchain-versions';
 import type { PerformDeps } from './toolchain-perform';
 
 /**
@@ -30,6 +31,9 @@ export interface ToolchainEffectPrimitives {
     resolveDownloadUrl: (source: DirectSource, ctx: AdapterContext) => Promise<string | null>;
     /** Run a downloaded artifact (installer / script / place a phar). */
     installArtifact: (command: DownloadInstallCommand, localPath: string) => Promise<CommandResult>;
+    /** Install a language version through Genie's own per-version installer —
+     *  the Toolchain page's installer, shared so there is only one (genie#212). */
+    installEngine: (engine: LanguageTool, version: string) => Promise<{ ok: boolean; error?: string }>;
     /** Verify a runtime LIBRARY, which has no `--version` to ask. */
     fileExists?: FileExists;
     /** Where Windows lives; only the library check reads it. */
@@ -80,6 +84,7 @@ export function createToolchainPerformDeps(
         download: prim.download,
         installArtifact: (command, localPath) =>
             mutating(() => prim.installArtifact(command, localPath)),
+        installEngine: (engine, version) => mutating(() => prim.installEngine(engine, version)),
         verify: (tool) => verifyToolVersion(tool, prim),
     };
 }

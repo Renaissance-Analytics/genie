@@ -62,24 +62,6 @@ export interface ArtifactContext {
 export type ArtifactInstall =
     | { kind: 'run'; command: string; args: string[] }
     | {
-          kind: 'extract';
-          zip: string;
-          dest: string;
-          command: string;
-          args: string[];
-          /** Directory to put on PATH once extracted. */
-          pathAdd: string;
-          /**
-           * A config file to write beside the binaries once they are unpacked.
-           *
-           * php only, and not a nicety: the windows.php.net zip ships no active
-           * `php.ini` (every `extension=` in `php.ini-production` is commented
-           * out), so without this the wizard produced a PHP that answers
-           * `--version` and cannot run `composer install` (genie#210).
-           */
-          configFile?: { path: string; body: string };
-      }
-    | {
           kind: 'phar';
           from: string;
           to: string;
@@ -96,28 +78,6 @@ export type ArtifactInstall =
 function joinFor(os: NodeJS.Platform | string, ...parts: string[]): string {
     const sep = os === 'win32' ? '\\' : '/';
     return parts.join(sep);
-}
-
-/**
- * The directory an extracted archive's executables actually sit in.
- *
- * A zip that declares {@link DownloadInstallCommand.wrapperDir} wraps its
- * contents in a single directory named after the archive itself — the convention
- * every nodejs.org distribution follows (`node-v24.19.0-win-x64.zip` holds
- * exactly one top-level directory and zero root-level entries). The name is
- * therefore the downloaded FILE's name without its extension, which is knowable
- * here without opening the archive.
- */
-function extractedBinDir(
-    command: DownloadInstallCommand,
-    dest: string,
-    localPath: string,
-    os: NodeJS.Platform | string,
-): string {
-    if (command.wrapperDir !== 'archive-name') return dest;
-    const file = localPath.split(/[\\/]/).pop() ?? '';
-    const inner = file.replace(/\.zip$/i, '');
-    return inner && inner !== file ? joinFor(os, dest, inner) : dest;
 }
 
 /**
@@ -149,45 +109,14 @@ export function artifactInstallPlan(
                 ? { kind: 'run', command: legacy.run.command, args: legacy.run.args }
                 : { kind: 'unsupported', artifact: command.artifact };
         }
-        case 'zip': {
-            // Its own directory under Genie: no elevation, nothing of the
-            // user's is overwritten, and removing the tool is deleting a folder.
-            const dest = joinFor(ctx.os, ctx.toolsDir, command.tool);
-            return {
-                kind: 'extract',
-                zip: localPath,
-                dest,
-                // `-Force` so a re-run overwrites a half-extracted attempt
-                // rather than failing on "already exists".
-                ...(isWin
-                    ? {
-                          command: 'powershell',
-                          args: [
-                              '-NoProfile',
-                              '-NonInteractive',
-                              '-Command',
-                              `Expand-Archive -Path '${localPath}' -DestinationPath '${dest}' -Force`,
-                          ],
-                      }
-                    : { command: 'unzip', args: ['-o', localPath, '-d', dest] }),
-                // Where the EXECUTABLES actually land. php's archive unpacks flat,
-                // so the extract dir is the PATH entry; node's wraps everything in
-                // one directory named after the archive, so the PATH entry is a
-                // level down. Adding the wrong one puts a directory holding nothing
-                // runnable on PATH and calls it a successful install (genie#209).
-                pathAdd: extractedBinDir(command, dest, localPath, ctx.os),
-                // The SAME php.ini the Toolchain page's installer writes — one
-                // source of truth, so a config fix lands on both paths at once.
-                ...(command.tool === 'php'
-                    ? {
-                          configFile: {
-                              path: joinFor(ctx.os, dest, 'php.ini'),
-                              body: phpIniContents(dest, ctx.os),
-                          },
-                      }
-                    : {}),
-            };
-        }
+        case 'zip':
+            // A zip artifact meant exactly one thing — a LANGUAGE runtime, php or
+            // node — and those are installed by Genie's per-version installer now
+            // (genie#212), which unpacks into the root the Toolchain page reads.
+            // Nothing emits a zip download any more; if something starts to, it
+            // must say where it belongs rather than land back in `<userData>/tools`
+            // where the page would never see it.
+            return { kind: 'unsupported', artifact: command.artifact };
         case 'phar': {
             const name = `${command.tool}.phar`;
             return {

@@ -61,6 +61,18 @@ export interface ScanToolchainOptions {
     platform: string;
     /** `<userData>/toolchain` — see `genieToolchainRoot`. */
     root: string;
+    /**
+     * `<userData>/tools` — where Genie's FIRST-RUN WIZARD used to install, one
+     * flat directory per tool with no version in the name (genie#212).
+     *
+     * Scanned so an upgrading user's existing php/node is adopted rather than
+     * orphaned: those are real installs Genie put there and paid disk for, and
+     * a page that ignored them would be reporting "nothing installed" to someone
+     * who watched Genie install something. The version has to come from the
+     * BINARY, since the directory name does not carry one. Omitted ⇒ not
+     * scanned, which is what a machine with no legacy directory wants.
+     */
+    legacyRoot?: string;
     home: string;
     env: Record<string, string | undefined>;
     /** Ask a binary for its version (`php --version`). Used only when the
@@ -256,6 +268,41 @@ async function scanGenieInstalls(opts: ScanToolchainOptions): Promise<EngineInst
     return out;
 }
 
+/**
+ * Genie's OLD flat layout: `<userData>/tools/<lang>`, one directory per tool.
+ *
+ * Genie-owned (Genie installed it, so Genie may remove it) but not version-keyed
+ * — the version is whatever the binary reports. Two Genie installs of the same
+ * language can therefore coexist during an upgrade, one per layout; they are
+ * different directories, so they are honestly two rows rather than a merge that
+ * would have to guess which one a site is running.
+ */
+async function scanLegacyInstalls(opts: ScanToolchainOptions): Promise<EngineInstall[]> {
+    const { fs, platform, legacyRoot } = opts;
+    if (!legacyRoot) return [];
+    const out: EngineInstall[] = [];
+    for (const name of await fs.listDir(legacyRoot)) {
+        if (!isLanguageTool(name)) continue;
+        const dir = joinFor(platform, legacyRoot, name);
+        const located = await locateExecutables(fs, dir, name, platform);
+        if (!located) continue;
+        const version = await opts.probeVersion(name, located.exe);
+        // Same refusal as everywhere else: a row that cannot name its version
+        // cannot be defaulted to or pinned to, so it is dropped, not guessed at.
+        if (!version) continue;
+        out.push({
+            tool: name,
+            version,
+            dir: located.dir,
+            exe: located.exe,
+            source: 'genie',
+            removable: true,
+            sizeBytes: await fs.dirSize(located.dir),
+        });
+    }
+    return out;
+}
+
 /** One candidate directory → an install, or nothing. Shared by every foreign
  *  source so the "prove it, then name it" rule is written once. */
 async function foreignInstall(
@@ -330,12 +377,15 @@ async function scanSystemInstalls(opts: ScanToolchainOptions): Promise<EngineIns
  */
 export async function scanToolchain(opts: ScanToolchainOptions): Promise<EngineInstall[]> {
     const genie = await scanGenieInstalls(opts);
+    const legacy = await scanLegacyInstalls(opts);
     const foreign = await scanForeignInstalls(opts);
     const system = await scanSystemInstalls(opts);
 
     const seen = new Set<string>();
     const merged: EngineInstall[] = [];
-    for (const i of [...genie, ...foreign, ...system]) {
+    // Version-keyed installs first: where the same bytes are reachable by both
+    // layouts, the row that survives is the one the rest of the model can pin.
+    for (const i of [...genie, ...legacy, ...foreign, ...system]) {
         const key = `${i.tool}|${i.dir.toLowerCase()}`;
         if (seen.has(key)) continue;
         seen.add(key);

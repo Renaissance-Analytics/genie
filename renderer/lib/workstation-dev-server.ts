@@ -302,7 +302,7 @@ function listNames(names: string[]): string {
 // section manages what is already here.
 
 export type ToolUpdateTone = 'update-available' | 'up-to-date' | 'not-installed' | 'unknown';
-export type ToolRowAction = 'update' | 'none';
+export type ToolRowAction = 'install' | 'update' | 'none';
 
 export interface ToolUpdateRow {
     name: HostToolName;
@@ -349,10 +349,23 @@ export function toolUpdateTone(u: ToolUpdate): ToolUpdateTone {
     return 'unknown';
 }
 
-/** Offer Update only when a newer version is actually known AND the tool is here
- *  to update. Everything else has no action in this section. */
+/**
+ * What this row lets you DO.
+ *
+ * Update when a newer version is known and the tool is here to update; INSTALL
+ * when it is not on the machine at all.
+ *
+ * Install used to be deliberately absent — the first-run wizard owned getting a
+ * tool onto the machine, and this section managed what was already here. That
+ * split stopped being defensible the moment this page began REPORTING that
+ * something was missing: it left a row saying "not installed" with no way to act
+ * on it, and the owner reported precisely that about docker, git and the agent
+ * CLIs. Both surfaces now install through the same path (genie#212), so there is
+ * no longer a reason for one of them to withhold the button.
+ */
 export function toolRowAction(u: ToolUpdate): ToolRowAction {
-    return u.updateAvailable && u.installed ? 'update' : 'none';
+    if (!u.installed) return 'install';
+    return u.updateAvailable ? 'update' : 'none';
 }
 
 /** One tool's row: the version pair, badge tone and action folded together. */

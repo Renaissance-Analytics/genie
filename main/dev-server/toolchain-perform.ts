@@ -2,6 +2,7 @@ import { resolveFailureHelp } from './toolchain-resolve';
 import type { CommandResult } from './container-runtime';
 import type { HostToolName } from './toolchain-detect';
 import type { AdapterContext, DirectSource, DownloadInstallCommand, InstallCommand } from './toolchain-adapters';
+import type { LanguageTool } from './toolchain-versions';
 import type { PerformInstall, StepOutcome } from './toolchain-install';
 
 /**
@@ -35,6 +36,19 @@ export interface PerformDeps {
     installArtifact(command: DownloadInstallCommand, localPath: string): Promise<CommandResult>;
     /** Re-detect a tool's version after install, for the outcome. Optional. */
     verify?(tool: HostToolName): Promise<string | undefined>;
+    /**
+     * Install a LANGUAGE version through Genie's own per-version installer —
+     * the same one the Toolchain page's "Add a version" runs (genie#212).
+     *
+     * REQUIRED, not optional, and for the same reason `onMachineChanged` is: the
+     * wizard having its own private install path is the bug. A new caller that
+     * cannot install an engine has to say so to the compiler rather than
+     * silently falling back to writing somewhere the page cannot see.
+     */
+    installEngine(
+        engine: LanguageTool,
+        version: string,
+    ): Promise<{ ok: boolean; error?: string }>;
 }
 
 /** Trim a failure message to something a wizard row can show. */
@@ -55,8 +69,30 @@ export function createPerformInstall(deps: PerformDeps, ctx: AdapterContext): Pe
                 return performDownload(command, deps, ctx);
             case 'verify':
                 return performVerify(command, deps);
+            case 'engine':
+                return performEngine(command, deps);
         }
     };
+}
+
+/**
+ * Install a language through Genie's own per-version installer.
+ *
+ * No re-probe afterwards, and that is deliberate: the engine installer's success
+ * signal is already the stronger one — the binary Genie will actually spawn,
+ * answering from the directory Genie put it in, with its modules loaded. Asking
+ * `php --version` on PATH after that would be a WEAKER check that could pass on
+ * a completely different php (Herd's), which is the confusion this whole change
+ * exists to end.
+ */
+async function performEngine(
+    command: Extract<InstallCommand, { via: 'engine' }>,
+    deps: PerformDeps,
+): Promise<StepOutcome> {
+    const res = await deps.installEngine(command.engine, command.version);
+    return res.ok
+        ? ok(command.version)
+        : { ok: false, error: res.error ?? `could not install ${command.engine} ${command.version}` };
 }
 
 /**

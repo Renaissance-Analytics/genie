@@ -244,6 +244,7 @@ async function readToolchainActivity(): Promise<ToolchainActivity> {
 import { hostToolCommandRunner } from './dev-server/seams';
 import { runInstallPlan } from './dev-server/toolchain-install';
 import { planToolUpdate } from './dev-server/toolchain-plan';
+import { installIntentFor } from './dev-server/toolchain-adapters';
 import { DEFAULT_TOOLCHAIN } from './dev-server/toolchain-detect';
 import type { HostToolName } from './dev-server/toolchain-detect';
 import {
@@ -683,7 +684,7 @@ export function registerIpcHandlers(): void {
             ...ctx,
             ...(pmChoice ? { pmChoice: pmChoice as never } : {}),
         });
-        const perform = createToolchainInstallEffect(ctx);
+        const perform = createToolchainInstallEffect(ctx, toolchainManagerDeps());
         return runInstallPlan({
             steps: insp.plan,
             ctx,
@@ -726,14 +727,16 @@ export function registerIpcHandlers(): void {
         }
         const ctx = { os: process.platform, arch: process.arch };
         const insp = await inspectToolchain({ runner: hostToolCommandRunner, ...ctx });
-        const perform = createToolchainInstallEffect(ctx);
+        const perform = createToolchainInstallEffect(ctx, toolchainManagerDeps());
         const result = await runInstallPlan({
             steps: [planToolUpdate(tool as HostToolName, ctx.os, insp.pmChoice)],
             ctx,
             perform,
             approved: true,
             present: insp.report.present,
-            intent: 'update',
+            // Install what is absent, update what is here — the page offers both
+            // actions now, and they are not the same command (genie#212).
+            intent: installIntentFor(tool as HostToolName, insp.report.present),
             onProgress: (p) => {
                 if (!e.sender.isDestroyed()) e.sender.send('toolchain:progress', p);
             },

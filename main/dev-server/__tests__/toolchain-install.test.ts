@@ -201,11 +201,12 @@ describe('runInstallPlan — a shared package installs exactly once', () => {
 
         const result = await runInstallPlan({ steps, ctx: WIN, approved: true, perform });
 
-        const wingetRuns = ran.filter(
-            (c) => c.via === 'run' && c.args.includes('OpenJS.NodeJS.LTS'),
-        );
-        expect(wingetRuns).toHaveLength(1);
-        expect(wingetRuns[0].tool).toBe('node');
+        // node installs ONCE, through Genie's own engine installer (genie#212)
+        // rather than a package manager — npm arrives inside it either way, and
+        // installing the same runtime twice is the bug this test guards.
+        const nodeInstalls = ran.filter((c) => c.via === 'engine' && c.tool === 'node');
+        expect(nodeInstalls).toHaveLength(1);
+        expect(ran.filter((c) => c.tool === 'npm' && c.via !== 'verify')).toEqual([]);
 
         // npm is still a reported row, and it did not fail — which is what kept
         // claude-code from being skipped.

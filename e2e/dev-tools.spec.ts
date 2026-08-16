@@ -138,6 +138,36 @@ test('clicking Update reaches main with the tool and repaints the row', async ()
     await expect(updateButton(gitRow())).toHaveCount(0);
 });
 
+/**
+ * A row that reports a problem and offers no way to fix it is a dead end — and
+ * it is what the owner hit: "it seems i am missing install buttons for docker
+ * and git and the agent clis" (genie#212). Both tabs, because the page owns
+ * install now on both.
+ */
+test('a NOT-INSTALLED tool offers Install, and installing it repaints the row', async () => {
+    await tab(/Dev tools/).click();
+    const composer = page.getByTestId('devtool-composer');
+    await expect(composer).toContainText('Not installed');
+
+    const install = composer.getByRole('button', { name: /^install$/i });
+    await expect(install).toHaveCount(1);
+    await install.click();
+
+    // It reached main for composer specifically, and the row now names a version
+    // rather than still claiming the tool is absent.
+    await expect
+        .poll(async () => (await readHostingState(app))?.calls.toolchainUpdate ?? [])
+        .toContain('composer');
+    await expect(composer).not.toContainText('Not installed');
+});
+
+test('the Agent CLIs tab offers Install too — the wizard is not the only way in', async () => {
+    await tab(/Agent CLIs/).click();
+    const claude = page.getByTestId('devtool-claude-code');
+    await expect(claude).toContainText('Not installed');
+    await expect(claude.getByRole('button', { name: /^install$/i })).toHaveCount(1);
+});
+
 test('the Agent CLIs tab states the mid-turn rule once, in its own place', async () => {
     await tab(/Agent CLIs/).click();
     await expect(section()).toContainText(/mid-turn/i);

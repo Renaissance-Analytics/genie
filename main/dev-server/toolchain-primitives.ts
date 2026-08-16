@@ -153,7 +153,7 @@ function genieToolsContext(): ArtifactContext {
  * successful install as failed would send the user to reinstall something they
  * already have.
  */
-async function addToolsPathEntry(dir: string): Promise<CommandResult> {
+export async function addToolsPathEntry(dir: string): Promise<CommandResult> {
     const current = process.env.PATH ?? '';
     const sep = process.platform === 'win32' ? ';' : ':';
     const already = current
@@ -188,8 +188,11 @@ async function addToolsPathEntry(dir: string): Promise<CommandResult> {
 /** Assemble the real primitives. `runner`/`verify` come from the tested effect
  *  assembly ({@link createToolchainPerformDeps}); the three impure verbs are the
  *  ones above. */
-export function createToolchainPrimitives(): ToolchainEffectPrimitives {
+export function createToolchainPrimitives(
+    installEngine: ToolchainEffectPrimitives['installEngine'],
+): ToolchainEffectPrimitives {
     return {
+        installEngine,
         // The SHIM-aware runner (genie#205): an `npm-global` step runs `npm`,
         // which on Windows is `npm.cmd` — unspawnable without a shell, which is
         // why installing the agent TUIs failed there. The elevated + artifact
@@ -213,31 +216,6 @@ export function createToolchainPrimitives(): ToolchainEffectPrimitives {
                         : defaultCommandRunner.run(plan.command, plan.args, {
                               timeoutMs: INSTALL_TIMEOUT_MS,
                           });
-                case 'extract': {
-                    // php/node on Windows arrive as a zip of loose binaries: unpack
-                    // into a Genie-owned dir (no elevation, nothing of the user's
-                    // overwritten) and put that dir on PATH, or the files are there
-                    // and nothing can find them.
-                    const res = await defaultCommandRunner.run(plan.command, plan.args, {
-                        timeoutMs: INSTALL_TIMEOUT_MS,
-                    });
-                    if (res.code !== 0) return res;
-                    if (plan.configFile) {
-                        // php's archive carries no active php.ini, so without this
-                        // the binaries land with every extension off (genie#210).
-                        try {
-                            await mkdir(dirname(plan.configFile.path), { recursive: true });
-                            await writeFile(plan.configFile.path, plan.configFile.body, 'utf8');
-                        } catch (e) {
-                            return {
-                                code: 1,
-                                stdout: '',
-                                stderr: `Unpacked ${command.tool}, but could not write ${plan.configFile.path}: ${String(e)}`,
-                            };
-                        }
-                    }
-                    return addToolsPathEntry(plan.pathAdd);
-                }
                 case 'phar': {
                     // composer is a phar — not executable by itself, so it is placed
                     // beside a launcher that feeds it to php.

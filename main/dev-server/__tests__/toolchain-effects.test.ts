@@ -32,6 +32,7 @@ function primitives(over: Partial<ToolchainEffectPrimitives> = {}): ToolchainEff
         runElevated: vi.fn(async () => OK('')),
         download: vi.fn(async () => ({ ok: true, path: '/tmp/x' })),
         resolveDownloadUrl: vi.fn(async () => 'https://example/x'),
+        installEngine: vi.fn(async () => ({ ok: true })),
         installArtifact: vi.fn(async () => OK('')),
         ...over,
     };

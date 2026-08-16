@@ -2,6 +2,8 @@ import type { HostToolName } from './toolchain-detect';
 import type { InstallStep } from './toolchain-plan';
 import { pmPackageFor } from './toolchain-packages';
 import type { PackageManager } from './toolchain-packages';
+import { LANGUAGE_LABELS, recipesFor } from './toolchain-versions';
+import type { LanguageTool } from './toolchain-versions';
 
 /**
  * PURE. Turn one planned {@link InstallStep} into the concrete command that
@@ -70,14 +72,6 @@ export interface DownloadInstallCommand extends InstallCommandBase {
     needs?: HostToolName;
     /** For an installer artifact: the args to run it with after download. */
     run?: { args: string[] };
-    /**
-     * ZIP ONLY: the archive wraps everything in a single directory named after
-     * itself, so the executables sit ONE LEVEL DOWN from the extract root
-     * (node's Windows zips). Absent ⇒ the archive unpacks flat (php's do). Get
-     * this wrong and the install "succeeds" while putting a directory with no
-     * executables on PATH — see genie#209.
-     */
-    wrapperDir?: 'archive-name';
 }
 
 /**
@@ -94,7 +88,62 @@ export interface VerifyInstallCommand extends InstallCommandBase {
     coveredBy: HostToolName;
 }
 
-export type InstallCommand = RunInstallCommand | DownloadInstallCommand | VerifyInstallCommand;
+/**
+ * Install a LANGUAGE through Genie's own per-version installer (genie#212).
+ *
+ * The wizard used to fetch php/node itself and unpack them into
+ * `<userData>/tools/<tool>` — a directory the Toolchain page has never looked
+ * in. Two installers, two layouts, and a page that truthfully reported nothing
+ * after the wizard had just installed something. This command routes the wizard
+ * at the SAME installer the page's "Add a version" uses, so there is one root,
+ * one layout, one `php.ini` and one definition of a successful install.
+ *
+ * The version is a {@link TOOLCHAIN_RECIPES} entry rather than "whatever the
+ * vendor index says is newest": the page can only offer versions this release
+ * knows it can install, and a wizard that installed something outside that list
+ * would produce a row the page could not reason about.
+ */
+export interface EngineInstallCommand extends InstallCommandBase {
+    via: 'engine';
+    /** The language — always one {@link engineToolFor} recognised. */
+    engine: LanguageTool;
+    /** The exact version, from this release's recipe table. */
+    version: string;
+}
+
+export type InstallCommand =
+    | RunInstallCommand
+    | DownloadInstallCommand
+    | VerifyInstallCommand
+    | EngineInstallCommand;
+
+/** The language a host tool IS, when Genie manages versions of it. `npm` is
+ *  deliberately absent — it arrives inside node, it is not installed. */
+export function engineToolFor(tool: HostToolName): LanguageTool | undefined {
+    return tool === 'php' || tool === 'node' ? tool : undefined;
+}
+
+/**
+ * The engine install for a tool on this machine, or undefined when Genie has no
+ * recipe here — php on macOS/Linux, where no relocatable official build exists.
+ * Those keep their previous route rather than being offered a download that
+ * cannot work.
+ */
+function buildEngineCommand(
+    tool: HostToolName,
+    ctx: AdapterContext,
+): Omit<EngineInstallCommand, 'tool' | 'requiresElevation' | 'requiresRestart'> | undefined {
+    const engine = engineToolFor(tool);
+    if (!engine) return undefined;
+    const newest = recipesFor(engine, { os: ctx.os, ...(ctx.arch ? { arch: ctx.arch } : {}) })[0];
+    if (!newest) return undefined;
+    return {
+        via: 'engine',
+        engine,
+        version: newest.version,
+        label: `install ${LANGUAGE_LABELS[engine]} ${newest.version} into Genie's toolchain`,
+    };
+}
 
 /**
  * Install a missing tool, or UPDATE an already-present one (Toolchain Manager,
@@ -104,6 +153,23 @@ export type InstallCommand = RunInstallCommand | DownloadInstallCommand | Verify
  * their install.
  */
 export type InstallIntent = 'install' | 'update';
+
+/**
+ * Is acting on this tool an INSTALL or an UPDATE?
+ *
+ * Decided from what detection actually found, because the two are different
+ * commands and the wrong one fails: `winget upgrade --id <pkg>` on a machine
+ * that does not have the package errors out. The Toolchain page ran everything
+ * as an update, which was invisible only while it had no Install button to
+ * offer — the moment it grew one (genie#212) an absent tool would have been
+ * "updated" and reported as broken.
+ */
+export function installIntentFor(
+    tool: HostToolName,
+    present: readonly HostToolName[],
+): InstallIntent {
+    return present.includes(tool) ? 'update' : 'install';
+}
 
 /** What a per-method builder returns: the command minus the three fields
  *  {@link buildInstallCommand} injects from the step (tool + the two cost flags).
@@ -148,6 +214,14 @@ export function buildInstallCommand(
             label: `${step.tool} (installed with ${step.coveredBy})`,
         };
     }
+    // A language Genie has a recipe for goes through Genie's own per-version
+    // installer WHATEVER the planner picked, and that override is the point of
+    // genie#212: a brew- or winget-installed node lands somewhere Genie does not
+    // own, so the page can only ever list it as unmanaged and no site can pin to
+    // it. One installer, one root, on every platform.
+    const engine = buildEngineCommand(step.tool, ctx);
+    if (engine) return { ...base, ...engine };
+
     switch (step.method) {
         case 'pm':
             return { ...base, ...buildPmCommand(step.tool, requirePm(step), intent) };
@@ -286,19 +360,15 @@ function buildDirectCommand(tool: HostToolName, ctx: AdapterContext): BuiltDownl
     }
     if (tool === 'docker') return buildDockerDirect(ctx);
 
-    // git / node / php on Windows ship only versioned assets — no fixed "latest"
-    // file exists, so the version is resolved at run time rather than pinned here.
+    // git on Windows ships only versioned assets — no fixed "latest" file
+    // exists, so the version is resolved at run time rather than pinned here.
     const source = VERSIONED_SOURCE[tool];
     if (source) {
         return {
             via: 'download',
             url: null,
             source,
-            artifact: tool === 'php' ? 'zip' : tool === 'node' ? 'zip' : 'exe',
-            // node's zip wraps everything in `node-vX.Y.Z-win-<arch>/`; php's
-            // unpacks flat. The one that wraps must say so, or the PATH entry
-            // points at a directory holding nothing runnable.
-            ...(tool === 'node' ? { wrapperDir: 'archive-name' as const } : {}),
+            artifact: 'exe',
             label: `download ${tool} (latest, resolved)`,
         };
     }
@@ -307,10 +377,19 @@ function buildDirectCommand(tool: HostToolName, ctx: AdapterContext): BuiltDownl
     throw new Error(`toolchain: no direct-download recipe for ${tool} on ${ctx.os}`);
 }
 
+/**
+ * Tools whose download URL must be RESOLVED against a vendor index.
+ *
+ * node and php used to be here. They are not any more, and their absence is the
+ * fix for genie#212: a language Genie manages versions of is installed by
+ * {@link buildEngineCommand} into `<userData>/toolchain/<tool>/<version>` — the
+ * one root the Toolchain page reads. Resolving "whatever the vendor calls latest
+ * today" and unpacking it somewhere else is what made the wizard's installs
+ * invisible to the page, so that path is gone rather than left as a fallback
+ * something could quietly route back through.
+ */
 const VERSIONED_SOURCE: Partial<Record<HostToolName, DirectSource>> = {
     git: 'git-for-windows',
-    node: 'nodejs-dist',
-    php: 'php-windows',
 };
 
 function buildDockerDirect(ctx: AdapterContext): BuiltDownload {

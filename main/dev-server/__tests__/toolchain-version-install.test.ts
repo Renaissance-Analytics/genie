@@ -33,6 +33,7 @@ function effects(over: Partial<VersionInstallEffects> = {}): VersionInstallEffec
         verify: vi.fn(async () => ({ version: '8.3.33' })),
         listModules: vi.fn(async () => ({ modules: [...PHP_INI_EXTENSIONS, 'Core', 'PDO'] })),
         removeDir: vi.fn(async () => {}),
+        addToPath: vi.fn(async () => {}),
         ...over,
     };
 }

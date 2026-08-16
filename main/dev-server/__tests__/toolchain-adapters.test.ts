@@ -64,8 +64,15 @@ describe('buildInstallCommand — winget (Windows)', () => {
         });
     });
 
-    it('installs node by the LTS id', () => {
-        expect(build('node').args).toContain('OpenJS.NodeJS.LTS');
+    it('installs a LANGUAGE through Genie’s engine installer even when the planner said winget', () => {
+        // The override is the point of genie#212, not an accident of ordering: a
+        // winget-installed node lands in a prefix Genie does not own, so the page
+        // can only ever list it as unmanaged and no site can pin a version to it.
+        const command = buildInstallCommand(
+            step({ tool: 'node', method: 'pm', packageManager: 'winget' }),
+            { os: 'win32', arch: 'x64' },
+        );
+        expect(command.via).toBe('engine');
     });
 
     it('installs Docker Desktop by id', () => {
@@ -92,9 +99,18 @@ describe('buildInstallCommand — apt / dnf (Linux)', () => {
         const build = (tool: HostToolName) =>
             asRun(buildInstallCommand(step({ tool, method: 'pm', packageManager: 'apt' }), { os: 'linux' }));
         expect(build('git')).toMatchObject({ command: 'apt-get', args: ['install', '-y', 'git'] });
-        expect(build('node').args).toEqual(['install', '-y', 'nodejs']);
-        expect(build('php').args).toEqual(['install', '-y', 'php-cli']);
         expect(build('docker').args).toEqual(['install', '-y', 'docker.io']);
+        // node and php are NOT here: a language Genie has a recipe for goes
+        // through Genie's own per-version installer on every platform, so a
+        // Linux user gets a node they can pin a site to rather than the distro's
+        // (genie#212). php has no Linux recipe, so it keeps the distro package.
+        expect(
+            buildInstallCommand(step({ tool: 'node', method: 'pm', packageManager: 'apt' }), {
+                os: 'linux',
+                arch: 'x64',
+            }).via,
+        ).toBe('engine');
+        expect(build('php').args).toEqual(['install', '-y', 'php-cli']);
     });
 
     it('installs with `dnf install -y <pkg>`', () => {
@@ -175,25 +191,21 @@ describe('buildInstallCommand — direct downloads', () => {
         expect(git.url).toBeNull();
         expect(git.source).toBe('git-for-windows');
 
-        const node = asDownload(buildInstallCommand(step({ tool: 'node', method: 'direct' }), { os: 'win32' }));
-        expect(node.url).toBeNull();
-        expect(node.source).toBe('nodejs-dist');
-
-        const php = asDownload(buildInstallCommand(step({ tool: 'php', method: 'direct' }), { os: 'win32' }));
-        expect(php.url).toBeNull();
-        expect(php.source).toBe('php-windows');
     });
 
-    it('declares node’s zip as wrapping its contents, and php’s as flat (genie#209)', () => {
-        // node-vX.Y.Z-win-<arch>.zip holds one top-level directory and nothing at
-        // its root; the php nts zip holds php.exe/php-cgi.exe at its root. The
-        // extract step reads this to decide which directory goes on PATH — get it
-        // wrong and node "installs" with nothing runnable on PATH.
-        const node = asDownload(buildInstallCommand(step({ tool: 'node', method: 'direct' }), { os: 'win32' }));
-        expect(node.wrapperDir).toBe('archive-name');
-
-        const php = asDownload(buildInstallCommand(step({ tool: 'php', method: 'direct' }), { os: 'win32' }));
-        expect(php.wrapperDir).toBeUndefined();
+    it('does NOT download a language itself — that is the engine installer’s job (genie#212)', () => {
+        // node and php used to resolve a vendor URL here and unpack into
+        // `<userData>/tools/<tool>`, which the Toolchain page has never read. The
+        // whole reason the page could not see what the wizard installed. They go
+        // through Genie's per-version installer now, at a version from the recipe
+        // table, into the one root both surfaces agree on.
+        for (const tool of ['node', 'php'] as const) {
+            const command = buildInstallCommand(step({ tool, method: 'direct' }), {
+                os: 'win32',
+                arch: 'x64',
+            });
+            expect(command.via, `${tool} still downloads its own archive`).toBe('engine');
+        }
     });
 });
 
@@ -259,8 +271,15 @@ describe('planner ↔ adapter consistency (single source of truth)', () => {
             for (const tool of DEFAULT_TOOLCHAIN) {
                 if (!pmCanInstall(pm, tool)) continue;
                 expect(PM_PACKAGES[pm][tool]).toBeDefined();
-                const cmd = asRun(buildInstallCommand(step({ tool, method: 'pm', packageManager: pm }), { os: 'linux' }));
-                expect(cmd.args.join(' ')).toContain(PM_PACKAGES[pm][tool]!.id);
+                const built = buildInstallCommand(
+                    step({ tool, method: 'pm', packageManager: pm }),
+                    { os: 'linux', arch: 'x64' },
+                );
+                // A language Genie has a recipe for overrides the manager
+                // entirely (genie#212) — it still has to have a package, which
+                // the assertion above proves, but it will not be used here.
+                if (built.via === 'engine') continue;
+                expect(asRun(built).args.join(' ')).toContain(PM_PACKAGES[pm][tool]!.id);
             }
         }
     });

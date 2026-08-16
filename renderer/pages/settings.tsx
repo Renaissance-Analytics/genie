@@ -3617,14 +3617,27 @@ function ToolUpdateList({
                             </div>
                             <Badge color={badge.color}>{badge.label}</Badge>
                             <div className="ws-engine-actions">
-                                {row.action === 'update' && (
+                                {/* Install and Update run the SAME handler, and
+                                    that is the point of genie#212: one install
+                                    path, so a tool this page installs is a tool
+                                    this page can then see. The verb differs only
+                                    because "Update" on something absent reads as
+                                    a bug. */}
+                                {(row.action === 'install' || row.action === 'update') && (
                                     <Action
                                         size="sm"
-                                        variant="ghost"
+                                        variant={row.action === 'install' ? 'default' : 'ghost'}
                                         disabled={busy !== null}
                                         onClick={() => onUpdate(row.name)}
+                                        data-testid={`devtool-${row.action}-${row.name}`}
                                     >
-                                        {busy === row.name ? 'Updating…' : 'Update'}
+                                        {busy === row.name
+                                            ? row.action === 'install'
+                                                ? 'Installing…'
+                                                : 'Updating…'
+                                            : row.action === 'install'
+                                              ? 'Install'
+                                              : 'Update'}
                                     </Action>
                                 )}
                             </div>

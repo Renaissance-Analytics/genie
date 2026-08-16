@@ -158,6 +158,21 @@ export interface VersionInstallEffects {
     listModules(exe: string): Promise<LoadedModules>;
     /** Delete the version directory. Called on every failure path. */
     removeDir(dir: string): Promise<void>;
+    /**
+     * Put a directory on PATH — this process's, and the persisted user one.
+     *
+     * Without it an install is bytes on disk that nothing can find: the owner's
+     * report was a Toolchain page saying Claude Code was installed and a fresh
+     * terminal answering "command not found". Genie's own process could resolve
+     * it because the install had augmented `process.env.PATH`; a newly spawned
+     * shell inherits the SYSTEM environment and knew nothing about it.
+     *
+     * Called only after the binary has proven itself, so PATH never points at a
+     * directory a failed install has already deleted. Never fails the install —
+     * the bytes really are there, and reporting a good install as failed would
+     * send someone to install it twice.
+     */
+    addToPath(dir: string): Promise<void>;
 }
 
 /** What the installed binary says it loaded, plus anything it grumbled about. */
@@ -296,6 +311,12 @@ export async function installEngineVersion(
             const problem = describeModuleFailure(plan, loaded);
             if (problem) return fail(problem);
         }
+
+        // Proven, so now make it FINDABLE. Last, and only on success: a PATH
+        // entry pointing at a directory the failure path just deleted would be
+        // worse than none. A PATH failure is not an install failure — the
+        // effect swallows its own trouble and says so in its own log.
+        await fx.addToPath(plan.binDir);
         return { ok: true, tool: plan.tool, version: plan.version, dir: plan.dir };
     } catch (e) {
         return fail(e instanceof Error ? e.message : String(e));

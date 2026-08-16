@@ -54,8 +54,13 @@ function deps(over: Partial<PerformDeps> = {}) {
         downloaded: [] as string[],
         installed: [] as InstallCommand[],
         verified: [] as string[],
+        engines: [] as { engine: string; version: string }[],
     };
     const base: PerformDeps = {
+        async installEngine(engine, version) {
+            calls.engines.push({ engine, version });
+            return { ok: true };
+        },
         async run(command, args, opts) {
             calls.run.push({ command, args, elevated: opts.elevated });
             return RUN_OK;

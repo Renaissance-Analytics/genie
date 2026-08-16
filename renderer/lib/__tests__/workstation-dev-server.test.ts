@@ -280,8 +280,19 @@ describe('tool update rows', () => {
     it('offers Update only when a newer version is known AND the tool is installed', () => {
         expect(toolRowAction(upd({ installed: '2.40.0', updateAvailable: true }))).toBe('update');
         expect(toolRowAction(upd({ installed: '2.45.0', updateAvailable: false }))).toBe('none');
-        // No Install action in the manager — the first-run wizard owns install.
-        expect(toolRowAction(upd({ installed: undefined, updateAvailable: false }))).toBe('none');
+    });
+
+    /**
+     * A row that says "not installed" and offers NOTHING is a dead end — the
+     * owner hit exactly that: "it seems i am missing install buttons for docker
+     * and git and the agent clis". The wizard owning install was a defensible
+     * split right up until the page started reporting installed-ness itself;
+     * then it became a page that names a problem and refuses to fix it.
+     */
+    it('offers Install for a tool that is not on the machine (genie#212)', () => {
+        expect(toolRowAction(upd({ name: 'docker', installed: undefined }))).toBe('install');
+        expect(toolRowAction(upd({ name: 'git', installed: undefined }))).toBe('install');
+        expect(toolRowAction(upd({ name: 'claude-code', installed: undefined }))).toBe('install');
     });
 
     it('builds a row that carries the version pair, tone and action together', () => {

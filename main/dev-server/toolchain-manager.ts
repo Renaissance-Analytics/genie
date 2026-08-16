@@ -3,7 +3,7 @@ import { basename, dirname, join } from 'node:path';
 import { cp, mkdir, mkdtemp, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { defaultCommandRunner } from './seams';
-import { createToolchainPrimitives, download } from './toolchain-primitives';
+import { addToolsPathEntry, createToolchainPrimitives, download } from './toolchain-primitives';
 import { createToolchainPerformDeps } from './toolchain-effects';
 import { createPerformInstall } from './toolchain-perform';
 import type { PerformInstall } from './toolchain-install';
@@ -71,6 +71,20 @@ function machineContext(): RecipeContext {
 
 export function toolchainRoot(): string {
     return genieToolchainRoot(userDataDir(), process.platform);
+}
+
+/**
+ * `<userData>/tools` — where Genie's first-run wizard installed BEFORE genie#212
+ * unified the two surfaces.
+ *
+ * Nothing writes here any more. It is still read, because a user upgrading from
+ * a Genie that used it has real php/node binaries in it, and quietly ignoring
+ * them would tell someone "nothing is installed" about a directory Genie itself
+ * filled. Adopted rather than migrated: moving another process's live binaries
+ * during a scan is not something a settings page should do.
+ */
+function legacyToolsRoot(): string {
+    return join(userDataDir(), 'tools');
 }
 
 // --- the real filesystem seam ----------------------------------------------
@@ -243,9 +257,22 @@ export { invalidateToolchainScan };
  * instead of grepping for callers — which is exactly the grep that came back
  * empty when the wizard's install path was added.
  */
-export function createToolchainInstallEffect(ctx: AdapterContext): PerformInstall {
+export function createToolchainInstallEffect(
+    ctx: AdapterContext,
+    deps: ToolchainManagerDeps,
+): PerformInstall {
     return createPerformInstall(
-        createToolchainPerformDeps(createToolchainPrimitives(), invalidateToolchainScan),
+        createToolchainPerformDeps(
+            // The wizard's language installs run {@link addToolchainVersion} —
+            // the SAME call the page's "Add a version" makes (genie#212). Passed
+            // in rather than reached for inside the primitives so this module,
+            // which owns both the installer and the cache, stays the only place
+            // that knows how the two surfaces are joined.
+            createToolchainPrimitives((engine, version) =>
+                addToolchainVersion(deps, engine, version),
+            ),
+            invalidateToolchainScan,
+        ),
         ctx,
     );
 }
@@ -265,6 +292,9 @@ async function machineInstalls(opts: { force?: boolean } = {}): Promise<EngineIn
         fs: realFs,
         platform: process.platform,
         root: toolchainRoot(),
+        // Adopt anything the OLD first-run wizard installed, so upgrading does
+        // not orphan a php the user watched Genie install (genie#212).
+        legacyRoot: legacyToolsRoot(),
         home: homedir(),
         env: process.env,
         probeVersion: probeEngineVersion,
@@ -488,6 +518,19 @@ function versionInstallEffects(tool: LanguageTool): VersionInstallEffects {
         },
 
         verify: (exe) => probeEngine(tool, exe),
+
+        /**
+         * Make the proven install FINDABLE.
+         *
+         * Through the SAME helper the wizard's artifact installs use, so there is
+         * one PATH implementation rather than one per surface — the shape of
+         * mistake genie#212 is made of. Its own failure is already swallowed and
+         * reported by the helper: an install whose bytes are on disk is an
+         * install, PATH or no PATH.
+         */
+        async addToPath(dir) {
+            await addToolsPathEntry(dir);
+        },
 
         /**
          * `php -m` is the only evidence the php.ini did anything: a failed

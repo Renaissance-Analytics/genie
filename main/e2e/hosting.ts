@@ -511,6 +511,11 @@ export function defaultHostingE2EState(): HostingE2EState {
                 source: 'version-index',
             },
             { name: 'docker', installed: '27.1.1', updateAvailable: false, source: 'unknown' },
+            // NOT INSTALLED — the state that used to render a row saying so and
+            // offering nothing to do about it (genie#212). One per tab, because
+            // the Install button has to exist on both.
+            { name: 'composer', updateAvailable: false, source: 'unknown' },
+            { name: 'claude-code', updateAvailable: false, source: 'unknown' },
         ],
     };
 }
@@ -586,7 +591,12 @@ export function registerHostingE2EMocks(): void {
         const row = hostingE2EState.toolchainUpdates.find((u) => u.name === tool);
         if (row) {
             row.updateAvailable = false;
-            if (row.latest) row.installed = row.latest;
+            // An INSTALL lands a version where there was none; an update moves an
+            // existing one to latest. Both end with the row naming what is now on
+            // the machine, which is what lets a spec prove the button did
+            // something rather than merely being clickable.
+            if (!row.installed) row.installed = row.latest ?? '1.0.0';
+            else if (row.latest) row.installed = row.latest;
         }
         return {
             ok: true,
