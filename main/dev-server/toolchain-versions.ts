@@ -479,11 +479,16 @@ export function addableRecipes(
  * `public/`. A MISSING extension surfaces as a cryptic failure deep inside a
  * request (`Class "PDO" not found`) that costs an afternoon; an enabled-but-
  * unused one costs a fraction of a megabyte of RAM. The asymmetry decides it.
- * Everything here ships inside the official Windows build, so enabling them
- * needs no compilation and no extra download.
+ * Everything here ships as a DLL in the official Windows build's `ext/`, so
+ * enabling them needs no compilation and no extra download.
+ *
+ * `bcmath` is deliberately absent even though a Laravel app may use it: on
+ * Windows it is COMPILED INTO the binary, there is no `php_bcmath.dll`, and the
+ * line only bought a "Unable to load dynamic library 'bcmath'" warning on every
+ * single startup. It is available regardless — `php -m` lists it with no ini at
+ * all (checked against php-8.4.24-nts-Win32-vs17-x64).
  */
 export const PHP_INI_EXTENSIONS: readonly string[] = [
-    'bcmath',
     'curl',
     'exif',
     'fileinfo',
@@ -517,10 +522,16 @@ export function phpIniContents(versionDir: string, platform: string): string {
         '',
         ...PHP_INI_EXTENSIONS.map((e) => `extension=${e}`),
         '',
-        '; opcache is a ZEND extension, not an ordinary one.',
-        'zend_extension=opcache',
-        'opcache.enable=1',
-        'opcache.enable_cli=0',
+        '; opcache is OFF, and that is a fix rather than an omission.',
+        '; `zend_extension=opcache` + `opcache.enable=1` makes php-cgi.exe DIE at',
+        '; startup on Windows — "Fatal Error Opcode handlers are unusable due to',
+        '; ASLR", exit 127 — and php-cgi is the binary the PHP serve mode spawns.',
+        '; With `opcache.enable_cli=0` beside it, opcache was enabled for exactly',
+        '; the one SAPI it kills and disabled for the one where it is harmless.',
+        '; It can come back the day Genie also CREATES an `opcache.file_cache`',
+        '; directory: with `file_cache` pointing at a directory that exists, plus',
+        '; `file_cache_fallback=1`, php-cgi starts (verified) — pointing it at one',
+        '; that does not exist changes nothing, because PHP will not create it.',
         '',
         '; Room for a real framework boot + a composer install.',
         'memory_limit = 512M',

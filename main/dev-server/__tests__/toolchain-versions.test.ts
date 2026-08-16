@@ -249,4 +249,30 @@ describe('php.ini — Genie owns the CONFIG, not just the binaries', () => {
             'extension_dir = "/home/x/.genie/toolchain/php/8.3.14/ext"',
         );
     });
+
+    /**
+     * Two lines in this file were reproduced as real failures against the actual
+     * php-8.4.24-nts-Win32-vs17-x64 build (genie#209 follow-up):
+     *
+     *   - `zend_extension=opcache` + `opcache.enable=1` makes **php-cgi.exe die at
+     *     startup** — "Fatal Error Opcode handlers are unusable due to ASLR",
+     *     exit 127 — and php-cgi is the binary Genie's PHP serve mode spawns. With
+     *     `opcache.enable_cli=0` alongside it, opcache was enabled for EXACTLY the
+     *     one SAPI it kills and disabled for the one where it is harmless.
+     *   - `extension=bcmath` cannot load: bcmath is COMPILED IN on Windows, there
+     *     is no `php_bcmath.dll`, so the line only buys a startup warning on every
+     *     request.
+     */
+    it('does not enable opcache — it kills the php-cgi worker on Windows', () => {
+        const ini = phpIniContents('C:\\g\\toolchain\\php\\8.4.24', 'win32');
+        expect(ini).not.toMatch(/^\s*zend_extension\s*=\s*opcache/m);
+        expect(ini).not.toMatch(/^\s*opcache\.enable\s*=\s*1/m);
+    });
+
+    it('does not list an extension that is built into the Windows build (bcmath)', () => {
+        expect(PHP_INI_EXTENSIONS).not.toContain('bcmath');
+        expect(phpIniContents('C:\\g\\toolchain\\php\\8.4.24', 'win32')).not.toContain(
+            'extension=bcmath',
+        );
+    });
 });
