@@ -323,6 +323,10 @@ const TOOL_LABELS: Record<HostToolName, string> = {
     php: 'PHP',
     composer: 'Composer',
     docker: 'Docker',
+    // Carried for completeness only. The VC++ runtime is a setup-time
+    // prerequisite, not a tool this page manages or updates — it is absent from
+    // DEFAULT_TOOLCHAIN, so no update row is ever built for it.
+    vcredist: 'Visual C++ runtime (for PHP)',
     'claude-code': 'Claude Code',
     codex: 'Codex',
 };

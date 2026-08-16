@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { stat } from 'node:fs/promises';
 import { quoteWinToken } from './host-site-process';
 import type {
     CommandResult,
@@ -184,3 +185,19 @@ export const hostToolCommandRunner: CommandRunner = {
     // it, so it stays on the no-shell path.
     stream: (command, args, opts) => defaultCommandRunner.stream(command, args, opts),
 };
+
+/**
+ * Does this path exist as a FILE?
+ *
+ * The seam a runtime-LIBRARY probe needs (`toolchain-detect`): a DLL has no
+ * `--version` to ask, so its presence is the presence of the file. Same contract
+ * as the runners above — it resolves, never rejects, because "it is not there"
+ * is an answer and not an error.
+ */
+export async function fileExistsSeam(path: string): Promise<boolean> {
+    try {
+        return (await stat(path)).isFile();
+    } catch {
+        return false;
+    }
+}

@@ -32,6 +32,9 @@ const TOOL_LABEL: Record<HostToolName, string> = {
     docker: 'Docker',
     'claude-code': 'Claude Code',
     codex: 'Codex',
+    // Named for what it IS to the user, not by its package id: the row appears
+    // only on Windows, and only because PHP cannot start without it.
+    vcredist: 'Visual C++ runtime (for PHP)',
 };
 
 const PM_LABEL: Record<ToolchainPackageManager | 'direct', string> = {

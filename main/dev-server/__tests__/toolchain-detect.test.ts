@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
     DEFAULT_TOOLCHAIN,
+    defaultToolchainFor,
     detectToolchain,
     parseToolVersion,
     probeHostTool,
@@ -231,5 +232,122 @@ describe('detectToolchain', () => {
             platform: 'linux',
         });
         expect(report.missing).toEqual([...DEFAULT_TOOLCHAIN]);
+    });
+});
+
+/**
+ * The Visual C++ runtime (genie#209 follow-up).
+ *
+ * The owner's clean machine installed PHP and then could not run it: every
+ * windows.php.net build links against the VC++ runtime, and a fresh Windows box
+ * does not have it. Naming that in the failure was the first fix; DETECTING it
+ * so Genie can install it is this one — "users should not ever have to go and
+ * manually download anything".
+ *
+ * It is not a program, so there is no `--version` to ask. It is a set of FILES,
+ * and the probe is whether they are in place.
+ */
+const WINDIR = ['C:', 'Windows'].join(String.fromCharCode(92));
+const sys32 = (dll: string) => [WINDIR, 'System32', dll].join(String.fromCharCode(92));
+
+describe('detectToolchain — the Visual C++ runtime is a library, not a program', () => {
+    /** Nothing on PATH: a library probe must not consult it anyway. */
+    const bareRunner = runner(() => MISSING);
+
+    const files = (present: string[]) => async (path: string) =>
+        present.some((p) => path.toLowerCase().endsWith(p.toLowerCase()));
+
+    const ALL = ['vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll'];
+
+    it('is PRESENT when every runtime file is in System32', async () => {
+        const report = await detectToolchain({
+            runner: bareRunner,
+            platform: 'win32',
+            wanted: ['vcredist'],
+            fileExists: files(ALL),
+            systemRoot: WINDIR,
+        });
+        expect(report.present).toEqual(['vcredist']);
+    });
+
+    it('looks in System32, not wherever PATH happens to point', async () => {
+        // `where vcruntime140.dll` finds copies other apps ship (Python drops one
+        // beside its own exe). Borrowing another app's copy is a dependency on an
+        // app the user may uninstall, so only the system copy counts.
+        const asked: string[] = [];
+        await detectToolchain({
+            runner: bareRunner,
+            platform: 'win32',
+            wanted: ['vcredist'],
+            fileExists: async (p) => {
+                asked.push(p);
+                return true;
+            },
+            systemRoot: WINDIR,
+        });
+        expect(asked).toContain(sys32('vcruntime140.dll'));
+        expect(asked).toContain(sys32('msvcp140.dll'));
+    });
+
+    it('is MISSING when any ONE of them is absent, and says which', async () => {
+        // msvcp140 is the C++ standard library: php.exe itself starts without it
+        // and then `intl` fails to load. A partial runtime must not read as present.
+        const report = await detectToolchain({
+            runner: bareRunner,
+            platform: 'win32',
+            wanted: ['vcredist'],
+            fileExists: files(['vcruntime140.dll', 'vcruntime140_1.dll']),
+            systemRoot: WINDIR,
+        });
+        expect(report.missing).toEqual(['vcredist']);
+        expect(report.probes[0].detail).toContain('msvcp140.dll');
+    });
+
+    it('never runs a command for it — a DLL has no --version', async () => {
+        const asked: string[] = [];
+        await detectToolchain({
+            runner: {
+                run: async (bin) => {
+                    asked.push(bin);
+                    return MISSING;
+                },
+                stream: () => {
+                    throw new Error('unused');
+                },
+            },
+            platform: 'win32',
+            wanted: ['vcredist'],
+            fileExists: async () => true,
+            systemRoot: WINDIR,
+        });
+        expect(asked).toEqual([]);
+    });
+
+    it('reports missing rather than crashing when there is no fileExists seam', async () => {
+        const report = await detectToolchain({
+            runner: bareRunner,
+            platform: 'win32',
+            wanted: ['vcredist'],
+        });
+        expect(report.missing).toEqual(['vcredist']);
+    });
+});
+
+describe('defaultToolchainFor — the runtime is a WINDOWS prerequisite', () => {
+    it('adds the VC++ runtime on Windows', () => {
+        expect(defaultToolchainFor('win32')).toContain('vcredist');
+    });
+
+    it('leaves it off everywhere else — there is nothing to install', () => {
+        expect(defaultToolchainFor('darwin')).not.toContain('vcredist');
+        expect(defaultToolchainFor('linux')).not.toContain('vcredist');
+    });
+
+    it('still offers every user-facing tool on both', () => {
+        for (const platform of ['win32', 'darwin']) {
+            for (const tool of DEFAULT_TOOLCHAIN) {
+                expect(defaultToolchainFor(platform)).toContain(tool);
+            }
+        }
     });
 });

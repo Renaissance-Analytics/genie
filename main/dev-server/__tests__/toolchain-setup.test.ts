@@ -105,3 +105,62 @@ describe('inspectToolchain', () => {
         expect(insp.packageManagers.recommended).toBe('brew');
     });
 });
+
+/**
+ * The wizard is where the VC++ runtime has to appear (genie#209): the owner's
+ * clean machine installed PHP through it and got a PHP that could not start.
+ * Inspecting must therefore PROBE the runtime on Windows and PLAN it when it is
+ * missing — otherwise everything downstream is correct about a tool nobody asked
+ * about.
+ */
+describe('inspectToolchain — the Windows VC++ runtime prerequisite', () => {
+    const nothingInstalled = runner(() => MISSING);
+
+    it('probes it on Windows and plans it before php', async () => {
+        const insp = await inspectToolchain({
+            runner: nothingInstalled,
+            os: 'win32',
+            pmChoice: 'winget',
+            fileExists: async () => false,
+        });
+        expect(insp.report.missing).toContain('vcredist');
+        const tools = insp.plan.map((s) => s.tool);
+        expect(tools).toContain('vcredist');
+        expect(tools.indexOf('vcredist')).toBeLessThan(tools.indexOf('php'));
+    });
+
+    it('plans nothing for it when the runtime is already on the machine', async () => {
+        const insp = await inspectToolchain({
+            runner: nothingInstalled,
+            os: 'win32',
+            pmChoice: 'winget',
+            fileExists: async () => true,
+        });
+        expect(insp.report.present).toContain('vcredist');
+        expect(insp.plan.map((s) => s.tool)).not.toContain('vcredist');
+        // …and php is still planned, now with its prerequisite satisfied.
+        expect(insp.plan.map((s) => s.tool)).toContain('php');
+    });
+
+    it('never mentions it off Windows', async () => {
+        const insp = await inspectToolchain({
+            runner: nothingInstalled,
+            os: 'darwin',
+            pmChoice: 'brew',
+            fileExists: async () => false,
+        });
+        expect(insp.report.probes.map((p) => p.name)).not.toContain('vcredist');
+        expect(insp.plan.map((s) => s.tool)).not.toContain('vcredist');
+    });
+
+    it('shows the elevation cost in the consent summary', async () => {
+        const insp = await inspectToolchain({
+            runner: nothingInstalled,
+            os: 'win32',
+            pmChoice: 'winget',
+            fileExists: async () => false,
+        });
+        expect(insp.consent.requiresElevation).toBe(true);
+        expect(insp.consent.elevated).toContain('vcredist');
+    });
+});

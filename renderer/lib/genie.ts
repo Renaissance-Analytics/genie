@@ -540,7 +540,12 @@ export type HostToolName =
     | 'composer'
     | 'docker'
     | 'claude-code'
-    | 'codex';
+    | 'codex'
+    // A Windows PREREQUISITE rather than a tool anyone picks: every
+    // windows.php.net build links against the Visual C++ runtime, so php
+    // installs and then cannot start without it (genie#209). It appears in the
+    // setup plan on Windows only.
+    | 'vcredist';
 export type ToolchainPackageManager = 'winget' | 'brew' | 'apt' | 'dnf';
 export type ToolchainInstallMethod = 'pm' | 'direct' | 'npm-global';
 

@@ -338,3 +338,46 @@ describe('runInstallPlan — update intent', () => {
         if (cmd.via === 'run') expect(cmd.args[0]).toBe('install');
     });
 });
+
+/**
+ * A prerequisite that fails must not leave php failing for a mystery reason
+ * (genie#209). The VC++ runtime is modelled as a dependency, so the executor's
+ * existing skip logic carries it — which is the point of modelling it that way
+ * rather than burying it in the php installer.
+ */
+describe('runInstallPlan — a failed VC++ runtime skips php', () => {
+    it('skips php, and composer after it, when the runtime could not install', async () => {
+        const { perform, ran } = performing({ vcredist: FAIL });
+        const result = await runInstallPlan({
+            steps: [
+                step({ tool: 'vcredist' }),
+                step({ tool: 'php', method: 'direct', packageManager: undefined, dependsOn: ['vcredist'] }),
+                step({ tool: 'composer', method: 'direct', packageManager: undefined, dependsOn: ['php'] }),
+                step({ tool: 'git' }),
+            ],
+            ctx: WIN,
+            approved: true,
+            perform,
+        });
+        expect(result.results.map((r) => [r.tool, r.status])).toEqual([
+            ['vcredist', 'failed'],
+            ['php', 'skipped'],
+            ['composer', 'skipped'],
+            ['git', 'succeeded'],
+        ]);
+        // php was never attempted — no half-installed PHP that cannot start.
+        expect(ran.map((c) => c.tool)).toEqual(['vcredist', 'git']);
+    });
+
+    it('installs php when the runtime was already present', async () => {
+        const { perform } = performing();
+        const result = await runInstallPlan({
+            steps: [step({ tool: 'php', method: 'direct', packageManager: undefined, dependsOn: ['vcredist'] })],
+            ctx: WIN,
+            approved: true,
+            present: ['vcredist'],
+            perform,
+        });
+        expect(result.results[0].status).toBe('succeeded');
+    });
+});

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { HostToolName, HostToolProbe, ToolchainReport } from '../toolchain-detect';
-import { DEFAULT_TOOLCHAIN } from '../toolchain-detect';
+import { DEFAULT_TOOLCHAIN, defaultToolchainFor } from '../toolchain-detect';
 import { INSTALL_ORDER, planToolchainInstall, planToolUpdate } from '../toolchain-plan';
 
 /**
@@ -19,15 +19,18 @@ import { INSTALL_ORDER, planToolchainInstall, planToolUpdate } from '../toolchai
 /** Build a detection report from the set of tools that ARE present. */
 function reportWith(present: HostToolName[], platform = 'linux'): ToolchainReport {
     const presentSet = new Set(present);
-    const probes: HostToolProbe[] = DEFAULT_TOOLCHAIN.map((name) => ({
+    // What the SETUP path probes on this platform — Windows adds the VC++
+    // runtime prerequisite, so a report for a Windows machine must carry it.
+    const probed = defaultToolchainFor(platform);
+    const probes: HostToolProbe[] = probed.map((name) => ({
         name,
         installed: presentSet.has(name),
     }));
     return {
         platform,
         probes,
-        present: DEFAULT_TOOLCHAIN.filter((n) => presentSet.has(n)),
-        missing: DEFAULT_TOOLCHAIN.filter((n) => !presentSet.has(n)),
+        present: probed.filter((n) => presentSet.has(n)),
+        missing: probed.filter((n) => !presentSet.has(n)),
     };
 }
 
@@ -60,7 +63,13 @@ describe('planToolchainInstall — what to install', () => {
             os: 'linux',
             pmChoice: 'apt',
         });
-        expect(toolsOf(steps)).toEqual([...INSTALL_ORDER]);
+        // INSTALL_ORDER is the ORDER, not the set: it also carries `vcredist`,
+        // which is a Windows-only prerequisite and never wanted here. The claim
+        // is that what IS planned comes out in that order.
+        expect(toolsOf(steps)).toEqual(
+            INSTALL_ORDER.filter((t) => (DEFAULT_TOOLCHAIN as readonly HostToolName[]).includes(t)),
+        );
+        expect(toolsOf(steps)).not.toContain('vcredist');
     });
 });
 
@@ -341,5 +350,88 @@ describe('planToolUpdate', () => {
             tool: 'php',
             method: 'direct',
         });
+    });
+});
+
+/**
+ * The Visual C++ runtime is a real PREREQUISITE of php on Windows (genie#209).
+ *
+ * The owner's clean machine got a PHP that would not start, because every
+ * windows.php.net build links against it. Modelling it as a dependency rather
+ * than a special case inside the php installer means the machinery that already
+ * exists does the work: it is ordered before php, and a php whose prerequisite
+ * failed is SKIPPED with a reason rather than failing confusingly on its own.
+ */
+describe('planToolchainInstall — the Windows VC++ runtime prerequisite', () => {
+    it('makes php depend on it, on Windows', () => {
+        const steps = planToolchainInstall({
+            detected: reportWith(NOTHING, 'win32'),
+            os: 'win32',
+            pmChoice: 'winget',
+            wanted: ['vcredist', 'php'],
+        });
+        expect(steps.find((s) => s.tool === 'php')!.dependsOn).toContain('vcredist');
+    });
+
+    it('installs it BEFORE php', () => {
+        const steps = planToolchainInstall({
+            detected: reportWith(NOTHING, 'win32'),
+            os: 'win32',
+            pmChoice: 'winget',
+            wanted: ['php', 'vcredist'],
+        });
+        expect(toolsOf(steps)).toEqual(['vcredist', 'php']);
+    });
+
+    it('does NOT make php depend on it off Windows — there is nothing to depend on', () => {
+        // A dependsOn naming a tool that is neither present nor planned would skip
+        // php on every mac and Linux machine.
+        for (const os of ['darwin', 'linux']) {
+            const steps = planToolchainInstall({
+                detected: reportWith(NOTHING, os),
+                os,
+                pmChoice: os === 'darwin' ? 'brew' : 'apt',
+                wanted: ['php'],
+            });
+            expect(steps[0].dependsOn).toEqual([]);
+        }
+    });
+
+    it('needs elevation — it is a system-wide runtime, however it is installed', () => {
+        // Even through winget, which usually does not: this one writes System32.
+        const viaPm = planToolchainInstall({
+            detected: reportWith(NOTHING, 'win32'),
+            os: 'win32',
+            pmChoice: 'winget',
+            wanted: ['vcredist'],
+        });
+        expect(viaPm[0].requiresElevation).toBe(true);
+        const direct = planToolchainInstall({
+            detected: reportWith(NOTHING, 'win32'),
+            os: 'win32',
+            pmChoice: 'direct',
+            wanted: ['vcredist'],
+        });
+        expect(direct[0].requiresElevation).toBe(true);
+    });
+
+    it('does not demand a reboot', () => {
+        const steps = planToolchainInstall({
+            detected: reportWith(NOTHING, 'win32'),
+            os: 'win32',
+            pmChoice: 'winget',
+            wanted: ['vcredist'],
+        });
+        expect(steps[0].requiresRestart).toBe(false);
+    });
+
+    it('plans nothing for it when the runtime is already there', () => {
+        const steps = planToolchainInstall({
+            detected: reportWith(['vcredist'], 'win32'),
+            os: 'win32',
+            pmChoice: 'winget',
+            wanted: ['vcredist', 'php'],
+        });
+        expect(toolsOf(steps)).toEqual(['php']);
     });
 });

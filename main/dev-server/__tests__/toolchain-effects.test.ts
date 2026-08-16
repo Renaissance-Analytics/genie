@@ -158,3 +158,42 @@ describe('createToolchainPerformDeps — invalidating the machine scan', () => {
         expect(changed).not.toHaveBeenCalled();
     });
 });
+
+/**
+ * Verifying a runtime LIBRARY (genie#209). A DLL has no `--version`, so the
+ * effect checks its files instead — and must answer something TRUTHY when they
+ * are there, because the executor reads a truthy verify as proof that a non-zero
+ * exit still left the thing installed. The VC++ redistributable exits 3010
+ * ("reboot required") on a perfectly good install, so that path is not
+ * hypothetical.
+ */
+describe('createToolchainPerformDeps — verifying a runtime library', () => {
+    it('reports it present by checking files, never by running it', async () => {
+        const ran: string[] = [];
+        const prim = primitives({
+            runner: fakeRunner((cmd) => {
+                ran.push(cmd);
+                return MISSING;
+            }),
+            fileExists: async () => true,
+            systemRoot: ['C:', 'Windows'].join(String.fromCharCode(92)),
+        });
+        const deps = createToolchainPerformDeps(prim, noop);
+        expect(await deps.verify?.('vcredist')).toBeTruthy();
+        expect(ran).toEqual([]);
+    });
+
+    it('reports it absent when a file is missing', async () => {
+        const prim = primitives({
+            fileExists: async (p) => !p.toLowerCase().includes('msvcp140'),
+            systemRoot: ['C:', 'Windows'].join(String.fromCharCode(92)),
+        });
+        const deps = createToolchainPerformDeps(prim, noop);
+        expect(await deps.verify?.('vcredist')).toBeUndefined();
+    });
+
+    it('reports it absent when there is no filesystem seam at all', async () => {
+        const deps = createToolchainPerformDeps(primitives(), noop);
+        expect(await deps.verify?.('vcredist')).toBeUndefined();
+    });
+});

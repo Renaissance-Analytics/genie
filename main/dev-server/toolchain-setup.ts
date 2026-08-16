@@ -1,6 +1,7 @@
 import type { CommandRunner } from './container-runtime';
-import { detectToolchain, DEFAULT_TOOLCHAIN } from './toolchain-detect';
-import type { HostToolName, ToolchainReport } from './toolchain-detect';
+import { defaultToolchainFor, detectToolchain, DEFAULT_TOOLCHAIN } from './toolchain-detect';
+import type { FileExists, HostToolName, ToolchainReport } from './toolchain-detect';
+import { fileExistsSeam } from './seams';
 import { availablePackageManagers } from './toolchain-choice';
 import type { ConsentSummary, PackageManagerChoices } from './toolchain-choice';
 import { planToolchainInstall } from './toolchain-plan';
@@ -37,6 +38,10 @@ export interface InspectToolchainOptions {
     /** Force a package-manager (or `direct`). Omit to use the detected
      *  recommendation (or `direct` when the machine has no manager). */
     pmChoice?: PackageManager | 'direct';
+    /** Override the filesystem check a LIBRARY probe needs (tests inject one). */
+    fileExists?: FileExists;
+    /** Override the Windows system root a library probe looks under. */
+    systemRoot?: string;
 }
 
 /** The full picture the wizard renders: what is here, what could install it,
@@ -67,10 +72,20 @@ export interface ToolchainInspection {
  */
 export async function inspectToolchain(opts: InspectToolchainOptions): Promise<ToolchainInspection> {
     const os = String(opts.os ?? process.platform);
-    const wanted = opts.wanted ?? DEFAULT_TOOLCHAIN;
+    // The SETUP default, not the manage-page one: on Windows it also carries the
+    // VC++ runtime php cannot start without (genie#209).
+    const wanted = opts.wanted ?? defaultToolchainFor(os);
 
     const [report, packageManagers] = await Promise.all([
-        detectToolchain({ runner: opts.runner, platform: os, wanted }),
+        detectToolchain({
+            runner: opts.runner,
+            platform: os,
+            wanted,
+            fileExists: opts.fileExists ?? fileExistsSeam,
+            ...(opts.systemRoot ?? process.env.SystemRoot
+                ? { systemRoot: opts.systemRoot ?? String(process.env.SystemRoot) }
+                : {}),
+        }),
         availablePackageManagers({ runner: opts.runner, os }),
     ]);
 

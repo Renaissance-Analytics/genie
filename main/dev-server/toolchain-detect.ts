@@ -53,10 +53,15 @@ export type HostToolName =
     | 'composer'
     | 'docker'
     | 'claude-code'
-    | 'codex';
+    | 'codex'
+    | 'vcredist';
 
 /** The full zero-setup toolchain, in a stable order (install order is the
- *  planner's concern — this is just the detection order). */
+ *  planner's concern — this is just the detection order).
+ *
+ *  `vcredist` is NOT here: it is a Windows PREREQUISITE Genie installs on the
+ *  way to php, not a tool anyone manages or updates. {@link defaultToolchainFor}
+ *  adds it where it exists. */
 export const DEFAULT_TOOLCHAIN: readonly HostToolName[] = [
     'git',
     'node',
@@ -68,6 +73,54 @@ export const DEFAULT_TOOLCHAIN: readonly HostToolName[] = [
     'codex',
 ];
 
+/**
+ * What the SETUP path considers on this platform: the user-facing toolchain
+ * plus any prerequisite that platform needs.
+ *
+ * Only Windows has one so far — every windows.php.net build links against the
+ * Visual C++ runtime, which a fresh Windows box does not have, so php installs
+ * and then cannot start (genie#209). The Toolchain page's manage/update views
+ * keep using {@link DEFAULT_TOOLCHAIN}: a runtime library is not a version
+ * anyone picks.
+ */
+export function defaultToolchainFor(platform: NodeJS.Platform | string): readonly HostToolName[] {
+    return platform === 'win32' ? ['vcredist', ...DEFAULT_TOOLCHAIN] : DEFAULT_TOOLCHAIN;
+}
+
+/**
+ * The Visual C++ runtime files a windows.php.net build actually loads, under
+ * the machine's system root.
+ *
+ * All three, because they fail differently and only the first is obvious.
+ * Read out of the IMPORT TABLES of php-8.4.24-nts-Win32-vs17-x64 with the
+ * vendor's own `deplister.exe`:
+ *
+ *   - `vcruntime140.dll` — imported by php.exe, php-cgi.exe and php8.dll.
+ *     Without it nothing starts at all.
+ *   - `vcruntime140_1.dll` + `msvcp140.dll` (the C++ standard library) —
+ *     imported by `php_intl.dll`, and among the extensions Genie enables, by
+ *     that one alone. Without them php starts, `php --version` answers, and
+ *     `intl` fails to load — a failure that surfaces far from its cause, in a
+ *     framework that requires it.
+ *
+ * A machine can genuinely have the first and not the others, so a check that
+ * stopped at `vcruntime140.dll` would call that machine ready.
+ *
+ * SYSTEM32 specifically, not PATH: `where vcruntime140.dll` also finds the
+ * private copies other apps ship (Python drops one beside its own exe), and a
+ * runtime borrowed from an app the user might uninstall is not a runtime Genie
+ * can promise. One redistributable provides all three.
+ */
+export const VC_RUNTIME_DLLS: readonly string[] = [
+    'vcruntime140.dll',
+    'vcruntime140_1.dll',
+    'msvcp140.dll',
+];
+
+export function vcRuntimeFiles(systemRoot: string): string[] {
+    return VC_RUNTIME_DLLS.map((dll) => `${systemRoot}\\System32\\${dll}`);
+}
+
 /** How to ask one tool for its version. `bin` is what actually lands on PATH,
  *  which is why it is not always the tool NAME (`claude-code` → `claude`). */
 export interface HostToolSpec {
@@ -75,6 +128,12 @@ export interface HostToolSpec {
     bin: string;
     /** argv that prints a version and exits 0 when the tool is usable. */
     versionArgv: string[];
+    /**
+     * A runtime LIBRARY rather than a program: there is no `--version` to ask,
+     * and its presence is the presence of specific files. Returns the absolute
+     * paths that must ALL exist, given the machine's system root.
+     */
+    files?: (systemRoot: string) => string[];
 }
 
 /**
@@ -93,6 +152,13 @@ export const TOOL_SPECS: Record<HostToolName, HostToolSpec> = {
     docker: { name: 'docker', bin: 'docker', versionArgv: ['--version'] },
     'claude-code': { name: 'claude-code', bin: 'claude', versionArgv: ['--version'] },
     codex: { name: 'codex', bin: 'codex', versionArgv: ['--version'] },
+    // Not a program. `bin` is carried for the shape's sake and never spawned.
+    vcredist: {
+        name: 'vcredist',
+        bin: 'vcruntime140.dll',
+        versionArgv: [],
+        files: vcRuntimeFiles,
+    },
 };
 
 /** What one tool reported. `running` is Docker-only; `detail` explains a failed
@@ -165,6 +231,40 @@ export async function probeHostTool(
     }
 }
 
+/**
+ * Probe a runtime LIBRARY: every file it needs must be there. Never throws.
+ *
+ * ALL of them, not any: a partial runtime is the worst state to call present,
+ * because php.exe starts and an extension fails later, far from the cause. The
+ * detail names the files that were missing, so the wizard can say which.
+ */
+async function probeLibrary(
+    spec: HostToolSpec,
+    systemRoot: string,
+    fileExists: FileExists | undefined,
+): Promise<HostToolProbe> {
+    const wanted = spec.files!(systemRoot);
+    if (!fileExists) {
+        return { name: spec.name, installed: false, detail: 'no filesystem check available' };
+    }
+    const missing: string[] = [];
+    for (const path of wanted) {
+        try {
+            if (!(await fileExists(path))) missing.push(path);
+        } catch {
+            missing.push(path);
+        }
+    }
+    if (missing.length > 0) {
+        return {
+            name: spec.name,
+            installed: false,
+            detail: `missing: ${missing.join(', ')}`.slice(0, DETAIL_LIMIT),
+        };
+    }
+    return { name: spec.name, installed: true };
+}
+
 /** Docker's probe: reuse the container-runtime detector so installed-vs-running
  *  is told apart exactly as it is for dev servers. Never throws. */
 async function probeDocker(runner: CommandRunner, bin?: string): Promise<HostToolProbe> {
@@ -178,6 +278,10 @@ async function probeDocker(runner: CommandRunner, bin?: string): Promise<HostToo
     };
 }
 
+/** Does this path exist as a file? The seam a LIBRARY probe needs — there is no
+ *  command to run, so the runner cannot answer for it. */
+export type FileExists = (path: string) => Promise<boolean>;
+
 export interface DetectToolchainOptions {
     runner: CommandRunner;
     platform?: NodeJS.Platform | string;
@@ -185,6 +289,11 @@ export interface DetectToolchainOptions {
     wanted?: readonly HostToolName[];
     /** Override the bin for one tool — a Herd php, a non-PATH install. */
     binFor?: (name: HostToolName) => string;
+    /** Required to probe a LIBRARY tool; without it one reports missing rather
+     *  than crashing, which is the same shape as any other unanswerable probe. */
+    fileExists?: FileExists;
+    /** Where Windows lives. Only a library probe reads it. */
+    systemRoot?: string;
 }
 
 /**
@@ -199,13 +308,18 @@ export async function detectToolchain(opts: DetectToolchainOptions): Promise<Too
     const platform = String(opts.platform ?? process.platform);
     const wanted = opts.wanted ?? DEFAULT_TOOLCHAIN;
 
+    const systemRoot = opts.systemRoot ?? 'C:\\Windows';
+
     const probes: HostToolProbe[] = [];
     for (const name of wanted) {
+        const spec = TOOL_SPECS[name];
         const bin = opts.binFor?.(name);
         probes.push(
             name === 'docker'
                 ? await probeDocker(opts.runner, bin)
-                : await probeHostTool(TOOL_SPECS[name], opts.runner, bin),
+                : spec.files
+                  ? await probeLibrary(spec, systemRoot, opts.fileExists)
+                  : await probeHostTool(spec, opts.runner, bin),
         );
     }
 

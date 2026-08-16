@@ -376,3 +376,34 @@ describe('buildInstallCommand — update intent', () => {
         );
     });
 });
+
+/**
+ * The Visual C++ runtime, both ways (genie#209). Genie installs it rather than
+ * telling the user to go and fetch it — through winget where that exists, and
+ * from Microsoft's own permanent short link where it does not (the same
+ * no-winget Windows path php already needed).
+ */
+describe('buildInstallCommand — the VC++ runtime', () => {
+    it('uses the winget package when a manager is available', () => {
+        const cmd = buildInstallCommand(
+            step({ tool: 'vcredist', method: 'pm', packageManager: 'winget' }),
+            { os: 'win32' },
+        );
+        expect(cmd.via).toBe('run');
+        if (cmd.via === 'run') {
+            expect(cmd.command).toBe('winget');
+            expect(cmd.args).toContain('Microsoft.VCRedist.2015+.x64');
+        }
+    });
+
+    it('falls back to Microsoft’s permanent redirect, installed silently', () => {
+        const cmd = asDownload(
+            buildInstallCommand(step({ tool: 'vcredist', method: 'direct' }), { os: 'win32' }),
+        );
+        // aka.ms/vs/17/... is a stable Microsoft short link, so there is no
+        // version to resolve and nothing that rots.
+        expect(cmd.url).toBe('https://aka.ms/vs/17/release/vc_redist.x64.exe');
+        expect(cmd.artifact).toBe('exe');
+        expect(cmd.run?.args).toEqual(['/install', '/quiet', '/norestart']);
+    });
+});

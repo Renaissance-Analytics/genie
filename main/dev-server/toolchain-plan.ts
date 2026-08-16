@@ -90,6 +90,9 @@ export const INSTALL_ORDER: readonly HostToolName[] = [
     'git',
     'node',
     'npm',
+    // php's Windows runtime prerequisite — before php, because php cannot start
+    // without it (genie#209).
+    'vcredist',
     'php',
     'composer',
     'claude-code',
@@ -107,6 +110,20 @@ const DEPENDS_ON: Partial<Record<HostToolName, HostToolName[]>> = {
     'claude-code': ['npm'],
     codex: ['npm'],
 };
+
+/**
+ * Prerequisites, for THIS platform.
+ *
+ * php's Visual C++ runtime is the only platform-specific one, and it has to be
+ * platform-specific rather than a static entry: a `dependsOn` naming a tool that
+ * is neither present nor planned makes the executor SKIP its dependent, so a
+ * blanket `php: ['vcredist']` would refuse to install php on every mac and Linux
+ * machine.
+ */
+function dependsOnFor(tool: HostToolName, os: NodeJS.Platform | string): HostToolName[] {
+    if (tool === 'php' && os === 'win32') return ['vcredist'];
+    return DEPENDS_ON[tool] ?? [];
+}
 
 export interface PlanToolchainOptions {
     /** The Phase-0 detection report — its `present` set is what gets skipped. */
@@ -193,7 +210,7 @@ function buildStep(
         ...(method === 'pm' ? { packageManager: pmChoice as PackageManager } : {}),
         requiresElevation: elevationFor(tool, os, method),
         requiresRestart: restartFor(tool, os),
-        dependsOn: DEPENDS_ON[tool] ?? [],
+        dependsOn: dependsOnFor(tool, os),
     };
 }
 
@@ -220,6 +237,9 @@ function methodFor(tool: HostToolName, pmChoice: PackageManager | 'direct'): Ins
  */
 function elevationFor(tool: HostToolName, os: NodeJS.Platform | string, method: InstallMethod): boolean {
     if (tool === 'docker') return true;
+    // The VC++ runtime writes System32 whichever way it is installed — winget
+    // included, which is the one case the `pm` rule below would let through.
+    if (tool === 'vcredist') return true;
     if (method === 'pm' && os === 'linux') return true;
     if (method === 'direct' && os === 'win32') return true;
     return false;

@@ -271,6 +271,19 @@ function buildDirectCommand(tool: HostToolName, ctx: AdapterContext): BuiltDownl
             label: 'download composer (stable phar)',
         };
     }
+    if (tool === 'vcredist') {
+        // Microsoft's permanent short link: no version to resolve, nothing that
+        // rots, and the only route on a Windows box without winget. The silent
+        // switches are the vendor's own; `/norestart` because the DLLs are usable
+        // immediately and a surprise reboot is worse than none.
+        return {
+            via: 'download',
+            url: 'https://aka.ms/vs/17/release/vc_redist.x64.exe',
+            artifact: 'exe',
+            run: { args: ['/install', '/quiet', '/norestart'] },
+            label: 'download the Visual C++ runtime (required by PHP)',
+        };
+    }
     if (tool === 'docker') return buildDockerDirect(ctx);
 
     // git / node / php on Windows ship only versioned assets — no fixed "latest"

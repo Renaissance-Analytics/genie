@@ -1,7 +1,7 @@
 import type { CommandResult, CommandRunner } from './container-runtime';
 import { probeRuntime } from './runtime-detect';
-import { probeHostTool, TOOL_SPECS } from './toolchain-detect';
-import type { HostToolName } from './toolchain-detect';
+import { detectToolchain, probeHostTool, TOOL_SPECS } from './toolchain-detect';
+import type { FileExists, HostToolName } from './toolchain-detect';
 import type { AdapterContext, DirectSource, DownloadInstallCommand } from './toolchain-adapters';
 import type { PerformDeps } from './toolchain-perform';
 
@@ -30,6 +30,10 @@ export interface ToolchainEffectPrimitives {
     resolveDownloadUrl: (source: DirectSource, ctx: AdapterContext) => Promise<string | null>;
     /** Run a downloaded artifact (installer / script / place a phar). */
     installArtifact: (command: DownloadInstallCommand, localPath: string) => Promise<CommandResult>;
+    /** Verify a runtime LIBRARY, which has no `--version` to ask. */
+    fileExists?: FileExists;
+    /** Where Windows lives; only the library check reads it. */
+    systemRoot?: string;
 }
 
 /**
@@ -76,19 +80,42 @@ export function createToolchainPerformDeps(
         download: prim.download,
         installArtifact: (command, localPath) =>
             mutating(() => prim.installArtifact(command, localPath)),
-        verify: (tool) => verifyToolVersion(tool, prim.runner),
+        verify: (tool) => verifyToolVersion(tool, prim),
     };
 }
 
-/** Read an installed tool's version back. Docker asks the ENGINE (a just-
- *  installed-but-unstarted Docker has no server version yet → undefined, which
- *  is the honest answer); every other tool answers `--version`. */
+/**
+ * Read an installed tool's version back.
+ *
+ * Docker asks the ENGINE (a just-installed-but-unstarted Docker has no server
+ * version yet → undefined, which is the honest answer). A runtime LIBRARY has
+ * no version to ask for at all, so its files are checked and a presence MARKER
+ * comes back — which matters, because the executor treats a truthy answer as
+ * proof that a non-zero exit still left the thing installed, and the VC++
+ * redistributable exits 3010 ("reboot required") on a perfectly good install.
+ * Everything else answers `--version`.
+ */
 async function verifyToolVersion(
     tool: HostToolName,
-    runner: CommandRunner,
+    prim: ToolchainEffectPrimitives,
 ): Promise<string | undefined> {
     if (tool === 'docker') {
-        return (await probeRuntime('docker', runner)).version;
+        return (await probeRuntime('docker', prim.runner)).version;
     }
-    return (await probeHostTool(TOOL_SPECS[tool], runner)).version;
+    const spec = TOOL_SPECS[tool];
+    if (spec.files) {
+        const probe = await detectToolchain({
+            runner: prim.runner,
+            platform: 'win32',
+            wanted: [tool],
+            ...(prim.fileExists ? { fileExists: prim.fileExists } : {}),
+            ...(prim.systemRoot ? { systemRoot: prim.systemRoot } : {}),
+        });
+        return probe.present.includes(tool) ? LIBRARY_PRESENT : undefined;
+    }
+    return (await probeHostTool(spec, prim.runner)).version;
 }
+
+/** What a library reports instead of a version. Not a version number and not
+ *  pretending to be one — it says the files are in place. */
+export const LIBRARY_PRESENT = 'present';

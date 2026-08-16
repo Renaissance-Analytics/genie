@@ -50,6 +50,9 @@ export const PM_PACKAGES: Record<PackageManager, Partial<Record<HostToolName, Pm
         node: { id: 'OpenJS.NodeJS.LTS' },
         npm: { id: 'OpenJS.NodeJS.LTS' },
         docker: { id: 'Docker.DockerDesktop' },
+        // php's runtime prerequisite. Verified against the live winget source:
+        // "Microsoft Visual C++ v14 Redistributable (x64)".
+        vcredist: { id: 'Microsoft.VCRedist.2015+.x64' },
         // php + composer: no reliable winget package → direct download.
     },
     brew: {
