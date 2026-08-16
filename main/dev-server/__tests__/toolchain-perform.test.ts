@@ -207,12 +207,18 @@ describe('createPerformInstall — download path (direct)', () => {
         expect(outcome.ok).toBe(true);
     });
 
-    it('fails when a versioned source cannot be resolved', async () => {
+    it('fails when a versioned source cannot be resolved, saying what to do about it', async () => {
+        // A bare "could not resolve download url" is where the owner's clean-machine
+        // run dead-ended (genie#209): true, and useless. The failure names the
+        // vendor index it asked and the way forward.
         const { deps: d } = deps({ resolveDownloadUrl: async () => null });
         const perform = createPerformInstall(d, WIN);
-        const outcome = await perform(downloadCmd({ url: null, source: 'php-windows', artifact: 'zip' }));
+        const outcome = await perform(
+            downloadCmd({ tool: 'php', url: null, source: 'php-windows', artifact: 'zip' }),
+        );
         expect(outcome.ok).toBe(false);
         expect(outcome.error).toMatch(/resolve/i);
+        expect(outcome.error).toContain('windows.php.net');
     });
 
     it('fails when the download fails, without attempting an install', async () => {

@@ -1,3 +1,4 @@
+import { resolveFailureHelp } from './toolchain-resolve';
 import type { CommandResult } from './container-runtime';
 import type { HostToolName } from './toolchain-detect';
 import type { AdapterContext, DirectSource, DownloadInstallCommand, InstallCommand } from './toolchain-adapters';
@@ -110,7 +111,10 @@ async function performDownload(
 ): Promise<StepOutcome> {
     const url = command.url ?? (command.source ? await deps.resolveDownloadUrl(command.source, ctx) : null);
     if (!url) {
-        return { ok: false, error: `could not resolve a download URL for ${command.tool}` };
+        // Never a bare "could not resolve": name the index that came up empty and
+        // what to do about it (genie#209).
+        const help = command.source ? ` ${resolveFailureHelp(command.source, command.tool)}` : '';
+        return { ok: false, error: `could not resolve a download URL for ${command.tool}.${help}` };
     }
 
     const dl = await deps.download(url);
