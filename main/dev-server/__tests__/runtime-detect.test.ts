@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { detectContainerRuntime, installHintFor } from '../runtime-detect';
+import { detectContainerRuntime, installHintFor, probeRuntime } from '../runtime-detect';
 import type { CommandResult, CommandRunner, StreamHandle } from '../container-runtime';
 
 /**
@@ -102,6 +102,28 @@ describe('detectContainerRuntime', () => {
         expect(result.reason).toBe('not-running');
         expect(result.installHint).toMatch(/start/i);
         expect(result.installHint).toContain('Docker');
+    });
+
+    /**
+     * The CLI's own version is the EVIDENCE that Docker is installed, and it was
+     * being thrown away when the engine did not answer — leaving the Toolchain
+     * page with no version to show, rendering "Not installed", and (once the page
+     * grew an Install button, genie#212) offering to install a Docker that is
+     * already there. Exactly the loop this module exists to prevent.
+     */
+    it('keeps the CLI version when the engine is down, as proof it IS installed', async () => {
+        const probe = await probeRuntime(
+            'docker',
+            runner((cmd, args) => {
+                if (cmd !== 'docker') return MISSING;
+                return isServerProbe(args) ? DAEMON_DOWN : OK('Docker version 27.3.1, build abc');
+            }),
+        );
+        expect(probe).toMatchObject({ installed: true, running: false });
+        expect(probe.clientVersion).toContain('27.3.1');
+        // …and it is NOT reported as the engine version, which is genuinely
+        // unknown while the daemon is down.
+        expect(probe.version).toBeUndefined();
     });
 
     it('records what each candidate reported, for diagnostics', async () => {

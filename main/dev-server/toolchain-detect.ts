@@ -273,7 +273,12 @@ async function probeDocker(runner: CommandRunner, bin?: string): Promise<HostToo
         name: 'docker',
         installed: probe.installed,
         running: probe.running,
-        ...(probe.version ? { version: probe.version } : {}),
+        // The engine's version when it answers; the CLI's when it does not. An
+        // installed-but-stopped Docker must still be able to NAME itself, or
+        // every surface downstream renders it as absent (genie#212).
+        ...(probe.version ?? probe.clientVersion
+            ? { version: (probe.version ?? probe.clientVersion) as string }
+            : {}),
         ...(probe.detail ? { detail: probe.detail } : {}),
     };
 }

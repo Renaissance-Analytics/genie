@@ -105,7 +105,13 @@ async function verifyToolVersion(
     prim: ToolchainEffectPrimitives,
 ): Promise<string | undefined> {
     if (tool === 'docker') {
-        return (await probeRuntime('docker', prim.runner)).version;
+        // Engine version when the daemon answers; otherwise the CLI's own, which
+        // is what makes an installed-but-STOPPED Docker Desktop read as installed
+        // rather than missing. Reporting nothing here is what let the Toolchain
+        // page contradict the wizard about Docker (genie#212), and — now that the
+        // page offers Install — would have offered to install it a second time.
+        const probe = await probeRuntime('docker', prim.runner);
+        return probe.version ?? probe.clientVersion;
     }
     const spec = TOOL_SPECS[tool];
     if (spec.files) {

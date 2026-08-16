@@ -71,6 +71,19 @@ export interface RuntimeProbe {
     running: boolean;
     /** Engine version, when running. */
     version?: string;
+    /**
+     * What the CLI itself reports (`docker --version`), read only when the
+     * ENGINE did not answer.
+     *
+     * The evidence that the runtime IS installed while its daemon is stopped.
+     * Discarding it left every caller with nothing to show for an installed
+     * Docker Desktop that happened not to be running, so the Toolchain page
+     * rendered "Not installed" — and would then offer to install it again
+     * (genie#212). Kept separate from {@link version} on purpose: the engine's
+     * version is genuinely unknown here, and saying otherwise would be a
+     * different lie.
+     */
+    clientVersion?: string;
     /** Redacted CLI output explaining a failed probe. */
     detail?: string;
 }

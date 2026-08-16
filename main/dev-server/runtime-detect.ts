@@ -61,9 +61,18 @@ export async function probeRuntime(
         if (version) return { kind, installed: true, running: true, version };
 
         const cli = await runner.run(bin, clientVersionArgv());
-        const installed = cli.code === 0 && !!cli.stdout.trim();
+        const clientVersion = cli.code === 0 ? cli.stdout.trim() : '';
+        const installed = !!clientVersion;
         const detail = (engine.stderr || cli.stderr || '').trim().slice(0, 400);
-        return { kind, installed, running: false, ...(detail ? { detail } : {}) };
+        return {
+            kind,
+            installed,
+            running: false,
+            // Carried, not discarded: it is the only proof the thing is on the
+            // machine when the daemon cannot speak for it.
+            ...(clientVersion ? { clientVersion } : {}),
+            ...(detail ? { detail } : {}),
+        };
     } catch (e) {
         // A CommandRunner is not supposed to reject (see `seams.ts`), but a
         // caller may inject one that does, and detection is load-bearing enough
