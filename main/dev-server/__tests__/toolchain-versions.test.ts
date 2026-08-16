@@ -228,9 +228,41 @@ describe('"Add a version" offers only what Genie has a RECIPE for', () => {
 });
 
 describe('php.ini — Genie owns the CONFIG, not just the binaries', () => {
+    /**
+     * The windows.php.net zip ships every extension as a DLL in `ext\` and NO
+     * active php.ini at all — `php.ini-production` has every `extension=` line
+     * commented out (verified: zero uncommented ones). So without this file a
+     * "successful" PHP install cannot run Laravel or even `composer install`,
+     * which needs openssl, mbstring and zip. Enabled-by-Genie is the whole point.
+     */
     it('enables the extensions a Laravel app needs, not a bare cli set', () => {
-        for (const ext of ['mbstring', 'openssl', 'curl', 'fileinfo', 'pdo_mysql', 'pdo_sqlite', 'zip']) {
+        for (const ext of [
+            'openssl',
+            'mbstring',
+            'curl',
+            'fileinfo',
+            'zip',
+            'pdo_sqlite',
+            'sqlite3',
+            'pdo_mysql',
+            'pdo_pgsql',
+            'gd',
+            'intl',
+            'exif',
+            'sodium',
+        ]) {
             expect(PHP_INI_EXTENSIONS).toContain(ext);
+        }
+    });
+
+    it('lists only extensions that are real DLLs in the build, never ones compiled in', () => {
+        // Every name here was loaded for real from php-8.4.24-nts-Win32-vs17-x64
+        // with `php -m` and produced no "Unable to load dynamic library" warning.
+        // The built-ins (ctype, dom, filter, hash, pcre, session, tokenizer, xml,
+        // json, bcmath) are absent on purpose — an extension= line for one of them
+        // is a warning on every single php invocation, in every site log.
+        for (const builtIn of ['ctype', 'dom', 'filter', 'hash', 'pcre', 'session', 'tokenizer', 'xml', 'json', 'bcmath']) {
+            expect(PHP_INI_EXTENSIONS).not.toContain(builtIn);
         }
     });
 

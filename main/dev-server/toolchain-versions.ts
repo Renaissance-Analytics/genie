@@ -475,18 +475,33 @@ export function addableRecipes(
 /**
  * The extensions Genie's php.ini enables.
  *
- * Chosen for what Genie's `php` serve mode actually runs — a Laravel app out of
- * `public/`. A MISSING extension surfaces as a cryptic failure deep inside a
- * request (`Class "PDO" not found`) that costs an afternoon; an enabled-but-
- * unused one costs a fraction of a megabyte of RAM. The asymmetry decides it.
- * Everything here ships as a DLL in the official Windows build's `ext/`, so
- * enabling them needs no compilation and no extra download.
+ * ## Why this file has to exist at all
  *
- * `bcmath` is deliberately absent even though a Laravel app may use it: on
- * Windows it is COMPILED INTO the binary, there is no `php_bcmath.dll`, and the
- * line only bought a "Unable to load dynamic library 'bcmath'" warning on every
- * single startup. It is available regardless — `php -m` lists it with no ini at
- * all (checked against php-8.4.24-nts-Win32-vs17-x64).
+ * The windows.php.net zip ships every extension as a DLL in `ext\` and NO active
+ * `php.ini` — `php.ini-production` has every single `extension=` line commented
+ * out. So an extracted PHP runs with nothing but its compiled-in modules: it
+ * answers `php --version` and then cannot run `composer install`, which needs
+ * openssl, mbstring and zip. An install like that reports success and is
+ * useless. Genie writing a real php.ini is what makes it a PHP you can work in.
+ *
+ * ## Why this list, and not `ext\*.dll`
+ *
+ * Chosen for what Genie's `php` serve mode actually runs — a Laravel app out of
+ * `public/` — plus what Composer itself needs. A MISSING extension surfaces as a
+ * cryptic failure deep inside a request (`Class "PDO" not found`) that costs an
+ * afternoon; an enabled-but-unused one costs a fraction of a megabyte. The
+ * asymmetry decides it. But enabling EVERYTHING is worse than either: several
+ * DLLs in `ext\` need libraries the zip does not carry, and a failing
+ * `extension=` line prints a warning on every php invocation — into every site
+ * log, forever.
+ *
+ * Built-ins are deliberately absent: `ctype`, `dom`, `filter`, `hash`, `pcre`,
+ * `session`, `tokenizer`, `xml`, `json` and `bcmath` are compiled into the
+ * Windows build, so naming them buys nothing but that warning. (`bcmath` was
+ * here and did exactly that.)
+ *
+ * Every name below was loaded for real out of php-8.4.24-nts-Win32-vs17-x64:
+ * `php -m` lists all fourteen and prints no "Unable to load dynamic library".
  */
 export const PHP_INI_EXTENSIONS: readonly string[] = [
     'curl',
@@ -500,9 +515,22 @@ export const PHP_INI_EXTENSIONS: readonly string[] = [
     'pdo_pgsql',
     'pdo_sqlite',
     'sockets',
+    // Laravel's encrypter and Composer's signature checks both reach for it.
+    'sodium',
     'sqlite3',
     'zip',
 ];
+
+/**
+ * The modules an installed PHP must actually REPORT before Genie calls it
+ * installed.
+ *
+ * Not the same claim as {@link PHP_INI_EXTENSIONS}: that is what the ini asks
+ * for, this is what `php -m` has to answer. An `extension=` line that fails is
+ * silent apart from a stderr warning, so asserting the ini's contents proves
+ * nothing — the module list is the only evidence that the config did anything.
+ */
+export const PHP_REQUIRED_MODULES: readonly string[] = PHP_INI_EXTENSIONS;
 
 /**
  * The `php.ini` Genie writes into a version's directory.

@@ -8,6 +8,7 @@ import {
     engineExeName,
     genieVersionDir,
     joinFor,
+    PHP_REQUIRED_MODULES,
     phpIniContents,
     selectableInstalls,
     type EngineInstall,
@@ -61,6 +62,9 @@ export interface VersionInstallPlan {
     installerArgs?: string[];
     /** The config file Genie writes into the version dir (php only, so far). */
     configFile?: { path: string; body: string };
+    /** Modules the installed binary must REPORT for this to count as installed.
+     *  Set where {@link configFile} has to actually do something (php). */
+    requireModules?: readonly string[];
 }
 
 export type VersionInstallPlanResult = VersionInstallPlan | { ok: false; reason: string };
@@ -118,6 +122,9 @@ export function planVersionInstall(
                       path: joinFor(ctx.os, dir, 'php.ini'),
                       body: phpIniContents(dir, ctx.os),
                   },
+                  // …and the config is checked, not assumed: a failed
+                  // `extension=` line is silent apart from a stderr warning.
+                  requireModules: PHP_REQUIRED_MODULES,
               }
             : {}),
     };
@@ -143,8 +150,22 @@ export interface VersionInstallEffects {
     writeFile(path: string, body: string): Promise<void>;
     /** Ask the INSTALLED binary for its version. The only success signal. */
     verify(exe: string): Promise<EngineProbe>;
+    /**
+     * Ask the installed binary which modules it LOADED, and for anything it
+     * complained about on the way. Required rather than optional: a config Genie
+     * writes and never checks is a config that can silently do nothing.
+     */
+    listModules(exe: string): Promise<LoadedModules>;
     /** Delete the version directory. Called on every failure path. */
     removeDir(dir: string): Promise<void>;
+}
+
+/** What the installed binary says it loaded, plus anything it grumbled about. */
+export interface LoadedModules {
+    /** Module names as the binary prints them (`Core`, `PDO`, `openssl`). */
+    modules: string[];
+    /** Loader complaints — an `extension=` naming something it cannot load. */
+    warnings?: string;
 }
 
 /**
@@ -267,10 +288,92 @@ export async function installEngineVersion(
         if (!probe.version) {
             return fail(describeVerifyFailure(plan, probe));
         }
+
+        // …and for a language whose config has to DO something, that the config
+        // did it. A php that starts without openssl cannot `composer install`.
+        if (plan.requireModules && plan.requireModules.length > 0) {
+            const loaded = await fx.listModules(plan.exe);
+            const problem = describeModuleFailure(plan, loaded);
+            if (problem) return fail(problem);
+        }
         return { ok: true, tool: plan.tool, version: plan.version, dir: plan.dir };
     } catch (e) {
         return fail(e instanceof Error ? e.message : String(e));
     }
+}
+
+/** Longest complaint kept — enough to name the extension, not a stack dump. */
+const MODULE_WARNING_LIMIT = 400;
+
+/**
+ * What a MODULE line looks like: `php -m` prints one bare token per module
+ * (`Core`, `PDO`, `pdo_mysql`, `Zend OPcache` is a Zend-section header, not this).
+ *
+ * Recognising modules POSITIVELY rather than filtering diagnostics out is what
+ * makes a wrapped warning safe: a path containing a newline splits the complaint
+ * across lines, and its tail ("ope\curl (The specified module could not be
+ * found), C:") looks like no diagnostic prefix at all. Anything that is not a
+ * single token is a complaint, whatever it says.
+ */
+const MODULE_LINE = /^[A-Za-z_][A-Za-z0-9_.-]*$/;
+
+/**
+ * PURE. Split `php -m` output into the modules it loaded and what it complained
+ * about.
+ *
+ * Both streams are read because **PHP's CLI prints startup warnings to STDOUT**,
+ * not stderr — verified by running the real 8.4.24 build with a bad
+ * `extension=` line and finding stderr completely empty. Looking only at stderr
+ * finds nothing, and treating every stdout line as a module files the warning
+ * itself as an installed module.
+ */
+export function parseModuleList(stdout: string, stderr: string): LoadedModules {
+    const modules: string[] = [];
+    const complaints: string[] = [];
+    for (const raw of stdout.split(/\r?\n/)) {
+        const line = raw.trim();
+        // `[PHP Modules]` / `[Zend Modules]` are section headers, not modules.
+        if (!line || line.startsWith('[')) continue;
+        if (MODULE_LINE.test(line)) modules.push(line);
+        else complaints.push(line);
+    }
+    // Nothing on stderr needs classifying: a binary that wrote to the error
+    // stream at all was complaining, whatever the wording.
+    if (stderr.trim()) complaints.push(stderr.trim());
+    const warnings = complaints.join(' ').slice(0, MODULE_WARNING_LIMIT);
+    return { modules, ...(warnings ? { warnings } : {}) };
+}
+
+/**
+ * PURE. What is wrong with what the installed binary loaded, or undefined.
+ *
+ * Two ways the config can have failed quietly:
+ *
+ *   - a required module is simply NOT in the list — the `extension=` line was
+ *     ignored, or `extension_dir` points somewhere with no DLLs in it;
+ *   - the binary printed a loader complaint. Even with every required module
+ *     present that is a real defect: some `extension=` line names something this
+ *     build cannot load, and the warning will be repeated into every site log on
+ *     every request until someone removes the line.
+ *
+ * Names are compared case-insensitively because `php -m` prints its own casing
+ * (`Core`, `PDO`, `SPL`) which is not the casing an ini uses.
+ */
+export function describeModuleFailure(
+    plan: Pick<VersionInstallPlan, 'tool' | 'version' | 'requireModules'>,
+    loaded: LoadedModules,
+): string | undefined {
+    const what = `${LANGUAGE_LABELS[plan.tool]} ${plan.version}`;
+    const have = new Set(loaded.modules.map((m) => m.toLowerCase()));
+    const missing = (plan.requireModules ?? []).filter((m) => !have.has(m.toLowerCase()));
+    if (missing.length > 0) {
+        return `${what} installed, but it did not load ${missing.join(', ')} — the extensions Genie enabled are not active, so this ${LANGUAGE_LABELS[plan.tool]} cannot run a real app. Nothing was installed.`;
+    }
+    const warned = loaded.warnings?.trim();
+    if (warned) {
+        return `${what} installed, but it complained on startup: ${warned}. That warning would repeat on every request, so nothing was installed.`;
+    }
+    return undefined;
 }
 
 // --- removal ----------------------------------------------------------------

@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
     installEngineVersion,
+    parseModuleList,
     planVersionInstall,
     planVersionRemoval,
     type VersionInstallEffects,
 } from '../toolchain-version-install';
-import type { EngineInstall } from '../toolchain-versions';
+import { PHP_INI_EXTENSIONS, type EngineInstall } from '../toolchain-versions';
 
 /**
  * Installing and removing ONE version of a language into Genie's own
@@ -30,6 +31,7 @@ function effects(over: Partial<VersionInstallEffects> = {}): VersionInstallEffec
         runInstaller: vi.fn(async () => ({ ok: true as const })),
         writeFile: vi.fn(async () => {}),
         verify: vi.fn(async () => ({ version: '8.3.33' })),
+        listModules: vi.fn(async () => ({ modules: [...PHP_INI_EXTENSIONS, 'Core', 'PDO'] })),
         removeDir: vi.fn(async () => {}),
         ...over,
     };
@@ -180,6 +182,57 @@ describe('running an install', () => {
             }
         });
 
+        /**
+         * An `extension=` line that fails is SILENT apart from a stderr warning,
+         * so asserting the ini's CONTENT proves nothing about what loaded. The
+         * module list is the evidence: a PHP that starts but has no openssl or
+         * mbstring cannot run `composer install`, and reporting that as a
+         * successful install is the same species as every other bug in this
+         * batch — a step wearing a success badge for something that does not work.
+         */
+        it('fails when a required extension did not actually load', async () => {
+            const e = effects({
+                listModules: vi.fn(async () => ({ modules: ['Core', 'curl', 'mbstring'] })),
+            });
+            const res = await installEngineVersion(php(), e);
+            expect(res.ok).toBe(false);
+            if (!res.ok) {
+                expect(res.error).toContain('openssl');
+                // …and it says which ones, rather than "some extensions".
+                expect(res.error).toContain('zip');
+            }
+            expect(e.removeDir).toHaveBeenCalled();
+        });
+
+        it('fails when php printed a loader warning, even if every module is present', async () => {
+            const e = effects({
+                listModules: vi.fn(async () => ({
+                    modules: [...PHP_INI_EXTENSIONS],
+                    warnings: "PHP Warning: Unable to load dynamic library 'bcmath'",
+                })),
+            });
+            const res = await installEngineVersion(php(), e);
+            expect(res.ok).toBe(false);
+            if (!res.ok) expect(res.error).toContain('Unable to load dynamic library');
+        });
+
+        it('matches module names case-insensitively — php -m prints Core, PDO, SPL', async () => {
+            const e = effects({
+                listModules: vi.fn(async () => ({
+                    modules: PHP_INI_EXTENSIONS.map((m) => m.toUpperCase()),
+                })),
+            });
+            expect((await installEngineVersion(php(), e)).ok).toBe(true);
+        });
+
+        it('does not ask a language with no required modules for a module list', async () => {
+            const e = effects({ verify: vi.fn(async () => ({ version: '24.19.0' })) });
+            const plan = planVersionInstall('node', '24.19.0', WIN, ROOT);
+            if (!plan.ok) throw new Error('expected a plan');
+            expect((await installEngineVersion(plan, e)).ok).toBe(true);
+            expect(e.listModules).not.toHaveBeenCalled();
+        });
+
         it('says the binary is MISSING when it never landed, not that it would not run', async () => {
             // A layout/strip mismatch: the unpack "succeeded" and put the files
             // somewhere else. A different bug from a binary that cannot start, so
@@ -218,6 +271,70 @@ describe('running an install', () => {
         const res = await installEngineVersion(plan, e);
         expect(res.ok).toBe(false);
         if (!res.ok) expect(res.error).toContain('disk full');
+    });
+});
+
+/**
+ * Reading `php -m`, with the fixture captured from the REAL binary.
+ *
+ * PHP's CLI prints startup warnings to **stdout**, not stderr — verified by
+ * running php-8.4.24-nts-Win32-vs17-x64 with a deliberately bad `extension=`
+ * line and finding stderr completely empty. Anything that looks for the
+ * complaint on stderr will never see it, and anything that treats every stdout
+ * line as a module name will file the warning itself as an installed module.
+ */
+describe('parseModuleList — php prints its complaints on stdout', () => {
+    // Captured verbatim from `php.exe -m` with `extension=bcmath` (which is
+    // built in, so the DLL does not exist) added to the ini.
+    const REAL_STDOUT = [
+        '',
+        "Warning: PHP Startup: Unable to load dynamic library 'bcmath' (tried: C:\\php\\ext\\bcmath (The specified module could not be found), C:\\php\\ext\\php_bcmath.dll (The specified module could not be found)) in Unknown on line 0",
+        '[PHP Modules]',
+        'bcmath',
+        'Core',
+        'openssl',
+        '',
+        '[Zend Modules]',
+        '',
+    ].join('\r\n');
+
+    it('finds the warning even though stderr is empty', () => {
+        const out = parseModuleList(REAL_STDOUT, '');
+        expect(out.warnings).toContain('Unable to load dynamic library');
+    });
+
+    it('does not file the warning line as an installed module', () => {
+        const out = parseModuleList(REAL_STDOUT, '');
+        expect(out.modules).toEqual(['bcmath', 'Core', 'openssl']);
+        expect(out.modules.some((m) => m.includes('Warning'))).toBe(false);
+    });
+
+    it('reports no warning for a clean run', () => {
+        const clean = '[PHP Modules]\r\nCore\r\nopenssl\r\n\r\n[Zend Modules]\r\n';
+        const out = parseModuleList(clean, '');
+        expect(out.modules).toEqual(['Core', 'openssl']);
+        expect(out.warnings).toBeUndefined();
+    });
+
+    it('still reads a complaint that DID come from stderr', () => {
+        const out = parseModuleList('[PHP Modules]\nCore\n', 'some loader error');
+        expect(out.warnings).toContain('some loader error');
+    });
+
+    it('never files a warning’s CONTINUATION line as a module', () => {
+        // A path with a newline in it wraps the warning, and the tail of it looks
+        // nothing like a diagnostic. Captured from a run whose extension_dir was
+        // deliberately broken. A module name is a single token; a sentence is not.
+        const wrapped = [
+            '[PHP Modules]',
+            'Core',
+            "Warning: PHP Startup: Unable to load dynamic library 'curl' (tried: C:",
+            'ope\\curl (The specified module could not be found), C:',
+            'ope\\php_curl.dll (The specified module could not be found)) in Unknown on line 0',
+        ].join('\n');
+        const out = parseModuleList(wrapped, '');
+        expect(out.modules).toEqual(['Core']);
+        expect(out.warnings).toContain('Unable to load dynamic library');
     });
 });
 

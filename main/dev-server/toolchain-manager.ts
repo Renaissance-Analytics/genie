@@ -26,6 +26,7 @@ import {
 } from './toolchain-versions';
 import {
     installEngineVersion,
+    parseModuleList,
     planVersionInstall,
     planVersionRemoval,
     type EngineProbe,
@@ -487,6 +488,22 @@ function versionInstallEffects(tool: LanguageTool): VersionInstallEffects {
         },
 
         verify: (exe) => probeEngine(tool, exe),
+
+        /**
+         * `php -m` is the only evidence the php.ini did anything: a failed
+         * `extension=` line is silent apart from a printed warning. The SPLIT of
+         * that output into modules and complaints is a pure decision — and a
+         * subtle one, since PHP puts the warning on stdout — so it lives in
+         * `parseModuleList` where it is tested against real captured output.
+         */
+        async listModules(exe) {
+            try {
+                const res = await defaultCommandRunner.run(exe, ['-m'], { timeoutMs: 10_000 });
+                return parseModuleList(res.stdout, res.stderr);
+            } catch (e) {
+                return { modules: [], warnings: String(e) };
+            }
+        },
 
         async removeDir(dir) {
             await rm(dir, { recursive: true, force: true }).catch(() => {});
