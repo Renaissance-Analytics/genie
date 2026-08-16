@@ -222,6 +222,20 @@ export function createToolchainPrimitives(): ToolchainEffectPrimitives {
                         timeoutMs: INSTALL_TIMEOUT_MS,
                     });
                     if (res.code !== 0) return res;
+                    if (plan.configFile) {
+                        // php's archive carries no active php.ini, so without this
+                        // the binaries land with every extension off (genie#210).
+                        try {
+                            await mkdir(dirname(plan.configFile.path), { recursive: true });
+                            await writeFile(plan.configFile.path, plan.configFile.body, 'utf8');
+                        } catch (e) {
+                            return {
+                                code: 1,
+                                stdout: '',
+                                stderr: `Unpacked ${command.tool}, but could not write ${plan.configFile.path}: ${String(e)}`,
+                            };
+                        }
+                    }
                     return addToolsPathEntry(plan.pathAdd);
                 }
                 case 'phar': {

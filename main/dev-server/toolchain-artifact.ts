@@ -1,4 +1,5 @@
 import type { DownloadInstallCommand } from './toolchain-adapters';
+import { phpIniContents } from './toolchain-versions';
 
 /**
  * PURE. How to RUN a downloaded installer artifact.
@@ -68,6 +69,15 @@ export type ArtifactInstall =
           args: string[];
           /** Directory to put on PATH once extracted. */
           pathAdd: string;
+          /**
+           * A config file to write beside the binaries once they are unpacked.
+           *
+           * php only, and not a nicety: the windows.php.net zip ships no active
+           * `php.ini` (every `extension=` in `php.ini-production` is commented
+           * out), so without this the wizard produced a PHP that answers
+           * `--version` and cannot run `composer install` (genie#210).
+           */
+          configFile?: { path: string; body: string };
       }
     | {
           kind: 'phar';
@@ -166,6 +176,16 @@ export function artifactInstallPlan(
                 // level down. Adding the wrong one puts a directory holding nothing
                 // runnable on PATH and calls it a successful install (genie#209).
                 pathAdd: extractedBinDir(command, dest, localPath, ctx.os),
+                // The SAME php.ini the Toolchain page's installer writes — one
+                // source of truth, so a config fix lands on both paths at once.
+                ...(command.tool === 'php'
+                    ? {
+                          configFile: {
+                              path: joinFor(ctx.os, dest, 'php.ini'),
+                              body: phpIniContents(dest, ctx.os),
+                          },
+                      }
+                    : {}),
             };
         }
         case 'phar': {

@@ -106,6 +106,34 @@ describe('artifactInstallPlan — zip (php on Windows)', () => {
         });
     });
 
+    /**
+     * The wizard's php was a php.ini-LESS install (genie#210).
+     *
+     * The windows.php.net zip carries no active php.ini — `php.ini-production`
+     * has every `extension=` commented out — so an extracted PHP starts with
+     * nothing but the compiled-in modules. It passes `php --version` and then
+     * cannot run `composer install`, which needs openssl, mbstring and zip. The
+     * Toolchain page's installer already writes the config; the wizard's did not,
+     * so a clean machine got the useless one.
+     */
+    it('writes Genie\u2019s php.ini beside the binaries, from the SAME source as the version installer', () => {
+        const plan = artifactInstallPlan(php(), 'C:/tmp/php.zip', ctx);
+        if (plan.kind !== 'extract') throw new Error('expected an extract plan');
+        expect(plan.configFile?.path).toBe(`C:/g/tools${SEP}php${SEP}php.ini`);
+        // extension_dir must point at THIS install's ext folder, or nothing loads
+        // however many extension= lines follow it.
+        expect(plan.configFile?.body).toContain(`extension_dir = "C:/g/tools${SEP}php${SEP}ext"`);
+        expect(plan.configFile?.body).toContain('extension=openssl');
+        expect(plan.configFile?.body).toContain('extension=mbstring');
+        expect(plan.configFile?.body).toContain('extension=zip');
+    });
+
+    it('gives a non-php zip no config file — there is none to write', () => {
+        const plan = artifactInstallPlan({ ...php(), tool: 'node', source: 'nodejs-dist' }, 'C:/tmp/n.zip', ctx);
+        if (plan.kind !== 'extract') throw new Error('expected an extract plan');
+        expect(plan.configFile).toBeUndefined();
+    });
+
     it('uses PowerShell Expand-Archive on Windows', () => {
         const plan = artifactInstallPlan(php(), 'C:/tmp/php.zip', ctx);
         if (plan.kind !== 'extract') throw new Error('expected an extract plan');
