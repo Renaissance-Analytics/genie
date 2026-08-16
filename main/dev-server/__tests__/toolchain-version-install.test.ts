@@ -29,7 +29,7 @@ function effects(over: Partial<VersionInstallEffects> = {}): VersionInstallEffec
         unpack: vi.fn(async () => ({ ok: true as const })),
         runInstaller: vi.fn(async () => ({ ok: true as const })),
         writeFile: vi.fn(async () => {}),
-        verify: vi.fn(async () => '8.3.33'),
+        verify: vi.fn(async () => ({ version: '8.3.33' })),
         removeDir: vi.fn(async () => {}),
         ...over,
     };
@@ -118,7 +118,7 @@ describe('running an install', () => {
     });
 
     it('runs the installer instead of unpacking, for an exe artifact', async () => {
-        const e = effects({ verify: vi.fn(async () => '3.13.15') });
+        const e = effects({ verify: vi.fn(async () => ({ version: '3.13.15' })) });
         const plan = planVersionInstall('python', '3.13.15', WIN, ROOT);
         if (!plan.ok) throw new Error('expected a plan');
         expect((await installEngineVersion(plan, e)).ok).toBe(true);
@@ -127,7 +127,7 @@ describe('running an install', () => {
     });
 
     it('a pid is not proof it ran: an unpack that leaves no working binary FAILS', async () => {
-        const e = effects({ verify: vi.fn(async () => undefined) });
+        const e = effects({ verify: vi.fn(async () => ({})) });
         const plan = planVersionInstall('php', '8.3.33', WIN, ROOT);
         if (!plan.ok) throw new Error('expected a plan');
         const res = await installEngineVersion(plan, e);
@@ -135,6 +135,63 @@ describe('running an install', () => {
         // …and the half-installed directory is GONE, or the next scan would list
         // a version that cannot run.
         expect(e.removeDir).toHaveBeenCalledWith(`${ROOT}\\php\\8.3.33`);
+    });
+
+    /**
+     * WHY it did not run (genie#209 follow-up).
+     *
+     * The owner hit "PHP 8.4.24 unpacked, but …\php.exe did not run — nothing was
+     * installed." and had nothing to act on: `verify` returned a version-or-
+     * nothing, so the exit code and the binary's own words were thrown away. That
+     * is the same blindness as genie#206, where the real cause sat in a log
+     * nothing read. Verifying the explicit `plan.exe` stays — what changes is that
+     * the failure now carries the reason, and tells three different stories for
+     * three different bugs.
+     */
+    describe('when the binary does not answer, the failure says WHY', () => {
+        const php = () => {
+            const plan = planVersionInstall('php', '8.3.33', WIN, ROOT);
+            if (!plan.ok) throw new Error('expected a plan');
+            return plan;
+        };
+
+        it("carries the binary's own words into the failure", async () => {
+            const e = effects({
+                verify: vi.fn(async () => ({ detail: 'php.exe: Unable to initialize module' })),
+            });
+            const res = await installEngineVersion(php(), e);
+            expect(res.ok).toBe(false);
+            if (!res.ok) expect(res.error).toContain('Unable to initialize module');
+        });
+
+        it('names the Visual C++ redistributable when Windows could not START the process', async () => {
+            // 0xC0000135 = STATUS_DLL_NOT_FOUND. windows.php.net builds import
+            // vcruntime140.dll; on a machine without the redistributable the
+            // process never starts and prints nothing at all, which is precisely
+            // the clean-machine case and precisely the least self-explanatory one.
+            const e = effects({
+                verify: vi.fn(async () => ({ exitCode: 3221225781, detail: '' })),
+            });
+            const res = await installEngineVersion(php(), e);
+            expect(res.ok).toBe(false);
+            if (!res.ok) {
+                expect(res.error).toMatch(/visual c\+\+/i);
+                expect(res.error).toContain('vc_redist.x64.exe');
+            }
+        });
+
+        it('says the binary is MISSING when it never landed, not that it would not run', async () => {
+            // A layout/strip mismatch: the unpack "succeeded" and put the files
+            // somewhere else. A different bug from a binary that cannot start, so
+            // it gets a different sentence.
+            const e = effects({ verify: vi.fn(async () => ({ missing: true })) });
+            const res = await installEngineVersion(php(), e);
+            expect(res.ok).toBe(false);
+            if (!res.ok) {
+                expect(res.error).toMatch(/not there|is missing|did not land/i);
+                expect(res.error).not.toMatch(/did not run/i);
+            }
+        });
     });
 
     it('reports a failed download without leaving a directory behind', async () => {

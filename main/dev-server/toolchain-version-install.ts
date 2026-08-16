@@ -43,6 +43,9 @@ export interface VersionInstallPlan {
     ok: true;
     tool: LanguageTool;
     version: string;
+    /** The platform this plan's paths and failure modes belong to. Carried so a
+     *  win32 plan reads the same on a posix CI runner. */
+    platform: string;
     /** `<root>/<tool>/<version>` — the directory Genie owns and Remove deletes. */
     dir: string;
     /** Candidate download URLs, tried in order. */
@@ -99,6 +102,7 @@ export function planVersionInstall(
         ok: true,
         tool,
         version,
+        platform: ctx.os,
         dir,
         urls: asset.urls,
         artifact: asset.artifact,
@@ -138,9 +142,79 @@ export interface VersionInstallEffects {
     ): Promise<{ ok: true } | { ok: false; error: string }>;
     writeFile(path: string, body: string): Promise<void>;
     /** Ask the INSTALLED binary for its version. The only success signal. */
-    verify(exe: string): Promise<string | undefined>;
+    verify(exe: string): Promise<EngineProbe>;
     /** Delete the version directory. Called on every failure path. */
     removeDir(dir: string): Promise<void>;
+}
+
+/**
+ * What asking the installed binary for its version actually found.
+ *
+ * It used to be a bare version-or-nothing, which is how the owner got "…\php.exe
+ * did not run — nothing was installed." with no exit code, no stderr and nothing
+ * to act on. The RAW facts come back here so the message can be built from them
+ * by a pure function that no spawn is needed to test.
+ */
+export interface EngineProbe {
+    /** The version it reported — the one and only success. */
+    version?: string;
+    /** The binary is not on disk. A different bug from one that will not run. */
+    missing?: boolean;
+    /** The process's exit code, when it started at all. */
+    exitCode?: number | null;
+    /** Its own words (stderr/stdout), or the spawn error. */
+    detail?: string;
+}
+
+/**
+ * Windows exit codes that mean the process NEVER STARTED.
+ *
+ * `0xC0000135` STATUS_DLL_NOT_FOUND and `0xC0000142` STATUS_DLL_INIT_FAILED are
+ * raised by the loader before a single line of the program runs, so the process
+ * prints nothing — the least self-explanatory failure there is, and the one a
+ * clean machine hits. windows.php.net's builds import `vcruntime140.dll`
+ * (verified against php-8.4.24-nts-Win32-vs17-x64), which a machine only has
+ * once the Visual C++ redistributable is installed.
+ */
+const WINDOWS_LOADER_FAILURES: readonly number[] = [3221225781, 3221225785];
+
+/** Microsoft's permanent short link for the x64 redistributable. */
+const VC_REDIST_URL = 'https://aka.ms/vs/17/release/vc_redist.x64.exe';
+
+/**
+ * PURE. Why the freshly installed binary did not answer, in words worth reading.
+ *
+ * Three different bugs, three different sentences: it never landed (a layout
+ * mismatch), Windows could not load it (a missing runtime — named, with the
+ * download), or it ran and objected (its own words).
+ */
+export function describeVerifyFailure(
+    plan: Pick<VersionInstallPlan, 'tool' | 'version' | 'exe' | 'platform'>,
+    probe: EngineProbe,
+): string {
+    const what = `${LANGUAGE_LABELS[plan.tool]} ${plan.version}`;
+    if (probe.missing) {
+        return `${what} unpacked, but ${plan.exe} is not there — the archive did not lay out the way Genie expected. Nothing was installed.`;
+    }
+    if (
+        plan.platform === 'win32' &&
+        typeof probe.exitCode === 'number' &&
+        WINDOWS_LOADER_FAILURES.includes(probe.exitCode)
+    ) {
+        return (
+            `${what} unpacked, but Windows could not start ${plan.exe} (exit 0x${probe.exitCode
+                .toString(16)
+                .toUpperCase()}). This build needs the Microsoft Visual C++ 2015-2022 x64 Redistributable, which this machine does not appear to have. ` +
+            `Install it from ${VC_REDIST_URL} and add the version again. Nothing was installed.`
+        );
+    }
+    const said = probe.detail?.trim();
+    const because = said
+        ? `: ${said}`
+        : probe.exitCode !== undefined && probe.exitCode !== null
+          ? ` (exited ${probe.exitCode})`
+          : '';
+    return `${what} unpacked, but ${plan.exe} did not run${because}. Nothing was installed.`;
 }
 
 export type VersionInstallResult =
@@ -187,12 +261,11 @@ export async function installEngineVersion(
             await fx.writeFile(plan.configFile.path, plan.configFile.body);
         }
 
-        // The install is only real once the binary Genie will spawn answers.
-        const version = await fx.verify(plan.exe);
-        if (!version) {
-            return fail(
-                `${LANGUAGE_LABELS[plan.tool]} ${plan.version} unpacked, but ${plan.exe} did not run — nothing was installed.`,
-            );
+        // The install is only real once the binary Genie will spawn answers — and
+        // when it does not, the reason it gave is the whole point (genie#209).
+        const probe = await fx.verify(plan.exe);
+        if (!probe.version) {
+            return fail(describeVerifyFailure(plan, probe));
         }
         return { ok: true, tool: plan.tool, version: plan.version, dir: plan.dir };
     } catch (e) {

@@ -24,6 +24,7 @@ import {
     installEngineVersion,
     planVersionInstall,
     planVersionRemoval,
+    type EngineProbe,
     type VersionInstallEffects,
 } from './toolchain-version-install';
 import { resolveEngineExe, type EngineResolution } from './engine-resolve';
@@ -130,21 +131,39 @@ async function walkSize(dir: string, depth: number): Promise<number> {
 
 // --- probing ----------------------------------------------------------------
 
-/** Ask an engine binary for its version. The exe is a REAL executable (the
- *  scanner proved it), so the no-shell runner is the right one. */
-async function probeEngineVersion(
-    tool: LanguageTool,
-    exe: string,
-): Promise<string | undefined> {
+/** How much of a failing binary's own output is worth keeping. */
+const PROBE_DETAIL_LIMIT = 400;
+
+/**
+ * Ask an engine binary for its version, keeping WHY when it does not answer.
+ *
+ * The exe is a real executable path, not a PATH lookup, so the no-shell runner
+ * is the right one. Everything it learns is reported: whether the file is even
+ * there, the exit code, and the process's own words. Discarding those is how a
+ * failed install came back as "did not run" and nothing else (genie#209) — and a
+ * loader failure prints NOTHING, so the exit code is the only evidence there is.
+ */
+async function probeEngine(tool: LanguageTool, exe: string): Promise<EngineProbe> {
+    if (!(await realFs.isFile(exe))) return { missing: true };
     try {
         const res = await defaultCommandRunner.run(exe, engineVersionArgv(tool), {
             timeoutMs: 10_000,
         });
-        if (res.code !== 0) return undefined;
-        return parseToolVersion(res.stdout || res.stderr);
-    } catch {
-        return undefined;
+        const version = res.code === 0 ? parseToolVersion(res.stdout || res.stderr) : undefined;
+        if (version) return { version };
+        return {
+            exitCode: res.code,
+            detail: (res.stderr || res.stdout || '').trim().slice(0, PROBE_DETAIL_LIMIT),
+        };
+    } catch (e) {
+        return { detail: String(e) };
     }
+}
+
+/** The SCAN's version probe: the same question, answered with just the version.
+ *  A directory that cannot name its own version is the only caller. */
+async function probeEngineVersion(tool: LanguageTool, exe: string): Promise<string | undefined> {
+    return (await probeEngine(tool, exe)).version;
 }
 
 /** Resolve a bare bin name against PATH. `where`/`which` may print several
@@ -445,7 +464,7 @@ function versionInstallEffects(tool: LanguageTool): VersionInstallEffects {
             await writeFile(path, body, 'utf8');
         },
 
-        verify: (exe) => probeEngineVersion(tool, exe),
+        verify: (exe) => probeEngine(tool, exe),
 
         async removeDir(dir) {
             await rm(dir, { recursive: true, force: true }).catch(() => {});
