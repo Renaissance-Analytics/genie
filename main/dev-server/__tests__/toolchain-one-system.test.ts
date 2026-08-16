@@ -187,6 +187,7 @@ describe('an install Genie reports is an install a new terminal can run', () => 
             addToPath: async (dir: string) => {
                 added.push(dir);
             },
+            ensurePrerequisite: async () => ({ ok: true as const }),
         };
     }
 
@@ -239,6 +240,98 @@ const PHP_MODULES = [
     'sqlite3',
     'zip',
 ];
+
+// --- 3b. a prerequisite is Genie's job, not a link in an error message -------
+
+/**
+ * "Users should not ever have to go and manually download anything."
+ *
+ * php's Windows build cannot start without the Visual C++ runtime, and the
+ * wizard has installed it since beta.252. The PAGE's per-version installer never
+ * did — it downloaded php, watched the binary fail to load, and printed a URL.
+ * Two install paths, one of which did the work; the same shape of split as
+ * genie#212 itself, one layer down.
+ */
+describe('installing a language installs what that language NEEDS', () => {
+    function fx(log: string[], over: Record<string, unknown> = {}) {
+        return {
+            download: async () => {
+                log.push('download');
+                return { ok: true as const, path: '/tmp/a.zip' };
+            },
+            unpack: async () => ({ ok: true as const }),
+            runInstaller: async () => ({ ok: true as const }),
+            writeFile: async () => {},
+            verify: async () => ({ version: '8.4.24' }),
+            listModules: async () => ({ modules: [...PHP_MODULES] }),
+            removeDir: async () => {},
+            addToPath: async () => {},
+            ensurePrerequisite: async (name: string) => {
+                log.push(`prereq:${name}`);
+                return { ok: true as const };
+            },
+            ...over,
+        };
+    }
+
+    const phpPlan = () => {
+        const plan = planVersionInstall(
+            'php',
+            '8.4.24',
+            { os: 'win32', arch: 'x64' },
+            genieToolchainRoot('C:\\Genie', 'win32'),
+        );
+        if (!plan.ok) throw new Error(plan.reason);
+        return plan;
+    };
+
+    it('declares the Visual C++ runtime as a requirement of php on Windows', () => {
+        expect(phpPlan().requires).toContain('vcredist');
+    });
+
+    it('does not invent a requirement for a language that has none', () => {
+        const plan = planVersionInstall(
+            'node',
+            '24.19.0',
+            { os: 'win32', arch: 'x64' },
+            genieToolchainRoot('C:\\Genie', 'win32'),
+        );
+        if (!plan.ok) throw new Error(plan.reason);
+        expect(plan.requires ?? []).toEqual([]);
+    });
+
+    it('installs the prerequisite BEFORE fetching the language', async () => {
+        const log: string[] = [];
+        const res = await installEngineVersion(phpPlan(), fx(log));
+
+        expect(res.ok).toBe(true);
+        // Order matters: the runtime has to be there before the binary is asked
+        // to run, and doing it first means the failure never happens rather than
+        // being explained after the fact.
+        expect(log).toEqual(['prereq:vcredist', 'download']);
+    });
+
+    it('fails with the prerequisite NAMED, and never downloads, when it cannot be installed', async () => {
+        const log: string[] = [];
+        const res = await installEngineVersion(
+            phpPlan(),
+            fx(log, {
+                ensurePrerequisite: async (name: string) => {
+                    log.push(`prereq:${name}`);
+                    return { ok: false as const, error: 'UAC declined' };
+                },
+            }),
+        );
+
+        expect(res.ok).toBe(false);
+        if (res.ok) return;
+        expect(res.error).toMatch(/visual c\+\+/i);
+        expect(res.error).toContain('UAC declined');
+        // Downloading 30MB of php that provably cannot start is wasted work and
+        // a more confusing failure than the real one.
+        expect(log).toEqual(['prereq:vcredist']);
+    });
+});
 
 // --- 4. nothing the old wizard installed is orphaned ------------------------
 

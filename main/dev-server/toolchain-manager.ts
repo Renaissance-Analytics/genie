@@ -2,13 +2,15 @@ import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { cp, mkdir, mkdtemp, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { defaultCommandRunner } from './seams';
+import { defaultCommandRunner, fileExistsSeam, hostToolCommandRunner } from './seams';
 import { addToolsPathEntry, createToolchainPrimitives, download } from './toolchain-primitives';
 import { createToolchainPerformDeps } from './toolchain-effects';
 import { createPerformInstall } from './toolchain-perform';
-import type { PerformInstall } from './toolchain-install';
+import { runInstallPlan, type PerformInstall } from './toolchain-install';
 import type { AdapterContext } from './toolchain-adapters';
-import { parseToolVersion } from './toolchain-detect';
+import { detectToolchain, parseToolVersion } from './toolchain-detect';
+
+import { planToolUpdate } from './toolchain-plan';
 import { scanToolchain, shouldRescanToolchain, type ToolchainFs } from './toolchain-scan';
 import {
     LANGUAGE_TOOLS,
@@ -407,7 +409,7 @@ export async function addToolchainVersion(
     const plan = planVersionInstall(tool, version, machineContext(), toolchainRoot());
     if (!plan.ok) return { ok: false, error: plan.reason };
 
-    const result = await installEngineVersion(plan, versionInstallEffects(tool));
+    const result = await installEngineVersion(plan, versionInstallEffects(tool, deps));
     // The disk changed either way: a failed install still deleted its directory.
     invalidateToolchainScan();
     if (!result.ok) return { ok: false, error: result.error };
@@ -462,7 +464,7 @@ export async function removeToolchainVersion(
 
 const INSTALL_TIMEOUT_MS = 15 * 60_000;
 
-function versionInstallEffects(tool: LanguageTool): VersionInstallEffects {
+function versionInstallEffects(tool: LanguageTool, deps: ToolchainManagerDeps): VersionInstallEffects {
     return {
         async download(urls) {
             const errors: string[] = [];
@@ -518,6 +520,48 @@ function versionInstallEffects(tool: LanguageTool): VersionInstallEffects {
         },
 
         verify: (exe) => probeEngine(tool, exe),
+
+        /**
+         * Install a machine-level prerequisite, if it is not already here.
+         *
+         * The Visual C++ runtime is the only one so far, and it is why a php
+         * install could unpack perfectly and then produce a binary Windows
+         * refuses to start. The wizard has installed it since beta.252; this
+         * page's installer only NAMED it in an error and left the user to go and
+         * download it, which is not something Genie should ever ask for.
+         *
+         * Runs through the same plan/adapter/perform machinery as every other
+         * install, so the elevation prompt, the silent switches and the
+         * "exit 3010 means reboot-required, not failure" handling are the ones
+         * already proven — not a second copy written for this call site.
+         */
+        async ensurePrerequisite(name) {
+            const detected = await detectToolchain({
+                runner: hostToolCommandRunner,
+                platform: process.platform,
+                wanted: [name],
+                // REQUIRED for a library probe: without it the check answers
+                // "no filesystem check available" → not installed → Genie would
+                // download and UAC-prompt for the runtime on every single php
+                // install, including the machines that already have it.
+                fileExists: fileExistsSeam,
+            });
+            // Already there: nothing to do, and no download to spend.
+            if (detected.present.includes(name)) return { ok: true };
+
+            const ctx = machineContext();
+            const result = await runInstallPlan({
+                steps: [planToolUpdate(name, ctx.os, 'direct')],
+                ctx,
+                perform: createToolchainInstallEffect(ctx, deps),
+                approved: true,
+                intent: 'install',
+            });
+            const failed = result.results.find((r) => r.status !== 'succeeded');
+            return failed
+                ? { ok: false, ...(failed.error ? { error: failed.error } : {}) }
+                : { ok: true };
+        },
 
         /**
          * Make the proven install FINDABLE.

@@ -65,6 +65,39 @@ export interface VersionInstallPlan {
     /** Modules the installed binary must REPORT for this to count as installed.
      *  Set where {@link configFile} has to actually do something (php). */
     requireModules?: readonly string[];
+    /**
+     * Things that must be on the machine before this language can run at all.
+     *
+     * Genie INSTALLS these; it does not name them in an error and leave the user
+     * to go and fetch something. php's Windows build imports `vcruntime140.dll`,
+     * which only exists once the Visual C++ redistributable is installed, and a
+     * clean machine does not have it — so an unpack that works perfectly is
+     * followed by a binary that cannot start.
+     */
+    requires?: readonly EnginePrerequisite[];
+}
+
+/** A machine-level dependency Genie can install on a language's behalf. Narrow
+ *  on purpose: this is not a general package concept, it is the short list of
+ *  runtimes an official build refuses to start without. */
+export type EnginePrerequisite = 'vcredist';
+
+/** Human names, so a failure can say what it could not install. */
+const PREREQUISITE_LABELS: Record<EnginePrerequisite, string> = {
+    vcredist: 'the Microsoft Visual C++ 2015-2022 x64 Redistributable',
+};
+
+/**
+ * What a language needs before it can run here.
+ *
+ * php on Windows and nothing else so far. Platform-scoped rather than a flat
+ * table: the requirement belongs to the windows.php.net BUILD, not to php.
+ */
+export function enginePrerequisites(
+    tool: LanguageTool,
+    platform: string,
+): readonly EnginePrerequisite[] {
+    return tool === 'php' && platform === 'win32' ? ['vcredist'] : [];
 }
 
 export type VersionInstallPlanResult = VersionInstallPlan | { ok: false; reason: string };
@@ -114,6 +147,9 @@ export function planVersionInstall(
         binDir,
         exe: joinFor(ctx.os, binDir, engineExeName(tool, ctx.os)),
         ...(asset.args ? { installerArgs: asset.args.map((a) => a.replace('{dir}', dir)) } : {}),
+        ...(enginePrerequisites(tool, ctx.os).length > 0
+            ? { requires: enginePrerequisites(tool, ctx.os) }
+            : {}),
         // Genie owns the language CONFIG, not just the binaries — a version whose
         // php.ini someone else can rewrite is a version a site cannot rely on.
         ...(tool === 'php'
@@ -173,6 +209,14 @@ export interface VersionInstallEffects {
      * send someone to install it twice.
      */
     addToPath(dir: string): Promise<void>;
+    /**
+     * Make sure a machine-level prerequisite is installed, installing it if it
+     * is not. Idempotent: called on every install, and a no-op when the thing is
+     * already there.
+     */
+    ensurePrerequisite(
+        name: EnginePrerequisite,
+    ): Promise<{ ok: boolean; error?: string }>;
 }
 
 /** What the installed binary says it loaded, plus anything it grumbled about. */
@@ -240,8 +284,9 @@ export function describeVerifyFailure(
         return (
             `${what} unpacked, but Windows could not start ${plan.exe} (exit 0x${probe.exitCode
                 .toString(16)
-                .toUpperCase()}). This build needs the Microsoft Visual C++ 2015-2022 x64 Redistributable, which this machine does not appear to have. ` +
-            `Install it from ${VC_REDIST_URL} and add the version again. Nothing was installed.`
+                .toUpperCase()}) — the Visual C++ runtime it needs did not load. ` +
+            `Genie installed that runtime before fetching ${LANGUAGE_LABELS[plan.tool]}, so the usual cause is that Windows has not picked it up yet: RESTART and add the version again. ` +
+            `If it still fails, install ${VC_REDIST_URL} manually and say so — that is a Genie bug, not something you should have to do. Nothing was installed.`
         );
     }
     const said = probe.detail?.trim();
@@ -277,6 +322,24 @@ export async function installEngineVersion(
     };
 
     try {
+        // FIRST, and before spending a download on a binary that provably cannot
+        // start without it. Genie installs what the language needs rather than
+        // telling someone to go and fetch it — an install that ends in a link to
+        // a Microsoft download page is an install that did not happen.
+        for (const name of plan.requires ?? []) {
+            const prereq = await fx.ensurePrerequisite(name);
+            if (!prereq.ok) {
+                // No `fail()`: nothing has been written yet, so there is no
+                // half-install to clean up and no directory to delete.
+                return {
+                    ok: false,
+                    error:
+                        `${LANGUAGE_LABELS[plan.tool]} ${plan.version} needs ${PREREQUISITE_LABELS[name]}, ` +
+                        `and Genie could not install it${prereq.error ? `: ${prereq.error}` : ''}. Nothing was installed.`,
+                };
+            }
+        }
+
         const dl = await fx.download(plan.urls);
         if (!dl.ok) return fail(dl.error);
 

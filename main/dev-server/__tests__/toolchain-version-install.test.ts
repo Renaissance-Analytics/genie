@@ -34,6 +34,7 @@ function effects(over: Partial<VersionInstallEffects> = {}): VersionInstallEffec
         listModules: vi.fn(async () => ({ modules: [...PHP_INI_EXTENSIONS, 'Core', 'PDO'] })),
         removeDir: vi.fn(async () => {}),
         addToPath: vi.fn(async () => {}),
+        ensurePrerequisite: vi.fn(async () => ({ ok: true })),
         ...over,
     };
 }
@@ -179,6 +180,13 @@ describe('running an install', () => {
             expect(res.ok).toBe(false);
             if (!res.ok) {
                 expect(res.error).toMatch(/visual c\+\+/i);
+                // Genie INSTALLS that runtime before fetching php now, so the
+                // advice is to restart — not "go and download this". A manual
+                // download is named only as the last resort, and explicitly as a
+                // Genie bug, because the owner's rule is that a user should never
+                // have to fetch anything by hand.
+                expect(res.error).toMatch(/restart/i);
+                expect(res.error).toMatch(/genie bug/i);
                 expect(res.error).toContain('vc_redist.x64.exe');
             }
         });
