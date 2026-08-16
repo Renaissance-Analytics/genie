@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { CommandResult } from '../container-runtime';
-import type { DownloadInstallCommand, InstallCommand, RunInstallCommand } from '../toolchain-adapters';
+import type {
+    DownloadInstallCommand,
+    InstallCommand,
+    RunInstallCommand,
+    VerifyInstallCommand,
+} from '../toolchain-adapters';
 import { createPerformInstall } from '../toolchain-perform';
 import type { PerformDeps } from '../toolchain-perform';
 
@@ -91,18 +96,90 @@ describe('createPerformInstall — run path (package managers, npm i -g)', () =>
         expect(calls.run[0].elevated).toBe(true);
     });
 
-    it('fails cleanly on a non-zero exit, keeping the reason', async () => {
-        const { deps: d } = deps({ run: async () => RUN_FAIL });
+    it('fails cleanly on a non-zero exit when the tool is still not there', async () => {
+        const { deps: d } = deps({ run: async () => RUN_FAIL, verify: async () => undefined });
         const perform = createPerformInstall(d, WIN);
         const outcome = await perform(runCmd());
         expect(outcome.ok).toBe(false);
         expect(outcome.error).toContain('install failed');
     });
 
+    /**
+     * genie#209: `winget install` on a package that is already present exits
+     * NON-ZERO with "Found an existing package already installed". That is the
+     * outcome we wanted — the tool is on the machine — and reporting it as a
+     * failure is what skipped claude-code and codex on the owner's fresh box. The
+     * exit code is the package manager's opinion; the re-probe is the fact.
+     */
+    it('treats a non-zero exit as success when the tool verifiably IS there', async () => {
+        const alreadyInstalled: CommandResult = {
+            code: -1978335135,
+            stdout: 'Found an existing package already installed.',
+            stderr: '',
+        };
+        const { deps: d, calls } = deps({ run: async () => alreadyInstalled });
+        const perform = createPerformInstall(d, WIN);
+        expect(await perform(runCmd({ tool: 'npm' }))).toEqual({ ok: true, version: '1.2.3' });
+        expect(calls.verified).toEqual(['npm']);
+    });
+
+    it('still fails a non-zero exit with no verifier to appeal to', async () => {
+        // Nothing can vouch for the tool, so the exit code stands.
+        const { deps: d } = deps({ run: async () => RUN_FAIL, verify: undefined });
+        const perform = createPerformInstall(d, WIN);
+        expect((await perform(runCmd())).ok).toBe(false);
+    });
+
     it('succeeds without a version when there is no verifier', async () => {
         const { deps: d } = deps({ verify: undefined });
         const perform = createPerformInstall(d, WIN);
         expect(await perform(runCmd())).toEqual({ ok: true });
+    });
+});
+
+/**
+ * The CONFIRM path (genie#209). When an earlier step in the plan already
+ * installed the very package this step names — winget's node package IS npm —
+ * the executor asks for a confirmation instead of a second install. It is not a
+ * free pass: a tool that cannot be found afterwards fails, and says whose install
+ * was supposed to have brought it.
+ */
+describe('createPerformInstall — verify path (a shared package)', () => {
+    const verifyCmd = (over: Partial<VerifyInstallCommand> = {}): VerifyInstallCommand => ({
+        via: 'verify',
+        tool: 'npm',
+        coveredBy: 'node',
+        label: 'npm (installed with node)',
+        requiresElevation: false,
+        requiresRestart: false,
+        ...over,
+    });
+
+    it('confirms the tool without running or downloading anything', async () => {
+        const { deps: d, calls } = deps();
+        const perform = createPerformInstall(d, WIN);
+        expect(await perform(verifyCmd())).toEqual({ ok: true, version: '1.2.3' });
+        expect(calls.run).toEqual([]);
+        expect(calls.downloaded).toEqual([]);
+        expect(calls.verified).toEqual(['npm']);
+    });
+
+    it('trusts the covering install when there is no verifier to check with', async () => {
+        // Nothing to check against: the covering install reported success and
+        // that is all the information there is, so this passes rather than
+        // failing a tool on no evidence.
+        const { deps: d } = deps({ verify: undefined });
+        const perform = createPerformInstall(d, WIN);
+        expect(await perform(verifyCmd())).toEqual({ ok: true });
+    });
+
+    it('fails, naming the install that should have provided it, when the tool is absent', async () => {
+        const { deps: d } = deps({ verify: async () => undefined });
+        const perform = createPerformInstall(d, WIN);
+        const outcome = await perform(verifyCmd());
+        expect(outcome.ok).toBe(false);
+        expect(outcome.error).toContain('npm');
+        expect(outcome.error).toContain('node');
     });
 });
 

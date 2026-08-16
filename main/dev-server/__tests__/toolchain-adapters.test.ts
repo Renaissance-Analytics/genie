@@ -185,6 +185,30 @@ describe('buildInstallCommand — direct downloads', () => {
     });
 });
 
+/**
+ * A step the planner marked as covered by an earlier one materialises into a
+ * CONFIRMATION, not a second install of the same package (genie#209).
+ */
+describe('buildInstallCommand — a covered step', () => {
+    it('emits a verify command naming the install that covers it', () => {
+        const cmd = buildInstallCommand(
+            step({ tool: 'npm', method: 'pm', packageManager: 'winget', coveredBy: 'node' }),
+            { os: 'win32' },
+        );
+        expect(cmd.via).toBe('verify');
+        if (cmd.via === 'verify') expect(cmd.coveredBy).toBe('node');
+        expect(cmd.label).toContain('node');
+    });
+
+    it('does not emit a package-manager argv for it', () => {
+        const cmd = buildInstallCommand(
+            step({ tool: 'npm', method: 'pm', packageManager: 'winget', coveredBy: 'node' }),
+            { os: 'win32' },
+        );
+        expect('command' in cmd).toBe(false);
+    });
+});
+
 describe('buildInstallCommand — cost carried from the plan', () => {
     it('propagates the step’s elevation and restart flags onto the command', () => {
         const cmd = buildInstallCommand(

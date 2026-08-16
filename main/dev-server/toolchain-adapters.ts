@@ -72,7 +72,21 @@ export interface DownloadInstallCommand extends InstallCommandBase {
     run?: { args: string[] };
 }
 
-export type InstallCommand = RunInstallCommand | DownloadInstallCommand;
+/**
+ * CONFIRM a tool an earlier step already installed, instead of installing the
+ * same package twice.
+ *
+ * Emitted for a step the planner marked {@link InstallStep.coveredBy}. It is not
+ * a free pass: the effect re-probes the tool, so a covered tool that is somehow
+ * NOT there fails — and says which install was supposed to have provided it.
+ */
+export interface VerifyInstallCommand extends InstallCommandBase {
+    via: 'verify';
+    /** The step whose install is expected to have brought this tool. */
+    coveredBy: HostToolName;
+}
+
+export type InstallCommand = RunInstallCommand | DownloadInstallCommand | VerifyInstallCommand;
 
 /**
  * Install a missing tool, or UPDATE an already-present one (Toolchain Manager,
@@ -116,6 +130,16 @@ export function buildInstallCommand(
         requiresElevation: step.requiresElevation,
         requiresRestart: step.requiresRestart,
     };
+    // One package, one install: a step an earlier one already covers is confirmed,
+    // not re-run (genie#209).
+    if (step.coveredBy) {
+        return {
+            ...base,
+            via: 'verify',
+            coveredBy: step.coveredBy,
+            label: `${step.tool} (installed with ${step.coveredBy})`,
+        };
+    }
     switch (step.method) {
         case 'pm':
             return { ...base, ...buildPmCommand(step.tool, requirePm(step), intent) };

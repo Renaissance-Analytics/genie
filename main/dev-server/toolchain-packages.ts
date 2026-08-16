@@ -36,8 +36,11 @@ export interface PmPackage {
  * Per-manager package identity for each installable tool.
  *
  * `npm` maps to the SAME package as `node` on winget/brew because npm ships
- * inside node there — the executor de-duplicates two steps that resolve to one
- * package. apt/dnf expose a real standalone `npm`, so they name it directly.
+ * inside node there. The PLANNER reads this table to mark the second of two
+ * steps that name one package as covered by the first (`InstallStep.coveredBy`),
+ * so the package installs once — installing it twice is what made winget answer
+ * "existing package already installed" with a non-zero exit and fail npm
+ * (genie#209). apt/dnf expose a real standalone `npm`, so they name it directly.
  * The agent TUIs (`claude-code`, `codex`) are absent from every manager: they
  * install via `npm i -g`, never a system PM (see `NPM_PACKAGES` in the adapter).
  */

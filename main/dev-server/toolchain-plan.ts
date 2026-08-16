@@ -1,6 +1,6 @@
 import { DEFAULT_TOOLCHAIN } from './toolchain-detect';
 import type { HostToolName, ToolchainReport } from './toolchain-detect';
-import { pmCanInstall } from './toolchain-packages';
+import { pmCanInstall, pmPackageFor } from './toolchain-packages';
 import type { PackageManager } from './toolchain-packages';
 
 // The package-manager identity lives in one place (`toolchain-packages.ts`) so
@@ -62,6 +62,18 @@ export interface InstallStep {
      *  these; they are carried so the executor can treat an already-present
      *  prerequisite as met and skip a dependent whose prerequisite failed. */
     dependsOn: HostToolName[];
+    /**
+     * An EARLIER step in this same plan whose install already brings this tool —
+     * both resolve to one package for the chosen manager (winget/brew ship npm
+     * INSIDE node, so `npm` and `node` are both `OpenJS.NodeJS.LTS`).
+     *
+     * The step stays in the plan: the user asked for the tool and the wizard
+     * shows a row per tool. Only its EXECUTION is shared — the executor confirms
+     * the tool rather than installing the same package a second time. Running it
+     * twice is what made winget answer "existing package already installed" with
+     * a non-zero exit, fail npm, and skip both agent TUIs (genie#209).
+     */
+    coveredBy?: HostToolName;
 }
 
 /**
@@ -118,9 +130,38 @@ export function planToolchainInstall(opts: PlanToolchainOptions): InstallStep[] 
     const present = new Set(opts.detected.present);
     const wanted = new Set(opts.wanted ?? DEFAULT_TOOLCHAIN);
 
-    return INSTALL_ORDER.filter((tool) => wanted.has(tool) && !present.has(tool)).map((tool) =>
+    const steps = INSTALL_ORDER.filter((tool) => wanted.has(tool) && !present.has(tool)).map((tool) =>
         buildStep(tool, opts.os, opts.pmChoice),
     );
+    return markSharedPackages(steps, opts.pmChoice);
+}
+
+/**
+ * Mark every step whose package an EARLIER step already installs.
+ *
+ * Pure, and decided here rather than at execution time because it is knowable
+ * before anything runs: it is a fact about the chosen manager's package table.
+ * Only the FIRST step naming a package installs it; the rest are covered by it.
+ * The cask flag is part of the identity — brew's `docker` formula and `docker`
+ * cask are two different things that happen to share a name.
+ */
+function markSharedPackages(
+    steps: InstallStep[],
+    pmChoice: PackageManager | 'direct',
+): InstallStep[] {
+    if (pmChoice === 'direct') return steps;
+    const installedBy = new Map<string, HostToolName>();
+    return steps.map((step) => {
+        const pkg = step.method === 'pm' ? pmPackageFor(pmChoice, step.tool) : undefined;
+        if (!pkg) return step;
+        const key = `${pkg.cask ? 'cask:' : ''}${pkg.id}`;
+        const owner = installedBy.get(key);
+        if (owner === undefined) {
+            installedBy.set(key, step.tool);
+            return step;
+        }
+        return { ...step, coveredBy: owner };
+    });
 }
 
 /**

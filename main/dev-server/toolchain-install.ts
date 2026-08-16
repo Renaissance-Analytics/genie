@@ -98,7 +98,14 @@ export async function runInstallPlan(opts: RunInstallPlanOptions): Promise<Insta
     const skipped: HostToolName[] = [];
     let restartRequired = false;
 
-    for (const step of opts.steps) {
+    for (const planned of opts.steps) {
+        // Coverage is only ever a shortcut past work that ALREADY succeeded. If
+        // the covering step did not, this step goes back to its real command
+        // rather than confirming a tool nothing installed.
+        const step =
+            planned.coveredBy && !satisfied.has(planned.coveredBy)
+                ? withoutCoverage(planned)
+                : planned;
         const unmet = step.dependsOn.some((dep) => !satisfied.has(dep));
         if (unmet) {
             skipped.push(step.tool);
@@ -129,6 +136,13 @@ export async function runInstallPlan(opts: RunInstallPlanOptions): Promise<Insta
         restartRequired,
         skipped,
     };
+}
+
+/** The step as it would have been planned with nothing to lean on. Rebuilt
+ *  without the key rather than set to undefined, so the shape stays exact. */
+function withoutCoverage(step: InstallStep): InstallStep {
+    const { coveredBy: _coveredBy, ...rest } = step;
+    return rest;
 }
 
 /** Materialise + perform one step, turning any throw — from the adapter or a

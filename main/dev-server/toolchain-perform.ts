@@ -46,17 +46,61 @@ const reason = (res: CommandResult): string =>
  * (fixed for a run, and needed to resolve a per-arch download URL).
  */
 export function createPerformInstall(deps: PerformDeps, ctx: AdapterContext): PerformInstall {
-    return (command: InstallCommand) =>
-        command.via === 'run' ? performRun(command, deps) : performDownload(command, deps, ctx);
+    return (command: InstallCommand) => {
+        switch (command.via) {
+            case 'run':
+                return performRun(command, deps);
+            case 'download':
+                return performDownload(command, deps, ctx);
+            case 'verify':
+                return performVerify(command, deps);
+        }
+    };
 }
 
+/**
+ * Run an argv, then let the RE-PROBE have the last word.
+ *
+ * An exit code is the package manager's opinion; whether the tool is on the
+ * machine is the fact, and the fact is what the user asked for. `winget install`
+ * on a package that is already present exits non-zero with "Found an existing
+ * package already installed" — an outcome that IS what we wanted, and reporting
+ * it as a failure is what skipped claude-code and codex on a clean Windows box
+ * (genie#209). So a non-zero exit fails only when the tool cannot be found
+ * afterwards; with no verifier to appeal to, the exit code stands.
+ */
 async function performRun(
     command: Extract<InstallCommand, { via: 'run' }>,
     deps: PerformDeps,
 ): Promise<StepOutcome> {
     const res = await deps.run(command.command, command.args, { elevated: command.requiresElevation });
-    if (res.code !== 0) return { ok: false, error: reason(res) };
+    if (res.code !== 0) {
+        const version = await deps.verify?.(command.tool);
+        return version ? ok(version) : { ok: false, error: reason(res) };
+    }
     return ok(await deps.verify?.(command.tool));
+}
+
+/**
+ * Confirm a tool an earlier step's package already brought, instead of
+ * installing that package twice.
+ *
+ * With no verifier wired there is nothing to check against — the covering
+ * install reported success and that is all the information there is, so the step
+ * passes rather than failing a tool on no evidence.
+ */
+async function performVerify(
+    command: Extract<InstallCommand, { via: 'verify' }>,
+    deps: PerformDeps,
+): Promise<StepOutcome> {
+    if (!deps.verify) return ok(undefined);
+    const version = await deps.verify(command.tool);
+    return version
+        ? ok(version)
+        : {
+              ok: false,
+              error: `${command.coveredBy} installed, but ${command.tool} was not found afterwards — open a new terminal, or install ${command.tool} yourself and re-run detection.`,
+          };
 }
 
 async function performDownload(

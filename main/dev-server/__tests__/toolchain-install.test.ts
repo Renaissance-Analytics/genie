@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { HostToolName } from '../toolchain-detect';
+import type { HostToolName, HostToolProbe, ToolchainReport } from '../toolchain-detect';
+import { DEFAULT_TOOLCHAIN } from '../toolchain-detect';
+import { planToolchainInstall } from '../toolchain-plan';
 import type { InstallStep } from '../toolchain-plan';
 import type { InstallCommand } from '../toolchain-adapters';
 import { runInstallPlan } from '../toolchain-install';
@@ -165,6 +167,102 @@ describe('runInstallPlan — dependencies', () => {
         });
         expect(result.results[0].status).toBe('skipped');
         expect(ran).toEqual([]);
+    });
+});
+
+/**
+ * The clean-Windows-machine regression (genie#209).
+ *
+ * winget has no standalone npm — node and npm are both `OpenJS.NodeJS.LTS` — so
+ * the plan for a fresh machine contains two steps that resolve to ONE package.
+ * Installing it twice is what made winget answer "existing package already
+ * installed" with a non-zero exit, fail the npm step, and skip both agent TUIs.
+ *
+ * Built from the REAL planner rather than hand-written steps: the bug lived in
+ * the gap BETWEEN planning and executing, so a test that fakes the plan cannot
+ * see it.
+ */
+describe('runInstallPlan — a shared package installs exactly once', () => {
+    const freshWindows = (): ToolchainReport => ({
+        platform: 'win32',
+        probes: DEFAULT_TOOLCHAIN.map((name): HostToolProbe => ({ name, installed: false })),
+        present: [],
+        missing: [...DEFAULT_TOOLCHAIN],
+    });
+
+    it('runs OpenJS.NodeJS.LTS once for node+npm, and still reports npm succeeded', async () => {
+        const { perform, ran } = performing();
+        const steps = planToolchainInstall({
+            detected: freshWindows(),
+            os: 'win32',
+            pmChoice: 'winget',
+            wanted: ['node', 'npm', 'claude-code'],
+        });
+
+        const result = await runInstallPlan({ steps, ctx: WIN, approved: true, perform });
+
+        const wingetRuns = ran.filter(
+            (c) => c.via === 'run' && c.args.includes('OpenJS.NodeJS.LTS'),
+        );
+        expect(wingetRuns).toHaveLength(1);
+        expect(wingetRuns[0].tool).toBe('node');
+
+        // npm is still a reported row, and it did not fail — which is what kept
+        // claude-code from being skipped.
+        expect(result.results.map((r) => [r.tool, r.status])).toEqual([
+            ['node', 'succeeded'],
+            ['npm', 'succeeded'],
+            ['claude-code', 'succeeded'],
+        ]);
+        expect(result.skipped).toEqual([]);
+        expect(result.ok).toBe(true);
+    });
+
+    it('asks the effect to CONFIRM the covered tool rather than install it again', async () => {
+        const { perform, ran } = performing();
+        const steps = planToolchainInstall({
+            detected: freshWindows(),
+            os: 'win32',
+            pmChoice: 'winget',
+            wanted: ['node', 'npm'],
+        });
+        await runInstallPlan({ steps, ctx: WIN, approved: true, perform });
+
+        const npmCommand = ran.find((c) => c.tool === 'npm')!;
+        expect(npmCommand.via).toBe('verify');
+        if (npmCommand.via === 'verify') expect(npmCommand.coveredBy).toBe('node');
+    });
+
+    it('never marks a covered tool done off a FAILED install', async () => {
+        const { perform, ran } = performing({ node: FAIL });
+        const steps = planToolchainInstall({
+            detected: freshWindows(),
+            os: 'win32',
+            pmChoice: 'winget',
+            wanted: ['node', 'npm'],
+        });
+        const result = await runInstallPlan({ steps, ctx: WIN, approved: true, perform });
+        // npm depends on node, so it skips — but crucially it is NOT confirmed.
+        expect(result.results.map((r) => [r.tool, r.status])).toEqual([
+            ['node', 'failed'],
+            ['npm', 'skipped'],
+        ]);
+        expect(ran.every((c) => c.via !== 'verify')).toBe(true);
+    });
+
+    it('falls back to the real install when the coverer is neither satisfied nor a prerequisite', async () => {
+        // Defensive: coverage is only ever a shortcut past work that ALREADY
+        // happened. With no dependency to skip on, an unsatisfied coverer must
+        // put the step back on the real command rather than confirm thin air.
+        const { perform, ran } = performing();
+        const result = await runInstallPlan({
+            steps: [step({ tool: 'npm', coveredBy: 'node' })],
+            ctx: WIN,
+            approved: true,
+            perform,
+        });
+        expect(ran[0].via).toBe('run');
+        expect(result.results[0].status).toBe('succeeded');
     });
 });
 

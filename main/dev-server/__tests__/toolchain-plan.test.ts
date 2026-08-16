@@ -237,6 +237,76 @@ describe('planToolchainInstall — dependencies', () => {
 });
 
 /**
+ * ONE package, ONE install (genie#209).
+ *
+ * winget and brew have no standalone npm — npm ships inside node, so both tools
+ * name the SAME package. Running that package's install twice is how the owner's
+ * clean Windows machine ended up with "npm: existing package already installed"
+ * reported as a FAILURE, which then skipped claude-code and codex. The planner is
+ * where this belongs: it is a pure fact about the chosen manager's package table,
+ * knowable before anything runs.
+ *
+ * The npm STEP stays in the plan — the user asked for npm and the wizard shows a
+ * row per tool — it is just marked as covered by the step that really installs it.
+ */
+describe('planToolchainInstall — one package, one install', () => {
+    it('marks npm as covered by node on winget, where both are OpenJS.NodeJS.LTS', () => {
+        const steps = planToolchainInstall({
+            detected: reportWith(NOTHING, 'win32'),
+            os: 'win32',
+            pmChoice: 'winget',
+        });
+        const npm = steps.find((s) => s.tool === 'npm')!;
+        const node = steps.find((s) => s.tool === 'node')!;
+        expect(node.coveredBy).toBeUndefined();
+        expect(npm.coveredBy).toBe('node');
+        // Still a visible row, still a pm step — only its execution is shared.
+        expect(npm.method).toBe('pm');
+    });
+
+    it('marks npm as covered by node on brew too — same shared package', () => {
+        const steps = planToolchainInstall({
+            detected: reportWith(NOTHING, 'darwin'),
+            os: 'darwin',
+            pmChoice: 'brew',
+        });
+        expect(steps.find((s) => s.tool === 'npm')!.coveredBy).toBe('node');
+    });
+
+    it('leaves npm uncovered on apt/dnf, which publish a real standalone npm', () => {
+        for (const pm of ['apt', 'dnf'] as const) {
+            const steps = planToolchainInstall({
+                detected: reportWith(NOTHING, 'linux'),
+                os: 'linux',
+                pmChoice: pm,
+            });
+            expect(steps.find((s) => s.tool === 'npm')!.coveredBy).toBeUndefined();
+        }
+    });
+
+    it('does not cover npm when node is already present — nothing in the plan installs it', () => {
+        // node present, npm somehow absent: npm's own install has to run for real.
+        const steps = planToolchainInstall({
+            detected: reportWith(['node'], 'win32'),
+            os: 'win32',
+            pmChoice: 'winget',
+            wanted: ['node', 'npm'],
+        });
+        expect(steps.map((s) => s.tool)).toEqual(['npm']);
+        expect(steps[0].coveredBy).toBeUndefined();
+    });
+
+    it('covers nothing on the direct path, where no packages are shared', () => {
+        const steps = planToolchainInstall({
+            detected: reportWith(NOTHING, 'win32'),
+            os: 'win32',
+            pmChoice: 'direct',
+        });
+        expect(steps.every((s) => s.coveredBy === undefined)).toBe(true);
+    });
+});
+
+/**
  * The single-tool UPDATE step for the Toolchain Manager (#242 P2). Unlike an
  * install plan it targets a tool already present, so it never consults a
  * present-set — the method + cost are exactly what an install of that tool would
