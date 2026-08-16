@@ -89,6 +89,28 @@ function joinFor(os: NodeJS.Platform | string, ...parts: string[]): string {
 }
 
 /**
+ * The directory an extracted archive's executables actually sit in.
+ *
+ * A zip that declares {@link DownloadInstallCommand.wrapperDir} wraps its
+ * contents in a single directory named after the archive itself — the convention
+ * every nodejs.org distribution follows (`node-v24.19.0-win-x64.zip` holds
+ * exactly one top-level directory and zero root-level entries). The name is
+ * therefore the downloaded FILE's name without its extension, which is knowable
+ * here without opening the archive.
+ */
+function extractedBinDir(
+    command: DownloadInstallCommand,
+    dest: string,
+    localPath: string,
+    os: NodeJS.Platform | string,
+): string {
+    if (command.wrapperDir !== 'archive-name') return dest;
+    const file = localPath.split(/[\\/]/).pop() ?? '';
+    const inner = file.replace(/\.zip$/i, '');
+    return inner && inner !== file ? joinFor(os, dest, inner) : dest;
+}
+
+/**
  * The Windows composer launcher. `%~dp0` resolves beside the shim (so moving the
  * tools directory does not break it) and `%*` forwards every argument — without
  * it `composer require x` would run as a bare `composer`.
@@ -138,9 +160,12 @@ export function artifactInstallPlan(
                           ],
                       }
                     : { command: 'unzip', args: ['-o', localPath, '-d', dest] }),
-                // The archives Genie fetches (php-windows, nodejs-dist) put the
-                // executables at the root, so the extract dir IS the PATH entry.
-                pathAdd: dest,
+                // Where the EXECUTABLES actually land. php's archive unpacks flat,
+                // so the extract dir is the PATH entry; node's wraps everything in
+                // one directory named after the archive, so the PATH entry is a
+                // level down. Adding the wrong one puts a directory holding nothing
+                // runnable on PATH and calls it a successful install (genie#209).
+                pathAdd: extractedBinDir(command, dest, localPath, ctx.os),
             };
         }
         case 'phar': {

@@ -128,6 +128,51 @@ describe('artifactInstallPlan — zip (php on Windows)', () => {
     });
 });
 
+/**
+ * NOT every archive unpacks flat (genie#209).
+ *
+ * The php-windows zips do — php.exe and php-cgi.exe sit at the root. Node's do
+ * NOT: `node-v24.19.0-win-x64.zip` holds exactly one top-level directory and
+ * zero root-level entries (verified against the real archive). Putting the
+ * extract directory on PATH would therefore add a directory containing nothing
+ * executable — node "installs", npm is then missing, and the agent TUIs skip.
+ */
+describe('artifactInstallPlan — zip with a wrapper directory (node)', () => {
+    const ctx = { toolsDir: 'C:/g/tools', binDir: 'C:/g/tools/bin', os: 'win32' as const };
+    const node = (): DownloadInstallCommand => ({
+        via: 'download',
+        tool: 'node',
+        url: null,
+        source: 'nodejs-dist',
+        artifact: 'zip',
+        wrapperDir: 'archive-name',
+        label: 'download node',
+        requiresElevation: false,
+        requiresRestart: false,
+    });
+
+    it('puts the wrapper directory on PATH, not the extract root', () => {
+        const plan = artifactInstallPlan(node(), 'C:/tmp/node-v24.19.0-win-x64.zip', ctx);
+        expect(plan).toMatchObject({
+            kind: 'extract',
+            dest: `C:/g/tools${SEP}node`,
+            // node.exe lives one level down, in the directory the archive names
+            // after itself.
+            pathAdd: `C:/g/tools${SEP}node${SEP}node-v24.19.0-win-x64`,
+        });
+    });
+
+    it('leaves an archive that does not declare a wrapper flat (php)', () => {
+        const { wrapperDir: _drop, ...flat } = node();
+        const plan = artifactInstallPlan(
+            { ...flat, tool: 'php', source: 'php-windows' },
+            'C:/tmp/php-8.4.24-nts-Win32-vs17-x64.zip',
+            ctx,
+        );
+        expect(plan).toMatchObject({ pathAdd: `C:/g/tools${SEP}php` });
+    });
+});
+
 describe('artifactInstallPlan — phar (composer)', () => {
     const composer = (): DownloadInstallCommand => ({
         via: 'download',

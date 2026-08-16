@@ -183,6 +183,18 @@ describe('buildInstallCommand — direct downloads', () => {
         expect(php.url).toBeNull();
         expect(php.source).toBe('php-windows');
     });
+
+    it('declares node’s zip as wrapping its contents, and php’s as flat (genie#209)', () => {
+        // node-vX.Y.Z-win-<arch>.zip holds one top-level directory and nothing at
+        // its root; the php nts zip holds php.exe/php-cgi.exe at its root. The
+        // extract step reads this to decide which directory goes on PATH — get it
+        // wrong and node "installs" with nothing runnable on PATH.
+        const node = asDownload(buildInstallCommand(step({ tool: 'node', method: 'direct' }), { os: 'win32' }));
+        expect(node.wrapperDir).toBe('archive-name');
+
+        const php = asDownload(buildInstallCommand(step({ tool: 'php', method: 'direct' }), { os: 'win32' }));
+        expect(php.wrapperDir).toBeUndefined();
+    });
 });
 
 /**

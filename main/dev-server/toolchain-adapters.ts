@@ -70,6 +70,14 @@ export interface DownloadInstallCommand extends InstallCommandBase {
     needs?: HostToolName;
     /** For an installer artifact: the args to run it with after download. */
     run?: { args: string[] };
+    /**
+     * ZIP ONLY: the archive wraps everything in a single directory named after
+     * itself, so the executables sit ONE LEVEL DOWN from the extract root
+     * (node's Windows zips). Absent ⇒ the archive unpacks flat (php's do). Get
+     * this wrong and the install "succeeds" while putting a directory with no
+     * executables on PATH — see genie#209.
+     */
+    wrapperDir?: 'archive-name';
 }
 
 /**
@@ -274,6 +282,10 @@ function buildDirectCommand(tool: HostToolName, ctx: AdapterContext): BuiltDownl
             url: null,
             source,
             artifact: tool === 'php' ? 'zip' : tool === 'node' ? 'zip' : 'exe',
+            // node's zip wraps everything in `node-vX.Y.Z-win-<arch>/`; php's
+            // unpacks flat. The one that wraps must say so, or the PATH entry
+            // points at a directory holding nothing runnable.
+            ...(tool === 'node' ? { wrapperDir: 'archive-name' as const } : {}),
             label: `download ${tool} (latest, resolved)`,
         };
     }
