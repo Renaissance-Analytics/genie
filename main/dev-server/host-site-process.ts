@@ -86,6 +86,24 @@ export interface HostSpawnInvocation {
      * OUTSIDE Genie (and `windowsHide` does NOT suppress a detached console); Windows
      * has no process groups, so we never detach there and kill the tree with
      * `taskkill /t` instead.
+     *
+     * MEASURED (genie#216), because the cost of that is real — a non-detached child
+     * dies with Genie, so every update takes every host-native site down. Spawning a
+     * console app on win32 and counting `conhost.exe` in the resulting process tree:
+     *
+     *   detached  windowsHide  shell   console allocated
+     *   false     true         true    NO   ← what ships
+     *   true      true         true    YES  ← genie#183 recurs
+     *   true      false        true    YES
+     *   true      true         false   NO
+     *
+     * The allocator is CMD.EXE, not the detach: with `DETACHED_PROCESS` the shell
+     * inherits no console and allocates one, and `CREATE_NO_WINDOW` does not stop
+     * it. Detaching would therefore need the win32 spawn to stop going through the
+     * shell — but the shell is what resolves the `.cmd`/`.bat` dev-server shims this
+     * function exists for (see the header), so that is a change to which commands
+     * host-native hosting can run at all, not a flag. Until then a site is a child
+     * of Genie's tree and `lifecycle.onBoot` resumes it.
      */
     detached: boolean;
 }

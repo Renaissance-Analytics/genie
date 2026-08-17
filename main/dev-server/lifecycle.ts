@@ -43,14 +43,18 @@ import type { TeardownResult } from './workspace-sandbox';
  *
  * **BOOT — adopt what survived, resume what could not.** Whatever is still
  * running has to be re-attached, which is what `adopt()` on each manager does. A
- * container site and a service engine both outlive the app by policy, so for them
- * adoption is the whole answer, and nothing is started: a workspace nobody asked
- * to serve must not begin serving because Genie launched. A HOST-NATIVE site has
- * no container to outlive anything — Genie quits to install an update and its dev
- * servers go with it — so adoption finds nothing and the site stays dark until a
- * human restarts it by hand, once per site. `resumeHostSites()` closes that gap:
- * `enabled` IS the user asking for the site to be served, so exactly those come
- * back. A disabled site still starts nothing.
+ * service engine and a container sandbox both outlive the app by policy, so for
+ * them adoption is usually the whole answer. But adoption cannot cover what did
+ * not survive, and two things routinely do not: a HOST-NATIVE site has no
+ * container at all (Genie quits to install an update and its dev servers go with
+ * it), and a container site's processes are exec'd INTO a sandbox that a Docker
+ * or host reboot restarts empty. Either way the site is dark and stays dark until
+ * a human restarts it by hand, once per site — the reported "every time I update,
+ * all our sites go down". `resumeEnabledSites()` closes that gap.
+ *
+ * The line it does NOT cross is the one that policy was always about: `enabled`
+ * IS the user asking for the site to be served, and only those come back. A site
+ * nobody enabled still starts nothing because Genie launched.
  *
  * **QUIT — stop nothing.** Not an omission. A service engine is created with
  * `restart: unless-stopped` precisely so it outlives the app; stopping it on
@@ -213,15 +217,18 @@ export function createDevServerLifecycle(deps: DevServerLifecycleDeps): DevServe
             } catch {
                 /* ditto */
             }
-            // …then bring back what could NOT survive (genie#190). Adoption is the
-            // whole answer for a container site, which outlives the app by policy.
-            // A HOST-NATIVE site has no container: Genie quits to install an update
-            // and its dev servers go with it, so adoption finds nothing and every
-            // one of them stays dark until a human restarts it by hand — which is
-            // precisely the report ("every time I update, all our sites go down").
+            // …then bring back what could NOT survive (genie#190, genie#216).
+            // Adoption is usually the whole answer for a container site, which
+            // outlives the app by policy. A HOST-NATIVE site has no container:
+            // Genie quits to install an update and its dev servers go with it (on
+            // Windows they are not even detached — a detached spawn there pops a
+            // stray console, so they are children of Genie's tree). Adoption then
+            // finds nothing and every one of them stays dark until a human restarts
+            // it by hand, which is precisely the report: "every time I update, all
+            // our sites go down and I have to manually restart most of them".
             // `enabled` is the user asking for it to be served, so those resume.
             try {
-                await deps.sites()?.resumeHostSites();
+                await deps.sites()?.resumeEnabledSites();
             } catch {
                 /* ditto */
             }

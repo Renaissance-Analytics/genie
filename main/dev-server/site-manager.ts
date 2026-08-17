@@ -370,11 +370,11 @@ export interface DevSiteManager {
     /** Start every enabled site and stop everything that no longer is. */
     reconcile(): Promise<void>;
     /**
-     * Bring back the ENABLED HOST-NATIVE sites that are not running (genie#190).
+     * Bring back the ENABLED sites that are not running (genie#190, genie#216).
      * Boot only, and strictly after {@link adopt} — what survived is adopted, what
-     * did not is started. Never throws.
+     * did not is started. A site nobody enabled is never started. Never throws.
      */
-    resumeHostSites(): Promise<void>;
+    resumeEnabledSites(): Promise<void>;
     /** RUNNING http sites as Testing-Browser rows. Synchronous. */
     genSites(): DevGenSite[];
     /** The browser-exposed HOST-NATIVE routes across all workspaces — the input to
@@ -1510,18 +1510,29 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             }
         },
 
-        async resumeHostSites() {
+        async resumeEnabledSites() {
+            // Resolved ONCE, and only to answer "is a container runtime up yet".
+            // Docker Desktop routinely finishes starting after Genie does, and
+            // trying anyway would stamp every container site with a "no container
+            // runtime" failure on every launch — a worse lie than "stopped", and
+            // one the user then has to clear by hand.
+            let hasRuntime = false;
+            try {
+                hasRuntime = !!(await deps.resolveRuntime()).runtime;
+            } catch {
+                hasRuntime = false;
+            }
             for (const workspace of deps.listWorkspaces()) {
                 for (const [siteId, config] of Object.entries(deps.devSitesFor(workspace.id))) {
-                    // HOST-NATIVE only. A container site needs nothing here: its
-                    // container carries `restart: unless-stopped`, so it is still up
-                    // and `adopt()` has already re-learned it — starting it again is
-                    // exactly the "a workspace nobody asked to serve begins serving
-                    // because the app launched" that boot must not do.
-                    if (config.runMode !== 'host' || !config.enabled) continue;
+                    // `enabled` IS the ask. A site nobody enabled still starts
+                    // nothing, which is the policy `adopt()` states and this keeps.
+                    if (!config.enabled) continue;
                     // Adopted a moment ago (it survived), or started by a concurrent
                     // caller — either way it is already serving.
                     if (live.has(siteId)) continue;
+                    // A host-native site needs no runtime — that is the whole point
+                    // of it — so it is never held back by Docker's absence.
+                    if (config.runMode !== 'host' && !hasRuntime) continue;
                     try {
                         await start(workspace.id, siteId);
                     } catch {

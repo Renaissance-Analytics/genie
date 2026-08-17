@@ -1831,11 +1831,11 @@ app.whenReady().then(async () => {
     // to serve must not begin serving because the app launched. This is the
     // counterpart of quitting without stopping anything — see `lifecycle.ts`.
     //
-    // HOST-NATIVE sites are the exception the same reasoning demands (genie#190):
-    // they have no container to outlive the quit, so an update takes every one of
-    // them down and adoption finds nothing to re-attach. `onBoot` resumes the ones
-    // the user has ENABLED — the ask that a container site's `restart:
-    // unless-stopped` already honours for free.
+    // What `onBoot` DOES do beyond adopting is resume the sites the user has
+    // ENABLED and which did not survive (genie#190, genie#216): a host-native site
+    // has no container to outlive the quit at all, and a container site's process
+    // is exec'd into a sandbox that a Docker reboot restarts empty. `enabled` is
+    // the ask; a site nobody enabled is still never started.
     //
     // Deferred and fire-and-forget: nothing here is a reason to hold up startup,
     // and the push at the end is what lights the rail's sites icon on a cold

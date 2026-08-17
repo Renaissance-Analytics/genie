@@ -454,14 +454,65 @@ describe('boot resumes host-native sites the update took down', () => {
         expect(manager.genSites()[0]?.port).toBe(4444);
     });
 
-    it('still starts NO container site on boot — that policy is unchanged', async () => {
+    it('still starts NO site the user has not enabled — that policy is unchanged', async () => {
         const runtime = fakeRuntime();
-        const manager = siteManager(runtime, { [WS.id]: { 'site-1': SITE } });
+        const manager = siteManager(runtime, { [WS.id]: { 'site-1': { ...SITE, enabled: false } } });
 
         await bootLifecycle(manager).onBoot();
 
         expect(runtime.ran).toEqual([]);
         expect(manager.list(WS.id)[0]?.state).toBe('stopped');
+    });
+
+    // A CONTAINER site normally needs none of this — its sandbox carries
+    // `restart: unless-stopped`, so it is up before Genie and adoption re-learns
+    // it. But a Docker/host REBOOT restarts the sandbox and the site processes
+    // exec'd into it do not come back, so an enabled site is just as dark, for the
+    // same reason and with the same manual fix.
+    it('restarts an ENABLED container site whose process is gone from a restarted sandbox', async () => {
+        const runtime = fakeRuntime();
+        const manager = siteManager(runtime, { [WS.id]: { 'site-1': SITE } });
+
+        await bootLifecycle(manager).onBoot();
+
+        expect(manager.list(WS.id)[0]?.state).toBe('running');
+        expect(runtime.ran.map((s) => s.name)).toEqual([devContainerNameFor(WS.id)]);
+    });
+
+    // Docker Desktop routinely finishes starting AFTER Genie does. Trying anyway
+    // would stamp every container site with a "no container runtime" failure on
+    // every launch — a worse lie than "stopped", and one the user then has to
+    // clear by hand. Host-native sites need no runtime and are unaffected.
+    it('leaves container sites alone when no container runtime is up yet — no boot-time failures', async () => {
+        const runtime = fakeRuntime({ detection: NO_RUNTIME });
+        const manager = siteManager(runtime, { [WS.id]: { 'site-1': SITE } }, [WS], {
+            resolveRuntime: async () => ({ runtime: null, detection: NO_RUNTIME }),
+        });
+
+        await bootLifecycle(manager).onBoot();
+
+        expect(runtime.ran).toEqual([]);
+        const row = manager.list(WS.id)[0];
+        expect(row?.state).toBe('stopped');
+        expect(row?.error).toBeUndefined();
+    });
+
+    it('still resumes a HOST-NATIVE site when there is no container runtime — it needs none', async () => {
+        const spawn = deadHostSpawn();
+        const manager = siteManager(
+            fakeRuntime({ detection: NO_RUNTIME }),
+            { [WS.id]: { 'site-1': HOST_SITE } },
+            [WS],
+            {
+                resolveRuntime: async () => ({ runtime: null, detection: NO_RUNTIME }),
+                hostSpawn: spawn.binding,
+                allocateFreePort: async () => 5321,
+            },
+        );
+
+        await bootLifecycle(manager).onBoot();
+
+        expect(spawn.started).toEqual(['site-1']);
     });
 });
 
