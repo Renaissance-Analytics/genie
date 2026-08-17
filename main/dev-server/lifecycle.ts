@@ -41,10 +41,16 @@ import type { TeardownResult } from './workspace-sandbox';
  * being advertised by `genSites()`, so the Testing Browser resolves `<name>.gen`
  * to a port nothing is listening on.
  *
- * **BOOT — adopt what is already running; start nothing.** Sites are NOT started
- * on boot (deliberate, and unchanged from P2: a workspace nobody asked to serve
- * should not begin serving because Genie launched). But whatever IS running has
- * to be re-attached, which is what `adopt()` on each manager does.
+ * **BOOT — adopt what survived, resume what could not.** Whatever is still
+ * running has to be re-attached, which is what `adopt()` on each manager does. A
+ * container site and a service engine both outlive the app by policy, so for them
+ * adoption is the whole answer, and nothing is started: a workspace nobody asked
+ * to serve must not begin serving because Genie launched. A HOST-NATIVE site has
+ * no container to outlive anything — Genie quits to install an update and its dev
+ * servers go with it — so adoption finds nothing and the site stays dark until a
+ * human restarts it by hand, once per site. `resumeHostSites()` closes that gap:
+ * `enabled` IS the user asking for the site to be served, so exactly those come
+ * back. A disabled site still starts nothing.
  *
  * **QUIT — stop nothing.** Not an omission. A service engine is created with
  * `restart: unless-stopped` precisely so it outlives the app; stopping it on
@@ -204,6 +210,18 @@ export function createDevServerLifecycle(deps: DevServerLifecycleDeps): DevServe
             }
             try {
                 await deps.sites()?.adopt();
+            } catch {
+                /* ditto */
+            }
+            // …then bring back what could NOT survive (genie#190). Adoption is the
+            // whole answer for a container site, which outlives the app by policy.
+            // A HOST-NATIVE site has no container: Genie quits to install an update
+            // and its dev servers go with it, so adoption finds nothing and every
+            // one of them stays dark until a human restarts it by hand — which is
+            // precisely the report ("every time I update, all our sites go down").
+            // `enabled` is the user asking for it to be served, so those resume.
+            try {
+                await deps.sites()?.resumeHostSites();
             } catch {
                 /* ditto */
             }

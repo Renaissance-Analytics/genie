@@ -5,6 +5,7 @@ import {
     devSiteIdFor,
     devSiteReconfigureNeedsRestart,
     parseDevSites,
+    parseDevSitesValue,
     sanitizeDevSitePatch,
 } from '../sites-config';
 import { devContainerNameFor } from '../argv';
@@ -269,6 +270,41 @@ describe('sites-config', () => {
         expect(parseDevSites('not json')).toEqual({});
         expect(parseDevSites(null)).toEqual({});
         expect(parseDevSites('[]')).toEqual({});
+    });
+
+    // The `sites` map does not only come from OUR blob: for an `.agi` workspace the
+    // envelope's project.json is the source of truth, and that file is git-tracked
+    // — it arrives from a clone, a merge, a hand edit, another machine. Read raw it
+    // is unsanitized input that becomes a spawned command and a minted certificate,
+    // AND a shape we cannot read reads as "this workspace has no sites", which then
+    // overwrites the local mirror and loses registrations while the servers keep
+    // running (genie#190). Hence a VALUE parser with a third answer: null = "that
+    // is not a sites map", distinct from `{}` = "no sites".
+    describe('parseDevSitesValue — a sites map from OUTSIDE our own blob', () => {
+        it('says null for anything that is not a sites map — never "no sites"', () => {
+            expect(parseDevSitesValue(undefined)).toBeNull();
+            expect(parseDevSitesValue(null)).toBeNull();
+            expect(parseDevSitesValue('web.gen')).toBeNull();
+            expect(parseDevSitesValue([{ name: 'web' }])).toBeNull();
+            expect(parseDevSitesValue(7)).toBeNull();
+        });
+
+        it('says {} for an explicitly EMPTY map — the user removed their last site', () => {
+            expect(parseDevSitesValue({})).toEqual({});
+        });
+
+        it('sanitizes every row it keeps, exactly like our own blob', () => {
+            const parsed = parseDevSitesValue({
+                ok: { name: 'web', genName: 'web.acme.gen', repo: 'app', runMode: 'host', kind: 'http', enabled: true },
+                // Not a `.gen` name: unroutable, and a certificate must never be
+                // minted for it.
+                bad: { name: 'evil', genName: 'evil.example.com', kind: 'http', enabled: true },
+                // A repo name that climbs out of the workspace mount.
+                climb: { name: 'up', genName: 'up.acme.gen', repo: '../../etc', kind: 'http', enabled: true },
+            });
+            expect(Object.keys(parsed ?? {})).toEqual(['ok', 'climb']);
+            expect(parsed?.climb?.repo).toBe('');
+        });
     });
 });
 
@@ -567,6 +603,88 @@ describe('adopt — re-attach to processes still running after a Genie restart',
         });
         await m.adopt();
         expect(m.list('acme')[0]?.ready).toBe(true);
+    });
+
+    // genie#190 — the HOST-NATIVE half of the same promise. A host-native dev
+    // server is spawned to outlive the call that started it, so it outlives Genie
+    // too; unadopted it keeps serving on its port while `genSites()` does not know
+    // it exists, which is the orphan the container path already guards against.
+    // And it must not depend on Docker: a host-native site's whole point is that
+    // there is no container, so adopt used to return before it ever looked.
+    it('re-attaches a HOST-NATIVE site still serving after the restart — with NO container runtime at all', async () => {
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const hostSpawn = {
+            start: async () => ({ ok: true as const, pid: 4242 }),
+            stop: async () => {},
+            alive: async () => true,
+            readLog: async () => '',
+            // The persisted registry: this run survived, on this port.
+            running: async () => [{ siteId: SITE_ID, port: 5321 }],
+        };
+        const sites: DevSites = {
+            [SITE_ID]: {
+                name: 'web',
+                genName: 'web.acme.gen',
+                repo: 'app',
+                runMode: 'host',
+                command: ['php', 'artisan', 'serve'],
+                port: 8001,
+                kind: 'http',
+                enabled: true,
+            },
+        };
+        const m = manager(runtime, sites, {
+            resolveRuntime: async () => ({ runtime: null, detection: { kind: 'none', probes: [] } }),
+            hostSpawn,
+            probeReady: async () => true,
+        });
+        await m.adopt();
+
+        expect(m.list('acme')[0]?.state).toBe('running');
+        // Routed at the port it is ACTUALLY serving on — not the stored 8001, and
+        // not a fresh one from a needless restart.
+        expect(m.genSites()).toEqual([
+            {
+                workspaceId: 'acme',
+                genName: 'web.acme.gen',
+                siteId: SITE_ID,
+                hostname: 'web.acme.gen',
+                scheme: 'http',
+                port: 5321,
+                loopback: '127.0.0.1',
+            },
+        ]);
+    });
+
+    it('leaves a host-native site whose dev server did NOT survive reported as stopped', async () => {
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const hostSpawn = {
+            start: async () => ({ ok: true as const, pid: 4242 }),
+            stop: async () => {},
+            alive: async () => false,
+            readLog: async () => '',
+            running: async () => [],
+        };
+        const sites: DevSites = {
+            [SITE_ID]: {
+                name: 'web',
+                genName: 'web.acme.gen',
+                repo: 'app',
+                runMode: 'host',
+                command: ['php', 'artisan', 'serve'],
+                port: 8001,
+                kind: 'http',
+                enabled: true,
+            },
+        };
+        const m = manager(runtime, sites, {
+            resolveRuntime: async () => ({ runtime: null, detection: { kind: 'none', probes: [] } }),
+            hostSpawn,
+            probeReady: async () => true,
+        });
+        await m.adopt();
+        expect(m.list('acme')[0]?.state).toBe('stopped');
+        expect(m.genSites()).toEqual([]);
     });
 });
 

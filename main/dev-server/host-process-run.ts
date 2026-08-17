@@ -1,5 +1,13 @@
 import { spawn } from 'node:child_process';
-import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync } from 'node:fs';
+import {
+    appendFileSync,
+    closeSync,
+    mkdirSync,
+    openSync,
+    readFileSync,
+    renameSync,
+    writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import {
     describeHostSpawnFailure,
@@ -18,6 +26,19 @@ const messageOf = (e: unknown): string => (e instanceof Error ? e.message : Stri
 /** Site ids are `devSiteIdFor` hashes; anything else must not reach a path. */
 const SITE_ID_RE = /^[A-Za-z0-9_-]+$/;
 
+/** The registry file, beside the logs it indexes. */
+const REGISTRY_FILE = 'host-runs.json';
+
+/** What the registry remembers about ONE host-native run, across restarts. */
+interface TrackedRun {
+    pid: number;
+    logPath: string;
+    /** The loopback port this run is serving on — what `.gen` routes to. Absent on
+     *  a record written before ports were tracked; such a run can still be stopped
+     *  and read, it just cannot be re-ROUTED without a restart. */
+    port?: number;
+}
+
 export interface HostProcessRunDeps {
     /** Where each site's captured output is written. */
     logDir: string;
@@ -30,6 +51,10 @@ export interface HostProcessRunDeps {
     ensureDir?: (dir: string) => void;
     /** Append a line to a site's log (the start-time `[genie]` note). Default: real fs. */
     appendLog?: (path: string, text: string) => void;
+    /** Read the persisted run registry (null when there is none). Default: real fs. */
+    readRegistry?: (path: string) => string | null;
+    /** Replace the persisted run registry, atomically. Default: real fs. */
+    writeRegistry?: (path: string, text: string) => void;
 }
 
 /**
@@ -39,6 +64,19 @@ export interface HostProcessRunDeps {
  * forgets it, alive/readLog look it up) is unit-tested; the defaults are the real
  * bindings a real machine / CI exercises. Never throws — a failure is `ok:false` /
  * `false` / `''`.
+ *
+ * ## The registry is PERSISTED (genie#190)
+ *
+ * The whole point of the spawn is that the dev server outlives the call that
+ * started it — which means it routinely outlives GENIE, across a restart and
+ * across an update. An in-memory registry could not survive that, so every such
+ * run became an orphan: still serving on its port, but with `alive` saying no,
+ * `stop` a no-op and `readLog` empty, while the Site Manager showed a stopped
+ * site that was in fact running. The pid + log + port are written beside the logs
+ * so the next Genie process can re-attach what is still up (and see that the rest
+ * really is gone). The file is a CACHE of the OS's truth, never the truth itself:
+ * every read is filtered through a liveness probe, so a stale record simply
+ * disappears rather than inventing a running site.
  */
 export function createHostProcessRun(deps: HostProcessRunDeps): HostProcessRun {
     const platform = deps.platform ?? process.platform;
@@ -46,10 +84,25 @@ export function createHostProcessRun(deps: HostProcessRunDeps): HostProcessRun {
     const readLogTail = deps.readLogTail ?? realReadLogTail;
     const ensureDir = deps.ensureDir ?? ((dir: string) => mkdirSync(dir, { recursive: true }));
     const appendLog = deps.appendLog ?? ((path: string, text: string) => appendFileSync(path, text));
-    const tracked = new Map<string, { pid: number; logPath: string }>();
+    const readRegistry = deps.readRegistry ?? realReadRegistry;
+    const writeRegistry = deps.writeRegistry ?? realWriteRegistry;
+    const registryPath = join(deps.logDir, REGISTRY_FILE);
+    const tracked = loadRegistry(readRegistry, registryPath);
+
+    /** Persist the registry after every change. Best-effort: losing the FILE only
+     *  costs the next process its re-attach, but throwing here would fail a start
+     *  whose dev server is already up. */
+    const save = (): void => {
+        try {
+            ensureDir(deps.logDir);
+            writeRegistry(registryPath, JSON.stringify(Object.fromEntries(tracked)));
+        } catch {
+            /* advisory */
+        }
+    };
 
     return {
-        async start({ siteId, command, cwd, env, note }) {
+        async start({ siteId, command, cwd, env, note, port }) {
             if (!SITE_ID_RE.test(siteId)) return { ok: false, error: `unsafe site id ${JSON.stringify(siteId)}` };
             try {
                 ensureDir(deps.logDir);
@@ -67,7 +120,8 @@ export function createHostProcessRun(deps: HostProcessRunDeps): HostProcessRun {
                 }
                 const spec: HostSiteSpawnSpec = { command, cwd, env, logPath };
                 const pid = startHostSite(spec, prims);
-                tracked.set(siteId, { pid, logPath });
+                tracked.set(siteId, { pid, logPath, ...(port ? { port } : {}) });
+                save();
                 return { ok: true, pid };
             } catch (e) {
                 return { ok: false, error: messageOf(e) };
@@ -82,6 +136,7 @@ export function createHostProcessRun(deps: HostProcessRunDeps): HostProcessRun {
                 // best-effort — a dead process is already stopped.
             }
             tracked.delete(siteId);
+            save();
         },
         async alive(siteId) {
             const t = tracked.get(siteId);
@@ -91,6 +146,28 @@ export function createHostProcessRun(deps: HostProcessRunDeps): HostProcessRun {
             } catch {
                 return false;
             }
+        },
+        async running() {
+            const out: Array<{ siteId: string; port: number }> = [];
+            let dropped = false;
+            for (const [siteId, t] of [...tracked]) {
+                let live = false;
+                try {
+                    live = hostSiteAlive(t.pid, prims);
+                } catch {
+                    live = false;
+                }
+                if (!live) {
+                    // The record outlived its process — forget it here rather than
+                    // leaving a pid that will one day be REUSED by something else.
+                    tracked.delete(siteId);
+                    dropped = true;
+                    continue;
+                }
+                if (t.port) out.push({ siteId, port: t.port });
+            }
+            if (dropped) save();
+            return out;
         },
         async readLog(siteId, tail = 200) {
             const t = tracked.get(siteId);
@@ -103,6 +180,62 @@ export function createHostProcessRun(deps: HostProcessRunDeps): HostProcessRun {
             }
         },
     };
+}
+
+/**
+ * Read the persisted registry back. Tolerant of every way a file written by a
+ * process that was killed mid-update can be wrong — absent, truncated, corrupt,
+ * or holding an entry of the wrong shape — because the alternative is a Genie
+ * that will not start hosting at all. Anything unreadable is simply "no runs",
+ * which is the state the old in-memory registry was always in.
+ */
+function loadRegistry(
+    read: (path: string) => string | null,
+    path: string,
+): Map<string, TrackedRun> {
+    const out = new Map<string, TrackedRun>();
+    let raw: string | null = null;
+    try {
+        raw = read(path);
+    } catch {
+        return out;
+    }
+    if (!raw) return out;
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(raw);
+    } catch {
+        return out;
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return out;
+    for (const [siteId, value] of Object.entries(parsed as Record<string, unknown>)) {
+        if (!SITE_ID_RE.test(siteId) || !value || typeof value !== 'object') continue;
+        const entry = value as Partial<TrackedRun>;
+        if (!Number.isInteger(entry.pid) || (entry.pid as number) <= 0) continue;
+        if (typeof entry.logPath !== 'string' || !entry.logPath) continue;
+        out.set(siteId, {
+            pid: entry.pid as number,
+            logPath: entry.logPath,
+            ...(Number.isInteger(entry.port) ? { port: entry.port as number } : {}),
+        });
+    }
+    return out;
+}
+
+function realReadRegistry(path: string): string | null {
+    try {
+        return readFileSync(path, 'utf8');
+    } catch {
+        return null; // absent is the ordinary first-run state
+    }
+}
+
+/** Atomic: temp file → rename, so a Genie killed mid-write leaves the previous
+ *  registry intact rather than a truncated one. */
+function realWriteRegistry(path: string, text: string): void {
+    const tmp = `${path}.tmp`;
+    writeFileSync(tmp, text, 'utf8');
+    renameSync(tmp, path);
 }
 
 /** The real Node bindings behind the injectable primitives. */

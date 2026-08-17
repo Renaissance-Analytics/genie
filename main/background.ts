@@ -1815,7 +1815,7 @@ app.whenReady().then(async () => {
     // and the packaged asar.
     registerDocsIpc(__dirname);
     // ADOPT the Dev Server containers that are already running (#234 P4) — and
-    // start NOTHING. Two different reasons, both load-bearing:
+    // start no CONTAINER. Two different reasons, both load-bearing:
     //
     //   - A service ENGINE carries `restart: unless-stopped`, so after a reboot
     //     it is up before Genie is, with zero known holders. Left unadopted the
@@ -1830,6 +1830,12 @@ app.whenReady().then(async () => {
     // What is deliberately NOT here is a `reconcile()`: a workspace nobody asked
     // to serve must not begin serving because the app launched. This is the
     // counterpart of quitting without stopping anything — see `lifecycle.ts`.
+    //
+    // HOST-NATIVE sites are the exception the same reasoning demands (genie#190):
+    // they have no container to outlive the quit, so an update takes every one of
+    // them down and adoption finds nothing to re-attach. `onBoot` resumes the ones
+    // the user has ENABLED — the ask that a container site's `restart:
+    // unless-stopped` already honours for free.
     //
     // Deferred and fire-and-forget: nothing here is a reason to hold up startup,
     // and the push at the end is what lights the rail's sites icon on a cold

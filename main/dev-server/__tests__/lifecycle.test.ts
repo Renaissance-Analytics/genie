@@ -203,7 +203,12 @@ const PG: DevServiceConfig = {
     enabled: true,
 };
 
-function siteManager(runtime: Fake, sites: Record<string, DevSites>, workspaces = [WS]) {
+function siteManager(
+    runtime: Fake,
+    sites: Record<string, DevSites>,
+    workspaces = [WS],
+    extra: Partial<Parameters<typeof createDevSiteManager>[0]> = {},
+) {
     return createDevSiteManager({
         resolveRuntime: async () => ({ runtime, detection: await runtime.detect() }),
         listWorkspaces: () => workspaces,
@@ -213,8 +218,39 @@ function siteManager(runtime: Fake, sites: Record<string, DevSites>, workspaces 
         platform: 'linux',
         probeReady: async () => true,
         hostIds: null,
+        ...extra,
     });
 }
+
+/** A host-native spawn binding whose runs did NOT survive the restart, recording
+ *  every start so a test can assert what boot brought back. */
+function deadHostSpawn() {
+    const started: string[] = [];
+    return {
+        started,
+        binding: {
+            start: async (i: { siteId: string }) => {
+                started.push(i.siteId);
+                return { ok: true as const, pid: 4242 };
+            },
+            stop: async () => {},
+            alive: async () => false,
+            readLog: async () => '',
+            running: async () => [],
+        },
+    };
+}
+
+const HOST_SITE: DevSiteConfig = {
+    name: 'web',
+    genName: 'web.acme.gen',
+    repo: '',
+    runMode: 'host',
+    command: ['php', 'artisan', 'serve'],
+    port: 8001,
+    kind: 'http',
+    enabled: true,
+};
 
 function serviceManager(runtime: Fake, services: Record<string, DevServices>, workspaces = [WS]) {
     return createDevServiceManager({
@@ -329,6 +365,103 @@ describe('adopting what is already running', () => {
 
         expect(manager.list(WS.id)[0]?.state).toBe('stopped');
         expect(manager.list(WS.id)[0]?.holders).toBeUndefined();
+    });
+});
+
+// --- boot: host-native sites come back --------------------------------------
+
+/**
+ * "Every time I update, all of our sites go down and I have to manually restart
+ * most of them" (genie#190).
+ *
+ * ADOPT is the whole answer for a CONTAINER site: the container carries
+ * `restart: unless-stopped`, so it is still up after the update and adoption
+ * re-learns it. A HOST-NATIVE site has no container to survive — Genie quits to
+ * install the update and its dev servers go with it — so adoption finds nothing
+ * and the site stays dark until a human restarts it by hand, once per site.
+ *
+ * `enabled: true` IS the user asking for the site to be served, so boot resumes
+ * exactly those. That does not reopen the policy adopt states: a site nobody
+ * enabled still does not begin serving because the app launched.
+ */
+describe('boot resumes host-native sites the update took down', () => {
+    function bootLifecycle(sites: ReturnType<typeof siteManager>) {
+        return createDevServerLifecycle({
+            resolveRuntime: async () => ({ runtime: null, detection: NO_RUNTIME }),
+            workspaceFor: () => WS,
+            devSitesFor: () => ({}),
+            devServicesFor: () => ({}),
+            sites: () => sites,
+            services: () => null,
+            platform: 'linux',
+            hostIds: null,
+        });
+    }
+
+    it('restarts an ENABLED host-native site whose dev server did not survive', async () => {
+        const spawn = deadHostSpawn();
+        const manager = siteManager(
+            fakeRuntime({ detection: NO_RUNTIME }),
+            { [WS.id]: { 'site-1': HOST_SITE } },
+            [WS],
+            { hostSpawn: spawn.binding, allocateFreePort: async () => 5321 },
+        );
+
+        await bootLifecycle(manager).onBoot();
+
+        expect(spawn.started).toEqual(['site-1']);
+        expect(manager.list(WS.id)[0]?.state).toBe('running');
+    });
+
+    it('does NOT restart a host-native site the user has disabled', async () => {
+        const spawn = deadHostSpawn();
+        const manager = siteManager(
+            fakeRuntime({ detection: NO_RUNTIME }),
+            { [WS.id]: { 'site-1': { ...HOST_SITE, enabled: false } } },
+            [WS],
+            { hostSpawn: spawn.binding, allocateFreePort: async () => 5321 },
+        );
+
+        await bootLifecycle(manager).onBoot();
+
+        expect(spawn.started).toEqual([]);
+        expect(manager.list(WS.id)[0]?.state).toBe('stopped');
+    });
+
+    it('does NOT respawn one that adopt already re-attached — no second dev server on a second port', async () => {
+        const started: string[] = [];
+        const hostSpawn = {
+            start: async (i: { siteId: string }) => {
+                started.push(i.siteId);
+                return { ok: true as const, pid: 1 };
+            },
+            stop: async () => {},
+            alive: async () => true,
+            readLog: async () => '',
+            // It survived — adopt re-attaches it on the port it is really serving.
+            running: async () => [{ siteId: 'site-1', port: 4444 }],
+        };
+        const manager = siteManager(
+            fakeRuntime({ detection: NO_RUNTIME }),
+            { [WS.id]: { 'site-1': HOST_SITE } },
+            [WS],
+            { hostSpawn, allocateFreePort: async () => 5321 },
+        );
+
+        await bootLifecycle(manager).onBoot();
+
+        expect(started).toEqual([]);
+        expect(manager.genSites()[0]?.port).toBe(4444);
+    });
+
+    it('still starts NO container site on boot — that policy is unchanged', async () => {
+        const runtime = fakeRuntime();
+        const manager = siteManager(runtime, { [WS.id]: { 'site-1': SITE } });
+
+        await bootLifecycle(manager).onBoot();
+
+        expect(runtime.ran).toEqual([]);
+        expect(manager.list(WS.id)[0]?.state).toBe('stopped');
     });
 });
 

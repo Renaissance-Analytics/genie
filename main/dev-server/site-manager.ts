@@ -206,10 +206,23 @@ export interface HostProcessRun {
          *  workspace's services resolved to no host env) where `manageSite logs`
          *  and the progress tail will show it. */
         note?: string;
+        /** The loopback port this run serves on. Recorded with the run so a Genie
+         *  that restarts can re-ROUTE `.gen` to a dev server still serving on it,
+         *  instead of leaving it orphaned (genie#190). */
+        port?: number;
     }): Promise<{ ok: true; pid: number } | { ok: false; error: string }>;
     stop(siteId: string): Promise<void>;
     alive(siteId: string): Promise<boolean>;
     readLog(siteId: string, tail?: number): Promise<string>;
+    /**
+     * The runs this binding can still account for — pid ALIVE, port known — after
+     * a Genie restart. `adopt()` re-attaches exactly these (genie#190).
+     *
+     * Optional because a leaner binding may keep no cross-restart registry at all;
+     * absent simply means "nothing to re-attach", which is what every build did
+     * before the registry was persisted.
+     */
+    running?(): Promise<Array<{ siteId: string; port: number }>>;
 }
 
 export interface DevSiteManagerDeps {
@@ -356,6 +369,12 @@ export interface DevSiteManager {
     logs(siteId: string, tail?: number): Promise<string>;
     /** Start every enabled site and stop everything that no longer is. */
     reconcile(): Promise<void>;
+    /**
+     * Bring back the ENABLED HOST-NATIVE sites that are not running (genie#190).
+     * Boot only, and strictly after {@link adopt} — what survived is adopted, what
+     * did not is started. Never throws.
+     */
+    resumeHostSites(): Promise<void>;
     /** RUNNING http sites as Testing-Browser rows. Synchronous. */
     genSites(): DevGenSite[];
     /** The browser-exposed HOST-NATIVE routes across all workspaces — the input to
@@ -903,6 +922,59 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
     }
 
     /**
+     * Re-attach every HOST-NATIVE dev server that outlived the last Genie (#190).
+     *
+     * The spawn is deliberately detached, so a restart — and above all an UPDATE,
+     * which is a quit — leaves the dev servers running. Which pids those were is
+     * the one thing this process cannot re-derive, so the spawn binding persists
+     * its registry and reports back the runs still alive (`running()`); everything
+     * here does is turn each of those into the live entry + `.gen` route the rest
+     * of Genie reads. A run whose process is gone is simply absent from that list,
+     * so it stays reported as stopped and nothing is invented.
+     *
+     * Never throws: adoption runs once at boot and gets no second chance, so one
+     * unreadable site must not abandon the others.
+     */
+    async function adoptHostNative(): Promise<void> {
+        const hostSpawn = deps.hostSpawn;
+        if (!hostSpawn?.running) return;
+        let recovered: Array<{ siteId: string; port: number }> = [];
+        try {
+            recovered = await hostSpawn.running();
+        } catch {
+            return;
+        }
+        if (recovered.length === 0) return;
+        const ports = new Map(recovered.map((r) => [r.siteId, r.port]));
+        for (const workspace of deps.listWorkspaces()) {
+            for (const [siteId, config] of Object.entries(deps.devSitesFor(workspace.id))) {
+                if (config.runMode !== 'host' || live.has(siteId)) continue;
+                const port = ports.get(siteId);
+                if (port === undefined) continue;
+                try {
+                    // A SHORT probe, like the container pass: the dev server is
+                    // already up, so a healthy one answers at once.
+                    await recordHostNativeLive(
+                        workspace.id,
+                        siteId,
+                        config,
+                        {
+                            genName: config.genName,
+                            scheme: 'http',
+                            loopback: '127.0.0.1',
+                            port,
+                            ...(config.upstreamHost ? { upstreamHost: config.upstreamHost } : {}),
+                        },
+                        ADOPT_PROBE_MS,
+                    );
+                } catch {
+                    /* one unreadable site must not abandon the rest */
+                }
+            }
+        }
+    }
+
+    /**
      * Start a MANAGED HOST-NATIVE site (story #238): run the repo's dev server as a
      * real HOST process (no container) and route `.gen` to it. Genie owns the
      * process (via {@link DevSiteManagerDeps.hostSpawn}); the dev server runs in the
@@ -1136,6 +1208,10 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             cwd,
             env,
             ...(note ? { note } : {}),
+            // The ALLOCATED port travels with the run so the next Genie can route
+            // `.gen` back to this dev server instead of orphaning it (genie#190) —
+            // `config.port` is deliberately not it, the host owns the port here.
+            port,
         });
         if (!started.ok) {
             // Don't orphan the worker if the Caddy failed to come up.
@@ -1277,6 +1353,15 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         },
 
         async adopt() {
+            // HOST-NATIVE first, and OUTSIDE the runtime gate (genie#190). A
+            // host-native site's whole point is that there is no container, so
+            // returning early on "no Docker" left exactly the sites that need this
+            // most unadopted: the dev server is spawned to outlive the call that
+            // started it, so it outlives Genie too, and an unadopted one keeps
+            // serving on its port while `genSites()` does not know it exists — the
+            // same orphan the container pass below exists to prevent.
+            await adoptHostNative();
+
             const { runtime } = await deps.resolveRuntime();
             if (!runtime) return;
             for (const workspace of deps.listWorkspaces()) {
@@ -1422,6 +1507,29 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             }
             for (const siteId of [...live.keys()]) {
                 if (!wanted.has(siteId)) await stop(siteId);
+            }
+        },
+
+        async resumeHostSites() {
+            for (const workspace of deps.listWorkspaces()) {
+                for (const [siteId, config] of Object.entries(deps.devSitesFor(workspace.id))) {
+                    // HOST-NATIVE only. A container site needs nothing here: its
+                    // container carries `restart: unless-stopped`, so it is still up
+                    // and `adopt()` has already re-learned it — starting it again is
+                    // exactly the "a workspace nobody asked to serve begins serving
+                    // because the app launched" that boot must not do.
+                    if (config.runMode !== 'host' || !config.enabled) continue;
+                    // Adopted a moment ago (it survived), or started by a concurrent
+                    // caller — either way it is already serving.
+                    if (live.has(siteId)) continue;
+                    try {
+                        await start(workspace.id, siteId);
+                    } catch {
+                        // A site that will not come back must not stop the others —
+                        // this runs once at boot and gets no second chance. `start`
+                        // already records the failure for `list`/`logs` to show.
+                    }
+                }
             }
         },
 

@@ -715,10 +715,33 @@ export function parseDevSites(raw: string | null | undefined): DevSites {
     } catch {
         return {};
     }
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return parseDevSitesValue(parsed) ?? {};
+}
+
+/**
+ * PURE. Normalize an ALREADY-DECODED `sites` map — the shape that arrives from
+ * outside our own blob, i.e. the `.agi` envelope's project.json.
+ *
+ * Two things that file is, and genie.db is not: it is UNTRUSTED (git-tracked, so
+ * it arrives from a clone, a merge, another machine, an agent's hand edit) and it
+ * is AUTHORITATIVE (`hosting-config.ts` mirrors it over genie.db). Read raw it was
+ * both a way for unsanitized values to reach a spawn and a certificate, and a way
+ * for one unreadable file to erase a workspace's registrations while its dev
+ * servers kept running (genie#190).
+ *
+ * Hence three answers, not two:
+ *   - `null` — this is not a sites map at all (absent, a string, an array). The
+ *     caller must treat it as "the envelope does not say", NEVER as "no sites".
+ *   - `{}` — an explicitly empty map. It DOES mean no sites: the user removed
+ *     their last one, and that has to propagate.
+ *   - a map — every row through the same sanitizer a write goes through, so an
+ *     unusable row is dropped rather than trusted.
+ */
+export function parseDevSitesValue(value: unknown): DevSites | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
     const out: DevSites = {};
-    for (const [id, value] of Object.entries(parsed as Record<string, unknown>)) {
-        const clean = sanitizeDevSitePatch(value as DevSiteConfig);
+    for (const [id, row] of Object.entries(value as Record<string, unknown>)) {
+        const clean = sanitizeDevSitePatch(row as DevSiteConfig);
         // A row with no name or no `.gen` cannot be routed or addressed; keeping
         // it would show an unusable site in every list.
         if (!clean.name || !clean.genName) continue;

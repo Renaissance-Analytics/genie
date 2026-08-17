@@ -4,6 +4,7 @@ import fs from 'fs';
 import {
     devSiteIdFor,
     parseDevSites,
+    parseDevSitesValue,
     sanitizeDevSitePatch,
     withoutPersistedEnv,
     type DevSiteConfig,
@@ -1916,7 +1917,13 @@ export function setHostedSitesSync(
 const devSitesStore: DevSitesStore = {
     workspacePath: (id) => getWorkspace(id)?.path ?? null,
     isEnvelope: (folder) => isEnvelopeFolder(folder),
-    readEnvelopeSites: (folder) => readProjectJson(folder)?.sites ?? null,
+    // Through the SAME sanitizer a write goes through. project.json is tracked, so
+    // its `sites` arrives from a clone, a merge or a hand edit — raw it would feed
+    // unvalidated values to a spawn and a cert, and a shape we cannot read would
+    // pass as "this workspace has no sites" and wipe the mirror (genie#190). `null`
+    // (not a sites map) reads as "the envelope does not say"; `{}` still means the
+    // user removed their last site.
+    readEnvelopeSites: (folder) => parseDevSitesValue(readProjectJson(folder)?.sites),
     writeEnvelopeSites: (folder, sites) => writeProjectJson(folder, { sites }),
     dbRead: (id) => {
         const row = getDb()

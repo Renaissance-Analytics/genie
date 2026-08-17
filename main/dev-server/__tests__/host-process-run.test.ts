@@ -98,6 +98,132 @@ describe('createHostProcessRun', () => {
         expect(appendLog).not.toHaveBeenCalled();
     });
 
+    // --- surviving a Genie restart (genie#190) -------------------------------
+    //
+    // A host-native dev server is spawned to OUTLIVE the call that started it, so
+    // it routinely outlives Genie itself (a restart, an update). The registry that
+    // knows its pid used to live only in this process's memory, so the moment Genie
+    // restarted the run became an ORPHAN: still serving on its port, but invisible
+    // — `alive` said no, `stop` was a no-op, `readLog` was empty, and the Site
+    // Manager showed a stopped site that was in fact running. The registry is
+    // persisted for exactly that reason.
+    describe('the run registry survives a Genie restart', () => {
+        /** An in-memory stand-in for the on-disk registry file, shared by two
+         *  successive `createHostProcessRun`s — i.e. across a restart. */
+        function registryFile() {
+            let text: string | null = null;
+            return {
+                readRegistry: (_path: string) => text,
+                writeRegistry: (_path: string, next: string) => {
+                    text = next;
+                },
+                get raw() {
+                    return text;
+                },
+            };
+        }
+
+        it('a NEW registry re-attaches a run started by the previous process', async () => {
+            const file = registryFile();
+            const before = createHostProcessRun({
+                logDir: '/logs',
+                primitives: fakePrims(),
+                ensureDir: vi.fn(),
+                readRegistry: file.readRegistry,
+                writeRegistry: file.writeRegistry,
+            });
+            await before.start({
+                siteId: 's',
+                workspaceId: 'ws',
+                command: ['php', 'artisan', 'serve'],
+                cwd: '/r',
+                env: {},
+                port: 5321,
+            });
+
+            // Genie restarts: a brand-new registry, same log dir, same still-running
+            // dev server.
+            const readLogTail = vi.fn().mockReturnValue('still serving');
+            const after = createHostProcessRun({
+                logDir: '/logs',
+                primitives: fakePrims({ signal: vi.fn().mockReturnValue(true) }),
+                ensureDir: vi.fn(),
+                readLogTail,
+                readRegistry: file.readRegistry,
+                writeRegistry: file.writeRegistry,
+            });
+            expect(await after.alive('s')).toBe(true);
+            expect(await after.readLog('s')).toBe('still serving');
+            // …and the PORT comes back too, so the site can be re-routed rather than
+            // restarted onto a second port beside the one already serving.
+            expect(await after.running?.()).toEqual([{ siteId: 's', port: 5321 }]);
+        });
+
+        it('running() reports only the sites whose process is actually still alive', async () => {
+            const file = registryFile();
+            const before = createHostProcessRun({
+                logDir: '/logs',
+                primitives: fakePrims({
+                    spawnDetached: vi
+                        .fn()
+                        .mockReturnValueOnce(11)
+                        .mockReturnValueOnce(22),
+                }),
+                ensureDir: vi.fn(),
+                readRegistry: file.readRegistry,
+                writeRegistry: file.writeRegistry,
+            });
+            await before.start({ siteId: 'alive', workspaceId: 'ws', command: ['x'], cwd: '/r', env: {}, port: 4001 });
+            await before.start({ siteId: 'dead', workspaceId: 'ws', command: ['y'], cwd: '/r', env: {}, port: 4002 });
+
+            // After the restart only pid 11 is still there — pid 22 died with Genie.
+            const after = createHostProcessRun({
+                logDir: '/logs',
+                primitives: fakePrims({ signal: vi.fn().mockImplementation((pid: number) => pid === 11) }),
+                ensureDir: vi.fn(),
+                readRegistry: file.readRegistry,
+                writeRegistry: file.writeRegistry,
+            });
+            expect(await after.running?.()).toEqual([{ siteId: 'alive', port: 4001 }]);
+            expect(await after.alive('dead')).toBe(false);
+        });
+
+        it('stop forgets the run in the PERSISTED registry, not only in memory', async () => {
+            const file = registryFile();
+            const first = createHostProcessRun({
+                logDir: '/logs',
+                primitives: fakePrims(),
+                ensureDir: vi.fn(),
+                readRegistry: file.readRegistry,
+                writeRegistry: file.writeRegistry,
+            });
+            await first.start({ siteId: 's', workspaceId: 'ws', command: ['x'], cwd: '/r', env: {}, port: 5321 });
+            await first.stop('s');
+
+            const after = createHostProcessRun({
+                logDir: '/logs',
+                primitives: fakePrims(),
+                ensureDir: vi.fn(),
+                readRegistry: file.readRegistry,
+                writeRegistry: file.writeRegistry,
+            });
+            expect(await after.alive('s')).toBe(false);
+            expect(await after.running?.()).toEqual([]);
+        });
+
+        it('a corrupt or absent registry file is simply no runs — never a throw', async () => {
+            const run = createHostProcessRun({
+                logDir: '/logs',
+                primitives: fakePrims(),
+                ensureDir: vi.fn(),
+                readRegistry: () => '{not json',
+                writeRegistry: vi.fn(),
+            });
+            expect(await run.running?.()).toEqual([]);
+            expect(await run.alive('s')).toBe(false);
+        });
+    });
+
     it('surfaces a spawn failure as ok:false rather than throwing', async () => {
         const prims = fakePrims({
             spawnDetached: vi.fn().mockImplementation(() => {
