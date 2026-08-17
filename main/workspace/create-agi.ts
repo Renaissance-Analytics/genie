@@ -11,6 +11,7 @@ import {
     type ProjectJsonRepoInput,
 } from './project-json';
 import { consolidateMcp } from './mcp';
+import { identityToApply } from './commit-identity';
 import { applyAgentsSection, hasGenieAgentsSection } from '../mcp/agent-config';
 import { getAllSettings } from '../db';
 import { getToken } from '../github/storage';
@@ -171,6 +172,26 @@ You are working inside a **\`.agi\` envelope**: an Aionima project monorepo.
 - Submodule pins advance deliberately
   (\`git submodule update --remote repos/<name>\`), not automatically.
 `;
+}
+
+/**
+ * Ensure the repo has a commit identity, WITHOUT overriding one it already has
+ * (genie#215). Best-effort: a config read that fails must not stop a commit.
+ */
+async function applyCommitIdentity(git: ReturnType<typeof simpleGit>): Promise<void> {
+    try {
+        const cfg = await git.listConfig();
+        const all = cfg.all as Record<string, string | string[]>;
+        const one = (k: string): string | undefined => {
+            const v = all[k];
+            return Array.isArray(v) ? v[v.length - 1] : v;
+        };
+        const patch = identityToApply({ name: one('user.name'), email: one('user.email') });
+        if (patch.name) await git.addConfig('user.name', patch.name);
+        if (patch.email) await git.addConfig('user.email', patch.email);
+    } catch {
+        /* best effort — a commit with no identity fails loudly on its own */
+    }
 }
 
 /**
@@ -427,8 +448,11 @@ export async function createAgiEnvelope(
     // a sane default so we're not blocked on env-level configuration.
     const git = simpleGit(envelopePath);
     await git.init(['--initial-branch=main']);
-    await git.addConfig('user.email', 'genie@localhost');
-    await git.addConfig('user.name', 'Genie');
+    // Only fill in what the machine does not already have (genie#215). Setting
+    // `genie@localhost` unconditionally overrode a perfectly good identity, and
+    // GitHub cannot link an address that belongs to nobody — so every envelope's
+    // first commit showed a bare "Genie" with no avatar and nothing to click.
+    await applyCommitIdentity(git);
     await git.add('.');
     await makeClaudeSymlink(git, envelopePath);
     await git.commit('Initial commit — {slug}.agi envelope scaffolded by Genie');
@@ -1125,14 +1149,7 @@ export async function addStructureDocs(
 
     const git = simpleGit({ baseDir: envelopePath });
     // Make sure a commit identity exists (envelope may predate Genie's).
-    try {
-        const cfg = await git.listConfig();
-        const all = cfg.all as Record<string, string | string[]>;
-        if (!all['user.email']) await git.addConfig('user.email', 'genie@localhost');
-        if (!all['user.name']) await git.addConfig('user.name', 'Genie');
-    } catch {
-        /* best effort */
-    }
+    await applyCommitIdentity(git);
 
     await git.add(added);
     if (needClaude) await makeClaudeSymlink(git, envelopePath);
@@ -1312,14 +1329,7 @@ export async function consolidateMcpAndCommit(
     }
 
     const git = simpleGit({ baseDir: envelopePath });
-    try {
-        const cfg = await git.listConfig();
-        const all = cfg.all as Record<string, string | string[]>;
-        if (!all['user.email']) await git.addConfig('user.email', 'genie@localhost');
-        if (!all['user.name']) await git.addConfig('user.name', 'Genie');
-    } catch {
-        /* best effort */
-    }
+    await applyCommitIdentity(git);
 
     // Only stage files that aren't gitignored. check-ignore exits 1 (and
     // simple-git throws) when a path is NOT ignored — so a throw means
