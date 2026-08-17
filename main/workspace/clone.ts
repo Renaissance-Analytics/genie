@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { cloneConfigFor, materializeAgentDocLinks } from './clone-symlinks';
 import path from 'path';
 import { simpleGit } from 'simple-git';
 import { getToken } from '../github/storage';
@@ -50,11 +51,16 @@ export async function cloneRepo(opts: CloneRepoOpts): Promise<{ path: string }> 
         // simple-git clone: (repo, localPath, opts). Created here, in the parent,
         // so git makes the destination folder for us. `config` becomes leading
         // `-c` args that also propagate to submodule fetches.
-        await simpleGit({ baseDir: opts.parent_path, config: auth.config }).clone(
-            auth.url,
-            dest,
-            ['--recurse-submodules'],
-        );
+        await simpleGit({
+            baseDir: opts.parent_path,
+            // `core.symlinks=false` on Windows (genie#214). A `.agi` envelope
+            // keeps CLAUDE.md as a symlink to AGENTS.md, and a Windows box
+            // without Developer Mode cannot create one — git then fails the
+            // WHOLE checkout ("unable to create symlink CLAUDE.md: Filename too
+            // long / unable to checkout working tree"), leaving the repo cloned
+            // with an empty working tree and the workspace unusable.
+            config: [...auth.config, ...cloneConfigFor(process.platform)],
+        }).clone(auth.url, dest, ['--recurse-submodules']);
     } catch (e) {
         // Scrub the token from the git error before it's surfaced/logged.
         throw new Error(
@@ -62,6 +68,22 @@ export async function cloneRepo(opts: CloneRepoOpts): Promise<{ path: string }> 
                 'and that you have access to the repository (connect GitHub in Settings, ' +
                 'or set up an SSH key / credential helper).',
         );
+    }
+
+    // With symlinks off, CLAUDE.md checked out as a one-line file containing
+    // "AGENTS.md" — which Claude Code would load as the workspace's entire
+    // instructions. Replace those placeholders with the real document.
+    //
+    // Never fails the clone: the repository IS on disk and usable, and a
+    // workspace that exists with one stub doc beats no workspace at all.
+    try {
+        await materializeAgentDocLinks(dest, process.platform, {
+            read: async (p) => (fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null),
+            write: async (p, body) => fs.writeFileSync(p, body, 'utf8'),
+            size: async (p) => (fs.existsSync(p) ? fs.statSync(p).size : -1),
+        });
+    } catch {
+        /* the clone succeeded; a stub doc is not worth failing it over */
     }
 
     return { path: dest };
