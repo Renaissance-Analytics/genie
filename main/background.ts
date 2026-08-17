@@ -97,7 +97,7 @@ import { getWorkspaceAgentAccess } from './db';
 import { getTynnBackend } from './backend/registry';
 import { installKnowledgeBroadcast } from './knowledge/presence';
 import {
-    buildSubmitBytes,
+    PASTE_SUBMIT_DELAY_MS,
     resolveTerminalInput,
     stripAnsi,
 } from './terminal/keystrokes';
@@ -1290,7 +1290,19 @@ app.whenReady().then(async () => {
         // be woken (fail-safe); this sink does the actual injection — submit the
         // nudge to the agent's pty, like a bracketed-paste send.
         agentInboxBroker.setWakeSink((terminalId, text) => {
-            writeToTerminal(terminalId, buildSubmitBytes(text, true));
+            // Through the SAME resolver every other terminal write uses, so the
+            // notice gets the split submit (genie#218). Written as one chunk with
+            // an inline CR, an agent TUI treats the ~180-character notice as a
+            // PASTE and the trailing Enter becomes a newline in its buffer — the
+            // nudge lands, sits at the prompt, and no turn ever starts. Which is
+            // the whole point of the nudge.
+            const built = resolveTerminalInput(text, { submit: true });
+            if ('error' in built) return;
+            writeToTerminal(terminalId, built.bytes);
+            if (built.submitAfter) {
+                const submit = built.submitAfter;
+                setTimeout(() => writeToTerminal(terminalId, submit), PASTE_SUBMIT_DELAY_MS);
+            }
         });
         // AgentInbox OUTER tier: the broker asks the workspaces table who may reach
         // into a given workspace. Kept a seam so the broker stays db-free (and

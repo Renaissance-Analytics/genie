@@ -34,6 +34,20 @@ export const CR = '\r';
 export const PASTE_SUBMIT_DELAY_MS = 60;
 
 /**
+ * Body length at which a TUI's paste heuristic starts treating a single write as
+ * PASTED input rather than typing — past which the submit must be delivered
+ * separately or it is swallowed into the buffer (genie#218).
+ *
+ * A threshold, not a certainty: the exact trigger is the TUI's own and differs
+ * between Claude Code and Codex. Deliberately LOW, because the two outcomes are
+ * not symmetric — splitting when it was not needed costs one 60ms write, while
+ * failing to split leaves an agent's prompt parked with text in it and no turn
+ * started, which is silent and looks like the agent ignored you. Short commands
+ * (`ls`, `npm test`) stay inline, which is what keeps interactive driving snappy.
+ */
+export const PASTE_HEURISTIC_CHARS = 48;
+
+/**
  * Named single keypresses an agent can deliver on their own (the `key` escape-
  * hatch), so a bare Enter can submit/clear a stuck buffer, Escape can dismiss a
  * mode, and Ctrl-C can interrupt — without smuggling them inside a text body.
@@ -130,6 +144,17 @@ export function resolveTerminalInput(
         // Multi-line → bracketed paste now, Enter delivered SEPARATELY after a
         // short delay so it doesn't race the paste-end marker (issue #8).
         return { bytes: PASTE_START + cleaned + PASTE_END, submitAfter: CR, preview };
+    }
+    if (submit && cleaned.length >= PASTE_HEURISTIC_CHARS) {
+        // Long SINGLE line → same split, for a different reason (genie#218).
+        // Claude Code and Codex treat a chunk that arrives all at once as PASTED
+        // input, and a newline inside a paste is a newline in the buffer, not a
+        // submit. So `body + CR` in one write parks the prompt with the text
+        // sitting there — which is exactly how an AgentInbox nudge (one ~180
+        // character line) failed to start a turn. No bracketed-paste wrapper
+        // here: the body is one line, it only needs the Enter to arrive as its
+        // own write.
+        return { bytes: cleaned, submitAfter: CR, preview };
     }
     return { bytes: buildSubmitBytes(cleaned, submit), preview };
 }

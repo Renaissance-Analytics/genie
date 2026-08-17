@@ -189,3 +189,61 @@ describe('stripAnsi', () => {
         expect(stripAnsi('just plain text')).toBe('just plain text');
     });
 });
+
+/**
+ * A SUBMIT must not ride inline behind a bulk body (genie#218).
+ *
+ * Reported: an AgentInbox nudge — a single line of ~180 characters — landed in
+ * the target agent's TUI and just sat at the prompt. The text was there, the
+ * turn never started. Driving another agent's terminal showed the same thing:
+ * "it just adds a new line".
+ *
+ * The cause is not multi-line-ness. Claude Code and Codex apply a PASTE
+ * HEURISTIC: a chunk that arrives all at once is treated as pasted input, and a
+ * newline inside a paste is a newline in the buffer, not a submit. So
+ * `body + CR` written as one chunk parks the prompt exactly like the bracketed
+ * paste in issue #8 did — which is why the fix there (deliver the Enter as a
+ * SEPARATE, slightly delayed write) is the fix here too. It was simply scoped to
+ * multi-line, and the nudge is one long line.
+ */
+describe('submitting a body a TUI will treat as a paste', () => {
+    const longLine = `[Genie] You just received a message from claude · master-ops as a DM, marked HIGH PRIORITY — check it immediately: read it with the agentinbox tool (action: "receive").`;
+
+    it('splits the Enter out for a long single line, not just for multi-line', () => {
+        const built = resolveTerminalInput(longLine, { submit: true });
+        if ('error' in built) throw new Error(built.error);
+
+        // The body must NOT carry a trailing CR — that is the byte the TUI eats
+        // as part of the paste.
+        expect(built.bytes.endsWith('\r')).toBe(false);
+        // …and the submit must be delivered separately.
+        expect(built.submitAfter).toBe('\r');
+    });
+
+    it('still splits for multi-line, as issue #8 established', () => {
+        const built = resolveTerminalInput('one\ntwo', { submit: true });
+        if ('error' in built) throw new Error(built.error);
+        expect(built.submitAfter).toBe('\r');
+    });
+
+    it('keeps a SHORT command inline — no paste heuristic to trip, no delay', () => {
+        const built = resolveTerminalInput('ls', { submit: true });
+        if ('error' in built) throw new Error(built.error);
+        expect(built.bytes).toBe('ls\r');
+        expect(built.submitAfter).toBeUndefined();
+    });
+
+    it('a bare Enter is still one keystroke', () => {
+        const built = resolveTerminalInput('', { submit: true });
+        if ('error' in built) throw new Error(built.error);
+        expect(built.bytes).toBe('\r');
+        expect(built.submitAfter).toBeUndefined();
+    });
+
+    it('does not submit at all when the caller said not to', () => {
+        const built = resolveTerminalInput(longLine, { submit: false });
+        if ('error' in built) throw new Error(built.error);
+        expect(built.submitAfter).toBeUndefined();
+        expect(built.bytes.endsWith('\r')).toBe(false);
+    });
+});
