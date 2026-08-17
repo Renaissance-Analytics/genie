@@ -40,6 +40,16 @@ import type { LanguageTool } from './toolchain-versions';
 export interface AdapterContext {
     os: NodeJS.Platform | string;
     arch?: NodeJS.Architecture | string;
+    /**
+     * Genie's own toolchain root (`<userData>/toolchain`), when the caller knows
+     * it. Used as the npm PREFIX for the agent CLIs so an install never touches
+     * a system-owned directory — see {@link buildNpmGlobalCommand}.
+     *
+     * Optional because this module is pure and platform-parameterised; a caller
+     * that omits it gets the old system-prefix behaviour rather than a fabricated
+     * path.
+     */
+    genieRoot?: string;
 }
 
 interface InstallCommandBase {
@@ -55,6 +65,15 @@ export interface RunInstallCommand extends InstallCommandBase {
     via: 'run';
     command: string;
     args: string[];
+    /**
+     * A directory to put on PATH once this command SUCCEEDS.
+     *
+     * Set for the agent CLIs, which install into a Genie-owned npm prefix
+     * (genie#214): the binaries land somewhere the system PATH knows nothing
+     * about, so without this the Toolchain page reports Claude Code installed
+     * while `claude` is "command not found" at a prompt.
+     */
+    pathAdd?: string;
 }
 
 /** A source whose latest version must be RESOLVED before a URL exists. */
@@ -228,7 +247,7 @@ export function buildInstallCommand(
         // npm-global (`npm i -g`) and direct downloads already resolve the latest,
         // so update and install are the same command.
         case 'npm-global':
-            return { ...base, ...buildNpmGlobalCommand(step.tool) };
+            return { ...base, ...buildNpmGlobalCommand(step.tool, ctx) };
         case 'direct':
             return { ...base, ...buildDirectCommand(step.tool, ctx) };
     }
@@ -318,12 +337,43 @@ export function packageManagerRefreshCommand(
 
 // --- agent TUIs ------------------------------------------------------------
 
-function buildNpmGlobalCommand(tool: HostToolName): BuiltRun {
+/**
+ * `npm i -g` into a directory GENIE owns (genie#214).
+ *
+ * A bare `npm install -g` installs into npm's configured prefix, which on a
+ * machine whose node came from the system — apt on Ubuntu, or a root-owned
+ * Homebrew — is `/usr/lib/node_modules`. The install then fails with EACCES and
+ * npm's own advice: "try running the command again as root/Administrator".
+ * Genie's model is that it installs into its own directory without elevation,
+ * and this was the one path still asking the OS for permission.
+ *
+ * The same change is what makes `claude` findable afterwards. A root-owned
+ * prefix is not a directory Genie can add to PATH; its own prefix is, so the
+ * `pathAdd` below turns "the page says it is installed" into "a new terminal can
+ * run it".
+ *
+ * npm's own layout decides where the binaries land: `<prefix>/bin` on posix,
+ * `<prefix>` itself on Windows.
+ */
+function buildNpmGlobalCommand(tool: HostToolName, ctx: AdapterContext): BuiltRun {
     const pkg = NPM_PACKAGES[tool];
     if (!pkg) {
         throw new Error(`toolchain: no npm package for ${tool}`);
     }
-    return { via: 'run', command: 'npm', args: ['install', '-g', pkg], label: `npm install -g ${pkg}` };
+    if (!ctx.genieRoot) {
+        // No root known — keep the previous behaviour rather than invent a path.
+        return { via: 'run', command: 'npm', args: ['install', '-g', pkg], label: `npm install -g ${pkg}` };
+    }
+    const isWin = ctx.os === 'win32';
+    const sep = isWin ? '\\' : '/';
+    const prefix = `${ctx.genieRoot}${sep}npm-global`;
+    return {
+        via: 'run',
+        command: 'npm',
+        args: ['install', '-g', '--prefix', prefix, pkg],
+        pathAdd: isWin ? prefix : `${prefix}${sep}bin`,
+        label: `npm install -g ${pkg}`,
+    };
 }
 
 // --- direct downloads ------------------------------------------------------

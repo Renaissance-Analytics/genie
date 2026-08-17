@@ -1,7 +1,7 @@
 import { resolveFailureHelp } from './toolchain-resolve';
 import type { CommandResult } from './container-runtime';
 import type { HostToolName } from './toolchain-detect';
-import type { AdapterContext, DirectSource, DownloadInstallCommand, InstallCommand } from './toolchain-adapters';
+import type { AdapterContext, DirectSource, DownloadInstallCommand, InstallCommand, RunInstallCommand } from './toolchain-adapters';
 import type { LanguageTool } from './toolchain-versions';
 import type { PerformInstall, StepOutcome } from './toolchain-install';
 
@@ -49,6 +49,30 @@ export interface PerformDeps {
         engine: LanguageTool,
         version: string,
     ): Promise<{ ok: boolean; error?: string }>;
+    /**
+     * Put a directory on PATH after a successful install (genie#214).
+     *
+     * For the agent CLIs, which now install into a Genie-owned npm prefix so the
+     * install never needs root. That prefix is invisible to the system PATH, so
+     * without this the tool is on disk and not runnable.
+     */
+    addToPath?(dir: string): Promise<void>;
+}
+
+/**
+ * Put this command's install directory on PATH, when it declared one.
+ *
+ * Never fails the step: the package really is installed, and reporting a good
+ * install as failed would send someone to install it a second time. A PATH that
+ * could not be persisted still leaves the tool findable in this Genie session.
+ */
+async function applyPathAdd(command: RunInstallCommand, deps: PerformDeps): Promise<void> {
+    if (!command.pathAdd || !deps.addToPath) return;
+    try {
+        await deps.addToPath(command.pathAdd);
+    } catch {
+        /* the bytes are on disk; PATH is a convenience layer over that fact */
+    }
 }
 
 /** Trim a failure message to something a wizard row can show. */
@@ -113,8 +137,14 @@ async function performRun(
     const res = await deps.run(command.command, command.args, { elevated: command.requiresElevation });
     if (res.code !== 0) {
         const version = await deps.verify?.(command.tool);
-        return version ? ok(version) : { ok: false, error: reason(res) };
+        if (!version) return { ok: false, error: reason(res) };
+        await applyPathAdd(command, deps);
+        return ok(version);
     }
+    // The agent CLIs install into a Genie-owned npm prefix the system PATH knows
+    // nothing about (genie#214). Adding it here — after success, never before —
+    // is what makes `claude` runnable at a prompt instead of merely present.
+    await applyPathAdd(command, deps);
     return ok(await deps.verify?.(command.tool));
 }
 

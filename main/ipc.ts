@@ -250,6 +250,7 @@ import type { HostToolName } from './dev-server/toolchain-detect';
 import {
     addToolchainVersion,
     createToolchainInstallEffect,
+    toolchainRoot,
     removeToolchainVersion,
     setToolchainDefault,
     toolchainInstallsInfo,
@@ -678,7 +679,7 @@ export function registerIpcHandlers(): void {
     // choice. Clicking Install in the reviewed wizard IS the consent (approved).
     // Per-tool progress streams back on `toolchain:progress`.
     ipcMain.handle('toolchain:install', async (e, pmChoice?: string) => {
-        const ctx = { os: process.platform, arch: process.arch };
+        const ctx = { os: process.platform, arch: process.arch, genieRoot: toolchainRoot() };
         const insp = await inspectToolchain({
             runner: hostToolCommandRunner,
             ...ctx,
@@ -725,7 +726,7 @@ export function registerIpcHandlers(): void {
                 affected: risk.affected,
             };
         }
-        const ctx = { os: process.platform, arch: process.arch };
+        const ctx = { os: process.platform, arch: process.arch, genieRoot: toolchainRoot() };
         const insp = await inspectToolchain({ runner: hostToolCommandRunner, ...ctx });
         const perform = createToolchainInstallEffect(ctx, toolchainManagerDeps());
         const result = await runInstallPlan({

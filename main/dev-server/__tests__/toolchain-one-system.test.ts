@@ -362,3 +362,77 @@ describe('tools the OLD wizard left in <userData>/tools are not orphaned', () =>
         expect(found?.source).toBe('genie');
     });
 });
+
+// --- 5. an install must never need root -------------------------------------
+
+/**
+ * `npm i -g` into a prefix Genie does not own (genie#214).
+ *
+ * Reported on Ubuntu: installing Codex failed with npm's EACCES and "try running
+ * the command again as root/Administrator". The machine had a SYSTEM node, so
+ * npm's global prefix was `/usr/lib/node_modules` — root-owned. Genie's whole
+ * model is that it installs into its own directory without elevation, and the
+ * agent CLIs were the one path still asking the OS for permission.
+ *
+ * Fixing it in the same place also ends "the page says Claude Code is installed
+ * but `claude` is not found": a Genie-owned prefix is a directory Genie can put
+ * on PATH, which a root-owned one never was.
+ */
+describe('installing an agent CLI never needs root', () => {
+    const npmStep = (tool: InstallStep['tool']): InstallStep => ({
+        tool,
+        method: 'npm-global',
+        requiresElevation: false,
+        requiresRestart: false,
+        dependsOn: [],
+    });
+
+    it('installs into a GENIE-owned prefix rather than the system one', () => {
+        const command = buildInstallCommand(npmStep('codex'), {
+            os: 'linux',
+            arch: 'x64',
+            genieRoot: '/home/dev/.config/Genie/toolchain',
+        });
+
+        expect(command.via).toBe('run');
+        if (command.via !== 'run') return;
+        const argv = command.args.join(' ');
+        expect(argv).toContain('--prefix');
+        expect(argv).toContain('/home/dev/.config/Genie/toolchain/npm-global');
+        // Still a global install — the prefix moves WHERE, not what.
+        expect(command.args).toContain('-g');
+    });
+
+    it('never asks for elevation to do it', () => {
+        const command = buildInstallCommand(npmStep('claude-code'), {
+            os: 'linux',
+            arch: 'x64',
+            genieRoot: '/home/dev/.config/Genie/toolchain',
+        });
+        expect(command.requiresElevation).toBe(false);
+    });
+
+    it('puts the prefix bin directory on PATH, or "installed" is a lie again', () => {
+        const command = buildInstallCommand(npmStep('codex'), {
+            os: 'linux',
+            arch: 'x64',
+            genieRoot: '/home/dev/.config/Genie/toolchain',
+        });
+        if (command.via !== 'run') throw new Error('expected a run command');
+        // posix npm puts binaries in <prefix>/bin; Windows puts them at <prefix>.
+        expect(command.pathAdd).toBe('/home/dev/.config/Genie/toolchain/npm-global/bin');
+    });
+
+    it('uses the Windows layout on win32', () => {
+        // String.raw — a plain literal turns \t into a TAB and the assertion
+        // then compares two strings that LOOK identical and are not.
+        const root = String.raw`C:\Genie\toolchain`;
+        const command = buildInstallCommand(npmStep('codex'), {
+            os: 'win32',
+            arch: 'x64',
+            genieRoot: root,
+        });
+        if (command.via !== 'run') throw new Error('expected a run command');
+        expect(command.pathAdd).toBe(String.raw`C:\Genie\toolchain\npm-global`);
+    });
+});

@@ -193,6 +193,9 @@ export function createToolchainPrimitives(
 ): ToolchainEffectPrimitives {
     return {
         installEngine,
+        async addToPath(dir: string) {
+            await addToolsPathEntry(dir);
+        },
         // The SHIM-aware runner (genie#205): an `npm-global` step runs `npm`,
         // which on Windows is `npm.cmd` — unspawnable without a shell, which is
         // why installing the agent TUIs failed there. The elevated + artifact

@@ -34,6 +34,8 @@ export interface ToolchainEffectPrimitives {
     /** Install a language version through Genie's own per-version installer —
      *  the Toolchain page's installer, shared so there is only one (genie#212). */
     installEngine: (engine: LanguageTool, version: string) => Promise<{ ok: boolean; error?: string }>;
+    /** Put a directory on PATH — this process and the persisted user PATH. */
+    addToPath: (dir: string) => Promise<void>;
     /** Verify a runtime LIBRARY, which has no `--version` to ask. */
     fileExists?: FileExists;
     /** Where Windows lives; only the library check reads it. */
@@ -85,6 +87,7 @@ export function createToolchainPerformDeps(
         installArtifact: (command, localPath) =>
             mutating(() => prim.installArtifact(command, localPath)),
         installEngine: (engine, version) => mutating(() => prim.installEngine(engine, version)),
+        addToPath: (dir) => prim.addToPath(dir),
         verify: (tool) => verifyToolVersion(tool, prim),
     };
 }
