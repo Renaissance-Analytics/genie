@@ -48,6 +48,15 @@ const PULSE_PIXEL = `(r, g, b) => b > r + 12 && b > g + 12 && b > 60`;
 
 const head = () => page.locator('.tproj-head').first();
 
+/** Put the row back in the state the sparkline renders in. Tests call this
+ *  rather than assuming the previous one left it collapsed — a failure part-way
+ *  through the metric guard would otherwise cascade into every test after it. */
+async function ensureCollapsed(): Promise<void> {
+    const expand = page.locator('.tproj-head [title="Expand"]').first();
+    if (await expand.count()) await expand.click();
+    await expect(page.locator('.agent-pulse-spark')).toBeVisible();
+}
+
 /**
  * Count the sparkline's pixels inside the row.
  *
@@ -118,9 +127,10 @@ async function headBackgroundAlpha(): Promise<number> {
  */
 async function pulsePixelsWhileHovered(): Promise<number> {
     for (let attempt = 0; attempt < 5; attempt++) {
-        const box = await head().boundingBox();
-        if (!box) throw new Error('row has no box');
-        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+        // `hover()`, not `mouse.move()` to the same point: on Windows the raw
+        // move did not register as a hover at all, while the actionability hover
+        // did — it is the one the other tests here use successfully.
+        await head().hover();
         await expect.poll(headBackgroundAlpha).toBe(1);
 
         const pixels = await pulsePixels();
@@ -159,6 +169,7 @@ test.afterAll(async () => {
 });
 
 test('the pulse is drawn on an idle row', async () => {
+    await ensureCollapsed();
     // Guard 1. Everything below compares against this number, so a sparkline that
     // never painted would make the survival assertion vacuously true.
     expect(await pulsePixels()).toBeGreaterThan(0);
@@ -172,14 +183,26 @@ test('the counted pixels are the sparkline and nothing else', async () => {
     // else on the row answers to the predicate — as the agent-active workspace
     // name did, in the same `var(--agent)` indigo — and every number here is
     // measuring that instead.
+    await ensureCollapsed();
     const withSparkline = await pulsePixels();
+    // A signal worth dividing into. If the sparkline only ever contributed a
+    // handful of pixels, the ratio below would be noise comparing itself.
+    expect(withSparkline).toBeGreaterThan(100);
 
-    await page.locator('.tproj-head [title="Expand"]').first().click();
-    await expect(page.locator('.agent-pulse-spark')).toHaveCount(0);
-    expect(await pulsePixels()).toBe(0);
+    try {
+        await page.locator('.tproj-head [title="Expand"]').first().click();
+        await expect(page.locator('.agent-pulse-spark')).toHaveCount(0);
 
-    await page.locator('.tproj-head [title="Collapse"]').first().click();
-    await expect(page.locator('.agent-pulse-spark')).toBeVisible();
+        // Not exactly zero: a few antialiased pixels on the row's own edges answer
+        // to any colour predicate, and Windows reported 7 of them. The claim being
+        // made is that the sparkline is where essentially ALL of this colour comes
+        // from — so removing it must remove essentially all of the count.
+        expect(await pulsePixels()).toBeLessThan(withSparkline * 0.05);
+    } finally {
+        // Restore, even on failure: leaving the row expanded would strand every
+        // later test with no sparkline and report their cause as this one's.
+        await ensureCollapsed();
+    }
     expect(await pulsePixels()).toBeGreaterThan(withSparkline * 0.5);
 });
 
@@ -191,6 +214,7 @@ test('hovering the row paints an opaque fill over it', async () => {
 });
 
 test('the pulse survives the hover — genie#197', async () => {
+    await ensureCollapsed();
     await page.mouse.move(0, 0);
     await expect.poll(headBackgroundAlpha).not.toBe(1);
     const idle = await pulsePixels();
@@ -205,6 +229,7 @@ test('the pulse survives the hover — genie#197', async () => {
 });
 
 test('the pulse is painted by the hovered element itself, not behind it', async () => {
+    await ensureCollapsed();
     // The structural invariant behind the fix, pinned so a refactor that moves the
     // sparkline back OUT of the head reads as the regression it is — and so the
     // suite says WHY the pixels survive, not just that they do.
