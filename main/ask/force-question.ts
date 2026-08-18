@@ -597,9 +597,13 @@ function enqueue(item: QueueItem): void {
     notifyQuestionsChanged();
 
     if (!startsQueue) {
-        // A modal is already up. Refresh its "N more queued" badge so the user
-        // sees the new arrival, then return — this item shows later.
-        showHead();
+        // A modal is already up, and the HEAD is untouched (insertByPriority never
+        // displaces it) — so push the QUEUE only. Re-sending `ask:show` here would
+        // tell the renderer the shown question changed when it hasn't; that yanked
+        // a user who was part-way through answering a queued request back to the
+        // head and discarded what they had typed (genie#156). This item shows when
+        // its turn comes; until then the new arrival is visible in the queue strip.
+        pushQueue();
         return;
     }
 

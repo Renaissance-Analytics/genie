@@ -1,11 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Action, ContentRenderer, Heading, Icon, Text } from '@particle-academy/react-fancy';
+import { api, hasGenieBridge, type ForceQuestionSpec } from '../lib/genie';
 import {
-    api,
-    hasGenieBridge,
-    type ForceAnswerSpec,
-    type ForceQuestionSpec,
-} from '../lib/genie';
+    clearDraft,
+    draftFor,
+    draftToAnswers,
+    isDraftReady,
+    resolveActiveQuestionId,
+    setDraftNote,
+    toggleDraftOption,
+    type AskDrafts,
+} from '../lib/ask-state';
 
 /**
  * ForceTheQuestion modal — a frameless, always-on-top window an agent raises via
@@ -14,10 +19,16 @@ import {
  * free-text note.
  *
  * PendingQuestions v2: Genie is multi-agent, so several asks can be pending at once.
- * Main pushes the WHOLE queue (`ask:queue`, priority-ordered) + the head (`ask:show`).
- * The user can pick which pending request to answer next (`answerPendingQuestion` by
- * id) — a higher-priority one sorts to the top, but nothing is answered for the user;
- * they choose. `ask:answer`/`ask:cancel` act on the SELECTED id.
+ * Main pushes the WHOLE queue (`ask:queue`, priority-ordered) + the head (`ask:show`,
+ * sent only when the head actually CHANGES). The user can pick which pending request
+ * to answer next — a higher-priority one sorts to the top, but nothing is answered
+ * for the user; they choose. `ask:answer`/`ask:cancel` act on the SELECTED id.
+ *
+ * The user is answering while other agents keep changing the queue, so which request
+ * is shown and the part-typed answer are both decided by pure helpers in
+ * `lib/ask-state` (unit-tested; the renderer has no jsdom harness): a pin is the
+ * user's until that request is gone, and a draft is keyed by request id so queue
+ * churn can never wipe it (genie#156).
  */
 
 type PendingItem = {
@@ -45,12 +56,13 @@ export default function AskPage() {
     // The full pending queue (priority-ordered) + the head, from main.
     const [pending, setPending] = useState<PendingItem[]>([]);
     const [head, setHead] = useState<PendingItem | null>(null);
-    // The request the user is currently answering. null ⇒ follow the head.
-    const [activeId, setActiveId] = useState<string | null>(null);
-    // Per-question selected labels + free-text note, keyed by question index.
-    const [selected, setSelected] = useState<Record<number, string[]>>({});
-    const [notes, setNotes] = useState<Record<number, string>>({});
-    const [submitting, setSubmitting] = useState(false);
+    // The request the user explicitly picked from the queue strip. Theirs until
+    // that request is gone — never cleared by queue churn (genie#156).
+    const [pinnedId, setPinnedId] = useState<string | null>(null);
+    // Part-typed answers, keyed by REQUEST id so nothing the queue does wipes them.
+    const [drafts, setDrafts] = useState<AskDrafts>({});
+    // The request whose submit is in flight (per id — the user can switch away).
+    const [submittingId, setSubmittingId] = useState<string | null>(null);
 
     useEffect(() => {
         if (hasGenieBridge()) setBridgeReady(true);
@@ -60,8 +72,6 @@ export default function AskPage() {
         if (!bridgeReady) return;
         const offShow = api().ask.onShow(({ id, questions: qs, workspaceLabel: ws, queued }) => {
             setHead({ id, questions: qs, workspaceLabel: ws, index: 0 });
-            // A new head means the previous one was answered/advanced — refollow it.
-            setActiveId(null);
             void queued; // count is derived from `pending` now
         });
         const offQueue = api().ask.onQueue(({ pending: p }) => setPending(p as PendingItem[]));
@@ -73,54 +83,50 @@ export default function AskPage() {
         };
     }, [bridgeReady]);
 
-    // The request being answered: the explicit selection, else the head. Prefer the
-    // queue copy (authoritative + carries priority) and fall back to the head payload.
+    // The request being answered: the user's pin while it is still pending, else
+    // the head (see resolveActiveQuestionId). Prefer the queue copy — authoritative
+    // and it carries the priority/attribution — and fall back to the head payload.
     const active: PendingItem | null = useMemo(() => {
-        const wantId = activeId ?? head?.id ?? pending[0]?.id ?? null;
-        return pending.find((p) => p.id === wantId) ?? (wantId === head?.id ? head : null) ?? head;
-    }, [activeId, head, pending]);
-
-    // Reset the per-question input whenever the ACTIVE request changes.
-    useEffect(() => {
-        setSelected({});
-        setNotes({});
-        setSubmitting(false);
-    }, [active?.id]);
+        const wantId = resolveActiveQuestionId({
+            pinnedId,
+            headId: head?.id ?? null,
+            pendingIds: pending.map((p) => p.id),
+        });
+        if (!wantId) return null;
+        return pending.find((p) => p.id === wantId) ?? (wantId === head?.id ? head : null);
+    }, [pinnedId, head, pending]);
 
     const questions = active?.questions ?? [];
+    const draft = active ? draftFor(drafts, active.id) : { selected: {}, notes: {} };
+    const submitting = !!active && submittingId === active.id;
 
     const toggle = (qi: number, label: string, multi: boolean) => {
-        setSelected((prev) => {
-            const cur = prev[qi] ?? [];
-            if (multi) {
-                return {
-                    ...prev,
-                    [qi]: cur.includes(label) ? cur.filter((l) => l !== label) : [...cur, label],
-                };
-            }
-            return { ...prev, [qi]: cur[0] === label ? [] : [label] };
-        });
+        if (!active) return;
+        setDrafts((prev) => toggleDraftOption(prev, active.id, qi, label, multi));
     };
 
     const submit = async () => {
         if (!active || submitting) return;
-        setSubmitting(true);
-        const answers: ForceAnswerSpec[] = questions.map((q, qi) => ({
-            header: q.header,
-            question: q.question,
-            selected: selected[qi] ?? [],
-            note: (notes[qi] ?? '').trim(),
-        }));
+        const id = active.id;
+        setSubmittingId(id);
         try {
-            await api().ask.answer(active.id, answers);
+            await api().ask.answer(id, draftToAnswers(draft, questions));
+            // Answered — the draft has served its purpose. (A failure keeps it, so
+            // nothing the user typed is lost if the send didn't land.)
+            setDrafts((prev) => clearDraft(prev, id));
         } catch {
             /* window will close / advance from main; nothing to recover here */
+        } finally {
+            setSubmittingId((cur) => (cur === id ? null : cur));
         }
     };
 
     // Cancel just the ACTIVE request (advances the queue); dismiss closes the window.
     const cancelActive = () => {
-        if (active) void api().ask.cancel(active.id).catch(() => {});
+        if (!active) return;
+        const id = active.id;
+        void api().ask.cancel(id).catch(() => {});
+        setDrafts((prev) => clearDraft(prev, id));
     };
     const dismiss = () => void api().ask.dismiss().catch(() => {});
 
@@ -135,11 +141,7 @@ export default function AskPage() {
         return () => window.removeEventListener('keydown', onKey);
     }, []);
 
-    const ready =
-        questions.length > 0 &&
-        questions.every(
-            (_q, qi) => (selected[qi]?.length ?? 0) > 0 || (notes[qi]?.trim() ?? '') !== '',
-        );
+    const ready = isDraftReady(draft, questions.length);
 
     // §8 attribution — a forwarded question names its REMOTE host so it's never
     // mistaken for a local one; a local question keeps the workspace phrasing.
@@ -214,7 +216,7 @@ export default function AskPage() {
                             <button
                                 key={p.id}
                                 type="button"
-                                onClick={() => setActiveId(p.id)}
+                                onClick={() => setPinnedId(p.id)}
                                 title={p.workspaceLabel ?? undefined}
                                 style={{
                                     display: 'inline-flex',
@@ -283,7 +285,7 @@ export default function AskPage() {
                         />
                         <div className="ask-options">
                             {q.options.map((o) => {
-                                const on = (selected[qi] ?? []).includes(o.label);
+                                const on = (draft.selected[qi] ?? []).includes(o.label);
                                 return (
                                     <button
                                         key={o.label}
@@ -303,10 +305,12 @@ export default function AskPage() {
                         </div>
                         <textarea
                             className="input ask-note"
-                            value={notes[qi] ?? ''}
-                            onChange={(e) =>
-                                setNotes((prev) => ({ ...prev, [qi]: e.target.value }))
-                            }
+                            value={draft.notes[qi] ?? ''}
+                            onChange={(e) => {
+                                if (!active) return;
+                                const text = e.target.value;
+                                setDrafts((prev) => setDraftNote(prev, active.id, qi, text));
+                            }}
                             placeholder="Add a note (optional)…"
                             rows={2}
                         />

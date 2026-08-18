@@ -249,12 +249,42 @@ describe('ForceTheQuestion FIFO queue', () => {
         const pB = forceQuestion(Q('B'));
         // Still ONE window — the second request is queued, not a new modal.
         expect(state.windows).toHaveLength(1);
-        // The badge on the shown request updates to reflect the new arrival.
-        const last = win().shown[win().shown.length - 1];
-        expect(last.questions[0].header).toBe('A');
-        expect(last.queued).toBe(1);
+        // The arrival is announced on `ask:queue` ONLY (see the mid-answer test
+        // below): the head is unchanged, so it is NOT re-shown.
+        expect(win().shown).toHaveLength(1);
+        expect(win().shown[0].questions[0].header).toBe('A');
+        const pending = win().queues[win().queues.length - 1].pending;
+        expect(pending.map((q) => q.questions[0].header)).toEqual(['A', 'B']);
         win().close();
         await Promise.all([pA, pB]);
+    });
+
+    it('another agent arriving refreshes the queue WITHOUT re-showing the head (genie#156)', async () => {
+        // `ask:show` is the renderer's "the question changed — switch to it and
+        // reset the form" signal. Emitting it for a mere ARRIVAL (the head is
+        // untouched) yanks a user who is part-way through answering a queued
+        // question back to the head and destroys what they typed. An arrival must
+        // therefore push the QUEUE only.
+        const pA = forceQuestion(Q('A'));
+        expect(win().shown).toHaveLength(1); // the head, shown once
+
+        const pB = forceQuestion(Q('B'));
+        const pC = forceQuestion(Q('C'), undefined, 'urgent');
+
+        // Two more agents asked — and the head was never re-shown.
+        expect(win().shown).toHaveLength(1);
+        expect(win().shown[0].questions[0].header).toBe('A');
+        // The user still sees them: every arrival pushed the full queue.
+        const pending = win().queues[win().queues.length - 1].pending;
+        expect(pending.map((q) => q.questions[0].header)).toEqual(['A', 'C', 'B']);
+
+        // A genuine head CHANGE still shows — that is what `ask:show` means.
+        await invokeIpc('ask:answer', win().id, win().shown[0].id, []);
+        expect(win().shown).toHaveLength(2);
+        expect(win().shown[1].questions[0].header).toBe('C');
+
+        win().close();
+        await Promise.all([pA, pB, pC]);
     });
 
     it('resolves each request with its OWN result, in FIFO order', async () => {
