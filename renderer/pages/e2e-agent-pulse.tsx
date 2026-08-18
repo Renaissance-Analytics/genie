@@ -77,7 +77,14 @@ export default function E2EAgentPulse() {
                 selected={new Set()}
                 activeIds={new Set()}
                 attentionIds={new Set()}
-                activeWorkspaceId={workspaces[0]!.id}
+                // NOT the selected workspace. `.tproj.is-active > .tproj-head`
+                // sets its own background at specificity 0,3,0 and so BEATS
+                // `.tproj-head:hover` at 0,2,0 (master.css:3145) — a selected row
+                // never takes the hover fill at all, and a harness that selected
+                // this one would be testing a row the bug cannot happen on. The
+                // report is about a row with an active AGENT, which is a
+                // different thing from the row the user has open.
+                activeWorkspaceId={null}
                 // PINNED — the sidebar OPEN, which is the state the bug was
                 // reported in. It is not cosmetic: `.chooser-flyout` is
                 // `pointer-events: none` until `.chooser:hover` or
