@@ -502,6 +502,15 @@ export function defaultHostingE2EState(): HostingE2EState {
                 latest: '2.45.0',
                 updateAvailable: true,
                 source: 'package-manager',
+                // A FOREIGN install (genie#213). The machine this fixture
+                // describes has a git winget put there, which the page must show
+                // as detected-but-not-managed rather than as one of its own —
+                // the same treatment a Herd php gets on the Languages tab.
+                origin: {
+                    managedByGenie: false,
+                    source: 'winget',
+                    directory: String.raw`C:\Users\dev\AppData\Local\Microsoft\WinGet\Links`,
+                },
             },
             {
                 name: 'node',
@@ -510,7 +519,20 @@ export function defaultHostingE2EState(): HostingE2EState {
                 updateAvailable: false,
                 source: 'version-index',
             },
-            { name: 'docker', installed: '27.1.1', updateAvailable: false, source: 'unknown' },
+            {
+                name: 'docker',
+                installed: '27.1.1',
+                updateAvailable: false,
+                source: 'unknown',
+                // Genie's OWN install, so this one is managed. Paired with the
+                // winget git above so a spec can prove the page tells them apart
+                // rather than labelling everything the same way.
+                origin: {
+                    managedByGenie: true,
+                    source: 'genie',
+                    directory: String.raw`C:\Users\dev\AppData\Roaming\genie\toolchain\docker\bin`,
+                },
+            },
             // NOT INSTALLED — the state that used to render a row saying so and
             // offering nothing to do about it (genie#212). One per tab, because
             // the Install button has to exist on both.

@@ -3,6 +3,7 @@ import type {
     DevRuntimeProbe,
     DevWorkstationInfo,
     HostToolName,
+    ToolInstallSource,
     ToolUpdate,
     ToolchainUpdateSource,
 } from './genie';
@@ -314,6 +315,18 @@ export interface ToolUpdateRow {
     tone: ToolUpdateTone;
     action: ToolRowAction;
     source: ToolchainUpdateSource;
+    /** Display name of WHO installed it, when the path said so (genie#213).
+     *  Absent for `unknown` — a row that cannot name the installer says nothing
+     *  rather than printing the word "unknown" at the user. */
+    originLabel?: string;
+    /** The DIRECTORY holding the binary that answered. Shown even when the
+     *  installer is unknown: "which git answered?" is the question, and WHERE
+     *  answers most of it. */
+    directory?: string;
+    /** Genie installed it, so Genie may update it. FALSE whenever the origin is
+     *  unknown — claiming ownership of a tool another installer put there is the
+     *  one answer that causes harm. */
+    managed: boolean;
 }
 
 const TOOL_LABELS: Record<HostToolName, string> = {
@@ -368,8 +381,21 @@ export function toolRowAction(u: ToolUpdate): ToolRowAction {
     return u.updateAvailable ? 'update' : 'none';
 }
 
+/** How each installer is written on screen. `unknown` is deliberately absent:
+ *  it is the "we could not tell" case, and the row omits the label entirely
+ *  rather than printing a non-answer. */
+const INSTALL_SOURCE_LABELS: Partial<Record<ToolInstallSource, string>> = {
+    genie: 'Genie',
+    winget: 'winget',
+    'program-files': 'Program Files',
+    homebrew: 'Homebrew',
+    'npm-global': 'npm (global)',
+    system: 'System',
+};
+
 /** One tool's row: the version pair, badge tone and action folded together. */
 export function toolUpdateRow(u: ToolUpdate): ToolUpdateRow {
+    const originLabel = u.origin ? INSTALL_SOURCE_LABELS[u.origin.source] : undefined;
     return {
         name: u.name,
         label: toolLabel(u.name),
@@ -379,6 +405,9 @@ export function toolUpdateRow(u: ToolUpdate): ToolUpdateRow {
         tone: toolUpdateTone(u),
         action: toolRowAction(u),
         source: u.source,
+        ...(originLabel ? { originLabel } : {}),
+        ...(u.origin?.directory ? { directory: u.origin.directory } : {}),
+        managed: u.origin?.managedByGenie === true,
     };
 }
 

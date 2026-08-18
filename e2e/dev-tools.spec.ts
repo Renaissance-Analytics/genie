@@ -184,3 +184,37 @@ test('the toolchain can be asked to check again', async () => {
     await tab(/Dev tools/).click();
     await expect(gitRow()).toBeVisible();
 });
+
+test('a tool row names WHO installed it and WHERE — genie#213', async () => {
+    // The gap this closes: the Languages tab has always answered "which php is
+    // this?" with a source and a directory, and the Dev tools tab answered
+    // neither — so on a machine carrying more than one git, the row could not say
+    // which one replied.
+    await tab(/dev tools/i).click();
+
+    // A winget git: visible, located, and explicitly NOT Genie's to update.
+    await expect(gitRow()).toContainText('winget');
+    await expect(gitRow()).toContainText(String.raw`WinGet\Links`);
+    await expect(gitRow()).toContainText('Not managed');
+
+    // A Genie-installed docker: located, and NOT carrying the foreign badge.
+    // Asserted alongside the row above because the claim is that the page tells
+    // the two apart — a page that labelled everything "Not managed" would pass
+    // the half of this test that only looks at git.
+    const dockerRow = page.getByTestId('devtool-docker');
+    await expect(dockerRow).toContainText('Genie');
+    await expect(dockerRow).toContainText(String.raw`toolchain\docker\bin`);
+    await expect(dockerRow).not.toContainText('Not managed');
+});
+
+test('a tool whose path could not be resolved says nothing rather than guessing', async () => {
+    // composer is not installed in the fixture and carries no origin. The row
+    // must not invent a location, and must not read as managed — offering to
+    // update something Genie does not own is the one wrong answer here.
+    await tab(/dev tools/i).click();
+
+    const composerRow = page.getByTestId('devtool-composer');
+    await expect(composerRow).toBeVisible();
+    await expect(composerRow).not.toContainText('Not managed');
+    await expect(composerRow).not.toContainText('·');
+});

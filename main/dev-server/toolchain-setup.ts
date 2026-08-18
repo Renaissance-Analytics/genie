@@ -10,6 +10,7 @@ import { summarizeInstallPlan } from './toolchain-choice';
 import type { PackageManager } from './toolchain-packages';
 import { createLatestFor } from './toolchain-latest';
 import { detectToolUpdates } from './toolchain-updates';
+import type { OriginContext } from './tool-install-origin';
 import type { ToolUpdate } from './toolchain-updates';
 
 /**
@@ -108,6 +109,12 @@ export interface DetectUpdatesOptions {
     runner: CommandRunner;
     os?: NodeJS.Platform | string;
     wanted?: readonly HostToolName[];
+    /** Resolve a bin name to the binary PATH would run — what lets each row say
+     *  who installed the tool and where (genie#213). */
+    resolvePath?: (bin: string) => Promise<string | undefined>;
+    /** Home + Genie's toolchain root, for classifying those paths. Without it
+     *  the rows simply carry no origin. */
+    origin?: OriginContext;
 }
 
 /**
@@ -126,7 +133,12 @@ export async function detectToolchainUpdates(opts: DetectUpdatesOptions): Promis
     const wanted = opts.wanted ?? DEFAULT_TOOLCHAIN;
 
     const [report, packageManagers] = await Promise.all([
-        detectToolchain({ runner: opts.runner, platform: os, wanted }),
+        detectToolchain({
+            runner: opts.runner,
+            platform: os,
+            wanted,
+            ...(opts.resolvePath ? { resolvePath: opts.resolvePath } : {}),
+        }),
         availablePackageManagers({ runner: opts.runner, os }),
     ]);
 
@@ -134,5 +146,5 @@ export async function detectToolchainUpdates(opts: DetectUpdatesOptions): Promis
         runner: opts.runner,
         ...(packageManagers.recommended ? { pm: packageManagers.recommended } : {}),
     });
-    return detectToolUpdates(report, latestFor);
+    return detectToolUpdates(report, latestFor, opts.origin);
 }

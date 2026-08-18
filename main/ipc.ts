@@ -250,6 +250,7 @@ import type { HostToolName } from './dev-server/toolchain-detect';
 import {
     addToolchainVersion,
     createToolchainInstallEffect,
+    resolveOnPath,
     toolchainRoot,
     removeToolchainVersion,
     setToolchainDefault,
@@ -668,6 +669,15 @@ export function registerIpcHandlers(): void {
         const rows = await detectToolchainUpdates({
             runner: hostToolCommandRunner,
             os: process.platform,
+            // Resolve each present tool's binary so its row can say WHO installed
+            // it and WHERE — the question the Languages tab already answers and
+            // this one could not (genie#213).
+            resolvePath: resolveOnPath,
+            origin: {
+                platform: process.platform,
+                home: os.homedir(),
+                genieRoot: toolchainRoot(),
+            },
         });
         toolchainUpdateCache = { at: Date.now(), rows };
         return rows;

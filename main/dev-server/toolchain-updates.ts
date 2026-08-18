@@ -1,4 +1,5 @@
 import type { HostToolName, ToolchainReport } from './toolchain-detect';
+import { toolInstallOrigin, type OriginContext, type ToolInstallOrigin } from './tool-install-origin';
 
 /**
  * PURE (+ one injected seam). "Is there a newer version of what's installed?"
@@ -28,6 +29,12 @@ export interface ToolUpdate {
     /** True only when {@link latest} is strictly newer than {@link installed}. */
     updateAvailable: boolean;
     source: UpdateSource;
+    /** WHO installed it and WHERE, when the binary's path could be resolved
+     *  (genie#213). Distinct from {@link source}, which says where the LATEST
+     *  version number was learned — the two answer different questions and the
+     *  names are close enough to be worth stating. Absent when nothing resolved:
+     *  the row then says less rather than guessing. */
+    origin?: ToolInstallOrigin;
 }
 
 /** The seam: given a tool (and its installed version, so a source can
@@ -82,6 +89,7 @@ export function isUpdateAvailable(installed: string | undefined, latest: string 
 export async function detectToolUpdates(
     report: ToolchainReport,
     latestFor: LatestFor,
+    origin?: OriginContext,
 ): Promise<ToolUpdate[]> {
     const updates: ToolUpdate[] = [];
     for (const probe of report.probes) {
@@ -99,12 +107,17 @@ export async function detectToolUpdates(
             // A failed lookup is "no update known", never a crash.
         }
 
+        // Pure, and only when there is a path to read: no probing, no
+        // filesystem, nothing that can fail here.
+        const installOrigin = origin && probe.path ? toolInstallOrigin(probe.path, origin) : undefined;
+
         updates.push({
             name: probe.name,
             ...(probe.version ? { installed: probe.version } : {}),
             ...(latest ? { latest } : {}),
             updateAvailable: isUpdateAvailable(probe.version, latest),
             source,
+            ...(installOrigin ? { origin: installOrigin } : {}),
         });
     }
     return updates;
