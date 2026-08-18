@@ -210,20 +210,22 @@ async function takeShots(): Promise<Shots> {
     await freshPulses();
     const region = await comparisonRegion();
 
-    // Each COMPARED pair is photographed back to back, so the two shots being
-    // subtracted are taken under the same conditions a second apart rather than
-    // at opposite ends of the sequence.
-    await unhover();
-    const cU = await shoot(region);
-    await setCollapsed(false);
-    const eU = await shoot(region);
+    // The hover state is (re)applied immediately before EVERY shot, because
+    // setCollapsed() CLICKS the chevron — which puts the pointer on the row and
+    // hovers it. Without this the "unhovered" half of the comparison was an
+    // unhovered shot against a hovered one, and the difference it reported was
+    // mostly the hover fill rather than the sparkline.
+    const shotIn = async (collapsed: boolean, hovered: boolean) => {
+        await setCollapsed(collapsed);
+        if (collapsed) await freshPulses();
+        await (hovered ? hover() : unhover());
+        return shoot(region);
+    };
 
-    await setCollapsed(true);
-    await freshPulses();
-    await hover();
-    const cH = await shoot(region);
-    await setCollapsed(false);
-    const eH = await shoot(region);
+    const cU = await shotIn(true, false);
+    const eU = await shotIn(false, false);
+    const cH = await shotIn(true, true);
+    const eH = await shotIn(false, true);
 
     await setCollapsed(true);
     return { cU, cH, eU, eH };
