@@ -185,7 +185,10 @@ async function sparklinePixels(hovered: boolean): Promise<number> {
 test.beforeAll(async () => {
     ({ app, page } = await launchGenieE2E('agent-pulse'));
     await expect(head()).toBeVisible();
-    await setCollapsed(true);
+    // Collapse by clicking directly rather than via setCollapsed(): the ring is
+    // still empty at this point, so there is no sparkline yet to wait for — the
+    // component renders nothing until some bytes have arrived.
+    await page.locator('.tproj-head [title="Collapse"]').first().click();
 
     // Fill the ring through the REAL broadcast, with `active: false`. The ring
     // fills from `bytes` either way, and an agent-active row runs a breathing
