@@ -3621,7 +3621,7 @@ function ToolUpdateList({
                                     answered?" has no other answer. Omitted rather
                                     than filled with a placeholder when the path
                                     could not be resolved. */}
-                                {false && (row.originLabel || row.directory) && (
+                                {(row.originLabel || row.directory) && (
                                     <Text
                                         size="xs"
                                         className="text-zinc-500"
@@ -3638,7 +3638,7 @@ function ToolUpdateList({
                                 here, Genie can see it, Genie did not put it here.
                                 Only shown once an origin is actually known — an
                                 unresolved path is not evidence of anything. */}
-                            {false && row.originLabel && !row.managed && (
+                            {row.originLabel && !row.managed && (
                                 <Badge color="zinc">Not managed</Badge>
                             )}
                             <div className="ws-engine-actions">
