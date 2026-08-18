@@ -225,6 +225,34 @@ test.afterAll(async () => {
     await app?.close();
 });
 
+test('the sparkline is painted by the hovered element itself, not behind it', async () => {
+    // FIRST, and deliberately: this reports the structural facts the pixel tests
+    // depend on, before any collapse/expand toggling can fail and hide them. If
+    // this is red, the pixel numbers below are explained by it and nothing else.
+    const facts = await spark()
+        .first()
+        .evaluate((el) => ({
+            insideHead: Boolean(el.closest('.tproj-head')),
+            zIndex: getComputedStyle(el).zIndex,
+            // The fix relies on the head forming a STACKING CONTEXT: only then
+            // does a z-index:-1 child paint above the head's own background
+            // instead of dropping behind the whole row.
+            headZIndex: el.closest('.tproj-head')
+                ? getComputedStyle(el.closest('.tproj-head')!).zIndex
+                : null,
+            headPosition: el.closest('.tproj-head')
+                ? getComputedStyle(el.closest('.tproj-head')!).position
+                : null,
+        }));
+
+    expect(facts).toEqual({
+        insideHead: true,
+        zIndex: '-1',
+        headZIndex: '1',
+        headPosition: 'relative',
+    });
+});
+
 test('the sparkline is visible, and the hover really reaches the photographs', async () => {
     // Both guards for everything below, and neither involves the fix.
     const { cU, cH, eU } = await takeShots();
@@ -253,21 +281,4 @@ test('the sparkline survives the hover — genie#197', async () => {
     // pulse composites against, so individual pixels legitimately shift. What
     // must not happen is the sparkline making NO difference to the row.
     expect(hovered).toBeGreaterThan(idle * 0.5);
-});
-
-test('the sparkline is painted by the hovered element itself, not behind it', async () => {
-    // The structural invariant behind the fix, pinned so a refactor that moves the
-    // sparkline back OUT of the head reads as the regression it is — and so the
-    // suite records WHY the pixels survive, not merely that they do.
-    await setCollapsed(true);
-
-    const nested = await spark()
-        .first()
-        .evaluate((el) => Boolean(el.closest('.tproj-head')));
-    expect(nested).toBe(true);
-
-    const z = await spark()
-        .first()
-        .evaluate((el) => getComputedStyle(el).zIndex);
-    expect(Number(z)).toBeLessThan(0);
 });
