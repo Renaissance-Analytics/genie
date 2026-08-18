@@ -10,6 +10,8 @@ import {
     pinnableVersions,
     isolationNote,
     optionCaveat,
+    optionRunnable,
+    runModeChoices,
     optionLabel,
     railSitesTitle,
     railSitesTone,
@@ -125,9 +127,28 @@ describe('site status', () => {
         expect(siteReach(SITE)).toEqual({
             browser: 'https://web.acme.gen',
             local: 'http://127.0.0.1:49812',
+            curl: null,
         });
         expect(siteReach({ ...SITE, state: 'stopped', origin: undefined, localOrigin: undefined }))
-            .toEqual({ browser: null, local: null });
+            .toEqual({ browser: null, local: null, curl: null });
+    });
+
+    it('carries the working curl form for a site whose port speaks TLS+SNI (genie#195)', () => {
+        // A container site's published port is the sandbox's Caddy, so the URL alone
+        // is not enough to reach it from this machine — the `.gen` name has to be
+        // pinned to loopback. The card shows the command rather than leaving the
+        // person to work out why `http://127.0.0.1:<port>` refuses to speak.
+        expect(
+            siteReach({
+                ...SITE,
+                localOrigin: 'https://web.acme.gen:49812',
+                localCurl: 'curl -sk --resolve web.acme.gen:49812:127.0.0.1 https://web.acme.gen:49812/',
+            }),
+        ).toEqual({
+            browser: 'https://web.acme.gen',
+            local: 'https://web.acme.gen:49812',
+            curl: 'curl -sk --resolve web.acme.gen:49812:127.0.0.1 https://web.acme.gen:49812/',
+        });
     });
 });
 
@@ -480,6 +501,44 @@ describe('the layered run options', () => {
                 confident: true,
             }),
         ).toBeNull();
+    });
+
+    it('never HIDES a `needs`, even on a confident option (genie#191)', () => {
+        // A recipe option is confidently detected AND unrunnable here — the host
+        // says so in `needs`. Gating the caveat on `confident` swallowed exactly
+        // that sentence, and the option looked like a working answer.
+        expect(
+            optionCaveat({
+                runMode: 'recipe',
+                stack: 'php',
+                source: 'composer.json',
+                reason: 'composer install --no-dev, then FrankenPHP over public/',
+                confident: true,
+                needs: 'Genie cannot run this mode in this build: …',
+            }),
+        ).toContain('Genie cannot run this mode');
+    });
+
+    it('marks the options this build cannot RUN, so the form does not offer them (genie#191)', () => {
+        const recipe = {
+            runMode: 'recipe',
+            source: 'composer.json',
+            reason: 'a production build+serve',
+            confident: true,
+        };
+        expect(optionRunnable(recipe)).toBe(false);
+        expect(optionRunnable({ ...recipe, runMode: 'dockerfile' })).toBe(false);
+        expect(optionRunnable({ ...recipe, runMode: 'host' })).toBe(true);
+        expect(optionRunnable({ ...recipe, runMode: 'explicit' })).toBe(true);
+    });
+
+    it('offers the Edit picker only run modes that run — plus the one the site is stored under', () => {
+        // A site saved under an old mode keeps its own entry, so the picker shows
+        // what the site actually IS instead of silently re-pointing it on save.
+        expect(runModeChoices('host').map((c) => c.value)).toEqual(['host', 'explicit']);
+        const legacy = runModeChoices('recipe');
+        expect(legacy.map((c) => c.value)).toEqual(['host', 'explicit', 'recipe']);
+        expect(legacy.at(-1)?.label).toMatch(/not runnable|cannot run/i);
     });
 });
 

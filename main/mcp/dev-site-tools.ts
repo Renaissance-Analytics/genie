@@ -18,7 +18,7 @@ import { detectFolder } from '../workspace/detect';
 import { resolveAgentTarget } from './host-tools';
 import { planHostAllowlist } from '../dev-server/host-allowlist';
 import type { DevFramework } from '../dev-server/host-allowlist';
-import { devCommandForRecipe } from '../dev-server/serve-recipe';
+import { devCommandForRecipe, unrunnableRunModeReason } from '../dev-server/serve-recipe';
 import type { BuildStep, HostingOption } from '../dev-server/serve-recipe';
 import type { DevSiteRow } from '../dev-server/site-manager';
 import type { DevSiteConfig, HostServeConfig } from '../dev-server/sites-config';
@@ -46,12 +46,25 @@ import type {
  * just a `name` detects the repo's stack and runs its DEV server HOST-NATIVE
  * (runMode `host`): a real host process against the LIVE source, `.gen` routed
  * straight to it, with NO container and NO build — "just serve the repo the site
- * points to", the way Herd did (Docker only for services). A production
- * BUILD+SERVE recipe is still available, but OPT-IN (runMode
- * `recipe`/`dockerfile`/`compose`/`devcontainer`). Two other host-native shapes:
- * pass `command` + `port` to run YOUR dev server, or `hostPort` to point `.gen` at
- * a dev server you already run (e.g. via `manageProcess`). When nothing can be
- * recommended it FAILS with the options attached, so the next call is obvious.
+ * points to", the way Herd did (Docker only for services). Two other host-native
+ * shapes: pass `command` + `port` to run YOUR dev server, or `hostPort` to point
+ * `.gen` at a dev server you already run (e.g. via `manageProcess`). When nothing
+ * can be recommended it FAILS with the options attached, so the next call is
+ * obvious.
+ *
+ * **A production BUILD+SERVE is REFUSED, not silently approximated (genie#191).**
+ * `recipe`/`dockerfile`/`compose`/`devcontainer` describe machinery this model
+ * dropped — no per-site container, no build runner (`site-build.ts` has had no
+ * caller since) — so accepting one stored a production recipe and then ran its
+ * serve argv as a dev command with the build skipped, reporting `running` the
+ * whole way. {@link unrunnableRunModeReason} is the single policy; create, update
+ * and the options `detect` returns all speak through it.
+ *
+ * **A start that outlives the call answers anyway (genie#194).** A cold image pull
+ * is minutes and the MCP transport gives a call ~120s, so every lifecycle action
+ * is bounded by {@link settleWithin}: past the budget the tool returns
+ * `pending: true` plus the id to poll, rather than holding the call open until the
+ * transport kills it and the caller is left with a timeout and no handle.
  *
  * **The runtime's absence is data, not an exception.** Every result carries
  * `runtime`, so an agent that gets `ok: false` on a machine with no Docker reads
@@ -150,6 +163,7 @@ function toInfo(row: DevSiteRow): DevSiteInfo {
         ...(row.hostPort ? { hostPort: row.hostPort } : {}),
         ...(row.origin ? { origin: row.origin } : {}),
         ...(row.localOrigin ? { localOrigin: row.localOrigin } : {}),
+        ...(row.localCurl ? { localCurl: row.localCurl } : {}),
         ...(row.stack ? { stack: row.stack } : {}),
         ...(row.server ? { server: row.server } : {}),
         ...(row.build?.length ? { build: row.build } : {}),
@@ -171,6 +185,17 @@ function toInfo(row: DevSiteRow): DevSiteInfo {
 }
 
 function toOption(option: HostingOption): DevSiteRunOption {
+    // An option Genie cannot RUN says so in the same field a caller already reads
+    // for "what is still missing" (genie#191). Detection describes the repo
+    // honestly; whether this build can execute the mode is our fact to add, and
+    // offering a recipe with nothing attached is how one gets picked and stored.
+    const cannotRun = unrunnableRunModeReason(option.runMode);
+    const needs = [
+        option.needs,
+        cannotRun ? `Genie cannot run this mode in this build: ${cannotRun}` : '',
+    ]
+        .filter(Boolean)
+        .join(' ');
     return {
         runMode: option.runMode,
         ...(option.stack ? { stack: option.stack } : {}),
@@ -182,8 +207,56 @@ function toOption(option: HostingOption): DevSiteRunOption {
         ...(option.image ? { image: option.image } : {}),
         ...(option.port ? { port: option.port } : {}),
         confident: option.confident,
-        ...(option.needs ? { needs: option.needs } : {}),
+        ...(needs ? { needs } : {}),
     };
+}
+
+/**
+ * How long a lifecycle action waits for the site to SETTLE before answering
+ * "still going" instead (genie#194).
+ *
+ * An MCP call gets ~120s from the transport, and a start can legitimately take
+ * longer: a cold dev-image pull is minutes, and a first `npm install` inside it is
+ * not quick either. Blocking to the cap gave the caller "The operation timed out"
+ * — no state, no handle — while the start carried on unobserved, so the only way
+ * to learn the outcome was to poll `status` anyway. This budget is comfortably
+ * under the cap and comfortably over a warm start (the readiness probe alone is
+ * 15s), so an ordinary call still returns the real result.
+ */
+const DEFAULT_SETTLE_MS = 30_000;
+
+/** Options the callers of {@link runManageSite} may tune. Tests shorten the wait;
+ *  nothing in the product does. */
+export interface RunManageSiteOptions {
+    settleMs?: number;
+}
+
+/**
+ * Await a lifecycle call, but never past `settleMs` — `null` means "not settled".
+ *
+ * The work is NOT cancelled: the site manager owns it, de-duplicates a concurrent
+ * `start` for the same site, and records the outcome for the next `list`/`status`.
+ * So returning early loses nothing except the wait.
+ */
+async function settleWithin<T>(work: Promise<T>, settleMs: number): Promise<T | null> {
+    // A late failure must not become an unhandled rejection once the race is over;
+    // the manager has already recorded it as this site's last failure.
+    work.catch(() => {});
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), settleMs);
+    });
+    try {
+        return await Promise.race([work, deadline]);
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
+}
+
+/** The note a PENDING result carries: what is still happening, and the exact call
+ *  that reads the outcome. */
+function pendingNote(action: string, siteId: string): string {
+    return `The ${action} is still running — this call returned before it finished so it would not hit the 120s tool timeout. Nothing was abandoned: poll \`manageSite {action:'status', id:'${siteId}'}\` until \`phase\` reaches \`ready\` or \`failed\` (\`logs\` shows it as it goes). Do NOT report the site as live until then.`;
 }
 
 /**
@@ -245,18 +318,24 @@ export async function manageSiteForMcp(
  * identical, and deliberately so — see the file header.
  */
 /**
- * Advisory notes to surface on `create` — things recorded but not the trap they
- * look like. Pure, so it is tested without the DB/manager the rest of create
- * needs. Currently: a custom `image` is a legacy per-site-container concept; in
- * the sandbox-serve model a site runs its command inside the shared workspace dev
- * sandbox, so the ref is stored but never used — say so rather than let it be a
- * silent trap (genie #125).
+ * Advisory notes to surface on `create` AND `update` — things recorded but not the
+ * trap they look like. Pure, so it is tested without the DB/manager the rest of the
+ * tool needs. Currently: a custom `image` is a legacy per-site-container concept;
+ * in the sandbox-serve model a site runs its command inside the shared workspace
+ * dev sandbox, so the ref is stored but never used — say so rather than let it be a
+ * silent trap (genie #125). Surfaced on UPDATE too, because that is where it was
+ * silent: `update {image}` recorded the ref and reported success (genie#191).
  */
-export function createAdvisoryNotes(req: Pick<ManageSiteRequest, 'image'>): string[] {
+export function siteAdvisoryNotes(req: Pick<ManageSiteRequest, 'image' | 'build'>): string[] {
     const notes: string[] = [];
     if (req.image) {
         notes.push(
             'The custom `image` is recorded but NOT used at runtime — a site runs its command inside the workspace dev sandbox, not a per-site image container. Put extra runtime tools in the workspace / its dev image, not a per-site `image`.',
+        );
+    }
+    if (req.build?.length) {
+        notes.push(
+            'The `build` steps are recorded but NOT run — nothing executes a site build in this model (genie#191), so the site starts against the tree exactly as it is on disk. Run the build yourself (a terminal, or `manageProcess`) and serve the output with `hostServe`.',
         );
     }
     return notes;
@@ -296,8 +375,10 @@ export function routeSiteEnvToDotEnv(
 export async function runManageSite(
     ws: DevSiteTarget,
     req: ManageSiteRequest,
+    opts: RunManageSiteOptions = {},
 ): Promise<ManageSiteResult> {
     const runtime = await runtimeInfo();
+    const settleMs = opts.settleMs ?? DEFAULT_SETTLE_MS;
     const bare = (error: string): ManageSiteResult => ({ ok: false, error, sites: [], runtime });
 
     const manager = devSiteManager();
@@ -360,6 +441,12 @@ export async function runManageSite(
             case 'create': {
                 const name = req.name?.trim().toLowerCase();
                 if (!name) return fail('create requires `name` — a DNS label like "web" or "api".');
+                // A run mode this build cannot run is REFUSED before anything is
+                // stored (genie#191). Recording it and starting the site anyway is
+                // what produced a `recipe` site that ran an unbuilt dev command
+                // while reporting a production build+serve.
+                const cannotRun = unrunnableRunModeReason(req.runMode);
+                if (cannotRun) return fail(cannotRun);
                 const repo = resolveRepoDir(req.repo);
                 if ('error' in repo) return fail(repo.error);
 
@@ -395,7 +482,6 @@ export async function runManageSite(
                 let options: HostingOption[] | undefined;
                 let framework: DevFramework | undefined;
                 let stack: HostingOption['stack'] | undefined;
-                let server: HostingOption['server'] | undefined;
 
                 // Nothing to start supplied → read the repo and, BY DEFAULT, run its
                 // DEV server host-native (story #238): "just serve the repo the site
@@ -417,12 +503,7 @@ export async function runManageSite(
                         );
                     }
 
-                    const wantsProduction =
-                        runMode === 'recipe' ||
-                        runMode === 'dockerfile' ||
-                        runMode === 'compose' ||
-                        runMode === 'devcontainer';
-                    const dev = wantsProduction ? null : devCommandForRecipe(applied);
+                    const dev = devCommandForRecipe(applied);
 
                     if (dev) {
                         // DEV BY DEFAULT — the repo's dev server run host-native.
@@ -431,26 +512,19 @@ export async function runManageSite(
                         runMode = 'host';
                         stack = dev.stack ?? applied.stack;
                         framework = dev.framework ?? applied.framework;
-                    } else if (applied.serve || applied.runMode === 'dockerfile') {
-                        // Explicit production, or a stack with no dev server Genie can
-                        // pick → the production BUILD+SERVE recipe (a container). The
-                        // recipe's image is load-bearing (FrankenPHP / nginx), not a
-                        // preference; env merges UNDER the caller's own.
-                        serve = applied.serve;
-                        build = build ?? applied.build;
-                        image = image ?? applied.image;
-                        env = { ...(applied.env ?? {}), ...(env ?? {}) };
-                        port = port ?? applied.port;
-                        runMode = applied.runMode as ManageSiteRequest['runMode'];
-                        stack = applied.stack;
-                        server = applied.server;
-                        // The ONLY moment this is knowable: `gunicorn mysite.wsgi`
-                        // contains no token spelling "django", the one framework whose
-                        // host allowlist still bites in production.
-                        framework = applied.framework;
                     } else {
+                        // No dev server Genie can pick. The detected recipe is NOT a
+                        // fallback: adopting it stored a production build+serve and
+                        // then ran its serve argv in the sandbox with the build steps
+                        // skipped — a site that reports `running` having built
+                        // nothing (genie#191). Say why, attach the options, stop.
+                        const cannotRunApplied = unrunnableRunModeReason(applied.runMode);
                         return fail(
-                            `Genie could not pick a dev server for ${req.repo || 'this workspace'}. Pass a \`command\` + \`port\` (the dev server to run), or \`hostPort\` to point \`.gen\` at one you already run.`,
+                            `Genie could not pick a dev server for ${req.repo || 'this workspace'}.${
+                                cannotRunApplied
+                                    ? ` The best it detected uses runMode:'${applied.runMode}', and that one is not runnable here: ${cannotRunApplied}`
+                                    : ' Pass a `command` + `port` (the dev server to run), or `hostPort` to point `.gen` at one you already run.'
+                            }`,
                             { options: described.options.map(toOption) },
                         );
                     }
@@ -479,7 +553,6 @@ export async function runManageSite(
                     repo: req.repo ?? '',
                     runMode: runMode ?? 'explicit',
                     ...(stack ? { stack } : {}),
-                    ...(server ? { server } : {}),
                     ...(image ? { image } : {}),
                     ...(build?.length ? { build } : {}),
                     ...(command?.length ? { command } : {}),
@@ -515,7 +588,7 @@ export async function runManageSite(
                 // the tracked project.json (genie #168) — done before the site
                 // starts so the app reads it.
                 const notes = [
-                    ...createAdvisoryNotes(req),
+                    ...siteAdvisoryNotes(req),
                     ...routeSiteEnvToDotEnv(ws.path, req.repo, req.env),
                     ...(detectedServe && !req.hostServe
                         ? [
@@ -534,18 +607,19 @@ export async function runManageSite(
                         ...(applied ? { applied: toOption(applied) } : {}),
                     };
                 }
-                const status = await manager.start(ws.id, siteId);
+                // Bounded (genie#194): a cold image pull outlives the tool call, and
+                // an unanswered call is worse than a pending one — the start keeps
+                // running either way, so say which happened.
+                const status = await settleWithin(manager.start(ws.id, siteId), settleMs);
                 // Reported on CREATE, where it is actionable. A `documented`
                 // status means the repo still has to change, and an agent that
                 // does not hear that will debug a working container.
                 const plan = planHostAllowlist({
                     genName: getWorkspaceDevSites(ws.id)[siteId]?.genName ?? '',
                     ...(framework ? { framework } : {}),
-                    // The recipe stack/server, so a production serve (e.g. a
-                    // FrankenPHP Laravel app with no `artisan` token) is reported
-                    // with its real host/scheme plan rather than as `none` (#119).
+                    // The stack, so the host/scheme plan is reported for what the
+                    // site actually runs rather than as `none` (#119).
                     ...(stack ? { stack } : {}),
-                    ...(server ? { server } : {}),
                     // The site's actual startup argv (the new command, or a legacy
                     // serve), so a framework hint the argv carries is recognised.
                     ...(command ?? serve ? { command: command ?? serve } : {}),
@@ -553,8 +627,9 @@ export async function runManageSite(
                     ...(req.browserExposed ? { browserExposed: req.browserExposed } : {}),
                 });
                 return {
-                    ok: status.state !== 'failed',
-                    ...(status.error ? { error: status.error } : {}),
+                    ok: status ? status.state !== 'failed' : true,
+                    ...(status?.error ? { error: status.error } : {}),
+                    ...(status ? {} : { pending: true }),
                     sites: sites(),
                     affectedId: siteId,
                     runtime,
@@ -566,7 +641,9 @@ export async function runManageSite(
                             ? { upstreamHostFallback: plan.upstreamHostFallback }
                             : {}),
                     },
-                    ...(notes.length ? { notes } : {}),
+                    ...(notes.length || !status
+                        ? { notes: [...notes, ...(status ? [] : [pendingNote('start', siteId)])] }
+                        : {}),
                     ...(options ? { options: options.map(toOption) } : {}),
                     ...(applied ? { applied: toOption(applied) } : {}),
                 };
@@ -576,6 +653,11 @@ export async function runManageSite(
                 const target = targetSite();
                 if ('error' in target) return fail(target.error);
                 const before = target.config;
+                // Same refusal as create, and this is where it was reported from:
+                // `update {runMode:'recipe', image:'…'}` came back `running` at once,
+                // recorded the image, and built nothing (genie#191).
+                const cannotRun = unrunnableRunModeReason(req.runMode);
+                if (cannotRun) return fail(cannotRun);
 
                 // A patch of ONLY the fields the caller named — anything omitted
                 // is left exactly as stored (see setWorkspaceDevSite's merge).
@@ -630,17 +712,28 @@ export async function runManageSite(
                 // rebuild/restart; a stopped site, or a cosmetic edit, is left as
                 // it is. `previousSiteId` differs only on a rename.
                 const restart = running && devSiteReconfigureNeedsRestart(before, after);
-                const status = await manager.reconfigure(ws.id, newId, {
-                    previousSiteId: target.siteId,
-                    restart,
-                });
+                // Bounded like create (genie#194): a restart re-runs the whole start,
+                // and that is exactly the call that was blowing the 120s cap.
+                const status = await settleWithin(
+                    manager.reconfigure(ws.id, newId, {
+                        previousSiteId: target.siteId,
+                        restart,
+                    }),
+                    settleMs,
+                );
+                const updateNotes = [
+                    ...envNotes,
+                    ...siteAdvisoryNotes(req),
+                    ...(status ? [] : [pendingNote('restart', newId)]),
+                ];
                 return {
-                    ok: status.state !== 'failed',
-                    ...(status.error ? { error: status.error } : {}),
+                    ok: status ? status.state !== 'failed' : true,
+                    ...(status?.error ? { error: status.error } : {}),
+                    ...(status ? {} : { pending: true }),
                     sites: sites(),
                     affectedId: newId,
                     runtime,
-                    ...(envNotes.length ? { notes: envNotes } : {}),
+                    ...(updateNotes.length ? { notes: updateNotes } : {}),
                 };
             }
 
@@ -653,16 +746,22 @@ export async function runManageSite(
                 if (!target.config.enabled) {
                     setWorkspaceDevSite(ws.id, { siteId: target.siteId, enabled: true });
                 }
-                const status =
+                // Bounded (genie#194) — see `settleWithin`. The site manager keeps
+                // starting it; this call just stops holding the transport open.
+                const status = await settleWithin(
                     req.action === 'restart'
-                        ? await manager.restart(ws.id, target.siteId)
-                        : await manager.start(ws.id, target.siteId);
+                        ? manager.restart(ws.id, target.siteId)
+                        : manager.start(ws.id, target.siteId),
+                    settleMs,
+                );
                 return {
-                    ok: status.state !== 'failed',
-                    ...(status.error ? { error: status.error } : {}),
+                    ok: status ? status.state !== 'failed' : true,
+                    ...(status?.error ? { error: status.error } : {}),
+                    ...(status ? {} : { pending: true }),
                     sites: sites(),
                     affectedId: target.siteId,
                     runtime,
+                    ...(status ? {} : { notes: [pendingNote(req.action, target.siteId)] }),
                 };
             }
 

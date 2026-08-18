@@ -112,6 +112,40 @@ export type ProductionServer =
  */
 export type HostingRunMode = 'dockerfile' | 'devcontainer' | 'compose' | 'recipe' | 'explicit' | 'host';
 
+/**
+ * The run modes this build can ACTUALLY run (genie#191).
+ *
+ * The sandbox-serve rework removed the per-site container: a site is a command run
+ * either as a HOST process (`host`) or inside the shared workspace sandbox
+ * (`explicit`). Nothing runs {@link BuildStep}s and nothing pulls a per-site
+ * {@link HostingOption.image} — `site-build.ts` has had no caller since. The other
+ * four modes therefore describe machinery that does not exist here, and a site
+ * stored under one of them serves its dev command while claiming a production
+ * build+serve.
+ */
+export const RUNNABLE_RUN_MODES: readonly HostingRunMode[] = ['host', 'explicit'];
+
+/** What Genie would still have to do to honour a run mode, or null when it can run
+ *  it. The sentence is the refusal text — see {@link RUNNABLE_RUN_MODES}. */
+export function unrunnableRunModeReason(runMode: string | undefined | null): string | null {
+    if (!runMode || (RUNNABLE_RUN_MODES as readonly string[]).includes(runMode)) return null;
+    const instead =
+        'Serve it a way that exists: `hostServe` (Genie serves a built directory, or a PHP app’s `public/`, with its own web server — run the build yourself first), `command` + `port` (Genie runs YOUR server against the live source), or `hostPort` (point `.gen` at a server you already run).';
+    if (runMode === 'recipe') {
+        return `runMode:'recipe' is a PRODUCTION build+serve — the detected \`build\` steps (e.g. \`composer install --no-dev\`) and then a production server (FrankenPHP, nginx, gunicorn) in an \`image\` of its own. Genie does NOT do that here: a site's command runs in the shared workspace sandbox, which runs no build steps and never uses a per-site \`image\`. Accepting it would report a production site while serving an unbuilt dev one, so it is refused instead. ${instead}`;
+    }
+    if (runMode === 'dockerfile') {
+        return `runMode:'dockerfile' would build the repo's Dockerfile and run the image's CMD. Genie builds no per-site image here — a site's command runs in the shared workspace sandbox — so the mode is refused rather than accepted and ignored. ${instead}`;
+    }
+    if (runMode === 'compose') {
+        return `runMode:'compose' needs compose orchestration, which Genie does not run. It is refused rather than accepted and ignored. ${instead}`;
+    }
+    if (runMode === 'devcontainer') {
+        return `runMode:'devcontainer' needs devcontainer.json parsed and its image built, which Genie does not do. It is refused rather than accepted and ignored. ${instead}`;
+    }
+    return `runMode:'${runMode}' is not a run mode Genie can run. ${instead}`;
+}
+
 /** One step of the production build, run before the server starts. */
 export interface BuildStep {
     /** A short human label — this is what a progress line and a log header say. */

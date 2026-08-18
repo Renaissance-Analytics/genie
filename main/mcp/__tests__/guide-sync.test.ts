@@ -184,9 +184,20 @@ describe('the guide describes the Hosting Manager, not the retired dev-site prox
         expect(GENIE_MCP_GUIDE).toMatch(/artisan serve/);
         expect(GENIE_MCP_GUIDE).toMatch(/npm run dev/);
         expect(GENIE_MCP_GUIDE).not.toMatch(/NOT a dev-server launcher/i);
-        // The production build+serve is still there — as the OPT-IN, still named.
-        expect(GENIE_MCP_GUIDE).toContain('FrankenPHP');
-        expect(GENIE_MCP_GUIDE).toMatch(/production/i);
+    });
+
+    it('says the production build+serve is REFUSED — it must not still be taught as an opt-in (genie#191)', () => {
+        // It WAS taught as `runMode:'recipe'`, and the mode is inert: nothing runs
+        // the build steps or the per-site image, so a site created that way served
+        // an unbuilt dev command while reporting a production build. The tool now
+        // refuses it, and a guide still advertising it would send every agent
+        // straight into that refusal.
+        expect(GENIE_MCP_GUIDE).not.toMatch(/OPT-IN via .?runMode:'recipe'/i);
+        expect(GENIE_MCP_GUIDE).not.toMatch(/production build\+serve.{0,40}opt-in/i);
+        // And it says so positively, with what to do instead.
+        expect(GENIE_MCP_GUIDE).toMatch(/recipe/);
+        expect(GENIE_MCP_GUIDE).toMatch(/refus/i);
+        expect(GENIE_MCP_GUIDE).toContain('hostServe');
     });
 
     it('does not steer agents to the retired loopback dev-site model', () => {

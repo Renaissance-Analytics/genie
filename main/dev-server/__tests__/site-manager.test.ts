@@ -363,6 +363,28 @@ describe('start', () => {
         expect(status.origin).toBe('https://web.acme.gen');
     });
 
+    /**
+     * genie#195 — the published `hostPort` of a CONTAINER site is the sandbox's
+     * Caddy, which speaks TLS and routes by SNI. Reporting an
+     * `http://127.0.0.1:<port>` "local origin" beside it sends whoever curls it
+     * into `Client sent an HTTP request to an HTTPS server`, which reads like the
+     * app is broken when it is the LABEL that is wrong. So the local reach a caller
+     * is handed has to be the form that actually answers.
+     */
+    it('reports a LOCAL reach that actually works: https + SNI, not an http loopback URL (genie#195)', async () => {
+        const runtime = fakeRuntime();
+        const status = await manager(runtime).start('acme', SITE_ID);
+
+        expect(status.localOrigin).toBe(`https://web.acme.gen:${CADDY_HOST_PORT}`);
+        // …and the exact command, because `https://web.acme.gen:<port>` does not
+        // resolve on this machine either — the SNI name has to be pinned to loopback.
+        expect(status.localCurl).toBe(
+            `curl -sk --resolve web.acme.gen:${CADDY_HOST_PORT}:127.0.0.1 https://web.acme.gen:${CADDY_HOST_PORT}/`,
+        );
+        // The form that produced the bug report is never handed out.
+        expect(status.localOrigin).not.toContain(`http://127.0.0.1:${CADDY_HOST_PORT}`);
+    });
+
     it('reports a site whose port never answered through Caddy as running-but-not-ready', async () => {
         const runtime = fakeRuntime();
         const status = await manager(runtime, undefined, { probeReady: async () => false }).start(
@@ -965,6 +987,30 @@ describe('service env injection (#234 P3)', () => {
                 loopback: '127.0.0.1',
             },
         ]);
+    });
+
+    it('reports a HOST-NATIVE site as plain http on loopback — there is no Caddy in front of it (genie#195)', async () => {
+        // The other half of #195: a host-native dev server holds the port ITSELF and
+        // speaks plain http, so the working local form is the bare loopback URL. One
+        // label for both shapes is what made the container form unusable.
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const sites: DevSites = {
+            [SITE_ID]: {
+                name: 'web',
+                genName: 'web.acme.gen',
+                repo: 'app',
+                runMode: 'explicit',
+                hostPort: 8001,
+                kind: 'http',
+                enabled: true,
+            },
+        };
+        const status = await manager(runtime, sites, { probeReady: async () => true }).start(
+            'acme',
+            SITE_ID,
+        );
+        expect(status.localOrigin).toBe('http://127.0.0.1:8001');
+        expect(status.localCurl).toBe('curl -s http://127.0.0.1:8001/');
     });
 
     it('exposes a browser-opted-in host-native site to the external-browser reconcile (story #238 P2)', async () => {

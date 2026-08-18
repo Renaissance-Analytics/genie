@@ -115,9 +115,23 @@ export interface DevSiteStatus {
     hostPort?: number;
     /** The routable origin through the Genie Browser (`http` sites only). */
     origin?: string;
-    /** The direct loopback origin — kept optional for callers that still read it;
-     *  no longer set, since a site is reached only through Caddy (with SNI). */
+    /**
+     * The origin that actually answers ON THIS MACHINE — and it is NOT the same
+     * shape for the two kinds of site (genie#195):
+     *
+     *  - a CONTAINER site's `hostPort` is the sandbox's Caddy, which speaks TLS and
+     *    routes by SNI, so the origin is `https://<genName>:<hostPort>`;
+     *  - a HOST-NATIVE site holds the port itself and speaks plain http, so it is
+     *    `http://127.0.0.1:<port>`.
+     *
+     * Printing one form for both is what made `curl http://127.0.0.1:<port>/` answer
+     * "Client sent an HTTP request to an HTTPS server" and read like an app bug. The
+     * https form still needs the SNI name pinned to loopback — see {@link localCurl}.
+     */
     localOrigin?: string;
+    /** The exact command that reaches {@link localOrigin} from this machine, SNI
+     *  and all — so nobody has to reconstruct it from the port. */
+    localCurl?: string;
     /** RETAINED for shape compatibility; the sandbox-serve model runs no build. */
     buildLog?: string;
     /** RETAINED for shape compatibility; raw extra surfaces are not published in
@@ -405,6 +419,41 @@ interface Live {
 }
 
 const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+/**
+ * PURE. How a running site is reached FROM THIS MACHINE — the honest answer to
+ * "what do I curl?" (genie#195).
+ *
+ * The two shapes are genuinely different protocols on the loopback port, and the
+ * bug this exists to end was labelling both as `http://127.0.0.1:<port>`:
+ *
+ *  - `sniTls` (a CONTAINER site) — the port belongs to the sandbox's Caddy, which
+ *    TLS-terminates every `.gen` and picks the vhost by SNI. A plain-http request
+ *    gets "Client sent an HTTP request to an HTTPS server", and even the https URL
+ *    needs `--resolve`, because `<genName>` resolves nowhere on this machine.
+ *  - otherwise (a HOST-NATIVE site) — the dev server holds the port itself and
+ *    speaks plain http, which is exactly why `.gen` for it is terminated elsewhere.
+ */
+export function siteLocalReach(site: {
+    genName: string;
+    /** The loopback port that is actually published/held. */
+    port: number;
+    /** True when that port is the sandbox's Caddy (TLS, routed by SNI). */
+    sniTls: boolean;
+}): { localOrigin: string; localCurl: string } {
+    if (!site.sniTls) {
+        const origin = `http://127.0.0.1:${site.port}`;
+        return { localOrigin: origin, localCurl: `curl -s ${origin}/` };
+    }
+    const origin = `https://${site.genName}:${site.port}`;
+    return {
+        localOrigin: origin,
+        // `-k` because Caddy's loopback leaf is signed by its internal CA, and
+        // `--resolve` because the SNI name has to be the `.gen` one for Caddy to
+        // route to this vhost at all.
+        localCurl: `curl -sk --resolve ${site.genName}:${site.port}:127.0.0.1 ${origin}/`,
+    };
+}
 
 /** A repo name safe to append to the container-side mount point. */
 const SAFE_REPO = /^[A-Za-z0-9._-]+$/;
@@ -1227,6 +1276,17 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         config: DevSiteConfig,
         entry: Live,
     ): DevSiteStatus {
+        // What answers on THIS machine, in the protocol the port really speaks: a
+        // container site's port is the sandbox Caddy (TLS + SNI), a host-native
+        // site's is the dev server itself (plain http). See `siteLocalReach`.
+        const local =
+            config.kind === 'http'
+                ? siteLocalReach({
+                      genName: config.genName,
+                      port: entry.caddyHostPort,
+                      sniTls: entry.internalPort !== undefined,
+                  })
+                : null;
         return {
             siteId,
             workspaceId,
@@ -1238,6 +1298,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             hostPort: entry.caddyHostPort,
             // The `.gen` origin exists only for an HTTP surface.
             ...(config.kind === 'http' ? { origin: `https://${config.genName}` } : {}),
+            ...(local ? { localOrigin: local.localOrigin, localCurl: local.localCurl } : {}),
         };
     }
 

@@ -268,6 +268,48 @@ describe('tools/call dispatch', () => {
     });
 });
 
+// --- what the tool ADVERTISES ----------------------------------------------
+
+describe('the manageSite description matches what the tool does', () => {
+    const description = async (): Promise<string> => {
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 7, method: 'tools/list' },
+            ctx({ devServerAvailable: async () => true }),
+        );
+        const tools = (res?.result as { tools: Array<{ name: string; description: string }> }).tools;
+        return tools.find((t) => t.name === 'manageSite')?.description ?? '';
+    };
+
+    it('never advertises the production recipe it refuses (genie#191)', async () => {
+        // An agent picks its arguments from this text. While it still offered
+        // `runMode:'recipe'` as an opt-in, every agent that took the offer got a
+        // site that reported `running` and built nothing — and now gets a refusal.
+        const text = await description();
+        expect(text).not.toMatch(/opt-in production recipe/i);
+        expect(text).not.toMatch(/production build\+serve is OPT-IN/i);
+        expect(text).toMatch(/REFUSED/);
+        // The schema offers only the two modes that run.
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 8, method: 'tools/list' },
+            ctx({ devServerAvailable: async () => true }),
+        );
+        const tool = (
+            res?.result as { tools: Array<{ name: string; inputSchema: Record<string, unknown> }> }
+        ).tools.find((t) => t.name === 'manageSite');
+        const props = (tool?.inputSchema.properties ?? {}) as Record<string, { enum?: string[] }>;
+        expect(props.runMode?.enum).toEqual(['host', 'explicit']);
+    });
+
+    it('tells an agent how to curl a site, and that a start can come back pending', async () => {
+        const text = await description();
+        // genie#195 — the two facts that turn a wrong label into a working command.
+        expect(text).toContain('localCurl');
+        expect(text).toContain('--resolve');
+        // genie#194 — the handle, named where the arguments are chosen.
+        expect(text).toContain('pending');
+    });
+});
+
 // --- the headline -----------------------------------------------------------
 
 describe('manageSiteSummary', () => {
@@ -293,6 +335,31 @@ describe('manageSiteSummary', () => {
         expect(text).toContain('https://web.acme.gen');
     });
 
+    it('names the LOCAL form that actually works, so nobody curls the http one (genie#195)', () => {
+        // The published port of a container site is the sandbox's Caddy — TLS,
+        // routed by SNI — so an agent that dials `http://127.0.0.1:<port>` gets
+        // "Client sent an HTTP request to an HTTPS server" and reports an app bug.
+        // The headline is where that is prevented, because it is what gets read.
+        const text = manageSiteSummary({
+            ok: true,
+            affectedId: 'abc',
+            sites: [
+                site({
+                    ready: true,
+                    origin: 'https://web.acme.gen',
+                    hostPort: 49_800,
+                    localOrigin: 'https://web.acme.gen:49800',
+                    localCurl:
+                        'curl -sk --resolve web.acme.gen:49800:127.0.0.1 https://web.acme.gen:49800/',
+                }),
+            ],
+        });
+        expect(text).toContain('https://web.acme.gen');
+        expect(text).toContain(
+            'curl -sk --resolve web.acme.gen:49800:127.0.0.1 https://web.acme.gen:49800/',
+        );
+    });
+
     it('does NOT hand back an origin for a site that is up but not listening', () => {
         // THE distinction. A container being `running` is not a dev server
         // having bound its port, and an agent that reports the first as the
@@ -305,6 +372,23 @@ describe('manageSiteSummary', () => {
         expect(text).not.toContain('https://web.acme.gen');
         expect(text).toMatch(/nothing is listening/i);
         expect(text).toMatch(/logs/);
+    });
+
+    it('says a PENDING action is still going, and never reads the stale row as the outcome (genie#194)', () => {
+        // A start that outlives the tool call comes back early with `pending`. The
+        // row still says `stopped`, because that is what it was before the start
+        // finished — leading with it would report the opposite of what happened.
+        const text = manageSiteSummary({
+            ok: true,
+            pending: true,
+            affectedId: 'abc',
+            sites: [site({ state: 'stopped', ready: undefined, phase: 'pulling' })],
+        });
+        expect(text).toMatch(/still coming up/i);
+        expect(text).toContain('pulling');
+        // The exact call that reads the outcome, so nobody has to invent a poll.
+        expect(text).toContain("manageSite {action:'status', id:'abc'}");
+        expect(text).not.toMatch(/^web is stopped/);
     });
 
     it('leads with the reason a site failed', () => {

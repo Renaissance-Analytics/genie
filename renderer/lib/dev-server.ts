@@ -1,3 +1,7 @@
+// The run-mode policy is the HOST's, imported rather than restated: a picker that
+// offers what `runManageSite` refuses is the same bug in a friendlier costume
+// (genie#191). The module is pure — no fs, no electron.
+import { unrunnableRunModeReason } from '../../main/dev-server/serve-recipe';
 import type {
     DevRuntimeInfo,
     DevServiceInfo,
@@ -140,12 +144,22 @@ export function canOpenInBrowser(site: DevSiteInfo): boolean {
 export interface SiteReach {
     /** The `.gen` origin — works here AND from a connected remote. */
     browser: string | null;
-    /** The published loopback origin — works on this machine only. */
+    /** The published loopback origin — works on this machine only. `https` with the
+     *  `.gen` name for a container site (the port is the sandbox's Caddy, which
+     *  routes by SNI), plain `http://127.0.0.1` for a host-native one. */
     local: string | null;
+    /** The command that actually reaches {@link local} from here (genie#195). The
+     *  https form needs `--resolve`, because the `.gen` name resolves nowhere on
+     *  this machine — so the command is shown rather than left to be reconstructed. */
+    curl: string | null;
 }
 
 export function siteReach(site: DevSiteInfo): SiteReach {
-    return { browser: site.origin ?? null, local: site.localOrigin ?? null };
+    return {
+        browser: site.origin ?? null,
+        local: site.localOrigin ?? null,
+        curl: site.localCurl ?? null,
+    };
 }
 
 // --- the serve-mode picker --------------------------------------------------
@@ -468,10 +482,41 @@ export function optionLabel(option: DevSiteRunOption): string {
 /** What is still a GUESS about this option, or null when nothing is.
  *
  *  Never decoration: an option whose port was defaulted rather than read will
- *  publish 8080, get a connection refused, and look like a working site. */
+ *  publish 8080, get a connection refused, and look like a working site.
+ *
+ *  A `needs` is shown whatever `confident` says (genie#191): the host also puts
+ *  "Genie cannot run this mode in this build" there, and that sentence arrives on
+ *  options that were detected with complete confidence — gating on `confident`
+ *  swallowed exactly the one caveat that matters most. */
 export function optionCaveat(option: DevSiteRunOption): string | null {
+    if (option.needs) return option.needs;
     if (option.confident) return null;
-    return option.needs ?? 'Some of this was inferred — check the command and the port.';
+    return 'Some of this was inferred — check the command and the port.';
+}
+
+/**
+ * Can Genie actually RUN this option's mode (genie#191)? The same policy the host
+ * refuses with, so the form never offers a choice the save rejects.
+ */
+export function optionRunnable(option: Pick<DevSiteRunOption, 'runMode'>): boolean {
+    return unrunnableRunModeReason(option.runMode) === null;
+}
+
+/**
+ * The Edit form's "How it runs" choices: the modes that RUN, plus — only when the
+ * site is stored under something else — its own mode, labelled for what it is.
+ *
+ * Keeping the stored mode listed matters: dropping it would leave the picker
+ * showing a value the site does not have, and saving would silently re-point a
+ * site the user only opened to look at.
+ */
+export function runModeChoices(current: string): Array<{ value: string; label: string }> {
+    const choices = [
+        { value: 'host', label: 'Dev server on the host' },
+        { value: 'explicit', label: 'Command in the workspace sandbox' },
+    ];
+    if (choices.some((c) => c.value === current)) return choices;
+    return [...choices, { value: current, label: `${current} — not runnable in this build` }];
 }
 
 // --- which VERSION of an engine this workspace's apps use (#242 P3) ----------

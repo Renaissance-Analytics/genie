@@ -37,6 +37,8 @@ import {
     isolationNote,
     optionCaveat,
     optionLabel,
+    optionRunnable,
+    runModeChoices,
     runtimeSummary,
     serveConfigIncomplete,
     serveModeOf,
@@ -554,6 +556,15 @@ function SiteCard({
                             <Input value={reach.local} readOnly disabled />
                         </label>
                     )}
+                    {/* A container site's port is the sandbox's Caddy — TLS, routed
+                        by SNI — so the URL above is not something curl can dial
+                        unaided. Show the command that works (genie#195). */}
+                    {reach.curl && (
+                        <label className="site-field">
+                            <span>With curl</span>
+                            <Input value={reach.curl} readOnly disabled />
+                        </label>
+                    )}
                 </div>
             )}
 
@@ -789,11 +800,12 @@ function EditSiteForm({
         return patch;
     };
 
-    const RUN_MODES = [
-        { value: 'host', label: 'Dev server on the host' },
-        { value: 'recipe', label: 'Production build (container)' },
-        { value: 'dockerfile', label: "The repo's Dockerfile" },
-    ];
+    // Only the modes Genie can actually run (genie#191). "Production build
+    // (container)" and "The repo's Dockerfile" were offered here while nothing
+    // built them — picking one recorded the mode, restarted the site on its old
+    // command, and reported success. A site STORED under one keeps its entry so
+    // the picker still shows what it is.
+    const RUN_MODES = runModeChoices(row.runMode);
 
     // A static/php serve mode needs a directory, or buildHostServe yields nothing
     // and the change is silently dropped on save — the exact bug where switching a
@@ -1268,8 +1280,13 @@ function AddSiteForm({
                                 </Text>
                             )}
                             {optionCaveat(option) && (
-                                <Callout color="amber" icon={<Icon name="alert-triangle" size="sm" />}>
-                                    Check this before starting: {optionCaveat(option)}.
+                                <Callout
+                                    color={optionRunnable(option) ? 'amber' : 'red'}
+                                    icon={<Icon name="alert-triangle" size="sm" />}
+                                >
+                                    {optionRunnable(option)
+                                        ? `Check this before starting: ${optionCaveat(option)}.`
+                                        : optionCaveat(option)}
                                 </Callout>
                             )}
                         </>
@@ -1282,7 +1299,15 @@ function AddSiteForm({
                     size="sm"
                     color="blue"
                     icon="check"
-                    disabled={saving || !name.trim() || serveIncomplete}
+                    // An option Genie cannot RUN is never startable (genie#191):
+                    // the host refuses it, so offering the button would produce a
+                    // failure the reason for is already on screen.
+                    disabled={
+                        saving ||
+                        !name.trim() ||
+                        serveIncomplete ||
+                        Boolean(option && !hostServe && !optionRunnable(option))
+                    }
                     onClick={async () => {
                         setSaving(true);
                         try {

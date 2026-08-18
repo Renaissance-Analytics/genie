@@ -561,12 +561,25 @@ export interface DevSiteInfo {
     ready?: boolean;
     /** The port inside the container. */
     port?: number;
-    /** The loopback port the runtime published on the host. */
+    /** The loopback port this site is reached on from THIS machine: the sandbox's
+     *  published Caddy port for a container site, the dev server's own port for a
+     *  host-native one. What it SPEAKS differs — see {@link localOrigin}. */
     hostPort?: number;
     /** The routable origin through the Genie Browser (http sites). */
     origin?: string;
-    /** The direct loopback origin (curl, a local browser, another program). */
+    /**
+     * The origin that answers on THIS machine — in the protocol the port really
+     * speaks (genie#195). A CONTAINER site's `hostPort` is the sandbox's Caddy: TLS,
+     * routed by SNI, so this is `https://<genName>:<hostPort>` and a plain-http
+     * request to it answers "Client sent an HTTP request to an HTTPS server". A
+     * HOST-NATIVE site holds the port itself and speaks plain http, so this is
+     * `http://127.0.0.1:<port>`. Use {@link localCurl} — the https form also needs
+     * the `.gen` name pinned to loopback, since it resolves nowhere here.
+     */
     localOrigin?: string;
+    /** The exact command that reaches {@link localOrigin} from this machine, SNI
+     *  and all. Curl THIS rather than building a URL from `hostPort`. */
+    localCurl?: string;
     /** What is being hosted: php | node | static | python | go | rust. */
     stack?: string;
     /** The production server holding the port: frankenphp | node | nginx |
@@ -583,9 +596,10 @@ export interface DevSiteInfo {
     /** LEGACY (pre-sandbox-serve): the production server's literal argv. Read as a
      *  fallback for {@link command} for sites saved before the rework. */
     serve?: string[];
+    /** The stored image ref. Recorded, never used — there is no per-site container
+     *  (genie#125/#191). */
     image?: string;
-    /** The last build's log. Present on a start that built, success or not — a
-     *  failed build is the most common reason a site does not come up. */
+    /** The pull/start log while a site comes up, and the last one on a failure. */
     buildLog?: string;
     /** Extra BROWSER-FACING surfaces, as they ended up. A raw one (gRPC/TCP)
      *  carries the stable `hostPort` a client dials. */
@@ -645,15 +659,22 @@ export interface ManageSiteRequest {
     name?: string;
     /** create/detect: a repo subfolder (repos/<repo>); omit for the workspace root. */
     repo?: string;
-    /** create: how it is built and served. Omit to take the recommendation, which
-     *  is the DEV server run host-native (`host`) — no container, no build. Pass
-     *  `recipe`/`dockerfile`/`compose`/`devcontainer` to opt INTO a production
-     *  build+serve instead. */
+    /**
+     * create/update: how it runs. Omit to take the recommendation — the repo's DEV
+     * server run host-native (`host`): no container, no build. `explicit` runs
+     * `command` inside the shared workspace sandbox.
+     *
+     * The four container modes are still IN the type because sites stored under them
+     * exist, but passing one is REFUSED with a reason (genie#191): nothing here runs
+     * `build` steps or a per-site `image`, so accepting one would record a production
+     * build+serve that never happens. See `unrunnableRunModeReason`.
+     */
     runMode?: 'dockerfile' | 'devcontainer' | 'compose' | 'recipe' | 'explicit' | 'host';
-    /** create: the image the SERVER runs in. Omit for the workspace dev image. */
+    /** create/update: RECORDED BUT NEVER USED — there is no per-site container
+     *  (genie#125/#191). The result says so in `notes`. */
     image?: string;
-    /** create: the PRODUCTION BUILD, in order. LEGACY — the sandbox-serve model
-     *  runs no build. */
+    /** create/update: RECORDED BUT NEVER RUN — nothing executes a site build in this
+     *  model (genie#191). The result says so in `notes`. */
     build?: Array<{ label?: string; command: string[]; optional?: boolean }>;
     /** create/update: the USER-CONTROLLED startup argv (NOT a shell string) Genie
      *  runs against the LIVE source in the sandbox. The canonical way to start a
@@ -720,10 +741,22 @@ export interface ManageSiteResult {
     ok: boolean;
     /** Set when ok is false (no runtime, bad args, unknown id, …). */
     error?: string;
+    /**
+     * The action was ACCEPTED and is still running — this call returned early
+     * rather than hold the tool transport open to its 120s timeout (genie#194).
+     * The site is NOT known to be live: poll `status` with {@link affectedId}
+     * until its `phase` reaches `ready` or `failed`. `notes` says the same in
+     * words. Absent ⇒ the result is the settled outcome.
+     */
+    pending?: boolean;
     /** The workspace's sites after the action (always returned on ok). */
     sites: DevSiteInfo[];
     /** The site the action targeted/created. */
     affectedId?: string;
+    /** Things that happened alongside the action and would otherwise be silent:
+     *  where an `env` was written, that an `image` is recorded but never used, that
+     *  a start is still running. Advisory — never a substitute for `error`. */
+    notes?: string[];
     /** detect/create: every way the repo could be built + served, best first. */
     options?: DevSiteRunOption[];
     /** create: which option was applied, when none was supplied. */
@@ -1496,7 +1529,7 @@ const PROVISION_WORKSPACES_TOOL = {
 const MANAGE_SITE_TOOL = {
     name: 'manageSite',
     description:
-        "HOST a repo the way you DEVELOP it — Genie runs its DEV server as a HOST process against the LIVE source (NO container, NO build) and serves it at a stable `https://<name>.gen` origin reachable whether the viewer is on this machine or connected remotely. DEFAULT is dev + host-native — 'just serve the repo the site points to', live (Docker is only for services and the opt-in production recipe): a bare `create {name}` detects the stack and runs its OWN dev server — PHP/Laravel → `php artisan serve`; Node (Vite/Next/Nuxt) → the repo's own `npm run dev`; Django → `manage.py runserver`; Go → `go run .`. To be explicit: `command`+`port` runs YOUR dev server; `hostPort` points `.gen` at a dev server you ALREADY run (e.g. one started with `manageProcess`). A PRODUCTION build+serve is OPT-IN via `runMode:'recipe'` (composer --no-dev + FrankenPHP over public/, `npm run build` + next start / nginx over dist/, gunicorn, a Go binary — in a container); a repo's own Dockerfile is `runMode:'dockerfile'`. Actions: `detect` (read a repo and return every build+serve recipe it could use, each with `confident` and, when it is a guess, `needs`); `list` (every site + live state); `create` (define one and host it — `name` (a DNS label) plus either an explicit `build` + `serve` + `port`, or nothing at all to take the detected recipe; optional `repo` to host repos/<repo>, `image`, `env`, `exposed`, `kind`); `update` (edit an existing site by `id` — pass only the fields to change: `name`/`genName`, `port`, `env`, `build`/`serve`, `image`, `runMode`, `exposed`, `upstreamHost`, `kind`; a RUNNING site is rebuilt/restarted only when the change requires it, and left as-is otherwise); `start` / `stop` / `restart` / `status` (by `id` from a prior list); `logs` (the container's log tail); `open` (show the site in the Genie Browser for the user); `remove` (stop it and forget the definition). READ THE RESULT: a failed BUILD is the most common reason a site does not come up, and `buildLog` carries it — a required build step that fails means the site is deliberately NOT started, because serving the previous build while every health signal reads green is worse than not serving. `state:'running'` means the CONTAINER is up; `ready:true` means the published port actually accepted a connection. `origin` is the routable `https://<name>.gen`; `localOrigin` is the direct loopback origin for curl. SERVICES — a host-native dev server runs ON THE HOST, so it reaches a `manageProcess` service and the managed DB/cache on `127.0.0.1:<published port>` — the host-form env (`DATABASE_URL`, …) Genie injects into it, the same env terminals get. (A container-recipe site instead reaches services on the workspace network by engine name; there its `localhost` is the sandbox and a host `manageProcess` service is at `${GENIE_HOST_GATEWAY}:<port>`.) A DATABASE OR CACHE IS NEVER EXPOSED — shared engines are workstation-hosted and reached on the workspace network through the env `manageService` injects (`DATABASE_URL`, …). Only what the BROWSER itself connects to is exposed, via `exposed:[{name,port,protocol,reason}]`: a websocket on the app's own port needs nothing (it upgrades over the existing carrier), one on another port gets `<name>.<site>.gen`, and gRPC/TCP get a STABLE loopback port. A surface that cannot say why the browser needs it is REFUSED. BINDING: bind the dev server to the `port` you give (on `127.0.0.1` or `0.0.0.0`) — a server on a random port `.gen` can't find is the common mistake; a container-recipe server must bind `0.0.0.0`. HOST ALLOWLISTS: upstream is sent `Host: <name>.gen`; Django checks it (`ALLOWED_HOSTS`), so either add the `.gen` name there or pass `upstreamHost:'localhost'`. Host-native dev hosting needs NO Docker; the OPT-IN production recipe (runMode `recipe`/`dockerfile`) and services do — when neither is usable that path's result carries the install hint. `command`, `build` and `serve` are literal argv ([\"npm\",\"run\",\"dev\"]), never shell strings. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; required when the workspace has more than one terminal.",
+        "HOST a repo the way you DEVELOP it — Genie runs its DEV server as a HOST process against the LIVE source (NO container, NO build) and serves it at a stable `https://<name>.gen` origin reachable whether the viewer is on this machine or connected remotely. DEFAULT is dev + host-native — 'just serve the repo the site points to', live (Docker is only for the services behind it): a bare `create {name}` detects the stack and runs its OWN dev server — PHP/Laravel → `php artisan serve`; Node (Vite/Next/Nuxt) → the repo's own `npm run dev`; Django → `manage.py runserver`; Go → `go run .`. To be explicit: `command`+`port` runs YOUR dev server; `hostPort` points `.gen` at a dev server you ALREADY run (e.g. one started with `manageProcess`). There is NO production build+serve here: `runMode:'recipe'`/`'dockerfile'`/`'compose'`/`'devcontainer'` are REFUSED with a reason, because nothing in this model runs `build` steps or a per-site `image` — a site is a command, run either on the host (`host`) or in the shared workspace sandbox (`explicit`). To serve a BUILT artifact, run the build yourself and point `hostServe` at the output. Actions: `detect` (read a repo and return every way it could run, each with `confident` and a `needs` that says what is still a guess OR that Genie cannot run that mode at all — read it before choosing); `list` (every site + live state); `create` (define one and host it — `name` (a DNS label) plus either `hostServe`, or a `command` + `port`, or nothing at all to take the detected DEV server; optional `repo` to host repos/<repo>, `env`, `exposed`, `kind`); `update` (edit an existing site by `id` — pass only the fields to change: `name`/`genName`, `command`, `port`, `env`, `hostServe`, `runMode`, `exposed`, `upstreamHost`, `kind`; a RUNNING site is rebuilt/restarted only when the change requires it, and left as-is otherwise); `start` / `stop` / `restart` / `status` (by `id` from a prior list); `logs` (the site's log tail — for a PHP site, the FastCGI worker's too); `open` (show the site in the Genie Browser for the user); `remove` (stop it and forget the definition). READ THE RESULT: `pending:true` means the start was ACCEPTED and is STILL RUNNING — this tool returns early rather than blow its 120s timeout on a cold image pull, so the site is NOT known to be live: poll `status` with the returned `id` until `phase` is `ready` or `failed`. `buildLog` carries the pull/start output while it comes up. `state:'running'` means the CONTAINER is up; `ready:true` means the published port actually accepted a connection. `origin` is the routable `https://<name>.gen`. TO CURL IT FROM THIS MACHINE, use the `localCurl` command in the result — do NOT build a URL out of `hostPort`: a container site's `hostPort` is the sandbox's Caddy, which speaks TLS and routes by SNI, so `curl http://127.0.0.1:<hostPort>/` answers `Client sent an HTTP request to an HTTPS server`, and even the https URL needs `--resolve <name>.gen:<hostPort>:127.0.0.1` because the `.gen` name resolves nowhere here. A host-native site's port is the dev server's own and is plain http. `localOrigin` says which of the two this site is. SERVICES — a host-native dev server runs ON THE HOST, so it reaches a `manageProcess` service and the managed DB/cache on `127.0.0.1:<published port>` — the host-form env (`DATABASE_URL`, …) Genie injects into it, the same env terminals get. (A sandbox (`explicit`) site instead reaches services on the workspace network by engine name; there its `localhost` is the sandbox and a host `manageProcess` service is at `${GENIE_HOST_GATEWAY}:<port>`.) A DATABASE OR CACHE IS NEVER EXPOSED — shared engines are workstation-hosted and reached on the workspace network through the env `manageService` injects (`DATABASE_URL`, …). Only what the BROWSER itself connects to is exposed, via `exposed:[{name,port,protocol,reason}]`: a websocket on the app's own port needs nothing (it upgrades over the existing carrier), one on another port gets `<name>.<site>.gen`, and gRPC/TCP get a STABLE loopback port. A surface that cannot say why the browser needs it is REFUSED. BINDING: bind the dev server to the `port` you give (on `127.0.0.1` or `0.0.0.0`) — a server on a random port `.gen` can't find is the common mistake; a sandbox (`explicit`) server must bind `0.0.0.0`. HOST ALLOWLISTS: upstream is sent `Host: <name>.gen`; Django checks it (`ALLOWED_HOSTS`), so either add the `.gen` name there or pass `upstreamHost:'localhost'`. Host-native hosting needs NO Docker; a sandbox (`explicit`) site and the services do — when a runtime is unusable that path's result carries the install hint. `command` is literal argv ([\"npm\",\"run\",\"dev\"]), never shell strings. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; required when the workspace has more than one terminal.",
     inputSchema: {
         type: 'object',
         properties: {
@@ -1535,14 +1568,14 @@ const MANAGE_SITE_TOOL = {
             },
             runMode: {
                 type: 'string',
-                enum: ['dockerfile', 'devcontainer', 'compose', 'recipe', 'explicit'],
+                enum: ['host', 'explicit'],
                 description:
-                    "create (optional): how it is built and served. PREFER `hostServe` — let GENIE serve the app (you point at a repo + a root; Genie owns the web server, the port and the `.gen` address). Reach for a runMode only when Genie cannot serve that stack, or you specifically want the repo's own dev server (HMR against live source). `host` runs `command` (or the detected dev command) as a HOST process on `port` — this is what you get if you omit both, and it is the FALLBACK, not the recommendation. `recipe` opts INTO the detected stack's PRODUCTION build+serve (in a container); `dockerfile` builds the repo's own Dockerfile and runs the image's CMD; `explicit` uses exactly the `build`/`serve`/`image` you pass. `devcontainer` and `compose` are not runnable yet.",
+                    "create/update (optional): how it runs. PREFER `hostServe` — let GENIE serve the app (you point at a repo + a root; Genie owns the web server, the port and the `.gen` address). Reach for a runMode only when Genie cannot serve that stack, or you specifically want the repo's own dev server (HMR against live source). `host` runs `command` (or the detected dev command) as a HOST process on a port Genie allocates — this is what you get if you omit both. `explicit` runs `command` inside the shared workspace sandbox (a container) on the `port` you give. NOTHING ELSE RUNS HERE: `recipe`, `dockerfile`, `compose` and `devcontainer` are REFUSED with a reason — no build steps are run and no per-site `image` is used in this model, so accepting one would report a production build+serve that never happened (genie#191). To serve a built artifact, build it yourself and point `hostServe` at the output.",
             },
             image: {
                 type: 'string',
                 description:
-                    "create (optional): the image the SERVER runs in — often NOT the one the build ran in (a PHP site builds with Composer and serves from FrankenPHP; a front end builds with npm and serves from nginx). Omit to serve from Genie's multi-language workspace dev image.",
+                    "create/update (optional): RECORDED BUT NOT USED (genie#125/#191). There is no per-site container in this model — a site's command runs on the host or in the shared workspace dev image — so an `image` here changes nothing at runtime and the result says so. Put extra runtime tools in the workspace's dev image instead.",
             },
             build: {
                 type: 'array',
@@ -1564,7 +1597,7 @@ const MANAGE_SITE_TOOL = {
                     required: ['command'],
                 },
                 description:
-                    "create (optional): the PRODUCTION BUILD, in order, run in the workspace sandbox before the server starts. A required step that fails means the site is NOT started. Omit to take the detected recipe's build.",
+                    'create/update (optional): RECORDED BUT NOT RUN (genie#191). Nothing in this model executes build steps before a site starts, so a `build` here is stored metadata only. Run the build yourself (a terminal, or `manageProcess`) and then serve the output with `hostServe`.',
             },
             command: {
                 type: 'array',
@@ -2297,6 +2330,13 @@ export function manageSiteSummary(result: ManageSiteResult): string {
     const target = result.affectedId
         ? result.sites.find((s) => s.id === result.affectedId)
         : undefined;
+    // STILL RUNNING (genie#194). Read before `state`, because the row's state is
+    // whatever it was BEFORE this action finished — reporting that as the outcome
+    // is how a call that returned early gets read as a call that succeeded.
+    if (result.pending) {
+        const phase = target?.phase ? ` (${target.phase})` : '';
+        return `${target?.name ?? 'The site'} is still coming up${phase} — this call returned before it settled, so it did not hit the 120s tool timeout. Poll \`manageSite {action:'status', id:'${result.affectedId}'}\` until \`phase\` is \`ready\` or \`failed\`; do not report it live yet.`;
+    }
     if (target) {
         if (target.state === 'failed') {
             return `${target.name} could not start: ${target.error ?? 'unknown error'}`;
@@ -2305,8 +2345,13 @@ export function manageSiteSummary(result: ManageSiteResult): string {
             return `${target.name} is ${target.state}.`;
         }
         const where = target.origin ?? target.localOrigin ?? '';
+        // The local form is spelled out rather than left to be derived from
+        // `hostPort`: a container site's port is the sandbox's Caddy (TLS + SNI), so
+        // the obvious `curl http://127.0.0.1:<port>/` answers "Client sent an HTTP
+        // request to an HTTPS server" and reads like the app is broken (genie#195).
+        const locally = target.localCurl ? ` From this machine: \`${target.localCurl}\`.` : '';
         return target.ready
-            ? `${target.name} is serving at ${where}.`
+            ? `${target.name} is serving at ${where}.${locally}`
             : `${target.name}'s container is up, but nothing is listening on port ${
                   target.port ?? '?'
               } yet — it may still be starting. Check \`logs\`, then \`status\` again before reporting it live.`;
@@ -2626,7 +2671,7 @@ export async function handleMcpMessage(
             }
             // `manageSite` now hosts DEV sites HOST-NATIVE (no container), so it is
             // ALWAYS available — an agent can serve a repo with just Node/PHP on the
-            // host. Only the OPT-IN production recipe and `manageService` need a
+            // host. Only a sandbox (`explicit`) site and `manageService` need a
             // container runtime; the probe (fail CLOSED) gates ONLY manageService, so
             // a machine with no Docker never sees a tool whose every call would fail.
             const hasContainerRuntime = await (

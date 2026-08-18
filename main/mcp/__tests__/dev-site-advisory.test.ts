@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createAdvisoryNotes, routeSiteEnvToDotEnv } from '../dev-site-tools';
+import { siteAdvisoryNotes, routeSiteEnvToDotEnv } from '../dev-site-tools';
 
 /**
  * The create-time advisories (genie #125). A custom `image` is a legacy
@@ -10,16 +10,29 @@ import { createAdvisoryNotes, routeSiteEnvToDotEnv } from '../dev-site-tools';
  * inside the shared workspace dev sandbox, so the ref is stored but never used.
  * Surfacing that on create turns a silent trap into a visible note.
  */
-describe('createAdvisoryNotes', () => {
+describe('siteAdvisoryNotes', () => {
     it('warns that a custom `image` is recorded but NOT used at runtime', () => {
-        const notes = createAdvisoryNotes({ image: 'ghcr.io/acme/app:1' });
+        const notes = siteAdvisoryNotes({ image: 'ghcr.io/acme/app:1' });
         expect(notes).toHaveLength(1);
         expect(notes[0]).toMatch(/`image` is recorded but NOT used/);
     });
 
+    it('warns that `build` steps are recorded but never RUN (genie#191)', () => {
+        // The other half of the inert-recipe report: a caller passes a production
+        // build, Genie stores it, starts the site, and reports success — having run
+        // none of it. Stored-and-silent is what made `recipe` look implemented.
+        const notes = siteAdvisoryNotes({
+            build: [{ label: 'composer', command: ['composer', 'install', '--no-dev'] }],
+        });
+        expect(notes).toHaveLength(1);
+        expect(notes[0]).toMatch(/`build`.*NOT run|never run/i);
+        expect(notes[0]).toMatch(/hostServe/);
+    });
+
     it('has nothing to say for a plain create with no custom image', () => {
-        expect(createAdvisoryNotes({})).toEqual([]);
-        expect(createAdvisoryNotes({ image: undefined })).toEqual([]);
+        expect(siteAdvisoryNotes({})).toEqual([]);
+        expect(siteAdvisoryNotes({ image: undefined })).toEqual([]);
+        expect(siteAdvisoryNotes({ build: [] })).toEqual([]);
     });
 });
 

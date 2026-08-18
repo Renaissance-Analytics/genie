@@ -302,7 +302,13 @@ export interface DevSiteInfo {
     port?: number;
     hostPort?: number;
     origin?: string;
+    /** The origin that answers on THIS machine, in the protocol the port really
+     *  speaks: `https://<genName>:<hostPort>` for a container site (the sandbox's
+     *  Caddy, routed by SNI), `http://127.0.0.1:<port>` for a host-native one. */
     localOrigin?: string;
+    /** The exact command that reaches `localOrigin` from here — the https form
+     *  needs `--resolve` to pin the `.gen` name to loopback (genie#195). */
+    localCurl?: string;
     command?: string[];
     image?: string;
     /** What is being hosted (`php`, `node`, `static`, …) and which production
