@@ -68,9 +68,9 @@ export default function E2EAgentPulse() {
     if (workspaces.length === 0) return <div data-testid="pulse-loading">loading…</div>;
 
     return (
-        // `.gwrap` carries the colour tokens; the fixed width keeps the row
-        // geometry stable so the spec can sample a known band of pixels.
-        <div className="gwrap" style={{ width: 320, padding: 0 }}>
+        // `.gwrap` carries the colour tokens; the width leaves room for the
+        // 56px rail plus the 282px flyout so the row is laid out at its real size.
+        <div className="gwrap" style={{ width: 420, padding: 0 }}>
             <Chooser
                 workspaces={workspaces}
                 specs={[]}
@@ -78,7 +78,13 @@ export default function E2EAgentPulse() {
                 activeIds={new Set()}
                 attentionIds={new Set()}
                 activeWorkspaceId={workspaces[0]!.id}
-                pinned={false}
+                // PINNED — the sidebar OPEN, which is the state the bug was
+                // reported in. It is not cosmetic: `.chooser-flyout` is
+                // `pointer-events: none` until `.chooser:hover` or
+                // `.chooser.pinned` (master.css:1718), so an unpinned harness
+                // has every click and hover fall straight through the rows to
+                // the wrapper behind them.
+                pinned={true}
                 onTogglePin={NOOP}
                 systemRevealed={false}
                 onToggleSystemWorkspace={NOOP}
