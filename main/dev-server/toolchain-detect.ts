@@ -174,6 +174,12 @@ export interface HostToolProbe {
     running?: boolean;
     /** Redacted output explaining a non-answer. */
     detail?: string;
+    /** Absolute path of the binary that ANSWERED, when it could be resolved.
+     *  Present only for an installed tool: it is what lets a row say which of
+     *  three gits on PATH replied, and which of them Genie may update
+     *  (genie#213). Absent is normal — the resolver is optional and allowed to
+     *  fail. */
+    path?: string;
 }
 
 /** The reviewable report: every wanted tool probed, split into present/missing. */
@@ -183,6 +189,26 @@ export interface ToolchainReport {
     probes: HostToolProbe[];
     present: HostToolName[];
     missing: HostToolName[];
+}
+
+/** Optional extras for a probe. `resolvePath` answers "which binary answered?"
+ *  — injected like every other seam here, so a machine without a working
+ *  `where`/`which` still produces a report. */
+export interface ProbeOptions {
+    resolvePath?: (bin: string) => Promise<string | undefined>;
+}
+
+/** Resolve a binary's path, or give up quietly. Never throws. */
+async function resolveQuietly(
+    resolve: ((bin: string) => Promise<string | undefined>) | undefined,
+    bin: string,
+): Promise<string | undefined> {
+    if (!resolve) return undefined;
+    try {
+        return (await resolve(bin)) || undefined;
+    } catch {
+        return undefined;
+    }
 }
 
 /** Longest output we keep from a failed probe — it exists to explain, not dump. */
@@ -213,6 +239,7 @@ export async function probeHostTool(
     spec: HostToolSpec,
     runner: CommandRunner,
     bin: string = spec.bin,
+    opts: ProbeOptions = {},
 ): Promise<HostToolProbe> {
     try {
         const res = await runner.run(bin, spec.versionArgv);
@@ -222,7 +249,18 @@ export async function probeHostTool(
             return { name: spec.name, installed: false, ...(detail ? { detail } : {}) };
         }
         const version = parseToolVersion(res.stdout);
-        return { name: spec.name, installed: true, ...(version ? { version } : {}) };
+        // Only for a tool that ANSWERED: there is nothing to locate otherwise,
+        // and asking anyway spends a process per missing tool on exactly the
+        // machines that can least afford it. A resolver that fails or throws
+        // leaves the path absent — the version is the load-bearing fact and a
+        // broken `where` must not take the row down with it.
+        const path = await resolveQuietly(opts.resolvePath, bin);
+        return {
+            name: spec.name,
+            installed: true,
+            ...(version ? { version } : {}),
+            ...(path ? { path } : {}),
+        };
     } catch (e) {
         // A CommandRunner is not supposed to reject (see `seams.ts`), but a
         // caller may inject one that does, and detection is load-bearing enough
@@ -299,6 +337,10 @@ export interface DetectToolchainOptions {
     fileExists?: FileExists;
     /** Where Windows lives. Only a library probe reads it. */
     systemRoot?: string;
+    /** Resolve a bare bin name to the binary PATH would actually run, so each
+     *  present tool can report WHERE it came from (genie#213). Optional: a report
+     *  is still a report without it. */
+    resolvePath?: (bin: string) => Promise<string | undefined>;
 }
 
 /**
@@ -324,7 +366,9 @@ export async function detectToolchain(opts: DetectToolchainOptions): Promise<Too
                 ? await probeDocker(opts.runner, bin)
                 : spec.files
                   ? await probeLibrary(spec, systemRoot, opts.fileExists)
-                  : await probeHostTool(spec, opts.runner, bin),
+                  : await probeHostTool(spec, opts.runner, bin, {
+                        ...(opts.resolvePath ? { resolvePath: opts.resolvePath } : {}),
+                    }),
         );
     }
 

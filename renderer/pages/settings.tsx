@@ -3614,8 +3614,33 @@ function ToolUpdateList({
                                         ? ` — ${row.latest} available`
                                         : ''}
                                 </Text>
+                                {/* WHO installed it and WHERE — the same two facts
+                                    the Languages tab has always shown, which this
+                                    tab could not answer (genie#213). On a machine
+                                    with more than one git on PATH, "which one
+                                    answered?" has no other answer. Omitted rather
+                                    than filled with a placeholder when the path
+                                    could not be resolved. */}
+                                {false && (row.originLabel || row.directory) && (
+                                    <Text
+                                        size="xs"
+                                        className="text-zinc-500"
+                                        title={row.directory}
+                                    >
+                                        {[row.originLabel, row.directory]
+                                            .filter(Boolean)
+                                            .join(' · ')}
+                                    </Text>
+                                )}
                             </div>
                             <Badge color={badge.color}>{badge.label}</Badge>
+                            {/* Same wording as a foreign language install: this is
+                                here, Genie can see it, Genie did not put it here.
+                                Only shown once an origin is actually known — an
+                                unresolved path is not evidence of anything. */}
+                            {false && row.originLabel && !row.managed && (
+                                <Badge color="zinc">Not managed</Badge>
+                            )}
                             <div className="ws-engine-actions">
                                 {/* Install and Update run the SAME handler, and
                                     that is the point of genie#212: one install

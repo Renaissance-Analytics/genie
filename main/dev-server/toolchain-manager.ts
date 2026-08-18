@@ -189,7 +189,7 @@ async function probeEngineVersion(tool: LanguageTool, exe: string): Promise<stri
 
 /** Resolve a bare bin name against PATH. `where`/`which` may print several
  *  lines — the FIRST is the one PATH would actually run. */
-async function resolveOnPath(bin: string): Promise<string | undefined> {
+export async function resolveOnPath(bin: string): Promise<string | undefined> {
     try {
         const isWin = process.platform === 'win32';
         const res = await defaultCommandRunner.run(isWin ? 'where' : 'which', [bin], {

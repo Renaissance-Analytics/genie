@@ -305,6 +305,10 @@ describe('tool update rows', () => {
             tone: 'update-available',
             action: 'update',
             source: 'package-manager',
+            // An update whose path was never resolved carries no origin, and
+            // `managed` is FALSE for it — Genie must not claim a tool it cannot
+            // show it installed (genie#213).
+            managed: false,
         });
     });
 
@@ -425,5 +429,69 @@ describe('engineInstalledNote', () => {
         expect(engineInstalledNote(engine({ engine: 'custom', label: 'Ollama' }))).toContain(
             'Ollama',
         );
+    });
+});
+
+// --- where a tool came from (genie#213) -------------------------------------
+//
+// The Languages tab has always been able to say who installed a version and
+// which directory it is; the Dev tools tab could not, so half the page could not
+// answer "which git answered?" on a machine carrying more than one. These assert
+// the row surfaces both, and — the part that actually matters — that it never
+// claims Genie owns something Genie did not install.
+
+describe('a tool row states its origin', () => {
+    const update = (origin?: ToolUpdate['origin']): ToolUpdate => ({
+        name: 'git',
+        installed: '2.42.0',
+        updateAvailable: false,
+        source: 'package-manager',
+        ...(origin ? { origin } : {}),
+    });
+
+    it('names the installer and the directory', () => {
+        const row = toolUpdateRow(
+            update({
+                managedByGenie: false,
+                source: 'winget',
+                directory: 'C:\Users\dev\AppData\Local\Microsoft\WinGet\Links',
+            }),
+        );
+
+        expect(row.originLabel).toBe('winget');
+        expect(row.directory).toBe('C:\Users\dev\AppData\Local\Microsoft\WinGet\Links');
+        expect(row.managed).toBe(false);
+    });
+
+    it('marks a Genie install as managed — the ones Genie may update', () => {
+        const row = toolUpdateRow(
+            update({ managedByGenie: true, source: 'genie', directory: '/root/toolchain/git/bin' }),
+        );
+
+        expect(row.originLabel).toBe('Genie');
+        expect(row.managed).toBe(true);
+    });
+
+    it('says nothing rather than guessing when the path could not be resolved', () => {
+        // No origin at all — an older main, or a machine with no working
+        // where/which. The row must not invent a location, and must not default
+        // to "managed": offering to update something Genie does not own is the
+        // one wrong answer here.
+        const row = toolUpdateRow(update());
+
+        expect(row.originLabel).toBeUndefined();
+        expect(row.directory).toBeUndefined();
+        expect(row.managed).toBe(false);
+    });
+
+    it('keeps the directory when the installer is unknown', () => {
+        // A hand-rolled location says nothing about WHO, but "which git
+        // answered?" is still answered by WHERE — and that is most of the value.
+        const row = toolUpdateRow(
+            update({ managedByGenie: false, source: 'unknown', directory: '/opt/custom/bin' }),
+        );
+
+        expect(row.originLabel).toBeUndefined();
+        expect(row.directory).toBe('/opt/custom/bin');
     });
 });

@@ -652,13 +652,37 @@ export type ToolchainUpdateSource =
     | 'npm-global'
     | 'registry'
     | 'unknown';
+/** Who installed a TOOL, as far as its resolved path can say (genie#213).
+ *  Mirrors main/dev-server/tool-install-origin.ts. */
+export type ToolInstallSource =
+    | 'genie'
+    | 'winget'
+    | 'program-files'
+    | 'homebrew'
+    | 'npm-global'
+    | 'system'
+    | 'unknown';
+
+export interface ToolInstallOrigin {
+    /** True only for a binary inside Genie's own toolchain root — the ones Genie
+     *  may update. */
+    managedByGenie: boolean;
+    source: ToolInstallSource;
+    /** The directory holding the binary. */
+    directory?: string;
+}
+
 /** One installed tool's update status (`devServer.toolchainUpdates`). */
 export interface ToolUpdate {
     name: HostToolName;
     installed?: string;
     latest?: string;
     updateAvailable: boolean;
+    /** Where the LATEST version number was learned. Not to be confused with
+     *  {@link origin}, which is who installed the thing. */
     source: ToolchainUpdateSource;
+    /** Who installed it and where, when the path could be resolved. */
+    origin?: ToolInstallOrigin;
 }
 
 // --- multi-version languages (the Toolchain page) --------------------------
