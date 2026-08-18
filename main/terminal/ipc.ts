@@ -41,6 +41,7 @@ import { buildTerminalEnv } from './terminal-env';
 import { computeOrphans } from './orphans';
 import { buildProcessArgs } from './process-spawn';
 import { devServiceHostEnvFor } from '../dev-server';
+import { terminalServiceEnv } from '../dev-server/services/env-wiring';
 import {
     TerminalReadBuffer,
     type ReadResult,
@@ -870,12 +871,25 @@ export function registerTerminalIpc(): void {
             // PUBLISHED loopback ports (127.0.0.1:<port>) — the site container's env
             // names the engine container, which a host shell/process cannot resolve.
             // Inject that host-form service env into the pty ENVIRONMENT (applied at
-            // execution, never in a typed command), authoritative like the site's
-            // injected env, so an agent's `artisan test`/`tinker` in a terminal and a
-            // `queue:work` in a process both reach the DB/redis/reverb with nothing
-            // typed. (Host-native hosting, Wish #102.)
+            // execution, never in a typed command) so `psql` and friends reach the
+            // workspace's services with nothing typed. (Host-native hosting, Wish
+            // #102.)
+            //
+            // NARROWED through `terminalServiceEnv` (genie#221). This used to hand a
+            // terminal the app's own configuration too — `DB_CONNECTION`,
+            // `DB_DATABASE`, the lot — so that `artisan test` would "reach the DB
+            // with nothing typed". It did: running a Laravel suite here dropped the
+            // development database and reported `99 passed`. PHPUnit's `<env>` is
+            // `force="false"`, so the `sqlite`/`:memory:` lines every Laravel
+            // skeleton ships were skipped because the variable was already set, and
+            // `RefreshDatabase` ran `migrate:fresh` against the live Postgres.
+            //
+            // A terminal now gets the CLIENT credentials (`PG*`, `MYSQL_*`) and the
+            // rest under `GENIE_`. SITES and PROCESSES still receive the full set —
+            // they ARE the application; an interactive shell is where a test suite
+            // gets typed.
             if (spec?.workspace_id) {
-                const svcEnv = devServiceHostEnvFor(spec.workspace_id);
+                const svcEnv = terminalServiceEnv(devServiceHostEnvFor(spec.workspace_id));
                 if (Object.keys(svcEnv).length) {
                     opts = { ...opts, env: { ...opts.env, ...svcEnv } };
                 }

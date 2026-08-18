@@ -260,3 +260,54 @@ export function serviceEnv(entries: ProvisionedService[]): Record<string, string
 
     return env;
 }
+
+// --- what an interactive TERMINAL may inherit (genie#221) --------------------
+
+/**
+ * Names a framework reads as ITS OWN datastore configuration.
+ *
+ * Ambient values for these silently outrank a project's test settings, which is
+ * how a Laravel suite run from a Genie terminal came to drop the development
+ * database while reporting `99 passed`: PHPUnit's `<env>` defaults to
+ * `force="false"`, so the `DB_CONNECTION=sqlite` / `DB_DATABASE=:memory:` lines
+ * every Laravel skeleton ships were skipped because Genie had already exported
+ * `DB_CONNECTION`. `RefreshDatabase` then ran `migrate:fresh` against the live
+ * workspace Postgres.
+ *
+ * `force="true"` is not a fix either: PHPUnit writes `<env>` to `$_ENV` and
+ * `putenv()` and never to `$_SERVER`, and Laravel's Dotenv chain consults
+ * `$_SERVER` first — where the shell's variables are.
+ *
+ * Only DATASTORES are listed. These are the ones a test run will DESTROY —
+ * `migrate:fresh` drops the schema, a cache flush empties Redis. `MAIL_*`,
+ * `REVERB_*` and `AWS_*` are left alone: shadowing them cannot lose data, and
+ * taking them away would break a dev server started from a terminal for no gain.
+ */
+const TERMINAL_RESERVED = /^(DATABASE_URL$|DB_|REDIS_)/;
+
+/**
+ * The service env an interactive TERMINAL is allowed to inherit.
+ *
+ * A terminal gets the CLIENT credentials, not the APPLICATION's configuration:
+ * `PG*`/`MYSQL_*` pass through (that is what makes `psql` work with nothing
+ * typed, and nothing treats them as an app's datastore), while the framework's
+ * own names are moved under `GENIE_` — withheld from being picked up by
+ * accident, but still there for an agent that wants the managed connection.
+ *
+ * SITES and PROCESSES do NOT go through here and are unchanged: a served app and
+ * a `queue:work` ARE the application and need its configuration. The narrowing
+ * is only where a test suite gets typed.
+ */
+export function terminalServiceEnv(env: Record<string, string>): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const [key, value] of Object.entries(env)) {
+        if (key.startsWith('GENIE_')) {
+            out[key] = value;
+        } else if (TERMINAL_RESERVED.test(key)) {
+            out[`GENIE_${key}`] = value;
+        } else {
+            out[key] = value;
+        }
+    }
+    return out;
+}
