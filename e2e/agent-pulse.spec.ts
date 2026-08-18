@@ -129,14 +129,23 @@ async function differingPixels(a: string, b: string): Promise<number> {
     );
 }
 
-/** Alpha of the row's resolved background — 1 once the hover fill applies. */
+/** Alpha of the strongest background the row paints — 1 once the hover fill
+ *  applies. Reads the head AND its `::after`, because which layer carries the
+ *  fill is an implementation detail this spec should not pin: the question being
+ *  asked is "is the row painting an opaque fill?", and that did not change when
+ *  the fix moved the fill from one to the other. */
 async function headBackgroundAlpha(): Promise<number> {
     return head().evaluate((el) => {
-        const bg = getComputedStyle(el).backgroundColor;
-        const m = /rgba?\(([^)]+)\)/.exec(bg);
-        if (!m) return 0;
-        const parts = m[1]!.split(',').map((s) => parseFloat(s));
-        return parts.length < 4 ? 1 : parts[3]!;
+        const alphaOf = (bg: string) => {
+            const m = /rgba?\(([^)]+)\)/.exec(bg);
+            if (!m) return 0;
+            const parts = m[1]!.split(',').map((s) => parseFloat(s));
+            return parts.length < 4 ? 1 : parts[3]!;
+        };
+        return Math.max(
+            alphaOf(getComputedStyle(el).backgroundColor),
+            alphaOf(getComputedStyle(el, '::after').backgroundColor),
+        );
     });
 }
 

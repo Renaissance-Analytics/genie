@@ -1916,7 +1916,31 @@
     font: inherit;
     text-align: left;
 }
-.tproj-head:hover {
+/* The hover fill is painted by a LAYER BEHIND the sparkline, not by the head's
+   own background (genie#197).
+
+   The first fix put the sparkline inside the head at z-index:-1, on the theory
+   that a negative-z child paints above its parent's background. On Linux and
+   Windows it does, and e2e/agent-pulse.spec.ts measures the pulse surviving the
+   hover there. On macOS the same DOM and the same computed styles produced a
+   covered pulse — ~7,500 differing pixels idle against ~780 hovered — which is
+   what a `<button>` painting its own control background will do.
+
+   So the fill stops being the head's background and becomes its own layer at
+   z-index:-2. Ordering two negative-z siblings is ordinary z-ordering rather than
+   the background-versus-negative-child case the platforms disagreed about, and
+   the sparkline at -1 sits above it on all three. Hover looks identical. */
+.tproj-head::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -2;
+    border-radius: inherit;
+    background: transparent;
+    transition: background var(--dur-fast) var(--ease-out);
+    pointer-events: none;
+}
+.tproj-head:hover::after {
     background: var(--bg-2);
 }
 .tproj-head .chev {
