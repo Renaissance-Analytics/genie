@@ -16,8 +16,10 @@ const WORKSPACE_NAME = 'Pulse Fixture';
 
 export interface PulseFixture {
     workspaceId: string;
-    /** Push one activity sample, exactly as a terminal's bytes would. */
-    emit: (bytes: number) => void;
+    /** Push one activity sample, exactly as a terminal's bytes would.
+     *  `active` drives the row's agent-active styling; the ring fills from
+     *  `bytes` regardless, so a spec can get a sparkline WITHOUT it. */
+    emit: (bytes: number, active: boolean) => void;
 }
 
 export function seedAgentPulseE2E(): PulseFixture {
@@ -43,10 +45,10 @@ export function seedAgentPulseE2E(): PulseFixture {
 
     const fixture: PulseFixture = {
         workspaceId: WORKSPACE_ID,
-        emit: (bytes: number) =>
+        emit: (bytes: number, active: boolean) =>
             broadcastLocal('agent-pulse', {
                 workspaceId: WORKSPACE_ID,
-                active: true,
+                active,
                 bytes,
             }),
     };
