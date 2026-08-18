@@ -22,6 +22,7 @@ import {
 import { _resetAuditForTest, recentAudit } from '../audit';
 import { _resetBatonForTest } from '../baton';
 import { _resetBridgeForTest } from '../terminal-bridge';
+import { MOUSE_REPORTING_OFF } from '../../terminal/replay';
 import type { MobileDataDeps } from '../api';
 
 /**
@@ -69,6 +70,10 @@ const resizes: Array<{ id: string; cols: number; rows: number }> = [];
 let setupWired = true;
 let setupCompleteCalls = 0;
 const SETUP_WS_ID = '__genie_setup__';
+// What the host's pty scrollback holds — the bytes a `/ws/term` attach replays as
+// its catch-up frame. A test that cares about REPLAY SANITISING (genie#202/#200)
+// swaps in a stream with a dead TUI's device probes + mouse-tracking enables.
+let scrollbackValue = 'catch-up-scrollback';
 
 function buildAppDir(): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'genie-mobile-it-'));
@@ -149,7 +154,7 @@ const deps = (): MobileDataDeps => ({
         return true;
     },
     readTerminalOutput: () => ({ data: '', cursor: 0, dropped: false }),
-    getScrollback: () => 'catch-up-scrollback',
+    getScrollback: () => scrollbackValue,
     resize: (id: string, cols: number, rows: number) => {
         resizes.push({ id, cols, rows });
         return true;
@@ -301,6 +306,7 @@ beforeEach(() => {
     resizes.length = 0;
     setupWired = true;
     setupCompleteCalls = 0;
+    scrollbackValue = 'catch-up-scrollback';
 });
 
 afterEach(() => {
@@ -628,9 +634,16 @@ describe('mobile server (integration, 127.0.0.1)', () => {
             `ws://127.0.0.1:${port}/ws/term?terminal=t-1&token=${token}`,
             frames,
         );
-        // Catch-up scrollback arrives first.
+        // Catch-up scrollback arrives first — history, then the replay epilogue
+        // that clears any mouse tracking the history left on (genie#202/#200).
         await new Promise((r) => setTimeout(r, 30));
-        expect(frames.some((f) => f.type === 'data' && f.data === 'catch-up-scrollback')).toBe(true);
+        expect(
+            frames.some(
+                (f) =>
+                    f.type === 'data' &&
+                    f.data === 'catch-up-scrollback' + MOUSE_REPORTING_OFF,
+            ),
+        ).toBe(true);
 
         // Phone input → writeToTerminal mock.
         ws.send(JSON.stringify({ type: 'input', data: 'ls\r' }));
@@ -641,6 +654,60 @@ describe('mobile server (integration, 127.0.0.1)', () => {
         mobileTermFanout('t-1', 'hello from pty');
         await new Promise((r) => setTimeout(r, 60));
         expect(frames.some((f) => f.type === 'data' && f.data === 'hello from pty')).toBe(true);
+        ws.close();
+    });
+
+    it('/ws/term catch-up replays history WITHOUT answering its device probes or leaving mouse tracking on', async () => {
+        // genie#202 / genie#200. The host pty's ring holds an agent TUI that probed
+        // the terminal and enabled mouse tracking, then was KILLED — so the ring has
+        // the enables and none of the matching disables. Replayed raw into the
+        // client's fresh xterm, the probes get ANSWERED (the replies are typed back
+        // into the pty, landing as `^[[?1;2c` garbage on the shell prompt) and the
+        // emulator re-enters mouse-tracking mode (pointer moves stream SGR reports at
+        // the shell, and drags stop selecting text).
+        scrollbackValue =
+            '\x1b[?1049h' +
+            '\x1b[c' + // DA1 probe → xterm would answer ESC[?1;2c
+            '\x1b[>0q' + // XTVERSION probe → xterm would answer a DCS
+            '\x1b]11;?\x07' + // OSC background query → another reply
+            '\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h' + // mouse tracking ON
+            '\x1b[1;32mclaude\x1b[0m ready\r\nuser@box:~$ ';
+        const port = await start();
+        const token = await pair(port);
+        const frames: any[] = [];
+        const ws = await openWs(
+            `ws://127.0.0.1:${port}/ws/term?terminal=t-1&token=${token}&client=desktop`,
+            frames,
+        );
+        await new Promise((r) => setTimeout(r, 30));
+        const catchUp = frames.find((f) => f.type === 'data');
+        expect(catchUp).toBeTruthy();
+
+        // No question from the past is left for the client's emulator to answer.
+        expect(catchUp.data).not.toContain('\x1b[c');
+        expect(catchUp.data).not.toContain('\x1b[>0q');
+        expect(catchUp.data).not.toContain('\x1b]11;?');
+        // The visible history still renders (this is NOT a blanket escape strip).
+        expect(catchUp.data).toContain('\x1b[1;32mclaude\x1b[0m ready');
+        expect(catchUp.data).toContain('\x1b[?1049h');
+        // …and the frame ends with mouse reporting disabled.
+        expect(catchUp.data.endsWith(MOUSE_REPORTING_OFF)).toBe(true);
+        ws.close();
+    });
+
+    it('/ws/term sends no catch-up frame at all when the pty has no scrollback', async () => {
+        // Nothing to repaint ⇒ nothing to correct. A bare reset here would fight a
+        // program that is starting up right now in a freshly spawned pty.
+        scrollbackValue = '';
+        const port = await start();
+        const token = await pair(port);
+        const frames: any[] = [];
+        const ws = await openWs(
+            `ws://127.0.0.1:${port}/ws/term?terminal=t-1&token=${token}`,
+            frames,
+        );
+        await new Promise((r) => setTimeout(r, 30));
+        expect(frames.filter((f) => f.type === 'data')).toEqual([]);
         ws.close();
     });
 
