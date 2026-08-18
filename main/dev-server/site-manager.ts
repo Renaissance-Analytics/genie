@@ -440,10 +440,14 @@ export function siteLocalReach(site: {
     port: number;
     /** True when that port is the sandbox's Caddy (TLS, routed by SNI). */
     sniTls: boolean;
-}): { localOrigin: string; localCurl: string } {
+}): { localOrigin: string; localCurl?: string } {
     if (!site.sniTls) {
-        const origin = `http://127.0.0.1:${site.port}`;
-        return { localOrigin: origin, localCurl: `curl -s ${origin}/` };
+        // NO curl command. The dev server holds this port itself and speaks plain
+        // http, so the command would be `curl -s <the origin printed directly
+        // above it>` — the same field twice. The line exists for the case below,
+        // where the URL genuinely cannot be dialed unaided; a card that repeats
+        // itself teaches people to skim past the lines that do carry something.
+        return { localOrigin: `http://127.0.0.1:${site.port}` };
     }
     const origin = `https://${site.genName}:${site.port}`;
     return {
@@ -1298,7 +1302,12 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             hostPort: entry.caddyHostPort,
             // The `.gen` origin exists only for an HTTP surface.
             ...(config.kind === 'http' ? { origin: `https://${config.genName}` } : {}),
-            ...(local ? { localOrigin: local.localOrigin, localCurl: local.localCurl } : {}),
+            ...(local
+                ? {
+                      localOrigin: local.localOrigin,
+                      ...(local.localCurl ? { localCurl: local.localCurl } : {}),
+                  }
+                : {}),
         };
     }
 

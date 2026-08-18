@@ -141,6 +141,24 @@ export function canOpenInBrowser(site: DevSiteInfo): boolean {
     return site.kind === 'http' && site.state === 'running' && site.ready !== false;
 }
 
+/**
+ * The port the site card may say the site LISTENS ON — or nothing.
+ *
+ * Only meaningful when the site runs the REPO's own dev server: there the port
+ * is the one that server binds, the person chose it, and Edit offers it.
+ *
+ * When GENIE serves the site itself (`hostServe` static/php) it allocates a free
+ * port at start, so the configured `port` is dead config — often a leftover from
+ * before the site was switched to that mode. Printing it put two different
+ * numbers on one card, only one of which anything was listening on, and pointed
+ * at a field the Edit dialog deliberately hides because the port is host-owned.
+ * The published address is already shown in full under "On this machine".
+ */
+export function siteListensOn(site: DevSiteInfo): number | undefined {
+    if (site.hostServe) return undefined;
+    return site.port;
+}
+
 export interface SiteReach {
     /** The `.gen` origin — works here AND from a connected remote. */
     browser: string | null;

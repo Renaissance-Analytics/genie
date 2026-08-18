@@ -1643,7 +1643,7 @@ const MANAGE_SITE_TOOL = {
                     root: {
                         type: 'string',
                         description:
-                            'The repo-RELATIVE directory to serve — a built front end (`dist`, `dashboard/dist`) for static; the app root for php (Genie serves its `public/`).',
+                            'The repo-RELATIVE DOCUMENT ROOT — served exactly as given. A built front end (`dist`, `dashboard/dist`) for static; for php the web root, which for Laravel and most PHP apps is `public/` and NOT the app root — pointing it at the app root would publish `.env` and `.git`.',
                     },
                     spa: {
                         type: 'boolean',
@@ -1658,7 +1658,7 @@ const MANAGE_SITE_TOOL = {
                 },
                 required: ['mode', 'root'],
                 description:
-                    'create: THE PREFERRED WAY to host a site. GENIE serves it with its own web server — you point at a repo and a ROOT, declare the mode, and Genie writes the config (no hand-rolled nginx/Caddy), owns the port and answers on `<name>.gen`. No `command`/`port` needed. A PHP/Laravel app points at the app root (Genie serves its `public/`); a built front end points at `dist`. Use a repo dev server (`command`+`port`) or an already-running one (`hostPort`) only when Genie cannot serve that stack, or you want HMR against live source. update: pass `null` to CLEAR it — switch back to the repo’s own dev server.',
+                    'create: THE PREFERRED WAY to host a site. GENIE serves it with its own web server — you point at a repo and a ROOT, declare the mode, and Genie writes the config (no hand-rolled nginx/Caddy), owns the port and answers on `<name>.gen`. No `command`/`port` needed. A PHP/Laravel app points at its WEB ROOT — `public/`, not the app root, which would publish `.env` and `.git`; a built front end points at `dist`. Use a repo dev server (`command`+`port`) or an already-running one (`hostPort`) only when Genie cannot serve that stack, or you want HMR against live source. update: pass `null` to CLEAR it — switch back to the repo’s own dev server.',
             },
             exposed: {
                 type: 'array',

@@ -49,6 +49,7 @@ import {
     serviceVersionChoice,
     siteIsStarting,
     sitePhaseBadge,
+    siteListensOn,
     siteReach,
     siteRunLine,
     siteStatusLabel,
@@ -493,6 +494,7 @@ function SiteCard({
 
     const tone = siteStatusTone(view);
     const reach = siteReach(view);
+    const listensOn = siteListensOn(view);
     const starting = siteIsStarting(view);
     // What the site actually RUNS. A Genie-SERVED site (hostServe) has no stored
     // argv that means anything — Genie generates its Caddy at start — so this
@@ -531,7 +533,7 @@ function SiteCard({
                     </Text>
                     <Text size="xs" className="text-zinc-500">
                         {view.repo ? `repos/${view.repo}` : 'the workspace root'}
-                        {view.port ? ` · listens on :${view.port}` : ''}
+                        {listensOn ? ` · listens on :${listensOn}` : ''}
                     </Text>
                 </div>
             </div>
@@ -1076,7 +1078,7 @@ function ServeModeFields({
                     />
                     <small className="site-field-hint">
                         {mode === 'php'
-                            ? "Repo-relative app root — Genie serves its public/ over a FastCGI PHP worker (the nginx/Valet model). No command, no hand-written web-server config."
+                            ? 'Repo-relative DOCUMENT ROOT — for Laravel and most PHP apps that is public/, not the app root. Genie serves exactly this directory and hands .php to a FastCGI worker (the nginx/Valet model). No command, no hand-written web-server config. Pointing it at the app root would publish .env and .git.'
                             : 'Repo-relative built folder — Genie serves it with its own file server. No dev command, no hand-written web-server config.'}
                     </small>
                 </label>

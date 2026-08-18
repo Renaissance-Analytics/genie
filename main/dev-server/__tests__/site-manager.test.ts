@@ -1010,7 +1010,11 @@ describe('service env injection (#234 P3)', () => {
             SITE_ID,
         );
         expect(status.localOrigin).toBe('http://127.0.0.1:8001');
-        expect(status.localCurl).toBe('curl -s http://127.0.0.1:8001/');
+        // NO curl command for a host-native site. `curl -s <localOrigin>/` is the
+        // origin on the line above with a verb in front of it, and the card was
+        // printing both. The command is for the container case, where the URL
+        // cannot be dialed unaided (genie#195).
+        expect(status.localCurl).toBeUndefined();
     });
 
     it('exposes a browser-opted-in host-native site to the external-browser reconcile (story #238 P2)', async () => {
