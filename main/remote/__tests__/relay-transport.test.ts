@@ -15,6 +15,7 @@ import {
     remoteReconnect,
 } from '../index';
 import { PopKeypair, popSignedInput } from '../relay-pop';
+import { MOUSE_REPORTING_OFF } from '../../terminal/replay';
 
 /**
  * Integration coverage for the RELAY transport wiring (increment 2): drive a
@@ -271,6 +272,50 @@ describe('relay transport — bridge ops route through the relay', () => {
                 data: 'hello-pty',
             }),
         );
+    });
+
+    it('clears mouse tracking after the host’s catch-up frame, once per attach', async () => {
+        // genie#202 / genie#200. The host replays its pty scrollback as the FIRST
+        // data frame after an attach. That history can hold an `ESC[?1002h` from a
+        // TUI that was killed before it could restore, so a fresh xterm comes up
+        // reporting the pointer for a program that is gone: SGR spam at the shell
+        // prompt, and drags eaten instead of selecting text. Genie's own hosts now
+        // sanitise the frame themselves, but a genie-cloud/older host does not — so
+        // the client appends the disable itself, exactly once per attach.
+        const win = fakeWindow(WC_ID);
+        vi.spyOn(BrowserWindow, 'getAllWindows').mockReturnValue([
+            win,
+        ] as unknown as Electron.BrowserWindow[]);
+
+        remoteAttachTerminal(WC_ID, 't-mouse');
+        await stub.waitFor((f) => f.channel === 'term' && f.kind === 'open');
+
+        stub.pushTerm({ type: 'data', data: 'history\x1b[?1002h' });
+        await vi.waitFor(() =>
+            expect(win.webContents.send).toHaveBeenCalledWith('terminal:data', {
+                id: 't-mouse',
+                data: MOUSE_REPORTING_OFF,
+            }),
+        );
+        const afterCatchUp = win.webContents.send.mock.calls.filter(
+            (c) => c[0] === 'terminal:data' && c[1].data === MOUSE_REPORTING_OFF,
+        ).length;
+        expect(afterCatchUp).toBe(1);
+
+        // LIVE output that follows is not history — it must pass through untouched,
+        // so an app that turns tracking on after the attach keeps it.
+        stub.pushTerm({ type: 'data', data: 'live\x1b[?1002h' });
+        await vi.waitFor(() =>
+            expect(win.webContents.send).toHaveBeenCalledWith('terminal:data', {
+                id: 't-mouse',
+                data: 'live\x1b[?1002h',
+            }),
+        );
+        expect(
+            win.webContents.send.mock.calls.filter(
+                (c) => c[0] === 'terminal:data' && c[1].data === MOUSE_REPORTING_OFF,
+            ).length,
+        ).toBe(1);
     });
 
     it('remoteTerminalInput forwards keystrokes as a term data frame', async () => {

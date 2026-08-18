@@ -14,6 +14,9 @@ import {
     PASTE_TRIGGER_ALT_V,
 } from '../../lib/terminal-image-paste';
 import { findUrls } from '../../lib/terminal-links';
+// Replaying a pty's scrollback is HISTORY, not live output — see the module for
+// why raw bytes must not reach a fresh emulator (genie#202, genie#200).
+import { sanitizeReplay, stripReplayQueries } from '../../../main/terminal/replay';
 import '@xterm/xterm/css/xterm.css';
 
 interface TerminalProps {
@@ -644,7 +647,16 @@ export default function Terminal({
                     // Replay the scrollback so this window catches up. Do NOT
                     // replay the on-disk snapshot — the live buffer supersedes
                     // it and double-drawing would duplicate history.
-                    if (res.scrollback) handle.write(res.scrollback);
+                    //
+                    // SANITISED (genie#202/#200): the scrollback is raw pty bytes,
+                    // and this xterm is FRESH — so replaying it verbatim makes the
+                    // emulator ANSWER the TUI's recorded device probes (the replies
+                    // go straight back into the pty and land as `^[[?1;2c` on the
+                    // prompt) and re-enter mouse-tracking mode on behalf of a TUI
+                    // that may have been killed before it could restore, which is
+                    // what streams SGR reports at a bare shell and stops drags from
+                    // selecting text. See main/terminal/replay.ts.
+                    if (res.scrollback) handle.write(sanitizeReplay(res.scrollback));
                 } else if (res.snapshot?.serialized) {
                     // Cold spawn with a previous-session snapshot. Frame it:
                     // restored history → dim divider → full reset (\x1bc) so
@@ -652,7 +664,14 @@ export default function Terminal({
                     // history. The reset clears any alt-screen/TUI state the
                     // snapshot captured (e.g. quitting inside vim), which is
                     // why we serialize rather than raw-replay.
-                    handle.write(res.snapshot.serialized);
+                    //
+                    // Queries are stripped for the same reason as the warm path:
+                    // the trailing \x1bc resets the emulator's MODES, but it comes
+                    // too late to stop a reply — xterm answers a probe the instant
+                    // the replay writes it, so the garbage is already on its way to
+                    // the pty. (A T1 snapshot of a windowless pty is raw scrollback,
+                    // not a serialized buffer — see snapshotHostTerminalsForUpdate.)
+                    handle.write(stripReplayQueries(res.snapshot.serialized));
                     handle.write('\r\n\x1b[2m— previous session —\x1b[0m\r\n');
                     handle.write('\x1bc');
                 }

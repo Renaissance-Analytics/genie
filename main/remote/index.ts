@@ -9,6 +9,7 @@ import { getAllSettings } from '../db';
 import { resolveAlertSound } from '../notify-sound';
 import { shouldForwardToDriver } from './forward-decision';
 import { isUsableGrid } from '../terminal/size-tracker';
+import { MOUSE_REPORTING_OFF } from '../terminal/replay';
 import {
     BRIDGE_PROTOCOL_VERSION,
     LIMBO_TIMEOUT_MS,
@@ -167,6 +168,15 @@ interface RemoteConnection {
      * `remoteDetachTerminal` clears an id from here.
      */
     attachedTerminals: Set<string>;
+    /**
+     * Terminal ids whose stream has been (re)opened but whose HISTORY catch-up
+     * frame has not arrived yet. The host replays its scrollback as the first data
+     * frame after an attach; `handleTermMessage` uses this to tell that one frame
+     * apart from live output, so it can clear any mouse tracking the replayed
+     * history turned on without ever touching what the live program emits
+     * afterwards (genie#202, genie#200 — see main/terminal/replay.ts).
+     */
+    termCatchUpPending: Set<string>;
     /**
      * SOMEBODY ELSE holds the host's baton => this driver is VIEW-ONLY. The single
      * source of truth for "who holds control", mirrored from the host's `locked`
@@ -1438,6 +1448,20 @@ function handleTermMessage(conn: RemoteConnection, id: string, raw: string): voi
         };
         if (msg.type === 'data' && typeof msg.data === 'string') {
             emitToConn(conn, 'terminal:data', { id, data: msg.data });
+            // The FIRST data frame after an attach is the host's scrollback
+            // catch-up — HISTORY, not live output (the host sends it the instant
+            // the stream is up, before it will accept any input). That history can
+            // carry an `ESC[?1002h` from a TUI killed before it could restore, so
+            // the fresh xterm comes up reporting the pointer for a program that is
+            // gone: SGR spam at a bare shell prompt (genie#202) and drags eaten
+            // instead of selecting text (genie#200). A Genie host now sanitises its
+            // own catch-up frame (mobile/server.ts), but a genie-cloud or older host
+            // does not — so clear tracking here too, exactly once per attach. Live
+            // frames after this one pass through untouched, so an app that turns
+            // tracking on AFTER the attach keeps it.
+            if (conn.termCatchUpPending.delete(id)) {
+                emitToConn(conn, 'terminal:data', { id, data: MOUSE_REPORTING_OFF });
+            }
         } else if (msg.type === 'exit') {
             emitToConn(conn, 'terminal:exit', { id, exitCode: msg.exitCode ?? 0, signal: msg.signal });
         }
@@ -1463,6 +1487,8 @@ function handleTermMessage(conn: RemoteConnection, id: string, raw: string): voi
  */
 function relayAttachTerminal(conn: RemoteConnection, id: string, workspaceId?: string): void {
     if (!conn.relay || conn.relayTerms.has(id)) return;
+    // The next data frame on this stream is the host's scrollback catch-up.
+    conn.termCatchUpPending.add(id);
     if (!conn.relayTermMultiplex) {
         for (const [otherId, stream] of conn.relayTerms) {
             try {
@@ -1492,6 +1518,8 @@ function relayAttachTerminal(conn: RemoteConnection, id: string, workspaceId?: s
 function openHostTermSocket(conn: RemoteConnection, id: string, replayReset: boolean): void {
     if (conn.termWs.has(id)) return;
     if (replayReset) emitToConn(conn, 'terminal:data', { id, data: '\x1bc' });
+    // The next data frame on this socket is the host's scrollback catch-up.
+    conn.termCatchUpPending.add(id);
     // `client=desktop`: we're a full Genie window, not the phone viewer — the host
     // applies our grid exactly instead of running it through the phone's grow-only
     // clamp. An old host ignores the param and keeps the previous behavior.
@@ -1640,6 +1668,8 @@ export function remoteDetachTerminal(wcId: number, id: string): void {
     // reused id never re-applies a stale size.
     conn.attachedTerminals.delete(id);
     conn.termSize.delete(id);
+    // No stream ⇒ no catch-up to wait for. A later re-attach re-arms it.
+    conn.termCatchUpPending.delete(id);
     if (conn.transport === 'relay') {
 
         const stream = conn.relayTerms.get(id);
@@ -1868,6 +1898,7 @@ async function connectRemoteInner(
         termWs: new Map(),
         termSize: new Map(),
         attachedTerminals: new Set(),
+        termCatchUpPending: new Set(),
         controlLocked: seedLocked,
         controlHolder: seedHolder,
 
@@ -2005,6 +2036,7 @@ async function connectWorkstationInner(
         termWs: new Map(),
         termSize: new Map(),
         attachedTerminals: new Set(),
+        termCatchUpPending: new Set(),
         controlLocked: false,
         controlHolder: null,
 

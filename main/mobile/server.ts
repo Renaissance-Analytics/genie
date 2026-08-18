@@ -25,6 +25,7 @@ import {
     setTerminalRepaintHandler,
 } from './terminal-bridge';
 import { isUsableGrid } from '../terminal/size-tracker';
+import { sanitizeReplay } from '../terminal/replay';
 import {
     initAuth,
     validateSession,
@@ -534,9 +535,15 @@ function attachTerminalSocketAndDrive(
     }
     const principal = sessionPrincipal(session);
 
-    // Catch-up: send the current scrollback so the phone paints history at once.
+    // Catch-up: send the current scrollback so the client paints history at once.
+    // SANITISED first (genie#202/#200): the ring is raw pty bytes, so replaying it
+    // into the client's fresh emulator would make it answer the recorded device
+    // probes (the replies are typed straight back into the pty and land as
+    // `^[[?1;2c` garbage on the prompt) and re-enter mouse-tracking mode on behalf
+    // of a TUI that may have died without restoring — which is what streams SGR
+    // reports at a bare shell and stops drags from selecting text. See replay.ts.
     try {
-        const scrollback = deps.data.getScrollback(terminalId);
+        const scrollback = sanitizeReplay(deps.data.getScrollback(terminalId));
         if (scrollback && ws.readyState === 1) {
             ws.send(JSON.stringify({ type: 'data', data: scrollback }));
         }
