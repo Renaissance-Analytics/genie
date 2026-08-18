@@ -50,10 +50,14 @@ const head = () => page.locator('.tproj-head').first();
 
 /** Put the row back in the state the sparkline renders in. Tests call this
  *  rather than assuming the previous one left it collapsed — a failure part-way
- *  through the metric guard would otherwise cascade into every test after it. */
+ *  through the metric guard would otherwise cascade into every test after it.
+ *
+ *  NOTE the chevron's title names the ACTION, not the state: an EXPANDED row
+ *  offers "Collapse". So collapsing means clicking the button titled Collapse,
+ *  and its absence means the row is already collapsed. */
 async function ensureCollapsed(): Promise<void> {
-    const expand = page.locator('.tproj-head [title="Expand"]').first();
-    if (await expand.count()) await expand.click();
+    const collapse = page.locator('.tproj-head [title="Collapse"]').first();
+    if (await collapse.count()) await collapse.click();
     await expect(page.locator('.agent-pulse-spark')).toBeVisible();
 }
 
