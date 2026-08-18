@@ -234,6 +234,37 @@ test.afterAll(async () => {
     await app?.close();
 });
 
+test('DIAGNOSTIC — dump every number and style at once', async () => {
+    const { cU, cH, eU, eH } = await takeShots();
+    const styles = await spark()
+        .first()
+        .evaluate((el) => {
+            const headEl = el.closest('.tproj-head') as HTMLElement | null;
+            const cs = getComputedStyle(el);
+            return {
+                sparkZ: cs.zIndex,
+                sparkOpacity: cs.opacity,
+                sparkDisplay: cs.display,
+                sparkRect: JSON.stringify(el.getBoundingClientRect()),
+                headRect: headEl ? JSON.stringify(headEl.getBoundingClientRect()) : 'none',
+                afterZ: headEl ? getComputedStyle(headEl, '::after').zIndex : 'none',
+                afterContent: headEl ? getComputedStyle(headEl, '::after').content : 'none',
+                afterBg: headEl ? getComputedStyle(headEl, '::after').backgroundColor : 'none',
+                headBg: headEl ? getComputedStyle(headEl).backgroundColor : 'none',
+                pointsLen: (el.querySelector('.aps-line') as SVGPolylineElement | null)
+                    ?.getAttribute('points')?.length ?? -1,
+            };
+        });
+
+    expect({
+        sparkIdle: await differingPixels(cU, eU),
+        sparkHovered: await differingPixels(cH, eH),
+        hoverEffectCollapsed: await differingPixels(cU, cH),
+        hoverEffectExpanded: await differingPixels(eU, eH),
+        ...styles,
+    }).toEqual({ DUMP: true });
+});
+
 test('the sparkline is painted by the hovered element itself, not behind it', async () => {
     // FIRST, and deliberately: this reports the structural facts the pixel tests
     // depend on, before any collapse/expand toggling can fail and hide them. If
