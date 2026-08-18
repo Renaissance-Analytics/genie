@@ -129,23 +129,14 @@ async function differingPixels(a: string, b: string): Promise<number> {
     );
 }
 
-/** Alpha of the strongest background the row paints — 1 once the hover fill
- *  applies. Looks at the head AND its `::after`, because which of the two carries
- *  the fill is an implementation detail this spec should not pin: the fix for
- *  #197 moved it from one to the other, and the question being asked here ("is
- *  the row painting an opaque fill?") did not change when it did. */
+/** Alpha of the row's resolved background — 1 once the hover fill applies. */
 async function headBackgroundAlpha(): Promise<number> {
     return head().evaluate((el) => {
-        const alphaOf = (bg: string) => {
-            const m = /rgba?\(([^)]+)\)/.exec(bg);
-            if (!m) return 0;
-            const parts = m[1]!.split(',').map((s) => parseFloat(s));
-            return parts.length < 4 ? 1 : parts[3]!;
-        };
-        return Math.max(
-            alphaOf(getComputedStyle(el).backgroundColor),
-            alphaOf(getComputedStyle(el, '::after').backgroundColor),
-        );
+        const bg = getComputedStyle(el).backgroundColor;
+        const m = /rgba?\(([^)]+)\)/.exec(bg);
+        if (!m) return 0;
+        const parts = m[1]!.split(',').map((s) => parseFloat(s));
+        return parts.length < 4 ? 1 : parts[3]!;
     });
 }
 
@@ -175,6 +166,25 @@ interface Shots {
     eH: string;
 }
 
+/** Top the ring up.
+ *
+ * The sparkline is a LIVE 60-second window, not a static chart: the ring shifts
+ * once a second (`ring.shift(); ring.push(0)` in Chooser), so a burst written in
+ * one go scrolls out after sixty of them and the component then renders nothing
+ * at all. A spec that ran past that window measured an empty row and read it as a
+ * covered sparkline — which is exactly what happened, and cost several runs. Real
+ * activity keeps arriving, so the test keeps it arriving too. */
+async function freshPulses(): Promise<void> {
+    await app.evaluate(({}, samples) => {
+        const fixture = (globalThis as Record<string, unknown>).__GENIE_E2E_PULSE__ as
+            | { emit: (bytes: number, active: boolean) => void }
+            | undefined;
+        if (!fixture) throw new Error('__GENIE_E2E_PULSE__ missing — seed did not run');
+        for (const s of samples) fixture.emit(s, false);
+    }, [400, 1200, 300, 2400, 800, 1800, 200, 3000]);
+    await expect(spark()).toBeVisible();
+}
+
 async function takeShots(): Promise<Shots> {
     const hover = async () => {
         // hover(), not mouse.move() to the same point: on Windows the raw move
@@ -188,18 +198,23 @@ async function takeShots(): Promise<Shots> {
     };
 
     await setCollapsed(true);
+    await freshPulses();
     const region = await comparisonRegion();
 
+    // Each COMPARED pair is photographed back to back, so the two shots being
+    // subtracted are taken under the same conditions a second apart rather than
+    // at opposite ends of the sequence.
     await unhover();
     const cU = await shoot(region);
+    await setCollapsed(false);
+    const eU = await shoot(region);
+
+    await setCollapsed(true);
+    await freshPulses();
     await hover();
     const cH = await shoot(region);
-
     await setCollapsed(false);
-    await hover();
     const eH = await shoot(region);
-    await unhover();
-    const eU = await shoot(region);
 
     await setCollapsed(true);
     return { cU, cH, eU, eH };
@@ -232,37 +247,6 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
     await app?.close();
-});
-
-test('DIAGNOSTIC — dump every number and style at once', async () => {
-    const { cU, cH, eU, eH } = await takeShots();
-    const styles = await spark()
-        .first()
-        .evaluate((el) => {
-            const headEl = el.closest('.tproj-head') as HTMLElement | null;
-            const cs = getComputedStyle(el);
-            return {
-                sparkZ: cs.zIndex,
-                sparkOpacity: cs.opacity,
-                sparkDisplay: cs.display,
-                sparkRect: JSON.stringify(el.getBoundingClientRect()),
-                headRect: headEl ? JSON.stringify(headEl.getBoundingClientRect()) : 'none',
-                afterZ: headEl ? getComputedStyle(headEl, '::after').zIndex : 'none',
-                afterContent: headEl ? getComputedStyle(headEl, '::after').content : 'none',
-                afterBg: headEl ? getComputedStyle(headEl, '::after').backgroundColor : 'none',
-                headBg: headEl ? getComputedStyle(headEl).backgroundColor : 'none',
-                pointsLen: (el.querySelector('.aps-line') as SVGPolylineElement | null)
-                    ?.getAttribute('points')?.length ?? -1,
-            };
-        });
-
-    expect({
-        sparkIdle: await differingPixels(cU, eU),
-        sparkHovered: await differingPixels(cH, eH),
-        hoverEffectCollapsed: await differingPixels(cU, cH),
-        hoverEffectExpanded: await differingPixels(eU, eH),
-        ...styles,
-    }).toEqual({ DUMP: true });
 });
 
 test('the sparkline is painted by the hovered element itself, not behind it', async () => {
