@@ -129,6 +129,48 @@ export function withServiceCredentials(
     return { ...config, password: config.password || newPassword() };
 }
 
+/**
+ * PURE. Merge a service PATCH over the row already stored, deciding the whole
+ * config that gets written — including which credential it keeps.
+ *
+ * Extracted from the db upsert so the one invariant that matters can be asserted
+ * without a database (genie#193):
+ *
+ * **A re-add never RE-KEYS a workspace out of its own database.** The password
+ * comes ONLY from the stored row, never from the patch — a patch crosses the
+ * MCP/renderer boundary, and letting it set the credential would make `add` a way
+ * to overwrite the secret the engine was actually provisioned with. A new one is
+ * minted only when there is genuinely no previous row: a first add, or an add
+ * after the registration was lost (genie#190, since fixed — that loss is what
+ * produced the rotation seen in the wild).
+ *
+ * Defaults sit UNDER the stored row, which sits under the patch: a create gets a
+ * complete row, an update touches only what it named.
+ */
+export function mergeDevServiceConfig(
+    previous: DevServiceConfig | undefined,
+    patch: Partial<DevServiceConfig> & { engine: DevServiceConfig['engine'] },
+    version: string,
+    newPassword: () => string = generateServicePassword,
+): DevServiceConfig {
+    const combined = { ...previous, ...patch };
+
+    return withServiceCredentials(
+        {
+            engine: patch.engine,
+            version,
+            dedicated: combined.dedicated ?? false,
+            enabled: combined.enabled ?? false,
+            // NOT `combined.password` — that would let a patch carry one.
+            password: previous?.password ?? '',
+            ...(combined.image ? { image: combined.image } : {}),
+            ...(combined.port ? { port: combined.port } : {}),
+            ...(combined.env ? { env: combined.env } : {}),
+        },
+        newPassword,
+    );
+}
+
 // --- sanitize ---------------------------------------------------------------
 
 /** PURE. Normalize an untrusted patch: only well-typed, in-catalog fields survive. */

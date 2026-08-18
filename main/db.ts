@@ -18,7 +18,7 @@ import {
     generateServicePassword,
     parseDevServices,
     sanitizeDevServicePatch,
-    withServiceCredentials,
+    mergeDevServiceConfig,
     type DevServiceConfig,
     type DevServices,
 } from './dev-server/services/services-config';
@@ -2053,22 +2053,14 @@ export function setWorkspaceDevService(
     const serviceId = devServiceIdFor(id, engineKeyFor(clean.engine, version));
     const current = getWorkspaceDevServices(id);
     const previous = current[serviceId];
-    // Defaults under the stored row, which is under the patch — a create gets a
-    // complete row, an update touches only what it named. The password comes
-    // ONLY from the stored row (a patch can never carry one), so an update can
-    // never silently re-key a workspace out of its own database.
-    const combined = { ...previous, ...clean };
-    const merged = withServiceCredentials(
-        {
-            engine: clean.engine,
-            version,
-            dedicated: combined.dedicated ?? false,
-            enabled: combined.enabled ?? false,
-            password: previous?.password ?? '',
-            ...(combined.image ? { image: combined.image } : {}),
-            ...(combined.port ? { port: combined.port } : {}),
-            ...(combined.env ? { env: combined.env } : {}),
-        },
+    // The merge — including "the password comes ONLY from the stored row, so a
+    // re-add can never re-key a workspace out of its own database" (genie#193) —
+    // is a pure decision, asserted directly in `merge-service.test.ts`.
+    // `engine` is re-stated because the guard above narrows the FIELD, not `clean`.
+    const merged = mergeDevServiceConfig(
+        previous,
+        { ...clean, engine: clean.engine },
+        version,
         generateServicePassword,
     );
     setWorkspaceDevServices(id, { ...current, [serviceId]: merged });
