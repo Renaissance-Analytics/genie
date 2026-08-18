@@ -7,7 +7,7 @@ import {
     killTreeWinArgv,
     hostSpawnInvocation,
     describeHostSpawnFailure,
-    describeEmptyHostServiceEnv,
+    describeHostServiceEnvGap,
     type HostSpawnPrimitives,
 } from '../host-site-process';
 import type { DevSiteConfig } from '../sites-config';
@@ -167,33 +167,38 @@ describe('describeHostSpawnFailure', () => {
 });
 
 /**
- * The "up but DB-less" trap (moic's beta.245 report): a host-native site whose
- * workspace has services enabled, but whose resolved host-form env is EMPTY, gets
- * started with no DB/cache connection and silently falls back to its repo `.env` —
- * a real request 500s while a cookieless one looks healthy. Instead of that
- * silence, the start writes an actionable `[genie]` diagnostic that names WHY the
- * env is empty. This is that message; it must stay silent (null) when there is
- * nothing wrong.
+ * The "up but DB-less" trap (moic's beta.245 report, genie#204): a host-native
+ * site whose workspace has services enabled but which did NOT get every one of
+ * them as env starts pointed at nothing for the missing ones and silently falls
+ * back to the app's own defaults — a real request 500s while the site binds,
+ * reports ready and looks healthy. Instead of that silence the start writes an
+ * actionable `[genie]` diagnostic naming every engine that contributed nothing
+ * and why. It must stay silent (null) only when there is nothing wrong.
  */
-describe('describeEmptyHostServiceEnv', () => {
+describe('describeHostServiceEnvGap', () => {
     it('is silent when the workspace has NO services enabled — nothing to inject', () => {
         expect(
-            describeEmptyHostServiceEnv({ enabled: 0, live: 0, withHostPort: 0, missingHostPort: [] }),
+            describeHostServiceEnvGap({ enabled: 0, live: 0, withHostPort: 0, gaps: [] }),
         ).toBeNull();
     });
 
-    it('is silent when at least one service contributed env (host env is NOT empty)', () => {
+    it('is silent when EVERY enabled service contributed env', () => {
         expect(
-            describeEmptyHostServiceEnv({ enabled: 2, live: 2, withHostPort: 2, missingHostPort: [] }),
+            describeHostServiceEnvGap({ enabled: 2, live: 2, withHostPort: 2, gaps: [] }),
         ).toBeNull();
     });
 
     it('warns, and points at a workspace/config mismatch, when enabled services are NONE live here', () => {
-        const msg = describeEmptyHostServiceEnv({
+        const msg = describeHostServiceEnvGap({
             enabled: 4,
             live: 0,
             withHostPort: 0,
-            missingHostPort: [],
+            gaps: [
+                { engine: 'postgres', version: '17', reason: 'not-live' },
+                { engine: 'redis', version: '7', reason: 'not-live' },
+                { engine: 'minio', version: 'latest', reason: 'not-live' },
+                { engine: 'reverb', version: '1', reason: 'not-live' },
+            ],
         });
         expect(msg).toContain('4');
         expect(msg).toMatch(/live/i);
@@ -203,15 +208,54 @@ describe('describeEmptyHostServiceEnv', () => {
     });
 
     it('warns, naming the engines, when live services publish no reachable loopback port', () => {
-        const msg = describeEmptyHostServiceEnv({
+        const msg = describeHostServiceEnvGap({
             enabled: 3,
             live: 3,
             withHostPort: 0,
-            missingHostPort: ['postgres', 'redis'],
+            gaps: [
+                { engine: 'postgres', version: '17', reason: 'no-host-port' },
+                { engine: 'redis', version: '7', reason: 'no-host-port' },
+                { engine: 'minio', version: 'latest', reason: 'no-host-port' },
+            ],
         });
         expect(msg).toContain('postgres');
         expect(msg).toContain('redis');
         expect(msg).toMatch(/loopback|port/i);
         expect(msg).toMatch(/\.env/);
+    });
+
+    it('warns when SOME services contributed and one did not — the PARTIAL gap (genie#204)', () => {
+        // First-hand: postgres was injected with a correct DB_PORT while redis
+        // contributed nothing, so Laravel fell back to 6379 and every request
+        // 500'd on `RedisException: … actively refused it`. One healthy engine
+        // must not buy silence for a broken one — that silence is the whole bug.
+        const msg = describeHostServiceEnvGap({
+            enabled: 2,
+            live: 1,
+            withHostPort: 1,
+            gaps: [{ engine: 'redis', version: '7', reason: 'not-live' }],
+        });
+        expect(msg).toContain('redis');
+        // The site DOES come up — naming that is what stops the reader from
+        // hunting a startup problem when the startup was fine.
+        expect(msg).toMatch(/ready|start|bind/i);
+        expect(msg).not.toContain('postgres');
+    });
+
+    it('carries the reason the service manager already recorded, so nobody re-derives it', () => {
+        const msg = describeHostServiceEnvGap({
+            enabled: 2,
+            live: 1,
+            withHostPort: 1,
+            gaps: [
+                {
+                    engine: 'redis',
+                    version: '7',
+                    reason: 'not-live',
+                    error: 'Redis started but never became ready — check `logs`.',
+                },
+            ],
+        });
+        expect(msg).toContain('never became ready');
     });
 });

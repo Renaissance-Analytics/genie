@@ -1146,7 +1146,11 @@ describe('service env injection (#234 P3)', () => {
                 enabled: 3,
                 live: 3,
                 withHostPort: 0,
-                missingHostPort: ['postgres', 'redis'],
+                gaps: [
+                    { engine: 'postgres', version: '17', reason: 'no-host-port' as const },
+                    { engine: 'redis', version: '7', reason: 'no-host-port' as const },
+                    { engine: 'minio', version: 'latest', reason: 'no-host-port' as const },
+                ],
             }),
         });
         await m.start('acme', SITE_ID);
@@ -1159,6 +1163,54 @@ describe('service env injection (#234 P3)', () => {
         expect(spawned[0]?.note).toBeTruthy();
         expect(spawned[0]?.note).toContain('postgres');
         expect(spawned[0]?.note).toMatch(/\.env/);
+    });
+
+    it('a host-native site missing ONE of its services still logs the diagnostic (genie#204)', async () => {
+        // First-hand on beta.257: the site had a correct DB_HOST/DB_PORT and no
+        // REDIS_PORT at all, so Laravel used 6379 and every request died on
+        // `RedisException: … actively refused it`. The site bound, reported ready
+        // and logged NOTHING, because one healthy engine silenced the warning.
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const spawned: Array<{ note?: string; env: Record<string, string> }> = [];
+        const hostSpawn = {
+            start: async (i: {
+                siteId: string;
+                workspaceId: string;
+                command: string[];
+                cwd: string;
+                env: Record<string, string>;
+                note?: string;
+            }) => {
+                spawned.push(i);
+                return { ok: true as const, pid: 4242 };
+            },
+            stop: async () => {},
+            alive: async () => false,
+            readLog: async () => '',
+        };
+        const sites: DevSites = {
+            [SITE_ID]: { name: 'web', genName: 'web.acme.gen', repo: 'app', runMode: 'host', command: ['php', 'artisan', 'serve'], port: 8001, kind: 'http', enabled: true },
+        };
+        const m = manager(runtime, sites, {
+            hostSpawn,
+            probeReady: async () => true,
+            allocateFreePort: async () => 5321,
+            serviceHostEnvReportFor: async () => ({
+                env: { DB_HOST: '127.0.0.1', DB_PORT: '58783' },
+                enabled: 2,
+                live: 1,
+                withHostPort: 1,
+                gaps: [{ engine: 'redis', version: '7', reason: 'not-live' as const }],
+            }),
+        });
+        const status = await m.start('acme', SITE_ID);
+
+        // The site really does come up — that is what made this invisible.
+        expect(status.state).toBe('running');
+        expect(spawned[0]?.env.DB_PORT).toBe('58783');
+        expect(spawned[0]?.env.REDIS_PORT).toBeUndefined();
+        // …and the log now names the engine that is missing.
+        expect(spawned[0]?.note).toContain('redis');
     });
 
     it('a host-native site with healthy service env starts with NO diagnostic note', async () => {
@@ -1192,7 +1244,7 @@ describe('service env injection (#234 P3)', () => {
                 enabled: 1,
                 live: 1,
                 withHostPort: 1,
-                missingHostPort: [],
+                gaps: [],
             }),
         });
         await m.start('acme', SITE_ID);
@@ -1371,7 +1423,7 @@ describe('service env injection (#234 P3)', () => {
                 enabled: 1,
                 live: 1,
                 withHostPort: 1,
-                missingHostPort: [],
+                gaps: [],
             }),
         });
         const status = await m.start('acme', SITE_ID);

@@ -11,7 +11,7 @@ import {
     startSiteProcess,
     stopSiteProcess,
 } from './site-process';
-import { composeHostSiteEnv, describeEmptyHostServiceEnv } from './host-site-process';
+import { composeHostSiteEnv, describeHostServiceEnvGap } from './host-site-process';
 import { serveCaddyfile, caddyServeArgv, phpFastcgiWorkerCommand } from './serve-config';
 import type { HostEnvReport } from './services/service-manager';
 import { hostBrowserRoutes as selectHostBrowserRoutes } from './host-browser-routes';
@@ -1187,7 +1187,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         if (deps.serviceHostEnvReportFor) {
             const report = await deps.serviceHostEnvReportFor(workspaceId).catch(() => null);
             serviceHostEnv = report?.env ?? {};
-            const n = report ? describeEmptyHostServiceEnv(report) : null;
+            const n = report ? describeHostServiceEnvGap(report) : null;
             if (n) notes.push(n);
         } else if (deps.serviceHostEnvFor) {
             serviceHostEnv = await deps.serviceHostEnvFor(workspaceId).catch(() => ({}));

@@ -49,7 +49,7 @@ import type { HostBrowserReconciler } from './dev-server/host-browser-reconcile'
 import { initHosting } from './host-core/hosting';
 import {
     writeWorkspaceAgentMcp,
-    healTynnLiteralToken,
+    healTynnMcpEntry,
     syncWorkspaceCodexTynnMcp,
 } from './mcp/agent-config';
 import { resolveAlertSound, deliverAlertSound } from './notify-sound';
@@ -1567,19 +1567,24 @@ app.whenReady().then(async () => {
             writeWorkspaceAgentMcp(ws.path, true, workspaceEndpointUrl(ws.id));
         }
     }
-    // Self-heal the `tynn` MCP entry of any workspace still on the OLD, broken
-    // `${TYNN_AGENT_TOKEN}` reference form — which Claude Code / Cursor REFUSE to
-    // load when the var is unset (a stale terminal, a subagent, a non-Genie shell),
-    // breaking "connect to Tynn" for EVERY agent there (the outage). Rewrite it to
-    // the self-contained literal-token form, reading the token from the workspace's
-    // own gitignored `.env` (no re-mint / no network). Best-effort per workspace —
-    // never blocks or crashes boot.
+    // Self-heal the `tynn` MCP entry of any workspace whose config is on disk but
+    // unusable, offline and with no re-mint:
+    //   - the OLD, broken `${TYNN_AGENT_TOKEN}` reference form, which Claude Code /
+    //     Cursor REFUSE to load when the var is unset (a stale terminal, a subagent,
+    //     a non-Genie shell), breaking "connect to Tynn" for EVERY agent there (the
+    //     outage) — rewritten to the self-contained literal-token form;
+    //   - a plaintext REMOTE url (`http://tynn.ai/…`, genie#201) — the bearer token
+    //     in the clear, and a 301 the client follows into a 405, so the agent lists
+    //     no tools at all. This loop is the ONLY thing that reaches workspaces
+    //     provisioned before the write boundary existed: they count as already
+    //     configured, so nothing would ever rewrite them.
+    // Best-effort per workspace — never blocks or crashes boot.
     for (const ws of listWorkspaces()) {
         try {
-            if (healTynnLiteralToken(ws.path)) ensureMcpGitignored(ws.path);
+            if (healTynnMcpEntry(ws.path)) ensureMcpGitignored(ws.path);
             if (syncWorkspaceCodexTynnMcp(ws.path)) ensureMcpGitignored(ws.path);
         } catch (e) {
-            console.error('[tynn] literal-token self-heal failed for', ws.path, e);
+            console.error('[tynn] mcp entry self-heal failed for', ws.path, e);
         }
     }
     // Control server for the bundled `genie` CLI (status / kill / host control).
