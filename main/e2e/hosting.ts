@@ -509,7 +509,7 @@ export function defaultHostingE2EState(): HostingE2EState {
                 origin: {
                     managedByGenie: false,
                     source: 'winget',
-                    directory: 'C:\Users\dev\AppData\Local\Microsoft\WinGet\Links',
+                    directory: String.raw`C:\Users\dev\AppData\Local\Microsoft\WinGet\Links`,
                 },
             },
             {
@@ -530,7 +530,7 @@ export function defaultHostingE2EState(): HostingE2EState {
                 origin: {
                     managedByGenie: true,
                     source: 'genie',
-                    directory: 'C:\Users\dev\AppData\Roaming\genie\toolchain\docker\bin',
+                    directory: String.raw`C:\Users\dev\AppData\Roaming\genie\toolchain\docker\bin`,
                 },
             },
             // NOT INSTALLED — the state that used to render a row saying so and

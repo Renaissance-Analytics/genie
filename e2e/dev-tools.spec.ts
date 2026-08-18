@@ -194,7 +194,7 @@ test('a tool row names WHO installed it and WHERE — genie#213', async () => {
 
     // A winget git: visible, located, and explicitly NOT Genie's to update.
     await expect(gitRow()).toContainText('winget');
-    await expect(gitRow()).toContainText('WinGet\Links');
+    await expect(gitRow()).toContainText(String.raw`WinGet\Links`);
     await expect(gitRow()).toContainText('Not managed');
 
     // A Genie-installed docker: located, and NOT carrying the foreign badge.
@@ -203,7 +203,7 @@ test('a tool row names WHO installed it and WHERE — genie#213', async () => {
     // the half of this test that only looks at git.
     const dockerRow = page.getByTestId('devtool-docker');
     await expect(dockerRow).toContainText('Genie');
-    await expect(dockerRow).toContainText('toolchain\docker\bin');
+    await expect(dockerRow).toContainText(String.raw`toolchain\docker\bin`);
     await expect(dockerRow).not.toContainText('Not managed');
 });
 
