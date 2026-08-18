@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { siteListensOn } from '../dev-server';
+import { isHostNativeSite, siteListensOn } from '../dev-server';
 import type { DevSiteInfo } from '../genie';
 
 /**
@@ -40,15 +40,45 @@ describe('a site GENIE serves itself', () => {
     });
 });
 
-describe("a site running the REPO's own dev server", () => {
-    it('reports the port that server binds — which the person chose and can edit', () => {
-        // Here `port` is real and load-bearing: the command binds it, and Genie
-        // reverse-proxies `.gen` to it.
-        const s = site({ port: 8080, hostPort: 65058 });
-        expect(siteListensOn(s)).toBe(8080);
+describe('a host-native site with no port configured at all', () => {
+    it('reports nothing, which is also what it reports when one IS configured', () => {
+        expect(siteListensOn(site({ hostPort: 65058 }))).toBeUndefined();
+    });
+});
+
+describe("a site running the REPO's own dev server, host-native", () => {
+    it('claims no port either — the host allocates it and REWRITES the command', () => {
+        // site-manager.ts: "The HOST owns the port ... The stored `config.port` is
+        // ignored on this path precisely because a fixed stored port is the
+        // collision vector." `withPort()` rewrites the argv to bind the allocated
+        // port, so a stored 8080 is never listened on by anything.
+        const s = site({ runMode: 'host', port: 8080, hostPort: 65058 });
+        expect(siteListensOn(s)).toBeUndefined();
+    });
+});
+
+describe('a CONTAINER site', () => {
+    it('reports its configured port — there the command really does bind it', () => {
+        // The container path REQUIRES this port and refuses to start without it,
+        // so it is the one case where the stored number is load-bearing.
+        const s = site({ runMode: 'recipe', port: 3000, hostPort: 49812 });
+        expect(siteListensOn(s)).toBe(3000);
+    });
+});
+
+describe('telling the two apart', () => {
+    it('does NOT use hostPort, which both kinds have once running', () => {
+        // `hostPort` is the PUBLISHED port and is set for a container site too
+        // (site-manager.ts sets `hostPort: entry.caddyHostPort` for both, and
+        // distinguishes them by `sniTls`). Classifying on it made a RUNNING
+        // container site read as host-native — hiding the port and image fields
+        // the container path requires, and showing the external-browser toggle
+        // that does nothing for it. Worse, it flipped when the site started.
+        expect(isHostNativeSite({ runMode: 'recipe', hostPort: 49812 })).toBe(false);
+        expect(isHostNativeSite({ runMode: 'host', hostPort: 65058 })).toBe(true);
     });
 
-    it('reports nothing when no port was configured', () => {
-        expect(siteListensOn(site({ hostPort: 65058 }))).toBeUndefined();
+    it('treats a Genie-served site as host-native whatever its runMode says', () => {
+        expect(isHostNativeSite({ runMode: '', hostServe: { mode: 'php', root: 'public' } })).toBe(true);
     });
 });

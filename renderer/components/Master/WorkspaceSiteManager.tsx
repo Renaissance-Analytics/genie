@@ -720,10 +720,16 @@ function EditSiteForm({
     // The external-browser toggle only means anything for a host-native site (one
     // Genie fronts on the host Caddy, not the sandbox one) — don't show a control
     // that would silently do nothing for a container site.
-    const isHostNative = runMode === 'host' || Boolean(row.hostPort);
     // Serve mode (genie #167/#171), prefilled from the stored config: proxy runs
     // the repo's dev server, static/php hand serving to Genie.
     const [serveMode, setServeMode] = useState<ServeMode>(serveModeOf(row));
+    // Classified on what the form currently SAYS the site is, never on
+    // `row.hostPort`: that is the PUBLISHED port and a container site has one too
+    // once it is running (see isHostNativeSite). Keying on it hid the port and
+    // image fields — which the container path REQUIRES, refusing to start without
+    // a port — on any container site that happened to be up, and offered the
+    // external-browser toggle that does nothing for one.
+    const isHostNative = runMode === 'host' || serveMode !== 'proxy';
     const [serveRoot, setServeRoot] = useState(row.hostServe?.root ?? '');
     const [serveSpa, setServeSpa] = useState(
         row.hostServe?.mode === 'static' ? Boolean(row.hostServe.spa) : true,
@@ -1219,8 +1225,12 @@ function AddSiteForm({
                     onSpa={setServeSpa}
                     onVersion={setServeVersion}
                 />
-                {/* proxy only: Genie owns the port for a static/php site it serves. */}
-                {serveMode === 'proxy' && (
+                {/* A CONTAINER site only. The host-native path allocates a free port
+                    at start and rewrites the command to bind it, ignoring anything
+                    stored — so offering the field there collects a number that is
+                    never used, and Edit rightly has no matching field to change it
+                    in afterwards. A container's port IS required, and asked for. */}
+                {serveMode === 'proxy' && option?.runMode && option.runMode !== 'host' && (
                     <label className="site-field">
                         <span>Port (optional)</span>
                         <Input

@@ -142,20 +142,47 @@ export function canOpenInBrowser(site: DevSiteInfo): boolean {
 }
 
 /**
+ * Is this a HOST-NATIVE site — one Genie runs as a host process against live
+ * source — as opposed to a container site?
+ *
+ * Classified on `runMode`, never on `hostPort`. `hostPort` is the PUBLISHED port
+ * and site-manager sets it for BOTH kinds once running (`hostPort:
+ * entry.caddyHostPort`; the two are told apart by `sniTls`). Classifying on it
+ * made a RUNNING container site read as host-native, which hid the port and image
+ * fields that the container path REQUIRES — it refuses to start without a port —
+ * and showed the external-browser toggle that does nothing for a container site.
+ * It also flipped the moment the site started, so the same site offered different
+ * fields depending on whether it happened to be up.
+ */
+export function isHostNativeSite(site: {
+    runMode?: string;
+    hostServe?: unknown;
+    /** Accepted and DELIBERATELY unused — see above. Naming it here is what stops
+     *  the next reader reaching for it. */
+    hostPort?: number;
+}): boolean {
+    // `hostServe` means GENIE serves it with its own web server, which only ever
+    // happens host-natively — belt for a row whose runMode was never migrated.
+    return site.runMode === 'host' || Boolean(site.hostServe);
+}
+
+/**
  * The port the site card may say the site LISTENS ON — or nothing.
  *
- * Only meaningful when the site runs the REPO's own dev server: there the port
- * is the one that server binds, the person chose it, and Edit offers it.
+ * Only a CONTAINER site has one: there the command binds the port inside the
+ * container, the value is required (the start path refuses without it) and Edit
+ * offers it.
  *
- * When GENIE serves the site itself (`hostServe` static/php) it allocates a free
- * port at start, so the configured `port` is dead config — often a leftover from
- * before the site was switched to that mode. Printing it put two different
- * numbers on one card, only one of which anything was listening on, and pointed
- * at a field the Edit dialog deliberately hides because the port is host-owned.
- * The published address is already shown in full under "On this machine".
+ * A HOST-NATIVE site has none to report, whether Genie serves it or it runs the
+ * repo's own dev server. site-manager is explicit: "The HOST owns the port ...
+ * The stored `config.port` is ignored on this path precisely because a fixed
+ * stored port is the collision vector" — a free port is allocated at start and
+ * `withPort()` rewrites the argv to bind it. Printing the stored number put two
+ * different ports on one card (`listens on :8091` above `127.0.0.1:58228`), only
+ * one of them real, and pointed at a field Edit correctly hides.
  */
 export function siteListensOn(site: DevSiteInfo): number | undefined {
-    if (site.hostServe) return undefined;
+    if (isHostNativeSite(site)) return undefined;
     return site.port;
 }
 
