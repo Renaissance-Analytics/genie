@@ -55,8 +55,15 @@ const PULSE_PIXEL = `(r, g, b) => b > r + 12 && b > g + 12 && b > 60`;
  * spec breaking on an unrelated lockfile change.
  */
 async function pulsePixels(): Promise<number> {
-    const head = page.locator('.tproj-head').first();
-    const shot = await head.screenshot();
+    // A CLIP screenshot of the page, not `locator.screenshot()`. An element
+    // screenshot calls scrollIntoViewIfNeeded first, and any scroll moves the row
+    // out from under the mouse — which drops `:hover`, removes the very fill this
+    // spec is checking the pulse survives, and makes the measurement pass in both
+    // the fixed and the broken layout. Clipping to the box leaves the mouse and
+    // the hover exactly where they are.
+    const box = await page.locator('.tproj-head').first().boundingBox();
+    if (!box) throw new Error('row has no box');
+    const shot = await page.screenshot({ clip: box });
     return page.evaluate(
         async ([dataUrl, predicateSrc]) => {
             const img = new Image();
@@ -142,6 +149,10 @@ test('the pulse survives the hover — genie#197', async () => {
     await page.locator('.tproj-head').first().hover();
     await expect.poll(headBackgroundAlpha).toBe(1);
     const hovered = await pulsePixels();
+    // The hover must STILL be on after the measurement. If taking the screenshot
+    // dropped it, the pixels just counted were of an unhovered row and would
+    // "survive" in the broken layout too — a green test proving nothing.
+    expect(await headBackgroundAlpha()).toBe(1);
 
     // Pre-fix this was ~0: the opaque fill painted straight over the sparkline.
     // Not asserting equality — the fill changes what the semi-transparent pulse
