@@ -1064,6 +1064,12 @@ export default function Chooser({
                                     commitReorder();
                                 }}
                             >
+                                {collapsed && (
+                                    <AgentPulseSparkline
+                                        ring={pulseRings.current.get(ws.id)}
+                                        active={activeWs.has(ws.id)}
+                                    />
+                                )}
                                 <button
                                     type="button"
                                     className="tproj-head"
@@ -1106,12 +1112,6 @@ export default function Chooser({
                                         hovering the row no longer paints over it.
                                         COLLAPSED workspaces only; an expanded one
                                         shows its terminals' own per-row lights. */}
-                                    {collapsed && (
-                                        <AgentPulseSparkline
-                                            ring={pulseRings.current.get(ws.id)}
-                                            active={activeWs.has(ws.id)}
-                                        />
-                                    )}
                                     <span
                                         className="chev"
                                         role="button"
