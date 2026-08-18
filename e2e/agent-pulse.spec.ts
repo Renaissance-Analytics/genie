@@ -141,45 +141,59 @@ async function headBackgroundAlpha(): Promise<number> {
 }
 
 /**
- * How many pixels the sparkline is responsible for, with the row hovered or not.
+ * Take all four photographs in one pass: the row collapsed and expanded, each
+ * hovered and not.
  *
- * When `hovered`, the row is re-hovered before EACH shot and the fill is
- * confirmed opaque on both sides of it. The row re-renders about once a second as
- * the ring shifts, and a re-render can leave the browser's hover stale until the
- * pointer moves — Windows showed a fully opaque row before a screenshot and a
- * fading `alpha: 0.224` after. A shot taken across that gap is a shot of an
- * UNHOVERED row, which would make the broken layout look fixed.
+ * Reading `:hover` back out of computed style and trusting it across a
+ * screenshot did not work — the row re-renders about once a second as the ring
+ * shifts, and the hover reliably went stale somewhere around the capture
+ * (Windows first showed it: alpha 1 before a screenshot, a fading 0.224 after).
+ *
+ * So nothing here trusts a style read. The photographs themselves say whether
+ * the hover was captured: an unhovered and a hovered shot of the SAME row differ
+ * by the whole opaque fill, which is thousands of pixels. `hoverCaptured` below
+ * asserts exactly that, which makes a missed hover impossible to mistake for a
+ * covered sparkline.
  */
-async function sparklinePixels(hovered: boolean): Promise<number> {
-    const settle = async () => {
-        if (hovered) {
-            // hover(), not mouse.move() to the same point: on Windows the raw
-            // move did not register as a hover at all.
-            await head().hover();
-            await expect.poll(headBackgroundAlpha).toBe(1);
-        } else {
-            await page.mouse.move(0, 0);
-            await expect.poll(headBackgroundAlpha).not.toBe(1);
-        }
+interface Shots {
+    /** collapsed, not hovered */
+    cU: string;
+    /** collapsed, hovered */
+    cH: string;
+    /** expanded, not hovered */
+    eU: string;
+    /** expanded, hovered */
+    eH: string;
+}
+
+async function takeShots(): Promise<Shots> {
+    const hover = async () => {
+        // hover(), not mouse.move() to the same point: on Windows the raw move
+        // did not register as a hover at all.
+        await head().hover();
+        await expect.poll(headBackgroundAlpha).toBe(1);
     };
-    const held = async () => !hovered || (await headBackgroundAlpha()) === 1;
+    const unhover = async () => {
+        await page.mouse.move(0, 0);
+        await expect.poll(headBackgroundAlpha).not.toBe(1);
+    };
 
-    for (let attempt = 0; attempt < 5; attempt++) {
-        await setCollapsed(true);
-        const region = await comparisonRegion();
-        await settle();
-        const withSpark = await shoot(region);
-        const heldFirst = await held();
+    await setCollapsed(true);
+    const region = await comparisonRegion();
 
-        await setCollapsed(false);
-        await settle();
-        const withoutSpark = await shoot(region);
-        const heldSecond = await held();
+    await unhover();
+    const cU = await shoot(region);
+    await hover();
+    const cH = await shoot(region);
 
-        await setCollapsed(true);
-        if (heldFirst && heldSecond) return differingPixels(withSpark, withoutSpark);
-    }
-    throw new Error('could not hold the hover across a measurement');
+    await setCollapsed(false);
+    await hover();
+    const eH = await shoot(region);
+    await unhover();
+    const eU = await shoot(region);
+
+    await setCollapsed(true);
+    return { cU, cH, eU, eH };
 }
 
 test.beforeAll(async () => {
@@ -211,30 +225,33 @@ test.afterAll(async () => {
     await app?.close();
 });
 
-test('the sparkline is visible on an idle row', async () => {
-    // The metric proving itself, with no hover involved: the sparkline must
-    // account for a substantial number of pixels. If this number is small then
-    // every number below is noise, and the survival test would be comparing
-    // nothing against nothing and passing for it.
-    expect(await sparklinePixels(false)).toBeGreaterThan(100);
-});
+test('the sparkline is visible, and the hover really reaches the photographs', async () => {
+    // Both guards for everything below, and neither involves the fix.
+    const { cU, cH, eU } = await takeShots();
 
-test('hovering the row paints an opaque fill over it', async () => {
-    // The hazard itself. If the hover fill ever stops applying there is nothing
-    // left to paint over the sparkline and the survival test proves nothing.
-    await head().hover();
-    await expect.poll(headBackgroundAlpha).toBe(1);
+    // The metric can see the sparkline at all: collapsed vs expanded, no hover.
+    expect(await differingPixels(cU, eU)).toBeGreaterThan(100);
+
+    // The hover is genuinely in the photograph: the opaque fill repaints the
+    // whole row, so this is thousands of pixels. Without it, a hover that never
+    // landed would look exactly like a sparkline that survived one.
+    expect(await differingPixels(cU, cH)).toBeGreaterThan(100);
 });
 
 test('the sparkline survives the hover — genie#197', async () => {
-    const idle = await sparklinePixels(false);
-    const hovered = await sparklinePixels(true);
+    const { cU, cH, eU, eH } = await takeShots();
 
-    // Pre-fix this collapsed to ~0: with the opaque fill painted over it, the row
-    // photographed identically with and without the sparkline. Not asserting
-    // equality with `idle` — the fill changes what the semi-transparent pulse
-    // composites against, so individual pixels legitimately shift. What must not
-    // happen is the sparkline making NO difference to the row.
+    // Proof the comparison is being made under the conditions it claims.
+    expect(await differingPixels(cU, cH)).toBeGreaterThan(100);
+
+    const idle = await differingPixels(cU, eU);
+    const hovered = await differingPixels(cH, eH);
+
+    // Pre-fix `hovered` collapsed to ~0: with the opaque fill painted over it,
+    // the row photographed identically with and without the sparkline. Not
+    // asserting equality with `idle` — the fill changes what the semi-transparent
+    // pulse composites against, so individual pixels legitimately shift. What
+    // must not happen is the sparkline making NO difference to the row.
     expect(hovered).toBeGreaterThan(idle * 0.5);
 });
 
