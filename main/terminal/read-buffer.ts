@@ -21,9 +21,17 @@
  * valid across trims; a read whose cursor predates what we still hold returns
  * the oldest retained bytes and signals `dropped`.
  *
+ * BUFFER PRESENCE IS PART OF THE ANSWER (genie#217): this buffer is fed by the
+ * LIVE data stream only, so it holds nothing for a terminal whose output all
+ * predates this process — a pty that survived a Genie restart inside the
+ * detached pty-host, say. "0 bytes because we hold no buffer for this terminal"
+ * and "0 bytes because the terminal is quiet" are DIFFERENT answers, so every
+ * read reports `buffered`, and `seed()` lets the caller restore a missing buffer
+ * from whatever scrollback DID survive before serving the read.
+ *
  * Pure + dependency-free (no electron, no pty) so the buffer logic is unit
- * tested directly. ipc.ts feeds it from subscribeBackendEvents.onData and drops
- * a terminal's buffer on exit/kill.
+ * tested directly. ipc.ts feeds it from subscribeBackendEvents.onData, seeds it
+ * from the backend's surviving scrollback, and drops a terminal's buffer on kill.
  */
 
 /** Max retained output per terminal. ~256 KiB — generous for a read loop,
@@ -45,7 +53,26 @@ export interface ReadResult {
     /** True when some output between the requested cursor and now was already
      *  evicted by the cap (the agent missed bytes — surfaced so it knows). */
     dropped: boolean;
+    /** True when this terminal HAS a buffer here (so empty `data` means the
+     *  terminal was quiet). False means we hold nothing for it at all — empty
+     *  `data` is then "we can't see this terminal", not "nothing happened". */
+    buffered: boolean;
 }
+
+/**
+ * What an EMPTY read actually means for a terminal (genie#217). Lives here, with
+ * the buffer, so the MCP protocol types can name it without importing the pty
+ * layer:
+ *
+ *   'live'     — the buffer is tracking this terminal. Empty data means it
+ *                genuinely produced nothing (since the cursor).
+ *   'restored' — no buffer was held (Genie restarted, or the pty-host client
+ *                reconnected) and it was re-seeded from the scrollback that
+ *                survived in the backend. The data is real history.
+ *   'exited'   — the pty is not running. Empty data means there is nothing to
+ *                read, NOT that the terminal is idle.
+ */
+export type TerminalReadState = 'live' | 'restored' | 'exited';
 
 /**
  * A fixed-capacity collection of per-terminal output buffers. One instance backs
@@ -80,7 +107,7 @@ export class TerminalReadBuffer {
      */
     readSince(id: string, cursor?: number): ReadResult {
         const e = this.entries.get(id);
-        if (!e) return { data: '', cursor: cursor ?? 0, dropped: false };
+        if (!e) return { data: '', cursor: cursor ?? 0, dropped: false, buffered: false };
 
         // The oldest byte we still hold sits at this absolute offset.
         const oldestHeld = e.total - e.buf.length;
@@ -88,30 +115,32 @@ export class TerminalReadBuffer {
 
         if (from >= e.total) {
             // Caller is already caught up (or passed a future cursor) — nothing new.
-            return { data: '', cursor: e.total, dropped: false };
+            return { data: '', cursor: e.total, dropped: false, buffered: true };
         }
         // Clamp to what we still retain; flag if their cursor predates it.
         const start = Math.max(from, oldestHeld);
         const dropped = from < oldestHeld;
         const data = e.buf.slice(start - oldestHeld);
-        return { data, cursor: e.total, dropped };
+        return { data, cursor: e.total, dropped, buffered: true };
     }
 
     /** The last `bytes` chars currently buffered for `id` (default: all held). */
     readTail(id: string, bytes?: number): ReadResult {
         const e = this.entries.get(id);
-        if (!e) return { data: '', cursor: 0, dropped: false };
+        if (!e) return { data: '', cursor: 0, dropped: false, buffered: false };
         if (bytes === undefined || bytes < 0 || bytes >= e.buf.length) {
             return {
                 data: e.buf,
                 cursor: e.total,
                 dropped: e.buf.length < e.total,
+                buffered: true,
             };
         }
         return {
             data: e.buf.slice(e.buf.length - bytes),
             cursor: e.total,
             dropped: true, // asked for a slice → older bytes intentionally omitted
+            buffered: true,
         };
     }
 
@@ -120,7 +149,52 @@ export class TerminalReadBuffer {
         return this.entries.get(id)?.total ?? 0;
     }
 
-    /** Drop a terminal's buffer (on exit/kill) so it can't leak memory. */
+    /** True when we hold a buffer for `id` (even an empty one). */
+    has(id: string): boolean {
+        return this.entries.has(id);
+    }
+
+    /**
+     * Populate a MISSING buffer from scrollback that outlived it — the pty-host's
+     * mirror of a terminal that survived a Genie restart (genie#217).
+     *
+     * Deliberately a NO-OP when we already hold a buffer for `id`: the live tap is
+     * authoritative, and overwriting it with a separately-trimmed copy of the same
+     * stream would duplicate output and rewind the cursor under a reader. Returns
+     * true when it actually seeded.
+     */
+    seed(id: string, scrollback: string): boolean {
+        if (!scrollback || this.entries.has(id)) return false;
+        this.entries.set(id, {
+            buf:
+                scrollback.length > this.cap
+                    ? scrollback.slice(scrollback.length - this.cap)
+                    : scrollback,
+            total: scrollback.length,
+        });
+        return true;
+    }
+
+    /**
+     * Shrink a terminal's retained output to its last `bytes`, keeping the cursor
+     * space intact. Used when a pty EXITS: the spec is retained (revivable) and
+     * that final output is the only evidence of WHY the process died, so it must
+     * outlive the pty — but only a bounded tail of it, since a dead terminal's
+     * buffer would otherwise sit at full capacity until the spec is deleted.
+     */
+    trimToTail(id: string, bytes: number): void {
+        const e = this.entries.get(id);
+        if (!e) return;
+        const keep = Math.max(0, bytes);
+        if (e.buf.length > keep) e.buf = e.buf.slice(e.buf.length - keep);
+    }
+
+    /** Every terminal id we currently hold a buffer for (reaping/diagnostics). */
+    ids(): string[] {
+        return Array.from(this.entries.keys());
+    }
+
+    /** Drop a terminal's buffer (on kill) so it can't leak memory. */
     forget(id: string): void {
         this.entries.delete(id);
     }

@@ -11,6 +11,7 @@
 
 import { GENIE_MCP_GUIDE } from './guide';
 import type { QuestionPriority } from '../ask/question-priority';
+import type { TerminalReadState } from '../terminal/read-buffer';
 import type {
     SetEnvRequest,
     SetEnvResult,
@@ -1023,6 +1024,11 @@ export interface ManageTerminalsResult {
     cursor?: number;
     /** read: true when some output was evicted by the buffer cap before this read. */
     dropped?: boolean;
+    /** read: what an EMPTY read means (genie#217) — 'live' (the terminal really
+     *  produced nothing), 'restored' (its buffer was missing and was rebuilt from
+     *  the scrollback that survived in the pty host), or 'exited' (its pty is not
+     *  running, so there is nothing to read at all). */
+    state?: TerminalReadState;
 }
 
 // --- runAgent ----------------------------------------------------------------
@@ -1083,6 +1089,8 @@ export interface RunAgentResult {
     cursor?: number;
     /** read: true when buffered output was evicted before this read. */
     dropped?: boolean;
+    /** read: what an EMPTY read means — see ManageTerminalsResult.state. */
+    state?: TerminalReadState;
 }
 
 // --- manageWorkspaces --------------------------------------------------------
@@ -2617,6 +2625,23 @@ const err = (
 ): JsonRpcResponse => ({ jsonrpc: '2.0', id: id ?? null, error: { code, message } });
 
 /**
+ * The sentence that stops a read of 0 bytes from being ambiguous (genie#217).
+ *
+ * An agent monitoring a terminal reads the SUMMARY line, and "0 bytes" alone
+ * cannot distinguish a quiet agent from one whose pty died or whose output
+ * Genie can no longer see. Say which it is, in words, right there.
+ */
+function readStateNote(state: TerminalReadState | undefined): string {
+    if (state === 'exited') {
+        return " This terminal's pty is not running, so there is nothing to read — 0 bytes here does NOT mean the terminal is idle.";
+    }
+    if (state === 'restored') {
+        return ' Its output buffer was missing (Genie restarted) and was restored from the pty host, so this is earlier scrollback.';
+    }
+    return '';
+}
+
+/**
  * Handle one JSON-RPC message. Returns the response, or null for notifications
  * (methods with no id / the `notifications/*` namespace) which get a bare 202.
  */
@@ -3038,7 +3063,7 @@ export async function handleMcpMessage(
                 });
                 const summary = result.ok
                     ? action === 'read'
-                        ? `Read ${result.data?.length ?? 0} byte(s)${result.dropped ? ' (some earlier output was dropped)' : ''}.`
+                        ? `Read ${result.data?.length ?? 0} byte(s)${result.dropped ? ' (some earlier output was dropped)' : ''}.${readStateNote(result.state)}`
                         : `${result.terminals.length} terminal${result.terminals.length === 1 ? '' : 's'} in the workspace${
                               result.affectedId ? ` (acted on ${result.affectedId})` : ''
                           }.`
@@ -3089,7 +3114,7 @@ export async function handleMcpMessage(
                 } else if (action === 'start') {
                     summary = `Launched ${result.agent ?? 'agent'} (${result.command ?? ''}) as terminal ${result.id ?? '?'}.`;
                 } else if (action === 'read') {
-                    summary = `Read ${result.data?.length ?? 0} byte(s)${result.dropped ? ' (some earlier output was dropped)' : ''}.`;
+                    summary = `Read ${result.data?.length ?? 0} byte(s)${result.dropped ? ' (some earlier output was dropped)' : ''}.${readStateNote(result.state)}`;
                 } else {
                     summary = `runAgent ${action} ok${result.id ? ` (${result.id})` : ''}.`;
                 }

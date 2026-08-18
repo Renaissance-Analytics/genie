@@ -39,11 +39,32 @@ describe('TerminalReadBuffer', () => {
         expect(r.data).toBe('first');
     });
 
-    it('returns empty (not throwing) for an unknown terminal', () => {
+    it('returns empty (not throwing) for an unknown terminal, and says it is unbuffered', () => {
         const b = new TerminalReadBuffer();
-        expect(b.readSince('nope', 0)).toEqual({ data: '', cursor: 0, dropped: false });
-        expect(b.readTail('nope')).toEqual({ data: '', cursor: 0, dropped: false });
+        // buffered:false is the whole point — an empty read for a terminal we
+        // hold nothing for must not look like an empty read for a quiet one.
+        expect(b.readSince('nope', 0)).toEqual({
+            data: '',
+            cursor: 0,
+            dropped: false,
+            buffered: false,
+        });
+        expect(b.readTail('nope')).toEqual({
+            data: '',
+            cursor: 0,
+            dropped: false,
+            buffered: false,
+        });
         expect(b.cursor('nope')).toBe(0);
+        expect(b.has('nope')).toBe(false);
+    });
+
+    it('reports buffered:true for a terminal it holds, even with nothing new', () => {
+        const b = new TerminalReadBuffer();
+        b.append('t1', 'abc');
+        const caughtUp = b.readSince('t1', 3);
+        expect(caughtUp.data).toBe('');
+        expect(caughtUp.buffered).toBe(true);
     });
 
     it('caps retained bytes and drops the oldest beyond the cap', () => {
@@ -94,6 +115,48 @@ describe('TerminalReadBuffer', () => {
 
     it('exposes a generous default cap', () => {
         expect(CAP_BYTES).toBe(256 * 1024);
+    });
+
+    it('seed populates a MISSING buffer from surviving scrollback', () => {
+        const b = new TerminalReadBuffer();
+        expect(b.seed('t1', 'history from the pty host')).toBe(true);
+        const r = b.readSince('t1', 0);
+        expect(r.data).toBe('history from the pty host');
+        expect(r.cursor).toBe(25);
+        expect(r.buffered).toBe(true);
+    });
+
+    it('seed never clobbers a live buffer (no duplicated output, no rewound cursor)', () => {
+        const b = new TerminalReadBuffer();
+        b.append('t1', 'live bytes');
+        expect(b.seed('t1', 'live bytes')).toBe(false);
+        expect(b.readSince('t1', 0).data).toBe('live bytes');
+        expect(b.cursor('t1')).toBe(10);
+    });
+
+    it('seed trims scrollback larger than the cap and keeps the cursor honest', () => {
+        const b = new TerminalReadBuffer(4);
+        expect(b.seed('t1', 'abcdefgh')).toBe(true);
+        const r = b.readSince('t1', 0);
+        expect(r.data).toBe('efgh'); // last cap bytes
+        expect(r.cursor).toBe(8); // cursor space covers everything seeded
+        expect(r.dropped).toBe(true); // and it says the earlier bytes are gone
+    });
+
+    it('seed ignores empty scrollback (nothing to restore)', () => {
+        const b = new TerminalReadBuffer();
+        expect(b.seed('t1', '')).toBe(false);
+        expect(b.has('t1')).toBe(false);
+    });
+
+    it('trimToTail keeps only the final bytes but leaves the cursor space intact', () => {
+        const b = new TerminalReadBuffer();
+        b.append('t1', '0123456789');
+        b.trimToTail('t1', 4);
+        const r = b.readTail('t1');
+        expect(r.data).toBe('6789');
+        expect(r.cursor).toBe(10);
+        expect(b.has('t1')).toBe(true); // still tracked — the tail is the evidence
     });
 
     it('cursor reports total bytes ever seen', () => {

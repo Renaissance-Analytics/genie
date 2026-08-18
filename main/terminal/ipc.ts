@@ -41,7 +41,11 @@ import { buildTerminalEnv } from './terminal-env';
 import { computeOrphans } from './orphans';
 import { buildProcessArgs } from './process-spawn';
 import { devServiceHostEnvFor } from '../dev-server';
-import { TerminalReadBuffer, type ReadResult } from './read-buffer';
+import {
+    TerminalReadBuffer,
+    type ReadResult,
+    type TerminalReadState,
+} from './read-buffer';
 import { recordTerminalSize, isUsableGrid } from './size-tracker';
 import {
     startProcess,
@@ -200,13 +204,125 @@ export function lastActiveTerminalForWorkspace(workspaceId: string): string | nu
  */
 const agentReadBuffer = new TerminalReadBuffer();
 
-/** Read recent output for a terminal (agent-control MCP). */
+/**
+ * How much of a terminal's output survives its pty EXIT. The spec is retained
+ * (revivable) after a pty dies, so the buffer must not vanish with it — those
+ * last bytes are the ONLY evidence of why an agent crashed, and an Ops loop
+ * reading the terminal has nothing else to classify it by. Bounded well under
+ * CAP_BYTES because a dead terminal only needs its tail, and its buffer now
+ * lives until the spec itself is killed.
+ */
+export const EXIT_TAIL_BYTES = 16 * 1024;
+
+/** A read plus what its emptiness actually means (see TerminalReadState). */
+export interface TerminalReadResult extends ReadResult {
+    state: TerminalReadState;
+}
+
+export type { TerminalReadState };
+
+/** Whether the active backend still owns a pty for `id`. Never throws. */
+function ptyIsLive(id: string): boolean {
+    try {
+        return terminalManager().isLive(id);
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Read recent output for a terminal (agent-control MCP).
+ *
+ * The buffer is fed by the LIVE data stream, so it holds nothing for a terminal
+ * whose output predates this process — a pty that survived a Genie restart in
+ * the detached pty-host, for instance. Those terminals are still alive and still
+ * listed, and a PARKED agent never emits the byte that would refill the buffer,
+ * so reads used to return an empty string forever (genie#217). The scrollback
+ * DID survive — in the backend (the host client mirror is seeded from the host
+ * on every connect) — so a read with no buffer restores it from there first.
+ *
+ * The result says which of the three answers it is, because "0 bytes, quiet",
+ * "0 bytes, just restored" and "0 bytes, no pty" are not the same news.
+ */
 export function readTerminalOutput(
     id: string,
     opts: { cursor?: number; bytes?: number },
-): ReadResult {
-    if (opts.bytes !== undefined) return agentReadBuffer.readTail(id, opts.bytes);
-    return agentReadBuffer.readSince(id, opts.cursor);
+): TerminalReadResult {
+    const restored = ensureReadBufferSeeded(id);
+    const r =
+        opts.bytes !== undefined
+            ? agentReadBuffer.readTail(id, opts.bytes)
+            : agentReadBuffer.readSince(id, opts.cursor);
+    const state: TerminalReadState = !ptyIsLive(id)
+        ? 'exited'
+        : restored
+          ? 'restored'
+          : 'live';
+    return { ...r, state };
+}
+
+/**
+ * Restore a MISSING read buffer from the backend's surviving scrollback.
+ * Returns true when it actually seeded (i.e. this read is serving restored
+ * history). A no-op when a buffer already exists — the live tap wins.
+ */
+function ensureReadBufferSeeded(id: string): boolean {
+    if (agentReadBuffer.has(id)) return false;
+    let scrollback: string | undefined;
+    try {
+        scrollback = terminalManager().getScrollback(id);
+    } catch {
+        scrollback = undefined;
+    }
+    return scrollback ? agentReadBuffer.seed(id, scrollback) : false;
+}
+
+/**
+ * Seed the agent read buffer for every terminal the backend already owns —
+ * called once at boot, after the backend is selected and its events are
+ * subscribed. Terminals that outlived Genie in the detached pty-host come back
+ * with their scrollback in the host client's mirror; without this their MCP
+ * reads stay empty until they happen to emit again (genie#217). Returns the ids
+ * seeded. Never throws: a backend that can't be listed simply seeds nothing, and
+ * the per-read restore above still covers it.
+ */
+/**
+ * Seed + log, run right after the live data tap is wired (both the desktop IPC
+ * fan-out and the headless one). Wiring the tap is exactly when we start seeing
+ * output, so it is also when we should collect what we MISSED — keeping the
+ * catch-up next to the subscription means no embedder can wire one without the
+ * other. Never throws; a read still restores itself lazily if this finds nothing.
+ */
+function catchUpAgentReadBuffers(): void {
+    try {
+        const seeded = seedAgentReadBuffers();
+        if (seeded.length > 0) {
+            // eslint-disable-next-line no-console
+            console.log(`[terminal] restored read buffers for ${seeded.length} terminal(s)`);
+        }
+    } catch {
+        /* best-effort */
+    }
+}
+
+export function seedAgentReadBuffers(): string[] {
+    const seeded: string[] = [];
+    let ids: string[] = [];
+    try {
+        ids = terminalManager()
+            .list()
+            .map((t) => t.id);
+    } catch {
+        return seeded;
+    }
+    for (const id of ids) {
+        try {
+            if (ensureReadBufferSeeded(id)) seeded.push(id);
+        } catch {
+            /* best-effort per terminal — one bad id can't sink the rest */
+        }
+    }
+    return seeded;
 }
 
 /**
@@ -619,8 +735,13 @@ function feedTerminalData(id: string, data: string): void {
 function feedTerminalExit(id: string, payload: { exitCode: number; signal?: number }): void {
     // Supervisor decides a Process runner's fate (no-op for other ids).
     onProcessPtyExit(id, payload);
-    // The pty is gone — drop its agent read buffer so it can't leak.
-    agentReadBuffer.forget(id);
+    // The pty is gone but the SPEC is retained (revivable) and still listed — so
+    // keep a bounded tail of its final output instead of dropping the buffer
+    // outright (genie#217). Those bytes are the only evidence of WHY it died; an
+    // agent monitor that reads the terminal has nothing else to tell a crash from
+    // an idle session. The buffer is released for real when the terminal is
+    // killed (killTerminalById), which is also when its spec goes.
+    agentReadBuffer.trimToTail(id, EXIT_TAIL_BYTES);
     // AgentInbox: the pty exited but the spec is retained (revivable) — mark the
     // agent `away` (no-op for a non-agent terminal).
     agentInboxBroker.away(id);
@@ -642,6 +763,7 @@ function feedTerminalExit(id: string, payload: { exitCode: number; signal?: numb
  */
 export function subscribeHeadlessBackendEvents(): void {
     subscribeBackendEvents({ onData: feedTerminalData, onExit: feedTerminalExit });
+    catchUpAgentReadBuffers();
 }
 
 export function registerTerminalIpc(): void {
@@ -940,6 +1062,7 @@ export function registerTerminalIpc(): void {
             }
         },
     });
+    catchUpAgentReadBuffers();
 
     // --- Process service runners (headless) -----------------------------
     ipcMain.handle('process:start', (_e, id: string) => {
@@ -1103,7 +1226,8 @@ export function reapOrphanTerminals(): { reaped: string[]; live: number } {
     } catch {
         return { reaped: [], live: 0 };
     }
-    const orphans = computeOrphans(live, listTerminalSpecs().map((s) => s.id));
+    const specIds = listTerminalSpecs().map((s) => s.id);
+    const orphans = computeOrphans(live, specIds);
     for (const id of orphans) {
         try {
             killTerminalById(id);
@@ -1111,12 +1235,32 @@ export function reapOrphanTerminals(): { reaped: string[]; live: number } {
             /* best-effort — one stubborn pty shouldn't abort the sweep */
         }
     }
+    // Same sweep, for read buffers: a pty that EXITS now leaves a bounded tail
+    // of its final output behind (so a crash stays diagnosable while the spec is
+    // still revivable — genie#217). Once the SPEC is gone the terminal no longer
+    // exists in any sense, so its buffer must go too — otherwise deleting a spec
+    // through any of the paths that don't run killTerminalById would strand it.
+    releaseReadBuffersWithoutSpec(specIds);
     if (orphans.length) {
         // eslint-disable-next-line no-console
         console.log(`[Genie] reaped ${orphans.length} orphaned host terminal(s): ${orphans.join(', ')}`);
     }
 
     return { reaped: orphans, live: live.length };
+}
+
+/**
+ * Drop every read buffer whose terminal SPEC no longer exists. The buffer's
+ * lifetime is the spec's: it survives a pty exit (the terminal is revivable, and
+ * its final output is the evidence of what happened) but not the terminal's
+ * deletion. Sweeping by spec list — rather than hooking each `deleteTerminalSpec`
+ * caller — means a new deletion path can't quietly strand a buffer.
+ */
+function releaseReadBuffersWithoutSpec(specIds: string[]): void {
+    const keep = new Set(specIds);
+    for (const id of agentReadBuffer.ids()) {
+        if (!keep.has(id)) agentReadBuffer.forget(id);
+    }
 }
 
 /**

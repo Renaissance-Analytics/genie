@@ -556,6 +556,59 @@ describe('handleMcpMessage', () => {
         expect(text).toContain('dropped');
     });
 
+    it('manageTerminals says an EMPTY read came from a dead pty, not a quiet one', async () => {
+        // genie#217: "0 bytes because the pty is gone" and "0 bytes because
+        // nothing was written" must not read identically to the agent.
+        const manageTerminals = vi.fn().mockResolvedValue({
+            ok: true,
+            terminals: [],
+            data: '',
+            cursor: 0,
+            dropped: false,
+            state: 'exited',
+        });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 43,
+                method: 'tools/call',
+                params: { name: 'manageTerminals', arguments: { action: 'read', id: 't-dead' } },
+            },
+            ctx({ manageTerminals }),
+        );
+        // Assert on the SUMMARY line, not the JSON block below it — the summary
+        // is what an agent skimming the tool result actually reads.
+        const summary = (res?.result as { content: Array<{ text: string }> }).content[0].text.split(
+            '\n\n',
+        )[0];
+        expect(summary).toContain('Read 0 byte');
+        expect(summary).toMatch(/pty is not running/i);
+    });
+
+    it('manageTerminals flags a read served from RESTORED scrollback', async () => {
+        const manageTerminals = vi.fn().mockResolvedValue({
+            ok: true,
+            terminals: [],
+            data: 'old history',
+            cursor: 11,
+            dropped: false,
+            state: 'restored',
+        });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 44,
+                method: 'tools/call',
+                params: { name: 'manageTerminals', arguments: { action: 'read', id: 't-back' } },
+            },
+            ctx({ manageTerminals }),
+        );
+        const summary = (res?.result as { content: Array<{ text: string }> }).content[0].text.split(
+            '\n\n',
+        )[0];
+        expect(summary).toMatch(/restored/i);
+    });
+
     it('manageTerminals rejects a bad/missing action', async () => {
         const res = await handleMcpMessage(
             { jsonrpc: '2.0', id: 42, method: 'tools/call', params: { name: 'manageTerminals', arguments: {} } },

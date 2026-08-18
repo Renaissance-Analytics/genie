@@ -1246,6 +1246,9 @@ export async function manageTerminalsForMcp(
                     data: req.strip ? stripAnsi(r.data) : r.data,
                     cursor: r.cursor,
                     dropped: r.dropped,
+                    // Whether an empty read means "quiet", "restored from the pty
+                    // host after a Genie restart", or "no pty at all" (genie#217).
+                    state: r.state,
                 };
             }
             case 'kill': {
@@ -1665,6 +1668,7 @@ export async function runAgentForMcp(
                     data: req.strip ? stripAnsi(r.data) : r.data,
                     cursor: r.cursor,
                     dropped: r.dropped,
+                    state: r.state,
                 };
             }
             case 'stop': {
