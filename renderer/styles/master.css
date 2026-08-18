@@ -1873,34 +1873,11 @@
     inset: 0;
     width: 100%;
     height: 100%;
-    /* z-index 0, NOT -1 (genie#197).
-     
-       The pulse has to land above the head's own background — including the
-       opaque `:hover` fill that used to cover it — and below the head's text. The
-       obvious way is a negative-z child, which paints above its parent's
-       background; and it works on Linux and Windows, where the spec measures the
-       pulse surviving the hover. macOS disagreed: identical DOM, identical
-       computed styles, pulse covered — ~7,500 differing pixels idle against ~780
-       hovered. `.tproj-head` is a <button>, and a native control painting its own
-       background is not obliged to sit under a negative-z child the way a plain
-       box does. Moving the fill into an ::after layer at -2 did not help either.
-     
-       So nothing here depends on negative z-index. A POSITIONED element at z-index
-       0 paints after backgrounds on every platform, and the row's own content is
-       lifted to 1 by the rule below to stay above the pulse. Ordinary stacking,
-       no platform-specific behaviour to rely on. */
-    z-index: 0;
+    z-index: -1;
     pointer-events: none;
     opacity: 0.55;
     transition: opacity 200ms ease-out;
     border-radius: inherit;
-}
-/* The row's own content sits ABOVE the pulse layer. Positioning these does not
-   move them — it only gives them a stack level — and the sparkline is excluded so
-   it stays the backdrop it is meant to be. */
-.tproj-head > *:not(.agent-pulse-spark) {
-    position: relative;
-    z-index: 1;
 }
 .agent-pulse-spark.active {
     opacity: 0.9;
