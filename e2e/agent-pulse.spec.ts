@@ -267,9 +267,13 @@ test('the sparkline is painted by the hovered element itself, not behind it', as
         .evaluate((el) => ({
             insideHead: Boolean(el.closest('.tproj-head')),
             zIndex: getComputedStyle(el).zIndex,
-            // The fix relies on the head forming a STACKING CONTEXT: only then
-            // does a z-index:-1 child paint above the head's own background
-            // instead of dropping behind the whole row.
+            // The row's own content must be lifted above the pulse layer, or the
+            // workspace name would sit UNDER it.
+            contentZ: el.closest('.tproj-head')?.querySelector('.pname')
+                ? getComputedStyle(el.closest('.tproj-head')!.querySelector('.pname')!).zIndex
+                : null,
+            // The head still forms a stacking context, which is what keeps the
+            // pulse from escaping upward past the rest of the sidebar.
             headZIndex: el.closest('.tproj-head')
                 ? getComputedStyle(el.closest('.tproj-head')!).zIndex
                 : null,
@@ -278,9 +282,13 @@ test('the sparkline is painted by the hovered element itself, not behind it', as
                 : null,
         }));
 
+    // The contract after #197: the pulse is a positioned layer at 0 — which paints
+    // above the head's background on every platform, unlike a negative-z child —
+    // and the row's own content is lifted above it.
     expect(facts).toEqual({
         insideHead: true,
-        zIndex: '-1',
+        zIndex: '0',
+        contentZ: '1',
         headZIndex: '1',
         headPosition: 'relative',
     });
