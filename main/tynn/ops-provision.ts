@@ -368,6 +368,59 @@ export interface OpsProvisionResult {
 }
 
 /**
+ * The side of registration that is not the database row (genie#201).
+ *
+ * A workspace Genie registers is a workspace agents will be launched in, and an
+ * agent with no `genie` MCP server cannot call `imDone` / `ForceTheQuestion` —
+ * it is invisible to the user, which is the one failure this whole protocol
+ * exists to prevent. The desktop `workspaces:add` handler has always written that
+ * entry; these paths register workspaces WITHOUT going through it, so a governed
+ * child came up toolless and had to be hand-repaired.
+ *
+ * Injected so this module stays unit-testable (the real writer reaches the MCP
+ * server + Electron-side config writers), with a lazy-required default so no
+ * caller can register a workspace and forget it — the same shape as
+ * `hostGenieMcpProvisioner` (genie #55).
+ */
+export interface OpsRegisterDeps {
+    registerGenieMcp?: (workspaceId: string, workspacePath: string) => void;
+}
+
+function defaultRegisterGenieMcp(workspaceId: string, workspacePath: string): void {
+    // Lazy-required (not imported) so `ops-provision` stays import-clean for unit
+    // tests: `../mcp/server` pulls the running MCP server + Electron paths.
+    const { writeWorkspaceAgentMcp } =
+        require('../mcp/agent-config') as typeof import('../mcp/agent-config');
+    const { workspaceEndpointUrl } = require('../mcp/server') as typeof import('../mcp/server');
+    // MINTS the stable per-workspace endpoint token on first ask — the thing that
+    // was missing from `genie-mcp.json` for a provisioned workspace. A null URL
+    // (server not listening yet) REMOVES any stale entry rather than writing a
+    // dead one; the next launch backfills it.
+    writeWorkspaceAgentMcp(workspacePath, true, workspaceEndpointUrl(workspaceId));
+}
+
+/**
+ * Register a freshly cloned/scaffolded workspace: the row, then everything that
+ * makes it usable. One function so a third registration path cannot repeat the
+ * omission. Never throws on the MCP half — a workspace that is registered but
+ * un-wired is recoverable; losing the registration is not.
+ */
+function registerProvisionedWorkspace(
+    row: Parameters<typeof addWorkspace>[0],
+    deps: OpsRegisterDeps,
+): ReturnType<typeof addWorkspace> {
+    const saved = addWorkspace(row);
+    if (saved.mcp_enabled) {
+        try {
+            (deps.registerGenieMcp ?? defaultRegisterGenieMcp)(saved.id, saved.path);
+        } catch {
+            /* best-effort — the workspace is registered either way */
+        }
+    }
+    return saved;
+}
+
+/**
  * Clone + register a workspace for each APPROVED target. Each op is best-effort;
  * failures are collected, not thrown. A child whose workspace already exists
  * (someone provisioned it between plan + apply) is skipped, not re-cloned. Must
@@ -377,6 +430,7 @@ export interface OpsProvisionResult {
 export async function applyOpsProvision(
     opsWorkspacePath: string,
     targets: OpsProvisionTarget[],
+    deps: OpsRegisterDeps = {},
 ): Promise<OpsProvisionResult> {
     const provisioned: OpsProvisionResult['provisioned'] = [];
     const errors: string[] = [];
@@ -395,22 +449,25 @@ export async function applyOpsProvision(
                 parent_path: parentPath,
                 folder: t.slug,
             });
-            const saved = addWorkspace({
-                id: t.projectId,
-                backend: 'tynn',
-                project_id: t.projectId,
-                project_name: t.name,
-                tynn_project_id: t.projectId,
-                tynn_project_name: t.name,
-                shape: 'agi',
-                path: wsPath,
-                editor: null,
-                editor_cmd: null,
-                start_cmd: null,
-                env_file: settings.default_env_file ?? '.env',
-                last_opened_at: null,
-                created_by_genie: 1,
-            });
+            const saved = registerProvisionedWorkspace(
+                {
+                    id: t.projectId,
+                    backend: 'tynn',
+                    project_id: t.projectId,
+                    project_name: t.name,
+                    tynn_project_id: t.projectId,
+                    tynn_project_name: t.name,
+                    shape: 'agi',
+                    path: wsPath,
+                    editor: null,
+                    editor_cmd: null,
+                    start_cmd: null,
+                    env_file: settings.default_env_file ?? '.env',
+                    last_opened_at: null,
+                    created_by_genie: 1,
+                },
+                deps,
+            );
             provisioned.push({ name: t.name, workspaceId: saved.id, path: wsPath });
             existingIds.add(saved.id);
         } catch (e) {
@@ -468,6 +525,7 @@ export async function applyOpsScaffold(
     opsWorkspacePath: string,
     targets: OpsScaffoldTarget[],
     createRemoteRepo: CreateRemoteRepo,
+    deps: OpsRegisterDeps = {},
 ): Promise<OpsScaffoldResult> {
     const scaffolded: OpsScaffoldResult['scaffolded'] = [];
     const errors: string[] = [];
@@ -512,22 +570,25 @@ export async function applyOpsScaffold(
 
             // 3. Register the workspace either way — the envelope exists and works
             // locally; publishing can be retried from git.
-            const saved = addWorkspace({
-                id: t.projectId,
-                backend: 'tynn',
-                project_id: t.projectId,
-                project_name: t.name,
-                tynn_project_id: t.projectId,
-                tynn_project_name: t.name,
-                shape: 'agi',
-                path: built.path,
-                editor: null,
-                editor_cmd: null,
-                start_cmd: null,
-                env_file: settings.default_env_file ?? '.env',
-                last_opened_at: null,
-                created_by_genie: 1,
-            });
+            const saved = registerProvisionedWorkspace(
+                {
+                    id: t.projectId,
+                    backend: 'tynn',
+                    project_id: t.projectId,
+                    project_name: t.name,
+                    tynn_project_id: t.projectId,
+                    tynn_project_name: t.name,
+                    shape: 'agi',
+                    path: built.path,
+                    editor: null,
+                    editor_cmd: null,
+                    start_cmd: null,
+                    env_file: settings.default_env_file ?? '.env',
+                    last_opened_at: null,
+                    created_by_genie: 1,
+                },
+                deps,
+            );
             scaffolded.push({ name: t.name, workspaceId: saved.id, path: built.path });
             existingIds.add(saved.id);
             if (!pushed) {

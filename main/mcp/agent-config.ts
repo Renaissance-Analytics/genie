@@ -50,6 +50,43 @@ export function cursorEntry(url: string): JsonObj {
  *  offline self-heal re-embeds the literal FROM here). */
 export const TYNN_TOKEN_ENV_KEY = 'TYNN_AGENT_TOKEN';
 
+/** Hosts that ARE this machine — plaintext there never leaves the loopback
+ *  interface, so it is not a downgrade (Genie's own MCP server is exactly this,
+ *  and a local Tynn dev server on `http://localhost:8000` is legitimate). */
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
+
+/**
+ * The MCP-url WRITE BOUNDARY: never persist a REMOTE endpoint as plaintext http
+ * (genie#201).
+ *
+ * `mcp_url` arrives from Tynn's mint response and used to be written verbatim.
+ * When Tynn answered `http://tynn.ai/mcp/tynn` that produced two failures at once:
+ *
+ *   - the entry embeds a LITERAL `Bearer <token>`, so every request would put the
+ *     project's agent credential on the wire in the clear;
+ *   - tynn.ai answers that url with a 301 to https. An MCP client follows the
+ *     redirect, a followed redirect turns the POST into a GET, and laravel/mcp
+ *     answers GET with a hardcoded 405 — so the agent could not list one tool.
+ *
+ * Upgrading here rather than at one call site is what makes it stick: the same
+ * value is written to `.mcp.json`, `.cursor/mcp.json` AND `.codex/config.toml`,
+ * and it is REWRITTEN on every re-provision — which is why hand-fixing the file
+ * kept getting reverted. Loopback is left alone; an unparseable string is returned
+ * unchanged (the caller's own validation owns that).
+ */
+export function secureMcpUrl(url: string): string {
+    if (!url) return url;
+    let parsed: URL;
+    try {
+        parsed = new URL(url);
+    } catch {
+        return url;
+    }
+    if (parsed.protocol !== 'http:' || LOOPBACK_HOSTS.has(parsed.hostname)) return url;
+    parsed.protocol = 'https:';
+    return parsed.toString();
+}
+
 /**
  * The Tynn MCP server entry — an authenticated remote endpoint. The Authorization
  * header embeds the project agent token as a LITERAL (`Bearer <token>`) for BOTH
@@ -343,7 +380,7 @@ export function withCodexGenieMcpLaunch(
  * now embeds the token as a literal (see `tynnEntry`), so the config no longer
  * DEPENDS on this — but we keep writing it because other tooling (or a human
  * `${TYNN_AGENT_TOKEN}` reference) may read it, and the offline self-heal
- * (`healTynnLiteralToken`) reads THIS to re-embed the literal for any workspace
+ * (`healTynnMcpEntry`) reads THIS to re-embed the literal for any workspace
  * still on the old broken `${…}` form — no re-mint. Best-effort.
  */
 function writeTynnTokenEnv(workspacePath: string, token: string): void {
@@ -494,10 +531,13 @@ export function hasTynnLiteralToken(workspacePath: string): boolean {
 export function writeWorkspaceTynnMcp(
     workspacePath: string,
     enabled: boolean,
-    opts: { url: string; token: string } | null,
+    input: { url: string; token: string } | null,
 ): void {
     if (!workspacePath) return;
-    if (enabled && (!opts?.url || !opts?.token)) return; // never write a broken/empty entry
+    if (enabled && (!input?.url || !input?.token)) return; // never write a broken/empty entry
+    // ONE place decides the url that lands on disk, so all three targets agree and
+    // a re-provision cannot reintroduce a plaintext remote endpoint (genie#201).
+    const opts = input ? { ...input, url: secureMcpUrl(input.url) } : null;
     let sync = { claude: true, cursor: true, codex: true };
     try {
         const s = getAllSettings();
@@ -537,20 +577,28 @@ export function writeWorkspaceTynnMcp(
 }
 
 /**
- * Self-heal a workspace stuck on the OLD, broken `${TYNN_AGENT_TOKEN}` reference
- * form: rewrite its `tynn` entry to the self-contained literal-token form, reading
- * the URL from the EXISTING entry and the token from the workspace's own gitignored
- * `.env` (where an earlier provision already landed it). NO re-mint and NO network —
- * a pure on-disk migration, so opening / app startup heals a workspace even offline.
+ * Self-heal a workspace whose `tynn` entry is on disk but unusable. Two shapes,
+ * both fixed WITHOUT a re-mint and WITHOUT the network — a pure on-disk migration,
+ * so opening / app startup heals a workspace even offline:
  *
- * A no-op (returns false) when there's nothing to do: no `tynn` entry, it's ALREADY
- * in the literal form, the URL is missing, or the `.env` has no token to embed
- * (those workspaces heal via a real re-mint on the next `provisionWorkspaceTynn`).
+ *  1. the OLD, broken `${TYNN_AGENT_TOKEN}` reference form, which Claude Code /
+ *     Cursor refuse to load when the var is unset. Rewritten to the self-contained
+ *     literal-token form, reading the token from the workspace's own gitignored
+ *     `.env` (where an earlier provision landed it).
+ *  2. a plaintext REMOTE url (`http://tynn.ai/…`, genie#201) — the credential in
+ *     the clear, and a 301 the client follows into a 405 that leaves the agent with
+ *     no Tynn tools at all. Upgraded to https, keeping the token already in the
+ *     entry. This is the only thing that reaches workspaces provisioned BEFORE the
+ *     write boundary existed: they are `alreadyConfigured`, so nothing re-mints
+ *     them and the broken url would sit there forever.
+ *
+ * A no-op (returns false) when there's nothing to do: no `tynn` entry, no URL, an
+ * entry that is already literal AND already secure, or a `${…}` form with no token
+ * to embed (those heal via a real re-mint on the next `provisionWorkspaceTynn`).
  * Returns true only when it rewrote the config. Best-effort — callers gitignore.
  */
-export function healTynnLiteralToken(workspacePath: string): boolean {
+export function healTynnMcpEntry(workspacePath: string): boolean {
     if (!workspacePath) return false;
-    if (hasTynnLiteralToken(workspacePath)) return false; // already self-contained
     const file = path.join(workspacePath, '.mcp.json');
     const cfg = fs.existsSync(file) ? readJson(file) : null;
     const servers = cfg?.mcpServers as JsonObj | undefined;
@@ -558,11 +606,16 @@ export function healTynnLiteralToken(workspacePath: string): boolean {
     if (!tynn) return false; // no entry to heal
     const url = typeof tynn.url === 'string' ? tynn.url : '';
     if (!url) return false;
-    // The token lives in the workspace's own `.env` (an earlier provision put it
-    // there); without it we can't embed a literal — leave it for a real re-mint.
-    const token = loadWorkspaceEnvVars(workspacePath)[TYNN_TOKEN_ENV_KEY];
+    const secure = secureMcpUrl(url);
+    // Already self-contained AND already secure — nothing to rewrite.
+    if (hasTynnLiteralToken(workspacePath) && secure === url) return false;
+    // The token: the entry's OWN literal when it has one (a scheme-only heal needs
+    // nothing else), else the workspace `.env`. Without either we can't embed a
+    // literal — leave it for a real re-mint.
+    const token =
+        readTynnMcpBearerToken(workspacePath) ?? loadWorkspaceEnvVars(workspacePath)[TYNN_TOKEN_ENV_KEY];
     if (!token) return false;
-    writeWorkspaceTynnMcp(workspacePath, true, { url, token });
+    writeWorkspaceTynnMcp(workspacePath, true, { url: secure, token });
     return true;
 }
 

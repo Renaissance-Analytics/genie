@@ -166,42 +166,62 @@ export function describeHostSpawnFailure(command: string[], detail?: string): st
 }
 
 /**
- * The "up but DB-less" diagnostic (moic's beta.245 report). A host-native site
- * whose workspace has services ENABLED but whose resolved host-form env is EMPTY
- * would start pointed at nothing and fall back to its repo `.env` — a real
- * (session/DB-backed) request 500s while a cookieless one looks healthy, which is
- * exactly the silent failure that took a Laravel site off Genie hosting. Rather
- * than serve DB-less without a word, the start writes this line to the site log.
+ * The "up but DB-less" diagnostic (moic's beta.245 report, genie#204). A
+ * host-native site whose workspace has services ENABLED but which did not get all
+ * of them as env starts pointed at nothing for the missing ones and falls back to
+ * the app's own defaults — a real request 500s while a cookieless one looks
+ * healthy, which is exactly the silent failure that took a Laravel site off Genie
+ * hosting. Rather than serve broken without a word, the start writes this line to
+ * the site log.
  *
- * Returns `null` when there is nothing to warn about — no services enabled, or at
- * least one service actually contributed env (`withHostPort > 0`). The two failure
- * shapes are disambiguated for the reader:
- *   - `live === 0` → the enabled services are not live for THIS workspace (a
- *     workspace-id / config mismatch, or they are down);
- *   - `live > 0 && withHostPort === 0` → they are running but publish no reachable
- *     loopback port, so nothing on the host can dial them.
+ * The predicate is EVERY enabled engine, not any of them. The first version asked
+ * "did anything contribute" (`withHostPort > 0`) and went quiet the moment one
+ * engine was healthy — so a workspace whose postgres was wired and whose redis was
+ * not started, bound, reported ready, and then 500'd every request on
+ * `RedisException: … actively refused it` with nothing in the log. One healthy
+ * engine cannot buy silence for a broken one.
+ *
+ * Returns `null` only when there is nothing to warn about: no services enabled, or
+ * every enabled engine contributed. Each gap names its own reason (not live here /
+ * live but publishing no loopback port) plus whatever failure the service manager
+ * already recorded for it.
  */
-export function describeEmptyHostServiceEnv(report: {
+export function describeHostServiceEnvGap(report: {
     enabled: number;
     live: number;
     withHostPort: number;
-    missingHostPort: string[];
+    gaps: Array<{ engine: string; version: string; reason: 'not-live' | 'no-host-port'; error?: string }>;
 }): string | null {
-    const { enabled, live, withHostPort, missingHostPort } = report;
-    if (enabled === 0 || withHostPort > 0) return null;
-    const tail =
-        'so no DB/cache/service env was injected — the site falls back to its repo ' +
-        '`.env` (e.g. a local database that may not exist), which is why a DB-backed ' +
-        'request can return 500 while a cookieless one still looks healthy.';
-    if (live === 0) {
+    const { enabled, withHostPort, gaps } = report;
+    if (enabled === 0 || gaps.length === 0) return null;
+
+    const named = gaps
+        .map((g) => {
+            const why =
+                g.reason === 'not-live'
+                    ? 'is not live for this workspace'
+                    : 'is running but publishes no reachable loopback port on the host';
+            return `${g.engine} ${g.version} ${why}${g.error ? ` — ${g.error}` : ''}`;
+        })
+        .join('; ');
+
+    // NOTHING reached the app: it is running entirely on its repo `.env`.
+    if (withHostPort === 0) {
         return (
-            `${enabled} service(s) are enabled for this workspace but 0 are live here, ${tail}`
+            `${enabled} service(s) are enabled for this workspace but NONE of them reached this ` +
+            `site (${named}), so no DB/cache/service env was injected — the site falls back to ` +
+            'its repo `.env` (e.g. a local database that may not exist), which is why a ' +
+            'DB-backed request can return 500 while a cookieless one still looks healthy.'
         );
     }
-    const engines = missingHostPort.length ? ` (${missingHostPort.join(', ')})` : '';
+
+    // The nastier half: the site LOOKS fine because the rest of the env is right.
     return (
-        `${live} service(s)${engines} are running but publish no reachable loopback port ` +
-        `on the host, ${tail}`
+        `${gaps.length} of ${enabled} enabled service(s) contributed NO env to this site ` +
+        `(${named}). The other services were injected, so the dev server starts, binds its ` +
+        'port and reports ready — and then every request touching ' +
+        `${gaps.map((g) => g.engine).join('/')} fails, because the app falls back to its own ` +
+        'default host/port for it (e.g. redis on 127.0.0.1:6379) instead of the managed engine.'
     );
 }
 

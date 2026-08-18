@@ -170,11 +170,38 @@ export interface DevServiceManagerDeps {
 }
 
 /**
- * Why a host-native site's service env is what it is — the diagnostic behind an
- * EMPTY {@link DevServiceManager.hostEnvFor}. `enabled` services that are `live`
- * but have `withHostPort === 0` (every one in `missingHostPort`) is the "up but
- * DB-less" state: the app would fall back to its repo `.env` and fail to reach
- * the managed DB with no signal — this report is that signal.
+ * One ENGINE this workspace has ENABLED that contributed NOTHING to the host env
+ * (genie#204). Reported per engine rather than per service because that is the
+ * unit the environment is named for: `DB_*` / `REDIS_*` come from the ACTIVE
+ * version, so a second, inactive version of the same engine is silent BY DESIGN
+ * and is not a gap.
+ */
+export interface HostEnvGap {
+    engine: string;
+    version: string;
+    /**
+     *  - `not-live` — nothing is live for this workspace under that service (it
+     *    never came up, failed, or was released);
+     *  - `no-host-port` — it IS live, but the runtime published no loopback port,
+     *    so nothing on the host can dial it (the #166 cause-A shape).
+     */
+    reason: 'not-live' | 'no-host-port';
+    /** The failure the manager ALREADY recorded for it, when there is one. It is
+     *  the whole diagnosis, and it used to be thrown away. */
+    error?: string;
+}
+
+/**
+ * Why a host-native site's service env is what it is — the diagnostic behind a
+ * host env that does not name every service the workspace enabled.
+ *
+ * `gaps` is the load-bearing field: an enabled engine that contributed nothing
+ * leaves the app falling back to its OWN defaults for that engine (a `.env`
+ * value, or a framework default like redis on 6379), so the site binds, reports
+ * ready and then fails every request that touches it. That is true whether ALL
+ * services are missing (the moic beta.245 shape) or only one of them (genie#204)
+ * — which is why the counts alone were not enough: a single healthy engine made
+ * `withHostPort > 0` and bought silence for every broken one.
  */
 export interface HostEnvReport {
     /** The host-form env — identical to {@link DevServiceManager.hostEnvFor}. */
@@ -186,9 +213,9 @@ export interface HostEnvReport {
     /** Of the live ones, how many expose a published loopback port (reachable
      *  from the host, so they contribute env). */
     withHostPort: number;
-    /** The engines that are live but publish NO host port — the ones that make
-     *  the env come up short. */
-    missingHostPort: string[];
+    /** Every enabled engine that contributed NO env, and why. Empty ⇒ the site
+     *  got everything its workspace declared. */
+    gaps: HostEnvGap[];
 }
 
 export interface DevServiceManager {
@@ -925,21 +952,47 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
 
         hostEnvReportFor(workspaceId) {
             const configured = deps.devServicesFor(workspaceId);
-            const enabled = Object.values(configured).filter((c) => c.enabled).length;
             const mine = [...live.values()].filter((e) => e.workspaceId === workspaceId);
             const provisioned: ProvisionedService[] = [];
-            const missingHostPort: string[] = [];
+            /** Live for this workspace, but publishing nothing the host can dial. */
+            const unpublished = new Set<string>();
             for (const entry of mine) {
                 const host = provisionedForHost(entry);
                 if (host) provisioned.push(host);
-                else missingHostPort.push(entry.config.engine);
+                else unpublished.add(entry.serviceId);
             }
+
+            // WHICH ENGINES actually reached the env. Keyed by engine, not by
+            // service: `serviceEnv` lets exactly one VERSION of an engine own the
+            // single-valued names (#242 P3), so a second, inactive postgres is
+            // silent by design — calling it a gap would warn on every start.
+            const contributing = new Set(provisioned.map((p) => p.engine));
+            const gaps: HostEnvGap[] = [];
+            let enabled = 0;
+            for (const [serviceId, config] of Object.entries(configured)) {
+                if (!config.enabled) continue;
+                enabled += 1;
+                if (contributing.has(config.engine)) continue;
+                if (gaps.some((g) => g.engine === config.engine)) continue;
+                const entry = live.get(serviceId);
+                const liveHere = entry?.workspaceId === workspaceId;
+                const error = lastFailure.get(serviceId)?.error;
+                gaps.push({
+                    engine: config.engine,
+                    version: config.version,
+                    // Live-but-unpublished only counts as such for THIS workspace's
+                    // own entry; anything else simply is not live here.
+                    reason: liveHere && unpublished.has(serviceId) ? 'no-host-port' : 'not-live',
+                    ...(error ? { error } : {}),
+                });
+            }
+
             return {
                 env: serviceEnv(provisioned),
                 enabled,
                 live: mine.length,
                 withHostPort: provisioned.length,
-                missingHostPort,
+                gaps,
             };
         },
 
@@ -1191,10 +1244,10 @@ export function devServiceHostEnvFor(workspaceId: string): Record<string, string
 }
 
 /**
- * {@link devServiceHostEnvFor} with the diagnostic that explains an empty result
- * — enabled vs live vs host-published counts, so a host-native site can log WHY
- * it got no service env rather than serving DB-less in silence. All-zeroes when
- * nothing is initialised.
+ * {@link devServiceHostEnvFor} with the diagnostic that explains a short result
+ * — the counts plus every enabled engine that contributed nothing, so a
+ * host-native site can log WHY a service it is wired to is absent rather than
+ * serving broken in silence. All-zeroes when nothing is initialised.
  */
 export function devServiceHostEnvReportFor(workspaceId: string): HostEnvReport {
     return (
@@ -1203,7 +1256,7 @@ export function devServiceHostEnvReportFor(workspaceId: string): HostEnvReport {
             enabled: 0,
             live: 0,
             withHostPort: 0,
-            missingHostPort: [],
+            gaps: [],
         }
     );
 }

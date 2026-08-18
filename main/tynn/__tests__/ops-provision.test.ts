@@ -24,7 +24,9 @@ let linkByPath: Record<string, { projectId: string } | null> = {};
 vi.mock('../../db', () => ({
     listWorkspaces: () => workspaceRows,
     getAllSettings: () => settings,
-    addWorkspace: vi.fn(),
+    // The real one fills in the row defaults — `mcp_enabled` among them, which is
+    // what decides whether a newly registered workspace gets its `genie` server.
+    addWorkspace: vi.fn((row: Record<string, unknown>) => ({ mcp_enabled: 1, ...row })),
 }));
 vi.mock('../../backend/tynn', () => ({
     TynnBackend: class {
@@ -37,7 +39,11 @@ vi.mock('../../backend/tynn', () => ({
     },
 }));
 vi.mock('../../workspace/create-agi', () => ({
-    cloneAgiEnvelope: vi.fn(),
+    cloneAgiEnvelope: vi.fn(async ({ folder }: { folder: string }) => ({
+        path: `/parent/${folder}`,
+    })),
+    convertToAgiPlan: vi.fn(async ({ slug }: { slug: string }) => ({ path: `/parent/${slug}` })),
+    pushEnvelopeToOrigin: vi.fn(async () => {}),
 }));
 vi.mock('../provision', () => ({
     // ops-provision links the OPS workspace itself + reads each ws's link.
@@ -46,6 +52,8 @@ vi.mock('../provision', () => ({
 }));
 
 import {
+    applyOpsProvision,
+    applyOpsScaffold,
     childAgiCloneUrl,
     classifyGitRemoteError,
     computeOpsProvisionPlan,
@@ -519,5 +527,70 @@ describe('computeOpsProvisionPlan — presence + clone URL', () => {
             throw new Error('network exploded');
         });
         expect(plan.children[0]?.remote).toBe('unknown');
+    });
+});
+
+/**
+ * A workspace Genie REGISTERS is a workspace Genie has to make usable (genie#201).
+ *
+ * The reported failure: an Ops agent provisioned a governed child, and the new
+ * workspace came up with a `.mcp.json` carrying no `genie` server at all — no
+ * per-workspace endpoint token was ever minted for it — so every agent launched
+ * there had no `imDone` / `ForceTheQuestion` and could not reach the user. The
+ * desktop "add workspace" path had always written that entry; these two paths
+ * register workspaces without going through it, and simply forgot.
+ */
+describe('provisioned workspaces get their genie MCP entry (genie#201)', () => {
+    it('applyOpsProvision writes the genie server for each workspace it registers', async () => {
+        const wrote: Array<{ path: string; enabled: boolean; url: string | null }> = [];
+        const result = await applyOpsProvision(
+            OPS_WS,
+            [
+                {
+                    projectId: 'child-1',
+                    name: 'The Ripple Effect',
+                    slug: 'ripple',
+                    cloneUrl: 'https://github.com/o/ripple.agi.git',
+                },
+            ],
+            {
+                registerGenieMcp: (workspaceId, workspacePath) =>
+                    wrote.push({
+                        path: workspacePath,
+                        enabled: true,
+                        url: `http://127.0.0.1:5199/mcp/tok-${workspaceId}`,
+                    }),
+            },
+        );
+
+        expect(result.provisioned).toHaveLength(1);
+        expect(wrote).toEqual([
+            {
+                path: '/parent/ripple',
+                enabled: true,
+                url: 'http://127.0.0.1:5199/mcp/tok-child-1',
+            },
+        ]);
+    });
+
+    it('applyOpsScaffold does too — the other path that registers a workspace', async () => {
+        const wrote: string[] = [];
+        const result = await applyOpsScaffold(
+            OPS_WS,
+            [
+                {
+                    projectId: 'child-2',
+                    name: 'Second Child',
+                    slug: 'second',
+                    envelopeUrl: 'https://github.com/o/second.agi.git',
+                    sourceRepoUrl: 'https://github.com/o/second.git',
+                },
+            ],
+            async () => ({ clone_url: 'https://github.com/o/second.agi.git' }),
+            { registerGenieMcp: (_id, workspacePath) => wrote.push(workspacePath) },
+        );
+
+        expect(result.scaffolded).toHaveLength(1);
+        expect(wrote).toEqual(['/parent/second']);
     });
 });

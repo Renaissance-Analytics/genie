@@ -15,7 +15,8 @@ import {
     tynnEntry,
     hasTynnServer,
     hasTynnLiteralToken,
-    healTynnLiteralToken,
+    healTynnMcpEntry,
+    secureMcpUrl,
     writeWorkspaceTynnMcp,
     TYNN_TOKEN_ENV_KEY,
 } from '../../mcp/agent-config';
@@ -184,7 +185,7 @@ describe('tynn server config writing', () => {
                 },
             }),
         );
-        writeWorkspaceTynnMcp(dir, true, { url: 'http://tynn/mcp/new', token: 'rpk_NEW.minted' });
+        writeWorkspaceTynnMcp(dir, true, { url: 'https://tynn.test/mcp/new', token: 'rpk_NEW.minted' });
 
         // The fresh token ALSO landed in .env (preserving siblings) and is gitignored.
         const env = fs.readFileSync(path.join(dir, '.env'), 'utf8');
@@ -195,7 +196,7 @@ describe('tynn server config writing', () => {
         // no ${…} reference remains, and the sibling server is preserved.
         const cfg = JSON.parse(fs.readFileSync(path.join(dir, '.mcp.json'), 'utf8'));
         expect(cfg.mcpServers.tynn.headers.Authorization).toBe('Bearer rpk_NEW.minted');
-        expect(cfg.mcpServers.tynn.url).toBe('http://tynn/mcp/new');
+        expect(cfg.mcpServers.tynn.url).toBe('https://tynn.test/mcp/new');
         expect(cfg.mcpServers.other).toBeTruthy();
         const raw = fs.readFileSync(path.join(dir, '.mcp.json'), 'utf8');
         expect(raw).not.toContain('rpk_OLD.literal');
@@ -203,7 +204,65 @@ describe('tynn server config writing', () => {
     });
 });
 
-describe('healTynnLiteralToken (offline self-heal)', () => {
+/**
+ * The write boundary refuses a plaintext REMOTE MCP url (genie#201).
+ *
+ * Tynn handed back `http://tynn.ai/mcp/tynn` and Genie wrote it verbatim into
+ * `.mcp.json` — twice over a bug: the entry carries a literal `Bearer` token, so
+ * plaintext means the credential goes over the wire in the clear; and tynn.ai
+ * answers that url with a 301 to https, which an MCP client FOLLOWS, turning the
+ * POST into a GET that laravel/mcp answers 405 — so the agent could not list a
+ * single tool. It also came BACK after every hand-fix, because each re-provision
+ * rewrote the url from the mint response again.
+ */
+describe('secureMcpUrl (the write boundary, genie#201)', () => {
+    it('upgrades a non-loopback http:// url to https', () => {
+        expect(secureMcpUrl('http://tynn.ai/mcp/tynn')).toBe('https://tynn.ai/mcp/tynn');
+        expect(secureMcpUrl('http://tynn.test/mcp/proj?x=1')).toBe('https://tynn.test/mcp/proj?x=1');
+    });
+
+    it('leaves a LOOPBACK http url alone — Genie’s own server and a local dev Tynn are not remote', () => {
+        expect(secureMcpUrl('http://127.0.0.1:5199/mcp/abc')).toBe('http://127.0.0.1:5199/mcp/abc');
+        expect(secureMcpUrl('http://localhost:8000/mcp/tynn')).toBe('http://localhost:8000/mcp/tynn');
+        expect(secureMcpUrl('http://[::1]:8000/mcp/tynn')).toBe('http://[::1]:8000/mcp/tynn');
+    });
+
+    it('leaves anything already https — and anything unparseable — exactly as it is', () => {
+        expect(secureMcpUrl('https://tynn.ai/mcp/tynn')).toBe('https://tynn.ai/mcp/tynn');
+        expect(secureMcpUrl('not a url')).toBe('not a url');
+        expect(secureMcpUrl('')).toBe('');
+    });
+
+    it('writeWorkspaceTynnMcp writes the UPGRADED url to every target it syncs', () => {
+        const dir = makeTmpDir('tynn-http-upgrade');
+        writeWorkspaceTynnMcp(dir, true, { url: 'http://tynn.ai/mcp/tynn', token: 'rpk_NEW.minted' });
+
+        const claude = JSON.parse(fs.readFileSync(path.join(dir, '.mcp.json'), 'utf8'));
+        expect(claude.mcpServers.tynn.url).toBe('https://tynn.ai/mcp/tynn');
+        const cursor = JSON.parse(fs.readFileSync(path.join(dir, '.cursor', 'mcp.json'), 'utf8'));
+        expect(cursor.mcpServers.tynn.url).toBe('https://tynn.ai/mcp/tynn');
+        // The Codex mirror is written from the same url — it must not keep the
+        // plaintext one the other two just refused.
+        const codex = fs.readFileSync(path.join(dir, '.codex', 'config.toml'), 'utf8');
+        expect(codex).toContain('https://tynn.ai/mcp/tynn');
+        expect(codex).not.toContain('"http://tynn.ai/mcp/tynn"');
+    });
+
+    it('a hand-corrected https entry survives a re-provision that mints the http url again', () => {
+        // The reported recurrence: the custodian fixed the url to https, and a
+        // later provision flipped it back to http, breaking the agent's Tynn tools
+        // again — repeatedly.
+        const dir = makeTmpDir('tynn-http-recurrence');
+        writeWorkspaceTynnMcp(dir, true, { url: 'https://tynn.ai/mcp/tynn', token: 'rpk_A.first' });
+        writeWorkspaceTynnMcp(dir, true, { url: 'http://tynn.ai/mcp/tynn', token: 'rpk_B.second' });
+
+        const cfg = JSON.parse(fs.readFileSync(path.join(dir, '.mcp.json'), 'utf8'));
+        expect(cfg.mcpServers.tynn.url).toBe('https://tynn.ai/mcp/tynn');
+        expect(cfg.mcpServers.tynn.headers.Authorization).toBe('Bearer rpk_B.second');
+    });
+});
+
+describe('healTynnMcpEntry (offline self-heal)', () => {
     const oldRefConfig = () => ({
         mcpServers: {
             other: { type: 'http', url: 'http://x' },
@@ -221,7 +280,7 @@ describe('healTynnLiteralToken (offline self-heal)', () => {
         fs.writeFileSync(path.join(dir, '.env'), `${TYNN_TOKEN_ENV_KEY}=rpk_env.token\n`);
 
         expect(hasTynnLiteralToken(dir)).toBe(false);
-        expect(healTynnLiteralToken(dir)).toBe(true);
+        expect(healTynnMcpEntry(dir)).toBe(true);
         expect(hasTynnLiteralToken(dir)).toBe(true);
 
         const cfg = JSON.parse(fs.readFileSync(path.join(dir, '.mcp.json'), 'utf8'));
@@ -245,14 +304,59 @@ describe('healTynnLiteralToken (offline self-heal)', () => {
                 },
             }),
         );
-        expect(healTynnLiteralToken(dir)).toBe(false);
+        expect(healTynnMcpEntry(dir)).toBe(false);
     });
 
     it('is a no-op (false) when the .env has no token to embed (leave for a re-mint)', () => {
         const dir = makeTmpDir('heal-notoken');
         fs.writeFileSync(path.join(dir, '.mcp.json'), JSON.stringify(oldRefConfig()));
-        expect(healTynnLiteralToken(dir)).toBe(false);
+        expect(healTynnMcpEntry(dir)).toBe(false);
         expect(hasTynnLiteralToken(dir)).toBe(false);
+    });
+
+    it('heals a plaintext REMOTE url to https, keeping the token — no re-mint (genie#201)', () => {
+        // Every workspace already provisioned with `http://tynn.ai/mcp/tynn` is
+        // broken until something rewrites it; the boot heal is what reaches them,
+        // and the token already in the entry is all it needs.
+        const dir = makeTmpDir('heal-scheme');
+        fs.writeFileSync(
+            path.join(dir, '.mcp.json'),
+            JSON.stringify({
+                mcpServers: {
+                    other: { type: 'http', url: 'http://x' },
+                    tynn: {
+                        type: 'http',
+                        url: 'http://tynn.ai/mcp/tynn',
+                        headers: { Authorization: 'Bearer rpk_live.token' },
+                    },
+                },
+            }),
+        );
+        expect(healTynnMcpEntry(dir)).toBe(true);
+
+        const cfg = JSON.parse(fs.readFileSync(path.join(dir, '.mcp.json'), 'utf8'));
+        expect(cfg.mcpServers.tynn.url).toBe('https://tynn.ai/mcp/tynn');
+        expect(cfg.mcpServers.tynn.headers.Authorization).toBe('Bearer rpk_live.token');
+        expect(cfg.mcpServers.other).toBeTruthy();
+        // Second pass has nothing left to do.
+        expect(healTynnMcpEntry(dir)).toBe(false);
+    });
+
+    it('leaves a LOOPBACK http entry alone — a local Tynn is not the bug', () => {
+        const dir = makeTmpDir('heal-scheme-loopback');
+        fs.writeFileSync(
+            path.join(dir, '.mcp.json'),
+            JSON.stringify({
+                mcpServers: {
+                    tynn: {
+                        type: 'http',
+                        url: 'http://localhost:8000/mcp/tynn',
+                        headers: { Authorization: 'Bearer rpk_local.token' },
+                    },
+                },
+            }),
+        );
+        expect(healTynnMcpEntry(dir)).toBe(false);
     });
 
     it('is a no-op (false) when there is no tynn entry at all', () => {
@@ -262,7 +366,7 @@ describe('healTynnLiteralToken (offline self-heal)', () => {
             JSON.stringify({ mcpServers: { other: { type: 'http', url: 'http://x' } } }),
         );
         fs.writeFileSync(path.join(dir, '.env'), `${TYNN_TOKEN_ENV_KEY}=rpk_env.token\n`);
-        expect(healTynnLiteralToken(dir)).toBe(false);
+        expect(healTynnMcpEntry(dir)).toBe(false);
     });
 });
 

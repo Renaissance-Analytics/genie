@@ -404,7 +404,7 @@ describe('one engine, two workspaces', () => {
         const healthy = createDevServiceManager(deps(fakeRuntime(), { a: pgFor('svc-a') }));
         await healthy.acquire('a', 'svc-a');
         const ok = healthy.hostEnvReportFor('a');
-        expect(ok).toMatchObject({ enabled: 1, live: 1, withHostPort: 1, missingHostPort: [] });
+        expect(ok).toMatchObject({ enabled: 1, live: 1, withHostPort: 1, gaps: [] });
         expect(ok.env.DB_HOST).toBe('127.0.0.1');
 
         // Degraded: the engine is live but nothing is published — the report names
@@ -415,8 +415,75 @@ describe('one engine, two workspaces', () => {
         );
         await degraded.acquire('a', 'svc-a');
         const bad = degraded.hostEnvReportFor('a');
-        expect(bad).toMatchObject({ enabled: 1, live: 1, withHostPort: 0, missingHostPort: ['postgres'] });
+        expect(bad).toMatchObject({ enabled: 1, live: 1, withHostPort: 0 });
+        expect(bad.gaps).toEqual([
+            { engine: 'postgres', version: '16', reason: 'no-host-port' },
+        ]);
         expect(bad.env).toEqual({});
+    });
+
+    it('reports an ENABLED engine that contributed NOTHING even when another one did (genie#204)', async () => {
+        // The first-hand failure: postgres was injected (correct DB_PORT) while
+        // redis contributed nothing, so the app fell back to redis on 6379 and
+        // 500'd every request. The report has to name redis — a healthy postgres
+        // must not make the missing one invisible.
+        const runtime = fakeRuntime();
+        const manager = createDevServiceManager(
+            deps(runtime, {
+                a: {
+                    'svc-pg': { ...PG16 },
+                    'svc-redis': {
+                        engine: 'redis',
+                        version: '7',
+                        dedicated: false,
+                        password: 'workspace_pw_0123456789',
+                        enabled: true,
+                    },
+                },
+            }),
+        );
+        // Only postgres is acquired — redis is enabled but never came up here.
+        await manager.acquire('a', 'svc-pg');
+
+        const report = manager.hostEnvReportFor('a');
+        expect(report.env.DB_PORT).toBeTruthy();
+        expect(report.env.REDIS_PORT).toBeUndefined();
+        expect(report).toMatchObject({ enabled: 2, live: 1, withHostPort: 1 });
+        expect(report.gaps).toEqual([{ engine: 'redis', version: '7', reason: 'not-live' }]);
+    });
+
+    it('carries the failure it already recorded for a service that could not start', async () => {
+        // The manager knows exactly why the engine is not live (`lastFailure`);
+        // throwing that away is what forced a human to re-derive it from a 500.
+        const runtime = fakeRuntime({ execFails: 'CREATE DATABASE' });
+        const manager = createDevServiceManager(deps(runtime, { a: pgFor('svc-a') }));
+        const status = await manager.acquire('a', 'svc-a');
+        expect(status.state).toBe('failed');
+
+        const report = manager.hostEnvReportFor('a');
+        expect(report.gaps).toHaveLength(1);
+        expect(report.gaps[0]).toMatchObject({ engine: 'postgres', reason: 'not-live' });
+        expect(report.gaps[0].error).toBeTruthy();
+    });
+
+    it('does NOT call the inactive version of an engine a gap — it contributes by design', async () => {
+        // A workspace can hold postgres 16 AND 17; only the ACTIVE one owns the
+        // single-valued DB_* names (#242 P3). Reporting the other as missing env
+        // would be a permanent false alarm on every start.
+        const runtime = fakeRuntime();
+        const manager = createDevServiceManager(
+            deps(runtime, {
+                a: {
+                    'svc-16': { ...PG16, active: true },
+                    'svc-17': { ...PG16, version: '17' },
+                },
+            }),
+        );
+        await manager.acquire('a', 'svc-16');
+        await manager.acquire('a', 'svc-17');
+
+        const report = manager.hostEnvReportFor('a');
+        expect(report.gaps).toEqual([]);
     });
 });
 

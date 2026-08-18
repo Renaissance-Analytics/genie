@@ -180,7 +180,7 @@ export function buildHostingDeps(ports: HostingPorts): HostingDeps {
         // in silence (moic's beta.245 report).
         serviceHostEnvReportFor: async (workspaceId) => {
             const svc = devServiceManager();
-            if (!svc) return { env: {}, enabled: 0, live: 0, withHostPort: 0, missingHostPort: [] };
+            if (!svc) return { env: {}, enabled: 0, live: 0, withHostPort: 0, gaps: [] };
             for (const row of svc.list(workspaceId)) {
                 // Tolerate a single service failing: acquire never throws (it returns
                 // a failed status), but guard anyway so one engine can never abort the
@@ -196,7 +196,7 @@ export function buildHostingDeps(ports: HostingPorts): HostingDeps {
                       enabled: 0,
                       live: 0,
                       withHostPort: 0,
-                      missingHostPort: [],
+                      gaps: [],
                   };
         },
         // Genie runs a host-native site's dev server as a real HOST process (no
