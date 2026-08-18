@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { projectPickerOptions } from '../lib/project-picker';
 import {
     Action,
     Badge,
@@ -1445,14 +1446,7 @@ function ProjectPicker({
             // workspace. An explicit "no project" entry lets the user pick (or
             // clear back to) none.
             { value: '', label: '— No project (just a folder) —' },
-            ...projects.map((p) => {
-                const tag = (p.backend ?? 'tynn').toUpperCase();
-                const owner = p.owner_name ?? '';
-                return {
-                    value: p.id,
-                    label: `[${tag}] ${p.name}${owner ? ' · ' + owner : ''}`,
-                };
-            }),
+            ...projectPickerOptions(projects, { withOwner: true }),
         ],
         [projects],
     );

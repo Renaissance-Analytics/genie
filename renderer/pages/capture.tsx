@@ -1,3 +1,4 @@
+import { projectPickerOptions } from '../lib/project-picker';
 import { useEffect, useRef, useState } from 'react';
 import { Action, Icon, Select, Text } from '@particle-academy/react-fancy';
 import { api, type TynnProject } from '../lib/genie';
@@ -76,10 +77,7 @@ export default function CapturePage() {
                 <Select
                     value={projectId}
                     onValueChange={setProjectId}
-                    list={projects.map((p) => ({
-                        value: p.id,
-                        label: `[${(p.backend ?? 'tynn').toUpperCase()}] ${p.name}`,
-                    }))}
+                    list={projectPickerOptions(projects)}
                 />
             </div>
 
