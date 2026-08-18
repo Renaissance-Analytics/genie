@@ -264,6 +264,7 @@ import {
 } from './e2e/tunnel';
 import { seedAgentAccessE2E } from './e2e/agent-access';
 import { seedRepoE2E } from './e2e/repo';
+import { seedAgentPulseE2E } from './e2e/agent-pulse';
 
 /**
  * Genie — Tynn desktop companion.
@@ -2098,6 +2099,7 @@ function showE2EWindow(): void {
         'e2e-repo-panel',
         'e2e-terminal-recovery',
         'e2e-tynn-health',
+        'e2e-agent-pulse',
     ] as const;
     const page = (ALLOWED as readonly string[]).includes(requested)
         ? requested
@@ -2119,6 +2121,16 @@ function showE2EWindow(): void {
             seedRepoE2E();
         } catch (e) {
             console.error('[e2e] repo-panel seed failed', e);
+        }
+    }
+    if (page === 'e2e-agent-pulse') {
+        // Seed the fixture workspace BEFORE the window loads — the harness page
+        // resolves its row by listing on mount — and expose the pulse emitter so
+        // the spec can push activity on the REAL `agent-pulse` channel.
+        try {
+            seedAgentPulseE2E();
+        } catch (e) {
+            console.error('[e2e] agent-pulse seed failed', e);
         }
     }
     if (page === 'e2e-terminal-recovery') {
