@@ -7,30 +7,39 @@ import { launchGenieE2E } from './helpers/launch';
  * THE BUG: hovering a collapsed workspace row that had an active agent made the
  * activity sparkline vanish; it came back on mouse-out. `.tproj-head` carries a
  * TRANSPARENT background that becomes an OPAQUE `var(--bg-2)` on `:hover`
- * (master.css:1919), and the sparkline was rendered as a SIBLING before the
- * head, at `z-index:0` — i.e. behind it. So the hover fill painted over it.
+ * (master.css:1919), and the sparkline was a SIBLING painted behind the head at
+ * `z-index:0` — so the hover fill painted straight over it.
  *
  * WHY E2E: this is a question about PAINT ORDER, and nothing short of a real
  * compositor can answer it. The unit suite runs in Node with no DOM, and jsdom
- * would not help either — it has no layout and no painting, so a completely
- * covered element still reports itself present and "visible". Playwright's own
- * `toBeVisible()` is no better: it checks CSS visibility and box size, neither of
- * which changes when something paints on top. `elementFromPoint` cannot see it
- * either, because the sparkline sets `pointer-events:none` by design.
+ * would not help — it has no layout and no painting, so a completely covered
+ * element still reports itself present and "visible". Playwright's `toBeVisible()`
+ * is no better: it checks CSS visibility and box size, neither of which changes
+ * when something paints on top. `elementFromPoint` cannot see it either, because
+ * the sparkline sets `pointer-events:none` by design.
  *
- * So the assertion is made of PIXELS. Which puts the burden on the MEASUREMENT
- * being honest, and three things had to be fixed before it was — each of them
- * caught by a guard below rather than by luck:
+ * HOW IT MEASURES — a DIFFERENTIAL, not a colour count. Counting "indigo pixels"
+ * was tried first and is not sound: the row's own chrome answers to any colour
+ * predicate (agent-active paints the workspace NAME in the same `var(--agent)`),
+ * antialiasing contributes a tail, and the totals swing between platforms and
+ * themes, so every threshold becomes a guess.
  *
- *   - The row must not be the SELECTED one. `.tproj.is-active > .tproj-head`
- *     (0,3,0) sets its own background and beats `.tproj-head:hover` (0,2,0), so a
- *     selected row never takes the hover fill and cannot exhibit the bug.
- *   - The row must not be AGENT-ACTIVE while measuring. That class paints the
- *     workspace NAME in `var(--agent)` — the same indigo as the sparkline — and
- *     text is non-positioned content that paints ABOVE the head's background, so
- *     it survives any hover. Counting it made the broken layout look fixed.
- *   - The measurement must not scroll, and the hover must still be on when it
- *     finishes; see {@link pulsePixelsWhileHovered}.
+ * Instead the row is photographed in two states that differ by EXACTLY one
+ * thing — the sparkline, which renders only while the row is collapsed — and the
+ * two photographs are compared:
+ *
+ *     collapsed (sparkline present)  vs  expanded (sparkline absent)
+ *
+ * Everything else in the head is identical between them: same name, same colours,
+ * same geometry. So a substantial number of differing pixels means the sparkline
+ * is VISIBLE, and near-zero means it is not being painted where it should be.
+ * Run that comparison while the row is HOVERED and it answers #197 exactly:
+ * pre-fix the hover fill covered the sparkline, both photographs came out the
+ * same, and the difference collapsed to nothing.
+ *
+ * The chevron is excluded from the comparison because it rotates between the two
+ * states (`.tproj.collapsed .chev { transform: rotate(-90deg) }`) and so differs
+ * in the broken and the fixed layout alike.
  *
  * The ring fills through the REAL `agent-pulse` broadcast from main, so a channel
  * drift between emit and listen fails this spec rather than dying silently.
@@ -39,68 +48,84 @@ import { launchGenieE2E } from './helpers/launch';
 let app: ElectronApplication;
 let page: Page;
 
-/** The sparkline is `--agent` (#818cf8) mixed over the row. Both the 55% stroke
- *  and the 14% fill land markedly blue-dominant against every row colour in play
- *  — the dark hover fill is `#27272a`, the light one `#f4f4f5`, both neutral — so
- *  "blue clearly beats red and green" finds pulse pixels without pinning a theme.
- *  `sparklineIsTheOnlyIndigo` proves nothing ELSE on the row answers to it. */
-const PULSE_PIXEL = `(r, g, b) => b > r + 12 && b > g + 12 && b > 60`;
-
 const head = () => page.locator('.tproj-head').first();
+const spark = () => page.locator('.agent-pulse-spark');
 
-/** Put the row back in the state the sparkline renders in. Tests call this
- *  rather than assuming the previous one left it collapsed — a failure part-way
- *  through the metric guard would otherwise cascade into every test after it.
- *
- *  NOTE the chevron's title names the ACTION, not the state: an EXPANDED row
- *  offers "Collapse". So collapsing means clicking the button titled Collapse,
- *  and its absence means the row is already collapsed. */
-async function ensureCollapsed(): Promise<void> {
-    const collapse = page.locator('.tproj-head [title="Collapse"]').first();
-    if (await collapse.count()) await collapse.click();
-    await expect(page.locator('.agent-pulse-spark')).toBeVisible();
+interface Region {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+}
+
+/** The chevron's title names the ACTION, not the state: an EXPANDED row offers
+ *  "Collapse". So the button's absence is how you know you are already there. */
+async function setCollapsed(collapsed: boolean): Promise<void> {
+    const button = page.locator(`.tproj-head [title="${collapsed ? 'Collapse' : 'Expand'}"]`).first();
+    if (await button.count()) await button.click();
+    if (collapsed) await expect(spark()).toBeVisible();
+    else await expect(spark()).toHaveCount(0);
 }
 
 /**
- * Count the sparkline's pixels inside the row.
- *
- * A CLIP screenshot of the page, never `locator.screenshot()`: an element
- * screenshot calls scrollIntoViewIfNeeded first, and any scroll moves the row out
- * from under the mouse, which drops `:hover` and removes the very fill this spec
- * checks the pulse survives.
- *
- * The PNG is decoded by the page's OWN decoder — handed back as a data URL and
- * drawn to a canvas — rather than by a Node PNG library: `pngjs`/`sharp` are only
- * present transitively via Playwright, so importing one would leave this spec
- * breaking on an unrelated lockfile change.
+ * The head's box minus the chevron — the region the two states must agree on.
+ * Returned in CSS pixels for `page.screenshot({ clip })`, which does not scroll
+ * and so cannot move the row out from under the mouse mid-measurement the way
+ * `locator.screenshot()`'s scrollIntoViewIfNeeded can.
  */
-async function pulsePixels(): Promise<number> {
+async function comparisonRegion(): Promise<Region> {
     const box = await head().boundingBox();
     if (!box) throw new Error('row has no box');
-    const shot = await page.screenshot({ clip: box });
+    const chev = await page.locator('.tproj-head .chev').first().boundingBox();
+    const left = chev ? Math.max(box.x, chev.x + chev.width + 2) : box.x;
+    const width = box.x + box.width - left;
+    if (width < 20) throw new Error(`comparison region too narrow: ${width}`);
+    return { x: left, y: box.y, width, height: box.height };
+}
+
+async function shoot(region: Region): Promise<string> {
+    return (await page.screenshot({ clip: region })).toString('base64');
+}
+
+/** How many pixels differ between two same-size shots, past a tolerance that
+ *  ignores subpixel noise. Decoding uses the page's OWN image decoder rather than
+ *  a Node PNG library: `pngjs`/`sharp` are present only transitively via
+ *  Playwright, so importing one would leave this spec breaking on an unrelated
+ *  lockfile change. */
+async function differingPixels(a: string, b: string): Promise<number> {
     return page.evaluate(
-        async ([dataUrl, predicateSrc]) => {
-            const img = new Image();
-            await new Promise((resolve, reject) => {
-                img.onload = resolve;
-                img.onerror = reject;
-                img.src = dataUrl;
-            });
-            const canvas = document.createElement('canvas');
-            canvas.width = img.width;
-            canvas.height = img.height;
-            const ctx = canvas.getContext('2d');
-            if (!ctx) throw new Error('no 2d context');
-            ctx.drawImage(img, 0, 0);
-            const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            const isPulse = eval(predicateSrc) as (r: number, g: number, b: number) => boolean;
+        async ([aUrl, bUrl]) => {
+            const load = async (src: string) => {
+                const img = new Image();
+                await new Promise((resolve, reject) => {
+                    img.onload = resolve;
+                    img.onerror = reject;
+                    img.src = src;
+                });
+                const canvas = document.createElement('canvas');
+                canvas.width = img.width;
+                canvas.height = img.height;
+                const ctx = canvas.getContext('2d');
+                if (!ctx) throw new Error('no 2d context');
+                ctx.drawImage(img, 0, 0);
+                return ctx.getImageData(0, 0, canvas.width, canvas.height);
+            };
+            const A = await load(aUrl);
+            const B = await load(bUrl);
+            if (A.width !== B.width || A.height !== B.height) {
+                throw new Error(`size drift: ${A.width}x${A.height} vs ${B.width}x${B.height}`);
+            }
             let n = 0;
-            for (let i = 0; i < data.length; i += 4) {
-                if (isPulse(data[i]!, data[i + 1]!, data[i + 2]!)) n++;
+            for (let i = 0; i < A.data.length; i += 4) {
+                const d =
+                    Math.abs(A.data[i]! - B.data[i]!) +
+                    Math.abs(A.data[i + 1]! - B.data[i + 1]!) +
+                    Math.abs(A.data[i + 2]! - B.data[i + 2]!);
+                if (d > 12) n++;
             }
             return n;
         },
-        [`data:image/png;base64,${shot.toString('base64')}`, PULSE_PIXEL] as const,
+        [`data:image/png;base64,${a}`, `data:image/png;base64,${b}`] as const,
     );
 }
 
@@ -116,29 +141,43 @@ async function headBackgroundAlpha(): Promise<number> {
 }
 
 /**
- * Count the pulse with the row genuinely hovered THROUGHOUT the measurement.
+ * How many pixels the sparkline is responsible for, with the row hovered or not.
  *
- * The row re-renders about once a second — the ring keeps shifting — and a
- * re-render can leave the browser's hover state stale until the pointer moves
- * again, which showed up on Windows as a fully opaque row before the screenshot
- * and a fading `alpha: 0.224` after it. A count taken across that gap is a count
- * of an UNHOVERED row, and it "survives" in the broken layout too.
- *
- * So the pointer is re-planted, the fill is confirmed opaque, the pixels are
- * counted, and the fill is confirmed opaque AGAIN. Only a measurement bracketed
- * by two opaque readings is returned; otherwise it retries, and having never
- * managed one it throws rather than quietly reporting a number.
+ * When `hovered`, the row is re-hovered before EACH shot and the fill is
+ * confirmed opaque on both sides of it. The row re-renders about once a second as
+ * the ring shifts, and a re-render can leave the browser's hover stale until the
+ * pointer moves — Windows showed a fully opaque row before a screenshot and a
+ * fading `alpha: 0.224` after. A shot taken across that gap is a shot of an
+ * UNHOVERED row, which would make the broken layout look fixed.
  */
-async function pulsePixelsWhileHovered(): Promise<number> {
-    for (let attempt = 0; attempt < 5; attempt++) {
-        // `hover()`, not `mouse.move()` to the same point: on Windows the raw
-        // move did not register as a hover at all, while the actionability hover
-        // did — it is the one the other tests here use successfully.
-        await head().hover();
-        await expect.poll(headBackgroundAlpha).toBe(1);
+async function sparklinePixels(hovered: boolean): Promise<number> {
+    const settle = async () => {
+        if (hovered) {
+            // hover(), not mouse.move() to the same point: on Windows the raw
+            // move did not register as a hover at all.
+            await head().hover();
+            await expect.poll(headBackgroundAlpha).toBe(1);
+        } else {
+            await page.mouse.move(0, 0);
+            await expect.poll(headBackgroundAlpha).not.toBe(1);
+        }
+    };
+    const held = async () => !hovered || (await headBackgroundAlpha()) === 1;
 
-        const pixels = await pulsePixels();
-        if ((await headBackgroundAlpha()) === 1) return pixels;
+    for (let attempt = 0; attempt < 5; attempt++) {
+        await setCollapsed(true);
+        const region = await comparisonRegion();
+        await settle();
+        const withSpark = await shoot(region);
+        const heldFirst = await held();
+
+        await setCollapsed(false);
+        await settle();
+        const withoutSpark = await shoot(region);
+        const heldSecond = await held();
+
+        await setCollapsed(true);
+        if (heldFirst && heldSecond) return differingPixels(withSpark, withoutSpark);
     }
     throw new Error('could not hold the hover across a measurement');
 }
@@ -146,17 +185,14 @@ async function pulsePixelsWhileHovered(): Promise<number> {
 test.beforeAll(async () => {
     ({ app, page } = await launchGenieE2E('agent-pulse'));
     await expect(head()).toBeVisible();
+    await setCollapsed(true);
 
-    // The sparkline renders for COLLAPSED rows only — an expanded workspace shows
-    // its terminals' own per-row lights instead. Collapse via the real chevron, so
-    // the spec fails if that control regresses.
-    await page.locator('.tproj-head [title="Collapse"]').first().click();
-
-    // Fill the ring through the REAL broadcast, with `active: false` — the ring
-    // fills from `bytes` either way, and leaving the row agent-active would paint
-    // its NAME in the same indigo the pixel predicate looks for. Samples of
-    // differing size so the polyline has actual shape: a flat ring maps every
-    // point to one y and draws a single thin line.
+    // Fill the ring through the REAL broadcast, with `active: false`. The ring
+    // fills from `bytes` either way, and an agent-active row runs a breathing
+    // box-shadow animation — which would differ between two photographs taken a
+    // moment apart and show up as sparkline pixels that are not the sparkline.
+    // Samples of differing size so the polyline has actual shape: a flat ring maps
+    // every point to one y and draws a single thin line.
     await app.evaluate(({}, samples) => {
         const fixture = (globalThis as Record<string, unknown>).__GENIE_E2E_PULSE__ as
             | { emit: (bytes: number, active: boolean) => void }
@@ -165,86 +201,52 @@ test.beforeAll(async () => {
         for (const s of samples) fixture.emit(s, false);
     }, [400, 1200, 300, 2400, 800, 1800, 200, 3000]);
 
-    await expect(page.locator('.agent-pulse-spark')).toBeVisible();
+    await expect(spark()).toBeVisible();
 });
 
 test.afterAll(async () => {
     await app?.close();
 });
 
-test('the pulse is drawn on an idle row', async () => {
-    await ensureCollapsed();
-    // Guard 1. Everything below compares against this number, so a sparkline that
-    // never painted would make the survival assertion vacuously true.
-    expect(await pulsePixels()).toBeGreaterThan(0);
-});
-
-test('the counted pixels are the sparkline and nothing else', async () => {
-    // Guard 2, and the one that matters most: it proves the METRIC is valid.
-    //
-    // Expanding the row removes the sparkline and changes nothing else about the
-    // row's chrome. If the count does not collapse to nothing, then something
-    // else on the row answers to the predicate — as the agent-active workspace
-    // name did, in the same `var(--agent)` indigo — and every number here is
-    // measuring that instead.
-    await ensureCollapsed();
-    const withSparkline = await pulsePixels();
-    // A signal worth dividing into. If the sparkline only ever contributed a
-    // handful of pixels, the ratio below would be noise comparing itself.
-    expect(withSparkline).toBeGreaterThan(100);
-
-    try {
-        await page.locator('.tproj-head [title="Expand"]').first().click();
-        await expect(page.locator('.agent-pulse-spark')).toHaveCount(0);
-
-        // Not exactly zero: a few antialiased pixels on the row's own edges answer
-        // to any colour predicate, and Windows reported 7 of them. The claim being
-        // made is that the sparkline is where essentially ALL of this colour comes
-        // from — so removing it must remove essentially all of the count.
-        expect(await pulsePixels()).toBeLessThan(withSparkline * 0.05);
-    } finally {
-        // Restore, even on failure: leaving the row expanded would strand every
-        // later test with no sparkline and report their cause as this one's.
-        await ensureCollapsed();
-    }
-    expect(await pulsePixels()).toBeGreaterThan(withSparkline * 0.5);
+test('the sparkline is visible on an idle row', async () => {
+    // The metric proving itself, with no hover involved: the sparkline must
+    // account for a substantial number of pixels. If this number is small then
+    // every number below is noise, and the survival test would be comparing
+    // nothing against nothing and passing for it.
+    expect(await sparklinePixels(false)).toBeGreaterThan(100);
 });
 
 test('hovering the row paints an opaque fill over it', async () => {
-    // Guard 3. The bug was the hover fill covering the pulse; if that fill stops
-    // applying there is no hazard left and the survival test proves nothing.
+    // The hazard itself. If the hover fill ever stops applying there is nothing
+    // left to paint over the sparkline and the survival test proves nothing.
     await head().hover();
     await expect.poll(headBackgroundAlpha).toBe(1);
 });
 
-test('the pulse survives the hover — genie#197', async () => {
-    await ensureCollapsed();
-    await page.mouse.move(0, 0);
-    await expect.poll(headBackgroundAlpha).not.toBe(1);
-    const idle = await pulsePixels();
+test('the sparkline survives the hover — genie#197', async () => {
+    const idle = await sparklinePixels(false);
+    const hovered = await sparklinePixels(true);
 
-    const hovered = await pulsePixelsWhileHovered();
-
-    // Pre-fix this was ~0: the opaque fill painted straight over the sparkline.
-    // Not asserting equality — the fill changes what the semi-transparent pulse
+    // Pre-fix this collapsed to ~0: with the opaque fill painted over it, the row
+    // photographed identically with and without the sparkline. Not asserting
+    // equality with `idle` — the fill changes what the semi-transparent pulse
     // composites against, so individual pixels legitimately shift. What must not
-    // happen is the pulse DISAPPEARING.
+    // happen is the sparkline making NO difference to the row.
     expect(hovered).toBeGreaterThan(idle * 0.5);
 });
 
-test('the pulse is painted by the hovered element itself, not behind it', async () => {
-    await ensureCollapsed();
+test('the sparkline is painted by the hovered element itself, not behind it', async () => {
     // The structural invariant behind the fix, pinned so a refactor that moves the
     // sparkline back OUT of the head reads as the regression it is — and so the
-    // suite says WHY the pixels survive, not just that they do.
-    const nested = await page
-        .locator('.agent-pulse-spark')
+    // suite records WHY the pixels survive, not merely that they do.
+    await setCollapsed(true);
+
+    const nested = await spark()
         .first()
         .evaluate((el) => Boolean(el.closest('.tproj-head')));
     expect(nested).toBe(true);
 
-    const z = await page
-        .locator('.agent-pulse-spark')
+    const z = await spark()
         .first()
         .evaluate((el) => getComputedStyle(el).zIndex);
     expect(Number(z)).toBeLessThan(0);
