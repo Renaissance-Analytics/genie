@@ -1519,6 +1519,31 @@ export function registerIpcHandlers(): void {
             },
         ) => getTynnBackend().createProject(input),
     );
+    // FEEDBACK about Genie itself (Tynn #249). Separate channel from capture-wish
+    // because they land in different places: a wish is work the user WANTS and
+    // goes to the backlog; feedback is a report about the tool and goes to Tynn's
+    // feedback pipeline to be triaged, quick-accepted or converted.
+    ipcMain.handle(
+        'tynn:submit-feedback',
+        async (
+            _e,
+            projectId: string,
+            message: string,
+            meta: Record<string, string> = {},
+            backendKind: BackendKind = 'tynn',
+        ) => {
+            try {
+                const backend = backendOfKind(backendKind);
+                const result = await backend.submitFeedback(projectId, message, {
+                    ...meta,
+                    genie_version: app.getVersion(),
+                });
+                return { ok: true, id: result.id };
+            } catch (e) {
+                return { ok: false, error: e instanceof Error ? e.message : String(e) };
+            }
+        },
+    );
     ipcMain.handle(
         'tynn:capture-wish',
         async (

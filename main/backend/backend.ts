@@ -69,6 +69,24 @@ export interface Backend {
 
     captureWish(projectId: string, content: string): Promise<BackendCaptureResult>;
 
+    /**
+     * File FEEDBACK about the product against a project (Tynn #249).
+     *
+     * Distinct from {@link captureWish}: a wish is work the user WANTS, and lands
+     * in the backlog; feedback is a report about the tool, and lands in Tynn's
+     * feedback pipeline where it can be triaged, quick-accepted or converted. Two
+     * different destinations, so two calls rather than one with a flag.
+     *
+     * `meta` carries the context that makes a report actionable later — Genie
+     * version, workspace, and for an agent its terminal. The SOURCE is stamped by
+     * the server, not here.
+     */
+    submitFeedback(
+        projectId: string,
+        message: string,
+        meta?: Record<string, string>,
+    ): Promise<BackendCaptureResult>;
+
     fetchInbox(): Promise<BackendInbox>;
 
     /** Opens the entity / path in the user's default browser. */

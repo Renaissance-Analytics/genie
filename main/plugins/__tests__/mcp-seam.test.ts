@@ -39,6 +39,7 @@ function ctx(over: Partial<McpContext> = {}): McpContext {
         openFileForUser: vi.fn().mockResolvedValue({ ok: true, reused: false, openedNew: true }),
         setEnv: vi.fn().mockReturnValue({ ok: true, file: '.env' }),
         checkEnv: vi.fn().mockReturnValue({ ok: true, exists: false, file: '.env' }),
+        submitFeedback: vi.fn().mockResolvedValue({ ok: true, id: 'fb-1' }),
         isOpsProject: vi.fn().mockResolvedValue(false),
         ...over,
     };
@@ -99,6 +100,7 @@ describe('tools/list plugin generalization', () => {
             'openFileForUser',
             'setEnv',
             'checkEnv',
+            'submitFeedback',
             'initializeWorkspace',
             'genieGuide',
         ]);

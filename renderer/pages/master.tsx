@@ -3,6 +3,7 @@ import { DEFAULT_HOTKEYS, type HotkeyBindings } from '../lib/hotkeys';
 import { useGenieHotkeys } from '../lib/use-genie-hotkeys';
 import { ftqNudgeBytes } from '../lib/ftq-nudge';
 import GenieCommandWindow, { type SavedPrompt } from '../components/Master/GenieCommandWindow';
+import FeedbackModal from '../components/Master/FeedbackModal';
 import Chooser from '../components/Master/Chooser';
 import ProjectContextMenu from '../components/Master/ProjectContextMenu';
 import WorkspaceSettingsModal from '../components/Master/WorkspaceSettingsModal';
@@ -322,6 +323,7 @@ function MasterInner() {
     }, []);
 
     const [commandWindowFor, setCommandWindowFor] = useState<string | null>(null);
+    const [feedbackWsId, setFeedbackWsId] = useState<string | null>(null);
     const [prompts, setPrompts] = useState<SavedPrompt[]>([]);
 
     useGenieHotkeys(
@@ -2082,7 +2084,20 @@ function MasterInner() {
                         onOpenInBrowser={() => openProjectInBrowser(ws.id)}
                         onSettings={() => setSettingsWorkspaceId(ws.id)}
                         onSiteManager={() => setSiteManagerWsId(ws.id)}
+                        onFeedback={() => setFeedbackWsId(ws.id)}
                         onRemove={() => void removeWorkspaceRow(ws.id)}
+                    />
+                );
+            })()}
+
+            {feedbackWsId && (() => {
+                const ws = workspacesById.get(feedbackWsId);
+                if (!ws) return null;
+                return (
+                    <FeedbackModal
+                        workspace={ws}
+                        open
+                        onClose={() => setFeedbackWsId(null)}
                     />
                 );
             })()}

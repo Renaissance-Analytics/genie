@@ -420,6 +420,25 @@ OBFUSCATED to its last 4 chars (\`••••••3f2a\`) unless you pass \`fo
 Non-secret values return in full. Only \`force\` a secret when you truly need the
 literal. Available to System-workspace agents too.
 
+### submitFeedback
+**File feedback about GENIE ITSELF** into this workspace's Tynn project — a rough
+edge, a confusing surface, something that behaved unexpectedly. It lands in Tynn's
+feedback pipeline, where a human triages, quick-accepts or converts it to a wish.
+
+Reach for it the MOMENT you notice something, instead of writing it into a
+terminal nobody is reading. That is the same reason \`imDone\` and
+\`ForceTheQuestion\` exist: a remark in a terminal the user is not watching has not
+been made.
+
+- Pass \`message\` — what happened, in your own words. Concrete beats polite: what
+  you expected, what you got.
+- Genie stamps the version, workspace and terminal itself, so do not describe your
+  own environment; the facts Genie knows for certain are better than the ones you
+  believe.
+
+NOT for: work you are doing (a feature is a wish, a defect is a repo issue), and
+NOT for asking the user something — that is \`ForceTheQuestion\`.
+
 ### ForceTheQuestion
 Call this whenever you are **blocked on a decision, clarification, or approval
 only the user can give**. It raises an OS-level, always-on-top modal that floats

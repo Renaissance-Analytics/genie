@@ -505,6 +505,20 @@ export class TynnBackend implements Backend {
         return { backend: 'tynn', id: data.id };
     }
 
+    async submitFeedback(
+        projectId: string,
+        message: string,
+        meta: Record<string, string> = {},
+    ): Promise<BackendCaptureResult> {
+        // The Genie session surface (`web` + auth), not the Passport group — the
+        // desktop holds a laravel_session, not a bearer token.
+        const data = await this.fetch<{ id: string }>('/api/v1/feedback', {
+            method: 'POST',
+            body: { project_id: projectId, message, meta },
+        });
+        return { backend: 'tynn', id: data.id };
+    }
+
     async fetchInbox(): Promise<BackendInbox> {
         try {
             const data = await this.fetch<{

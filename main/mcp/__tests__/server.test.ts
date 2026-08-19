@@ -240,6 +240,7 @@ const deps = (
     openFileForUser: async () => ({ ok: true, reused: false, openedNew: true }),
     setEnv: () => ({ ok: true, file: '.env' }),
     checkEnv: () => ({ ok: true, exists: false, file: '.env' }),
+    submitFeedback: async () => ({ ok: true, id: 'fb-1' }),
     isOpsProject: async () => true,
 });
 

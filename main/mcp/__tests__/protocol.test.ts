@@ -88,6 +88,7 @@ describe('handleMcpMessage', () => {
             'openFileForUser',
             'setEnv',
             'checkEnv',
+            'submitFeedback',
             'initializeWorkspace',
             'genieGuide',
         ]);
@@ -120,6 +121,7 @@ describe('handleMcpMessage', () => {
             'openFileForUser',
             'setEnv',
             'checkEnv',
+            'submitFeedback',
             'initializeWorkspace',
             'genieGuide',
         ]);

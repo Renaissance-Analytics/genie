@@ -4,6 +4,7 @@ import {
     IconCpu,
     IconGlobe,
     IconMaximize,
+    IconMessage,
     IconPlus,
     IconServer,
     IconSettings,
@@ -28,6 +29,8 @@ interface Props {
     /** Open the Workspace Site Manager (#232). Absent in a remote window, where
      *  hosting drives the CLIENT's runtime rather than the host's. */
     onSiteManager?: () => void;
+    /** Send feedback about GENIE to this workspace's Tynn project (Tynn #249). */
+    onFeedback?: () => void;
     onRemove: () => void;
 }
 
@@ -46,6 +49,7 @@ export default function ProjectContextMenu({
     onOpenInBrowser,
     onSettings,
     onSiteManager,
+    onFeedback,
     onRemove,
 }: Props) {
     const menuRef = useRef<HTMLDivElement>(null);
@@ -134,6 +138,20 @@ export default function ProjectContextMenu({
                         label="Site Manager…"
                         onClick={() => {
                             onSiteManager();
+                            onClose();
+                        }}
+                    />
+                )}
+                {/* Feedback about GENIE, not about the work — it goes to this
+                    workspace's Tynn project, where it can be triaged or turned
+                    into a wish. In-app rather than a link out: leaving Genie is
+                    the friction that stops feedback being written at all. */}
+                {onFeedback && (
+                    <CtxItem
+                        icon={<IconMessage size={14} />}
+                        label="Send feedback…"
+                        onClick={() => {
+                            onFeedback();
                             onClose();
                         }}
                     />

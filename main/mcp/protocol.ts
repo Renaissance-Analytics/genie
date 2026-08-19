@@ -394,6 +394,13 @@ export interface McpContext {
     /** Presence/value lookup of a key in the workspace (default) or a repo `.env`
      *  (the `checkEnv` tool), with secret obfuscation by default. */
     checkEnv: (terminalId: string, req: CheckEnvRequest) => CheckEnvResult;
+    /** File feedback about Genie into the workspace's Tynn project (Tynn #249).
+     *  OPTIONAL: a host that cannot reach a Tynn backend simply does not wire it,
+     *  and the tool reports that plainly instead of the surface throwing. */
+    submitFeedback?: (
+        terminalId: string,
+        message: string,
+    ) => Promise<{ ok: boolean; id?: string; error?: string }>;
     /**
      * The namespaced tool descriptors contributed by ENABLED plugins (the
      * Plugin System seam, §5.1). Concatenated into `tools/list` AFTER the core
@@ -1372,6 +1379,25 @@ const SET_ENV_TOOL = {
             ...ENV_TARGET_PROP,
         },
         required: ['key', 'value'],
+        additionalProperties: false,
+    },
+};
+
+const SUBMIT_FEEDBACK_TOOL = {
+    name: 'submitFeedback',
+    description:
+        "File FEEDBACK about GENIE ITSELF into this workspace's Tynn project — a rough edge, a confusing surface, something that behaved unexpectedly. It lands in Tynn's feedback pipeline, where a human triages, quick-accepts or converts it. Use this the moment you notice something, INSTEAD of writing it into a terminal nobody is reading. NOT for the work you are doing (a feature belongs in a wish, a defect in the repo's issue tracker) and NOT for asking the user something — that is ForceTheQuestion. Genie stamps the version, workspace and terminal automatically, so just say what happened.",
+    inputSchema: {
+        type: 'object',
+        properties: {
+            ...TERMINAL_ID_PROP,
+            message: {
+                type: 'string',
+                description:
+                    'What happened, in your own words. Concrete beats polite — what you expected, what you got.',
+            },
+        },
+        required: ['message'],
         additionalProperties: false,
     },
 };
@@ -2724,6 +2750,7 @@ export async function handleMcpMessage(
                     OPEN_FILE_TOOL,
                     SET_ENV_TOOL,
                     CHECK_ENV_TOOL,
+                    SUBMIT_FEEDBACK_TOOL,
                     INITIALIZE_WORKSPACE_TOOL,
                     GUIDE_TOOL,
                     ...pluginTools,
@@ -3357,6 +3384,34 @@ export async function handleMcpMessage(
                 return ok(msg.id, {
                     content: [
                         { type: 'text', text: `${summary}\n\n${JSON.stringify(result, null, 2)}` },
+                    ],
+                });
+            }
+            if (params.name === 'submitFeedback') {
+                const a = (params.arguments ?? {}) as { message?: unknown };
+                const message = typeof a.message === 'string' ? a.message.trim() : '';
+                if (!message) {
+                    return err(msg.id, -32602, 'submitFeedback requires a `message`.');
+                }
+                if (!ctx.submitFeedback) {
+                    return ok(msg.id, {
+                        content: [
+                            {
+                                type: 'text',
+                                text: 'Feedback is not available on this host — it needs a workspace connected to a Tynn project.',
+                            },
+                        ],
+                    });
+                }
+                const result = await ctx.submitFeedback(ctx.terminalId, message);
+                return ok(msg.id, {
+                    content: [
+                        {
+                            type: 'text',
+                            text: result.ok
+                                ? 'Feedback filed in Tynn. A human will see it in the project feedback list — you do not need to repeat it in the terminal.'
+                                : `Could not file feedback: ${result.error ?? 'unknown error'}`,
+                        },
                     ],
                 });
             }

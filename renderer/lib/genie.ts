@@ -2836,6 +2836,17 @@ export interface GenieApi {
             content: string,
             backendKind?: BackendKind,
         ) => Promise<{ id: string; backend: BackendKind }>;
+        /** File feedback about GENIE ITSELF into a Tynn project (Tynn #249).
+         *  Distinct from captureWish: a wish is work the user wants and lands in
+         *  the backlog; feedback is a report about the tool and lands in Tynn's
+         *  feedback pipeline. Never throws — it resolves with `ok:false` and a
+         *  reason, so a form can show what went wrong instead of dying. */
+        submitFeedback: (
+            projectId: string,
+            message: string,
+            meta?: Record<string, string>,
+            backendKind?: BackendKind,
+        ) => Promise<{ ok: boolean; id?: string; error?: string }>;
         inbox: () => Promise<InboxPayload>;
         openInBrowser: (
             urlOrPath: string,

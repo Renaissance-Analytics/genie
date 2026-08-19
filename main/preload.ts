@@ -796,6 +796,13 @@ const api = {
             owner_id?: string;
             slug?: string;
         }) => ipcRenderer.invoke('tynn:create-project', input),
+        submitFeedback: (
+            projectId: string,
+            message: string,
+            meta: Record<string, string> = {},
+            backendKind: 'tynn' | 'aionima' = 'tynn',
+        ) =>
+            ipcRenderer.invoke('tynn:submit-feedback', projectId, message, meta, backendKind),
         captureWish: (
             projectId: string,
             content: string,

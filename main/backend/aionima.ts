@@ -119,6 +119,18 @@ export class AionimaBackend implements Backend {
      * to `POST /api/capture` (or whatever native endpoint Aionima ships)
      * once Q5.4 on Civicognita/agi#178 is answered.
      */
+    /**
+     * Aionima has no feedback pipeline (Tynn #249 is a Tynn feature), so this is
+     * REFUSED rather than quietly routed into chat capture. Feedback that silently
+     * became something else would be worse than feedback that could not be sent:
+     * the user would believe it had been filed.
+     */
+    async submitFeedback(): Promise<BackendCaptureResult> {
+        throw new Error(
+            'Feedback goes to a Tynn project — this workspace is connected to an Aionima backend, which has no feedback pipeline.',
+        );
+    }
+
     async captureWish(
         projectId: string,
         content: string,

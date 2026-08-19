@@ -27,6 +27,7 @@ import { applySetEnv, applyCheckEnv } from '../env-store';
 import { pluginToolDescriptors, dispatchPluginTool } from '../plugins/registry';
 import { agentInboxBroker } from '../agentinbox/broker';
 import { agentPulse } from '../terminal/agent-pulse';
+import { backendOfKind } from '../backend/registry';
 import { formatAgentInboxMailLine } from '../mcp/protocol';
 import type { ServerDeps } from '../mcp/server';
 import type { HostCorePorts } from './ports';
@@ -134,6 +135,40 @@ export function buildHostServerDeps(
             const root = workspaceRootForTerminal(terminalId);
             if (!root) return { ok: false, error: 'No workspace resolved for this terminal.' };
             return applyCheckEnv(root, req);
+        },
+        // FEEDBACK about Genie itself, into the workspace's Tynn project (Tynn
+        // #249). The context is stamped HERE rather than asked of the agent: an
+        // agent reporting its own version and workspace would be reporting what it
+        // believes, and the useful facts are the ones Genie knows for certain.
+        submitFeedback: async (terminalId, message) => {
+            const wsId = terminalId ? getTerminalSpec(terminalId)?.workspace_id ?? null : null;
+            const ws = wsId ? getWorkspace(wsId) : null;
+            if (!ws) {
+                return { ok: false, error: 'This terminal is not attached to a Genie workspace.' };
+            }
+            // A workspace not connected to a Tynn project has nowhere to file to,
+            // and saying so is better than filing into a project nobody expects.
+            const projectId = ws.tynn_project_id ?? ws.project_id ?? '';
+            if (!projectId) {
+                return {
+                    ok: false,
+                    error: `Workspace "${ws.project_name}" is not connected to a Tynn project, so there is nowhere to file feedback.`,
+                };
+            }
+            try {
+                const result = await backendOfKind(ws.backend === 'aionima' ? 'aionima' : 'tynn').submitFeedback(
+                    projectId,
+                    message,
+                    {
+                        genie_version: cfg.serverVersion,
+                        workspace: ws.project_name,
+                        ...(terminalId ? { terminal_id: terminalId } : {}),
+                    },
+                );
+                return { ok: true, id: result.id };
+            } catch (e) {
+                return { ok: false, error: e instanceof Error ? e.message : String(e) };
+            }
         },
         isOpsProject: async (terminalId) => {
             const wsId = terminalId ? getTerminalSpec(terminalId)?.workspace_id ?? null : null;

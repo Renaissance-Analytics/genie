@@ -151,6 +151,12 @@ export interface ServerDeps {
     setEnv: (terminalId: string, req: SetEnvRequest) => SetEnvResult;
     /** Look up a key in the caller's workspace/repo `.env` (checkEnv tool). */
     checkEnv: (terminalId: string, req: CheckEnvRequest) => CheckEnvResult;
+    /** File feedback about Genie into the workspace's Tynn project (Tynn #249).
+     *  Optional — see McpContext. */
+    submitFeedback?: (
+        terminalId: string,
+        message: string,
+    ) => Promise<{ ok: boolean; id?: string; error?: string }>;
     /** True when the caller's workspace is an Ops project. Gates the ops-only
      *  `provisionWorkspaces` tool OUT of tools/list for non-Ops workspaces. */
     isOpsProject: (terminalId: string) => Promise<boolean>;
@@ -658,6 +664,7 @@ async function handle(
         openFileForUser: deps.openFileForUser,
         setEnv: deps.setEnv,
         checkEnv: deps.checkEnv,
+        submitFeedback: deps.submitFeedback,
         isOpsProject: deps.isOpsProject,
         pluginTools: deps.pluginTools,
         dispatchPluginTool: deps.dispatchPluginTool,
