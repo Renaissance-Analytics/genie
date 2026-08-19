@@ -68,12 +68,28 @@ jobs:
       # never running at all. DPkg::Lock::Timeout makes the wait bounded, and the
       # step timeout turns any remaining hang into a visible FAILURE instead of a
       # quiet cancellation.
-      - name: Install php-cgi (the FastCGI worker the php serve mode spawns)
+      # Only reach for apt when the runner does not already have php-cgi.
+      #
+      # This step silently killed the gate: apt waits forever by default, and on
+      # 2026-08-19 azure.archive.ubuntu.com stopped answering, so every repo was
+      # retried with backoff until the job hit its budget and was CANCELLED — and a
+      # cancelled job does not read as a failure, so three merges went by with the
+      # real-hosting gate never running.
+      #
+      # Asking whether the binary is there first makes the normal case instant and
+      # independent of any mirror. The apt path stays as the fallback, now bounded
+      # (retries + per-request timeouts + a lock timeout) and under a step timeout,
+      # so a hang is a visible FAILURE instead of a quiet cancellation.
+      - name: Ensure php-cgi (the FastCGI worker the php serve mode spawns)
         timeout-minutes: 6
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get update -o DPkg::Lock::Timeout=180
+          if command -v php-cgi >/dev/null 2>&1; then
+            echo "php-cgi already present: $(php-cgi --version | head -1)"
+            exit 0
+          fi
+          sudo apt-get update             -o DPkg::Lock::Timeout=180             -o Acquire::Retries=2             -o Acquire::http::Timeout=15             -o Acquire::https::Timeout=15
           sudo apt-get install -y -o DPkg::Lock::Timeout=180 php-cgi
       - name: Build the service runtime (bundled Caddy)
         run: npm run build:runtime
