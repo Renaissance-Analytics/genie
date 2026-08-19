@@ -29,7 +29,14 @@ export interface TargetDecision {
     /** Human-readable reason, surfaced to the agent on denial (and for logs). */
     reason: string;
     /** How the target was authorized: the caller's own ws, or a governed child. */
-    via: 'self' | 'governed' | 'operator' | 'denied';
+    /**
+     * WHY the decision went the way it did. Distinct values because the reason
+     * differs and travels into approval prompts and logs:
+     *   self/governed/operator — an AGENT acting (mcp/target-workspace.ts)
+     *   granted/workstation    — a GAPP acting under its installed scope
+     *                            (apps/scope.ts, Tynn #250)
+     */
+    via: 'self' | 'governed' | 'operator' | 'granted' | 'workstation' | 'denied';
 }
 
 /**
