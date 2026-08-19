@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DEFAULT_HOTKEYS, type HotkeyBindings } from '../lib/hotkeys';
 import { useGenieHotkeys } from '../lib/use-genie-hotkeys';
 import { ftqNudgeBytes } from '../lib/ftq-nudge';
+import GenieCommandWindow, { type SavedPrompt } from '../components/Master/GenieCommandWindow';
 import Chooser from '../components/Master/Chooser';
 import ProjectContextMenu from '../components/Master/ProjectContextMenu';
 import WorkspaceSettingsModal from '../components/Master/WorkspaceSettingsModal';
@@ -303,16 +304,25 @@ function MasterInner() {
     useEffect(() => {
         void api()
             .settings.get()
-            .then((s) =>
+            .then((s) => {
                 setHotkeys({
                     ftqNudge: s.ftq_nudge_hotkey || DEFAULT_HOTKEYS.ftqNudge,
                     commandWindow: s.command_window_hotkey || DEFAULT_HOTKEYS.commandWindow,
-                }),
-            )
+                });
+                // A malformed library must not take the palette down with it —
+                // an unusable Ctrl+K is worse than an empty prompt list.
+                try {
+                    const parsed = JSON.parse(s.saved_prompts || '[]');
+                    if (Array.isArray(parsed)) setPrompts(parsed as SavedPrompt[]);
+                } catch {
+                    setPrompts([]);
+                }
+            })
             .catch(() => {});
     }, []);
 
     const [commandWindowFor, setCommandWindowFor] = useState<string | null>(null);
+    const [prompts, setPrompts] = useState<SavedPrompt[]>([]);
 
     useGenieHotkeys(
         useMemo(
@@ -2088,6 +2098,26 @@ function MasterInner() {
                 );
             })()}
 
+            {/* Ctrl+K — opened by the terminal-scoped hotkey layer, so it appears
+                only while a terminal panel has focus and the keypress never
+                reaches the shell (Tynn #247). */}
+            <GenieCommandWindow
+                open={commandWindowFor !== null}
+                onClose={() => setCommandWindowFor(null)}
+                terminalId={commandWindowFor}
+                workspaces={workspaces.map((w) => ({ id: w.id, name: w.project_name }))}
+                terminals={specs.map((sp) => ({
+                    id: sp.id,
+                    label: sp.label || sp.type || 'terminal',
+                    ...(sp.cwd ? { hint: sp.cwd } : {}),
+                }))}
+                prompts={prompts}
+                onActivateWorkspace={activateWorkspace}
+                onFocusTerminal={toggleSpec}
+                onSendPrompt={(terminalId, text) => {
+                    void api().terminal.write(terminalId, text);
+                }}
+            />
             {siteManagerWsId && (() => {
                 const ws = workspacesById.get(siteManagerWsId);
                 if (!ws) return null;

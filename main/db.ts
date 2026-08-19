@@ -1015,6 +1015,8 @@ export interface Settings {
      *  and Ctrl+K still belong to whatever app the user is actually in. */
     ftq_nudge_hotkey?: string;
     command_window_hotkey?: string;
+    /** Command Window prompt library (Tynn #247): JSON array of {id,label,text}. */
+    saved_prompts?: string;
     tynn_host?: string;
     notifications_muted?: string; // JSON-encoded array of category keys
     auto_update?: 'on' | 'off';
@@ -1239,6 +1241,7 @@ export function getAllSettings(): Settings {
                 : 'Control+Shift+W'),
         ftq_nudge_hotkey: out['ftq_nudge_hotkey'] ?? 'F5',
         command_window_hotkey: out['command_window_hotkey'] ?? 'CommandOrControl+K',
+        saved_prompts: out['saved_prompts'] ?? '[]',
         tynn_host: out['tynn_host'] ?? 'https://tynn.ai',
         notifications_muted: out['notifications_muted'] ?? '[]',
         auto_update: (out['auto_update'] as 'on' | 'off') ?? 'on',

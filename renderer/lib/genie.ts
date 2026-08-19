@@ -954,6 +954,8 @@ export interface Settings {
      *  while a Genie terminal panel has focus. */
     ftq_nudge_hotkey?: string;
     command_window_hotkey?: string;
+    /** Command Window prompt library — JSON array of {id,label,text}. */
+    saved_prompts?: string;
     tynn_host?: string;
     notifications_muted?: string;
     auto_update?: 'on' | 'off';
