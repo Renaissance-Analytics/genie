@@ -48,7 +48,10 @@ jobs:
   # cleanly. Needs `build:runtime` first for the Caddy binary.
   hosting:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 20, not 15: apt now regularly waits on the runner's own
+    # unattended-upgrades holding the dpkg lock, and the real hosting tests need
+    # room after it.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v6
@@ -57,8 +60,21 @@ jobs:
           cache: npm
       - name: Install
         run: npm ci
+      # Bounded, and with its own timeout, because this step silently killed the
+      # gate. apt waits on the dpkg lock FOREVER by default; on 2026-08-19 the
+      # runner image began holding it long enough that apt ate 13m19s of a
+      # 15-minute job budget, so the job was CANCELLED — and a cancelled job does
+      # not read as a failure, so three merges went by with the real-hosting gate
+      # never running at all. DPkg::Lock::Timeout makes the wait bounded, and the
+      # step timeout turns any remaining hang into a visible FAILURE instead of a
+      # quiet cancellation.
       - name: Install php-cgi (the FastCGI worker the php serve mode spawns)
-        run: sudo apt-get update && sudo apt-get install -y php-cgi
+        timeout-minutes: 6
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update -o DPkg::Lock::Timeout=180
+          sudo apt-get install -y -o DPkg::Lock::Timeout=180 php-cgi
       - name: Build the service runtime (bundled Caddy)
         run: npm run build:runtime
       - name: Real hosting tests (bundled Caddy + php-cgi)
