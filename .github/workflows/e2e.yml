@@ -76,9 +76,23 @@ jobs:
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get update             -o DPkg::Lock::Timeout=180             -o Acquire::Retries=2             -o Acquire::http::Timeout=15             -o Acquire::https::Timeout=15
-          sudo apt-get install -y -o DPkg::Lock::Timeout=180 xvfb
-          npx playwright install-deps chromium
+          # Ask before installing. The runner image usually already ships xvfb and
+          # Chromium's libraries, and every apt call here depends on an Ubuntu
+          # mirror that has now gone unreachable twice in two days — taking the
+          # Linux leg of the suite down with it while the code was fine. Skipping
+          # the install when the tools are already present makes the normal case
+          # instant AND independent of that mirror.
+          if command -v xvfb-run >/dev/null 2>&1; then
+            echo "xvfb already present: $(command -v xvfb-run)"
+          else
+            sudo apt-get update               -o DPkg::Lock::Timeout=180               -o Acquire::Retries=2               -o Acquire::http::Timeout=15               -o Acquire::https::Timeout=15
+            sudo apt-get install -y -o DPkg::Lock::Timeout=180 xvfb
+          fi
+          # Playwright's own dependency check also goes through apt. It is a no-op
+          # on a runner that already has the libraries, so let a mirror outage warn
+          # rather than fail the leg — the browser launch below is the real test of
+          # whether anything is missing, and it fails loudly on its own.
+          npx playwright install-deps chromium ||             echo "::warning::playwright install-deps failed (likely an apt mirror outage) — continuing, the browser launch will catch a genuinely missing library"
 
       # Refresh better-sqlite3's ELECTRON prebuild before the suite (Electron's
       # Node ABI differs from the host Node). This is `pretest:e2e`, run
