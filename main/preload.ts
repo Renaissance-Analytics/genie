@@ -635,6 +635,8 @@ const api = {
         reorder: (ids: string[]) => ipcRenderer.invoke('workspaces:reorder', ids),
         setMcp: (id: string, enabled: boolean) =>
             ipcRenderer.invoke('workspaces:set-mcp', id, enabled),
+        setWorkstationOperator: (id: string, on: boolean) =>
+            ipcRenderer.invoke('workspaces:set-workstation-operator', id, on),
         setProcessApproval: (id: string, require: boolean) =>
             ipcRenderer.invoke('workspaces:set-process-approval', id, require),
         setTerminalApproval: (id: string, require: boolean) =>

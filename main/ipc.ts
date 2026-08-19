@@ -12,6 +12,7 @@ import {
     reorderWorkspaces,
     setWorkspaceMcp,
     setWorkspaceProcessApproval,
+    setWorkstationOperator,
     setWorkspaceTerminalApproval,
     setWorkspaceScheduleApproval,
     getWorkspaceAgentAccess,
@@ -527,6 +528,16 @@ export function registerIpcHandlers(): void {
         if (ws) writeWorkspaceAgentMcp(ws.path, enabled, workspaceEndpointUrl(id));
         return { ok: true };
     });
+    // WORKSTATION OPERATOR (Tynn #248) — authority over every workspace on this
+    // machine, so it is granted here by an explicit human act in Workspace
+    // settings and nowhere else. No agent-facing tool sets it.
+    ipcMain.handle(
+        'workspaces:set-workstation-operator',
+        (_e, id: string, on: boolean) => {
+            setWorkstationOperator(id, on);
+            return { ok: true };
+        },
+    );
     ipcMain.handle(
         'workspaces:set-process-approval',
         (_e, id: string, require: boolean) => {

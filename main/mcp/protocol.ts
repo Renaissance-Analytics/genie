@@ -1100,8 +1100,13 @@ export interface ManagedWorkspaceInfo {
     id: string;
     name: string;
     path: string;
-    /** Relationship to the caller: its own workspace, or a governed child. */
-    relation: 'self' | 'governed';
+    /** Relationship to the caller: its own workspace, a governed child, or — when
+     *  this workspace is the designated WORKSTATION OPERATOR — any other
+     *  workspace on this machine (Tynn #248). Kept distinct from `governed`
+     *  because the caller does not own an `operator` workspace; it has authority
+     *  over the machine, and blurring the two would misreport why it is
+     *  reachable. */
+    relation: 'self' | 'governed' | 'operator';
 }
 
 export interface ManageWorkspacesRequest {

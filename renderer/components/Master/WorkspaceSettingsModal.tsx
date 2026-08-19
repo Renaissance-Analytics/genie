@@ -67,6 +67,10 @@ export default function WorkspaceSettingsModal({
     const [nameSaved, setNameSaved] = useState(false);
     // Per-workspace "require approval before an agent starts a process".
     const [processApproval, setProcessApproval] = useState<boolean | null>(null);
+    // WORKSTATION OPERATOR (Tynn #248): this workspace's agent may act on EVERY
+    // workspace on this machine. Off unless explicitly granted — it is authority
+    // across workspace boundaries, not a convenience.
+    const [operator, setOperator] = useState<boolean | null>(null);
     // Per-workspace "require approval before an agent spawns a terminal /
     // launches a coding agent" (the higher-power manageTerminals / runAgent gate).
     const [terminalApproval, setTerminalApproval] = useState<boolean | null>(null);
@@ -106,12 +110,16 @@ export default function WorkspaceSettingsModal({
                 const ws = (await api().workspaces.list()).find((w) => w.id === workspace.id);
                 if (alive) {
                     setProcessApproval(ws ? ws.process_approval !== 0 : true);
+                    setOperator(ws ? ws.workstation_operator === 1 : false);
                     setTerminalApproval(ws ? ws.terminal_approval !== 0 : true);
                     setScheduleApproval(ws ? ws.schedule_approval !== 0 : true);
                 }
             } catch {
                 if (alive) {
                     setProcessApproval(true);
+                    // Fail CLOSED: a read that failed must never render as
+                    // "this machine's operator".
+                    setOperator(false);
                     setTerminalApproval(true);
                     setScheduleApproval(true);
                 }
@@ -159,6 +167,15 @@ export default function WorkspaceSettingsModal({
             await api().settings.set({ ftq_availability_workspaces: nextRaw });
         } catch {
             setAvailability(prev); // revert
+        }
+    };
+
+    const toggleOperator = async (on: boolean) => {
+        setOperator(on); // optimistic
+        try {
+            await api().workspaces.setWorkstationOperator(workspace.id, on);
+        } catch {
+            setOperator((prev) => !prev); // revert
         }
     };
 
@@ -409,6 +426,18 @@ export default function WorkspaceSettingsModal({
                         vertical
                     >
                         <AgentAccessPanel workspaceId={workspace.id} />
+                    </Row>
+                    <Row
+                        label="Workstation operator"
+                        sub="Let this workspace's agent manage EVERY workspace on this machine — its sites, services and processes. For triaging hosting from one place. Off by default; this is authority beyond this workspace."
+                    >
+                        <input
+                            type="checkbox"
+                            checked={operator ?? false}
+                            disabled={operator === null}
+                            onChange={(e) => void toggleOperator(e.target.checked)}
+                            aria-label="Make this workspace the workstation operator"
+                        />
                     </Row>
                     <Row
                         label="Background process approval"

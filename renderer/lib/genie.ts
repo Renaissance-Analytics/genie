@@ -76,6 +76,9 @@ export interface WorkspaceRow {
      *  its agents) from another workspace. 'all' is the default and preserves the
      *  pre-feature behaviour. Resolve via `workspaces.getAgentAccess`. */
     agent_access?: WorkspaceAgentAccess;
+    /** 1 = this workspace is the designated WORKSTATION OPERATOR and its agent may
+     *  act on every workspace on this machine (Tynn #248). */
+    workstation_operator?: number | null;
     /** Workspace ids admitted when `agent_access: 'specific'`, JSON-encoded.
      *  Resolve via `workspaces.getAgentAccess` rather than parsing here. */
     agent_access_workspaces?: string | null;
@@ -2701,6 +2704,9 @@ export interface GenieApi {
         reorder: (ids: string[]) => Promise<{ ok: boolean }>;
         /** Toggle the agent-integration MCP for a workspace's terminals. */
         setMcp: (id: string, enabled: boolean) => Promise<{ ok: boolean }>;
+        /** Designate (or clear) this workspace as the WORKSTATION OPERATOR — its
+         *  agent may then act on every workspace on this machine (Tynn #248). */
+        setWorkstationOperator: (id: string, on: boolean) => Promise<{ ok: boolean }>;
         /** Toggle "require approval before an agent starts a background process". */
         setProcessApproval: (
             id: string,

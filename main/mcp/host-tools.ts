@@ -12,6 +12,7 @@ import {
     getAllSettings,
     getTerminalSpec,
     getWorkspace,
+    isWorkstationOperator,
     createTerminalSpec,
     updateTerminalSpec,
     workspaceProcessApproval,
@@ -1111,6 +1112,10 @@ export async function resolveAgentTarget(
             callerWs
                 ? governedWorkspaceIdsFor(callerWs.path)
                 : Promise.resolve(new Set<string>()),
+        // WORKSTATION OPERATOR (Tynn #248). Read from the caller's OWN workspace
+        // row, never from the request: the authority has to come from what the
+        // machine was configured to trust, not from what a caller claims.
+        callerIsOperator: callerWorkspaceId ? isWorkstationOperator(callerWorkspaceId) : false,
     });
     const ws = decision.allowed ? getWorkspace(decision.workspaceId) ?? null : null;
     return { decision, ws };
@@ -2075,13 +2080,30 @@ async function actionableWorkspaces(
         } catch {
             governed = new Set();
         }
+        // WORKSTATION OPERATOR (Tynn #248): every workspace on this machine is
+        // actionable, so LIST them. Without this half the permission is useless —
+        // an operator that may act on a workspace it cannot see still cannot
+        // diagnose the site that is down in it, which is the reason the
+        // designation exists.
+        const operator = isWorkstationOperator(callerWs.id);
         for (const w of listWorkspaces()) {
-            if (governed.has(w.id) && w.id !== callerWs.id) {
+            if (w.id === callerWs.id) continue;
+            if (governed.has(w.id)) {
                 out.push({
                     id: w.id,
                     name: w.project_name,
                     path: w.path,
                     relation: 'governed',
+                });
+            } else if (operator) {
+                // Reported as `operator`, not `governed`: the caller does not own
+                // this workspace, it merely has authority over the machine, and a
+                // list that blurred the two would misrepresent why it is reachable.
+                out.push({
+                    id: w.id,
+                    name: w.project_name,
+                    path: w.path,
+                    relation: 'operator',
                 });
             }
         }

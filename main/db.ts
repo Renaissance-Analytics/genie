@@ -964,6 +964,27 @@ export function runMigrations(d: Database.Database): void {
                 `);
             },
         },
+        {
+            // v36: WORKSTATION OPERATOR (Tynn #248). One workspace on a machine may
+            // be designated the operator, letting its agent act on EVERY workspace
+            // on that workstation — not only the child projects an Ops project
+            // governs. It exists because a hosting failure lands in whichever
+            // workspace owns the site, while the agent with the context is in
+            // another, and without this there is no site list, status or log to
+            // read from the place that could fix it.
+            //
+            // Defaults to 0 and stays 0 on upgrade: this is authority ACROSS
+            // workspace boundaries, so it is granted by an explicit act, never
+            // inherited by a migration.
+            version: 36,
+            runner: (db) => {
+                if (!workspaceColumns(db).has('workstation_operator')) {
+                    db.exec(
+                        `ALTER TABLE workspaces ADD COLUMN workstation_operator INTEGER NOT NULL DEFAULT 0`,
+                    );
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -1364,6 +1385,10 @@ export interface WorkspaceRow {
      *  pre-feature behaviour where channels were ungoverned. Resolve via
      *  {@link getWorkspaceAgentAccess}, never read raw. */
     agent_access: WorkspaceAgentAccess;
+    /** WORKSTATION OPERATOR (Tynn #248): 1 = this workspace's agent may act on
+     *  every workspace on this machine. 0/absent = no. Resolve via
+     *  {@link isWorkstationOperator}, never read raw. */
+    workstation_operator?: number | null;
     /** Workspace ids admitted when `agent_access: 'specific'`, JSON-encoded.
      *  NULL/absent = none admitted. Resolve via {@link getWorkspaceAgentAccess}. */
     agent_access_workspaces?: string | null;
@@ -1694,6 +1719,29 @@ export function getWorkspaceAgentAccess(id: string): {
         }
     }
     return { access, workspaces };
+}
+
+/**
+ * Is this workspace the designated WORKSTATION OPERATOR (Tynn #248)?
+ *
+ * Fails CLOSED — an unknown id, a NULL column or a corrupt value all read as
+ * `false`. This is authority over every workspace on the machine, so the only way
+ * to hold it is to have been explicitly given it.
+ */
+export function isWorkstationOperator(id: string): boolean {
+    const row = getDb()
+        .prepare<[string], { workstation_operator: number | null } | undefined>(
+            'SELECT workstation_operator FROM workspaces WHERE id = ?',
+        )
+        .get(id);
+    return row?.workstation_operator === 1;
+}
+
+/** Grant or revoke the workstation-operator designation. */
+export function setWorkstationOperator(id: string, on: boolean): void {
+    getDb()
+        .prepare('UPDATE workspaces SET workstation_operator = ? WHERE id = ?')
+        .run(on ? 1 : 0, id);
 }
 
 export type IssuewatchPolicy = 'surface' | 'fix' | 'fix-and-ship';

@@ -29,7 +29,7 @@ export interface TargetDecision {
     /** Human-readable reason, surfaced to the agent on denial (and for logs). */
     reason: string;
     /** How the target was authorized: the caller's own ws, or a governed child. */
-    via: 'self' | 'governed' | 'denied';
+    via: 'self' | 'governed' | 'operator' | 'denied';
 }
 
 /**
@@ -49,6 +49,7 @@ export function decideTargetWorkspace(
     callerWorkspaceId: string | null,
     requestedWorkspaceId: string | undefined,
     governedIds: ReadonlySet<string>,
+    opts: { callerIsOperator?: boolean } = {},
 ): TargetDecision {
     if (!callerWorkspaceId) {
         return {
@@ -79,12 +80,29 @@ export function decideTargetWorkspace(
         };
     }
 
+    // WORKSTATION OPERATOR (Tynn #248) — checked AFTER governance, so a governed
+    // child still reports the narrower `governed`: the reason travels into
+    // approval prompts and logs, and the specific one is the useful one.
+    //
+    // Deliberately last among the allow paths, and only reachable when the caller
+    // HAS a workspace: an operator flag is authority to reach across this
+    // workstation, and an unattached terminal has no authority to escalate from.
+    if (opts.callerIsOperator) {
+        return {
+            allowed: true,
+            workspaceId: requested,
+            reason: 'Acting as this workstation’s operator.',
+            via: 'operator',
+        };
+    }
+
     return {
         allowed: false,
         workspaceId: '',
         reason:
             `Not allowed to target workspace "${requested}". An agent may act on its own ` +
-            'workspace, or — for an Ops project — a workspace it governs. This workspace is neither.',
+            'workspace, a workspace its Ops project governs, or — when this workspace is the ' +
+            'designated workstation operator — any workspace on this machine. None applies here.',
         via: 'denied',
     };
 }
@@ -101,6 +119,9 @@ export interface TargetResolverDeps {
      * slaves resolution provisionWorkspaces relies on.
      */
     governedWorkspaceIds: () => Promise<Set<string>>;
+    /** WORKSTATION OPERATOR (Tynn #248) — the caller's own workspace holds the
+     *  designation, so it may act on every workspace on this machine. */
+    callerIsOperator?: boolean;
 }
 
 /**
@@ -113,9 +134,10 @@ export async function resolveTargetWorkspace(
     deps: TargetResolverDeps,
 ): Promise<TargetDecision> {
     const requested = requestedWorkspaceId?.trim();
+    const operator = { callerIsOperator: deps.callerIsOperator === true };
     // Fast path: own workspace (or no/unattached caller) — no governance lookup.
     if (!requested || requested === deps.callerWorkspaceId || !deps.callerWorkspaceId) {
-        return decideTargetWorkspace(deps.callerWorkspaceId, requested, new Set());
+        return decideTargetWorkspace(deps.callerWorkspaceId, requested, new Set(), operator);
     }
     let governed = new Set<string>();
     try {
@@ -123,5 +145,5 @@ export async function resolveTargetWorkspace(
     } catch {
         governed = new Set(); // fail closed
     }
-    return decideTargetWorkspace(deps.callerWorkspaceId, requested, governed);
+    return decideTargetWorkspace(deps.callerWorkspaceId, requested, governed, operator);
 }
