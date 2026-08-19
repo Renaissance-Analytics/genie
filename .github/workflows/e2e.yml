@@ -64,11 +64,20 @@ jobs:
       # the apt packages Electron shares with Chromium; xvfb provides the display
       # (the run step below wraps the suite in `xvfb-run`). macOS/Windows runners
       # already have a display + the needed libraries, so this is Linux-only.
+      # Bounded, with its own timeout — the same failure that killed the CI
+      # hosting gate. apt waits forever by default, so when
+      # azure.archive.ubuntu.com stopped answering on 2026-08-19 this step hung
+      # for 28 minutes and the job was CANCELLED. A cancelled job does not read as
+      # a failure, which is how a dead gate stays unnoticed. Now an outage fails
+      # fast and loudly instead of quietly consuming the run.
       - name: Install Linux display + Electron system libraries
         if: runner.os == 'Linux'
+        timeout-minutes: 8
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb
+          sudo apt-get update             -o DPkg::Lock::Timeout=180             -o Acquire::Retries=2             -o Acquire::http::Timeout=15             -o Acquire::https::Timeout=15
+          sudo apt-get install -y -o DPkg::Lock::Timeout=180 xvfb
           npx playwright install-deps chromium
 
       # Refresh better-sqlite3's ELECTRON prebuild before the suite (Electron's
