@@ -1,0 +1,181 @@
+import { describe, expect, it } from 'vitest';
+import { appInstallPlan } from '../install-plan';
+import { validateAppManifest, type AppManifest } from '../manifest';
+import { parseDevSitesValue } from '../../dev-server/sites-config';
+
+/**
+ * Turning a GApp manifest into the hosting an App Workspace actually runs
+ * (Tynn #250).
+ *
+ * This is the step that makes "automated install with preconfigured hosting"
+ * true: the installer writes exactly what a person would otherwise have set up by
+ * hand in the Site Manager. It emits the envelope's OWN `DevSiteConfig` shape
+ * (`dev-server/sites-config.ts`) rather than a GApp-specific one, so an installed
+ * app is an ordinary Genie site from that moment on — startable, restartable,
+ * loggable, and visible in the Site Manager like anything else.
+ *
+ * Pure, so the mapping is asserted directly instead of inferred from a workspace
+ * that got created somewhere.
+ */
+
+/** The App Workspace the installer has just created for this GApp. */
+const WS = 'ws-app-1';
+
+const manifest = (over: Partial<AppManifest> = {}): AppManifest => {
+    const result = validateAppManifest({
+        id: 'com.example.trader',
+        slug: 'trader',
+        name: 'Example Trader',
+        version: '1.0.0',
+        frontend: { repo: 'desktop', serve: { mode: 'static', root: 'dist' } },
+        permissions: { scope: 'self' },
+        ...over,
+    });
+    if (!result.ok) throw new Error(`fixture invalid: ${result.errors.join('; ')}`);
+    return result.value;
+};
+
+describe('the front end', () => {
+    it('becomes a host-native site at <slug>.gen', () => {
+        const plan = appInstallPlan(WS, manifest());
+
+        expect(plan.site.name).toBe('trader');
+        expect(plan.site.genName).toBe('trader.gen');
+        // Host-native, not a container: a GApp runs against live source on the
+        // host, which is the model the real apps already use.
+        expect(plan.site.runMode).toBe('host');
+        expect(plan.site.kind).toBe('http');
+        expect(plan.site.enabled).toBe(true);
+    });
+
+    it('carries the repo through as a repo-relative root', () => {
+        const plan = appInstallPlan(WS, manifest());
+        expect(plan.site.repo).toBe('desktop');
+        expect(plan.site.hostServe).toEqual({ mode: 'static', root: 'dist' });
+    });
+
+    it('serves the workspace root when the manifest names no repo', () => {
+        const plan = appInstallPlan(
+            WS,
+            manifest({ frontend: { serve: { mode: 'static', root: 'dist' } } }),
+        );
+        // '' is the envelope's own spelling for "the workspace root".
+        expect(plan.site.repo).toBe('');
+    });
+
+    it('keeps the SPA flag, so deep links and refreshes resolve', () => {
+        const plan = appInstallPlan(
+            WS,
+            manifest({ frontend: { repo: 'app', serve: { mode: 'static', root: 'dist', spa: true } } }),
+        );
+        expect(plan.site.hostServe).toEqual({ mode: 'static', root: 'dist', spa: true });
+    });
+
+    it('points at an ALREADY-RUNNING dev server without generating a serve config', () => {
+        // The Ripple Effect's shape. Genie fronts a port it did not start, so
+        // there is no hostServe block at all — a generated one would be config for
+        // a server Genie is not running.
+        const plan = appInstallPlan(
+            WS,
+            manifest({ frontend: { repo: 'app', serve: { mode: 'proxy', hostPort: 5273 } } }),
+        );
+
+        expect(plan.site.hostPort).toBe(5273);
+        expect(plan.site.hostServe).toBeUndefined();
+    });
+
+    it('does NOT expose the app to a real browser unless it asked', () => {
+        // Reaching a real Chrome/Edge installs a certificate, edits the hosts file
+        // and runs a local proxy. That is a one-time admin prompt, so it is never
+        // a side effect of installing an app.
+        expect(appInstallPlan(WS, manifest()).site.browserExposed).toBeUndefined();
+
+        const exposed = appInstallPlan(
+            WS,
+            manifest({
+                frontend: { repo: 'd', serve: { mode: 'static', root: 'dist' }, browserExposed: true },
+            }),
+        );
+        expect(exposed.site.browserExposed).toBe(true);
+    });
+});
+
+describe('backend services', () => {
+    it('become supervised processes, with their argv intact', () => {
+        // ORR's backend is uvicorn. The argv is passed through verbatim — Genie
+        // makes no assumption about the language or the runner.
+        const plan = appInstallPlan(
+            WS,
+            manifest({
+                services: [
+                    { name: 'api', repo: 'backend', command: ['uvicorn', 'app:api'], port: 8000 },
+                ],
+            }),
+        );
+
+        expect(plan.processes).toHaveLength(1);
+        expect(plan.processes[0]).toMatchObject({
+            label: 'api',
+            command: ['uvicorn', 'app:api'],
+            cwd: 'repos/backend',
+        });
+    });
+
+    it('plans no processes when the app has no backend', () => {
+        expect(appInstallPlan(WS, manifest()).processes).toEqual([]);
+    });
+
+    it('runs a service from the workspace root when it names no repo', () => {
+        const plan = appInstallPlan(
+            WS,
+            manifest({ services: [{ name: 'worker', command: ['node', 'worker.js'] }] }),
+        );
+        expect(plan.processes[0]?.cwd).toBe('');
+    });
+});
+
+describe('the site id', () => {
+    it('is stable for the same app, so reinstalling does not orphan the old site', () => {
+        expect(appInstallPlan(WS, manifest()).siteId).toBe(appInstallPlan(WS, manifest()).siteId);
+    });
+
+    it('differs between apps', () => {
+        expect(appInstallPlan(WS, manifest()).siteId).not.toBe(
+            appInstallPlan(WS, manifest({ id: 'com.example.other', slug: 'other' })).siteId,
+        );
+    });
+});
+
+describe('the plan survives the envelope, not just our own types', () => {
+    it('every generated site is accepted by the envelope sanitizer, unchanged', () => {
+        // The strongest check available here. project.json is UNTRUSTED and
+        // AUTHORITATIVE, so every row Genie reads back goes through
+        // `parseDevSitesValue`, which silently DROPS a row it cannot use — that is
+        // how genie#190 erased live registrations. A plan that merely satisfies our
+        // own TypeScript would install an app whose site vanishes on the next read.
+        //
+        // So assert the round trip on every shape the manifest can produce.
+        const shapes = [
+            manifest(),
+            manifest({ frontend: { serve: { mode: 'static', root: 'dist', spa: true } } }),
+            manifest({ frontend: { repo: 'app', serve: { mode: 'proxy', hostPort: 5273 } } }),
+            manifest({
+                frontend: { repo: 'd', serve: { mode: 'static', root: 'dist' }, browserExposed: true },
+            }),
+        ];
+
+        for (const m of shapes) {
+            const plan = appInstallPlan(WS, m);
+            const parsed = parseDevSitesValue({ [plan.siteId]: plan.site });
+
+            expect(parsed, `${m.slug} must parse as a sites map`).not.toBeNull();
+            expect(
+                Object.keys(parsed ?? {}),
+                `${m.slug}: the row must SURVIVE, not be dropped`,
+            ).toEqual([plan.siteId]);
+            // And survive intact — a silently rewritten row is a site that does
+            // not serve what the manifest asked for.
+            expect(parsed?.[plan.siteId]).toEqual(plan.site);
+        }
+    });
+});
