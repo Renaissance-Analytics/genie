@@ -82,30 +82,54 @@ function isVersionOnly(text: string): boolean {
 }
 
 /**
- * A user-facing description for one commit, robust to release-commit style.
- * Release commits tag the VERSION as the subject (`v0.7.0-beta.100`) and put the
- * real note in the BODY, so using the subject verbatim would show the version
- * repeated with no context. Resolution order:
- *   1. Subject with any leading version prefix stripped (`vX — Foo` → `Foo`).
- *   2. If that's still just a version, the first non-empty BODY line (also
- *      version-prefix-stripped).
- *   3. Otherwise '' — nothing meaningful — so the caller drops it (a version
- *      header must not be echoed as its own "change").
+ * The line the update popover shows for one commit — or `''` for the commits
+ * that should never reach it, which is most of them (genie#224).
+ *
+ * This used to return the commit SUBJECT. Subjects are written for the repo, so
+ * the popover showed the owner things like "Stop classifying a site by its
+ * PUBLISHED port — a running container read as host-native": engineering
+ * reasoning rendered as a product surface, next to a Restart button.
+ *
+ * Filtering cannot fix that. What separates an internal subject from a
+ * user-facing note is INTENT, not vocabulary, so any blocklist keeps leaking
+ * whatever it failed to anticipate. Notes are therefore OPT-IN — nothing appears
+ * unless it was written to appear:
+ *
+ *   1. A `Release-Note:` trailer, anywhere in the message. The escape hatch for
+ *      an ordinary commit that genuinely changes something people will notice.
+ *   2. Otherwise a RELEASE commit's headline (`vX.Y.Z — the thing that changed`),
+ *      which is already written for people and is what the popover has always
+ *      really been showing when it looked right.
+ *   3. Otherwise nothing.
  */
+const RELEASE_NOTE_TRAILER = /^\s*Release-Note:\s*(.+)$/im;
+
 export function describeCommit(message: string): string {
-    const lines = message.split('\n');
-    const subject = (lines[0] ?? '').trim();
-    const fromSubject = stripVersionPrefix(subject);
-    if (fromSubject && !isVersionOnly(fromSubject)) return fromSubject;
-    // Subject was a bare version → fall back to the first meaningful body line.
-    const bodyLine = lines
-        .slice(1)
-        .map((l) => l.trim())
-        .find((l) => l.length > 0);
-    if (bodyLine) {
-        const fromBody = stripVersionPrefix(bodyLine);
-        if (fromBody && !isVersionOnly(fromBody)) return fromBody;
+    const trailer = RELEASE_NOTE_TRAILER.exec(message);
+    if (trailer) {
+        const note = stripVersionPrefix(trailer[1].trim());
+        if (note && !isVersionOnly(note)) return note;
     }
+
+    // A RELEASE commit — and only a release commit. The version prefix is what
+    // marks a subject as deliberately written for this popover.
+    const subject = (message.split('\n')[0] ?? '').trim();
+    const headline = stripVersionPrefix(subject);
+    if (headline !== subject && headline && !isVersionOnly(headline)) return headline;
+
+    // A bare `vX.Y.Z` subject: the note is the first meaningful body line.
+    if (isVersionOnly(subject)) {
+        const bodyLine = message
+            .split('\n')
+            .slice(1)
+            .map((l) => l.trim())
+            .find((l) => l.length > 0);
+        if (bodyLine) {
+            const fromBody = stripVersionPrefix(bodyLine);
+            if (fromBody && !isVersionOnly(fromBody)) return fromBody;
+        }
+    }
+
     return '';
 }
 
