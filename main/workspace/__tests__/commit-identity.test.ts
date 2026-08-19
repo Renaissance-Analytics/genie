@@ -48,3 +48,34 @@ describe('the identity a Genie commit is made under', () => {
         expect(identityToApply({ name: '  ', email: '' })).toEqual(GENIE_FALLBACK_IDENTITY);
     });
 });
+
+// --- the fallback has to resolve to a real GitHub account (genie#215) --------
+
+describe('the fallback identity Genie commits under', () => {
+    it("is the App bot's GitHub noreply address, so the commit gets an avatar", () => {
+        // The whole point of #215: GitHub attaches an identity to a commit only
+        // when the EMAIL resolves to an account. `genie@localhost` belongs to
+        // nobody, so GitHub rendered the raw name — no avatar, nothing to click.
+        expect(GENIE_FALLBACK_IDENTITY).toEqual({
+            name: 'genie-ide[bot]',
+            email: '294734720+genie-ide[bot]@users.noreply.github.com',
+        });
+    });
+
+    it('uses the BOT USER id, not the App id', () => {
+        // The trap, and the reason this test names the number. GitHub's noreply
+        // form is `<bot-user-id>+<slug>[bot]@users.noreply.github.com`, where the
+        // id is the id of the BOT ACCOUNT (`GET /users/genie-ide[bot]` →
+        // 294734720) — NOT the App id (4083762). The issue itself proposed
+        // `<app-id>+…`, which would produce another address resolving to nothing:
+        // precisely the bug being fixed, shipped again in a new disguise.
+        expect(GENIE_FALLBACK_IDENTITY.email).toMatch(/^294734720\+/);
+        expect(GENIE_FALLBACK_IDENTITY.email).not.toContain('4083762');
+    });
+
+    it('is only a FALLBACK — a configured human identity still wins', () => {
+        // A commit attributed to the person whose machine made it is accurate AND
+        // linkable, which beats attributing everything to the bot.
+        expect(identityToApply({ name: 'Wish Born', email: 'wish@impact.do' })).toEqual({});
+    });
+});

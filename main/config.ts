@@ -33,6 +33,25 @@ export const GENIE_GITHUB_CLIENT_ID = 'Iv23liPssWsCpaUIxtIT';
 export const GENIE_GITHUB_APP_SLUG = 'genie-ide';
 
 /**
+ * The App's numeric ID, and the user ID of the BOT ACCOUNT it commits as.
+ *
+ * THREE different identifiers name this one App, and mixing them up is the whole
+ * of genie#215:
+ *
+ *   - `GENIE_GITHUB_CLIENT_ID` (`Iv23…`) — what Device Flow authenticates with.
+ *     This is the only one the workstation GitHub connection ever needs, which is
+ *     why that connection working tells you nothing about the two below.
+ *   - `GENIE_GITHUB_APP_ID` (4083762) — the App itself. Used to sign the JWT for
+ *     app-level auth. NOT part of any commit address.
+ *   - `GENIE_GITHUB_BOT_USER_ID` (294734720) — the `genie-ide[bot]` ACCOUNT
+ *     (`GET /users/genie-ide[bot]`). This is the one GitHub's noreply commit
+ *     address is built from, and using the App id there produces an address that
+ *     resolves to nobody — the exact failure #215 is about.
+ */
+export const GENIE_GITHUB_APP_ID = 4083762;
+export const GENIE_GITHUB_BOT_USER_ID = 294734720;
+
+/**
  * Where to send the user to install the App. With no argument this is the
  * account chooser: GitHub's `installations/new` lists the personal account
  * plus every org the user can install on, then lets them pick repositories.

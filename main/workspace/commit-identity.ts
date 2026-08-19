@@ -1,3 +1,4 @@
+import { GENIE_GITHUB_APP_SLUG, GENIE_GITHUB_BOT_USER_ID } from '../config';
 /**
  * PURE. Which git identity a Genie-made commit should be authored under
  * (genie#215).
@@ -40,9 +41,27 @@ export interface GitIdentity {
  * it is unmistakably not a real mailbox, so it can never collide with a person's
  * account, and it makes an unattributable commit obvious rather than plausible.
  */
+/**
+ * Who a commit is attributed to when the machine has no identity of its own
+ * (genie#215).
+ *
+ * `genie@localhost` belonged to nobody, so GitHub rendered the raw name: no
+ * avatar, no profile link, nothing to click — beside a Claude co-author line
+ * that had all three. GitHub attaches an identity only when the EMAIL resolves
+ * to an account, so the fix is an address that does.
+ *
+ * Built from the BOT ACCOUNT's user id, not the App id — see the note in
+ * config.ts. An App identity also cannot be impersonated and reads unambiguously
+ * as automation, which is why the recorded decision preferred it to a dedicated
+ * machine user.
+ *
+ * Still only a FALLBACK: a machine with a configured human identity keeps it,
+ * because attributing a commit to the person who made it is both accurate and
+ * linkable.
+ */
 export const GENIE_FALLBACK_IDENTITY = {
-    name: 'Genie',
-    email: 'genie@localhost',
+    name: `${GENIE_GITHUB_APP_SLUG}[bot]`,
+    email: `${GENIE_GITHUB_BOT_USER_ID}+${GENIE_GITHUB_APP_SLUG}[bot]@users.noreply.github.com`,
 } as const;
 
 const missing = (v: string | undefined): boolean => !v || v.trim() === '';
