@@ -20,6 +20,7 @@ import {
     Switch,
     Tabs,
     Text,
+    Textarea,
 } from '@particle-academy/react-fancy';
 import {
     api,
@@ -55,6 +56,14 @@ import {
     removeConfirmation,
 } from '../lib/toolchain-page';
 import { isolationNote } from '../lib/dev-server';
+import {
+    newPromptId,
+    parsePromptLibrary,
+    removePrompt,
+    serializePromptLibrary,
+    upsertPrompt,
+} from '../lib/prompt-library';
+import type { SavedPrompt } from '../components/Master/GenieCommandWindow';
 import { ToolchainSetupWizard } from '../components/Master/ToolchainSetupWizard';
 import { checkedAgoLabel, pluginSummaryLine } from '../lib/plugins-view';
 import {
@@ -115,6 +124,13 @@ export default function SettingsPage() {
     }, []);
 
     const patch = (p: Partial<Settings>) => setS((cur) => (cur ? { ...cur, ...p } : cur));
+
+    // The Command Window's prompt library, stored as JSON in one setting. Parsed
+    // through the defensive reader so a hand-edited or half-synced value shows an
+    // empty list here rather than throwing on the settings page.
+    const promptLibrary = parsePromptLibrary(s?.saved_prompts);
+    const savePrompts = (next: SavedPrompt[]) =>
+        patch({ saved_prompts: serializePromptLibrary(next) });
 
     const save = async () => {
         if (!s) return;
@@ -541,6 +557,101 @@ export default function SettingsPage() {
                             value={s.global_hotkey ?? ''}
                             onValueChange={(v) => patch({ global_hotkey: v })}
                             placeholder="CommandOrControl+Shift+W"
+                        />
+                    </SettingRow>
+                </SetSection>
+            )}
+
+            {!restricted && (
+                <SetSection
+                    title="Command Window prompts"
+                    desc="The prompt library the Command Window offers. Selecting one sends it to the terminal that was focused when you opened the window."
+                >
+                    {promptLibrary.length === 0 && (
+                        <Text size="sm" className="text-zinc-500">
+                            No saved prompts yet. Add one and it appears under
+                            &ldquo;Prompts&rdquo; in the Command Window.
+                        </Text>
+                    )}
+                    {promptLibrary.map((prompt) => (
+                        <SettingRow
+                            key={prompt.id}
+                            label="Prompt"
+                            desc="A short name to find it by, and the text sent to the agent."
+                            keywords="command window prompt library saved prompts"
+                            vertical
+                        >
+                            <Input
+                                value={prompt.label}
+                                onValueChange={(v) =>
+                                    savePrompts(upsertPrompt(promptLibrary, { ...prompt, label: v }))
+                                }
+                                placeholder="Run the test suite"
+                            />
+                            <Textarea
+                                value={prompt.text}
+                                onValueChange={(v) =>
+                                    savePrompts(upsertPrompt(promptLibrary, { ...prompt, text: v }))
+                                }
+                                rows={2}
+                                spellCheck={false}
+                                placeholder="Run the full test suite and report only what fails."
+                            />
+                            <Action
+                                size="sm"
+                                variant="ghost"
+                                icon="trash-2"
+                                onClick={() => savePrompts(removePrompt(promptLibrary, prompt.id))}
+                            >
+                                Remove
+                            </Action>
+                        </SettingRow>
+                    ))}
+                    <Action
+                        size="sm"
+                        onClick={() =>
+                            savePrompts([
+                                ...promptLibrary,
+                                {
+                                    id: newPromptId(Date.now(), Math.random()),
+                                    label: 'New prompt',
+                                    text: '',
+                                },
+                            ])
+                        }
+                    >
+                        Add a prompt
+                    </Action>
+                </SetSection>
+            )}
+
+            {!restricted && (
+                <SetSection
+                    title="Terminal hotkeys"
+                    desc="Bound ONLY while a terminal panel has focus — never when Genie is in the background, another app has focus, or you are in Genie's own settings, editors or modals. Genie takes the key completely, so the terminal never also receives it."
+                >
+                    <SettingRow
+                        label="Nudge the agent to use ForceTheQuestion"
+                        desc="Types a nudge into the focused agent and submits it, so a question it asked in plaintext — which nobody sees — gets re-asked as a pop-up. Electron accelerator string."
+                        keywords="ftq forcethequestion nudge hotkey f5 accelerator terminal keybinding"
+                        vertical
+                    >
+                        <Input
+                            value={s.ftq_nudge_hotkey ?? ''}
+                            onValueChange={(v) => patch({ ftq_nudge_hotkey: v })}
+                            placeholder="F5"
+                        />
+                    </SettingRow>
+                    <SettingRow
+                        label="Open the Command Window"
+                        desc="Searchable palette of saved prompts, workspaces and terminals. Type p&gt; w&gt; or t&gt; to filter to one kind."
+                        keywords="command window palette ctrl+k cmd+k hotkey accelerator prompts"
+                        vertical
+                    >
+                        <Input
+                            value={s.command_window_hotkey ?? ''}
+                            onValueChange={(v) => patch({ command_window_hotkey: v })}
+                            placeholder="CommandOrControl+K"
                         />
                     </SettingRow>
                 </SetSection>
