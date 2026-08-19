@@ -1010,6 +1010,11 @@ export interface Settings {
     active_workspace?: string;
     default_env_file?: string;
     global_hotkey?: string;
+    /** Terminal-scoped hotkeys (Tynn #246/#247). Unlike `global_hotkey` these are
+     *  NOT OS-wide: they bind only while a Genie terminal panel has focus, so F5
+     *  and Ctrl+K still belong to whatever app the user is actually in. */
+    ftq_nudge_hotkey?: string;
+    command_window_hotkey?: string;
     tynn_host?: string;
     notifications_muted?: string; // JSON-encoded array of category keys
     auto_update?: 'on' | 'off';
@@ -1232,6 +1237,8 @@ export function getAllSettings(): Settings {
             (process.platform === 'darwin'
                 ? 'CommandOrControl+Shift+W'
                 : 'Control+Shift+W'),
+        ftq_nudge_hotkey: out['ftq_nudge_hotkey'] ?? 'F5',
+        command_window_hotkey: out['command_window_hotkey'] ?? 'CommandOrControl+K',
         tynn_host: out['tynn_host'] ?? 'https://tynn.ai',
         notifications_muted: out['notifications_muted'] ?? '[]',
         auto_update: (out['auto_update'] as 'on' | 'off') ?? 'on',

@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { DEFAULT_HOTKEYS, type HotkeyBindings } from '../lib/hotkeys';
+import { useGenieHotkeys } from '../lib/use-genie-hotkeys';
+import { ftqNudgeBytes } from '../lib/ftq-nudge';
 import Chooser from '../components/Master/Chooser';
 import ProjectContextMenu from '../components/Master/ProjectContextMenu';
 import WorkspaceSettingsModal from '../components/Master/WorkspaceSettingsModal';
@@ -290,6 +293,41 @@ function MasterInner() {
     } | null>(null);
     const [addingWorkspace, setAddingWorkspace] = useState(false);
     const [settingsWorkspaceId, setSettingsWorkspaceId] = useState<string | null>(null);
+
+    // Terminal-scoped hotkeys (Tynn #246/#247): F5 nudges the focused agent to
+    // re-ask through ForceTheQuestion, Ctrl+K opens the Command Window. Both bind
+    // ONLY while a terminal panel has focus and are consumed there, so the
+    // terminal never also receives the keypress — see renderer/lib/hotkeys.ts.
+    // Remappable per workstation; defaults until settings load.
+    const [hotkeys, setHotkeys] = useState<HotkeyBindings>(DEFAULT_HOTKEYS);
+    useEffect(() => {
+        void api()
+            .settings.get()
+            .then((s) =>
+                setHotkeys({
+                    ftqNudge: s.ftq_nudge_hotkey || DEFAULT_HOTKEYS.ftqNudge,
+                    commandWindow: s.command_window_hotkey || DEFAULT_HOTKEYS.commandWindow,
+                }),
+            )
+            .catch(() => {});
+    }, []);
+
+    const [commandWindowFor, setCommandWindowFor] = useState<string | null>(null);
+
+    useGenieHotkeys(
+        useMemo(
+            () => ({
+                // Typed into the agent's TUI exactly as a person would, then
+                // submitted — the agent re-asks through the MCP tool itself.
+                onFtqNudge: (terminalId: string) => {
+                    void api().terminal.write(terminalId, ftqNudgeBytes());
+                },
+                onCommandWindow: (terminalId: string) => setCommandWindowFor(terminalId),
+            }),
+            [],
+        ),
+        hotkeys,
+    );
     // "Run a recipe" launcher (Toolbar wand button). Scoped to the active
     // workspace so a recipe's git/gh terminal steps default their cwd to the
     // repo — see recipeLaunchScope + RecipeLauncher.

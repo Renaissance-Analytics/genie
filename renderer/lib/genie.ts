@@ -950,6 +950,10 @@ export interface Settings {
     collapsed_workspaces?: string;
     default_env_file?: string;
     global_hotkey?: string;
+    /** Terminal-scoped hotkeys (Tynn #246/#247) — NOT OS-wide: they bind only
+     *  while a Genie terminal panel has focus. */
+    ftq_nudge_hotkey?: string;
+    command_window_hotkey?: string;
     tynn_host?: string;
     notifications_muted?: string;
     auto_update?: 'on' | 'off';

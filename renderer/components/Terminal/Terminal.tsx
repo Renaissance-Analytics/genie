@@ -721,7 +721,18 @@ export default function Terminal({
     }, []);
 
     return (
-        <div ref={hostElRef} className={className ?? 'h-full w-full'}>
+        // `data-genie-terminal` marks this subtree as a TERMINAL PANEL and carries
+        // the pty id (the caller-provided one — every panel Genie renders passes
+        // it, and it is the same id `api().terminal.write` takes). Genie's hotkeys (F5 nudge, Ctrl+K Command Window) bind only
+        // while focus is inside one of these, and use the id to reach the agent
+        // the user is actually looking at — see renderer/lib/hotkeys.ts. An
+        // explicit attribute rather than a class, because a class is styling and
+        // gets renamed; this is a contract.
+        <div
+            ref={hostElRef}
+            data-genie-terminal={providedId ?? ''}
+            className={className ?? 'h-full w-full'}
+        >
             <FancyTerminal
                 ref={handleRef}
                 className="h-full w-full"
