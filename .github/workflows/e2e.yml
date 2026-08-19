@@ -85,8 +85,17 @@ jobs:
           if command -v xvfb-run >/dev/null 2>&1; then
             echo "xvfb already present: $(command -v xvfb-run)"
           else
-            sudo apt-get update               -o DPkg::Lock::Timeout=180               -o Acquire::Retries=2               -o Acquire::http::Timeout=15               -o Acquire::https::Timeout=15
-            sudo apt-get install -y -o DPkg::Lock::Timeout=180 xvfb
+            # NON-FATAL. azure.archive.ubuntu.com has now been unreachable twice
+            # in two days; apt answers Ign: for every repo and then sits there,
+            # which killed this leg while the code under test was fine. An apt
+            # outage must not decide whether the suite ran.
+            #
+            # If the install genuinely fails AND xvfb is genuinely missing, the
+            # `xvfb-run` in the run step below fails immediately with a clear
+            # error — so a real missing dependency still breaks the leg loudly.
+            # What no longer happens is a mirror deciding it for us.
+            timeout 240 sudo apt-get update               -o DPkg::Lock::Timeout=60               -o Acquire::Retries=1               -o Acquire::http::Timeout=10               -o Acquire::https::Timeout=10               || echo "::warning::apt-get update failed or timed out (mirror outage) — continuing"
+            timeout 240 sudo apt-get install -y -o DPkg::Lock::Timeout=60 xvfb               || echo "::warning::could not install xvfb — continuing; the xvfb-run below will fail loudly if it is genuinely absent"
           fi
           # Playwright's own dependency check also goes through apt. It is a no-op
           # on a runner that already has the libraries, so let a mirror outage warn
