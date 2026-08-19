@@ -70,8 +70,22 @@ export function serveCaddyfile(opts: { sitePort: number; serve: SiteServe }): st
         body.push('\tfile_server');
     } else {
         assertPort(opts.serve.fcgiPort, 'fcgi port');
-        // `php_fastcgi` adds its own file server + front-controller try_files.
+        // `php_fastcgi` is the FRONT CONTROLLER only: it rewrites an unmatched
+        // path to index.php and proxies *.php to the worker. It does NOT serve
+        // static files — Caddy's own Laravel example pairs it with `file_server`
+        // for exactly that reason, and this comment used to claim otherwise
+        // (genie#225).
+        //
+        // Without the file server a request for /build/assets/app.js matched no
+        // handler at all: Caddy answered 200 with an EMPTY body and NO
+        // Content-Type, with the file sitting right there on disk. Chrome enforces
+        // a JS MIME type for <script type="module">, so every Vite/Inertia site
+        // served this way rendered blank while its markup and Inertia props looked
+        // perfect — which reads as an app bug until you check response headers.
         body.push(`\tphp_fastcgi 127.0.0.1:${opts.serve.fcgiPort}`);
+        // AFTER php_fastcgi, so the front controller gets first refusal and
+        // anything it does not claim is served from disk with a real Content-Type.
+        body.push(`\tfile_server`);
     }
     return [
         '{',

@@ -163,4 +163,50 @@ describe('REAL php serve mode — the bundled Caddy + php-cgi actually EXECUTE P
         expect(body, 'PHP must have EXECUTED, not been served as source').toMatch(/\d+\.\d+\.\d+/);
         expect(body).not.toContain('<?php');
     });
+
+    it.skipIf(!phpCgiExe)('serves STATIC assets with a real Content-Type (genie#225)', async () => {
+        // The gap that let #225 ship: the test above proves PHP executes, and stops
+        // there. `php_fastcgi` does NOT include a file server — it rewrites to
+        // index.php and proxies *.php, nothing else — so a request for a .js asset
+        // matched no handler at all and Caddy answered 200 with an EMPTY body and
+        // no Content-Type. The file was right there and readable.
+        //
+        // A missing type is not cosmetic for a modern app: Chrome enforces a JS
+        // MIME type for <script type="module">, so every Vite/Inertia site served
+        // this way rendered blank while its markup and props looked perfect.
+        // hostServe php is the recommended path for a Laravel repo, so that is the
+        // whole "host it the plain way" flow.
+        const dir = mkdtempSync(path.join(tmpdir(), 'genie-real-php-assets-'));
+        dirs.push(dir);
+        const root = path.join(dir, 'public');
+        mkdirSync(path.join(root, 'build', 'assets'), { recursive: true });
+        writeFileSync(path.join(root, 'index.php'), '<?php echo "app";');
+        writeFileSync(path.join(root, 'build', 'assets', 'app.js'), 'export const ok = 1;');
+        writeFileSync(path.join(root, 'build', 'assets', 'app.css'), '.ok{color:red}');
+
+        const sitePort = await allocateFreePort();
+        const fcgiPort = await allocateFreePort(new Set([sitePort]));
+        const [wbin, ...wargs] = phpFastcgiWorkerCommand(phpCgiExe, fcgiPort);
+        procs.push(spawn(wbin!, wargs, { stdio: 'ignore' }));
+
+        const configPath = path.join(dir, 'Caddyfile');
+        writeFileSync(configPath, serveCaddyfile({ sitePort, serve: { kind: 'php', root, fcgiPort } }));
+        const [bin, ...args] = caddyServeArgv(caddyBin, configPath);
+        procs.push(spawn(bin!, args, { stdio: 'ignore' }));
+
+        expect(await waitForHttp(sitePort, 15_000), 'Caddy + php-cgi must answer').toBe(true);
+
+        const js = await fetch(`http://127.0.0.1:${sitePort}/build/assets/app.js`);
+        expect(js.status).toBe(200);
+        expect(await js.text(), 'the asset must have a BODY, not an empty 200').toContain('export');
+        // The assertion the browser itself makes: anything that is not a JS type
+        // is a hard refusal for an ES module.
+        expect(js.headers.get('content-type') ?? '').toMatch(/javascript|ecmascript/i);
+
+        const css = await fetch(`http://127.0.0.1:${sitePort}/build/assets/app.css`);
+        expect(css.status).toBe(200);
+        // Dropped too under X-Content-Type-Options: nosniff, so fixing only the JS
+        // case would leave the page unstyled instead of blank.
+        expect(css.headers.get('content-type') ?? '').toMatch(/text[/]css/i);
+    });
 });

@@ -65,7 +65,17 @@ describe('serveCaddyfile — php', () => {
         expect(cf).toContain('root * "/repos/moic/public"');
         expect(cf).toContain('php_fastcgi 127.0.0.1:5322');
         expect(cf).toContain('auto_https off');
-        expect(cf).not.toContain('file_server'); // php_fastcgi adds its own file server
+        // MUST have a file server, and this assertion used to say the opposite —
+        // "php_fastcgi adds its own file server", which is not true and is what
+        // locked in genie#225. php_fastcgi is the front controller: it rewrites an
+        // unmatched path to index.php and proxies *.php, and serves nothing else.
+        // Without file_server a request for /build/assets/app.js matched no
+        // handler and Caddy returned 200 with an empty body and no Content-Type,
+        // so every Vite/Inertia site hosted this way rendered blank.
+        expect(cf).toContain('file_server');
+        // ORDER matters: the front controller has to get first refusal, otherwise
+        // a bare file server would answer paths index.php is meant to own.
+        expect(cf.indexOf('php_fastcgi')).toBeLessThan(cf.indexOf('file_server'));
     });
 });
 
