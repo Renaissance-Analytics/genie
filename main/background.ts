@@ -1859,10 +1859,21 @@ app.whenReady().then(async () => {
     // and the push at the end is what lights the rail's sites icon on a cold
     // start, since nothing polls for it.
     void (async () => {
+        // Hold the external-browser reconcile for the WHOLE restore (genie#225).
+        // onBoot brings every enabled site back one at a time and each start fires
+        // `onChanged`; without this the debounce elapses long before the last one
+        // is up, so a reconcile — and its elevated hosts write, i.e. a UAC prompt —
+        // fires mid-restore and another trails it. Suspended, the upgrade costs ONE
+        // prompt carrying every site.
+        const resumeHostBrowser = hostBrowserReconciler?.suspend();
         try {
             await devLifecycle()?.onBoot();
         } catch (e) {
             console.error('[dev-server] boot adoption failed', e);
+        } finally {
+            // In a finally: a failed restore must not leave reconciles suspended
+            // for the rest of the session.
+            await resumeHostBrowser?.();
         }
         broadcastDevServerChanged();
         // Adopt re-attached any browser-exposed host-native site that was already
