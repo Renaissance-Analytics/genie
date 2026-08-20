@@ -41,9 +41,22 @@ export function appPartitionFor(appId: string): string {
     return `persist:gapp-${appId.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
 }
 
+export interface AppWindowOptions {
+    /**
+     * The app is being BUILT here.
+     *
+     * Exactly one switch: dev tools. Everything else — the sandbox, context
+     * isolation, no Node, web security, the partition — is identical, because a
+     * developer's window is not a place to discover that the isolation only ever
+     * worked because of a flag.
+     */
+    devMode?: boolean;
+}
+
 export function appWindowOptions(
     app: AppWindowIdentity,
     preloadPath: string,
+    options: AppWindowOptions = {},
 ): BrowserWindowConstructorOptions {
     return {
         width: 1100,
@@ -54,7 +67,9 @@ export function appWindowOptions(
         // The app's own name, never Genie's. The window chrome is Genie-drawn and
         // not themeable — the structural half of anti-impersonation — and the title
         // is where the user reads whose window this is.
-        title: `${app.slug} — Genie App`,
+        title: options.devMode
+            ? `${app.slug} — Genie App (development)`
+            : `${app.slug} — Genie App`,
         autoHideMenuBar: true,
         backgroundColor: '#0a0a0c',
         webPreferences: {
@@ -70,9 +85,10 @@ export function appWindowOptions(
             allowRunningInsecureContent: false,
             experimentalFeatures: false,
             partition: appPartitionFor(app.id),
-            // No dev tools shortcut into a third-party page by default; the
-            // development workspace (P2) turns this on for apps you are building.
-            devTools: false,
+            // Closed for everyone else's app, so a third-party page cannot be
+            // talked into opening one; open for an app you are building, which you
+            // have to be able to inspect.
+            devTools: options.devMode === true,
         },
     };
 }

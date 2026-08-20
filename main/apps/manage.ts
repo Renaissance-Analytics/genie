@@ -44,6 +44,8 @@ export interface InstalledAppView {
     /** Named workspaces, when the scope is `workspaces`. */
     workspaces: string[];
     revoked: boolean;
+    /** Running from a folder Genie does not control, with dev tools on. */
+    devMode: boolean;
     /** `https://<slug>.gen/` — where its window opens. */
     homeUrl: string;
     permissions: AppPermissionView[];
@@ -75,6 +77,7 @@ function toView(row: AppGrantRow): InstalledAppView {
         scope: row.scope,
         workspaces: row.workspaces,
         revoked: row.revoked,
+        devMode: row.devMode,
         homeUrl: `https://${row.slug}.gen/`,
         permissions: grantableCapabilities(declared).map((c) => ({
             key: c.key,

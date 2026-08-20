@@ -1070,6 +1070,33 @@ export function runMigrations(d: Database.Database): void {
                 `);
             },
         },
+        {
+            // v40: an app someone is BUILDING (Tynn #250, P2).
+            //
+            // A dev-mode app runs from the developer's OWN folder rather than a
+            // copy — the only way an edit is visible without reinstalling — and
+            // its window gets dev tools. Both are weaker than a normal install, so
+            // the state is STORED rather than inferred from a path: the window and
+            // the Apps panel both have to say so, and a flag is harder to lose
+            // than a heuristic.
+            //
+            // Defaults to 0 and stays 0 on upgrade. Nobody's installed apps should
+            // acquire dev tools and an uncontrolled source folder by upgrading.
+            version: 40,
+            runner: (db) => {
+                const cols = new Set(
+                    db
+                        .prepare<[], { name: string }>(`PRAGMA table_info(app_grants)`)
+                        .all()
+                        .map((r) => r.name),
+                );
+                if (!cols.has('dev_mode')) {
+                    db.exec(
+                        `ALTER TABLE app_grants ADD COLUMN dev_mode INTEGER NOT NULL DEFAULT 0`,
+                    );
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -1832,7 +1859,7 @@ export function isWorkstationOperator(id: string): boolean {
  * Genie's kind, a hand edit — reads as "not an App workspace" instead of being
  * treated as one.
  */
-export type WorkspaceAppKind = 'app';
+export type WorkspaceAppKind = 'app' | 'app-dev';
 
 export function getWorkspaceAppKind(id: string): WorkspaceAppKind | null {
     const row = getDb()
@@ -1840,7 +1867,7 @@ export function getWorkspaceAppKind(id: string): WorkspaceAppKind | null {
             'SELECT app_kind FROM workspaces WHERE id = ?',
         )
         .get(id);
-    return row?.app_kind === 'app' ? 'app' : null;
+    return row?.app_kind === 'app' || row?.app_kind === 'app-dev' ? row.app_kind : null;
 }
 
 /** Mark (or unmark) a workspace as hosting an installed GApp. */
@@ -1871,6 +1898,8 @@ export interface AppGrantRow {
     manifestJson: string;
     installPath: string;
     revoked: boolean;
+    /** Running from a folder Genie does not control, with dev tools on. */
+    devMode: boolean;
     installedAt: string;
     updatedAt: string;
 }
@@ -1887,6 +1916,7 @@ interface RawAppGrant {
     manifest_json: string;
     install_path: string;
     revoked: number;
+    dev_mode: number;
     installed_at: string;
     updated_at: string;
 }
@@ -1920,13 +1950,14 @@ function toAppGrant(row: RawAppGrant): AppGrantRow {
         manifestJson: row.manifest_json,
         installPath: row.install_path,
         revoked: row.revoked === 1,
+        devMode: row.dev_mode === 1,
         installedAt: row.installed_at,
         updatedAt: row.updated_at,
     };
 }
 
 const APP_GRANT_COLUMNS =
-    'app_id, workspace_id, name, version, slug, scope, workspaces_json, capabilities_json, manifest_json, install_path, revoked, installed_at, updated_at';
+    'app_id, workspace_id, name, version, slug, scope, workspaces_json, capabilities_json, manifest_json, install_path, revoked, dev_mode, installed_at, updated_at';
 
 export function getAppGrant(appId: string): AppGrantRow | null {
     const row = getDb()
@@ -1969,7 +2000,8 @@ export function upsertAppGrant(
         .prepare(
             `INSERT INTO app_grants (${APP_GRANT_COLUMNS})
              VALUES (@app_id, @workspace_id, @name, @version, @slug, @scope, @workspaces_json,
-                     @capabilities_json, @manifest_json, @install_path, @revoked, @installed_at, @updated_at)
+                     @capabilities_json, @manifest_json, @install_path, @revoked, @dev_mode,
+                     @installed_at, @updated_at)
              ON CONFLICT(app_id) DO UPDATE SET
                 workspace_id = excluded.workspace_id,
                 name = excluded.name,
@@ -1981,6 +2013,7 @@ export function upsertAppGrant(
                 manifest_json = excluded.manifest_json,
                 install_path = excluded.install_path,
                 revoked = excluded.revoked,
+                dev_mode = excluded.dev_mode,
                 updated_at = excluded.updated_at`,
         )
         .run({
@@ -1995,6 +2028,7 @@ export function upsertAppGrant(
             manifest_json: grant.manifestJson,
             install_path: grant.installPath,
             revoked: grant.revoked ? 1 : 0,
+            dev_mode: grant.devMode ? 1 : 0,
             installed_at: grant.installedAt ?? now,
             updated_at: now,
         });

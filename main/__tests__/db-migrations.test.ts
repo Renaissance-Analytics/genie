@@ -1267,3 +1267,28 @@ describe('v39 — what the user granted a GApp (Tynn #250)', () => {
         expect(cols(db, 'app_grants').has('capabilities_json')).toBe(true);
     });
 });
+
+describe('v40 — an app you are BUILDING (Tynn #250)', () => {
+    it('adds dev_mode, and every EXISTING app stays a normal one', () => {
+        // A dev app runs from a folder Genie does not control and gets dev tools.
+        // Nobody's installed apps should acquire that by upgrading.
+        const db = new Database(':memory:');
+        runMigrations(db);
+        db.prepare(
+            `INSERT INTO app_grants
+                (app_id, workspace_id, name, version, slug, scope, manifest_json, install_path, installed_at, updated_at)
+             VALUES ('com.a.b', 'ws', 'A', '1.0.0', 'a', 'self', '{}', '/tmp/a', 'now', 'now')`,
+        ).run();
+
+        expect(cols(db, 'app_grants').has('dev_mode')).toBe(true);
+        const row = db.prepare<[], { dev_mode: number }>('SELECT dev_mode FROM app_grants').get();
+        expect(row?.dev_mode).toBe(0);
+    });
+
+    it('is idempotent — re-running converges without throwing', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(() => runMigrations(db)).not.toThrow();
+        expect(cols(db, 'app_grants').has('dev_mode')).toBe(true);
+    });
+});

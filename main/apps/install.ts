@@ -44,6 +44,13 @@ export interface AppGrantInput {
     manifestJson: string;
     installPath: string;
     revoked: boolean;
+    /**
+     * Running from a folder Genie does not control, with dev tools on.
+     *
+     * Stored rather than inferred: both the window and the Apps panel have to say
+     * so, and a flag is harder to lose than a heuristic about paths.
+     */
+    devMode: boolean;
 }
 
 export interface AppInstallIO {
@@ -60,6 +67,16 @@ export interface AppInstallIO {
     /** The workspace an already-installed copy of this app lives in. */
     existingApp: (appId: string) => { workspaceId: string; path: string } | null;
     createWorkspace: (
+        manifest: AppManifest,
+    ) => Promise<{ workspaceId: string; path: string }>;
+    /**
+     * DEV MODE: register the developer's OWN folder as the app's workspace.
+     *
+     * No new workspace, no copy — the app runs from the folder being edited, which
+     * is the only way an edit is visible without reinstalling.
+     */
+    adoptFolder: (
+        folder: string,
         manifest: AppManifest,
     ) => Promise<{ workspaceId: string; path: string }>;
     /** Copy the app's source into its workspace. */
@@ -109,9 +126,25 @@ export interface AppInstallResult {
     userProvides?: ResolvedRequirement[];
 }
 
+export interface InstallOptions {
+    /**
+     * Install the app IN PLACE, for someone building it.
+     *
+     * The developer loop is otherwise broken: a normal install copies the source
+     * into a new workspace, so every edit needs a reinstall before it is visible.
+     * In dev mode the folder being edited IS the workspace.
+     *
+     * It does NOT skip consent. Building an app is not a reason to grant it
+     * anything — and a developer who never sees their own consent screen never
+     * finds out how it reads.
+     */
+    devMode?: boolean;
+}
+
 export async function installAppFromFolder(
     sourceFolder: string,
     io: AppInstallIO,
+    options: InstallOptions = {},
 ): Promise<AppInstallResult> {
     const raw = io.readManifest(sourceFolder);
     if (raw === null) {
@@ -150,15 +183,21 @@ export async function installAppFromFolder(
     // the same place rather than orphaning the old one beside it. What is NOT
     // reused is the grant — a new version can ask for more than the last one did,
     // and inheriting it would let an update escalate without anyone being asked.
+    const devMode = options.devMode === true;
     const existing = io.existingApp(manifest.id);
-    const created = existing ? null : await io.createWorkspace(manifest);
+    const created = existing
+        ? null
+        : devMode
+          ? await io.adoptFolder(sourceFolder, manifest)
+          : await io.createWorkspace(manifest);
     const workspace = existing ?? created!;
 
     const plan = appInstallPlan(workspace.workspaceId, manifest);
     try {
         // Source first: a site pointed at a directory that is not there yet serves
-        // a 404 the user reads as a broken app.
-        io.copyAppSource(sourceFolder, workspace.path, manifest);
+        // a 404 the user reads as a broken app. In dev mode there is nothing to
+        // copy — the source and the workspace are the same folder.
+        if (!devMode) io.copyAppSource(sourceFolder, workspace.path, manifest);
 
         io.persistSites(workspace.workspaceId, { [plan.siteId]: plan.site });
 
@@ -174,12 +213,12 @@ export async function installAppFromFolder(
             manifestJson: raw,
             installPath: workspace.path,
             revoked: false,
+            devMode,
         });
     } catch (e) {
-        // Roll back only what THIS install created. Deleting the workspace a
-        // working app was already living in would turn a failed update into data
-        // loss.
-        if (created) io.removeWorkspace(created.workspaceId);
+        // Roll back only what THIS install created — and NEVER in dev mode, where
+        // "what was created" is the developer's own folder.
+        if (created && !devMode) io.removeWorkspace(created.workspaceId);
         return { ok: false, errors: [(e as Error).message] };
     }
 

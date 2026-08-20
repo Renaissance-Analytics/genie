@@ -42,6 +42,7 @@ const io = (over: Partial<AppInstallIO> = {}): AppInstallIO => ({
     }),
     existingApp: () => null,
     createWorkspace: async () => ({ workspaceId: 'ws-app', path: 'C:/apps/trader.agi' }),
+    adoptFolder: async () => ({ workspaceId: 'ws-dev', path: 'C:/src/trader' }),
     copyAppSource: () => {},
     persistSites: () => {},
     recordGrant: () => {},
@@ -376,5 +377,68 @@ describe('what the user still has to install themselves', () => {
     it('is empty when the machine already has everything', async () => {
         const result = await installAppFromFolder('C:/src/trader', io());
         expect(result.userProvides).toEqual([]);
+    });
+});
+
+describe('installing an app you are BUILDING', () => {
+    it('runs from your own folder instead of copying it', async () => {
+        // The developer loop, which was broken: a normal install copies the source
+        // into a new workspace, so every change needed a reinstall to be visible.
+        const copyAppSource = vi.fn();
+        const createWorkspace = vi.fn();
+        const result = await installAppFromFolder(
+            'C:/src/trader',
+            io({ copyAppSource, createWorkspace }),
+            { devMode: true },
+        );
+
+        expect(result.ok).toBe(true);
+        expect(copyAppSource).not.toHaveBeenCalled();
+        // And no second workspace: the folder you are working in IS the workspace.
+        expect(createWorkspace).not.toHaveBeenCalled();
+        expect(result.workspaceId).toBeTruthy();
+    });
+
+    it('serves the site out of the folder it was pointed at', async () => {
+        const persistSites = vi.fn();
+        await installAppFromFolder('C:/src/trader', io({ persistSites }), { devMode: true });
+
+        const [workspaceId] = persistSites.mock.calls[0] ?? [];
+        expect(workspaceId).toBe('ws-dev');
+    });
+
+    it('records that it is in development, so nothing has to infer it', async () => {
+        // A dev app gets weaker isolation (dev tools) and runs from a folder Genie
+        // does not control. Both surfaces need to SAY so, and a stored flag is
+        // harder to lose than a heuristic about paths.
+        const recordGrant = vi.fn();
+        await installAppFromFolder('C:/src/trader', io({ recordGrant }), { devMode: true });
+
+        expect(recordGrant).toHaveBeenCalledWith(expect.objectContaining({ devMode: true }));
+    });
+
+    it('is NOT development by default', async () => {
+        const recordGrant = vi.fn();
+        await installAppFromFolder('C:/src/trader', io({ recordGrant }));
+
+        expect(recordGrant).toHaveBeenCalledWith(expect.objectContaining({ devMode: false }));
+    });
+
+    it('still asks for consent — building it is not a reason to skip that', async () => {
+        const ask = vi.fn(io().ask);
+        await installAppFromFolder('C:/src/trader', io({ ask }), { devMode: true });
+        expect(ask).toHaveBeenCalled();
+    });
+
+    it('creates nothing when the user declines a dev install either', async () => {
+        const recordGrant = vi.fn();
+        const result = await installAppFromFolder(
+            'C:/src/trader',
+            io({ ask: async () => ({ cancelled: true, answers: [] }), recordGrant }),
+            { devMode: true },
+        );
+
+        expect(result.ok).toBe(false);
+        expect(recordGrant).not.toHaveBeenCalled();
     });
 });

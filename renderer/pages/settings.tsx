@@ -3195,11 +3195,11 @@ function AppsSection() {
         }
     };
 
-    const install = async () => {
+    const install = async (devMode = false) => {
         setBusy(true);
         setMsg(null);
         try {
-            const r = await api().apps.installFolder();
+            const r = await api().apps.installFolder(undefined, devMode);
             if (r.ok) {
                 // A warning means it INSTALLED and something did not come up.
                 // Reporting that as success would hide a dead backend; reporting
@@ -3322,7 +3322,7 @@ function AppsSection() {
                 desc="Choose a folder containing a genie-app.json. Genie validates it, asks what to allow, then creates its workspace and serves it."
                 keywords="install genie app gapp folder genie-app.json"
             >
-                <Action icon="folder" disabled={busy} onClick={install}>
+                <Action icon="folder" disabled={busy} onClick={() => void install(false)}>
                     Install an app…
                 </Action>
             </SettingRow>
@@ -3459,6 +3459,16 @@ function AppsSection() {
             >
                 <Action variant="ghost" icon="circle-check" disabled={busy} onClick={check}>
                     Check an app…
+                </Action>
+            </SettingRow>
+
+            <SettingRow
+                label="Run one you are building"
+                desc="Installs from your folder WITHOUT copying it, so an edit shows up on reload instead of needing a reinstall — and opens its window with dev tools. It still asks what to allow."
+                keywords="develop genie app dev mode devtools in place gapp"
+            >
+                <Action variant="ghost" icon="hammer" disabled={busy} onClick={() => void install(true)}>
+                    Install for development…
                 </Action>
             </SettingRow>
 

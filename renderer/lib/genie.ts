@@ -2026,6 +2026,8 @@ export interface InstalledAppView {
     scope: 'self' | 'workspaces' | 'workstation';
     workspaces: string[];
     revoked: boolean;
+    /** Running from the developer's own folder, with dev tools on. */
+    devMode: boolean;
     /** `https://<slug>.gen/` — where its window opens. */
     homeUrl: string;
     permissions: AppPermissionView[];
@@ -2507,7 +2509,7 @@ export interface GenieApi {
         list: () => Promise<InstalledAppView[]>;
         get: (appId: string) => Promise<InstalledAppView | null>;
         requirements: (appId: string) => Promise<AppRequirementPlanView | null>;
-        installFolder: (folder?: string) => Promise<AppInstallResult>;
+        installFolder: (folder?: string, devMode?: boolean) => Promise<AppInstallResult>;
         checkFolder: (folder?: string) => Promise<AppFolderReport>;
         scaffold: (req: { name: string; id?: string; parent?: string }) => Promise<{
             ok: boolean;

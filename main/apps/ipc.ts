@@ -16,6 +16,7 @@ import { ipcMain, dialog } from 'electron';
 import {
     addWorkspace,
     getWorkspace,
+    listWorkspaces,
     removeWorkspace as removeWorkspaceRow,
     setWorkspaceAppKind,
     upsertAppGrant,
@@ -160,6 +161,41 @@ export function installIO(): AppInstallIO {
             // Marked as an App workspace so the UI presents it as one rather than
             // as a project the user forgot creating.
             setWorkspaceAppKind(row.id, 'app');
+            return { workspaceId: row.id, path: row.path };
+        },
+        /**
+         * DEV MODE: adopt the developer's folder as the app's workspace.
+         *
+         * Registered as a workspace so hosting, processes and the permission
+         * chokepoint all work exactly as they do for an installed app — the ONLY
+         * difference is that the files are theirs, not a copy. `app-dev` marks it
+         * so the rail and the Apps panel can say so.
+         */
+        adoptFolder: async (folder, manifest) => {
+            const existing = listWorkspaces().find((w) => w.path === folder);
+            if (existing) {
+                setWorkspaceAppKind(existing.id, 'app-dev');
+                return { workspaceId: existing.id, path: existing.path };
+            }
+            const row = addWorkspace({
+                id: `appdev-${manifest.slug}-${Date.now().toString(36)}`,
+                backend: 'aionima',
+                project_id: manifest.id,
+                project_name: manifest.name,
+                tynn_project_id: manifest.id,
+                tynn_project_name: manifest.name,
+                // A GApp source folder is a plain directory, not an envelope — its
+                // sites live in genie.db rather than a project.json it does not have.
+                shape: 'simple',
+                path: folder,
+                editor: null,
+                editor_cmd: null,
+                start_cmd: null,
+                env_file: null,
+                last_opened_at: null,
+                created_by_genie: 0,
+            });
+            setWorkspaceAppKind(row.id, 'app-dev');
             return { workspaceId: row.id, path: row.path };
         },
         copyAppSource,
@@ -417,10 +453,13 @@ export function registerAppsIpc(): void {
     // installs the missing runtime stops being told to install it.
     ipcMain.handle('apps:requirements', (_e, appId: string) => appsRequirements(String(appId)));
 
-    ipcMain.handle('apps:install-folder', async (_e, folder?: string) => {
+    ipcMain.handle('apps:install-folder', async (_e, folder?: string, devMode?: boolean) => {
         const dir = folder ?? (await pickFolder('Install a Genie App'));
         if (!dir) return { ok: false, errors: ['No folder was chosen.'] };
-        return installAppFromFolder(dir, installIO());
+        // DEV MODE runs the app from the chosen folder rather than a copy, so an
+        // edit is visible without reinstalling. Consent is asked exactly as
+        // normal: building an app is not a reason to grant it anything.
+        return installAppFromFolder(dir, installIO(), { devMode: devMode === true });
     });
 
     ipcMain.handle('apps:open', (_e, appId: string) => {
@@ -436,6 +475,7 @@ export function registerAppsIpc(): void {
             slug: app.slug,
             name: app.name,
             homeUrl: app.homeUrl,
+            devMode: app.devMode,
         });
         return { ok: true };
     });

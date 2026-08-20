@@ -16,9 +16,12 @@ import type { InstalledAppView, AppRequirementView } from './genie';
 /** The collapsed row's one line. */
 export function appSummaryLine(app: InstalledAppView): string {
     const where = app.homeUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
-    const base = `v${app.version} · ${where}`;
-    // A revoked app looks identical to a working one everywhere else. If the row
-    // does not say so, the user's next stop is a bug report.
+    // A dev app runs from the developer's own folder with dev tools on — a
+    // different trust posture from an installed app, and the list is where someone
+    // would notice one they had forgotten about.
+    const base = `v${app.version} · ${where}${app.devMode ? ' · in development' : ''}`;
+    // A revoked app looks identical to a working one everywhere else, and it is
+    // the fact that changes what every other line means, so it leads.
     return app.revoked ? `Turned off · ${base}` : base;
 }
 

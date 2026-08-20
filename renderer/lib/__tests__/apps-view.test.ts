@@ -28,6 +28,7 @@ const app = (over: Partial<InstalledAppView> = {}): InstalledAppView => ({
     scope: 'self',
     workspaces: [],
     revoked: false,
+    devMode: false,
     homeUrl: 'https://trader.gen/',
     installedAt: '2026-01-01T00:00:00.000Z',
     permissions: [
@@ -151,5 +152,20 @@ describe('what the app still needs from this machine', () => {
         const note = missingRuntimesNote([req(), req({ tool: 'docker', reason: 'sandboxes it' })]);
         expect(note).toContain('2');
         expect(note).toMatch(/install/i);
+    });
+});
+
+describe('an app you are BUILDING', () => {
+    it('says so in the row, since it runs from a folder Genie does not control', () => {
+        // Dev apps get dev tools and live in the developer's own directory. That is
+        // a different trust posture from an installed app, and the list is where
+        // someone would notice one they forgot about.
+        expect(appSummaryLine(app({ devMode: true }))).toMatch(/development/i);
+        expect(appSummaryLine(app())).not.toMatch(/development/i);
+    });
+
+    it('still leads with turned-off when it is BOTH', () => {
+        // Revoked is the fact that changes what every other line means.
+        expect(appSummaryLine(app({ devMode: true, revoked: true }))).toMatch(/^Turned off/);
     });
 });

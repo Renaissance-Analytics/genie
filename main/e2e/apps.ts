@@ -113,6 +113,7 @@ export function registerAppsE2E(): void {
                 }),
                 installPath: exampleWebRoot(),
                 revoked: false,
+                devMode: false,
             });
 
             openAppWindow({

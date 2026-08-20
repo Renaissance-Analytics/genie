@@ -168,7 +168,8 @@ const api = {
         list: () => ipcRenderer.invoke('apps:list'),
         get: (appId: string) => ipcRenderer.invoke('apps:get', appId),
         requirements: (appId: string) => ipcRenderer.invoke('apps:requirements', appId),
-        installFolder: (folder?: string) => ipcRenderer.invoke('apps:install-folder', folder),
+        installFolder: (folder?: string, devMode?: boolean) =>
+            ipcRenderer.invoke('apps:install-folder', folder, devMode),
         // Check a folder WITHOUT installing — the loop a developer works in.
         checkFolder: (folder?: string) => ipcRenderer.invoke('apps:check-folder', folder),
         scaffold: (req: { name: string; id?: string; parent?: string }) =>

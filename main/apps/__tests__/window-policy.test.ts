@@ -114,3 +114,33 @@ describe('where a GApp window may navigate', () => {
         expect(decideAppNavigation(home, 'https://trader.gen.evil.com/').allow).toBe(false);
     });
 });
+
+describe('a window for an app you are BUILDING', () => {
+    it('gets dev tools, which a normal app does not', () => {
+        // The developer needs to inspect their own app. Everyone else's window
+        // stays closed, so a third-party page cannot be talked into opening one.
+        expect(appWindowOptions(app, '/genie/app-preload.js').webPreferences?.devTools).toBe(false);
+        expect(
+            appWindowOptions(app, '/genie/app-preload.js', { devMode: true }).webPreferences
+                ?.devTools,
+        ).toBe(true);
+    });
+
+    it('relaxes NOTHING else', () => {
+        // Dev mode is one switch, not a mode. Sandbox, isolation, Node and web
+        // security are identical — a developer's window is not a place to find out
+        // that the isolation only worked because of a flag.
+        const dev = appWindowOptions(app, '/p.js', { devMode: true }).webPreferences;
+        const normal = appWindowOptions(app, '/p.js').webPreferences;
+
+        expect(dev?.sandbox).toBe(normal?.sandbox);
+        expect(dev?.contextIsolation).toBe(normal?.contextIsolation);
+        expect(dev?.nodeIntegration).toBe(normal?.nodeIntegration);
+        expect(dev?.webSecurity).toBe(normal?.webSecurity);
+        expect(dev?.partition).toBe(normal?.partition);
+    });
+
+    it('says so in the title, since the user should know which windows these are', () => {
+        expect(appWindowOptions(app, '/p.js', { devMode: true }).title).toMatch(/development/i);
+    });
+});

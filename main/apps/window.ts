@@ -27,6 +27,8 @@ export interface OpenAppWindowOpts {
     name: string;
     /** `https://<slug>.gen/` — where Genie serves this app. */
     homeUrl: string;
+    /** The app is being BUILT here: dev tools on, and the title says so. */
+    devMode?: boolean;
 }
 
 const openWindows = new Map<string, BrowserWindow>();
@@ -40,8 +42,14 @@ export function openAppWindow(opts: OpenAppWindowOpts): BrowserWindow {
     }
 
     const win = new BrowserWindow({
-        ...appWindowOptions({ id: opts.appId, slug: opts.slug }, path.join(__dirname, APP_PRELOAD_FILENAME)),
-        title: `${opts.name} — Genie App`,
+        ...appWindowOptions(
+            { id: opts.appId, slug: opts.slug },
+            path.join(__dirname, APP_PRELOAD_FILENAME),
+            { devMode: opts.devMode === true },
+        ),
+        title: opts.devMode
+            ? `${opts.name} — Genie App (development)`
+            : `${opts.name} — Genie App`,
     });
 
     registerAppWindow(win.webContents, opts.appId);

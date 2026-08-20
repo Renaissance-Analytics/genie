@@ -190,10 +190,16 @@ All of it lives in **Settings → Genie Apps**.
    the manifest points at that are not there, and — listed separately — the
    things that will work but are worth a second thought. This is the loop to work
    in: change, check, fix.
-4. **Install an app…**, and answer the consent prompt. Genie creates the
+4. **Install for development** runs it from *your* folder rather than a copy, so
+   an edit shows up on reload instead of needing a reinstall, and opens its window
+   with dev tools. It still asks what to allow — building an app is not a reason
+   to grant it anything, and a developer who never sees their own consent screen
+   never finds out how it reads. Nothing else is relaxed: same sandbox, same
+   isolation, same bridge.
+5. **Install an app…** for the real thing, and answer the consent prompt. Genie creates the
    workspace, copies the source in, serves it at `<slug>.gen`, and starts your
    declared services beside it.
-5. Open it. Your front end renders in its own window with `window.genieApp` wired.
+6. Open it. Your front end renders in its own window with `window.genieApp` wired.
 
 If a service does not come up, the install still **succeeds** and says what did
 not start — an app with a broken part is not an app that failed to install.
