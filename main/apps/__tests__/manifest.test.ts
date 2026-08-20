@@ -138,3 +138,38 @@ describe('rejections that protect the user', () => {
         }
     });
 });
+
+describe('declaring what the app needs to run', () => {
+    it('carries requirements through, with the reason the user will be shown', () => {
+        const result = validateAppManifest({
+            ...valid(),
+            requires: [
+                { tool: 'python', version: '3.13.15' },
+                { tool: 'docker', reason: 'runs the strategy sandbox' },
+            ],
+        });
+
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.value.requires).toEqual([
+            { tool: 'python', version: '3.13.15' },
+            { tool: 'docker', reason: 'runs the strategy sandbox' },
+        ]);
+    });
+
+    it('refuses a requirement that names no tool', () => {
+        const result = validateAppManifest({ ...valid(), requires: [{ version: '3.13' }] });
+        expect(result.ok).toBe(false);
+        if (result.ok) return;
+        expect(result.errors.join(' ')).toContain('requires[0].tool');
+    });
+
+    it('leaves requires ABSENT for an app that needs nothing', () => {
+        const result = validateAppManifest(valid());
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        // Absent rather than an empty array: an installer that showed an empty
+        // "you must install" section would be asking for nothing, loudly.
+        expect(result.value.requires).toBeUndefined();
+    });
+});

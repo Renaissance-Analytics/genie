@@ -79,6 +79,24 @@ export interface AppPermissions {
     workspaces?: string[];
 }
 
+/**
+ * A runtime or tool the app needs to RUN (owner-directed).
+ *
+ * Declared, never resolved here: whether Genie can provide it depends on the
+ * machine (Python installs on Windows x64 today and not on macOS), so the
+ * manifest states the need and `resolveAppRequirements` answers it per machine.
+ * A missing one does NOT block the install — the app lands and the service that
+ * needs it is reported unstartable, with what to install shown prominently.
+ */
+export interface AppRequirementDecl {
+    tool: string;
+    version?: string;
+    /** WHY it is needed. Shown when the user has to provide it themselves —
+     *  "install Docker" is an instruction; "install Docker — it runs the strategy
+     *  sandbox" is a decision they can make. */
+    reason?: string;
+}
+
 export interface AppManifest {
     /** Reverse-DNS, globally unique. */
     id: string;
@@ -89,6 +107,8 @@ export interface AppManifest {
     description?: string;
     frontend: AppFrontend;
     services?: AppService[];
+    /** Runtimes/tools this app needs to run. */
+    requires?: AppRequirementDecl[];
     permissions: AppPermissions;
 }
 
@@ -151,6 +171,27 @@ function validateFrontend(raw: unknown, errors: string[]): AppFrontend | null {
 
     errors.push('`frontend.serve.mode` must be "static" or "proxy"');
     return null;
+}
+
+function validateRequires(raw: unknown, errors: string[]): AppRequirementDecl[] | undefined {
+    if (raw === undefined) return undefined;
+    if (!Array.isArray(raw)) {
+        errors.push('`requires` must be an array when present');
+        return undefined;
+    }
+    const out: AppRequirementDecl[] = [];
+    raw.forEach((entry, i) => {
+        if (!isRecord(entry) || !nonEmpty(entry.tool)) {
+            errors.push(`\`requires[${i}].tool\` is required (the runtime or tool needed)`);
+            return;
+        }
+        out.push({
+            tool: entry.tool,
+            ...(nonEmpty(entry.version) ? { version: entry.version } : {}),
+            ...(nonEmpty(entry.reason) ? { reason: entry.reason } : {}),
+        });
+    });
+    return out;
 }
 
 function validateServices(raw: unknown, errors: string[]): AppService[] | undefined {
@@ -250,6 +291,7 @@ export function validateAppManifest(raw: unknown): ValidationResult<AppManifest>
     if (!nonEmpty(raw.version)) errors.push('`version` is required');
     else if (!SEMVER.test(raw.version)) errors.push('`version` must be semver (e.g. 1.0.0)');
 
+    const requires = validateRequires(raw.requires, errors);
     const frontend = validateFrontend(raw.frontend, errors);
     const services = validateServices(raw.services, errors);
     const permissions = validatePermissions(raw.permissions, errors);
@@ -266,6 +308,7 @@ export function validateAppManifest(raw: unknown): ValidationResult<AppManifest>
             ...(nonEmpty(raw.description) ? { description: raw.description } : {}),
             frontend: frontend!,
             ...(services && services.length > 0 ? { services } : {}),
+            ...(requires && requires.length > 0 ? { requires } : {}),
             permissions,
         },
     };
