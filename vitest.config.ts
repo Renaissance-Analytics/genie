@@ -23,6 +23,10 @@ export default defineConfig({
         include: [
             'main/**/__tests__/**/*.test.ts',
             'renderer/**/__tests__/**/*.test.ts',
+            // `@genie/app-sdk` (Tynn #250) — the package a Genie App developer
+            // builds against. Framework-free and DOM-free by design, so it runs
+            // in this lane beside the main-process tests.
+            'packages/**/__tests__/**/*.test.ts',
         ],
         // `*.real.test.ts` are REAL hosting tests — they spawn the bundled Caddy /
         // php-cgi / Docker and bind real ports, and need `npm run build:runtime`
