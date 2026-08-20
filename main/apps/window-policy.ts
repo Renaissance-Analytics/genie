@@ -93,6 +93,40 @@ export function appWindowOptions(
     };
 }
 
+
+/** The web preferences an embedded GApp view is constructed with. */
+export type AppViewPreferences = NonNullable<BrowserWindowConstructorOptions['webPreferences']>;
+
+/**
+ * The web preferences for the EMBEDDED view a GApp's UI lives in (App Tray pivot).
+ *
+ * The app's content no longer owns a window — it is a tab inside a Genie-drawn
+ * shell whose first tab is Genie's own panel management. That is BETTER for
+ * anti-impersonation: Genie owns the frame, the strip and the Agent tab outright,
+ * where before the app owned everything inside the window.
+ *
+ * But the isolation has to MOVE WITH THE CONTENT. Every flag that made the window
+ * safe — no Node, context isolation, the full sandbox, web security, the per-app
+ * partition, the dedicated two-call preload — is a property of the surface the app
+ * runs in, not of whatever contains it. An embedded view that inherited the host
+ * renderer's privileges would undo the whole model and look perfectly fine in a
+ * screenshot.
+ *
+ * Derived from {@link appWindowOptions} rather than written out again, so the two
+ * cannot drift: a flag added there is a flag the embedded view gets, and the test
+ * compares them field by field.
+ */
+export function appViewOptions(
+    app: AppWindowIdentity,
+    preloadPath: string,
+    options: AppWindowOptions = {},
+): AppViewPreferences {
+    // Non-optional on purpose: `appWindowOptions` always sets these, and a caller
+    // embedding a third-party page should never be handed a `maybe` it might
+    // shrug off.
+    return appWindowOptions(app, preloadPath, options).webPreferences as AppViewPreferences;
+}
+
 export interface NavigationDecision {
     allow: boolean;
     /** Hand it to the user's real browser instead — visibly, outside this session. */

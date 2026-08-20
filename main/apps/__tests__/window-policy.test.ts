@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
     appWindowOptions,
+    appViewOptions,
     appPartitionFor,
     decideAppNavigation,
     APP_PRELOAD_FILENAME,
@@ -142,5 +143,50 @@ describe('a window for an app you are BUILDING', () => {
 
     it('says so in the title, since the user should know which windows these are', () => {
         expect(appWindowOptions(app, '/p.js', { devMode: true }).title).toMatch(/development/i);
+    });
+});
+
+/**
+ * The app's content moves from OWNING the window to being embedded in a tab
+ * (App Tray pivot) — and the isolation has to move with it.
+ *
+ * This is the whole risk of the pivot. Everything asserted above was a property of
+ * a `BrowserWindow`; the app's UI is now a view inside a Genie-drawn window, and an
+ * embedded surface that quietly inherited the host renderer's privileges would
+ * undo the entire model while looking perfectly fine in a screenshot.
+ *
+ * So the embedded view is compared FIELD BY FIELD against the window it replaces.
+ * Not "is it locked down" — "is it no weaker than what we already proved".
+ */
+describe('the embedded view a GApp’s UI now lives in', () => {
+    const windowPrefs = appWindowOptions(app, '/genie/app-preload.js').webPreferences!;
+    const viewPrefs = appViewOptions(app, '/genie/app-preload.js');
+
+    it('is no weaker than the window it replaced, on every flag that mattered', () => {
+        expect(viewPrefs.nodeIntegration).toBe(windowPrefs.nodeIntegration);
+        expect(viewPrefs.nodeIntegrationInSubFrames).toBe(windowPrefs.nodeIntegrationInSubFrames);
+        expect(viewPrefs.contextIsolation).toBe(windowPrefs.contextIsolation);
+        expect(viewPrefs.sandbox).toBe(windowPrefs.sandbox);
+        expect(viewPrefs.webSecurity).toBe(windowPrefs.webSecurity);
+        expect(viewPrefs.allowRunningInsecureContent).toBe(windowPrefs.allowRunningInsecureContent);
+        expect(viewPrefs.experimentalFeatures).toBe(windowPrefs.experimentalFeatures);
+    });
+
+    it('keeps the app’s OWN partition, so embedding shares nothing with Genie', () => {
+        // The window's partition was what made uninstall mean something and kept
+        // two apps out of each other's storage. Embedding must not quietly put the
+        // app in the host renderer's session.
+        expect(viewPrefs.partition).toBe(appPartitionFor(app.id));
+        expect(viewPrefs.partition).toBe(windowPrefs.partition);
+    });
+
+    it('keeps the dedicated two-call preload, never Genie’s own', () => {
+        expect(viewPrefs.preload).toContain(APP_PRELOAD_FILENAME);
+        expect(viewPrefs.preload).not.toMatch(/[/\\]preload\.js$/);
+    });
+
+    it('still opens dev tools only for an app you are building', () => {
+        expect(appViewOptions(app, '/p.js').devTools).toBe(false);
+        expect(appViewOptions(app, '/p.js', { devMode: true }).devTools).toBe(true);
     });
 });
