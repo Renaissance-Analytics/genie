@@ -27,7 +27,7 @@ const manifestJson = (over: Record<string, unknown> = {}) =>
 
 const io = (over: Partial<AppInstallIO> = {}): AppInstallIO => ({
     readManifest: () => manifestJson(),
-    machine: { installed: new Set(['node']), canInstall: () => true },
+    machine: async () => ({ installed: new Set(['node']), canInstall: () => true }),
     ask: async () => ({
         cancelled: false,
         answers: [

@@ -197,6 +197,8 @@ import {
 } from './terminal/recovery-channels';
 import { setSecretEncryptor } from './secrets/store';
 import { buildHostServerDeps } from './host-core/server-deps';
+import { registerAppBridge } from './apps/bridge';
+import { registerAppsIpc } from './apps/ipc';
 import type { HostCorePorts } from './host-core/ports';
 import {
     hostBackendKind,
@@ -1497,22 +1499,28 @@ app.whenReady().then(async () => {
     // Best-effort: a failed bind just means no MCP endpoints.
     // The MCP server's deps are assembled by the GUI-free factory from the
     // extracted host-tools + the injected ports (so the SAME deps run headless).
-    await startMcpServer(
-        buildHostServerDeps(
-            {
-                serverVersion: app.getVersion(),
-                userDataDir: app.getPath('userData'),
-                // The fixed, user-settable port (Settings → Agent MCP). Parsed
-                // from the k/v setting; falls back to the default when garbage.
-                configuredPort: () => {
-                    const raw = (getAllSettings() as Record<string, string>)['mcp_port'];
-                    const n = raw ? parseInt(raw, 10) : NaN;
-                    return Number.isInteger(n) && n > 0 && n < 65536 ? n : DEFAULT_MCP_PORT;
-                },
+    const mcpDeps = buildHostServerDeps(
+        {
+            serverVersion: app.getVersion(),
+            userDataDir: app.getPath('userData'),
+            // The fixed, user-settable port (Settings → Agent MCP). Parsed
+            // from the k/v setting; falls back to the default when garbage.
+            configuredPort: () => {
+                const raw = (getAllSettings() as Record<string, string>)['mcp_port'];
+                const n = raw ? parseInt(raw, 10) : NaN;
+                return Number.isInteger(n) && n > 0 && n < 65536 ? n : DEFAULT_MCP_PORT;
             },
-            electronPorts,
-        ),
-    ).catch((e) => console.error('[mcp] failed to start', e));
+        },
+        electronPorts,
+    );
+    // Genie Apps (Tynn #250): the GApp bridge runs on the SAME deps as the MCP
+    // server, so an installed app reaches the real tools through the real
+    // implementations — under app rules, decided at the same chokepoint agents
+    // use. Registered before the server starts so an app window that opens early
+    // never finds a dead channel.
+    registerAppBridge(mcpDeps);
+    registerAppsIpc();
+    await startMcpServer(mcpDeps).catch((e) => console.error('[mcp] failed to start', e));
     // E2E seam (GENIE_E2E=1 only): publish the LIVE MCP endpoint plus hooks to
     // drive a REAL broker delivery, so a Playwright spec can prove the whole
     // server-push chain in the compiled app — including that the boot above

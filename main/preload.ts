@@ -160,6 +160,22 @@ const api = {
             }>,
     },
 
+    // Genie Apps (Tynn #250). Whole agentic applications, installed with their own
+    // workspace, hosting and consented permissions. This is the MANAGEMENT surface
+    // for Genie's own UI — an installed app never sees it. What a GApp gets is the
+    // two-call bridge in `apps/app-preload.ts`, in a window with none of this.
+    apps: {
+        list: () => ipcRenderer.invoke('apps:list'),
+        get: (appId: string) => ipcRenderer.invoke('apps:get', appId),
+        installFolder: (folder?: string) => ipcRenderer.invoke('apps:install-folder', folder),
+        open: (appId: string) => ipcRenderer.invoke('apps:open', appId),
+        setCapabilities: (appId: string, capabilities: string[]) =>
+            ipcRenderer.invoke('apps:set-capabilities', appId, capabilities),
+        setRevoked: (appId: string, revoked: boolean) =>
+            ipcRenderer.invoke('apps:set-revoked', appId, revoked),
+        uninstall: (appId: string) => ipcRenderer.invoke('apps:uninstall', appId),
+    },
+
     // Plugin System (Settings → Plugins). Install / enable / grant + marketplaces.
     plugins: {
         list: () => ipcRenderer.invoke('plugins:list'),

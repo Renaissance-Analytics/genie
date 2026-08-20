@@ -45,7 +45,11 @@ export interface AppGrantInput {
 export interface AppInstallIO {
     /** The raw `genie-app.json`, or null when the folder has none. */
     readManifest: (folder: string) => string | null;
-    machine: RequirementMachine;
+    /**
+     * The machine's facts for the tools this app names. A resolver rather than a
+     * value: only the required tools are probed, and probing is I/O.
+     */
+    machine: (required: readonly string[]) => Promise<RequirementMachine>;
     ask: (
         questions: ForceQuestion[],
     ) => Promise<{ cancelled: boolean; answers: ForceAnswer[] }>;
@@ -97,7 +101,11 @@ export async function installAppFromFolder(
     if (!validated.ok) return { ok: false, errors: validated.errors };
     const manifest = validated.value;
 
-    const requirements = resolveAppRequirements(manifest.requires ?? [], io.machine);
+    const requires = manifest.requires ?? [];
+    const requirements = resolveAppRequirements(
+        requires,
+        await io.machine(requires.map((r) => r.tool)),
+    );
     const consentPlan = buildConsentPlan(manifest, requirements);
     const outcome = readConsent(consentPlan, await io.ask(consentPlan.questions));
     if (!outcome.install) {
