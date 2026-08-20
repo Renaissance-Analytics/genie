@@ -46,6 +46,9 @@ interface Fake extends ContainerRuntime {
     readonly containers: Map<string, ContainerSummary>;
     /** Images this runtime was asked to pull (#242 P3, multi-version install). */
     readonly pulled: string[];
+    /** The published-port map, so a test can move a port underneath the manager —
+     *  which is exactly what a container recreate does in production. */
+    readonly ports: Map<string, PortMapping[]>;
 }
 
 function fakeRuntime(
@@ -83,6 +86,9 @@ function fakeRuntime(
         kind: 'docker',
         ran,
         started,
+        // Exposed so a test can change a published port underneath the manager —
+        // which is exactly what a container recreate does in production.
+        ports,
         stopped,
         removed,
         removedVolumes,
@@ -857,5 +863,79 @@ describe('engineAction — install (multi-version)', () => {
         const res = await manager.engineAction({ recordKey: 'postgres-99', action: 'install' });
         expect(res.ok).toBe(false);
         expect(runtime.pulled).toEqual([]);
+    });
+});
+
+/**
+ * The reported port must be the port Docker actually publishes (genie#204-adjacent,
+ * reported independently by two agents).
+ *
+ * An engine's published port is EPHEMERAL — `HostPort: ""`, Docker chooses at
+ * create — and the manager read it once, at acquire, then served that snapshot
+ * from `list` / `status` / `connection` forever. When the container was recreated
+ * the record and Docker diverged silently, and because the reported port is
+ * injected into host-native sites and terminals as DB_PORT, a wrong record
+ * silently overrode a correct `.env`: `php artisan migrate` failed with
+ * "connection refused" against a database that was perfectly healthy.
+ *
+ * Worse, `ready` stayed TRUE throughout, because readiness is asked INSIDE the
+ * container. Genie was reporting an address nothing was listening on, and calling
+ * it ready.
+ */
+describe('a published port that changed underneath us', () => {
+    it('re-reads the LIVE mapping instead of serving the one from acquire', async () => {
+        const runtime = fakeRuntime();
+        const manager = createDevServiceManager(deps(runtime, { a: pgFor('svc-a') }));
+
+        const acquired = await manager.acquire('a', 'svc-a');
+        const before = acquired.endpoints?.[0]?.hostPort;
+        if (before === undefined) throw new Error('the fake published no port');
+
+        // The container is recreated out from under Genie — a Docker restart, a
+        // prune, a person. Same container id in this fake; a new published port.
+        runtime.ports.set(acquired.containerId ?? '', [
+            { container: 5432, hostPort: before + 7000, protocol: 'tcp', hostIp: '127.0.0.1' },
+        ]);
+
+        await manager.refresh();
+        expect(manager.list('a')[0]?.endpoints?.[0]?.hostPort).toBe(before + 7000);
+    });
+
+    it('does not report READY for an address nothing answers on', async () => {
+        // `ready: true` has to mean "something answered where I said it was".
+        // Asking the engine inside its own container cannot know the published
+        // port is wrong — which is exactly how this went unnoticed.
+        const runtime = fakeRuntime();
+        const reachable = new Set<number>();
+        const manager = createDevServiceManager({
+            ...deps(runtime, { a: pgFor('svc-a') }),
+            probeReady: async ({ port }) => reachable.has(port),
+        });
+
+        const acquired = await manager.acquire('a', 'svc-a');
+        reachable.add(acquired.endpoints?.[0]?.hostPort ?? 0);
+        await manager.refresh();
+        expect(manager.list('a')[0]?.ready).toBe(true);
+
+        // Now nothing is listening there any more.
+        reachable.clear();
+        await manager.refresh();
+        expect(manager.list('a')[0]?.ready).toBe(false);
+    });
+
+    it('leaves an engine alone when the runtime cannot be read', async () => {
+        // A runtime hiccup must not blank out a working record — that would turn
+        // a transient failure into a wrong answer, which is the whole complaint.
+        const runtime = fakeRuntime();
+        const manager = createDevServiceManager(deps(runtime, { a: pgFor('svc-a') }));
+        const acquired = await manager.acquire('a', 'svc-a');
+        const before = acquired.endpoints?.[0]?.hostPort;
+
+        runtime.portMappings = async () => {
+            throw new Error('docker is not answering');
+        };
+
+        await expect(manager.refresh()).resolves.toBeUndefined();
+        expect(manager.list('a')[0]?.endpoints?.[0]?.hostPort).toBe(before);
     });
 });

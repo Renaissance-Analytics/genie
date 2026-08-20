@@ -219,6 +219,13 @@ export interface HostEnvReport {
 }
 
 export interface DevServiceManager {
+    /**
+     * Re-read every live engine's published ports and re-check that the address
+     * being reported answers. Call before any READ that a caller will act on —
+     * an ephemeral publication can change under us, and the reported port is
+     * injected into sites and terminals as DB_PORT.
+     */
+    refresh: () => Promise<void>;
     /** Ensure the engine is up, this workspace's slice provisioned, and the
      *  engine attached to its network. Never throws. */
     acquire(workspaceId: string, serviceId: string): Promise<DevServiceStatus>;
@@ -751,6 +758,69 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
         return { ...provisionedFor(entry), host: '127.0.0.1', port: primary.hostPort };
     }
 
+
+    /**
+     * Re-read every live engine's PUBLISHED ports, and re-check that the address
+     * being reported actually answers.
+     *
+     * An engine's publication is EPHEMERAL — `HostPort: ""`, Docker chooses at
+     * create — and the endpoints were read ONCE, at acquire, then served from
+     * `list` / `status` / `connection` forever. Recreate the container and the
+     * record diverges from Docker silently. That is not merely a bad readout: the
+     * reported port is injected into host-native sites and terminals as DB_PORT,
+     * and Laravel's dotenv is immutable, so a stale record silently OVERRIDES a
+     * correct `.env` and `artisan migrate` fails against a healthy database.
+     *
+     * Readiness is re-derived here too, because `waitReady` asks the engine INSIDE
+     * its container — which cannot possibly know the published port is wrong. That
+     * is how an address nothing was listening on kept reporting `ready: true`.
+     * After this, ready means "something answered where I said it was".
+     *
+     * Failure LEAVES THE RECORD ALONE. A runtime hiccup blanking a working entry
+     * would turn a transient error into a wrong answer, which is the complaint
+     * this is fixing.
+     */
+    async function refresh(): Promise<void> {
+        if (live.size === 0) return;
+        const { runtime } = await deps.resolveRuntime();
+        if (!runtime) return;
+
+        for (const entry of live.values()) {
+            let endpoints: ServiceEndpoint[];
+            try {
+                endpoints = await endpointsFor(
+                    runtime,
+                    engineSpecFor(entry.config.engine),
+                    entry.config,
+                    entry.containerName,
+                    entry.containerId,
+                );
+            } catch {
+                continue; // keep what we had
+            }
+            // An empty read is "I could not see them", not "there are none".
+            if (endpoints.length === 0) continue;
+            // Nor is a read that came back with NO published port, when we had one.
+            // `endpointsFor` swallows a runtime error into an empty mapping list,
+            // so a docker hiccup arrives here looking exactly like an unpublished
+            // container — and a running container cannot lose a publication,
+            // because publication is fixed at create. Losing one means we failed
+            // to read it, and overwriting would turn a transient error into the
+            // very wrong answer this function exists to fix.
+            if (entry.endpoints.some((e) => e.hostPort) && !endpoints.some((e) => e.hostPort)) {
+                continue;
+            }
+            entry.endpoints = endpoints;
+
+            const primary = endpoints.find((e) => e.hostPort);
+            if (primary?.hostPort && deps.probeReady) {
+                entry.ready = await deps
+                    .probeReady({ port: primary.hostPort, kind: primary.kind, timeoutMs: 1_000 })
+                    .catch(() => entry.ready);
+            }
+        }
+    }
+
     function statusOf(entry: Live): DevServiceStatus {
         return {
             serviceId: entry.serviceId,
@@ -822,6 +892,7 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
     return {
         acquire,
         release,
+        refresh,
 
         async adopt() {
             const { runtime } = await deps.resolveRuntime();

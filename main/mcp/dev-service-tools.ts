@@ -237,6 +237,11 @@ export async function runManageService(
         switch (req.action) {
             case 'list':
             case 'status':
+                // Re-read the LIVE published ports first. An engine's publication
+                // is ephemeral, the endpoints were captured once at acquire, and
+                // this is the tool an agent calls to learn how to connect — an
+                // address nothing is listening on is worse than no answer.
+                await manager.refresh().catch(() => {});
                 return {
                     ok: true,
                     services: services(),
@@ -343,6 +348,9 @@ export async function runManageService(
             }
 
             case 'connection': {
+                // Same reason as `list`/`status`, and more so: this one exists to
+                // hand back an address somebody will dial.
+                await manager.refresh().catch(() => {});
                 const target = targetService();
                 if ('error' in target) return fail(target.error);
                 return {
