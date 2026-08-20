@@ -985,6 +985,26 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // v37: GENIE APPS (Tynn #250). A workspace created by installing a
+            // GApp is an ordinary envelope whose sites/services the installer
+            // wrote — this column is what marks it as one, so the UI can present
+            // it as an App rather than a project and the runtime can find the app
+            // a window belongs to.
+            //
+            // A separate column rather than a new `shape`: `shape` carries a CHECK
+            // constraint (`IN ('agi','simple')`), and SQLite cannot alter a CHECK
+            // without rebuilding the table. Rebuilding `workspaces` — the primary
+            // table every other feature keys off — is the wrong risk to take for a
+            // label. NULL for every existing workspace, and for every workspace a
+            // person creates by hand.
+            version: 37,
+            runner: (db) => {
+                if (!workspaceColumns(db).has('app_kind')) {
+                    db.exec(`ALTER TABLE workspaces ADD COLUMN app_kind TEXT`);
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -1389,6 +1409,9 @@ export interface WorkspaceRow {
      *  every workspace on this machine. 0/absent = no. Resolve via
      *  {@link isWorkstationOperator}, never read raw. */
     workstation_operator?: number | null;
+    /** GENIE APPS (Tynn #250): 'app' = this workspace hosts an installed GApp.
+     *  NULL = an ordinary workspace. Resolve via {@link getWorkspaceAppKind}. */
+    app_kind?: string | null;
     /** Workspace ids admitted when `agent_access: 'specific'`, JSON-encoded.
      *  NULL/absent = none admitted. Resolve via {@link getWorkspaceAgentAccess}. */
     agent_access_workspaces?: string | null;
@@ -1735,6 +1758,29 @@ export function isWorkstationOperator(id: string): boolean {
         )
         .get(id);
     return row?.workstation_operator === 1;
+}
+
+/**
+ * Which kind of App workspace this is, or null for an ordinary one (Tynn #250).
+ *
+ * Read through here rather than off the row so an unrecognised value — a newer
+ * Genie's kind, a hand edit — reads as "not an App workspace" instead of being
+ * treated as one.
+ */
+export type WorkspaceAppKind = 'app';
+
+export function getWorkspaceAppKind(id: string): WorkspaceAppKind | null {
+    const row = getDb()
+        .prepare<[string], { app_kind: string | null } | undefined>(
+            'SELECT app_kind FROM workspaces WHERE id = ?',
+        )
+        .get(id);
+    return row?.app_kind === 'app' ? 'app' : null;
+}
+
+/** Mark (or unmark) a workspace as hosting an installed GApp. */
+export function setWorkspaceAppKind(id: string, kind: WorkspaceAppKind | null): void {
+    getDb().prepare('UPDATE workspaces SET app_kind = ? WHERE id = ?').run(kind, id);
 }
 
 /** Grant or revoke the workstation-operator designation. */

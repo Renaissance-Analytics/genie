@@ -1155,3 +1155,49 @@ describe('db migrations v32 + v33 (the container Dev Server’s services, #234 P
         expect(cols(db, 'workspaces').has('dev_services')).toBe(true);
     });
 });
+
+describe('v37 — App workspaces (Tynn #250)', () => {
+    it('adds app_kind, and every EXISTING workspace stays an ordinary one', () => {
+        // The migration must not retroactively turn anybody's project into an App.
+        const db = new Database(':memory:');
+        runMigrations(db);
+        db.prepare(
+            `INSERT INTO workspaces
+                (id, project_id, project_name, tynn_project_id, tynn_project_name, shape, path, sort_order)
+             VALUES ('ws-1', 'p1', 'A Project', 'p1', 'A Project', 'simple', '/tmp/a', 0)`,
+        ).run();
+
+        expect(cols(db, 'workspaces').has('app_kind')).toBe(true);
+        const row = db
+            .prepare<[], { app_kind: string | null }>('SELECT app_kind FROM workspaces')
+            .get();
+        expect(row?.app_kind ?? null).toBeNull();
+    });
+
+    it('leaves `shape` and its CHECK constraint alone', () => {
+        // The reason app_kind is a separate column: `shape` carries
+        // CHECK (shape IN ('agi','simple')), and SQLite cannot alter a CHECK
+        // without rebuilding the table. Rebuilding `workspaces` — the table every
+        // other feature keys off — is the wrong risk for a label. If a later
+        // change ever does relax that constraint, this fails and asks why.
+        const db = new Database(':memory:');
+        runMigrations(db);
+
+        expect(() =>
+            db
+                .prepare(
+                    `INSERT INTO workspaces
+                        (id, project_id, project_name, tynn_project_id, tynn_project_name, shape, path, sort_order)
+                     VALUES ('ws-2', 'p2', 'B', 'p2', 'B', 'app', '/tmp/b', 0)`,
+                )
+                .run(),
+        ).toThrow();
+    });
+
+    it('is idempotent — re-running converges without throwing', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(() => runMigrations(db)).not.toThrow();
+        expect(cols(db, 'workspaces').has('app_kind')).toBe(true);
+    });
+});
