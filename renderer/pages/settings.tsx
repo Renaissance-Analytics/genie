@@ -35,6 +35,7 @@ import {
     type UpdaterConfig,
     type UpdaterStatus,
     type InstalledPluginView,
+    type InstalledAppView,
     type MarketplaceView,
     type OfficialPluginsResult,
     type PluginDeveloperModeState,
@@ -55,6 +56,7 @@ import {
     languageSections,
     removeConfirmation,
 } from '../lib/toolchain-page';
+import { appSummaryLine, permissionSummary, reachLabel, uninstallConfirmation } from '../lib/apps-view';
 import { isolationNote } from '../lib/dev-server';
 import {
     newPromptId,
@@ -733,6 +735,13 @@ export default function SettingsPage() {
                             <SearchGroup label="Plugins" searching={searching}>
 
             <PluginsSection />
+
+                            </SearchGroup>
+                        )}
+                        {show('apps') && (
+                            <SearchGroup label="Genie Apps" searching={searching}>
+
+            <AppsSection />
 
                             </SearchGroup>
                         )}
@@ -3124,6 +3133,222 @@ function TrustBadge({ plugin }: { plugin: InstalledPluginView }) {
  * keeps its one-line explanation in the head — a dark switch with no reason
  * given is the thing that sends you looking for a bug.
  */
+/* ---- Genie Apps (Tynn #250) ------------------------------------------- */
+
+/**
+ * The Apps panel.
+ *
+ * Its whole job is to make an app's authority legible AFTER install. The consent
+ * modal is a moment; this is the standing answer to "what did I let this thing
+ * do?" — which is the question a user actually has weeks later, when something
+ * surprises them.
+ *
+ * So permissions are individually toggleable here, turning an app off is one
+ * switch away on every row, and every state says what it MEANS in words rather
+ * than leaving the user to infer it from a count or an absence.
+ */
+function AppsSection() {
+    const [apps, setApps] = useState<InstalledAppView[]>([]);
+    const [busy, setBusy] = useState(false);
+    const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+    const filter = useContext(SettingsFilterCtx);
+
+    const refresh = async () => {
+        try {
+            setApps(await api().apps.list());
+        } catch {
+            /* leave prior state */
+        }
+    };
+
+    useEffect(() => {
+        void refresh();
+    }, []);
+
+    const run = async (fn: () => Promise<{ ok: boolean; error?: string }>, okText: string) => {
+        setBusy(true);
+        setMsg(null);
+        try {
+            const r = await fn();
+            if (r.ok) setMsg({ kind: 'ok', text: okText });
+            else setMsg({ kind: 'err', text: r.error ?? 'Failed.' });
+        } catch (e) {
+            setMsg({ kind: 'err', text: (e as Error).message });
+        } finally {
+            setBusy(false);
+            await refresh();
+        }
+    };
+
+    const install = async () => {
+        setBusy(true);
+        setMsg(null);
+        try {
+            const r = await api().apps.installFolder();
+            if (r.ok) setMsg({ kind: 'ok', text: 'Installed. Open it below.' });
+            else if (r.errors?.length) setMsg({ kind: 'err', text: r.errors.join(' ') });
+        } catch (e) {
+            setMsg({ kind: 'err', text: (e as Error).message });
+        } finally {
+            setBusy(false);
+            await refresh();
+        }
+    };
+
+    /** The granted set after flipping one permission — the whole list, every time,
+     *  because the main side stores a set and narrowing it to the manifest is its
+     *  job, not the panel's. */
+    const nextGrants = (app: InstalledAppView, key: string, granted: boolean): string[] => {
+        const held = app.permissions.filter((p) => p.granted && p.key !== key).map((p) => p.key);
+        return granted ? [...held, key] : held;
+    };
+
+    return (
+        <SetSection
+            title="Genie Apps"
+            desc="Whole applications installed into Genie — each with its own workspace, its own address, and only the permissions you gave it"
+        >
+            {msg && <div className={`set-note${msg.kind === 'err' ? ' warn' : ''}`}>{msg.text}</div>}
+
+            <SettingRow
+                label="Install from a folder"
+                desc="Choose a folder containing a genie-app.json. Genie validates it, asks what to allow, then creates its workspace and serves it."
+                keywords="install genie app gapp folder genie-app.json"
+            >
+                <Action icon="folder" disabled={busy} onClick={install}>
+                    Install an app…
+                </Action>
+            </SettingRow>
+
+            {apps.length === 0 ? (
+                <Text size="xs" className="text-zinc-500">
+                    No apps installed. A Genie App brings its own front end, its own services and its own
+                    workspace — see packages/app-sdk to build one, or apps/example for a working app to try.
+                </Text>
+            ) : (
+                <Accordion
+                    key={filter ? 'searching' : 'browsing'}
+                    type="multiple"
+                    defaultOpen={filter ? apps.map((a) => a.id) : []}
+                >
+                    {apps.map((a) => (
+                        <AppCard
+                            key={a.id}
+                            app={a}
+                            busy={busy}
+                            onOpen={() => run(() => api().apps.open(a.id), `Opened ${a.name}.`)}
+                            onToggleOn={(on) =>
+                                run(
+                                    () => api().apps.setRevoked(a.id, !on),
+                                    on
+                                        ? `${a.name} is on.`
+                                        : `${a.name} is turned off — it can call nothing until you turn it back on.`,
+                                )
+                            }
+                            onTogglePermission={(key, granted) =>
+                                run(
+                                    () => api().apps.setCapabilities(a.id, nextGrants(a, key, granted)),
+                                    `${granted ? 'Granted' : 'Revoked'} ${
+                                        a.permissions.find((p) => p.key === key)?.label ?? key
+                                    }.`,
+                                )
+                            }
+                            onUninstall={() => {
+                                if (!window.confirm(uninstallConfirmation(a))) return;
+                                void run(() => api().apps.uninstall(a.id), `Uninstalled ${a.name}.`);
+                            }}
+                        />
+                    ))}
+                </Accordion>
+            )}
+        </SetSection>
+    );
+}
+
+function AppCard({
+    app,
+    busy,
+    onOpen,
+    onToggleOn,
+    onTogglePermission,
+    onUninstall,
+}: {
+    app: InstalledAppView;
+    busy: boolean;
+    onOpen: () => void;
+    onToggleOn: (on: boolean) => void;
+    onTogglePermission: (key: string, granted: boolean) => void;
+    onUninstall: () => void;
+}) {
+    return (
+        <Accordion.Item value={app.id} className="plugin-card border-b-0">
+            <div className="plugin-card-head">
+                <Accordion.Trigger className="plugin-card-summary py-0">
+                    <span className="set-row-main">
+                        <span className="set-row-label">
+                            {app.name} <span className="text-zinc-500">{appSummaryLine(app)}</span>
+                        </span>
+                        <span className="set-row-desc">{permissionSummary(app)}</span>
+                    </span>
+                </Accordion.Trigger>
+                <div className="set-actions">
+                    {/* The switch means the app is ON, not "revoked": a switch
+                        labelled by a negative gets read backwards half the time. */}
+                    <Switch checked={!app.revoked} disabled={busy} onCheckedChange={onToggleOn} />
+                    <Action
+                        variant="ghost"
+                        icon="external-link"
+                        disabled={busy || app.revoked}
+                        onClick={onOpen}
+                    >
+                        Open
+                    </Action>
+                    <Action variant="ghost" color="red" icon="trash-2" disabled={busy} onClick={onUninstall}>
+                        Uninstall
+                    </Action>
+                </div>
+            </div>
+
+            <Accordion.Content className="plugin-card-details">
+                <Text size="xs" className="text-zinc-500">
+                    {reachLabel(app.scope, app.workspaces)} · v{app.version} · {app.installPath}
+                </Text>
+
+                {app.permissions.length === 0 ? (
+                    <Text size="xs" className="text-zinc-500">
+                        This app asked for nothing, so there is nothing to grant. It still runs — it just
+                        cannot call Genie.
+                    </Text>
+                ) : (
+                    <>
+                        <SetSubhead>What it may do</SetSubhead>
+                        {app.permissions.map((p) => (
+                            <div className="plugin-row" key={p.key}>
+                                <div className="set-row-main">
+                                    <span className="set-row-label">
+                                        {p.label}{' '}
+                                        {p.risk === 'high' && (
+                                            <Badge color="amber" size="sm">
+                                                high risk
+                                            </Badge>
+                                        )}
+                                    </span>
+                                    <span className="set-row-desc">{p.grantDescription}</span>
+                                </div>
+                                <Switch
+                                    checked={p.granted}
+                                    disabled={busy}
+                                    onCheckedChange={(on) => onTogglePermission(p.key, on)}
+                                />
+                            </div>
+                        ))}
+                    </>
+                )}
+            </Accordion.Content>
+        </Accordion.Item>
+    );
+}
+
 function PluginCard({
     plugin,
     busy,

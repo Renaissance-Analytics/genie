@@ -2003,6 +2003,49 @@ export interface PluginPermissionView {
 export type PluginTrustStatus = 'trusted' | 'unsigned' | 'untrusted' | 'outdated';
 
 /** An installed plugin as Settings → Plugins renders it. */
+
+/* ---- Genie Apps (Tynn #250) ------------------------------------------- */
+
+/** One capability an app DECLARED, and whether the user granted it. */
+export interface AppPermissionView {
+    key: string;
+    label: string;
+    grantDescription: string;
+    risk: 'standard' | 'high';
+    granted: boolean;
+}
+
+/** An installed Genie App, as the Apps panel sees it. */
+export interface InstalledAppView {
+    id: string;
+    name: string;
+    slug: string;
+    version: string;
+    workspaceId: string;
+    installPath: string;
+    scope: 'self' | 'workspaces' | 'workstation';
+    workspaces: string[];
+    revoked: boolean;
+    /** `https://<slug>.gen/` — where its window opens. */
+    homeUrl: string;
+    permissions: AppPermissionView[];
+    installedAt: string;
+}
+
+export interface AppActionResult {
+    ok: boolean;
+    error?: string;
+    app?: InstalledAppView;
+}
+
+export interface AppInstallResult {
+    ok: boolean;
+    appId?: string;
+    workspaceId?: string;
+    homeUrl?: string;
+    errors?: string[];
+}
+
 export interface InstalledPluginView {
     id: string;
     name: string;
@@ -2399,6 +2442,20 @@ export interface GenieApi {
     };
     /** Plugin System (Settings → Plugins). Install from a repo URL / folder /
      *  marketplace; enable/disable; toggle granular permissions; uninstall. */
+    /**
+     * Genie Apps — the MANAGEMENT surface, for Genie's own UI. An installed app
+     * never sees this: what a GApp gets is the two-call bridge in its own
+     * sandboxed window, with none of this on it.
+     */
+    apps: {
+        list: () => Promise<InstalledAppView[]>;
+        get: (appId: string) => Promise<InstalledAppView | null>;
+        installFolder: (folder?: string) => Promise<AppInstallResult>;
+        open: (appId: string) => Promise<AppActionResult>;
+        setCapabilities: (appId: string, capabilities: string[]) => Promise<AppActionResult>;
+        setRevoked: (appId: string, revoked: boolean) => Promise<AppActionResult>;
+        uninstall: (appId: string) => Promise<AppActionResult>;
+    };
     plugins: {
         list: () => Promise<InstalledPluginView[]>;
         installRepo: (url: string, ref?: string) => Promise<PluginActionResult>;

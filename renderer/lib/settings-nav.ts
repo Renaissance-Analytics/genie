@@ -14,6 +14,7 @@ export type SectionId =
     | 'customization'
     | 'agent-mcp'
     | 'plugins'
+    | 'apps'
     | 'mobile'
     | 'toolchain'
     | 'dev-server'
@@ -50,6 +51,12 @@ export const NAV_GROUPS: NavGroup[] = [
         items: [
             { id: 'agent-mcp', label: 'Agent MCP', icon: 'plug' },
             { id: 'plugins', label: 'Plugins', icon: 'puzzle' },
+            // Genie Apps (Tynn #250) — whole agentic applications, each with its
+            // own workspace, hosting, window and consented permissions. Beside
+            // Plugins because both are third-party code the user chose to trust,
+            // and separate because they are different KINDS of trust: a plugin
+            // extends Genie's surfaces, an app is a program of its own.
+            { id: 'apps', label: 'Genie Apps', icon: 'layout-dashboard' },
             { id: 'mobile', label: 'Work Mode', icon: 'monitor' },
             // THIS MACHINE's toolchain: the language versions Genie installs and
             // owns (php/node/python/go/rust, many side by side, one default),
