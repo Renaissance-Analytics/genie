@@ -2389,11 +2389,29 @@ export function manageSiteSummary(result: ManageSiteResult): string {
         // the obvious `curl http://127.0.0.1:<port>/` answers "Client sent an HTTP
         // request to an HTTPS server" and reads like the app is broken (genie#195).
         const locally = target.localCurl ? ` From this machine: \`${target.localCurl}\`.` : '';
-        return target.ready
-            ? `${target.name} is serving at ${where}.${locally}`
-            : `${target.name}'s container is up, but nothing is listening on port ${
-                  target.port ?? '?'
-              } yet — it may still be starting. Check \`logs\`, then \`status\` again before reporting it live.`;
+        if (target.ready) return `${target.name} is serving at ${where}.${locally}`;
+        // NOT-ANSWERING (genie#227). Two faults were reported in the old sentence.
+        //
+        // It said "container" for `runMode: host`, which is documented as having
+        // none — sending the reporter hunting something that does not exist.
+        //
+        // And "may still be starting" is UNFALSIFIABLE: a permanent
+        // misconfiguration and a slow boot read identically, forever, so there is
+        // no reading of it that ever means "this is broken". The host owns the
+        // port — it allocates one at start and rewrites the command to match — so
+        // when an app binds a port of its own instead, Genie proxies into nothing
+        // and nothing ever appears. Naming the port GENIE is watching, and how to
+        // tell that case apart, is what makes the message checkable.
+        const isHost = target.runMode === 'host';
+        const noun = isHost ? 'process' : 'container';
+        const watching = target.hostPort ?? target.port;
+        return (
+            `${target.name}'s ${noun} is up, but nothing is answering on port ${watching ?? '?'} — ` +
+            `the port Genie allocated and is proxying to. Either it is still starting, or the app ` +
+            `bound a DIFFERENT port: check \`logs\` for the port it reports, and ` +
+            `\`curl http://127.0.0.1:${watching ?? 'PORT'}/\` from this machine. If the app answers ` +
+            `somewhere else, its command is binding a port Genie did not allocate.`
+        );
     }
     const running = result.sites.filter((s) => s.state === 'running').length;
     return `${result.sites.length} site${result.sites.length === 1 ? '' : 's'} in this workspace, ${running} running.`;

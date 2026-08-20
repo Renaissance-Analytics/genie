@@ -370,7 +370,10 @@ describe('manageSiteSummary', () => {
             sites: [site({ ready: false, port: 5173, origin: 'https://web.acme.gen' })],
         });
         expect(text).not.toContain('https://web.acme.gen');
-        expect(text).toMatch(/nothing is listening/i);
+        // Wording changed with genie#227 — "nothing is ANSWERING on port <n>, the
+        // port Genie allocated". The distinction this test guards is unchanged:
+        // running is not listening, and no origin is handed back either way.
+        expect(text).toMatch(/nothing is answering on port 5173/i);
         expect(text).toMatch(/logs/);
     });
 
