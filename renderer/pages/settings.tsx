@@ -37,6 +37,7 @@ import {
     type InstalledPluginView,
     type InstalledAppView,
     type AppRequirementPlanView,
+    type AppUpdateState,
     type AppFolderReport,
     type GithubInstallReview,
     type MarketplaceView,
@@ -65,6 +66,7 @@ import {
     permissionSummary,
     provenanceLine,
     reachLabel,
+    updateNote,
     requirementLine,
     uninstallConfirmation,
 } from '../lib/apps-view';
@@ -3164,6 +3166,7 @@ function AppsSection() {
     const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
     const [report, setReport] = useState<AppFolderReport | null>(null);
     const [newName, setNewName] = useState('');
+    const [updates, setUpdates] = useState<Record<string, AppUpdateState>>({});
     const [repoUrl, setRepoUrl] = useState('');
     const [review, setReview] = useState<GithubInstallReview | null>(null);
     const [typed, setTyped] = useState('');
@@ -3179,6 +3182,13 @@ function AppsSection() {
 
     useEffect(() => {
         void refresh();
+        // Opening the panel is the moment "is there a newer version?" matters, so
+        // that is when it is asked. Event-driven by the user's attention, never a
+        // background poller hitting GitHub for every installed app.
+        void api()
+            .apps.checkUpdates()
+            .then(setUpdates)
+            .catch(() => setUpdates({}));
     }, []);
 
     const run = async (fn: () => Promise<{ ok: boolean; error?: string }>, okText: string) => {
@@ -3520,6 +3530,7 @@ function AppsSection() {
                         <AppCard
                             key={a.id}
                             app={a}
+                            update={updates[a.id] ?? 'not-tracked'}
                             busy={busy}
                             onOpen={() => run(() => api().apps.open(a.id), `Opened ${a.name}.`)}
                             onToggleOn={(on) =>
@@ -3552,6 +3563,7 @@ function AppsSection() {
 
 function AppCard({
     app,
+    update,
     busy,
     onOpen,
     onToggleOn,
@@ -3559,6 +3571,7 @@ function AppCard({
     onUninstall,
 }: {
     app: InstalledAppView;
+    update: AppUpdateState;
     busy: boolean;
     onOpen: () => void;
     onToggleOn: (on: boolean) => void;
@@ -3620,6 +3633,9 @@ function AppCard({
                             ))}
                         </ul>
                     </div>
+                )}
+                {updateNote(update, app) && (
+                    <div className="set-note">{updateNote(update, app)}</div>
                 )}
                 {/* Provenance first among the facts: "who gave me this?" is the
                     question someone opens this card to answer. */}

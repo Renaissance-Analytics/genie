@@ -5,10 +5,11 @@ import {
     reachLabel,
     uninstallConfirmation,
     provenanceLine,
+    updateNote,
     requirementLine,
     missingRuntimesNote,
 } from '../apps-view';
-import type { InstalledAppView, AppRequirementView } from '../genie';
+import type { InstalledAppView, AppRequirementView, AppUpdateState } from '../genie';
 
 /**
  * What the Apps panel SAYS about an installed Genie App.
@@ -194,5 +195,32 @@ describe('where an installed app came from', () => {
         // read as "local and fine"; the honest answer is that Genie cannot say.
         const line = provenanceLine(app({ source: null }));
         expect(line).toMatch(/not recorded|does not know|unknown/i);
+    });
+});
+
+describe('telling the user a newer version exists', () => {
+    it('offers the update, and says how', () => {
+        const note = updateNote('update-available', app({ source: {
+            kind: 'github', origin: 'github.com/acme/trader', commit: 'a1b2c3d',
+        } }));
+        expect(note).toMatch(/newer/i);
+        // Updating goes back through the review — a new version can ask for more
+        // than the user agreed to, so the UI must not imply a one-click pull.
+        expect(note).toMatch(/review/i);
+    });
+
+    it('says nothing when the app is current', () => {
+        expect(updateNote('current', app())).toBeNull();
+    });
+
+    it('says nothing for an app with no upstream', () => {
+        expect(updateNote('not-tracked', app())).toBeNull();
+    });
+
+    it('admits it could not check, rather than staying silent', () => {
+        // Silence is indistinguishable from "up to date", and the whole point of
+        // separating unknown from current is not to make a promise Genie did not
+        // verify.
+        expect(updateNote('unknown', app())).toMatch(/could not|couldn’t|unable/i);
     });
 });

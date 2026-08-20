@@ -168,6 +168,8 @@ const api = {
         list: () => ipcRenderer.invoke('apps:list'),
         get: (appId: string) => ipcRenderer.invoke('apps:get', appId),
         requirements: (appId: string) => ipcRenderer.invoke('apps:requirements', appId),
+        // Asks each tracked repo for its HEAD. On demand, never on a timer.
+        checkUpdates: () => ipcRenderer.invoke('apps:check-updates'),
         installFolder: (folder?: string, devMode?: boolean) =>
             ipcRenderer.invoke('apps:install-folder', folder, devMode),
         // Check a folder WITHOUT installing — the loop a developer works in.

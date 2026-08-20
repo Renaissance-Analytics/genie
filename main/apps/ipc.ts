@@ -42,6 +42,7 @@ import {
 } from './manage';
 import { clearAppStorage, closeAppWindows, openAppWindow } from './window';
 import { validateAppFolder, type AppFolderReport } from './validate';
+import { appUpdateState, updatableApps, type AppUpdateState } from './updates';
 import {
     buildGithubReview,
     parseGithubSource,
@@ -349,8 +350,48 @@ async function reviewGithubApp(
     }
 }
 
+
+/* ---- Is there a newer version? ---------------------------------------- */
+
+/**
+ * Ask each tracked repo for its current HEAD and compare.
+ *
+ * `ls-remote` rather than a fetch: it is one round trip and clones nothing, so
+ * this is cheap enough to run when the user opens the panel. On DEMAND, never on
+ * a timer — a background poller hitting GitHub for every installed app is a rate
+ * limit and a privacy footprint nobody asked for.
+ *
+ * Each distinct ORIGIN is asked once, however many apps came from it: a monorepo
+ * can hold several.
+ */
+async function checkAppUpdates(): Promise<Record<string, AppUpdateState>> {
+    const tracked = updatableApps(
+        listAppGrants().map((g) => ({ id: g.appId, source: g.source })),
+    );
+
+    const heads = new Map<string, string | null>();
+    for (const origin of new Set(tracked.map((t) => t.origin))) {
+        try {
+            const raw = await simpleGit().listRemote([`https://${origin}.git`, 'HEAD']);
+            heads.set(origin, raw.trim().split(/\s+/)[0] ?? null);
+        } catch {
+            // Unreachable is UNKNOWN, never "current" — see updates.ts.
+            heads.set(origin, null);
+        }
+    }
+
+    const out: Record<string, AppUpdateState> = {};
+    for (const grant of listAppGrants()) {
+        const head = grant.source?.kind === 'github' ? heads.get(grant.source.origin) : undefined;
+        out[grant.appId] = appUpdateState(grant.source, head ?? null);
+    }
+    return out;
+}
+
 export function registerAppsIpc(): void {
     ipcMain.handle('apps:list', () => appsList());
+    // On demand — when the panel opens, or when the user asks. Never polled.
+    ipcMain.handle('apps:check-updates', () => checkAppUpdates());
 
     /**
      * STEP 1 of installing from GitHub: fetch it and describe it.

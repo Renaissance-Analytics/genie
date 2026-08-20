@@ -2058,6 +2058,9 @@ export interface AppRequirementPlanView {
     installable: true;
 }
 
+/** Whether a tracked app has a newer version upstream. */
+export type AppUpdateState = 'current' | 'update-available' | 'unknown' | 'not-tracked';
+
 /** One capability, as the GitHub review presents it. */
 export interface AppReviewCapability {
     key: string;
@@ -2511,6 +2514,7 @@ export interface GenieApi {
         list: () => Promise<InstalledAppView[]>;
         get: (appId: string) => Promise<InstalledAppView | null>;
         requirements: (appId: string) => Promise<AppRequirementPlanView | null>;
+        checkUpdates: () => Promise<Record<string, AppUpdateState>>;
         installFolder: (folder?: string, devMode?: boolean) => Promise<AppInstallResult>;
         checkFolder: (folder?: string) => Promise<AppFolderReport>;
         scaffold: (req: { name: string; id?: string; parent?: string }) => Promise<{

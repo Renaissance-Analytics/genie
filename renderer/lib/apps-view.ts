@@ -11,7 +11,7 @@
  * app's state is called.
  */
 
-import type { InstalledAppView, AppRequirementView } from './genie';
+import type { InstalledAppView, AppRequirementView, AppUpdateState } from './genie';
 
 /** The collapsed row's one line. */
 export function appSummaryLine(app: InstalledAppView): string {
@@ -113,4 +113,29 @@ export function provenanceLine(app: InstalledAppView): string {
         return `From ${app.source.origin}${at}`;
     }
     return `Installed from ${app.source.origin}`;
+}
+
+/**
+ * Whether to tell the user a newer version exists, and what to say.
+ *
+ * Null when there is nothing to say — a current app and one with no upstream both
+ * get silence, because a row full of "up to date" badges is a row nobody reads.
+ *
+ * `unknown` does NOT get silence. Silence is indistinguishable from "up to date",
+ * and the entire reason `unknown` is a separate state is to avoid promising
+ * something Genie never managed to check.
+ *
+ * The wording sends the user back through the review deliberately. A new version
+ * can ask for more than they agreed to, so there is no one-click pull and the UI
+ * must not imply one.
+ */
+export function updateNote(state: AppUpdateState, app: InstalledAppView): string | null {
+    if (state === 'update-available') {
+        const where = app.source?.origin ?? 'its repository';
+        return `A newer version is available at ${where}. Install from GitHub again to review what changed before updating.`;
+    }
+    if (state === 'unknown') {
+        return 'Genie could not check for a newer version — the repository was unreachable, or no commit was recorded.';
+    }
+    return null;
 }
