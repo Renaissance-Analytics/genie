@@ -42,6 +42,7 @@ import { computeOrphans } from './orphans';
 import { buildProcessArgs } from './process-spawn';
 import { devServiceHostEnvFor } from '../dev-server';
 import { terminalServiceEnv } from '../dev-server/services/env-wiring';
+import { recordTerminalServiceEnv } from '../db';
 import {
     TerminalReadBuffer,
     type ReadResult,
@@ -892,6 +893,17 @@ export function registerTerminalIpc(): void {
                 const svcEnv = terminalServiceEnv(devServiceHostEnvFor(spec.workspace_id));
                 if (Object.keys(svcEnv).length) {
                     opts = { ...opts, env: { ...opts.env, ...svcEnv } };
+                    // RECORD what was baked in (genie#222). A shell's environment is
+                    // fixed once it starts, so when a published port later moves this
+                    // terminal keeps pointing at an address that no longer exists —
+                    // and in a framework with an immutable dotenv, that stale value
+                    // beats a correct `.env`. Without a record of what was injected,
+                    // nothing can ever tell the user their SHELL is the problem.
+                    try {
+                        recordTerminalServiceEnv(opts.id, svcEnv);
+                    } catch {
+                        // A bookkeeping failure must never stop a terminal opening.
+                    }
                 }
             }
             // Agent-integration MCP: when the spec's workspace has opted in, mint

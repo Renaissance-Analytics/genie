@@ -1362,3 +1362,30 @@ describe('v42 — data kept from an uninstalled app (Tynn #250)', () => {
         expect(cols(db, 'app_retained_data').has('source_origin')).toBe(true);
     });
 });
+
+describe('v43 — the service env baked into a terminal (genie#222)', () => {
+    it('keeps what was injected, so drift can be spotted after a restart', () => {
+        // PERSISTED, not in memory: a Genie restart is one of the things that
+        // moves a published port, so an in-memory record would be lost at exactly
+        // the moment it became worth having — while the terminal itself survives
+        // in the pty host.
+        const db = new Database(':memory:');
+        runMigrations(db);
+        db.prepare(
+            `INSERT INTO terminal_service_env (terminal_id, env_json, injected_at)
+             VALUES ('term-1', '{"DB_PORT":"51157"}', 'now')`,
+        ).run();
+
+        const row = db
+            .prepare<[], { env_json: string }>('SELECT env_json FROM terminal_service_env')
+            .get();
+        expect(JSON.parse(row?.env_json ?? '{}')).toEqual({ DB_PORT: '51157' });
+    });
+
+    it('is idempotent — re-running converges without throwing', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(() => runMigrations(db)).not.toThrow();
+        expect(cols(db, 'terminal_service_env').has('env_json')).toBe(true);
+    });
+});

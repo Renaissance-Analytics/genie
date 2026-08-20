@@ -1152,6 +1152,30 @@ export function runMigrations(d: Database.Database): void {
                 `);
             },
         },
+        {
+            // v43: the service env BAKED into a terminal at spawn (genie#222).
+            //
+            // A shell's environment is fixed once it starts, so when an engine's
+            // published port moves, every terminal opened before the change carries
+            // a port that no longer exists — and in a framework whose dotenv is
+            // immutable, that stale value BEATS the app's own .env. The remedy is a
+            // new terminal, and nothing told anybody so.
+            //
+            // PERSISTED rather than kept in memory, precisely because a Genie
+            // restart is one of the things that moves a port: an in-memory record
+            // would be lost at the exact moment it became worth having, while the
+            // terminal itself survives in the pty host.
+            version: 43,
+            runner: (db) => {
+                db.exec(`
+                    CREATE TABLE IF NOT EXISTS terminal_service_env (
+                        terminal_id TEXT PRIMARY KEY,
+                        env_json    TEXT NOT NULL,
+                        injected_at TEXT NOT NULL
+                    );
+                `);
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -3509,4 +3533,48 @@ export function retainedAppData(appId: string): { origin: string } | null {
 /** Forget the retention record — after restoring it, or after wiping it. */
 export function forgetRetainedAppData(appId: string): void {
     getDb().prepare('DELETE FROM app_retained_data WHERE app_id = ?').run(appId);
+}
+
+
+/* -------------------------------------------------------------------------- */
+/* The service env baked into a terminal at spawn (genie#222)                   */
+/* -------------------------------------------------------------------------- */
+
+/** Record what Genie injected into a pty, so drift can be spotted later. */
+export function recordTerminalServiceEnv(
+    terminalId: string,
+    env: Record<string, string>,
+): void {
+    getDb()
+        .prepare(
+            `INSERT INTO terminal_service_env (terminal_id, env_json, injected_at)
+             VALUES (?, ?, ?)
+             ON CONFLICT(terminal_id) DO UPDATE SET
+                env_json = excluded.env_json,
+                injected_at = excluded.injected_at`,
+        )
+        .run(terminalId, JSON.stringify(env), new Date().toISOString());
+}
+
+/** What a terminal was given at spawn. Empty when nothing was recorded. */
+export function terminalServiceEnvFor(terminalId: string): Record<string, string> {
+    const row = getDb()
+        .prepare<[string], { env_json: string } | undefined>(
+            'SELECT env_json FROM terminal_service_env WHERE terminal_id = ?',
+        )
+        .get(terminalId);
+    if (!row) return {};
+    try {
+        const parsed: unknown = JSON.parse(row.env_json);
+        return typeof parsed === 'object' && parsed !== null
+            ? (parsed as Record<string, string>)
+            : {};
+    } catch {
+        return {};
+    }
+}
+
+/** Forget a terminal's record when the terminal goes. */
+export function forgetTerminalServiceEnv(terminalId: string): void {
+    getDb().prepare('DELETE FROM terminal_service_env WHERE terminal_id = ?').run(terminalId);
 }

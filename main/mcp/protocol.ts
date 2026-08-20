@@ -953,6 +953,16 @@ export interface ManageServiceResult {
     engines?: DevServiceEngineInfo[];
     /** logs: the engine's log tail. */
     logs?: string;
+    /**
+     * The CALLING terminal's service env has gone stale (genie#222).
+     *
+     * A shell's environment is fixed when it starts, so a published port that
+     * moved leaves this terminal pointing at an address that no longer exists —
+     * and in a framework with an immutable dotenv that stale value beats a correct
+     * `.env`. Carried on the result of the tool somebody calls WHEN a connection is
+     * already failing, because that is the moment it explains everything.
+     */
+    staleTerminalEnv?: string;
     /** connection: the env this workspace's site containers are given. */
     env?: Record<string, string>;
     /** A consequence the caller must know about even though the action SUCCEEDED
