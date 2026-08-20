@@ -20,14 +20,25 @@ import {
     setWorkspaceAppKind,
     upsertAppGrant,
     getAppGrant,
+    getAppGrantForWorkspace,
     setWorkspaceDevSites,
 } from '../db';
 import { forceQuestion } from '../ask/force-question';
 import { createAgiEnvelope } from '../workspace/create-agi';
 import { toolchainMachineFacts } from './machine';
 import { installAppFromFolder, type AppInstallIO } from './install';
+import { manageProcessForMcp } from '../mcp/host-tools';
+import { manageSiteForMcp } from '../mcp/dev-site-tools';
+import { callerIdForApp } from '../mcp/caller-identity';
 import { APP_MANIFEST_FILENAME, type AppManifest } from './manifest';
-import { appsGet, appsList, appsSetCapabilities, appsSetRevoked, appsUninstall } from './manage';
+import {
+    appsGet,
+    appsList,
+    appsRequirements,
+    appsSetCapabilities,
+    appsSetRevoked,
+    appsUninstall,
+} from './manage';
 import { closeAppWindows, openAppWindow } from './window';
 
 /**
@@ -69,6 +80,20 @@ function copyAppSource(sourceFolder: string, workspacePath: string, manifest: Ap
         path.join(sourceFolder, APP_MANIFEST_FILENAME),
         path.join(workspacePath, APP_MANIFEST_FILENAME),
     );
+}
+
+
+/**
+ * The caller id to bring an app's own services and site up as.
+ *
+ * Resolved from the WORKSPACE rather than passed in, because by the time these
+ * run the grant is recorded — so this reads the identity Genie stored instead of
+ * trusting one threaded down from the installer. Empty means no grant, which
+ * fails closed at the chokepoint exactly like any other unknown caller.
+ */
+function appCallerFor(workspaceId: string): string {
+    const grant = getAppGrantForWorkspace(workspaceId);
+    return grant ? callerIdForApp(grant.appId) : '';
 }
 
 function installIO(): AppInstallIO {
@@ -121,12 +146,44 @@ function installIO(): AppInstallIO {
         persistSites: (workspaceId, sites) => setWorkspaceDevSites(workspaceId, sites),
         recordGrant: (grant) => upsertAppGrant(grant),
         removeWorkspace: (workspaceId) => removeWorkspaceRow(workspaceId),
+        // Services and the site come up through the SAME tools an agent uses,
+        // addressed as the app itself. Deliberately not a private path into the
+        // supervisor: an installer that can start processes by another route is a
+        // second implementation of the thing the permission model guards.
+        createService: async (workspaceId, service) => {
+            const r = await manageProcessForMcp(appCallerFor(workspaceId), {
+                action: 'create',
+                // No workspaceId: manageProcess resolves it from the CALLER, and
+                // the caller is the app, whose workspace is exactly this one.
+                label: service.label,
+                // The supervisor takes a command LINE; the manifest keeps literal
+                // argv, because a shell string in a manifest is an injection
+                // surface. Quote anything with whitespace on the way across.
+                command: service.command
+                    .map((a) => (/\s/.test(a) ? JSON.stringify(a) : a))
+                    .join(' '),
+                ...(service.cwd ? { repo: service.cwd.replace(/^repos\//, '') } : {}),
+                autostart: true,
+            });
+            return { ok: r.ok, ...(r.error ? { error: r.error } : {}) };
+        },
+        startSite: async (workspaceId, siteName) => {
+            const r = await manageSiteForMcp(appCallerFor(workspaceId), {
+                action: 'start',
+                workspaceId,
+                name: siteName,
+            });
+            return { ok: r.ok, ...(r.error ? { error: r.error } : {}) };
+        },
     };
 }
 
 export function registerAppsIpc(): void {
     ipcMain.handle('apps:list', () => appsList());
     ipcMain.handle('apps:get', (_e, appId: string) => appsGet(String(appId)));
+    // Resolved against the machine AS IT IS NOW, on every ask — so a user who
+    // installs the missing runtime stops being told to install it.
+    ipcMain.handle('apps:requirements', (_e, appId: string) => appsRequirements(String(appId)));
 
     ipcMain.handle('apps:install-folder', async (_e, folder?: string) => {
         let dir = folder;

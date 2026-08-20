@@ -36,6 +36,7 @@ import {
     type UpdaterStatus,
     type InstalledPluginView,
     type InstalledAppView,
+    type AppRequirementPlanView,
     type MarketplaceView,
     type OfficialPluginsResult,
     type PluginDeveloperModeState,
@@ -56,7 +57,14 @@ import {
     languageSections,
     removeConfirmation,
 } from '../lib/toolchain-page';
-import { appSummaryLine, permissionSummary, reachLabel, uninstallConfirmation } from '../lib/apps-view';
+import {
+    appSummaryLine,
+    missingRuntimesNote,
+    permissionSummary,
+    reachLabel,
+    requirementLine,
+    uninstallConfirmation,
+} from '../lib/apps-view';
 import { isolationNote } from '../lib/dev-server';
 import {
     newPromptId,
@@ -3185,8 +3193,18 @@ function AppsSection() {
         setMsg(null);
         try {
             const r = await api().apps.installFolder();
-            if (r.ok) setMsg({ kind: 'ok', text: 'Installed. Open it below.' });
-            else if (r.errors?.length) setMsg({ kind: 'err', text: r.errors.join(' ') });
+            if (r.ok) {
+                // A warning means it INSTALLED and something did not come up.
+                // Reporting that as success would hide a dead backend; reporting
+                // it as failure would send the user to reinstall a working app.
+                setMsg(
+                    r.warnings?.length
+                        ? { kind: 'err', text: `Installed, but: ${r.warnings.join(' ')}` }
+                        : { kind: 'ok', text: 'Installed. Open it below.' },
+                );
+            } else if (r.errors?.length) {
+                setMsg({ kind: 'err', text: r.errors.join(' ') });
+            }
         } catch (e) {
             setMsg({ kind: 'err', text: (e as Error).message });
         } finally {
@@ -3280,6 +3298,19 @@ function AppCard({
     onTogglePermission: (key: string, granted: boolean) => void;
     onUninstall: () => void;
 }) {
+    // Resolved against the machine AS IT IS NOW, not stored at install: a user who
+    // installs the missing runtime should stop being told to install it. Asked for
+    // once per card rather than per list, so opening Settings costs no probes.
+    const [requirements, setRequirements] = useState<AppRequirementPlanView | null>(null);
+    useEffect(() => {
+        void api()
+            .apps.requirements(app.id)
+            .then(setRequirements)
+            .catch(() => setRequirements(null));
+    }, [app.id]);
+    const missing = requirements?.userProvides ?? [];
+    const note = missingRuntimesNote(missing);
+
     return (
         <Accordion.Item value={app.id} className="plugin-card border-b-0">
             <div className="plugin-card-head">
@@ -3310,6 +3341,19 @@ function AppCard({
             </div>
 
             <Accordion.Content className="plugin-card-details">
+                {note && (
+                    // First, not last: it is the explanation for a backend that
+                    // never comes up, and buried under the permission list it
+                    // would be found after the bug report was already written.
+                    <div className="set-note warn">
+                        {note}
+                        <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                            {missing.map((r) => (
+                                <li key={r.tool}>{requirementLine(r)}</li>
+                            ))}
+                        </ul>
+                    </div>
+                )}
                 <Text size="xs" className="text-zinc-500">
                     {reachLabel(app.scope, app.workspaces)} · v{app.version} · {app.installPath}
                 </Text>

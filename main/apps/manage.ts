@@ -20,6 +20,8 @@ import {
     type AppGrantRow,
 } from '../db';
 import { validateAppManifest } from './manifest';
+import { resolveAppRequirements, type AppRequirementPlan, type RequirementMachine } from './requirements';
+import { toolchainMachineFacts } from './machine';
 import { grantableCapabilities, narrowGrant } from './manage-core';
 import type { CapabilityRisk } from './capabilities';
 
@@ -83,6 +85,54 @@ function toView(row: AppGrantRow): InstalledAppView {
         })),
         installedAt: row.installedAt,
     };
+}
+
+
+/**
+ * What an installed app still needs from THIS machine.
+ *
+ * Derived from the stored manifest on every read, never a snapshot taken at
+ * install: the machine changes. A user who installs Rust the day after should
+ * stop being told to install Rust, and a stored "you must provide" list would go
+ * on nagging them forever.
+ *
+ * `machine` is injectable so every branch is assertable; production passes the
+ * real toolchain probe. An unreadable manifest yields NOTHING rather than an
+ * error — that failure is already reported where it matters, and inventing
+ * requirements out of a parse failure would put a scary, wrong list in front of
+ * the user.
+ */
+export async function appRequirements(
+    manifestJson: string,
+    machine?: RequirementMachine,
+): Promise<AppRequirementPlan> {
+    let requires: Array<{ tool: string; version?: string; reason?: string }> = [];
+    try {
+        const parsed: unknown = JSON.parse(manifestJson);
+        const raw =
+            typeof parsed === 'object' && parsed !== null
+                ? (parsed as { requires?: unknown }).requires
+                : undefined;
+        if (Array.isArray(raw)) {
+            requires = raw.filter(
+                (r): r is { tool: string } =>
+                    typeof r === 'object' && r !== null && typeof (r as { tool?: unknown }).tool === 'string',
+            );
+        }
+    } catch {
+        /* nothing declared */
+    }
+
+    return resolveAppRequirements(
+        requires,
+        machine ?? (await toolchainMachineFacts(requires.map((r) => r.tool))),
+    );
+}
+
+/** The live requirement plan for an installed app, or null when it is not one. */
+export async function appsRequirements(appId: string): Promise<AppRequirementPlan | null> {
+    const row = getAppGrant(appId);
+    return row ? appRequirements(row.manifestJson) : null;
 }
 
 export function appsList(): InstalledAppView[] {

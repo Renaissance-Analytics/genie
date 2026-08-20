@@ -11,7 +11,7 @@
  * app's state is called.
  */
 
-import type { InstalledAppView } from './genie';
+import type { InstalledAppView, AppRequirementView } from './genie';
 
 /** The collapsed row's one line. */
 export function appSummaryLine(app: InstalledAppView): string {
@@ -59,5 +59,35 @@ export function uninstallConfirmation(app: InstalledAppView): string {
         'Its window closes.\n\n' +
         `Its files stay where they are — ${app.installPath} — as an ordinary workspace ` +
         'you can keep or delete like any other.'
+    );
+}
+
+/**
+ * One runtime the app needs, as a line the user can act on.
+ *
+ * The app's own reason travels with it: "install rust" is an instruction, while
+ * "rust — compiles the engine" is a decision someone can actually make.
+ */
+export function requirementLine(requirement: AppRequirementView): string {
+    const what = requirement.version
+        ? `${requirement.tool} ${requirement.version}`
+        : requirement.tool;
+    return requirement.reason ? `${what} — ${requirement.reason}` : what;
+}
+
+/**
+ * The banner for runtimes Genie cannot provide on this machine.
+ *
+ * Null when there are none, so the panel renders nothing rather than an empty
+ * warning. When there ARE some it has to be prominent: a backend that never comes
+ * up looks like a broken app — or a broken Genie — until something says the
+ * machine is missing a tool.
+ */
+export function missingRuntimesNote(missing: AppRequirementView[]): string | null {
+    if (missing.length === 0) return null;
+    const count = `${missing.length} ${missing.length === 1 ? 'runtime' : 'runtimes'}`;
+    return (
+        `This app needs ${count} Genie cannot install on this machine. ` +
+        'Anything that depends on them will not start until you install them yourself.'
     );
 }

@@ -20,10 +20,14 @@
  * grant on a failure — and those are only assertable if the calls are visible.
  */
 
-import { appInstallPlan } from './install-plan';
+import { appInstallPlan, type AppProcessPlan } from './install-plan';
 import { buildConsentPlan, readConsent } from './consent-plan';
 import { validateAppManifest, APP_MANIFEST_FILENAME, type AppManifest } from './manifest';
-import { resolveAppRequirements, type RequirementMachine } from './requirements';
+import {
+    resolveAppRequirements,
+    type RequirementMachine,
+    type ResolvedRequirement,
+} from './requirements';
 import type { DevSites } from '../dev-server/sites-config';
 import type { AppScope } from './manifest';
 import type { ForceAnswer, ForceQuestion } from '../mcp/protocol';
@@ -62,6 +66,21 @@ export interface AppInstallIO {
     copyAppSource: (sourceFolder: string, workspacePath: string, manifest: AppManifest) => void;
     persistSites: (workspaceId: string, sites: DevSites) => void;
     recordGrant: (grant: AppGrantInput) => void;
+    /**
+     * Supervise one of the app's declared backends, as an ordinary Genie process.
+     *
+     * Optional so a caller that has no supervisor (a test, a headless probe) is
+     * not forced to fake one — an app with no services never needs it either.
+     */
+    createService?: (
+        workspaceId: string,
+        service: AppProcessPlan,
+    ) => Promise<{ ok: boolean; error?: string }>;
+    /** Bring the app's site up at `<slug>.gen`. */
+    startSite?: (
+        workspaceId: string,
+        siteName: string,
+    ) => Promise<{ ok: boolean; error?: string }>;
     /** Undo a workspace THIS install created. */
     removeWorkspace: (workspaceId: string) => void;
 }
@@ -73,6 +92,21 @@ export interface AppInstallResult {
     /** Where the app will be served — what the caller opens a window on. */
     homeUrl?: string;
     errors?: string[];
+    /**
+     * The app is installed, but something did not come UP. Distinct from
+     * `errors`, which mean it is not installed at all — an app whose backend is
+     * missing is a working install with a broken part, and conflating the two
+     * would either roll back a good install or hide a dead service.
+     */
+    warnings?: string[];
+    /**
+     * Runtimes the user must provide themselves.
+     *
+     * Carried back rather than left in the consent modal that closed: the Apps
+     * panel has to keep saying it, or a permanently-unstartable service reads as
+     * a bug in Genie rather than a missing tool.
+     */
+    userProvides?: ResolvedRequirement[];
 }
 
 export async function installAppFromFolder(
@@ -120,12 +154,12 @@ export async function installAppFromFolder(
     const created = existing ? null : await io.createWorkspace(manifest);
     const workspace = existing ?? created!;
 
+    const plan = appInstallPlan(workspace.workspaceId, manifest);
     try {
         // Source first: a site pointed at a directory that is not there yet serves
         // a 404 the user reads as a broken app.
         io.copyAppSource(sourceFolder, workspace.path, manifest);
 
-        const plan = appInstallPlan(workspace.workspaceId, manifest);
         io.persistSites(workspace.workspaceId, { [plan.siteId]: plan.site });
 
         io.recordGrant({
@@ -149,10 +183,45 @@ export async function installAppFromFolder(
         return { ok: false, errors: [(e as Error).message] };
     }
 
+    // --- Bring it UP ---------------------------------------------------------
+    // Past this line the app IS installed: the grant is recorded and nothing
+    // below rolls it back. The owner's rule for a missing runtime applies to
+    // everything here — the app lands, and whatever cannot start is REPORTED with
+    // the reason rather than taking the install down with it.
+    const warnings: string[] = [];
+    const attempt = async (
+        what: string,
+        run: () => Promise<{ ok: boolean; error?: string }>,
+    ): Promise<void> => {
+        try {
+            const r = await run();
+            if (!r.ok) warnings.push(`${what} did not start: ${r.error ?? 'no reason given'}`);
+        } catch (e) {
+            // A supervisor that throws must not be worse than one that says no.
+            warnings.push(`${what} did not start: ${(e as Error).message}`);
+        }
+    };
+
+    // Services first, and each independently: an app whose backend is missing
+    // should still serve its front end, which is where it can EXPLAIN that.
+    for (const service of plan.processes) {
+        if (!io.createService) break;
+        await attempt(`The service “${service.label}”`, () =>
+            io.createService!(workspace.workspaceId, service),
+        );
+    }
+    if (io.startSite) {
+        await attempt(`The site “${manifest.slug}”`, () =>
+            io.startSite!(workspace.workspaceId, manifest.slug),
+        );
+    }
+
     return {
         ok: true,
         appId: manifest.id,
         workspaceId: workspace.workspaceId,
         homeUrl: `https://${manifest.slug}.gen/`,
+        ...(warnings.length > 0 ? { warnings } : {}),
+        userProvides: requirements.userProvides,
     };
 }

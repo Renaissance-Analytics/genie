@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { grantableCapabilities, narrowGrant } from '../manage-core';
+import { appRequirements } from '../manage';
 
 /**
  * Changing what an installed app may do, after it is installed (Tynn #250).
@@ -79,5 +80,48 @@ describe('what a change may actually grant', () => {
         // So the stored grant is comparable between reads, and a reordered payload
         // is not a different grant.
         expect(narrowGrant(declared, ['knowledge', 'hosting'])).toEqual(['hosting', 'knowledge']);
+    });
+});
+
+describe('what an installed app still needs from this machine', () => {
+    it('is DERIVED from the stored manifest, never a snapshot taken at install', async () => {
+        // The machine changes. A user who installs Rust after the fact should stop
+        // being told to install Rust, and a stored "you must provide" list would
+        // keep nagging them forever.
+        const manifest = JSON.stringify({
+            requires: [{ tool: 'rust', reason: 'compiles the engine' }],
+        });
+
+        const before = await appRequirements(manifest, {
+            installed: new Set<string>(),
+            canInstall: () => false,
+        });
+        expect(before.userProvides.map((r) => r.tool)).toEqual(['rust']);
+
+        const after = await appRequirements(manifest, {
+            installed: new Set(['rust']),
+            canInstall: () => false,
+        });
+        expect(after.userProvides).toEqual([]);
+        expect(after.items[0]?.status).toBe('satisfied');
+    });
+
+    it('asks nothing of an app that requires nothing', async () => {
+        const plan = await appRequirements(JSON.stringify({}), {
+            installed: new Set<string>(),
+            canInstall: () => false,
+        });
+        expect(plan.items).toEqual([]);
+    });
+
+    it('treats a manifest it cannot read as requiring nothing', async () => {
+        // Fail QUIET here, not closed-and-loud: an unreadable manifest is already
+        // reported elsewhere, and inventing requirements from a parse failure
+        // would put a scary, wrong list in front of the user.
+        const plan = await appRequirements('not json', {
+            installed: new Set<string>(),
+            canInstall: () => false,
+        });
+        expect(plan.items).toEqual([]);
     });
 });

@@ -2038,12 +2038,31 @@ export interface AppActionResult {
     app?: InstalledAppView;
 }
 
+/** One runtime an app needs, and who is expected to provide it. */
+export interface AppRequirementView {
+    tool: string;
+    version?: string;
+    reason?: string;
+    status: 'satisfied' | 'genie-installs' | 'user-provides';
+}
+
+export interface AppRequirementPlanView {
+    items: AppRequirementView[];
+    genieInstalls: AppRequirementView[];
+    userProvides: AppRequirementView[];
+    needsUser: boolean;
+    installable: true;
+}
+
 export interface AppInstallResult {
     ok: boolean;
     appId?: string;
     workspaceId?: string;
     homeUrl?: string;
     errors?: string[];
+    /** Installed, but something did not come UP. Not the same as a failed install. */
+    warnings?: string[];
+    userProvides?: AppRequirementView[];
 }
 
 export interface InstalledPluginView {
@@ -2450,6 +2469,7 @@ export interface GenieApi {
     apps: {
         list: () => Promise<InstalledAppView[]>;
         get: (appId: string) => Promise<InstalledAppView | null>;
+        requirements: (appId: string) => Promise<AppRequirementPlanView | null>;
         installFolder: (folder?: string) => Promise<AppInstallResult>;
         open: (appId: string) => Promise<AppActionResult>;
         setCapabilities: (appId: string, capabilities: string[]) => Promise<AppActionResult>;

@@ -167,6 +167,7 @@ const api = {
     apps: {
         list: () => ipcRenderer.invoke('apps:list'),
         get: (appId: string) => ipcRenderer.invoke('apps:get', appId),
+        requirements: (appId: string) => ipcRenderer.invoke('apps:requirements', appId),
         installFolder: (folder?: string) => ipcRenderer.invoke('apps:install-folder', folder),
         open: (appId: string) => ipcRenderer.invoke('apps:open', appId),
         setCapabilities: (appId: string, capabilities: string[]) =>

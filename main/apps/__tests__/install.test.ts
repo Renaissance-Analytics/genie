@@ -248,3 +248,133 @@ describe('when a step fails halfway', () => {
         expect(removeWorkspace).not.toHaveBeenCalled();
     });
 });
+
+describe('bringing the app UP, not just onto disk', () => {
+    const withService = () =>
+        io({
+            readManifest: () =>
+                manifestJson({
+                    services: [
+                        { name: 'api', repo: 'backend', command: ['uvicorn', 'app:api'], port: 8000 },
+                    ],
+                    requires: [{ tool: 'rust', reason: 'compiles the engine' }],
+                }),
+        });
+
+    it('creates a supervised process for every declared service', async () => {
+        // The install plan has always computed these. Until now nothing ran them,
+        // so a multi-component app installed with its backend permanently absent —
+        // and the front end reporting the service "not answering" forever.
+        const createService = vi.fn(async () => ({ ok: true }));
+        await installAppFromFolder('C:/src/trader', { ...withService(), createService });
+
+        expect(createService).toHaveBeenCalledWith(
+            'ws-app',
+            expect.objectContaining({ label: 'api', command: ['uvicorn', 'app:api'] }),
+        );
+    });
+
+    it('starts the site, so `<slug>.gen` answers when the window opens', async () => {
+        const startSite = vi.fn(async () => ({ ok: true }));
+        await installAppFromFolder('C:/src/trader', io({ startSite }));
+
+        expect(startSite).toHaveBeenCalledWith('ws-app', 'trader');
+    });
+
+    it('writes the site config BEFORE starting it', async () => {
+        const order: string[] = [];
+        await installAppFromFolder(
+            'C:/src/trader',
+            io({
+                persistSites: () => void order.push('config'),
+                startSite: async () => {
+                    order.push('start');
+                    return { ok: true };
+                },
+            }),
+        );
+
+        expect(order).toEqual(['config', 'start']);
+    });
+
+    it('creates no processes for an app that declares no services', async () => {
+        const createService = vi.fn(async () => ({ ok: true }));
+        await installAppFromFolder('C:/src/trader', io({ createService }));
+        expect(createService).not.toHaveBeenCalled();
+    });
+});
+
+describe('when the app lands but will not come up', () => {
+    it('stays INSTALLED — the owner ruled that a missing runtime does not block', async () => {
+        const recordGrant = vi.fn();
+        const result = await installAppFromFolder(
+            'C:/src/trader',
+            io({ startSite: async () => ({ ok: false, error: 'port 443 is in use' }), recordGrant }),
+        );
+
+        expect(result.ok).toBe(true);
+        expect(recordGrant).toHaveBeenCalled();
+    });
+
+    it('says WHAT did not come up, rather than succeeding in silence', async () => {
+        const result = await installAppFromFolder(
+            'C:/src/trader',
+            io({ startSite: async () => ({ ok: false, error: 'port 443 is in use' }) }),
+        );
+
+        expect(result.warnings?.join(' ')).toContain('trader');
+        expect(result.warnings?.join(' ')).toContain('port 443 is in use');
+    });
+
+    it('does not let a dead service stop the site from starting', async () => {
+        // They fail independently. An app whose backend is missing should still
+        // serve its front end, which is where it can EXPLAIN that.
+        const startSite = vi.fn(async () => ({ ok: true }));
+        await installAppFromFolder('C:/src/trader', {
+            ...io({ startSite }),
+            readManifest: () =>
+                manifestJson({ services: [{ name: 'api', command: ['nope'] }] }),
+            createService: async () => ({ ok: false, error: 'nope: not found' }),
+        });
+
+        expect(startSite).toHaveBeenCalled();
+    });
+
+    it('reports a throwing starter instead of failing the whole install', async () => {
+        const result = await installAppFromFolder(
+            'C:/src/trader',
+            io({
+                startSite: async () => {
+                    throw new Error('the hosting layer is down');
+                },
+            }),
+        );
+
+        expect(result.ok).toBe(true);
+        expect(result.warnings?.join(' ')).toContain('the hosting layer is down');
+    });
+});
+
+describe('what the user still has to install themselves', () => {
+    it('travels back with the result, not only into the modal that closed', async () => {
+        // The consent prompt says it once and vanishes. The Apps panel needs to
+        // keep saying it, or a permanently-unstartable service looks like a bug.
+        const result = await installAppFromFolder(
+            'C:/src/trader',
+            io({
+                readManifest: () =>
+                    manifestJson({ requires: [{ tool: 'rust', reason: 'compiles the engine' }] }),
+                machine: async () => ({ installed: new Set<string>(), canInstall: () => false }),
+            }),
+        );
+
+        expect(result.userProvides).toEqual([
+            expect.objectContaining({ tool: 'rust', reason: 'compiles the engine' }),
+        ]);
+    });
+
+    it('is empty when the machine already has everything', async () => {
+        const result = await installAppFromFolder('C:/src/trader', io());
+        expect(result.userProvides).toEqual([]);
+    });
+});

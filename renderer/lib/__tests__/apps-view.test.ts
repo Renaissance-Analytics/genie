@@ -4,8 +4,10 @@ import {
     permissionSummary,
     reachLabel,
     uninstallConfirmation,
+    requirementLine,
+    missingRuntimesNote,
 } from '../apps-view';
-import type { InstalledAppView } from '../genie';
+import type { InstalledAppView, AppRequirementView } from '../genie';
 
 /**
  * What the Apps panel SAYS about an installed Genie App.
@@ -111,5 +113,43 @@ describe('uninstalling', () => {
         expect(text).toMatch(/permission/i);
         expect(text).toMatch(/files|workspace/i);
         expect(text).toContain('trader.agi');
+    });
+});
+
+describe('what the app still needs from this machine', () => {
+    const req = (over: Partial<AppRequirementView> = {}): AppRequirementView => ({
+        tool: 'rust',
+        reason: 'compiles the engine',
+        status: 'user-provides',
+        ...over,
+    });
+
+    it('names the tool AND why the app wants it', () => {
+        // "Install rust" is an instruction. "Install rust — it compiles the
+        // engine" is a decision the user can make.
+        const line = requirementLine(req());
+        expect(line).toContain('rust');
+        expect(line).toContain('compiles the engine');
+    });
+
+    it('includes the version when the app pinned one', () => {
+        expect(requirementLine(req({ version: '1.84' }))).toContain('1.84');
+    });
+
+    it('survives a requirement with no reason given', () => {
+        expect(() => requirementLine(req({ reason: undefined }))).not.toThrow();
+        expect(requirementLine(req({ reason: undefined }))).toContain('rust');
+    });
+
+    it('says nothing at all when the machine has everything', () => {
+        expect(missingRuntimesNote([])).toBeNull();
+    });
+
+    it('says how many are missing, so an unstartable service is EXPLAINED', () => {
+        // Without this the user sees a backend that never comes up and concludes
+        // the app — or Genie — is broken.
+        const note = missingRuntimesNote([req(), req({ tool: 'docker', reason: 'sandboxes it' })]);
+        expect(note).toContain('2');
+        expect(note).toMatch(/install/i);
     });
 });
