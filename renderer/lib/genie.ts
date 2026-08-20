@@ -2054,6 +2054,33 @@ export interface AppRequirementPlanView {
     installable: true;
 }
 
+/** One capability, as the GitHub review presents it. */
+export interface AppReviewCapability {
+    key: string;
+    label: string;
+    grantDescription: string;
+    risk: 'standard' | 'high';
+}
+
+/** What a person reads before installing third-party code from GitHub. */
+export interface GithubInstallReview {
+    origin: string;
+    commit: string;
+    shortCommit: string;
+    ref: string;
+    name: string;
+    slug: string;
+    version: string;
+    description?: string;
+    /** Every command that will RUN on this machine. No permission covers these. */
+    commands: string[];
+    highRisk: AppReviewCapability[];
+    standard: AppReviewCapability[];
+    escalations: string[];
+    /** What the user must type to proceed. */
+    confirmPhrase: string;
+}
+
 /** The result of checking a folder without installing it. */
 export interface AppFolderReport {
     ok: boolean;
@@ -2487,6 +2514,12 @@ export interface GenieApi {
             folder?: string;
             error?: string;
         }>;
+        reviewGithub: (
+            url: string,
+            ref?: string,
+        ) => Promise<{ ok: true; review: GithubInstallReview } | { ok: false; error: string }>;
+        installGithub: (commit: string, typed: string) => Promise<AppInstallResult>;
+        discardGithub: (commit: string) => Promise<{ ok: boolean }>;
         open: (appId: string) => Promise<AppActionResult>;
         setCapabilities: (appId: string, capabilities: string[]) => Promise<AppActionResult>;
         setRevoked: (appId: string, revoked: boolean) => Promise<AppActionResult>;

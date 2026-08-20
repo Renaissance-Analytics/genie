@@ -38,6 +38,7 @@ import {
     type InstalledAppView,
     type AppRequirementPlanView,
     type AppFolderReport,
+    type GithubInstallReview,
     type MarketplaceView,
     type OfficialPluginsResult,
     type PluginDeveloperModeState,
@@ -3162,6 +3163,9 @@ function AppsSection() {
     const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
     const [report, setReport] = useState<AppFolderReport | null>(null);
     const [newName, setNewName] = useState('');
+    const [repoUrl, setRepoUrl] = useState('');
+    const [review, setReview] = useState<GithubInstallReview | null>(null);
+    const [typed, setTyped] = useState('');
     const filter = useContext(SettingsFilterCtx);
 
     const refresh = async () => {
@@ -3256,6 +3260,56 @@ function AppsSection() {
         }
     };
 
+    /** STEP 1: fetch it and read what it is. Nothing is installed or granted. */
+    const fetchReview = async () => {
+        setBusy(true);
+        setMsg(null);
+        setReview(null);
+        setTyped('');
+        try {
+            const r = await api().apps.reviewGithub(repoUrl.trim());
+            if (r.ok) setReview(r.review);
+            else setMsg({ kind: 'err', text: r.error });
+        } catch (e) {
+            setMsg({ kind: 'err', text: (e as Error).message });
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    /** STEP 2: the deliberate act. The main process re-checks what was typed. */
+    const confirmGithubInstall = async () => {
+        if (!review) return;
+        setBusy(true);
+        setMsg(null);
+        try {
+            const r = await api().apps.installGithub(review.commit, typed);
+            if (r.ok) {
+                setMsg(
+                    r.warnings?.length
+                        ? { kind: 'err', text: `Installed, but: ${r.warnings.join(' ')}` }
+                        : { kind: 'ok', text: `Installed ${review.name}. Open it below.` },
+                );
+                setReview(null);
+                setRepoUrl('');
+                setTyped('');
+            } else {
+                setMsg({ kind: 'err', text: r.errors?.join(' ') ?? 'Could not install it.' });
+            }
+        } catch (e) {
+            setMsg({ kind: 'err', text: (e as Error).message });
+        } finally {
+            setBusy(false);
+            await refresh();
+        }
+    };
+
+    const walkAway = async () => {
+        if (review) await api().apps.discardGithub(review.commit).catch(() => {});
+        setReview(null);
+        setTyped('');
+    };
+
     return (
         <SetSection
             title="Genie Apps"
@@ -3272,6 +3326,116 @@ function AppsSection() {
                     Install an app…
                 </Action>
             </SettingRow>
+
+            <SettingRow
+                label="Install from GitHub"
+                desc="Genie fetches the repository and shows you what it is — including every command it will run — before anything is installed."
+                keywords="install genie app github repo url gapp"
+                grow
+            >
+                <div className="set-actions" style={{ width: '100%' }}>
+                    <Input
+                        value={repoUrl}
+                        onValueChange={setRepoUrl}
+                        placeholder="https://github.com/owner/some-genie-app"
+                    />
+                    <Action
+                        icon="download"
+                        disabled={busy || !repoUrl.trim()}
+                        onClick={fetchReview}
+                    >
+                        Fetch and review
+                    </Action>
+                </div>
+            </SettingRow>
+
+            {review && (
+                // The whole review is on screen at once, deliberately. Splitting it
+                // across steps would let someone approve a page they never saw.
+                <div className="set-note warn" data-testid="gapp-github-review">
+                    <strong>
+                        {review.name} v{review.version}
+                    </strong>
+                    <div style={{ marginTop: 4 }}>
+                        from <code>{review.origin}</code> at commit{' '}
+                        <code>{review.shortCommit}</code> ({review.ref})
+                    </div>
+                    {review.description && <div style={{ marginTop: 4 }}>{review.description}</div>}
+
+                    {review.commands.length > 0 && (
+                        // FIRST, and on its own. An argv is code that will execute
+                        // on this machine, and no permission in the model covers
+                        // it — a review that buried it would hide the most
+                        // dangerous line in the manifest.
+                        <>
+                            <div style={{ marginTop: 10 }}>
+                                <strong>It will run these commands on your machine:</strong>
+                            </div>
+                            <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+                                {review.commands.map((c) => (
+                                    <li key={c}>
+                                        <code>{c}</code>
+                                    </li>
+                                ))}
+                            </ul>
+                        </>
+                    )}
+
+                    {review.highRisk.length > 0 && (
+                        <>
+                            <div style={{ marginTop: 10 }}>
+                                <strong>It asks for high-risk permissions:</strong>
+                            </div>
+                            <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+                                {review.highRisk.map((c) => (
+                                    <li key={c.key}>
+                                        {c.label} — {c.grantDescription}
+                                    </li>
+                                ))}
+                            </ul>
+                        </>
+                    )}
+
+                    {review.standard.length > 0 && (
+                        <div style={{ marginTop: 10 }}>
+                            It also asks for: {review.standard.map((c) => c.label).join(', ')}.
+                        </div>
+                    )}
+
+                    {review.escalations.map((e) => (
+                        <div key={e} style={{ marginTop: 6 }}>
+                            {e}
+                        </div>
+                    ))}
+
+                    <div style={{ marginTop: 12 }}>
+                        You will still be asked which permissions to grant. To go on, type{' '}
+                        <strong>{review.confirmPhrase}</strong>:
+                    </div>
+                    <div className="set-actions" style={{ marginTop: 6 }}>
+                        <Input
+                            value={typed}
+                            onValueChange={setTyped}
+                            placeholder={review.confirmPhrase}
+                        />
+                        <Action
+                            color="red"
+                            icon="download"
+                            // Typing is a deliberate act; a button alone is a thing
+                            // that gets clicked past. The main process re-checks
+                            // this anyway — the disabled state is a courtesy, not
+                            // the gate.
+                            disabled={busy || typed.trim().toLowerCase() !== review.confirmPhrase}
+                            onClick={confirmGithubInstall}
+                        >
+                            Install {review.name}
+                        </Action>
+                        <Action variant="ghost" disabled={busy} onClick={walkAway}>
+                            Cancel
+                        </Action>
+                    </div>
+                </div>
+            )}
 
             <SetSubhead>Build one</SetSubhead>
 

@@ -26,11 +26,11 @@ import {
 import { forceQuestion } from '../ask/force-question';
 import { createAgiEnvelope } from '../workspace/create-agi';
 import { toolchainMachineFacts } from './machine';
-import { installAppFromFolder, type AppInstallIO } from './install';
+import { installAppFromFolder, type AppInstallIO, type AppInstallResult } from './install';
 import { manageProcessForMcp } from '../mcp/host-tools';
 import { manageSiteForMcp } from '../mcp/dev-site-tools';
 import { callerIdForApp } from '../mcp/caller-identity';
-import { APP_MANIFEST_FILENAME, type AppManifest } from './manifest';
+import { APP_MANIFEST_FILENAME, validateAppManifest, type AppManifest } from './manifest';
 import {
     appsGet,
     appsList,
@@ -41,6 +41,15 @@ import {
 } from './manage';
 import { closeAppWindows, openAppWindow } from './window';
 import { validateAppFolder, type AppFolderReport } from './validate';
+import {
+    buildGithubReview,
+    parseGithubSource,
+    verifyHumanConfirmation,
+    type GithubInstallReview,
+} from './github-install';
+import { cloneRepo } from '../workspace/clone';
+import { simpleGit } from 'simple-git';
+import os from 'os';
 import { scaffoldApp, slugify } from './scaffold';
 import { listAppGrants } from '../db';
 
@@ -215,8 +224,149 @@ function folderProbe() {
     };
 }
 
+
+/* ---- Install from GitHub (P4) ----------------------------------------- */
+
+/**
+ * A review the user is looking at, kept until they act on it.
+ *
+ * The CLONE is kept with it, and the install runs from that exact folder rather
+ * than re-cloning. Re-cloning would mean the thing reviewed and the thing
+ * installed are two different fetches of a moving branch — and the review's whole
+ * value is that it describes what is about to happen.
+ */
+interface PendingGithubInstall {
+    review: GithubInstallReview;
+    folder: string;
+}
+
+const pendingGithub = new Map<string, PendingGithubInstall>();
+
+/** Discard a clone we are not going to install. */
+function discard(folder: string): void {
+    try {
+        fs.rmSync(folder, { recursive: true, force: true });
+    } catch {
+        // A temp folder we could not remove is untidy, not unsafe.
+    }
+}
+
+async function reviewGithubApp(
+    url: string,
+    ref?: string,
+): Promise<{ ok: true; review: GithubInstallReview } | { ok: false; error: string }> {
+    const source = parseGithubSource(url);
+    if (!source) {
+        return {
+            ok: false,
+            error: 'That is not a GitHub repository URL. Use https://github.com/owner/repo.',
+        };
+    }
+
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'genie-app-review-'));
+    let folder: string;
+    try {
+        folder = (await cloneRepo({ url: source.cloneUrl, parent_path: parent, folder: 'app' }))
+            .path;
+    } catch (e) {
+        discard(parent);
+        return { ok: false, error: `Could not fetch it: ${(e as Error).message}` };
+    }
+
+    try {
+        // The exact commit, because a ref is whatever is there later and the review
+        // has to describe what is actually being installed.
+        const commit = (await simpleGit(folder).revparse(['HEAD'])).trim();
+
+        const report = validateAppFolder(folder, folderProbe());
+        if (!report.ok || !report.app) {
+            discard(parent);
+            return {
+                ok: false,
+                error: `That repository is not an installable Genie App: ${report.errors.join(' ')}`,
+            };
+        }
+
+        const raw = fs.readFileSync(path.join(folder, APP_MANIFEST_FILENAME), 'utf8');
+        const parsed = validateAppManifest(JSON.parse(raw));
+        if (!parsed.ok) {
+            discard(parent);
+            return { ok: false, error: parsed.errors.join(' ') };
+        }
+
+        const review = buildGithubReview({
+            source,
+            commit,
+            ref: ref?.trim() || 'the default branch',
+            manifest: parsed.value,
+        });
+        pendingGithub.set(review.commit, { review, folder });
+        return { ok: true, review };
+    } catch (e) {
+        discard(parent);
+        return { ok: false, error: (e as Error).message };
+    }
+}
+
 export function registerAppsIpc(): void {
     ipcMain.handle('apps:list', () => appsList());
+
+    /**
+     * STEP 1 of installing from GitHub: fetch it and describe it.
+     *
+     * Nothing is installed here and no permission is granted. It clones to a temp
+     * folder, pins the commit, and hands back everything a person needs to decide —
+     * including every command the app will run, which no permission covers.
+     */
+    ipcMain.handle('apps:review-github', (_e, url: string, ref?: string) =>
+        reviewGithubApp(String(url ?? ''), typeof ref === 'string' ? ref : undefined),
+    );
+
+    /**
+     * STEP 2: the human's deliberate act, re-verified HERE.
+     *
+     * The renderer decides whether to enable a button; the main process decides
+     * whether the install happens. Trusting the renderer's word for it would make
+     * the one gate that exists to require a person skippable by a bug — or by a
+     * window being driven.
+     */
+    ipcMain.handle(
+        'apps:install-github',
+        async (_e, commit: string, typed: string): Promise<AppInstallResult> => {
+            const pending = pendingGithub.get(String(commit ?? ''));
+            if (!pending) {
+                return {
+                    ok: false,
+                    errors: ['That review has expired. Fetch the app again and re-read it.'],
+                };
+            }
+            if (!verifyHumanConfirmation(String(typed ?? ''), pending.review)) {
+                return {
+                    ok: false,
+                    errors: [
+                        `To install “${pending.review.name}” from GitHub, type its name — ${pending.review.confirmPhrase} — exactly.`,
+                    ],
+                };
+            }
+
+            // Only NOW does the consent modal appear, and only now can anything be
+            // granted. Install runs from the reviewed clone, not a fresh fetch.
+            const result = await installAppFromFolder(pending.folder, installIO());
+            pendingGithub.delete(pending.review.commit);
+            return result;
+        },
+    );
+
+    /** Throw away a review the user walked away from, clone and all. */
+    ipcMain.handle('apps:discard-github', (_e, commit: string) => {
+        const pending = pendingGithub.get(String(commit ?? ''));
+        if (pending) {
+            discard(path.dirname(pending.folder));
+            pendingGithub.delete(pending.review.commit);
+        }
+        return { ok: true };
+    });
+
 
     /**
      * Check a folder WITHOUT installing it — the loop a developer (or the agent

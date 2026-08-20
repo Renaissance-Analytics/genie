@@ -200,6 +200,23 @@ not start — an app with a broken part is not an app that failed to install.
 Runtimes Genie cannot provide on this machine are listed on the app's card, and
 stop being listed once you install them.
 
+## Sharing it
+
+Push it to GitHub, and anyone can install it with **Install from GitHub**. Genie
+fetches the repository and shows them a review *before* anything is installed:
+
+- the exact **commit** it is about to install, not just the branch,
+- **every command your app will run on their machine** — your `services[].command`
+  argv, listed first, because no permission covers code execution,
+- the high-risk permissions you ask for, spelled out,
+- anything that widens your reach past your own workspace.
+
+Then they have to type your app's slug, and then answer the permission prompt.
+Three deliberate acts, none of which can be automated away.
+
+Design for that review. An app whose review reads well — one obvious command, two
+explained permissions, a `reason` on every requirement — is one people install.
+
 Reinstalling lands on the same workspace, and asks about permissions again — a new
 version can want more than the last one did, and nobody should be escalated
 silently.

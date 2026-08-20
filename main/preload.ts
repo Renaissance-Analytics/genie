@@ -173,6 +173,14 @@ const api = {
         checkFolder: (folder?: string) => ipcRenderer.invoke('apps:check-folder', folder),
         scaffold: (req: { name: string; id?: string; parent?: string }) =>
             ipcRenderer.invoke('apps:scaffold', req),
+        // Install from GitHub is TWO steps, and both belong to a human: read
+        // the review, then type the app's name. The main process re-checks the
+        // typing — this pair only carries it.
+        reviewGithub: (url: string, ref?: string) =>
+            ipcRenderer.invoke('apps:review-github', url, ref),
+        installGithub: (commit: string, typed: string) =>
+            ipcRenderer.invoke('apps:install-github', commit, typed),
+        discardGithub: (commit: string) => ipcRenderer.invoke('apps:discard-github', commit),
         open: (appId: string) => ipcRenderer.invoke('apps:open', appId),
         setCapabilities: (appId: string, capabilities: string[]) =>
             ipcRenderer.invoke('apps:set-capabilities', appId, capabilities),
