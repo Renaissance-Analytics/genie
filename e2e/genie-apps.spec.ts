@@ -131,3 +131,44 @@ test('the page cannot claim to be a different app', async () => {
 
     expect(me.id).toBe('com.genie.example');
 });
+
+/**
+ * Scaffold → check → install, over the REAL I/O chain.
+ *
+ * Every unit test of the installer replaces the filesystem and the database with
+ * fakes — necessarily, since the assertions that matter there are about calls that
+ * must NOT happen. Which leaves the thing nobody had verified: whether an install
+ * actually lands. Envelope creation, the file copy, the project.json write, the
+ * grant row, and the attempt to bring services and the site up all happen here for
+ * real. Only the OS consent modal is substituted; it would block a headless run
+ * forever, and what it decides is covered exhaustively in unit tests.
+ */
+test('a scaffolded app passes Genie’s own check and then installs', async () => {
+    const outcome = await app.evaluate(() =>
+        (globalThis as Record<string, any>).__GENIE_E2E_APPS__.scaffoldCheckInstall(),
+    );
+
+    // The scaffold must pass the gate it scaffolds for. If this ever fails, the
+    // starting point Genie hands people is one Genie itself rejects.
+    expect(outcome.report.errors).toEqual([]);
+    expect(outcome.report.ok).toBe(true);
+
+    // And it installs — a real workspace, real files, a real grant row.
+    expect(outcome.install.errors ?? []).toEqual([]);
+    expect(outcome.install.ok).toBe(true);
+    expect(outcome.install.workspaceId).toBeTruthy();
+    expect(outcome.install.homeUrl).toBe('https://harness-thing.gen/');
+});
+
+test('the installed app is visible to Genie afterwards, with what it was granted', async () => {
+    const listed = await app.evaluate(() =>
+        (globalThis as Record<string, any>).__GENIE_E2E_APPS__.listInstalled(),
+    );
+
+    const harness = listed.find((a: { id: string }) => a.id === 'com.genie.harness');
+    expect(harness).toBeTruthy();
+    // The scaffold asks for nothing, so the app holds nothing — and the panel has
+    // a sentence for exactly that state rather than showing "0 of 0".
+    expect(harness.permissions).toEqual([]);
+    expect(harness.revoked).toBe(false);
+});

@@ -29,10 +29,17 @@
  */
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { upsertAppGrant } from '../db';
 import { openAppWindow } from '../apps/window';
+import { scaffoldApp, slugify } from '../apps/scaffold';
+import { validateAppFolder, type AppFolderReport } from '../apps/validate';
+import { installAppFromFolder, type AppInstallResult } from '../apps/install';
+import { installIO } from '../apps/ipc';
+import { appsList } from '../apps/manage';
+import { APP_MANIFEST_FILENAME } from '../apps/manifest';
 
 const APP_ID = 'com.genie.example';
 
@@ -116,5 +123,63 @@ export function registerAppsE2E(): void {
             });
             return { url };
         },
+
+        scaffoldCheckInstall: () => scaffoldCheckInstall(),
+        // The installed-apps list, read through the SAME function the panel
+        // uses. Exposed here because the compiled main is one bundle — a spec
+        // cannot `require` a module out of it.
+        listInstalled: () => appsList(),
     };
+}
+
+/**
+ * Scaffold → check → install, over the REAL I/O chain.
+ *
+ * Everything the unit tests must fake — envelope creation, the file copy, the
+ * project.json write, the grant row, starting the service and the site — happens
+ * here for real. The ONLY substitution is the OS consent modal, which would block
+ * a headless run forever; what it decides is covered exhaustively by the
+ * consent-plan unit tests, and what it CANNOT cover is this: whether an install
+ * actually lands on disk.
+ *
+ * Site and service start may well fail on a CI box with no hosting stack. That is
+ * the point of asserting them as WARNINGS: the app must still be installed.
+ */
+export async function scaffoldCheckInstall(): Promise<{
+    folder: string;
+    report: AppFolderReport;
+    install: AppInstallResult;
+}> {
+    const name = 'Harness Thing';
+    // Its own throwaway parent: an install writes a real envelope, and a spec that
+    // reached into the developer's folders to do it would be a spec nobody runs
+    // twice.
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'gapp-e2e-'));
+    const folder = path.join(parent, slugify(name));
+    for (const file of scaffoldApp({ name, id: 'com.genie.harness' })) {
+        const target = path.join(folder, file.path);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, file.contents, 'utf8');
+    }
+
+    const report = validateAppFolder(folder, {
+        readManifest: (dir) => {
+            const file = path.join(dir, APP_MANIFEST_FILENAME);
+            return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
+        },
+        exists: (p) => fs.existsSync(p),
+        slugTaken: () => false,
+    });
+
+    const install = await installAppFromFolder(folder, {
+        ...installIO(),
+        // The one substitution. Answer exactly as a user who said yes and granted
+        // nothing — which is what the scaffold asks for anyway.
+        ask: async () => ({
+            cancelled: false,
+            answers: [{ header: 'Install', question: '', selected: ['Install'], note: '' }],
+        }),
+    });
+
+    return { folder, report, install };
 }

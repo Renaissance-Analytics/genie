@@ -99,7 +99,15 @@ function appCallerFor(workspaceId: string): string {
     return grant ? callerIdForApp(grant.appId) : '';
 }
 
-function installIO(): AppInstallIO {
+/**
+ * The real install I/O.
+ *
+ * Exported so the E2E harness can drive the ACTUAL chain — envelope creation,
+ * file copy, project.json write, grant, service + site start — with only the OS
+ * modal swapped out. Everything else about an install is filesystem and database
+ * work that unit tests, by construction, replace with fakes.
+ */
+export function installIO(): AppInstallIO {
     return {
         readManifest: (folder) => {
             const file = path.join(folder, APP_MANIFEST_FILENAME);
