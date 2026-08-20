@@ -49,7 +49,7 @@ jobs:
       - name: Set up Go (xcaddy builds the host Caddy for resources/runtime)
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: '1.25'
 
       - name: Set up Python (node-gyp needs distutils)
         uses: actions/setup-python@v6

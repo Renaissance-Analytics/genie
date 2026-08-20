@@ -107,7 +107,7 @@ jobs:
         # reproducible, same discipline as the Node pin.
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: '1.25'
 
       - name: Set up Python (node-gyp needs distutils)
         # node-pty / better-sqlite3 native rebuild goes through node-gyp,

@@ -91,6 +91,16 @@ jobs:
           fi
           sudo apt-get update             -o DPkg::Lock::Timeout=180             -o Acquire::Retries=2             -o Acquire::http::Timeout=15             -o Acquire::https::Timeout=15
           sudo apt-get install -y -o DPkg::Lock::Timeout=180 php-cgi
+      # PINNED, and at 1.25+. This job had no Go setup at all, so it built with
+      # whatever the runner image shipped — and on 2026-08-20 that broke outright:
+      # a transitive genproto module published the day before now requires
+      # go >= 1.25.0, while the image carried 1.24.13. `xcaddy build` resolves
+      # latest transitive deps, so an unpinned toolchain here is a build that can
+      # break with no commit of ours involved. It did.
+      - name: Set up Go (xcaddy builds the host Caddy for resources/runtime)
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
       - name: Build the service runtime (bundled Caddy)
         run: npm run build:runtime
       - name: Real hosting tests (bundled Caddy + php-cgi)
