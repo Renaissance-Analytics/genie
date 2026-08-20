@@ -22,6 +22,7 @@
 
 import { appInstallPlan, type AppProcessPlan } from './install-plan';
 import { buildConsentPlan, readConsent } from './consent-plan';
+import { decideStorageOnInstall } from './data-retention';
 import { validateAppManifest, APP_MANIFEST_FILENAME, type AppManifest } from './manifest';
 import {
     resolveAppRequirements,
@@ -108,6 +109,13 @@ export interface AppInstallIO {
      * is not about this) is not forced to fake one.
      */
     clearAppStorage?: (appId: string) => Promise<void>;
+    /**
+     * Data kept when this app id was last uninstalled, and the origin it belonged
+     * to. Null when nothing was kept.
+     */
+    retainedData?: (appId: string) => { origin: string } | null;
+    /** Forget the retention record, once it has been restored or wiped. */
+    forgetRetainedData?: (appId: string) => void;
     persistSites: (workspaceId: string, sites: DevSites) => void;
     recordGrant: (grant: AppGrantInput) => void;
     /**
@@ -236,16 +244,21 @@ export async function installAppFromFolder(
 
     const plan = appInstallPlan(workspace.workspaceId, manifest);
     try {
-        // A FRESH app id starts with nothing. Not on a reinstall, though: that is
-        // an update, and wiping a user's data because they updated an app would be
-        // a far worse bug than the one this guards against.
+        // Whether this app inherits the storage sitting under its id.
         //
-        // The guarantee lives HERE rather than in uninstall on purpose. Uninstall
-        // can fail — a partition held open by a closing window, a machine that
-        // lost power midway — and an install cannot be skipped. Putting it at the
-        // point of arrival means a new app never inherits, however the last one
-        // ended.
-        if (!existing) await io.clearAppStorage?.(manifest.id);
+        // Decided in `data-retention.ts`, where the reasoning lives: data is kept
+        // for an app FROM A PARTICULAR ORIGIN, so a reinstall from the same place
+        // gets it back and an app that merely claims the same id does not. The
+        // decision is made at ARRIVAL because uninstall can fail and an install
+        // cannot be skipped.
+        const retained = io.retainedData?.(manifest.id) ?? null;
+        const storage = decideStorageOnInstall({
+            stillInstalled: Boolean(existing),
+            retained,
+            incoming: { origin: source.origin },
+        });
+        if (storage.clear) await io.clearAppStorage?.(manifest.id);
+        if (retained) io.forgetRetainedData?.(manifest.id);
 
         // Source next: a site pointed at a directory that is not there yet serves
         // a 404 the user reads as a broken app. In dev mode there is nothing to

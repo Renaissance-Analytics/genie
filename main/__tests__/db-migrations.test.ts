@@ -1323,3 +1323,42 @@ describe('v41 — where an app came from (Tynn #250)', () => {
         expect(cols(db, 'app_grants').has('source_origin')).toBe(true);
     });
 });
+
+describe('v42 — data kept from an uninstalled app (Tynn #250)', () => {
+    it('remembers WHICH ORIGIN the kept data belongs to', () => {
+        // The second column is the whole point: data is kept for an app from a
+        // particular place, so a reinstall from anywhere else cannot inherit it.
+        const db = new Database(':memory:');
+        runMigrations(db);
+        db.prepare(
+            `INSERT INTO app_retained_data (app_id, source_origin, retained_at)
+             VALUES ('com.a.b', 'github.com/acme/trader', 'now')`,
+        ).run();
+
+        const row = db
+            .prepare<[], { source_origin: string }>('SELECT source_origin FROM app_retained_data')
+            .get();
+        expect(row?.source_origin).toBe('github.com/acme/trader');
+    });
+
+    it('holds one record per app, so a second uninstall replaces the first', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        const insert = () =>
+            db
+                .prepare(
+                    `INSERT INTO app_retained_data (app_id, source_origin, retained_at)
+                     VALUES ('com.a.b', 'x', 'now')`,
+                )
+                .run();
+        insert();
+        expect(insert).toThrow();
+    });
+
+    it('is idempotent — re-running converges without throwing', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(() => runMigrations(db)).not.toThrow();
+        expect(cols(db, 'app_retained_data').has('source_origin')).toBe(true);
+    });
+});

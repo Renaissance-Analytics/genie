@@ -22,6 +22,9 @@ import {
     upsertAppGrant,
     getAppGrant,
     getAppGrantForWorkspace,
+    retainAppData,
+    retainedAppData,
+    forgetRetainedAppData,
     setWorkspaceDevSites,
 } from '../db';
 import { forceQuestion } from '../ask/force-question';
@@ -41,6 +44,7 @@ import {
     appsUninstall,
 } from './manage';
 import { clearAppStorage, closeAppWindows, openAppWindow } from './window';
+import { uninstallDataQuestion } from './data-retention';
 import { validateAppFolder, type AppFolderReport } from './validate';
 import { appUpdateState, updatableApps, type AppUpdateState } from './updates';
 import {
@@ -204,6 +208,8 @@ export function installIO(): AppInstallIO {
             return { workspaceId: row.id, path: row.path };
         },
         clearAppStorage,
+        retainedData: (appId) => retainedAppData(appId),
+        forgetRetainedData: (appId) => forgetRetainedAppData(appId),
         copyAppSource,
         persistSites: (workspaceId, sites) => setWorkspaceDevSites(workspaceId, sites),
         recordGrant: (grant) => upsertAppGrant(grant),
@@ -545,7 +551,19 @@ export function registerAppsIpc(): void {
     });
 
     ipcMain.handle('apps:uninstall', async (_e, appId: string) => {
+        const app = appsGet(String(appId));
+        if (!app) return { ok: false, error: 'That app is not installed.' };
+
+        // Its data is the user's, so the user decides. Asked on the OS modal like
+        // every other consequential Genie question, and a DISMISSED modal keeps the
+        // data — dismissing must never be the thing that destroys it.
+        const answered = await forceQuestion([uninstallDataQuestion(app.name)], 'high');
+        const keepData = !answered.answers[0]?.selected.includes('Delete it');
+
         closeAppWindows(String(appId));
-        return appsUninstall(String(appId), clearAppStorage);
+        return appsUninstall(String(appId), keepData, {
+            clearStorage: clearAppStorage,
+            retainData: retainAppData,
+        });
     });
 }

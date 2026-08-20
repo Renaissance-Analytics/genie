@@ -1129,6 +1129,29 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // v42: data KEPT when a GApp is uninstalled (Tynn #250, owner-directed).
+            //
+            // Uninstall asks whether to keep the app's data and settings, and a
+            // reinstall from the SAME origin restores them. Losing everything
+            // because you removed an app for a fortnight is hostile.
+            //
+            // The origin is the whole reason this table has a second column. An
+            // app id is claimed by whoever writes the manifest, so data is kept for
+            // an app FROM A PARTICULAR PLACE — come back from the same one and it
+            // is restored; arrive from anywhere else and it is wiped, because that
+            // is not the same app, it merely claims the same name.
+            version: 42,
+            runner: (db) => {
+                db.exec(`
+                    CREATE TABLE IF NOT EXISTS app_retained_data (
+                        app_id        TEXT PRIMARY KEY,
+                        source_origin TEXT NOT NULL,
+                        retained_at   TEXT NOT NULL
+                    );
+                `);
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -3453,4 +3476,37 @@ export function upsertPluginMarketplace(input: UpsertMarketplaceInput): PluginMa
 
 export function deletePluginMarketplace(id: string): void {
     getDb().prepare('DELETE FROM plugin_marketplaces WHERE id = ?').run(id);
+}
+
+
+/* -------------------------------------------------------------------------- */
+/* Data kept from an uninstalled GApp (Tynn #250)                              */
+/* -------------------------------------------------------------------------- */
+
+/** Remember that an uninstalled app's data was KEPT, and who it belonged to. */
+export function retainAppData(appId: string, sourceOrigin: string): void {
+    getDb()
+        .prepare(
+            `INSERT INTO app_retained_data (app_id, source_origin, retained_at)
+             VALUES (?, ?, ?)
+             ON CONFLICT(app_id) DO UPDATE SET
+                source_origin = excluded.source_origin,
+                retained_at = excluded.retained_at`,
+        )
+        .run(appId, sourceOrigin, new Date().toISOString());
+}
+
+/** The origin whose data is being held for this app id, if any. */
+export function retainedAppData(appId: string): { origin: string } | null {
+    const row = getDb()
+        .prepare<[string], { source_origin: string } | undefined>(
+            'SELECT source_origin FROM app_retained_data WHERE app_id = ?',
+        )
+        .get(appId);
+    return row ? { origin: row.source_origin } : null;
+}
+
+/** Forget the retention record — after restoring it, or after wiping it. */
+export function forgetRetainedAppData(appId: string): void {
+    getDb().prepare('DELETE FROM app_retained_data WHERE app_id = ?').run(appId);
 }
