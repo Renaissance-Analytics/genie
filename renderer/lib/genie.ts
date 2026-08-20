@@ -2054,6 +2054,16 @@ export interface AppRequirementPlanView {
     installable: true;
 }
 
+/** The result of checking a folder without installing it. */
+export interface AppFolderReport {
+    ok: boolean;
+    /** It will not run until these are fixed. */
+    errors: string[];
+    /** It will run. Worth a second thought anyway. */
+    advice: string[];
+    app?: { id: string; slug: string; name: string; version: string; description?: string };
+}
+
 export interface AppInstallResult {
     ok: boolean;
     appId?: string;
@@ -2471,6 +2481,12 @@ export interface GenieApi {
         get: (appId: string) => Promise<InstalledAppView | null>;
         requirements: (appId: string) => Promise<AppRequirementPlanView | null>;
         installFolder: (folder?: string) => Promise<AppInstallResult>;
+        checkFolder: (folder?: string) => Promise<AppFolderReport>;
+        scaffold: (req: { name: string; id?: string; parent?: string }) => Promise<{
+            ok: boolean;
+            folder?: string;
+            error?: string;
+        }>;
         open: (appId: string) => Promise<AppActionResult>;
         setCapabilities: (appId: string, capabilities: string[]) => Promise<AppActionResult>;
         setRevoked: (appId: string, revoked: boolean) => Promise<AppActionResult>;

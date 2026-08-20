@@ -37,6 +37,7 @@ import {
     type InstalledPluginView,
     type InstalledAppView,
     type AppRequirementPlanView,
+    type AppFolderReport,
     type MarketplaceView,
     type OfficialPluginsResult,
     type PluginDeveloperModeState,
@@ -3159,6 +3160,8 @@ function AppsSection() {
     const [apps, setApps] = useState<InstalledAppView[]>([]);
     const [busy, setBusy] = useState(false);
     const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+    const [report, setReport] = useState<AppFolderReport | null>(null);
+    const [newName, setNewName] = useState('');
     const filter = useContext(SettingsFilterCtx);
 
     const refresh = async () => {
@@ -3221,6 +3224,38 @@ function AppsSection() {
         return granted ? [...held, key] : held;
     };
 
+    /** Check a folder WITHOUT installing it — the loop a developer works in. */
+    const check = async () => {
+        setBusy(true);
+        setMsg(null);
+        setReport(null);
+        try {
+            setReport(await api().apps.checkFolder());
+        } catch (e) {
+            setMsg({ kind: 'err', text: (e as Error).message });
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const scaffold = async () => {
+        setBusy(true);
+        setMsg(null);
+        try {
+            const r = await api().apps.scaffold({ name: newName.trim() });
+            setMsg(
+                r.ok
+                    ? { kind: 'ok', text: `Created ${r.folder} — open it, then install it here.` }
+                    : { kind: 'err', text: r.error ?? 'Could not create it.' },
+            );
+            if (r.ok) setNewName('');
+        } catch (e) {
+            setMsg({ kind: 'err', text: (e as Error).message });
+        } finally {
+            setBusy(false);
+        }
+    };
+
     return (
         <SetSection
             title="Genie Apps"
@@ -3237,6 +3272,63 @@ function AppsSection() {
                     Install an app…
                 </Action>
             </SettingRow>
+
+            <SetSubhead>Build one</SetSubhead>
+
+            <SettingRow
+                label="Start a new app"
+                desc="Writes a working Genie App into a folder you pick — a valid manifest, a front end, and a README. It starts with NO permissions; add them as you need them."
+                keywords="new genie app scaffold create gapp template"
+            >
+                <div className="set-actions" style={{ width: '100%' }}>
+                    <Input value={newName} onValueChange={setNewName} placeholder="My Thing" />
+                    <Action icon="plus" disabled={busy || !newName.trim()} onClick={scaffold}>
+                        Create
+                    </Action>
+                </div>
+            </SettingRow>
+
+            <SettingRow
+                label="Check a folder"
+                desc="Validates an app without installing it: schema problems, files the manifest points at that are not there, and permissions worth a second thought."
+                keywords="check validate genie app lint gapp"
+            >
+                <Action variant="ghost" icon="circle-check" disabled={busy} onClick={check}>
+                    Check an app…
+                </Action>
+            </SettingRow>
+
+            {report && (
+                <div className={`set-note${report.ok ? '' : ' warn'}`}>
+                    <strong>
+                        {report.app ? `${report.app.name} v${report.app.version}` : 'This folder'}
+                        {report.ok ? ' is ready to install.' : ' will not run yet.'}
+                    </strong>
+                    {report.errors.length > 0 && (
+                        <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                            {report.errors.map((e) => (
+                                <li key={e}>{e}</li>
+                            ))}
+                        </ul>
+                    )}
+                    {/* Advice is listed apart from errors, and stays visible on a
+                        PASSING check — it is the half a developer would otherwise
+                        never see, and merging it into the errors would train them
+                        to skim both. */}
+                    {report.advice.length > 0 && (
+                        <>
+                            <div style={{ marginTop: 8 }}>Worth a second thought:</div>
+                            <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+                                {report.advice.map((a) => (
+                                    <li key={a}>{a}</li>
+                                ))}
+                            </ul>
+                        </>
+                    )}
+                </div>
+            )}
+
+            <SetSubhead>Installed</SetSubhead>
 
             {apps.length === 0 ? (
                 <Text size="xs" className="text-zinc-500">

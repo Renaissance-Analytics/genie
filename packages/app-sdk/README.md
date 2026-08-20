@@ -179,13 +179,26 @@ all:
 
 ## Building one — the short version
 
-1. Make a folder with your app's code, and a `genie-app.json` at its root.
+All of it lives in **Settings → Genie Apps**.
+
+1. **Start a new app.** Genie writes a valid manifest, a front end and a README
+   into a folder you pick. It starts with **no permissions at all** — add them as
+   you need them, and be ready to say why.
 2. Build your front end to a directory (`dist`), or run a dev server and use
    `serve: { mode: "proxy", hostPort: … }`.
-3. In Genie: **Apps → Install from folder**, and pick it.
-4. Answer the consent prompt. Genie creates the workspace, copies the source,
-   serves it at `<slug>.gen` and records what you were granted.
+3. **Check a folder** validates it *without installing*: schema problems, files
+   the manifest points at that are not there, and — listed separately — the
+   things that will work but are worth a second thought. This is the loop to work
+   in: change, check, fix.
+4. **Install an app…**, and answer the consent prompt. Genie creates the
+   workspace, copies the source in, serves it at `<slug>.gen`, and starts your
+   declared services beside it.
 5. Open it. Your front end renders in its own window with `window.genieApp` wired.
+
+If a service does not come up, the install still **succeeds** and says what did
+not start — an app with a broken part is not an app that failed to install.
+Runtimes Genie cannot provide on this machine are listed on the app's card, and
+stop being listed once you install them.
 
 Reinstalling lands on the same workspace, and asks about permissions again — a new
 version can want more than the last one did, and nobody should be escalated

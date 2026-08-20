@@ -40,6 +40,9 @@ import {
     appsUninstall,
 } from './manage';
 import { closeAppWindows, openAppWindow } from './window';
+import { validateAppFolder, type AppFolderReport } from './validate';
+import { scaffoldApp, slugify } from './scaffold';
+import { listAppGrants } from '../db';
 
 /**
  * Copy the app's source into its workspace.
@@ -178,26 +181,87 @@ function installIO(): AppInstallIO {
     };
 }
 
+
+
+async function pickFolder(title: string): Promise<string | null> {
+    const picked = await dialog.showOpenDialog({
+        title,
+        message: `Choose the folder containing ${APP_MANIFEST_FILENAME}`,
+        properties: ['openDirectory'],
+    });
+    return picked.canceled ? null : (picked.filePaths[0] ?? null);
+}
+
+/** The folder probe, backed by the real filesystem and the real app registry. */
+function folderProbe() {
+    return {
+        readManifest: (folder: string) => {
+            const file = path.join(folder, APP_MANIFEST_FILENAME);
+            return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
+        },
+        exists: (p: string) => fs.existsSync(p),
+        // An app re-checking ITSELF must not report its own address as taken —
+        // that would make every reinstall look like a collision.
+        slugTaken: (slug: string, selfId: string) =>
+            listAppGrants().some((g) => g.slug === slug && g.appId !== selfId),
+    };
+}
+
 export function registerAppsIpc(): void {
     ipcMain.handle('apps:list', () => appsList());
+
+    /**
+     * Check a folder WITHOUT installing it — the loop a developer (or the agent
+     * writing the app) works in. Reports schema problems, missing files, and
+     * separately the things that will work but are worth a second thought.
+     */
+    ipcMain.handle('apps:check-folder', async (_e, folder?: string): Promise<AppFolderReport> => {
+        const dir = folder ?? (await pickFolder('Check a Genie App'));
+        if (!dir) return { ok: false, errors: ['No folder was chosen.'], advice: [] };
+        return validateAppFolder(dir, folderProbe());
+    });
+
+    /**
+     * Write a new Genie App into a folder.
+     *
+     * Refuses to write into a folder that already holds one: silently overwriting
+     * somebody's manifest is not a scaffold, it is data loss.
+     */
+    ipcMain.handle(
+        'apps:scaffold',
+        async (_e, req: { name?: string; id?: string; parent?: string }) => {
+            const name = String(req?.name ?? '').trim();
+            if (!name) return { ok: false, error: 'The app needs a name.' };
+            const parent = req?.parent ?? (await pickFolder('Where should the app live?'));
+            if (!parent) return { ok: false, error: 'No folder was chosen.' };
+
+            const folder = path.join(parent, slugify(name));
+            if (fs.existsSync(path.join(folder, APP_MANIFEST_FILENAME))) {
+                return { ok: false, error: `${folder} already holds a Genie App.` };
+            }
+
+            try {
+                const id =
+                    String(req?.id ?? '').trim() || `com.genie.local.${slugify(name)}`;
+                for (const file of scaffoldApp({ name, id })) {
+                    const target = path.join(folder, file.path);
+                    fs.mkdirSync(path.dirname(target), { recursive: true });
+                    fs.writeFileSync(target, file.contents, 'utf8');
+                }
+                return { ok: true, folder };
+            } catch (e) {
+                return { ok: false, error: (e as Error).message };
+            }
+        },
+    );
     ipcMain.handle('apps:get', (_e, appId: string) => appsGet(String(appId)));
     // Resolved against the machine AS IT IS NOW, on every ask — so a user who
     // installs the missing runtime stops being told to install it.
     ipcMain.handle('apps:requirements', (_e, appId: string) => appsRequirements(String(appId)));
 
     ipcMain.handle('apps:install-folder', async (_e, folder?: string) => {
-        let dir = folder;
-        if (!dir) {
-            const picked = await dialog.showOpenDialog({
-                title: 'Install a Genie App',
-                message: `Choose the folder containing ${APP_MANIFEST_FILENAME}`,
-                properties: ['openDirectory'],
-            });
-            if (picked.canceled || !picked.filePaths[0]) {
-                return { ok: false, errors: ['No folder was chosen.'] };
-            }
-            dir = picked.filePaths[0];
-        }
+        const dir = folder ?? (await pickFolder('Install a Genie App'));
+        if (!dir) return { ok: false, errors: ['No folder was chosen.'] };
         return installAppFromFolder(dir, installIO());
     });
 

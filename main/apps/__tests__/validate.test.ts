@@ -1,0 +1,204 @@
+import { describe, expect, it } from 'vitest';
+import { validateAppFolder, type FolderProbe } from '../validate';
+
+/**
+ * Checking a Genie App WITHOUT installing it (Tynn #250, P2).
+ *
+ * This is the loop a developer — or the agent writing the app — actually works
+ * in: change something, ask if it is right, fix what it says. Without it the only
+ * feedback is an install that either refuses with schema errors or "succeeds" and
+ * then serves a blank page, which teaches nothing about which of the two happened.
+ *
+ * So it checks the things the manifest validator structurally CANNOT: whether what
+ * the manifest points at is actually there. A manifest can be perfectly valid and
+ * describe an app that cannot work.
+ *
+ * Errors and advice are separate lists on purpose. An error means it will not run;
+ * advice means it will run and the developer should think about it. Merging them
+ * trains people to ignore both.
+ */
+
+const manifest = (over: Record<string, unknown> = {}) =>
+    JSON.stringify({
+        id: 'com.example.trader',
+        slug: 'trader',
+        name: 'Example Trader',
+        version: '1.0.0',
+        frontend: { repo: 'web', serve: { mode: 'static', root: 'dist' } },
+        permissions: { scope: 'self', capabilities: ['hosting'] },
+        ...over,
+    });
+
+const probe = (over: Partial<FolderProbe> = {}): FolderProbe => ({
+    readManifest: () => manifest(),
+    exists: () => true,
+    slugTaken: () => false,
+    ...over,
+});
+
+describe('a folder that is ready to install', () => {
+    it('passes, with nothing to say', () => {
+        const report = validateAppFolder('C:/src/trader', probe());
+
+        expect(report.ok).toBe(true);
+        expect(report.errors).toEqual([]);
+    });
+
+    it('reports back what the app IS, so a UI can show it before installing', () => {
+        const report = validateAppFolder('C:/src/trader', probe());
+
+        expect(report.app).toMatchObject({ name: 'Example Trader', slug: 'trader' });
+    });
+});
+
+describe('what the manifest validator cannot see', () => {
+    it('catches a front end pointed at a directory that is not there', () => {
+        // The failure this prevents: install succeeds, the site starts, and
+        // `trader.gen` serves a 404 the user reads as a broken app.
+        const report = validateAppFolder(
+            'C:/src/trader',
+            probe({ exists: (p) => !p.endsWith('dist') }),
+        );
+
+        expect(report.ok).toBe(false);
+        expect(report.errors.join(' ')).toContain('dist');
+    });
+
+    it('catches a service whose repo folder is missing', () => {
+        const report = validateAppFolder(
+            'C:/src/trader',
+            probe({
+                readManifest: () =>
+                    manifest({
+                        services: [{ name: 'api', repo: 'backend', command: ['node', 'server.mjs'] }],
+                    }),
+                exists: (p) => !p.endsWith('backend'),
+            }),
+        );
+
+        expect(report.ok).toBe(false);
+        expect(report.errors.join(' ')).toContain('backend');
+    });
+
+    it('does not demand a directory for a PROXY front end', () => {
+        // A proxy app has no built output — its front end is a dev server the
+        // developer runs. Insisting on a folder would fail every Ripple-shaped app.
+        const report = validateAppFolder(
+            'C:/src/trader',
+            probe({
+                readManifest: () =>
+                    manifest({ frontend: { serve: { mode: 'proxy', hostPort: 5273 } } }),
+                exists: () => false,
+            }),
+        );
+
+        expect(report.ok).toBe(true);
+    });
+
+    it('does NOT flag an app re-checking itself', () => {
+        // The probe is told who is asking. Without that, every reinstall would
+        // report its own address as taken.
+        const report = validateAppFolder(
+            'C:/src/trader',
+            probe({ slugTaken: (_slug, selfId) => selfId !== 'com.example.trader' }),
+        );
+        expect(report.ok).toBe(true);
+    });
+
+    it('catches a slug another installed app already owns', () => {
+        // Two apps at `trader.gen` is one app the user cannot reach, and the
+        // failure would appear at HOSTING time, far from the cause.
+        const report = validateAppFolder('C:/src/trader', probe({ slugTaken: () => true }));
+
+        expect(report.ok).toBe(false);
+        expect(report.errors.join(' ')).toContain('trader.gen');
+    });
+});
+
+describe('the manifest itself', () => {
+    it('passes schema errors straight through', () => {
+        const report = validateAppFolder(
+            'C:/src/trader',
+            probe({ readManifest: () => manifest({ slug: 'Not A Slug' }) }),
+        );
+
+        expect(report.ok).toBe(false);
+        expect(report.errors.join(' ')).toContain('slug');
+    });
+
+    it('says plainly when the folder is not a Genie App at all', () => {
+        const report = validateAppFolder('C:/src/nothing', probe({ readManifest: () => null }));
+
+        expect(report.ok).toBe(false);
+        expect(report.errors.join(' ')).toContain('genie-app.json');
+    });
+
+    it('does not crash on a file that is not JSON', () => {
+        const report = validateAppFolder('C:/src/trader', probe({ readManifest: () => '{{{' }));
+        expect(report.ok).toBe(false);
+    });
+});
+
+describe('advice — it will run, but think about it', () => {
+    it('flags asking for the whole workstation', () => {
+        const report = validateAppFolder(
+            'C:/src/trader',
+            probe({
+                readManifest: () =>
+                    manifest({ permissions: { scope: 'workstation', capabilities: ['hosting'] } }),
+            }),
+        );
+
+        // Still installable — it is the user's call, not the linter's.
+        expect(report.ok).toBe(true);
+        expect(report.advice.join(' ')).toMatch(/workstation/i);
+    });
+
+    it('flags every high-risk capability by name', () => {
+        const report = validateAppFolder(
+            'C:/src/trader',
+            probe({
+                readManifest: () =>
+                    manifest({
+                        permissions: { scope: 'self', capabilities: ['terminals', 'secrets'] },
+                    }),
+            }),
+        );
+
+        expect(report.advice.join(' ')).toContain('Run commands');
+        expect(report.advice.join(' ')).toContain('Environment variables and secrets');
+    });
+
+    it('flags a requirement with no reason, since the user has to act on it', () => {
+        const report = validateAppFolder(
+            'C:/src/trader',
+            probe({ readManifest: () => manifest({ requires: [{ tool: 'docker' }] }) }),
+        );
+
+        expect(report.advice.join(' ')).toContain('docker');
+        expect(report.advice.join(' ')).toMatch(/reason/i);
+    });
+
+    it('flags asking to be reachable from the real browser', () => {
+        // It costs a one-time admin prompt on the user's machine. Worth being sure.
+        const report = validateAppFolder(
+            'C:/src/trader',
+            probe({
+                readManifest: () =>
+                    manifest({
+                        frontend: {
+                            repo: 'web',
+                            serve: { mode: 'static', root: 'dist' },
+                            browserExposed: true,
+                        },
+                    }),
+            }),
+        );
+
+        expect(report.advice.join(' ')).toMatch(/browser/i);
+    });
+
+    it('stays quiet about a modest app', () => {
+        expect(validateAppFolder('C:/src/trader', probe()).advice).toEqual([]);
+    });
+});
