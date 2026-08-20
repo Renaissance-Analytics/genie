@@ -15,6 +15,9 @@ import {
     type KnowledgeSearchResult,
     type KnowledgeSource,
     type KnowledgeUpdateInput,
+    type MemoryClass,
+    isMemoryClass,
+    DEFAULT_MEMORY_CLASS,
 } from './types';
 
 /**
@@ -103,19 +106,22 @@ export class KnowledgeStore {
         const raw = String(opts.query ?? '').trim();
         const limit = opts.limit && opts.limit > 0 ? opts.limit : 20;
         const filterTags = normalizeTags(opts.tags).map((t) => t.toLowerCase());
-        // When a tag filter is present we over-fetch candidates, then narrow —
-        // so the tag cut doesn't starve the result below `limit`.
-        const candidates = filterTags.length ? Math.max(limit * 5, 50) : limit;
+        const filterClass = isMemoryClass(opts.class) ? opts.class : undefined;
+        // When a tag or CLASS filter is present we over-fetch candidates, then
+        // narrow — so the cut doesn't starve the result below `limit`.
+        const candidates = filterTags.length || filterClass ? Math.max(limit * 5, 50) : limit;
 
         let hits = this.ftsSearch(raw, candidates);
         if (hits.length === 0) hits = this.likeSearch(raw, candidates);
 
-        const narrowed = filterTags.length
-            ? hits.filter((h) => {
-                  const have = new Set(h.tags.map((t) => t.toLowerCase()));
-                  return filterTags.every((t) => have.has(t));
-              })
-            : hits;
+        const narrowed = hits.filter((h) => {
+            // Absent class searches EVERY class, so every existing caller keeps
+            // finding exactly what it found before.
+            if (filterClass && h.class !== filterClass) return false;
+            if (!filterTags.length) return true;
+            const have = new Set(h.tags.map((t) => t.toLowerCase()));
+            return filterTags.every((t) => have.has(t));
+        });
         return narrowed.slice(0, limit);
     }
 
@@ -158,12 +164,21 @@ export class KnowledgeStore {
         const body = input.body ?? '';
         const tags = normalizeTags(input.tags);
         const source: KnowledgeSource = input.source === 'agent' ? 'agent' : 'user';
+        // REFUSED, not coerced. Silently filing a node under the wrong memory is
+        // worse than rejecting the write: it answers a question nobody asked and
+        // there is nothing in the result to notice it by.
+        if (input.class !== undefined && !isMemoryClass(input.class)) {
+            throw new Error(
+                `knowledge: unknown memory class ${JSON.stringify(input.class)} — expected profile, episodic, procedural or knowledge`,
+            );
+        }
+        const memoryClass: MemoryClass = input.class ?? DEFAULT_MEMORY_CLASS;
         this.db
             .prepare(
-                `INSERT INTO knowledge_nodes (id, title, slug, body, tags, source, created_at, updated_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+                `INSERT INTO knowledge_nodes (id, title, slug, body, tags, source, class, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             )
-            .run(id, title, slugify(title), body, JSON.stringify(tags), source, now, now);
+            .run(id, title, slugify(title), body, JSON.stringify(tags), source, memoryClass, now, now);
         this.ftsInsert(id, title, body, tags);
         this.setEdges(id, 'wiki', parseWikilinks(body));
         this.setEdges(id, 'explicit', input.links ?? []);
@@ -327,6 +342,9 @@ export class KnowledgeStore {
             tags: safeTags(row.tags),
             links,
             source: row.source === 'agent' ? 'agent' : 'user',
+            // An unrecognised value on the row — a newer Genie's class, a hand
+            // edit — reads as the default rather than being trusted through.
+            class: isMemoryClass(row.class) ? row.class : DEFAULT_MEMORY_CLASS,
             createdAt: row.created_at,
             updatedAt: row.updated_at,
         };
@@ -350,6 +368,7 @@ export class KnowledgeStore {
             const rows = this.db
                 .prepare<[string, number], FtsRow>(
                     `SELECT n.id AS id, n.title AS title, n.tags AS tags, n.body AS body,
+                            n.class AS class,
                             snippet(knowledge_nodes_fts, 2, '', '', '…', 12) AS snip,
                             bm25(knowledge_nodes_fts) AS rank
                      FROM knowledge_nodes_fts
@@ -366,6 +385,7 @@ export class KnowledgeStore {
                 // bm25 is smaller-is-better (typically negative); flip so higher = better.
                 score: round(-r.rank),
                 tags: safeTags(r.tags),
+                class: isMemoryClass(r.class) ? r.class : DEFAULT_MEMORY_CLASS,
             }));
         } catch {
             // A malformed MATCH expression should never sink the search — the LIKE
@@ -391,6 +411,7 @@ export class KnowledgeStore {
             snippet: excerpt(r.body, raw),
             score: 0,
             tags: safeTags(r.tags),
+            class: isMemoryClass(r.class) ? r.class : DEFAULT_MEMORY_CLASS,
         }));
     }
 }
@@ -404,11 +425,13 @@ interface NodeRow {
     body: string;
     tags: string;
     source: string;
+    class: string;
     created_at: number;
     updated_at: number;
 }
 
 interface FtsRow {
+    class: string;
     id: string;
     title: string;
     tags: string;

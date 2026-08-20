@@ -1005,6 +1005,33 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // v38: MEMORY CLASSES on knowledge nodes (Tynn #250).
+            //
+            // The store answered one question — "find a node matching this text" —
+            // which collapses four different retrieval problems into one. A node
+            // now says which memory it is: profile / episodic / procedural /
+            // knowledge.
+            //
+            // Every existing node becomes `knowledge`, which is what they all are:
+            // documents and notes. That is also the safe direction — a note filed
+            // as knowledge stays findable, whereas one mis-filed as `profile`
+            // would start answering "what does the user prefer?".
+            version: 38,
+            runner: (db) => {
+                const cols = new Set(
+                    db
+                        .prepare<[], { name: string }>(`PRAGMA table_info(knowledge_nodes)`)
+                        .all()
+                        .map((r) => r.name),
+                );
+                if (!cols.has('class')) {
+                    db.exec(
+                        `ALTER TABLE knowledge_nodes ADD COLUMN class TEXT NOT NULL DEFAULT 'knowledge'`,
+                    );
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(

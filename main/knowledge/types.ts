@@ -15,6 +15,41 @@
 export type KnowledgeSource = 'agent' | 'user';
 
 /**
+ * WHICH memory this node is (Tynn #250).
+ *
+ * One store answered one question — "find a node matching this text" — which
+ * collapses four genuinely different retrieval problems into one:
+ *
+ *   profile     — what does the user prefer / what is true of them?
+ *   episodic    — what happened, and when?
+ *   procedural  — what was learned from doing this before?
+ *   knowledge   — where is this in the documents?
+ *
+ * "What does Wish prefer?" and "find the section about X in 8,000 documents" are
+ * not the same query with a different string, and an agent that cannot say which
+ * it is asking gets the other one's answers. The graph stays ONE graph —
+ * `[[wikilinks]]` cross classes freely — only retrieval learns which problem it
+ * is solving.
+ */
+export type MemoryClass = 'profile' | 'episodic' | 'procedural' | 'knowledge';
+
+export const MEMORY_CLASSES: readonly MemoryClass[] = [
+    'profile',
+    'episodic',
+    'procedural',
+    'knowledge',
+];
+
+/** The class a node gets when nothing says otherwise — and what every node
+ *  written before this existed is. A note filed as `knowledge` is findable; one
+ *  mis-filed as `profile` would start answering "what does the user prefer?". */
+export const DEFAULT_MEMORY_CLASS: MemoryClass = 'knowledge';
+
+export function isMemoryClass(v: unknown): v is MemoryClass {
+    return typeof v === 'string' && (MEMORY_CLASSES as readonly string[]).includes(v);
+}
+
+/**
  * A single knowledge node ("memory"). `links` are the ids of the nodes this one
  * references — resolved from the node's `[[wikilink]]`s + any explicit links —
  * and each resolved link is a graph EDGE (this node → the linked node).
@@ -29,6 +64,8 @@ export interface KnowledgeNode {
     /** Ids of the nodes this one links to (resolved edges out of this node). */
     links: string[];
     source: KnowledgeSource;
+    /** Which memory this is (Tynn #250). */
+    class: MemoryClass;
     /** Epoch ms. */
     createdAt: number;
     updatedAt: number;
@@ -43,6 +80,9 @@ export interface KnowledgeSearchResult {
     /** Relevance score — higher is a better match. */
     score: number;
     tags: string[];
+    /** Which memory this hit is — so a caller can tell a preference from a
+     *  document without a second lookup. */
+    class: MemoryClass;
 }
 
 /**
@@ -70,6 +110,8 @@ export interface KnowledgeAddInput {
     /** Explicit link targets — a node id, title, or slug (resolved like a wikilink). */
     links?: string[];
     source: KnowledgeSource;
+    /** Defaults to {@link DEFAULT_MEMORY_CLASS}. */
+    class?: MemoryClass;
 }
 
 /** Patch to update a node — only the provided fields change. */
@@ -86,6 +128,9 @@ export interface KnowledgeSearchOptions {
     limit?: number;
     /** Restrict hits to nodes carrying ALL of these tags. */
     tags?: string[];
+    /** Restrict to ONE memory class. Absent searches every class, so existing
+     *  callers keep finding exactly what they found before. */
+    class?: MemoryClass;
 }
 
 /** Options for a plain node list. */
