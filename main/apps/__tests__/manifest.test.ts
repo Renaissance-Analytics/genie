@@ -228,3 +228,84 @@ describe('the permissions a GApp asks the user for', () => {
         expect(result.value.permissions.capabilities).toEqual(['hosting']);
     });
 });
+
+describe('the window a GApp gets — panels and tabs', () => {
+    it('declares how many agent panels it wants, and of what kind', () => {
+        // A GApp that runs several agent sessions at once needs to say so: the
+        // Agent tab is Genie's panel management, and how much of it to lay out is
+        // the app's call, not a guess.
+        const result = validateAppManifest({
+            ...valid(),
+            panels: { agents: 3, kinds: ['terminal', 'files'] },
+        });
+
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.value.panels).toEqual({ agents: 3, kinds: ['terminal', 'files'] });
+    });
+
+    it('gives an app that says nothing ONE agent panel', () => {
+        // The Agent tab exists for every GApp, so the default is a working one —
+        // not zero, which would render an empty tab nobody asked for.
+        const result = validateAppManifest(valid());
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.value.panels.agents).toBe(1);
+    });
+
+    it('refuses a panel count that is not a sane number', () => {
+        for (const agents of [0, -1, 1.5, 99, 'two']) {
+            expect(validateAppManifest({ ...valid(), panels: { agents } }).ok, String(agents)).toBe(
+                false,
+            );
+        }
+    });
+
+    it('refuses a panel kind Genie does not have', () => {
+        const result = validateAppManifest({
+            ...valid(),
+            panels: { agents: 1, kinds: ['terminal', 'holodeck'] },
+        });
+        expect(result.ok).toBe(false);
+        if (result.ok) return;
+        expect(result.errors.join(' ')).toContain('holodeck');
+    });
+
+    it('carries the UI tabs the app serves, in the order it listed them', () => {
+        // They render to the RIGHT of the Agent tab, so the order is the app's.
+        const result = validateAppManifest({
+            ...valid(),
+            tabs: [
+                { title: 'Board', path: '/' },
+                { title: 'Settings', path: '/settings' },
+            ],
+        });
+
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.value.tabs?.map((t) => t.title)).toEqual(['Board', 'Settings']);
+    });
+
+    it('refuses a tab with no title, since the tab strip has to say something', () => {
+        const result = validateAppManifest({ ...valid(), tabs: [{ path: '/' }] });
+        expect(result.ok).toBe(false);
+    });
+
+    it('refuses a tab path that leaves the app’s own origin', () => {
+        // A tab is served from <slug>.gen. An absolute URL here would put another
+        // origin inside Genie's chrome wearing this app's name.
+        for (const path of ['https://example.com/', '//example.com', 'javascript:x']) {
+            expect(
+                validateAppManifest({ ...valid(), tabs: [{ title: 'X', path }] }).ok,
+                path,
+            ).toBe(false);
+        }
+    });
+
+    it('leaves tabs ABSENT for an app that serves one surface', () => {
+        const result = validateAppManifest(valid());
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.value.tabs).toBeUndefined();
+    });
+});

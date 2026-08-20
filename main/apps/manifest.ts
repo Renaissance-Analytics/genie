@@ -106,6 +106,36 @@ export interface AppRequirementDecl {
     reason?: string;
 }
 
+
+/**
+ * The panel kinds a GApp's Agent tab can lay out — the same surfaces a workspace
+ * has, because a GApp IS a workspace with extras.
+ */
+export const APP_PANEL_KINDS: readonly string[] = ['terminal', 'files', 'editor'];
+
+/** How much of Genie's own panel management the app's first tab lays out. */
+export interface AppPanels {
+    /**
+     * Concurrent agent panels. Defaults to ONE, never zero: the Agent tab exists
+     * for every GApp, and zero would render an empty tab nobody asked for.
+     */
+    agents: number;
+    /** Which surfaces to offer. Absent means Genie's own default set. */
+    kinds?: string[];
+}
+
+/**
+ * A tab the APP serves, rendered to the RIGHT of the Agent tab.
+ *
+ * `path` is relative to the app's own `<slug>.gen` origin, and is required to be:
+ * a tab is Genie chrome wearing this app's name, and pointing one at another
+ * origin would hand somebody else that frame.
+ */
+export interface AppTab {
+    title: string;
+    path: string;
+}
+
 export interface AppManifest {
     /** Reverse-DNS, globally unique. */
     id: string;
@@ -118,6 +148,10 @@ export interface AppManifest {
     services?: AppService[];
     /** Runtimes/tools this app needs to run. */
     requires?: AppRequirementDecl[];
+    /** How the app's Agent tab is laid out. */
+    panels: AppPanels;
+    /** Extra tabs the app serves, in the order the strip shows them. */
+    tabs?: AppTab[];
     permissions: AppPermissions;
 }
 
@@ -127,6 +161,8 @@ const REVERSE_DNS = /^[a-z0-9]+(?:[.-][a-z0-9]+)+$/;
 /** A DNS label: what can legally become `<slug>.gen`. */
 const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const SEMVER = /^\d+\.\d+\.\d+(?:[-+].+)?$/;
+/** A window is a layout, not an appetite. */
+const MAX_AGENT_PANELS = 8;
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
     typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -199,6 +235,84 @@ function validateRequires(raw: unknown, errors: string[]): AppRequirementDecl[] 
             ...(nonEmpty(entry.version) ? { version: entry.version } : {}),
             ...(nonEmpty(entry.reason) ? { reason: entry.reason } : {}),
         });
+    });
+    return out;
+}
+
+
+/**
+ * Panels, defaulting to a single agent.
+ *
+ * An upper bound because this is a layout, not an appetite: a manifest asking for
+ * ninety panels describes a window nobody can use, and accepting it would be
+ * Genie's problem to render rather than the app's to justify.
+ */
+function validatePanels(raw: unknown, errors: string[]): AppPanels {
+    if (raw === undefined) return { agents: 1 };
+    if (!isRecord(raw)) {
+        errors.push('`panels` must be an object when present');
+        return { agents: 1 };
+    }
+
+    const agents = raw.agents ?? 1;
+    if (
+        typeof agents !== 'number' ||
+        !Number.isInteger(agents) ||
+        agents < 1 ||
+        agents > MAX_AGENT_PANELS
+    ) {
+        errors.push(
+            `\`panels.agents\` must be a whole number from 1 to ${MAX_AGENT_PANELS}`,
+        );
+        return { agents: 1 };
+    }
+
+    if (raw.kinds === undefined) return { agents };
+    if (!Array.isArray(raw.kinds)) {
+        errors.push('`panels.kinds` must be an array when present');
+        return { agents };
+    }
+    const kinds: string[] = [];
+    for (const kind of raw.kinds) {
+        if (!nonEmpty(kind) || !APP_PANEL_KINDS.includes(kind)) {
+            errors.push(`\`panels.kinds\` contains "${String(kind)}", which is not a Genie panel`);
+            continue;
+        }
+        if (!kinds.includes(kind)) kinds.push(kind);
+    }
+    return { agents, ...(kinds.length > 0 ? { kinds } : {}) };
+}
+
+/**
+ * A tab path must stay on the app's OWN origin.
+ *
+ * One leading slash, and the next character may NOT be another slash or a
+ * backslash: `//example.com` is a PROTOCOL-RELATIVE url — it starts with `/`
+ * and goes somewhere else entirely, which is exactly the bypass this stops.
+ */
+const APP_TAB_PATH = /^\/(?![/\\])\S*$/;
+
+function validateTabs(raw: unknown, errors: string[]): AppTab[] | undefined {
+    if (raw === undefined) return undefined;
+    if (!Array.isArray(raw)) {
+        errors.push('`tabs` must be an array when present');
+        return undefined;
+    }
+    const out: AppTab[] = [];
+    raw.forEach((entry, i) => {
+        if (!isRecord(entry) || !nonEmpty(entry.title)) {
+            errors.push(`\`tabs[${i}].title\` is required — the tab strip has to say something`);
+            return;
+        }
+        if (!nonEmpty(entry.path) || !APP_TAB_PATH.test(entry.path)) {
+            // A tab is Genie chrome wearing this app's name. An absolute URL would
+            // put another origin inside that frame.
+            errors.push(
+                `\`tabs[${i}].path\` must be a path on the app's own site, starting with "/"`,
+            );
+            return;
+        }
+        out.push({ title: entry.title, path: entry.path });
     });
     return out;
 }
@@ -331,6 +445,8 @@ export function validateAppManifest(raw: unknown): ValidationResult<AppManifest>
     else if (!SEMVER.test(raw.version)) errors.push('`version` must be semver (e.g. 1.0.0)');
 
     const requires = validateRequires(raw.requires, errors);
+    const panels = validatePanels(raw.panels, errors);
+    const tabs = validateTabs(raw.tabs, errors);
     const frontend = validateFrontend(raw.frontend, errors);
     const services = validateServices(raw.services, errors);
     const permissions = validatePermissions(raw.permissions, errors);
@@ -348,6 +464,8 @@ export function validateAppManifest(raw: unknown): ValidationResult<AppManifest>
             frontend: frontend!,
             ...(services && services.length > 0 ? { services } : {}),
             ...(requires && requires.length > 0 ? { requires } : {}),
+            panels,
+            ...(tabs && tabs.length > 0 ? { tabs } : {}),
             permissions,
         },
     };
