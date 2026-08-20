@@ -21,6 +21,7 @@ import {
     deleteTerminalSpec,
     getWorkspaceIssuewatchPolicyBuckets,
     removeWorkspace,
+    getAppGrant,
     type TerminalSpecMeta,
     type TerminalSpecRow,
 } from '../db';
@@ -76,6 +77,42 @@ import { openWorkspace } from '../workspace/open';
 import { resolveWorkspaceRepos, getWorkspaceFeed, getOpenCounts, getWorkspaceStatus } from '../issue-watch';
 import { forceQuestion } from '../ask/force-question';
 import { resolveTargetWorkspace, type TargetDecision } from './target-workspace';
+import { resolveCaller, type Caller } from './caller-identity';
+import { decideAppTarget } from '../apps/scope';
+
+/**
+ * WHO is calling, using the live stores (Tynn #250).
+ *
+ * The decision itself is pure (`caller-identity.ts`); this is the thin wrapper
+ * that hands it the two lookups. Every tool that used to read
+ * `getTerminalSpec(id)?.workspace_id` goes through here instead, so an installed
+ * GApp resolves to ITS workspace on exactly the same path a terminal does — one
+ * implementation of caller authority, not two.
+ */
+function resolveCallerFor(callerId: string): Caller {
+    return resolveCaller(callerId, {
+        terminalWorkspaceId: (id) => getTerminalSpec(id)?.workspace_id ?? null,
+        appGrant: (appId) => {
+            const row = getAppGrant(appId);
+            return row
+                ? {
+                      appId: row.appId,
+                      appName: row.name,
+                      workspaceId: row.workspaceId,
+                      scope: row.scope,
+                      workspaces: row.workspaces,
+                      capabilities: row.capabilities,
+                      revoked: row.revoked,
+                  }
+                : null;
+        },
+    });
+}
+
+/** The workspace a caller (terminal or GApp) acts from, or null for none. */
+export function callerWorkspaceIdFor(callerId: string): string | null {
+    return callerId ? resolveCallerFor(callerId).workspaceId : null;
+}
 import { readTynnLink } from '../tynn/provision';
 import {
     readTynnMcpUrl,
@@ -174,9 +211,10 @@ const MANIFEST_FILES = [
 export async function describeWorkspaceForMcp(
     terminalId: string,
 ): Promise<WorkspaceMap | null> {
-    const terminalSpec = terminalId ? getTerminalSpec(terminalId) : null;
-    const workspaceId = terminalSpec?.workspace_id ?? null;
+    const workspaceId = callerWorkspaceIdFor(terminalId);
     if (!workspaceId) return null;
+    // Agent metadata is a TERMINAL fact; a GApp caller simply has none.
+    const terminalSpec = terminalId ? getTerminalSpec(terminalId) : null;
     const ws = listWorkspaces().find((w) => w.id === workspaceId);
     if (!ws) return null;
 
@@ -300,7 +338,7 @@ export async function describeWorkspaceForMcp(
  */
 export async function checkIssuesForMcp(terminalId: string): Promise<IssueWatchSnapshot> {
     const empty = { issue: 0, pr: 0, security: 0 };
-    const wsId = terminalId ? getTerminalSpec(terminalId)?.workspace_id ?? null : null;
+    const wsId = callerWorkspaceIdFor(terminalId);
     if (!wsId || !getWorkspace(wsId)) {
         return { connected: false, workspaceResolved: false, counts: empty, items: [] };
     }
@@ -480,7 +518,7 @@ export async function manageProcessForMcp(
     terminalId: string,
     req: ManageProcessRequest,
 ): Promise<ManageProcessResult> {
-    const wsId = terminalId ? getTerminalSpec(terminalId)?.workspace_id ?? null : null;
+    const wsId = callerWorkspaceIdFor(terminalId);
     const ws = wsId ? getWorkspace(wsId) : null;
     if (!ws) {
         return { ok: false, error: 'No Genie workspace resolved for this terminal.', processes: [] };
@@ -894,7 +932,7 @@ export async function provisionWorkspacesForMcp(
     terminalId: string,
     req: ProvisionWorkspacesRequest,
 ): Promise<ProvisionWorkspacesResult> {
-    const wsId = terminalId ? getTerminalSpec(terminalId)?.workspace_id ?? null : null;
+    const wsId = callerWorkspaceIdFor(terminalId);
     const ws = wsId ? getWorkspace(wsId) : null;
     if (!ws) {
         return {
@@ -1102,9 +1140,25 @@ export async function resolveAgentTarget(
     callerTerminalId: string,
     requestedWorkspaceId: string | undefined,
 ): Promise<{ decision: TargetDecision; ws: ReturnType<typeof getWorkspace> | null }> {
-    const callerWorkspaceId = callerTerminalId
-        ? getTerminalSpec(callerTerminalId)?.workspace_id ?? null
-        : null;
+    // A caller is a terminal OR an installed GApp (Tynn #250). Both land here, so
+    // there is one answer to "may this caller act there?" instead of a second,
+    // laxer path for apps.
+    const caller = resolveCallerFor(callerTerminalId);
+    if (caller.kind === 'app') {
+        // App rules, not agent rules: an app never governs children and is never
+        // the workstation operator — its reach is exactly the scope the user
+        // granted at install.
+        const decision = decideAppTarget(caller.workspaceId, requestedWorkspaceId, {
+            scope: caller.grant.scope,
+            ...(caller.grant.workspaces ? { workspaces: caller.grant.workspaces } : {}),
+        });
+        return {
+            decision,
+            ws: decision.allowed ? getWorkspace(decision.workspaceId) ?? null : null,
+        };
+    }
+
+    const callerWorkspaceId = caller.workspaceId;
     const callerWs = callerWorkspaceId ? getWorkspace(callerWorkspaceId) : null;
     const decision = await resolveTargetWorkspace(requestedWorkspaceId, {
         callerWorkspaceId,

@@ -22,8 +22,21 @@
  *   megabytes), but that's the right trade-off for an electron-main
  *   target — it loads from disk once at boot and never streams.
  */
+const path = require('path');
+
 module.exports = {
     webpack: (config /* , env */) => {
+        // The GApp preload (Tynn #250) is a SECOND preload bundle, emitted beside
+        // `preload.js` as `app-preload.js`. It must be its own entry rather than a
+        // module inside the main bundle: it is loaded into a third-party app's
+        // sandboxed window, and the whole point is that the file that lands there
+        // contains only the two-call bridge surface — not Genie's own preload, and
+        // not the main process it would otherwise be bundled with.
+        config.entry = {
+            ...(config.entry ?? {}),
+            'app-preload': path.join(__dirname, 'main/apps/app-preload.ts'),
+        };
+
         config.optimization = {
             ...(config.optimization ?? {}),
             splitChunks: false,
