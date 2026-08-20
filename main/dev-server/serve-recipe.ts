@@ -295,6 +295,21 @@ export function withPort(
     if (argv.some((a) => a.startsWith('--port='))) {
         return { command: argv.map((a) => (a.startsWith('--port=') ? `--port=${p}` : a)), env: {} };
     }
+    // The SPACE-separated spelling — `--port 5173`, which is how everybody writes
+    // it through `npm run dev -- --port 5173`. Missing this was silent and total:
+    // the app bound the port IT was told, Genie proxied to the one IT allocated,
+    // and the site was unreachable while every signal said "still starting". The
+    // env fallback below cannot rescue it either, because an explicit `--port` on
+    // a Vite command beats the PORT variable.
+    const flagIdx = argv.findIndex((a) => a === '--port' || a === '-p');
+    // Only when a NUMBER follows: `--port` as the last token is a malformed
+    // command, and `--port auto` means something else — inventing a value for
+    // either would corrupt an argv rather than fix one.
+    if (flagIdx >= 0 && /^\d+$/.test(argv[flagIdx + 1] ?? '')) {
+        const command = [...argv];
+        command[flagIdx + 1] = p;
+        return { command, env: {} };
+    }
     const hostPortIdx = argv.findIndex((a) => /^(\d{1,3}(\.\d{1,3}){3}|localhost)?:\d+$/.test(a));
     if (hostPortIdx >= 0) {
         const host = argv[hostPortIdx].split(':')[0] || '127.0.0.1';

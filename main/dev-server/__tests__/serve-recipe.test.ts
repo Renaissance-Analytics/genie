@@ -403,3 +403,61 @@ describe('resolveHostedRun — a stored site, made runnable', () => {
         expect(run.ok).toBe(false);
     });
 });
+
+/**
+ * A caller-supplied command that spells its port with a SPACE (genie, reported by
+ * the Impactium workspace).
+ *
+ * The host owns the port: `site-manager` allocates a free one at start and
+ * rewrites the command to match. That rewrite understood `--port=5173` and a
+ * positional `127.0.0.1:5173`, but not `--port 5173` — which is how everybody
+ * writes it through `npm run dev -- --port 5173`.
+ *
+ * The failure is silent and total. The app binds the port IT was told, Genie
+ * proxies to the one IT allocated, and nothing is listening there — so the site is
+ * unreachable while every signal says "still starting". Vite makes it worse: an
+ * explicit `--port` on the CLI beats the `PORT` env var the fallback sets, so the
+ * env-only path cannot rescue it either.
+ */
+describe('withPort — a port written with a space', () => {
+    const vite = { stack: 'node' as const, framework: 'vite' as const };
+
+    it('rewrites `--port 5173` in place, the way it rewrites `--port=5173`', () => {
+        const argv = ['npm', '--prefix', 'dashboard', 'run', 'dev', '--', '--port', '5173'];
+        const { command } = withPort(argv, 64100, vite);
+
+        expect(command).toEqual([
+            'npm', '--prefix', 'dashboard', 'run', 'dev', '--', '--port', '64100',
+        ]);
+    });
+
+    it('does not add a SECOND port when it rewrote one', () => {
+        // Appending `--port 64100` after an existing `--port 5173` leaves the app
+        // reading whichever its arg parser prefers — a coin toss, per framework.
+        const { command } = withPort(['vite', '--port', '5173'], 64100, vite);
+        expect(command.filter((a) => a === '--port')).toHaveLength(1);
+        expect(command).not.toContain('5173');
+    });
+
+    it('handles the short `-p` form too', () => {
+        const { command } = withPort(['serve', '-p', '3000'], 64100, {});
+        expect(command).toEqual(['serve', '-p', '64100']);
+    });
+
+    it('leaves a `--port` with no value alone rather than corrupting the argv', () => {
+        // `--port` as the last token is a malformed command; rewriting a value
+        // that is not there would silently invent one.
+        const { command } = withPort(['vite', '--port'], 64100, vite);
+        expect(command.slice(0, 2)).toEqual(['vite', '--port']);
+    });
+
+    it('does not mistake a NON-port value for one', () => {
+        const { command } = withPort(['app', '--port', 'auto'], 64100, {});
+        expect(command).toEqual(['app', '--port', 'auto', ]);
+    });
+
+    it('still prefers the equals form when both spellings appear', () => {
+        const { command } = withPort(['vite', '--port=5173'], 64100, vite);
+        expect(command).toEqual(['vite', '--port=64100']);
+    });
+});
