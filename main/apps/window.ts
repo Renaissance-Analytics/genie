@@ -13,10 +13,11 @@
  */
 
 import path from 'path';
-import { BrowserWindow, shell } from 'electron';
+import { BrowserWindow, session, shell } from 'electron';
 import { registerAppWindow, windowIdsForApp } from './bridge';
 import {
     APP_PRELOAD_FILENAME,
+    appPartitionFor,
     appWindowOptions,
     decideAppNavigation,
 } from './window-policy';
@@ -102,4 +103,18 @@ export function closeAppWindows(appId: string): void {
         const other = BrowserWindow.getAllWindows().find((w) => w.webContents.id === wcId);
         if (other && !other.isDestroyed()) other.close();
     }
+}
+
+/**
+ * Wipe everything an app stored in its browser partition.
+ *
+ * Cookies, localStorage, IndexedDB, service workers, cache — everything keyed to
+ * `persist:gapp-<id>`. Called on a FRESH install (where it is the guarantee that a
+ * new app never inherits a previous claimant's data) and on uninstall (where it is
+ * tidiness, because the install-side clear is what actually protects).
+ */
+export async function clearAppStorage(appId: string): Promise<void> {
+    const partition = session.fromPartition(appPartitionFor(appId));
+    await partition.clearStorageData();
+    await partition.clearCache();
 }

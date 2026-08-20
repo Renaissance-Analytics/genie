@@ -442,3 +442,64 @@ describe('installing an app you are BUILDING', () => {
         expect(recordGrant).not.toHaveBeenCalled();
     });
 });
+
+describe('a new app must not inherit an old one’s storage', () => {
+    it('clears the app id’s storage on a FRESH install', async () => {
+        // The partition is keyed by app id, and an app id is claimed by whoever
+        // writes the manifest. Without this, uninstalling an app and installing a
+        // DIFFERENT one that claims the same id hands the new one the old one's
+        // cookies, tokens and localStorage.
+        const clearAppStorage = vi.fn(async () => {});
+        await installAppFromFolder('C:/src/trader', io({ clearAppStorage }));
+
+        expect(clearAppStorage).toHaveBeenCalledWith('com.example.trader');
+    });
+
+    it('clears it BEFORE anything of the app is on disk', async () => {
+        const order: string[] = [];
+        await installAppFromFolder(
+            'C:/src/trader',
+            io({
+                clearAppStorage: async () => void order.push('clear'),
+                copyAppSource: () => void order.push('copy'),
+                recordGrant: () => void order.push('grant'),
+            }),
+        );
+
+        expect(order).toEqual(['clear', 'copy', 'grant']);
+    });
+
+    it('does NOT clear it when the SAME app is reinstalled', async () => {
+        // That is an update. Wiping a user's data because they updated an app
+        // would be a far worse bug than the one this guards against.
+        const clearAppStorage = vi.fn(async () => {});
+        await installAppFromFolder(
+            'C:/src/trader',
+            io({
+                existingApp: () => ({ workspaceId: 'ws-existing', path: 'C:/apps/trader.agi' }),
+                clearAppStorage,
+            }),
+        );
+
+        expect(clearAppStorage).not.toHaveBeenCalled();
+    });
+
+    it('refuses to install when the storage cannot be cleared', async () => {
+        // Fail SAFE. Proceeding would silently hand the new app whatever the old
+        // one left behind, which is the entire thing this exists to prevent.
+        const recordGrant = vi.fn();
+        const result = await installAppFromFolder(
+            'C:/src/trader',
+            io({
+                clearAppStorage: async () => {
+                    throw new Error('partition is locked');
+                },
+                recordGrant,
+            }),
+        );
+
+        expect(result.ok).toBe(false);
+        expect(result.errors?.join(' ')).toContain('partition is locked');
+        expect(recordGrant).not.toHaveBeenCalled();
+    });
+});

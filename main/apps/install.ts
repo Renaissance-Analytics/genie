@@ -81,6 +81,18 @@ export interface AppInstallIO {
     ) => Promise<{ workspaceId: string; path: string }>;
     /** Copy the app's source into its workspace. */
     copyAppSource: (sourceFolder: string, workspacePath: string, manifest: AppManifest) => void;
+    /**
+     * Wipe everything stored under this app id's browser partition.
+     *
+     * The partition is keyed by APP ID, and an app id is claimed by whoever wrote
+     * the manifest. Uninstalling one app and installing a DIFFERENT one that
+     * claims the same id would otherwise hand the newcomer the old app's cookies,
+     * tokens and localStorage.
+     *
+     * Optional so a caller with no browser session (a headless probe, a test that
+     * is not about this) is not forced to fake one.
+     */
+    clearAppStorage?: (appId: string) => Promise<void>;
     persistSites: (workspaceId: string, sites: DevSites) => void;
     recordGrant: (grant: AppGrantInput) => void;
     /**
@@ -194,7 +206,18 @@ export async function installAppFromFolder(
 
     const plan = appInstallPlan(workspace.workspaceId, manifest);
     try {
-        // Source first: a site pointed at a directory that is not there yet serves
+        // A FRESH app id starts with nothing. Not on a reinstall, though: that is
+        // an update, and wiping a user's data because they updated an app would be
+        // a far worse bug than the one this guards against.
+        //
+        // The guarantee lives HERE rather than in uninstall on purpose. Uninstall
+        // can fail — a partition held open by a closing window, a machine that
+        // lost power midway — and an install cannot be skipped. Putting it at the
+        // point of arrival means a new app never inherits, however the last one
+        // ended.
+        if (!existing) await io.clearAppStorage?.(manifest.id);
+
+        // Source next: a site pointed at a directory that is not there yet serves
         // a 404 the user reads as a broken app. In dev mode there is nothing to
         // copy — the source and the workspace are the same folder.
         if (!devMode) io.copyAppSource(sourceFolder, workspace.path, manifest);

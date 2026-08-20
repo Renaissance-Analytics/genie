@@ -40,7 +40,7 @@ import {
     appsSetRevoked,
     appsUninstall,
 } from './manage';
-import { closeAppWindows, openAppWindow } from './window';
+import { clearAppStorage, closeAppWindows, openAppWindow } from './window';
 import { validateAppFolder, type AppFolderReport } from './validate';
 import {
     buildGithubReview,
@@ -198,6 +198,7 @@ export function installIO(): AppInstallIO {
             setWorkspaceAppKind(row.id, 'app-dev');
             return { workspaceId: row.id, path: row.path };
         },
+        clearAppStorage,
         copyAppSource,
         persistSites: (workspaceId, sites) => setWorkspaceDevSites(workspaceId, sites),
         recordGrant: (grant) => upsertAppGrant(grant),
@@ -490,8 +491,8 @@ export function registerAppsIpc(): void {
         return result;
     });
 
-    ipcMain.handle('apps:uninstall', (_e, appId: string) => {
+    ipcMain.handle('apps:uninstall', async (_e, appId: string) => {
         closeAppWindows(String(appId));
-        return appsUninstall(String(appId));
+        return appsUninstall(String(appId), clearAppStorage);
     });
 }

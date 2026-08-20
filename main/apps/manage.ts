@@ -184,15 +184,30 @@ export function appsSetRevoked(appId: string, revoked: boolean): AppActionResult
 /**
  * Uninstall: the app stops being an app.
  *
- * Its grant goes, so it can call nothing, and its workspace stops being marked as
- * an App workspace — but the workspace and its files STAY. Deleting a workspace is
+ * Its grant goes, so it can call nothing; its stored browser data goes; and its
+ * workspace stops being marked as an App workspace — but the workspace and its
+ * files STAY. Deleting a workspace is
  * a bigger, more destructive act than removing a permission grant, and the user
  * may well want what is in there; they can delete it like any other workspace, and
  * the Apps panel says so.
  */
-export function appsUninstall(appId: string): AppActionResult {
+export async function appsUninstall(
+    appId: string,
+    clearStorage?: (appId: string) => Promise<void>,
+): Promise<AppActionResult> {
     const row = getAppGrant(appId);
     if (!row) return { ok: false, error: 'That app is not installed.' };
+
+    // Best effort, and deliberately NOT the guarantee. A partition can be held
+    // open by a window that is still closing, and an uninstall that refused
+    // because of that would strand an app the user asked to be rid of. The
+    // guarantee is on the install side, where it cannot be skipped: a fresh app id
+    // is cleared before the new app can run.
+    try {
+        await clearStorage?.(appId);
+    } catch {
+        /* the install-side clear covers this */
+    }
 
     deleteAppGrant(appId);
     if (row.workspaceId) setWorkspaceAppKind(row.workspaceId, null);
