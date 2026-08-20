@@ -2522,6 +2522,7 @@ export interface GenieApi {
             folder?: string;
             error?: string;
         }>;
+        /** The GApp WINDOW's own bridge — what this window is, and which tab shows. */
         reviewGithub: (
             url: string,
             ref?: string,
@@ -2532,6 +2533,17 @@ export interface GenieApi {
         setCapabilities: (appId: string, capabilities: string[]) => Promise<AppActionResult>;
         setRevoked: (appId: string, revoked: boolean) => Promise<AppActionResult>;
         uninstall: (appId: string) => Promise<AppActionResult>;
+    };
+    /**
+     * The GApp window's own surface. Only a GApp window answers these; Genie's
+     * other windows get null, because they are not one.
+     */
+    gapp: {
+        describe: () => Promise<{
+            app: InstalledAppView;
+            tabs: { kind: 'agent' | 'app'; title: string }[];
+        } | null>;
+        showTab: (index: number) => Promise<void>;
     };
     plugins: {
         list: () => Promise<InstalledPluginView[]>;

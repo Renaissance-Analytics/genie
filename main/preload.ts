@@ -192,6 +192,14 @@ const api = {
         uninstall: (appId: string) => ipcRenderer.invoke('apps:uninstall', appId),
     },
 
+    // The GApp window's own bridge. NOT the app's — this is Genie's renderer
+    // drawing the frame and the tab strip; the app's two-call surface is the
+    // separate `app-preload`, in a view with none of this.
+    gapp: {
+        describe: () => ipcRenderer.invoke('gapp:describe'),
+        showTab: (index: number) => ipcRenderer.invoke('gapp:show-tab', index),
+    },
+
     // Plugin System (Settings → Plugins). Install / enable / grant + marketplaces.
     plugins: {
         list: () => ipcRenderer.invoke('plugins:list'),

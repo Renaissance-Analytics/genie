@@ -33,13 +33,13 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { upsertAppGrant } from '../db';
-import { openAppWindow } from '../apps/window';
+import { openAppWindow, appViewWebContents } from '../apps/window';
 import { scaffoldApp, slugify } from '../apps/scaffold';
 import { validateAppFolder, type AppFolderReport } from '../apps/validate';
 import { installAppFromFolder, type AppInstallResult } from '../apps/install';
 import { installIO } from '../apps/ipc';
 import { appsList } from '../apps/manage';
-import { APP_MANIFEST_FILENAME } from '../apps/manifest';
+import { APP_MANIFEST_FILENAME, validateAppManifest } from '../apps/manifest';
 
 const APP_ID = 'com.genie.example';
 
@@ -94,7 +94,7 @@ export function registerAppsE2E(): void {
          * Install a partial grant for the shipped example app and open its window.
          * Returns the URL so the spec can assert same-origin behaviour against it.
          */
-        async openExample(): Promise<{ url: string }> {
+        async openExample(): Promise<{ url: string; viewId: number }> {
             const url = await serveExample(exampleWebRoot());
 
             upsertAppGrant({
@@ -117,13 +117,43 @@ export function registerAppsE2E(): void {
                 devMode: false,
             });
 
+            // The window is GENIE'S now — its first tab is Genie's own panel
+            // management, and the app lives in an embedded view. So the harness
+            // hands back the APP VIEW's webContents id: that is the surface the
+            // isolation claims are about, and asserting them against the shell
+            // would be asserting them against the wrong thing entirely.
+            const manifest = validateAppManifest({
+                id: APP_ID,
+                slug: 'example',
+                name: 'Genie App Example',
+                version: '1.0.0',
+                frontend: { repo: 'web', serve: { mode: 'static', root: '.' } },
+                permissions: { scope: 'self', capabilities: ['hosting'] },
+                tabs: [{ title: 'Example', path: '/' }],
+            });
+            if (!manifest.ok) throw new Error(manifest.errors.join('; '));
+
             openAppWindow({
                 appId: APP_ID,
                 slug: 'example',
                 name: 'Genie App Example',
                 homeUrl: url,
+                manifest: manifest.value,
             });
-            return { url };
+
+            const view = appViewWebContents(APP_ID)[0];
+            if (!view) throw new Error('the GApp window created no app view');
+            // Point it at the harness server rather than https://example.gen,
+            // which has no hosting behind it on a CI box.
+            await view.loadURL(url);
+            return { url, viewId: view.id };
+        },
+
+        /** Run an expression INSIDE the app's embedded view and hand back the result. */
+        evalInAppView: async (appId: string, expression: string) => {
+            const view = appViewWebContents(appId)[0];
+            if (!view) throw new Error('no app view');
+            return view.executeJavaScript(expression, true);
         },
 
         scaffoldCheckInstall: () => scaffoldCheckInstall(),

@@ -43,9 +43,10 @@ import {
     appsSetRevoked,
     appsUninstall,
 } from './manage';
-import { clearAppStorage, closeAppWindows, openAppWindow } from './window';
+import { clearAppStorage, closeAppWindows, openAppWindow, showAppTab } from './window';
 import { uninstallDataQuestion } from './data-retention';
 import { validateAppFolder, type AppFolderReport } from './validate';
+import { appWindowTabs } from './window-tabs';
 import { appUpdateState, updatableApps, type AppUpdateState } from './updates';
 import {
     buildGithubReview,
@@ -394,8 +395,60 @@ async function checkAppUpdates(): Promise<Record<string, AppUpdateState>> {
     return out;
 }
 
+
+/* ---- The GApp WINDOW's own surface ------------------------------------ */
+
+/**
+ * Which app a Genie-drawn GApp window belongs to, keyed by its SHELL webContents.
+ *
+ * Deliberately a different map from the bridge's. The bridge's answers "which app
+ * may call Genie through this webContents" and must contain ONLY the app's own
+ * views; this one answers "which app is this window about" and contains only the
+ * SHELL. Keeping them apart is what stops the shell ever being mistaken for the
+ * app — the confusion that would hand the app's grant to Genie's own preload.
+ */
+const shellWindows = new Map<number, string>();
+
+export function registerAppShell(webContentsId: number, appId: string): void {
+    shellWindows.set(webContentsId, appId);
+}
+
+export function unregisterAppShell(webContentsId: number): void {
+    shellWindows.delete(webContentsId);
+}
+
 export function registerAppsIpc(): void {
     ipcMain.handle('apps:list', () => appsList());
+
+    /**
+     * What this window is. Answered only for a GApp SHELL — Genie's other windows
+     * are not one, and get null rather than a guess.
+     */
+    ipcMain.handle('gapp:describe', (event) => {
+        const appId = shellWindows.get(event.sender.id);
+        if (!appId) return null;
+        const app = appsGet(appId);
+        const row = getAppGrant(appId);
+        if (!app || !row) return null;
+        try {
+            const parsed = validateAppManifest(JSON.parse(row.manifestJson));
+            if (!parsed.ok) return null;
+            return {
+                app,
+                tabs: appWindowTabs(parsed.value).map((t) => ({ kind: t.kind, title: t.title })),
+            };
+        } catch {
+            return null;
+        }
+    });
+
+    /** Show a tab: the shell paints the strip, main moves the embedded view. */
+    ipcMain.handle('gapp:show-tab', (event, index: number) => {
+        const appId = shellWindows.get(event.sender.id);
+        if (!appId) return;
+        showAppTab(appId, Number(index) || 0);
+    });
+
     // On demand — when the panel opens, or when the user asks. Never polled.
     ipcMain.handle('apps:check-updates', () => checkAppUpdates());
 
@@ -530,12 +583,25 @@ export function registerAppsIpc(): void {
             // fails — broken, rather than revoked.
             return { ok: false, error: `“${app.name}” is turned off. Turn it back on to open it.` };
         }
+        // The manifest travels with the open: it is what says how many tabs the
+        // window has and what the Agent tab lays out. An app whose stored manifest
+        // no longer parses still OPENS — with its Agent tab and nothing else —
+        // rather than refusing, because the workspace half is still perfectly good.
+        const row = getAppGrant(app.id);
+        let manifest: AppManifest | undefined;
+        try {
+            const parsed = row ? validateAppManifest(JSON.parse(row.manifestJson)) : null;
+            if (parsed?.ok) manifest = parsed.value;
+        } catch {
+            /* open without app tabs */
+        }
         openAppWindow({
             appId: app.id,
             slug: app.slug,
             name: app.name,
             homeUrl: app.homeUrl,
             devMode: app.devMode,
+            ...(manifest ? { manifest } : {}),
         });
         return { ok: true };
     });

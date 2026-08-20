@@ -1,4 +1,4 @@
-import { test, expect, type ElectronApplication, type Page } from '@playwright/test';
+import { test, expect, type ElectronApplication } from '@playwright/test';
 import { launchGenieE2E } from './helpers/launch';
 
 /**
@@ -21,40 +21,47 @@ import { launchGenieE2E } from './helpers/launch';
  */
 
 let app: ElectronApplication;
-let appWindow: Page;
+
+/** Run an expression INSIDE the app's embedded view, via main. */
+const inAppView = <T,>(expression: string): Promise<T> =>
+    app.evaluate(
+        ({}, expr) =>
+            (globalThis as Record<string, any>).__GENIE_E2E_APPS__.evalInAppView(
+                'com.genie.example',
+                expr,
+            ),
+        expression,
+    ) as Promise<T>;
 
 test.beforeAll(async () => {
     ({ app } = await launchGenieE2E());
-
-    // The window must be awaited BEFORE the open, or the event is missed.
-    const [opened] = await Promise.all([
-        app.waitForEvent('window'),
-        app.evaluate(() =>
-            (globalThis as Record<string, any>).__GENIE_E2E_APPS__.openExample(),
-        ),
-    ]);
-    appWindow = opened;
-    await appWindow.waitForLoadState('domcontentloaded');
+    await app.evaluate(() =>
+        (globalThis as Record<string, any>).__GENIE_E2E_APPS__.openExample(),
+    );
+    // The view loads asynchronously; wait for its bridge rather than racing it.
+    await expect
+        .poll(() => inAppView<string>('typeof window.genieApp'), { timeout: 15_000 })
+        .toBe('object');
 });
 
 test.afterAll(async () => {
     await app?.close();
 });
 
-test('the page renders the app’s own front end', async () => {
-    // Proves the window really loaded the served app rather than sitting blank —
+test('the embedded view renders the app’s own front end', async () => {
+    // Proves the VIEW really loaded the served app rather than sitting blank —
     // without which every assertion below would pass vacuously on an empty page.
-    await expect(appWindow.locator('h1')).toContainText('Genie App Example');
+    expect(await inAppView<string>('document.querySelector("h1")?.textContent ?? ""')).toContain(
+        'Genie App Example',
+    );
 });
 
 test('window.genie is ABSENT — the property the whole model rests on', async () => {
-    const seen = await appWindow.evaluate(() => ({
-        genie: typeof (window as unknown as Record<string, unknown>).genie,
-        genieApp: typeof (window as unknown as Record<string, unknown>).genieApp,
-        require: typeof (window as unknown as Record<string, unknown>).require,
-        process: typeof (window as unknown as Record<string, unknown>).process,
-        module: typeof (window as unknown as Record<string, unknown>).module,
-    }));
+    const seen = await inAppView<Record<string, string>>(
+        '({ genie: typeof window.genie, genieApp: typeof window.genieApp,' +
+            ' require: typeof window.require, process: typeof window.process,' +
+            ' module: typeof window.module })',
+    );
 
     // The bridge is PRESENT. Asserted here, in the same breath, because the first
     // run of this spec passed the absence check on a window where the preload had
@@ -72,14 +79,12 @@ test('window.genie is ABSENT — the property the whole model rests on', async (
 test('window.genieApp is exactly two calls, and no more', async () => {
     // The surface is meant to be small. A third method appearing here without a
     // deliberate decision is the kind of drift that ends in a wide bridge.
-    const keys = await appWindow.evaluate(() =>
-        Object.keys((window as unknown as Record<string, any>).genieApp ?? {}).sort(),
-    );
+    const keys = await inAppView<string[]>('Object.keys(window.genieApp ?? {}).sort()');
     expect(keys).toEqual(['call', 'me']);
 });
 
 test('the app learns who it is — from Genie, not from itself', async () => {
-    const me = await appWindow.evaluate(() => (window as unknown as Record<string, any>).genieApp.me());
+    const me = await inAppView<Record<string, unknown>>('window.genieApp.me()');
 
     expect(me).toMatchObject({ id: 'com.genie.example', name: 'Genie App Example' });
     // The GRANTED set, not the declared one: the harness declares hosting AND
@@ -88,8 +93,8 @@ test('the app learns who it is — from Genie, not from itself', async () => {
 });
 
 test('an ungranted call is refused, in words the user could act on', async () => {
-    const outcome = await appWindow.evaluate(() =>
-        (window as unknown as Record<string, any>).genieApp.call('manageTerminals', { action: 'list' }),
+    const outcome = await inAppView<{ ok: boolean; error?: string }>(
+        'window.genieApp.call("manageTerminals", { action: "list" })',
     );
 
     expect(outcome.ok).toBe(false);
@@ -101,8 +106,8 @@ test('an ungranted call is refused, in words the user could act on', async () =>
 test('a tool no app may ever use is refused with the standing reason', async () => {
     // `submitFeedback` posts to Tynn in the user's name. There is no permission
     // level at which an app gets it, so the message must not suggest a setting.
-    const outcome = await appWindow.evaluate(() =>
-        (window as unknown as Record<string, any>).genieApp.call('submitFeedback', { text: 'hi' }),
+    const outcome = await inAppView<{ ok: boolean; error?: string }>(
+        'window.genieApp.call("submitFeedback", { text: "hi" })',
     );
 
     expect(outcome.ok).toBe(false);
@@ -113,8 +118,8 @@ test('a granted call reaches the real tool', async () => {
     // It may well fail INSIDE the tool — the harness grant points at a workspace
     // that does not exist — but it must get past the gate. A refusal here would
     // mean the granted path never opens, which no negative test can catch.
-    const outcome = await appWindow.evaluate(() =>
-        (window as unknown as Record<string, any>).genieApp.call('manageSite', { action: 'list' }),
+    const outcome = await inAppView<{ ok: boolean; error?: string }>(
+        'window.genieApp.call("manageSite", { action: "list" })',
     );
 
     expect(String(outcome.error ?? '')).not.toContain('was not granted');
@@ -123,11 +128,10 @@ test('a granted call reaches the real tool', async () => {
 test('the page cannot claim to be a different app', async () => {
     // There is no field for it — identity is the window Genie recorded. Sending
     // one anyway must change nothing.
-    const me = await appWindow.evaluate(async () => {
-        const genieApp = (window as unknown as Record<string, any>).genieApp;
-        await genieApp.call('manageSite', { action: 'list', appId: 'com.attacker.app' });
-        return genieApp.me();
-    });
+    const me = await inAppView<Record<string, unknown>>(
+        'window.genieApp.call("manageSite", { action: "list", appId: "com.attacker.app" })' +
+            '.then(() => window.genieApp.me())',
+    );
 
     expect(me.id).toBe('com.genie.example');
 });

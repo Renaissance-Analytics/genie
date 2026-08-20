@@ -27,6 +27,8 @@ import IssueWatchFlyout from '../components/Master/IssueWatchFlyout';
 import TaskManagerFlyout from '../components/Master/TaskManagerFlyout';
 import AgentInboxFlyout from '../components/Master/AgentInboxFlyout';
 import QuestionInboxFlyout from '../components/Master/QuestionInboxFlyout';
+import AppStoreFlyout from '../components/Master/AppStoreFlyout';
+import AppTray from '../components/Master/AppTray';
 import { questionBadgeCount } from '../lib/question-badge';
 import TerminalTypeSplitButton from '../components/Master/TerminalTypeSplitButton';
 import AgentTerminalForm from '../components/Master/AgentTerminalForm';
@@ -454,6 +456,8 @@ function MasterInner() {
     // The panel owns the grouped list; the master just tracks the badge total and
     // refreshes it on `questions:changed` (event-driven, no polling).
     const [questionsOpen, setQuestionsOpen] = useState(false);
+    // The GApp Store drawer, opened from the App Tray's icon in the header.
+    const [appStoreOpen, setAppStoreOpen] = useState(false);
     const [questionCount, setQuestionCount] = useState(0);
     useEffect(() => {
         // #60: badge how many QUESTIONS are waiting (incl. DND-deferred) — not how
@@ -1939,6 +1943,7 @@ function MasterInner() {
                         onShowAgentInbox={() => setAgentInboxOpen((o) => !o)}
                         agentInboxLag={agentInboxLag}
                         onShowQuestions={() => setQuestionsOpen((o) => !o)}
+                        onShowAppStore={() => setAppStoreOpen((o) => !o)}
                         questionCount={questionCount}
                         onShowKnowledge={() => {
                             // Header button → open the standalone Knowledge Graph
@@ -2044,6 +2049,7 @@ function MasterInner() {
                 open={agentInboxOpen}
                 onClose={() => setAgentInboxOpen(false)}
             />
+            <AppStoreFlyout open={appStoreOpen} onClose={() => setAppStoreOpen(false)} />
             <QuestionInboxFlyout
                 open={questionsOpen}
                 onClose={() => setQuestionsOpen(false)}
@@ -2813,6 +2819,7 @@ function TitleBar({
     agentInboxLag = 0,
     onShowQuestions,
     questionCount = 0,
+    onShowAppStore,
     onShowKnowledge,
     onShowIssueWatch,
     issueWatchUnread = 0,
@@ -2830,6 +2837,7 @@ function TitleBar({
     agentInboxLag?: number;
     onShowQuestions?: () => void;
     questionCount?: number;
+    onShowAppStore?: () => void;
     onShowKnowledge?: () => void;
     onShowIssueWatch?: () => void;
     issueWatchUnread?: number;
@@ -2866,6 +2874,10 @@ function TitleBar({
                 <span className="ttl">{stageWorkspaceName}</span>
             )}
             <span className="spacer" />
+            {/* App Tray — left of the Genie icons, growing LEFTWARD into the
+                spacer, so installing an app never shifts the icons the user aims
+                at. Its own layout is row-reverse; see AppTray. */}
+            {!isStage && <AppTray onOpenStore={() => onShowAppStore?.()} />}
             <SitesButton />
             <HostsButton />
             <UpdatePill />
