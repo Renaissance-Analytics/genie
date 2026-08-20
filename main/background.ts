@@ -199,6 +199,7 @@ import { setSecretEncryptor } from './secrets/store';
 import { buildHostServerDeps } from './host-core/server-deps';
 import { registerAppBridge } from './apps/bridge';
 import { registerAppsIpc } from './apps/ipc';
+import { registerAppsE2E } from './e2e/apps';
 import type { HostCorePorts } from './host-core/ports';
 import {
     hostBackendKind,
@@ -1520,6 +1521,11 @@ app.whenReady().then(async () => {
     // never finds a dead channel.
     registerAppBridge(mcpDeps);
     registerAppsIpc();
+    // E2E seam (GENIE_E2E=1 only): publish the handle a spec uses to open a REAL
+    // GApp window over the REAL bridge. The property it exists to prove is a
+    // negative -- `window.genie` is absent inside a GApp's page -- and a negative
+    // cannot be established by reading code. Inert in a normal run.
+    if (isE2E()) registerAppsE2E();
     await startMcpServer(mcpDeps).catch((e) => console.error('[mcp] failed to start', e));
     // E2E seam (GENIE_E2E=1 only): publish the LIVE MCP endpoint plus hooks to
     // drive a REAL broker delivery, so a Playwright spec can prove the whole
