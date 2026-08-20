@@ -2541,6 +2541,8 @@ export interface GenieApi {
     gapp: {
         describe: () => Promise<{
             app: InstalledAppView;
+            /** The app's workspace — the Agent tab's Floor runs over it. */
+            workspace: WorkspaceRow | null;
             tabs: { kind: 'agent' | 'app'; title: string }[];
         } | null>;
         showTab: (index: number) => Promise<void>;

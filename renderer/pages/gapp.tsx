@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Text } from '@particle-academy/react-fancy';
-import { api, hasGenieBridge, type InstalledAppView } from '../lib/genie';
+import { api, hasGenieBridge, type InstalledAppView, type WorkspaceRow } from '../lib/genie';
+import Floor from '../components/Master/Floor';
+import { useFloorState } from '../lib/use-floor-state';
 
 /**
  * The GApp window (Tynn #250, App Tray pivot).
@@ -26,6 +28,7 @@ export default function GAppWindow() {
     const [tabs, setTabs] = useState<{ kind: 'agent' | 'app'; title: string }[]>([]);
     const [active, setActive] = useState(0);
     const [error, setError] = useState<string | null>(null);
+    const [workspace, setWorkspace] = useState<WorkspaceRow | null>(null);
 
     useEffect(() => {
         if (!hasGenieBridge()) return;
@@ -38,9 +41,12 @@ export default function GAppWindow() {
                 }
                 setApp(info.app);
                 setTabs(info.tabs);
+                setWorkspace(info.workspace);
             })
             .catch((e: Error) => setError(e.message));
     }, []);
+
+    const floor = useFloorState(app?.workspaceId ?? null, workspace);
 
     // Telling main which tab is showing is what moves the embedded view. Done as an
     // effect rather than in the click handler so the window is correct after a
@@ -49,8 +55,6 @@ export default function GAppWindow() {
         if (!hasGenieBridge() || tabs.length === 0) return;
         void api().gapp.showTab(active).catch(() => {});
     }, [active, tabs.length]);
-
-    const agentPanels = useMemo(() => app?.permissions.length ?? 0, [app]);
 
     if (error) {
         return (
@@ -124,19 +128,23 @@ export default function GAppWindow() {
                 exactly as a workspace has them. Every other tab is an embedded view
                 the MAIN process positions in this space, so this element is left
                 empty for them rather than rendering anything of the app's. */}
-            <div style={{ flex: 1, minHeight: 0 }}>
-                {active === 0 && (
-                    <section data-testid="gapp-agent-panel" style={{ height: '100%', padding: 16 }}>
-                        <Text size="sm">
-                            {app
-                                ? `${app.name} — ${agentPanels} permission${agentPanels === 1 ? '' : 's'} granted`
-                                : 'Loading…'}
-                        </Text>
-                        <Text size="xs" className="text-zinc-500">
-                            Terminals and files for this app’s workspace.
-                        </Text>
-                    </section>
-                )}
+            <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                {/* The Agent tab: the SAME Floor the master window mounts, for this
+                    app's workspace. Kept mounted while other tabs show — hiding it
+                    with `display` rather than unmounting is what keeps its ptys
+                    alive, exactly as the master window keeps off-workspace panels
+                    mounted-hidden across a switch. */}
+                <div
+                    data-testid="gapp-agent-panel"
+                    style={{
+                        display: active === 0 ? 'flex' : 'none',
+                        flexDirection: 'column',
+                        flex: 1,
+                        minHeight: 0,
+                    }}
+                >
+                    {app ? <Floor {...floor} /> : <Text size="sm">Loading…</Text>}
+                </div>
             </div>
         </div>
     );

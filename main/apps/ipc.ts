@@ -435,6 +435,10 @@ export function registerAppsIpc(): void {
             if (!parsed.ok) return null;
             return {
                 app,
+                // The Agent tab is a real Floor over this app's workspace, so the
+                // window needs the workspace ROW — its path is where a new panel
+                // opens, and its name is what the grid labels things with.
+                workspace: getWorkspace(app.workspaceId) ?? null,
                 tabs: appWindowTabs(parsed.value).map((t) => ({ kind: t.kind, title: t.title })),
             };
         } catch {

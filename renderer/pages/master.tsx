@@ -14,9 +14,7 @@ import { PromptHost, showPrompt } from '../components/Master/Prompt';
 import QuitTerminalsModal, {
     type QuitTerminal,
 } from '../components/Master/QuitTerminalsModal';
-import TerminalGrid, {
-    type LayoutMode,
-} from '../components/Master/TerminalGrid';
+import { type LayoutMode } from '../components/Master/TerminalGrid';
 import AddWorkspaceModal from '../components/AddWorkspaceModal';
 import BootScreen from '../components/Master/BootScreen';
 import HostUpgradeOverlay from '../components/Master/HostUpgradeOverlay';
@@ -29,6 +27,7 @@ import AgentInboxFlyout from '../components/Master/AgentInboxFlyout';
 import QuestionInboxFlyout from '../components/Master/QuestionInboxFlyout';
 import AppStoreFlyout from '../components/Master/AppStoreFlyout';
 import AppTray from '../components/Master/AppTray';
+import Floor from '../components/Master/Floor';
 import { questionBadgeCount } from '../lib/question-badge';
 import TerminalTypeSplitButton from '../components/Master/TerminalTypeSplitButton';
 import AgentTerminalForm from '../components/Master/AgentTerminalForm';
@@ -69,7 +68,6 @@ import {
 } from '../lib/workstation-status';
 import { cloudHostVisual, unifiedCloudWorkstations } from '../lib/cloud-host-visual';
 import {
-    IconBox,
     IconColumns,
     IconLayoutGrid,
     IconMaximize,
@@ -1994,37 +1992,38 @@ function MasterInner() {
                         onAgentCreated={selectAgentSpec}
                         agentCustomCommand={agentCustomCommand}
                     />
-                    <div className="gbody">
-                        <TerminalGrid
-                            specs={selectedSpecs}
-                            backgroundSpecs={backgroundSpecs}
-                            workspacesById={workspacesById}
-                            activeWorkspaceId={activeWorkspaceId}
-                            addDisabled={atMaxViews}
-                            addDisabledReason={maxViewsReason}
-                            focusId={focusId}
-                            attentionIds={attentionIds}
-                            onAttentionClear={clearAttention}
-                            recoverGen={recoverGenById}
-                            maximizedId={maximizedId}
-                            onClose={closeSelected}
-                            onFocus={(id) => setFocusId((cur) => (cur === id ? null : id))}
-                            onToggleMaximize={toggleMaximize}
-                            onDisable={(id) => void disableSpec(id)}
-                            onAddTerminal={() =>
-                                activeWorkspaceId && void addSpec(activeWorkspaceId, 'terminal')
-                            }
-                            onAddCode={() =>
-                                activeWorkspaceId && void addSpec(activeWorkspaceId, 'code')
-                            }
-                            onMarkActive={markActive}
-                            onMarkInactive={markInactive}
-                            layoutMode={layoutMode}
-                            onReorder={reorderSpecs}
-                        />
-                    </div>
-                    <StatusBar
-                        panelCount={selectedSpecs.length}
+                    {/* The Floor — the grid plus its status bar, now ONE component
+                        the GApp window's Agent tab mounts too. The state stays
+                        here because this window derives it across every workspace
+                        (background specs keep off-workspace ptys alive); a GApp
+                        window is a single workspace and derives the same shape
+                        from far less. */}
+                    <Floor
+                        specs={selectedSpecs}
+                        backgroundSpecs={backgroundSpecs}
+                        workspacesById={workspacesById}
+                        activeWorkspaceId={activeWorkspaceId}
+                        addDisabled={atMaxViews}
+                        addDisabledReason={maxViewsReason}
+                        focusId={focusId}
+                        attentionIds={attentionIds}
+                        onAttentionClear={clearAttention}
+                        recoverGen={recoverGenById}
+                        maximizedId={maximizedId}
+                        onClose={closeSelected}
+                        onFocus={(id) => setFocusId((cur) => (cur === id ? null : id))}
+                        onToggleMaximize={toggleMaximize}
+                        onDisable={(id) => void disableSpec(id)}
+                        onAddTerminal={() =>
+                            activeWorkspaceId && void addSpec(activeWorkspaceId, 'terminal')
+                        }
+                        onAddCode={() =>
+                            activeWorkspaceId && void addSpec(activeWorkspaceId, 'code')
+                        }
+                        onMarkActive={markActive}
+                        onMarkInactive={markInactive}
+                        layoutMode={layoutMode}
+                        onReorder={reorderSpecs}
                         projectCount={projectsActive.size}
                         activeCount={activeIds.size}
                     />
@@ -3897,31 +3896,3 @@ function Toolbar({
     );
 }
 
-interface StatusBarProps {
-    panelCount: number;
-    projectCount: number;
-    activeCount: number;
-}
-
-function StatusBar({ panelCount, projectCount, activeCount }: StatusBarProps) {
-    return (
-        <div className="gstatus">
-            <span className="si">
-                <IconLayoutGrid size={13} /> {panelCount} panel
-                {panelCount === 1 ? '' : 's'}
-            </span>
-            <span className="si">
-                <IconBox size={13} />
-                {projectCount === 0
-                    ? 'No project'
-                    : projectCount === 1
-                      ? '1 project'
-                      : `${projectCount} projects`}
-            </span>
-            <span className="si">
-                <span className="sdot" style={{ background: '#10b981' }} />
-                {activeCount} live
-            </span>
-        </div>
-    );
-}
