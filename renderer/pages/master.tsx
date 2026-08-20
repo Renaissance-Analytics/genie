@@ -27,6 +27,7 @@ import IssueWatchFlyout from '../components/Master/IssueWatchFlyout';
 import TaskManagerFlyout from '../components/Master/TaskManagerFlyout';
 import AgentInboxFlyout from '../components/Master/AgentInboxFlyout';
 import QuestionInboxFlyout from '../components/Master/QuestionInboxFlyout';
+import { questionBadgeCount } from '../lib/question-badge';
 import TerminalTypeSplitButton from '../components/Master/TerminalTypeSplitButton';
 import AgentTerminalForm from '../components/Master/AgentTerminalForm';
 import RecoveryBanner from '../components/Master/RecoveryBanner';
@@ -455,23 +456,40 @@ function MasterInner() {
     const [questionsOpen, setQuestionsOpen] = useState(false);
     const [questionCount, setQuestionCount] = useState(0);
     useEffect(() => {
-        // #60: badge the number of WORKSPACES with pending questions (incl. DND-
-        // deferred). The `questions:changed` event now CARRIES `{workspaces}` — set it
-        // straight from the payload (push-driven, like the AgentInbox lag badge), so a
-        // host-bound window updates without a fetch that would only see its empty local
-        // list. Fall back to a fetch on the initial mount (no payload).
-        const load = (payload?: { workspaces?: number }): void => {
-            if (payload && typeof payload.workspaces === 'number') {
-                setQuestionCount(payload.workspaces);
-                return;
-            }
+        // #60: badge how many QUESTIONS are waiting (incl. DND-deferred) — not how
+        // many workspaces they are spread across, which was the old behaviour and
+        // showed "1" for the three questions the flyout was listing.
+        //
+        // `questionBadgeCount` returns NULL when a payload carries no readable
+        // total, and null means FETCH rather than zero: several emitters send
+        // `questions:changed` with no payload at all, and treating that as "none"
+        // is precisely how this badge sat empty while questions were waiting.
+        const fetchCount = (): void => {
             api()
                 .questions?.list?.()
-                .then((r) => setQuestionCount(r.groups.length))
+                .then((r) => {
+                    const n = questionBadgeCount(r);
+                    if (n !== null) setQuestionCount(n);
+                })
                 .catch(() => {});
         };
+        const load = (payload?: unknown): void => {
+            const pushed = questionBadgeCount(payload);
+            if (pushed !== null) setQuestionCount(pushed);
+            else fetchCount();
+        };
         load();
-        return api().on.questionsChanged?.(load);
+        const off = api().on.questionsChanged?.(load);
+        // Self-heal. A dropped event, a bridge that attached late, a window that
+        // was asleep — any of them would otherwise leave the badge frozen until
+        // the next question arrives. Refocusing the window is the moment the user
+        // looks at it, so it is the moment to be right, and it costs one local
+        // IPC call. Event-driven, not a timer.
+        window.addEventListener('focus', fetchCount);
+        return () => {
+            off?.();
+            window.removeEventListener('focus', fetchCount);
+        };
     }, []);
     // Split Add-Terminal button: the last-used terminal type (persisted) + the
     // configured custom-agent command (for the create form's placeholder).
