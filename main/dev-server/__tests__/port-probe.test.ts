@@ -262,3 +262,67 @@ describe('waitForHttpsSni — readiness THROUGH the sandbox Caddy', () => {
         expect(await waitForHttpsSni(port, 'web.acme.gen', 12_000)).toBe(true);
     });
 });
+
+/**
+ * BOTH loopbacks (genie#227).
+ *
+ * Vite binds `localhost` by default, which on a dual-stack machine resolves to
+ * `::1` — so a dev server can be perfectly healthy, answering `curl localhost:5173`
+ * with a 200, while Genie's `127.0.0.1` probe gets nothing. Healthy and dead are
+ * then indistinguishable, and the site sits reported as "still starting" forever.
+ *
+ * The reporter worked around it by pinning `--host 127.0.0.1`. That is a real fix
+ * for one app and no fix for the next person, so the probe asks both.
+ */
+describe('a server on the OTHER loopback', () => {
+    /** Listen on IPv6 loopback only — what `--host localhost` gives you. */
+    const listenV6 = (): Promise<number> =>
+        new Promise((resolve, reject) => {
+            const server = net.createServer((socket) => socket.destroy());
+            servers.push(server);
+            server.once('error', reject);
+            server.listen(0, '::1', () => resolve((server.address() as net.AddressInfo).port));
+        });
+
+    it('finds a TCP server bound only to ::1', async () => {
+        let port: number;
+        try {
+            port = await listenV6();
+        } catch {
+            return; // no IPv6 on this box; nothing to assert
+        }
+        expect(await waitForPort(port, 2_000)).toBe(true);
+    });
+
+    it('finds an HTTP server bound only to ::1', async () => {
+        let port: number;
+        try {
+            port = await new Promise<number>((resolve, reject) => {
+                const server = net.createServer((socket) => {
+                    socket.on('data', () => {
+                        socket.write('HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n');
+                        socket.end();
+                    });
+                });
+                servers.push(server);
+                server.once('error', reject);
+                server.listen(0, '::1', () => resolve((server.address() as net.AddressInfo).port));
+            });
+        } catch {
+            return;
+        }
+        expect(await waitForHttp(port, 2_000)).toBe(true);
+    });
+
+    it('still reports nothing-listening as false', async () => {
+        // The point is to widen where we look, not to start saying yes.
+        expect(await waitForPort(await closedPort(), 400)).toBe(false);
+    });
+
+    it('honours an EXPLICIT host instead of widening it', async () => {
+        // A caller that named a host meant that host. Only the loopback DEFAULT
+        // is ambiguous, and only the default gets both.
+        const port = await listen((socket) => socket.destroy());
+        expect(await waitForPort(port, 400, '203.0.113.1')).toBe(false);
+    });
+});

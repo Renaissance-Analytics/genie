@@ -2,6 +2,9 @@ import { devContainerNameFor } from './argv';
 import { CADDY_HTTPS_PORT, type CaddySite } from './caddyfile';
 import { applyCaddyConfig } from './caddy-proxy';
 import { GENIE_DEV_BASE_IMAGE, WORKSPACE_MOUNT_TARGET } from './images';
+import fs from 'fs';
+import path from 'path';
+import { diagnoseHostSpawnFailure } from './host-deps-diagnosis';
 import { allocateFreePort as realAllocateFreePort, DEFAULT_READY_TIMEOUT_MS, waitForHttp, waitForHttpsSni, waitForPort } from './port-probe';
 import { withPort } from './serve-recipe';
 import { planHostAllowlist } from './host-allowlist';
@@ -398,6 +401,33 @@ export interface DevSiteManager {
 }
 
 // --- implementation ---------------------------------------------------------
+
+
+/**
+ * The `node_modules` diagnosis for a HOST-NATIVE site's log (genie#227).
+ *
+ * Reads `node_modules/.bin` beside the site's repo and lets the pure diagnosis
+ * decide whether the shim layout explains a missing binary. Best effort in every
+ * direction: an unreadable directory yields no hint rather than a wrong one, and a
+ * hint is only ever APPENDED to the real output.
+ */
+function hostDepsHint(config: DevSiteConfig, workspacePath: string | null, log: string): string | null {
+    try {
+        if (!workspacePath) return null;
+        const cwd = repoCwdOnHost(workspacePath, config.repo);
+        if (cwd === null) return null;
+        const binDir = path.join(cwd, 'node_modules', '.bin');
+        let binEntries: string[] | null = null;
+        try {
+            binEntries = fs.readdirSync(binDir);
+        } catch {
+            binEntries = fs.existsSync(path.join(cwd, 'node_modules')) ? [] : null;
+        }
+        return diagnoseHostSpawnFailure({ log, platform: process.platform, binEntries });
+    } catch {
+        return null;
+    }
+}
 
 interface Live {
     workspaceId: string;
@@ -1544,11 +1574,26 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                     return 'Host-native hosting is not available, so the log cannot be read.';
                 }
                 const main = await deps.hostSpawn.readLog(siteId, tail);
+                // Say WHY a missing binary is missing (genie#227). The raw error
+                // names the binary — `'vite' is not recognized` — and every
+                // workspace moving off container hosting reads that as "vite is
+                // broken" rather than "these dependencies were installed for
+                // another platform". Appended, never substituted: the real output
+                // is what somebody came here for.
+                const hint = hostDepsHint(
+                    entry.config,
+                    deps.listWorkspaces().find((w) => w.id === entry.workspaceId)?.path ?? null,
+                    main,
+                );
+                const withHint = hint ? `${main}
+
+--- Genie ---
+${hint}` : main;
                 // A PHP site is TWO processes, and the interesting failures happen in
                 // the one nobody was showing (genie#206): the front Caddy logs a
                 // tidy 502 while the FastCGI worker's log holds the actual reason
                 // ("'php-cgi' is not recognized"). Show both, labelled.
-                if (entry.config.hostServe?.mode !== 'php') return main;
+                if (entry.config.hostServe?.mode !== 'php') return withHint;
                 const workerLog = (await deps.hostSpawn
                     .readLog(fcgiSiteId(siteId), tail)
                     .catch(() => '')).trim();

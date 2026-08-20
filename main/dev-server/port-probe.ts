@@ -64,6 +64,31 @@ async function poll(
     }
 }
 
+
+/**
+ * The loopback addresses a "loopback" probe should actually try.
+ *
+ * Vite binds `localhost` by default, which on a dual-stack machine is `::1` — so a
+ * dev server can be perfectly healthy, answering `curl localhost:5173` with a 200,
+ * while a `127.0.0.1` probe gets nothing and the site reads as "still starting"
+ * forever (genie#227). Only the DEFAULT is ambiguous: a caller that named a host
+ * meant that host, and gets exactly it.
+ */
+const LOOPBACKS = ['127.0.0.1', '::1'] as const;
+
+/** Race an attempt across both loopbacks; true if EITHER answered. */
+async function eitherLoopback(
+    host: string,
+    attempt: (host: string) => Promise<boolean>,
+): Promise<boolean> {
+    if (host !== DEFAULT_LOOPBACK) return attempt(host);
+    const results = await Promise.all(LOOPBACKS.map((h) => attempt(h).catch(() => false)));
+    return results.some(Boolean);
+}
+
+/** What every loopback probe means by "loopback" unless told otherwise. */
+const DEFAULT_LOOPBACK = '127.0.0.1';
+
 /** One connect attempt. Resolves true iff something accepted. */
 function connectOnce(host: string, port: number, timeoutMs: number): Promise<boolean> {
     return new Promise((resolve) => {
@@ -90,9 +115,12 @@ function connectOnce(host: string, port: number, timeoutMs: number): Promise<boo
 export async function waitForPort(
     port: number,
     timeoutMs: number = DEFAULT_READY_TIMEOUT_MS,
-    host = '127.0.0.1',
+    host: string = DEFAULT_LOOPBACK,
 ): Promise<boolean> {
-    return poll((attemptMs) => connectOnce(host, port, attemptMs), timeoutMs);
+    return poll(
+        (attemptMs) => eitherLoopback(host, (h) => connectOnce(h, port, attemptMs)),
+        timeoutMs,
+    );
 }
 
 /**
@@ -182,9 +210,12 @@ export async function waitForHttp(
     port: number,
     timeoutMs: number = DEFAULT_READY_TIMEOUT_MS,
     hostHeader?: string,
-    host = '127.0.0.1',
+    host: string = DEFAULT_LOOPBACK,
 ): Promise<boolean> {
-    return poll((attemptMs) => requestOnce(host, port, attemptMs, hostHeader), timeoutMs);
+    return poll(
+        (attemptMs) => eitherLoopback(host, (h) => requestOnce(h, port, attemptMs, hostHeader)),
+        timeoutMs,
+    );
 }
 
 /** Caddy's own "the upstream app is not answering yet" statuses. A response
