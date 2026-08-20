@@ -2673,6 +2673,39 @@ function readStateNote(state: TerminalReadState | undefined): string {
 }
 
 /**
+ * Every tool Genie itself advertises, in the order `tools/list` presents them.
+ *
+ * One source of truth rather than a literal built inline: the GApp capability
+ * catalogue (`apps/capabilities.ts`) classifies this list so that no tool can
+ * exist outside its permission model, and that check is only as good as the list
+ * it reads. `manageService` is here but filtered at list time — a machine with no
+ * container runtime never sees it.
+ */
+const CORE_TOOLS = [
+    IMDONE_TOOL,
+    CHECK_ISSUES_TOOL,
+    FORCE_QUESTION_TOOL,
+    MANAGE_PROCESS_TOOL,
+    PROVISION_WORKSPACES_TOOL,
+    MANAGE_SITE_TOOL,
+    MANAGE_SERVICE_TOOL,
+    MANAGE_TERMINALS_TOOL,
+    RUN_AGENT_TOOL,
+    MANAGE_WORKSPACES_TOOL,
+    AGENTINBOX_TOOL,
+    KNOWLEDGE_TOOL,
+    OPEN_FILE_TOOL,
+    SET_ENV_TOOL,
+    CHECK_ENV_TOOL,
+    SUBMIT_FEEDBACK_TOOL,
+    INITIALIZE_WORKSPACE_TOOL,
+    GUIDE_TOOL,
+];
+
+/** The names of {@link CORE_TOOLS}. */
+export const GENIE_TOOL_NAMES: readonly string[] = CORE_TOOLS.map((t) => t.name);
+
+/**
  * Handle one JSON-RPC message. Returns the response, or null for notifications
  * (methods with no id / the `notifications/*` namespace) which get a bare 202.
  */
@@ -2735,24 +2768,11 @@ export async function handleMcpMessage(
             ).catch(() => false);
             return ok(msg.id, {
                 tools: [
-                    IMDONE_TOOL,
-                    CHECK_ISSUES_TOOL,
-                    FORCE_QUESTION_TOOL,
-                    MANAGE_PROCESS_TOOL,
-                    PROVISION_WORKSPACES_TOOL,
-                    MANAGE_SITE_TOOL,
-                    ...(hasContainerRuntime && ctx.manageService ? [MANAGE_SERVICE_TOOL] : []),
-                    MANAGE_TERMINALS_TOOL,
-                    RUN_AGENT_TOOL,
-                    MANAGE_WORKSPACES_TOOL,
-                    AGENTINBOX_TOOL,
-                    KNOWLEDGE_TOOL,
-                    OPEN_FILE_TOOL,
-                    SET_ENV_TOOL,
-                    CHECK_ENV_TOOL,
-                    SUBMIT_FEEDBACK_TOOL,
-                    INITIALIZE_WORKSPACE_TOOL,
-                    GUIDE_TOOL,
+                    ...CORE_TOOLS.filter(
+                        (t) =>
+                            t !== MANAGE_SERVICE_TOOL ||
+                            (hasContainerRuntime && ctx.manageService),
+                    ),
                     ...pluginTools,
                 ],
             });

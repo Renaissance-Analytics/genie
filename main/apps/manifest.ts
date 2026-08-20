@@ -24,6 +24,8 @@
  * model, because the one Genie has is already what these apps run on.
  */
 
+import { isAppCapability } from './capabilities';
+
 export const APP_MANIFEST_FILENAME = 'genie-app.json';
 
 /**
@@ -77,6 +79,13 @@ export interface AppPermissions {
     scope: AppScope;
     /** Required when scope is `workspaces` — the explicit allow-list. */
     workspaces?: string[];
+    /**
+     * The capabilities the app ASKS for (see `capabilities.ts`) — never tool
+     * names, which are not something a consent prompt can be written about. Empty
+     * means the app reaches no Genie tool at all; the user grants a subset of this
+     * at install, and the bridge enforces the granted subset, not this one.
+     */
+    capabilities: string[];
 }
 
 /**
@@ -235,16 +244,18 @@ function validateServices(raw: unknown, errors: string[]): AppService[] | undefi
  * lets it exist until its manifest asks for more and the user agrees to it.
  */
 function validatePermissions(raw: unknown, errors: string[]): AppPermissions {
-    if (raw === undefined) return { scope: 'self' };
+    if (raw === undefined) return { scope: 'self', capabilities: [] };
     if (!isRecord(raw)) {
         errors.push('`permissions` must be an object when present');
-        return { scope: 'self' };
+        return { scope: 'self', capabilities: [] };
     }
+
+    const capabilities = validateCapabilities(raw.capabilities, errors);
 
     const scope = raw.scope ?? 'self';
     if (scope !== 'self' && scope !== 'workspaces' && scope !== 'workstation') {
         errors.push('`permissions.scope` must be "self", "workspaces" or "workstation"');
-        return { scope: 'self' };
+        return { scope: 'self', capabilities };
     }
 
     if (scope === 'workspaces') {
@@ -254,12 +265,40 @@ function validatePermissions(raw: unknown, errors: string[]): AppPermissions {
             errors.push(
                 '`permissions.workspaces` must name at least one workspace when scope is "workspaces"',
             );
-            return { scope: 'self' };
+            return { scope: 'self', capabilities };
         }
-        return { scope, workspaces: list as string[] };
+        return { scope, workspaces: list as string[], capabilities };
     }
 
-    return { scope };
+    return { scope, capabilities };
+}
+
+/**
+ * The declared capabilities — deduped, and every one of them real.
+ *
+ * An unknown name is an ERROR rather than something to drop: silently ignoring
+ * `"root"` would let a manifest read as though it asked for something while the
+ * runtime quietly granted nothing, and the developer would find out from a
+ * mystery denial months later. Tool names are rejected for the same reason — they
+ * would be a second, unclassified vocabulary inside the permission model.
+ */
+function validateCapabilities(raw: unknown, errors: string[]): string[] {
+    if (raw === undefined) return [];
+    if (!Array.isArray(raw)) {
+        errors.push('`permissions.capabilities` must be an array when present');
+        return [];
+    }
+    const out: string[] = [];
+    for (const entry of raw) {
+        if (!nonEmpty(entry) || !isAppCapability(entry)) {
+            errors.push(
+                `\`permissions.capabilities\` contains "${String(entry)}", which is not a Genie App capability`,
+            );
+            continue;
+        }
+        if (!out.includes(entry)) out.push(entry);
+    }
+    return out;
 }
 
 /**

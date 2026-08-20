@@ -1,4 +1,11 @@
 import type { AppPermissions } from './manifest';
+
+/**
+ * Just the WHERE half of a grant. Deliberately not the whole {@link AppPermissions}:
+ * which workspace an app may act on has nothing to do with which capabilities it
+ * holds, and a function that cannot see them cannot accidentally consult them.
+ */
+export type AppScopeGrant = Pick<AppPermissions, 'scope' | 'workspaces'>;
 import type { TargetDecision } from '../mcp/target-workspace';
 
 /**
@@ -22,7 +29,7 @@ import type { TargetDecision } from '../mcp/target-workspace';
 export function decideAppTarget(
     appWorkspaceId: string | null,
     requestedWorkspaceId: string | undefined,
-    permissions: AppPermissions,
+    permissions: AppScopeGrant,
 ): TargetDecision {
     if (!appWorkspaceId) {
         return {

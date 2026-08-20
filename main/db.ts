@@ -1032,6 +1032,44 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // v39: GENIE APP GRANTS (Tynn #250) — what the user consented to when
+            // they installed an app, which is the record the bridge enforces on
+            // every call it makes.
+            //
+            // Separate from `plugins` on purpose. A plugin extends Genie's own
+            // surfaces; a GApp is a whole application with a workspace, hosting and
+            // an authority scope, and folding the two into one table would mean one
+            // shape trying to answer two different questions about trust.
+            //
+            // The row IS the authority, so the schema refuses what the model does
+            // not have rather than trusting readers to interpret it: `scope` is
+            // CHECKed, `app_id` is the primary key (two grants for one app would be
+            // two answers to "what may this app do?"), and `revoked` defaults to 0
+            // but is honoured as total — a revoked app's every call fails closed.
+            version: 39,
+            runner: (db) => {
+                db.exec(`
+                    CREATE TABLE IF NOT EXISTS app_grants (
+                        app_id            TEXT PRIMARY KEY,
+                        workspace_id      TEXT NOT NULL,
+                        name              TEXT NOT NULL,
+                        version           TEXT NOT NULL,
+                        slug              TEXT NOT NULL,
+                        scope             TEXT NOT NULL CHECK (scope IN ('self','workspaces','workstation')),
+                        workspaces_json   TEXT NOT NULL DEFAULT '[]',
+                        capabilities_json TEXT NOT NULL DEFAULT '[]',
+                        manifest_json     TEXT NOT NULL,
+                        install_path      TEXT NOT NULL,
+                        revoked           INTEGER NOT NULL DEFAULT 0,
+                        installed_at      TEXT NOT NULL,
+                        updated_at        TEXT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_app_grants_workspace
+                        ON app_grants(workspace_id);
+                `);
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -1808,6 +1846,176 @@ export function getWorkspaceAppKind(id: string): WorkspaceAppKind | null {
 /** Mark (or unmark) a workspace as hosting an installed GApp. */
 export function setWorkspaceAppKind(id: string, kind: WorkspaceAppKind | null): void {
     getDb().prepare('UPDATE workspaces SET app_kind = ? WHERE id = ?').run(kind, id);
+}
+
+/* -------------------------------------------------------------------------- */
+/* GApp grants (Tynn #250)                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * An installed GApp and what the user granted it.
+ *
+ * Read through {@link getAppGrant} rather than off the row: a malformed scope or
+ * an unparseable capability list must degrade to LESS authority, never more, and
+ * that only holds if there is one place doing the reading.
+ */
+export interface AppGrantRow {
+    appId: string;
+    workspaceId: string;
+    name: string;
+    version: string;
+    slug: string;
+    scope: 'self' | 'workspaces' | 'workstation';
+    workspaces: string[];
+    capabilities: string[];
+    manifestJson: string;
+    installPath: string;
+    revoked: boolean;
+    installedAt: string;
+    updatedAt: string;
+}
+
+interface RawAppGrant {
+    app_id: string;
+    workspace_id: string;
+    name: string;
+    version: string;
+    slug: string;
+    scope: string;
+    workspaces_json: string;
+    capabilities_json: string;
+    manifest_json: string;
+    install_path: string;
+    revoked: number;
+    installed_at: string;
+    updated_at: string;
+}
+
+/** Parse a JSON string array, degrading to empty — never to "everything". */
+function parseStringList(json: string): string[] {
+    try {
+        const parsed: unknown = JSON.parse(json);
+        return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string') : [];
+    } catch {
+        return [];
+    }
+}
+
+function toAppGrant(row: RawAppGrant): AppGrantRow {
+    return {
+        appId: row.app_id,
+        workspaceId: row.workspace_id,
+        name: row.name,
+        version: row.version,
+        slug: row.slug,
+        // An unrecognised scope narrows to `self`. The CHECK constraint should make
+        // this unreachable; if it is ever reached, the safe reading is the smallest
+        // one.
+        scope:
+            row.scope === 'workstation' || row.scope === 'workspaces'
+                ? row.scope
+                : 'self',
+        workspaces: parseStringList(row.workspaces_json),
+        capabilities: parseStringList(row.capabilities_json),
+        manifestJson: row.manifest_json,
+        installPath: row.install_path,
+        revoked: row.revoked === 1,
+        installedAt: row.installed_at,
+        updatedAt: row.updated_at,
+    };
+}
+
+const APP_GRANT_COLUMNS =
+    'app_id, workspace_id, name, version, slug, scope, workspaces_json, capabilities_json, manifest_json, install_path, revoked, installed_at, updated_at';
+
+export function getAppGrant(appId: string): AppGrantRow | null {
+    const row = getDb()
+        .prepare<[string], RawAppGrant | undefined>(
+            `SELECT ${APP_GRANT_COLUMNS} FROM app_grants WHERE app_id = ?`,
+        )
+        .get(appId);
+    return row ? toAppGrant(row) : null;
+}
+
+/** The app installed into a workspace, if that workspace is an App workspace. */
+export function getAppGrantForWorkspace(workspaceId: string): AppGrantRow | null {
+    const row = getDb()
+        .prepare<[string], RawAppGrant | undefined>(
+            `SELECT ${APP_GRANT_COLUMNS} FROM app_grants WHERE workspace_id = ?`,
+        )
+        .get(workspaceId);
+    return row ? toAppGrant(row) : null;
+}
+
+export function listAppGrants(): AppGrantRow[] {
+    return getDb()
+        .prepare<[], RawAppGrant>(`SELECT ${APP_GRANT_COLUMNS} FROM app_grants ORDER BY name`)
+        .all()
+        .map(toAppGrant);
+}
+
+/**
+ * Record an install, or update one in place.
+ *
+ * Reinstalling an app does NOT silently re-grant what it had: the caller passes
+ * the capabilities the user consented to THIS time, so a new version asking for
+ * more has to ask again.
+ */
+export function upsertAppGrant(
+    grant: Omit<AppGrantRow, 'installedAt' | 'updatedAt'> & { installedAt?: string },
+): void {
+    const now = new Date().toISOString();
+    getDb()
+        .prepare(
+            `INSERT INTO app_grants (${APP_GRANT_COLUMNS})
+             VALUES (@app_id, @workspace_id, @name, @version, @slug, @scope, @workspaces_json,
+                     @capabilities_json, @manifest_json, @install_path, @revoked, @installed_at, @updated_at)
+             ON CONFLICT(app_id) DO UPDATE SET
+                workspace_id = excluded.workspace_id,
+                name = excluded.name,
+                version = excluded.version,
+                slug = excluded.slug,
+                scope = excluded.scope,
+                workspaces_json = excluded.workspaces_json,
+                capabilities_json = excluded.capabilities_json,
+                manifest_json = excluded.manifest_json,
+                install_path = excluded.install_path,
+                revoked = excluded.revoked,
+                updated_at = excluded.updated_at`,
+        )
+        .run({
+            app_id: grant.appId,
+            workspace_id: grant.workspaceId,
+            name: grant.name,
+            version: grant.version,
+            slug: grant.slug,
+            scope: grant.scope,
+            workspaces_json: JSON.stringify(grant.workspaces),
+            capabilities_json: JSON.stringify(grant.capabilities),
+            manifest_json: grant.manifestJson,
+            install_path: grant.installPath,
+            revoked: grant.revoked ? 1 : 0,
+            installed_at: grant.installedAt ?? now,
+            updated_at: now,
+        });
+}
+
+/** Turn an app's permissions off (or back on) without uninstalling it. */
+export function setAppGrantRevoked(appId: string, revoked: boolean): void {
+    getDb()
+        .prepare('UPDATE app_grants SET revoked = ?, updated_at = ? WHERE app_id = ?')
+        .run(revoked ? 1 : 0, new Date().toISOString(), appId);
+}
+
+/** Change what an installed app is allowed to do, from its permissions screen. */
+export function setAppGrantCapabilities(appId: string, capabilities: string[]): void {
+    getDb()
+        .prepare('UPDATE app_grants SET capabilities_json = ?, updated_at = ? WHERE app_id = ?')
+        .run(JSON.stringify(capabilities), new Date().toISOString(), appId);
+}
+
+export function deleteAppGrant(appId: string): void {
+    getDb().prepare('DELETE FROM app_grants WHERE app_id = ?').run(appId);
 }
 
 /** Grant or revoke the workstation-operator designation. */

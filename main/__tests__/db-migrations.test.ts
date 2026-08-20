@@ -1201,3 +1201,69 @@ describe('v37 — App workspaces (Tynn #250)', () => {
         expect(cols(db, 'workspaces').has('app_kind')).toBe(true);
     });
 });
+
+describe('v39 — what the user granted a GApp (Tynn #250)', () => {
+    const install = (db: Database.Database, over: Record<string, unknown> = {}) =>
+        db
+            .prepare(
+                `INSERT INTO app_grants
+                    (app_id, workspace_id, name, version, slug, scope, workspaces_json,
+                     capabilities_json, manifest_json, install_path, revoked, installed_at, updated_at)
+                 VALUES (@app_id, @workspace_id, @name, @version, @slug, @scope, @workspaces_json,
+                     @capabilities_json, @manifest_json, @install_path, @revoked, @now, @now)`,
+            )
+            .run({
+                app_id: 'com.example.trader',
+                workspace_id: 'ws-app',
+                name: 'Example Trader',
+                version: '1.0.0',
+                slug: 'trader',
+                scope: 'self',
+                workspaces_json: '[]',
+                capabilities_json: '["hosting"]',
+                manifest_json: '{}',
+                install_path: '/tmp/trader',
+                revoked: 0,
+                now: '2026-01-01T00:00:00.000Z',
+                ...over,
+            });
+
+    it('records the grant, keyed by the app id', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        install(db);
+
+        const row = db
+            .prepare<[], { scope: string; capabilities_json: string; revoked: number }>(
+                'SELECT scope, capabilities_json, revoked FROM app_grants',
+            )
+            .get();
+        expect(row?.scope).toBe('self');
+        expect(row?.capabilities_json).toBe('["hosting"]');
+        expect(row?.revoked).toBe(0);
+    });
+
+    it('refuses a scope the permission model does not have', () => {
+        // A grant row is authority. An unrecognised scope must not be storable at
+        // all, rather than sit there waiting for a reader to interpret it
+        // generously.
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(() => install(db, { scope: 'everything' })).toThrow();
+    });
+
+    it('cannot install the same app twice', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        install(db);
+        // Two grant rows for one app is two answers to "what may this app do?".
+        expect(() => install(db)).toThrow();
+    });
+
+    it('is idempotent — re-running converges without throwing', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(() => runMigrations(db)).not.toThrow();
+        expect(cols(db, 'app_grants').has('capabilities_json')).toBe(true);
+    });
+});

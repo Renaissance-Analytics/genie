@@ -173,3 +173,58 @@ describe('declaring what the app needs to run', () => {
         expect(result.value.requires).toBeUndefined();
     });
 });
+
+describe('the permissions a GApp asks the user for', () => {
+    it('carries the declared capabilities through', () => {
+        const result = validateAppManifest({
+            ...valid(),
+            permissions: { scope: 'self', capabilities: ['hosting', 'knowledge'] },
+        });
+
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.value.permissions.capabilities).toEqual(['hosting', 'knowledge']);
+    });
+
+    it('declares NOTHING when the manifest asks for nothing', () => {
+        const result = validateAppManifest(valid());
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        // An app that asked for no capability reaches no tool. Silence is not a
+        // shorthand for "the usual set".
+        expect(result.value.permissions.capabilities).toEqual([]);
+    });
+
+    it('refuses a capability that does not exist', () => {
+        // Typos and invented names must fail at install rather than resolve to
+        // something adjacent — or, worse, be ignored and read as harmless.
+        const result = validateAppManifest({
+            ...valid(),
+            permissions: { scope: 'self', capabilities: ['hosting', 'root'] },
+        });
+
+        expect(result.ok).toBe(false);
+        if (result.ok) return;
+        expect(result.errors.join(' ')).toContain('root');
+    });
+
+    it('refuses a tool NAME where a capability belongs', () => {
+        // `manageTerminals` is a tool, not a capability. Accepting it would put a
+        // second, unclassified vocabulary into the permission model.
+        const result = validateAppManifest({
+            ...valid(),
+            permissions: { scope: 'self', capabilities: ['manageTerminals'] },
+        });
+        expect(result.ok).toBe(false);
+    });
+
+    it('drops a duplicate rather than asking the user twice', () => {
+        const result = validateAppManifest({
+            ...valid(),
+            permissions: { scope: 'self', capabilities: ['hosting', 'hosting'] },
+        });
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.value.permissions.capabilities).toEqual(['hosting']);
+    });
+});
