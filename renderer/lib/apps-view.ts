@@ -94,3 +94,23 @@ export function missingRuntimesNote(missing: AppRequirementView[]): string | nul
         'Anything that depends on them will not start until you install them yourself.'
     );
 }
+
+/**
+ * Where the app came from, as a standing line on its card.
+ *
+ * The GitHub review is a screen that closes; this is the answer to "what is this
+ * thing on my machine and who gave it to me?", asked weeks later. An app that
+ * cannot answer that is an app nobody can audit.
+ *
+ * An app with no recorded source SAYS so. Blank would read as "local, and fine" —
+ * and the apps with no record are precisely the ones installed before Genie
+ * started keeping one, which is not the same as safe.
+ */
+export function provenanceLine(app: InstalledAppView): string {
+    if (!app.source) return 'Source not recorded — this app predates Genie tracking where apps come from.';
+    if (app.source.kind === 'github') {
+        const at = app.source.commit ? ` at ${app.source.commit.slice(0, 7)}` : '';
+        return `From ${app.source.origin}${at}`;
+    }
+    return `Installed from ${app.source.origin}`;
+}

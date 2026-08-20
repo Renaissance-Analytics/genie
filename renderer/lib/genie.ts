@@ -2028,6 +2028,8 @@ export interface InstalledAppView {
     revoked: boolean;
     /** Running from the developer's own folder, with dev tools on. */
     devMode: boolean;
+    /** Where it came from. Null for an app installed before Genie recorded it. */
+    source: { kind: 'folder' | 'github'; origin: string; commit?: string } | null;
     /** `https://<slug>.gen/` — where its window opens. */
     homeUrl: string;
     permissions: AppPermissionView[];

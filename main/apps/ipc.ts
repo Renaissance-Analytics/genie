@@ -131,7 +131,11 @@ export function installIO(): AppInstallIO {
             const row = getAppGrant(appId);
             if (!row) return null;
             const ws = getWorkspace(row.workspaceId);
-            return ws ? { workspaceId: ws.id, path: ws.path } : null;
+            // The recorded SOURCE travels with it, so an install can notice that an
+            // app id already in use is being replaced from somewhere else.
+            return ws
+                ? { workspaceId: ws.id, path: ws.path, ...(row.source ? { source: row.source } : {}) }
+                : null;
         },
         createWorkspace: async (manifest) => {
             const parent = path.join(path.dirname(process.cwd()), 'genie-apps');
@@ -388,7 +392,15 @@ export function registerAppsIpc(): void {
 
             // Only NOW does the consent modal appear, and only now can anything be
             // granted. Install runs from the reviewed clone, not a fresh fetch.
-            const result = await installAppFromFolder(pending.folder, installIO());
+            const result = await installAppFromFolder(pending.folder, installIO(), {
+                // Provenance outlives the review: the panel goes on saying which
+                // repo and which commit this app came from.
+                source: {
+                    kind: 'github',
+                    origin: pending.review.origin,
+                    commit: pending.review.commit,
+                },
+            });
             pendingGithub.delete(pending.review.commit);
             return result;
         },

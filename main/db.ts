@@ -1097,6 +1097,38 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // v41: WHERE an installed app came from (Tynn #250).
+            //
+            // The GitHub review is a screen that closes. "What is this thing on my
+            // machine, and who gave it to me?" is a question asked weeks later, and
+            // an app that cannot answer it is an app nobody can audit.
+            //
+            // It is also what lets an install notice that an app id already in use
+            // is being replaced from a DIFFERENT origin — a stranger's fork
+            // stepping into the shoes of something the user installed on purpose.
+            //
+            // NULL for apps installed before this, which is honest: Genie does not
+            // know where they came from, and guessing would be worse than saying so.
+            version: 41,
+            runner: (db) => {
+                const cols = new Set(
+                    db
+                        .prepare<[], { name: string }>(`PRAGMA table_info(app_grants)`)
+                        .all()
+                        .map((r) => r.name),
+                );
+                if (!cols.has('source_kind')) {
+                    db.exec(`ALTER TABLE app_grants ADD COLUMN source_kind TEXT`);
+                }
+                if (!cols.has('source_origin')) {
+                    db.exec(`ALTER TABLE app_grants ADD COLUMN source_origin TEXT`);
+                }
+                if (!cols.has('source_commit')) {
+                    db.exec(`ALTER TABLE app_grants ADD COLUMN source_commit TEXT`);
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -1886,6 +1918,14 @@ export function setWorkspaceAppKind(id: string, kind: WorkspaceAppKind | null): 
  * an unparseable capability list must degrade to LESS authority, never more, and
  * that only holds if there is one place doing the reading.
  */
+/** Where an installed GApp came from. */
+export interface AppGrantSource {
+    kind: 'folder' | 'github';
+    origin: string;
+    /** The exact commit, for a GitHub install. */
+    commit?: string;
+}
+
 export interface AppGrantRow {
     appId: string;
     workspaceId: string;
@@ -1897,6 +1937,8 @@ export interface AppGrantRow {
     capabilities: string[];
     manifestJson: string;
     installPath: string;
+    /** Where it came from. Null for an app installed before Genie recorded it. */
+    source: AppGrantSource | null;
     revoked: boolean;
     /** Running from a folder Genie does not control, with dev tools on. */
     devMode: boolean;
@@ -1915,6 +1957,9 @@ interface RawAppGrant {
     capabilities_json: string;
     manifest_json: string;
     install_path: string;
+    source_kind: string | null;
+    source_origin: string | null;
+    source_commit: string | null;
     revoked: number;
     dev_mode: number;
     installed_at: string;
@@ -1949,6 +1994,16 @@ function toAppGrant(row: RawAppGrant): AppGrantRow {
         capabilities: parseStringList(row.capabilities_json),
         manifestJson: row.manifest_json,
         installPath: row.install_path,
+        // An unrecognised kind reads as "not recorded" rather than being shown
+        // verbatim: a provenance line the user cannot trust is worse than none.
+        source:
+            (row.source_kind === 'folder' || row.source_kind === 'github') && row.source_origin
+                ? {
+                      kind: row.source_kind,
+                      origin: row.source_origin,
+                      ...(row.source_commit ? { commit: row.source_commit } : {}),
+                  }
+                : null,
         revoked: row.revoked === 1,
         devMode: row.dev_mode === 1,
         installedAt: row.installed_at,
@@ -1957,7 +2012,7 @@ function toAppGrant(row: RawAppGrant): AppGrantRow {
 }
 
 const APP_GRANT_COLUMNS =
-    'app_id, workspace_id, name, version, slug, scope, workspaces_json, capabilities_json, manifest_json, install_path, revoked, dev_mode, installed_at, updated_at';
+    'app_id, workspace_id, name, version, slug, scope, workspaces_json, capabilities_json, manifest_json, install_path, source_kind, source_origin, source_commit, revoked, dev_mode, installed_at, updated_at';
 
 export function getAppGrant(appId: string): AppGrantRow | null {
     const row = getDb()
@@ -2000,7 +2055,8 @@ export function upsertAppGrant(
         .prepare(
             `INSERT INTO app_grants (${APP_GRANT_COLUMNS})
              VALUES (@app_id, @workspace_id, @name, @version, @slug, @scope, @workspaces_json,
-                     @capabilities_json, @manifest_json, @install_path, @revoked, @dev_mode,
+                     @capabilities_json, @manifest_json, @install_path, @source_kind,
+                     @source_origin, @source_commit, @revoked, @dev_mode,
                      @installed_at, @updated_at)
              ON CONFLICT(app_id) DO UPDATE SET
                 workspace_id = excluded.workspace_id,
@@ -2012,6 +2068,9 @@ export function upsertAppGrant(
                 capabilities_json = excluded.capabilities_json,
                 manifest_json = excluded.manifest_json,
                 install_path = excluded.install_path,
+                source_kind = excluded.source_kind,
+                source_origin = excluded.source_origin,
+                source_commit = excluded.source_commit,
                 revoked = excluded.revoked,
                 dev_mode = excluded.dev_mode,
                 updated_at = excluded.updated_at`,
@@ -2027,6 +2086,9 @@ export function upsertAppGrant(
             capabilities_json: JSON.stringify(grant.capabilities),
             manifest_json: grant.manifestJson,
             install_path: grant.installPath,
+            source_kind: grant.source?.kind ?? null,
+            source_origin: grant.source?.origin ?? null,
+            source_commit: grant.source?.commit ?? null,
             revoked: grant.revoked ? 1 : 0,
             dev_mode: grant.devMode ? 1 : 0,
             installed_at: grant.installedAt ?? now,

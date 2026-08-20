@@ -63,6 +63,7 @@ import {
     appSummaryLine,
     missingRuntimesNote,
     permissionSummary,
+    provenanceLine,
     reachLabel,
     requirementLine,
     uninstallConfirmation,
@@ -3620,6 +3621,11 @@ function AppCard({
                         </ul>
                     </div>
                 )}
+                {/* Provenance first among the facts: "who gave me this?" is the
+                    question someone opens this card to answer. */}
+                <Text size="xs" className="text-zinc-500">
+                    {provenanceLine(app)}
+                </Text>
                 <Text size="xs" className="text-zinc-500">
                     {reachLabel(app.scope, app.workspaces)} · v{app.version} · {app.installPath}
                 </Text>

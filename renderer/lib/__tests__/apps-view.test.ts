@@ -4,6 +4,7 @@ import {
     permissionSummary,
     reachLabel,
     uninstallConfirmation,
+    provenanceLine,
     requirementLine,
     missingRuntimesNote,
 } from '../apps-view';
@@ -29,6 +30,7 @@ const app = (over: Partial<InstalledAppView> = {}): InstalledAppView => ({
     workspaces: [],
     revoked: false,
     devMode: false,
+    source: { kind: 'folder', origin: 'C:/src/trader' },
     homeUrl: 'https://trader.gen/',
     installedAt: '2026-01-01T00:00:00.000Z',
     permissions: [
@@ -167,5 +169,30 @@ describe('an app you are BUILDING', () => {
     it('still leads with turned-off when it is BOTH', () => {
         // Revoked is the fact that changes what every other line means.
         expect(appSummaryLine(app({ devMode: true, revoked: true }))).toMatch(/^Turned off/);
+    });
+});
+
+describe('where an installed app came from', () => {
+    it('names the repo and the commit for a GitHub app', () => {
+        // The review is a screen that closed. This is the standing answer to
+        // "what is this thing and who gave it to me?".
+        const line = provenanceLine(
+            app({ source: { kind: 'github', origin: 'github.com/acme/trader', commit: 'a1b2c3d4e5' } }),
+        );
+        expect(line).toContain('github.com/acme/trader');
+        expect(line).toContain('a1b2c3d');
+    });
+
+    it('names the folder for a local install', () => {
+        expect(provenanceLine(app({ source: { kind: 'folder', origin: 'C:/src/trader' } }))).toContain(
+            'C:/src/trader',
+        );
+    });
+
+    it('SAYS it does not know, rather than implying a source', () => {
+        // Apps installed before Genie recorded provenance have none. Blank would
+        // read as "local and fine"; the honest answer is that Genie cannot say.
+        const line = provenanceLine(app({ source: null }));
+        expect(line).toMatch(/not recorded|does not know|unknown/i);
     });
 });

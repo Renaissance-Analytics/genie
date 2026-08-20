@@ -56,6 +56,25 @@ function whatItSetsUp(manifest: AppManifest): string {
 }
 
 /**
+ * The loudest thing on the screen, when it applies.
+ *
+ * An app id is claimed by whoever writes the manifest, so replacing an installed
+ * app with one from a different origin is a takeover of something the user already
+ * trusts — a stranger's fork stepping into the shoes of an app they installed on
+ * purpose. It goes ABOVE what the app sets up, because it changes the meaning of
+ * everything below it.
+ */
+function originChangeWarning(context: ConsentContext): string {
+    if (!context.replacing || !context.source) return '';
+    return (
+        `**This replaces an app you already have, and it came from somewhere else.**\n\n` +
+        `- Installed from: \`${context.replacing.origin}\`\n` +
+        `- This one is from: \`${context.source.origin}\`\n\n` +
+        'If you did not expect that, stop here.\n\n'
+    );
+}
+
+/**
  * The requirements section — the "distinctive spot in the installer" the owner
  * asked for. A runtime the user has to fetch themselves is a thing they need to
  * SEE, not a line that scrolls past in a log.
@@ -129,9 +148,17 @@ function permissionOptions(capabilities: string[]): Array<{
     ];
 }
 
+export interface ConsentContext {
+    /** The source an ALREADY-INSTALLED copy came from, when it differs. */
+    replacing?: { origin: string };
+    /** Where this copy comes from. */
+    source?: { origin: string };
+}
+
 export function buildConsentPlan(
     manifest: AppManifest,
     requirements: AppRequirementPlan,
+    context: ConsentContext = {},
 ): ConsentPlan {
     const installLabel = 'Install';
     const questions: ForceQuestion[] = [
@@ -139,6 +166,7 @@ export function buildConsentPlan(
             header: 'Install',
             question:
                 `Install the Genie App **${manifest.name}** (version ${manifest.version})?\n\n` +
+                originChangeWarning(context) +
                 `${whatItSetsUp(manifest)}\n` +
                 requirementsSection(requirements),
             options: [

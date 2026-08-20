@@ -503,3 +503,74 @@ describe('a new app must not inherit an old one’s storage', () => {
         expect(recordGrant).not.toHaveBeenCalled();
     });
 });
+
+describe('where the app came from', () => {
+    it('records a local folder install as exactly that', async () => {
+        const recordGrant = vi.fn();
+        await installAppFromFolder('C:/src/trader', io({ recordGrant }));
+
+        expect(recordGrant).toHaveBeenCalledWith(
+            expect.objectContaining({ source: { kind: 'folder', origin: 'C:/src/trader' } }),
+        );
+    });
+
+    it('records the repo AND the commit for a GitHub install', async () => {
+        // Provenance has to outlive the review. The review is a screen that
+        // closes; "where did this thing on my machine come from?" is a question
+        // asked weeks later.
+        const recordGrant = vi.fn();
+        await installAppFromFolder('C:/tmp/clone', io({ recordGrant }), {
+            source: { kind: 'github', origin: 'github.com/acme/trader', commit: 'a1b2c3d4' },
+        });
+
+        expect(recordGrant).toHaveBeenCalledWith(
+            expect.objectContaining({
+                source: { kind: 'github', origin: 'github.com/acme/trader', commit: 'a1b2c3d4' },
+            }),
+        );
+    });
+});
+
+describe('an app being replaced from somewhere else', () => {
+    const installedFrom = (origin: string) => ({
+        workspaceId: 'ws-existing',
+        path: 'C:/apps/trader.agi',
+        source: { kind: 'github' as const, origin },
+    });
+
+    it('warns the user when the ORIGIN has changed', async () => {
+        // An app id is claimed by whoever writes the manifest. Reinstalling
+        // `com.example.trader` from a stranger's fork is a takeover of an app the
+        // user already trusts, and the only moment to catch it is this one.
+        const ask = vi.fn(io().ask);
+        await installAppFromFolder('C:/tmp/clone', {
+            ...io({ existingApp: () => installedFrom('github.com/acme/trader') }),
+            ask,
+        }, {
+            source: { kind: 'github', origin: 'github.com/evil/trader', commit: 'deadbeef' },
+        });
+
+        const asked = JSON.stringify(ask.mock.calls[0]?.[0] ?? []);
+        expect(asked).toContain('github.com/acme/trader');
+        expect(asked).toContain('github.com/evil/trader');
+    });
+
+    it('says nothing when it is the same source', async () => {
+        const ask = vi.fn(io().ask);
+        await installAppFromFolder('C:/tmp/clone', {
+            ...io({ existingApp: () => installedFrom('github.com/acme/trader') }),
+            ask,
+        }, {
+            source: { kind: 'github', origin: 'github.com/acme/trader', commit: 'newer' },
+        });
+
+        expect(JSON.stringify(ask.mock.calls[0]?.[0] ?? [])).not.toMatch(/came from a different/i);
+    });
+
+    it('says nothing for a first install, which replaces nothing', async () => {
+        const ask = vi.fn(io().ask);
+        await installAppFromFolder('C:/src/trader', { ...io(), ask });
+
+        expect(JSON.stringify(ask.mock.calls[0]?.[0] ?? [])).not.toMatch(/came from a different/i);
+    });
+});

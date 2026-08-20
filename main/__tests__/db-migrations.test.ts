@@ -1292,3 +1292,34 @@ describe('v40 — an app you are BUILDING (Tynn #250)', () => {
         expect(cols(db, 'app_grants').has('dev_mode')).toBe(true);
     });
 });
+
+describe('v41 — where an app came from (Tynn #250)', () => {
+    it('adds the provenance columns, NULL for apps installed before them', () => {
+        // Honest rather than convenient: Genie does not know where those came
+        // from, and inventing "folder" would be a provenance claim it cannot back.
+        const db = new Database(':memory:');
+        runMigrations(db);
+        db.prepare(
+            `INSERT INTO app_grants
+                (app_id, workspace_id, name, version, slug, scope, manifest_json, install_path, installed_at, updated_at)
+             VALUES ('com.a.b', 'ws', 'A', '1.0.0', 'a', 'self', '{}', '/tmp/a', 'now', 'now')`,
+        ).run();
+
+        const c = cols(db, 'app_grants');
+        expect(c.has('source_kind')).toBe(true);
+        expect(c.has('source_origin')).toBe(true);
+        expect(c.has('source_commit')).toBe(true);
+
+        const row = db
+            .prepare<[], { source_kind: string | null }>('SELECT source_kind FROM app_grants')
+            .get();
+        expect(row?.source_kind ?? null).toBeNull();
+    });
+
+    it('is idempotent — re-running converges without throwing', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(() => runMigrations(db)).not.toThrow();
+        expect(cols(db, 'app_grants').has('source_origin')).toBe(true);
+    });
+});

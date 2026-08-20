@@ -32,6 +32,18 @@ import type { DevSites } from '../dev-server/sites-config';
 import type { AppScope } from './manifest';
 import type { ForceAnswer, ForceQuestion } from '../mcp/protocol';
 
+/**
+ * WHERE an installed app came from.
+ *
+ * Recorded, because provenance has to outlive the review. The GitHub review is a
+ * screen that closes; "what is this thing on my machine and who gave it to me?" is
+ * a question asked weeks later, and an app that cannot answer it is an app nobody
+ * can audit.
+ */
+export type AppSource =
+    | { kind: 'folder'; origin: string }
+    | { kind: 'github'; origin: string; commit?: string };
+
 export interface AppGrantInput {
     appId: string;
     workspaceId: string;
@@ -43,6 +55,7 @@ export interface AppGrantInput {
     capabilities: string[];
     manifestJson: string;
     installPath: string;
+    source: AppSource;
     revoked: boolean;
     /**
      * Running from a folder Genie does not control, with dev tools on.
@@ -64,8 +77,10 @@ export interface AppInstallIO {
     ask: (
         questions: ForceQuestion[],
     ) => Promise<{ cancelled: boolean; answers: ForceAnswer[] }>;
-    /** The workspace an already-installed copy of this app lives in. */
-    existingApp: (appId: string) => { workspaceId: string; path: string } | null;
+    /** The workspace an already-installed copy of this app lives in, and where it came from. */
+    existingApp: (
+        appId: string,
+    ) => { workspaceId: string; path: string; source?: AppSource } | null;
     createWorkspace: (
         manifest: AppManifest,
     ) => Promise<{ workspaceId: string; path: string }>;
@@ -151,6 +166,8 @@ export interface InstallOptions {
      * finds out how it reads.
      */
     devMode?: boolean;
+    /** Where this copy came from. Defaults to the local folder it was read from. */
+    source?: AppSource;
 }
 
 export async function installAppFromFolder(
@@ -185,7 +202,20 @@ export async function installAppFromFolder(
         requires,
         await io.machine(requires.map((r) => r.tool)),
     );
-    const consentPlan = buildConsentPlan(manifest, requirements);
+
+    const source: AppSource = options.source ?? { kind: 'folder', origin: sourceFolder };
+    const alreadyInstalled = io.existingApp(manifest.id);
+    // An app id is claimed by whoever writes the manifest, so replacing an
+    // installed app with one from a DIFFERENT origin is a takeover of something
+    // the user already trusts. This is the only moment it can be caught.
+    const replacing =
+        alreadyInstalled?.source && alreadyInstalled.source.origin !== source.origin
+            ? alreadyInstalled.source
+            : undefined;
+
+    const consentPlan = buildConsentPlan(manifest, requirements, {
+        ...(replacing ? { replacing, source } : {}),
+    });
     const outcome = readConsent(consentPlan, await io.ask(consentPlan.questions));
     if (!outcome.install) {
         return { ok: false, errors: ['Installation was declined, so nothing was created.'] };
@@ -196,7 +226,7 @@ export async function installAppFromFolder(
     // reused is the grant — a new version can ask for more than the last one did,
     // and inheriting it would let an update escalate without anyone being asked.
     const devMode = options.devMode === true;
-    const existing = io.existingApp(manifest.id);
+    const existing = alreadyInstalled;
     const created = existing
         ? null
         : devMode
@@ -235,6 +265,7 @@ export async function installAppFromFolder(
             capabilities: outcome.capabilities,
             manifestJson: raw,
             installPath: workspace.path,
+            source,
             revoked: false,
             devMode,
         });

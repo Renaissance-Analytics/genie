@@ -112,6 +112,7 @@ export function registerAppsE2E(): void {
                     permissions: { scope: 'self', capabilities: ['hosting', 'terminals'] },
                 }),
                 installPath: exampleWebRoot(),
+                source: { kind: 'folder', origin: exampleWebRoot() },
                 revoked: false,
                 devMode: false,
             });
