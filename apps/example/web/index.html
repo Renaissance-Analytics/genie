@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Genie App Example</title>
+        <!--
+            No bundler, no framework, no build step. This app exists to be READ,
+            and a reference whose first lesson is "install these 40 packages"
+            teaches the wrong thing. Everything a real app needs is here; a real
+            app just swaps the rendering for whatever it likes.
+        -->
+        <style>
+            :root {
+                color-scheme: dark;
+                --bg: #0a0a0c;
+                --panel: #131318;
+                --line: #26262e;
+                --text: #e8e8ec;
+                --muted: #9a9aa6;
+                --ok: #4ade80;
+                --no: #f87171;
+            }
+            * { box-sizing: border-box; }
+            body {
+                margin: 0;
+                padding: 2rem 1.5rem 3rem;
+                background: var(--bg);
+                color: var(--text);
+                font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+            }
+            main { max-width: 46rem; margin: 0 auto; }
+            h1 { font-size: 1.35rem; margin: 0 0 0.25rem; }
+            p.sub { color: var(--muted); margin: 0 0 2rem; }
+            section {
+                background: var(--panel);
+                border: 1px solid var(--line);
+                border-radius: 10px;
+                padding: 1rem 1.15rem;
+                margin-bottom: 1rem;
+            }
+            h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 0.75rem; }
+            dl { display: grid; grid-template-columns: 9rem 1fr; gap: 0.4rem 1rem; margin: 0; }
+            dt { color: var(--muted); }
+            dd { margin: 0; font-variant-numeric: tabular-nums; }
+            ul { margin: 0; padding-left: 1.1rem; }
+            button {
+                font: inherit;
+                color: inherit;
+                background: #1d1d25;
+                border: 1px solid var(--line);
+                border-radius: 7px;
+                padding: 0.4rem 0.8rem;
+                cursor: pointer;
+            }
+            button:hover { background: #26262f; }
+            .row { display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center; }
+            .granted { color: var(--ok); }
+            .withheld { color: var(--no); }
+            .note { color: var(--muted); font-size: 0.87rem; margin-top: 0.6rem; }
+            pre {
+                margin: 0.75rem 0 0;
+                padding: 0.75rem;
+                background: #0d0d11;
+                border: 1px solid var(--line);
+                border-radius: 7px;
+                overflow-x: auto;
+                font-size: 0.85rem;
+                white-space: pre-wrap;
+            }
+        </style>
+    </head>
+    <body>
+        <main>
+            <h1>Genie App Example</h1>
+            <p class="sub">
+                Installed as a Genie App. Served by Genie at
+                <code>example.gen</code>, talking to Genie through
+                <code>window.genieApp</code> and to its own backend service beside it.
+            </p>
+
+            <section>
+                <h2>Who this app is</h2>
+                <dl id="identity">
+                    <dt>Status</dt>
+                    <dd id="status">checking…</dd>
+                </dl>
+            </section>
+
+            <section>
+                <h2>What the user granted</h2>
+                <ul id="capabilities">
+                    <li>checking…</li>
+                </ul>
+                <p class="note">
+                    Everything below is drawn from this list, not from what the
+                    manifest asked for. A control you were not granted should not be
+                    on screen at all.
+                </p>
+            </section>
+
+            <section id="hosting-section" hidden>
+                <h2>Hosting</h2>
+                <div class="row">
+                    <button id="list-sites">List this workspace’s sites</button>
+                </div>
+                <pre id="sites-out" hidden></pre>
+            </section>
+
+            <section id="terminals-section" hidden>
+                <h2>Run a command</h2>
+                <div class="row">
+                    <button id="run-command">Try to open a terminal</button>
+                </div>
+                <pre id="terminal-out" hidden></pre>
+                <p class="note">
+                    This app does not ask for <code>terminals</code>. The button is
+                    here only so the example can show you what a refusal looks like.
+                </p>
+            </section>
+
+            <section>
+                <h2>Its own backend</h2>
+                <div class="row">
+                    <button id="ping-service">Ping the service</button>
+                </div>
+                <pre id="service-out" hidden></pre>
+                <p class="note">
+                    A GApp is multi-component. This calls the app’s own
+                    <code>service/server.mjs</code>, not Genie.
+                </p>
+            </section>
+        </main>
+        <script type="module" src="./app.js"></script>
+    </body>
+</html>

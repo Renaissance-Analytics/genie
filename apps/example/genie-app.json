@@ -1,0 +1,26 @@
+{
+    "id": "com.genie.example",
+    "slug": "example",
+    "name": "Genie App Example",
+    "version": "1.0.0",
+    "description": "A working Genie App you can install, read and copy: a front end served at example.gen, a backend service beside it, and every permission asked for the smallest reason.",
+    "frontend": {
+        "repo": "web",
+        "serve": { "mode": "static", "root": ".", "spa": false }
+    },
+    "services": [
+        {
+            "name": "api",
+            "repo": "service",
+            "command": ["node", "server.mjs"],
+            "port": 8791
+        }
+    ],
+    "requires": [
+        { "tool": "node", "reason": "runs the example's backend service" }
+    ],
+    "permissions": {
+        "scope": "self",
+        "capabilities": ["hosting", "knowledge"]
+    }
+}
