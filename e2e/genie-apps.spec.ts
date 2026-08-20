@@ -50,10 +50,17 @@ test('the page renders the app’s own front end', async () => {
 test('window.genie is ABSENT — the property the whole model rests on', async () => {
     const seen = await appWindow.evaluate(() => ({
         genie: typeof (window as unknown as Record<string, unknown>).genie,
+        genieApp: typeof (window as unknown as Record<string, unknown>).genieApp,
         require: typeof (window as unknown as Record<string, unknown>).require,
         process: typeof (window as unknown as Record<string, unknown>).process,
         module: typeof (window as unknown as Record<string, unknown>).module,
     }));
+
+    // The bridge is PRESENT. Asserted here, in the same breath, because the first
+    // run of this spec passed the absence check on a window where the preload had
+    // DIED — a preload that never runs exposes nothing either, so "no
+    // window.genie" is exactly what a completely broken bridge looks like.
+    expect(seen.genieApp).toBe('object');
 
     expect(seen.genie).toBe('undefined');
     // And no Node, by any of the usual doors.

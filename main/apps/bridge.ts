@@ -22,9 +22,10 @@ import { APP_CAPABILITIES } from './capabilities';
 import { callerIdForApp } from '../mcp/caller-identity';
 import { handleMcpMessage } from '../mcp/protocol';
 import type { ServerDeps } from '../mcp/server';
+// From a LEAF module, never the other way round: the preload imports these too,
+// and anything reachable from it lands in a third-party sandboxed window.
+import { APP_CALL_CHANNEL, APP_ME_CHANNEL } from './channels';
 
-export const APP_CALL_CHANNEL = 'gapp:call';
-export const APP_ME_CHANNEL = 'gapp:me';
 
 /** webContents id → the app whose window it is. Genie's record, not the page's. */
 const windowApps = new Map<number, string>();

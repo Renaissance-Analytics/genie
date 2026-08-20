@@ -10,13 +10,18 @@
  * the point: even if a GApp's page found a way to run code in here, there is
  * nothing in here to run.
  *
+ * It imports from `channels.ts` and nothing else. Taking those constants from
+ * `bridge.ts` instead dragged the whole main-process graph in behind them and the
+ * preload died on its first native `require` — leaving the page with no
+ * `window.genieApp` at all, and the "no `window.genie`" assertion passing anyway.
+ *
  * The app never tells Genie who it is. Identity is the window it was given, which
  * Genie created and recorded — there is no field on either call for a page to
  * claim an app id, and adding one would be the whole vulnerability.
  */
 
 import { contextBridge, ipcRenderer } from 'electron';
-import { APP_CALL_CHANNEL, APP_ME_CHANNEL } from './bridge';
+import { APP_CALL_CHANNEL, APP_ME_CHANNEL } from './channels';
 
 export interface GenieAppIdentity {
     id: string;
