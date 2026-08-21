@@ -6,6 +6,7 @@ import {
 } from '@particle-academy/fancy-term';
 import { SerializeAddon } from '@xterm/addon-serialize';
 import { api, isRemoteWindow, ulid } from '../../lib/genie';
+import { shouldFit } from '../../lib/terminal-fit';
 import { buildClipboardMenu, handleOsc52 } from '../../lib/terminal-clipboard';
 import {
     buildImagePathPaste,
@@ -167,7 +168,18 @@ export default function Terminal({
             // Coalesce bursts (e.g. a live gutter drag) into one fit per frame,
             // and measure after the browser has finished laying out.
             cancelAnimationFrame(raf);
-            raf = requestAnimationFrame(() => handleRef.current?.fit());
+            raf = requestAnimationFrame(() => {
+                // NEVER fit a panel that is not on screen (genie#229). An
+                // off-workspace panel is kept mounted-hidden so its pty survives
+                // the switch, and a hidden element measures 0×0 — which this
+                // observer fires for. Fitting there pushed a nonsense geometry to
+                // the pty, and a TUI told it has no columns REFLOWS ITS SCROLLBACK
+                // to that width. The damage was already written by the time the
+                // panel came back, which is why switching workspaces returned a
+                // terminal wrapped at a width the window never had.
+                if (!shouldFit(el.getBoundingClientRect())) return;
+                handleRef.current?.fit();
+            });
         });
         ro.observe(el);
         return () => {
@@ -426,7 +438,9 @@ export default function Terminal({
             onExit?.({ exitCode: payload.exitCode, signal: payload.signal });
         });
 
-        handle.fit();
+        // Same guard as the observer: a panel created while hidden (a restored
+        // session in a background workspace) must not fit against a zero box.
+        if (shouldFit(hostElRef.current?.getBoundingClientRect())) handle.fit();
 
         // Load the SerializeAddon onto the live xterm instance, exposed by
         // fancy-term 0.3.0's `handle.xterm` escape hatch (non-null after the
