@@ -27,6 +27,11 @@ export default defineConfig({
             // builds against. Framework-free and DOM-free by design, so it runs
             // in this lane beside the main-process tests.
             'packages/**/__tests__/**/*.test.ts',
+            // Build/install scripts. They are plain node, they run on every
+            // developer's machine and in every workflow, and one of them decides
+            // whether Windows can open a terminal at all — so the decisions in
+            // them are tested like anything else.
+            'scripts/**/__tests__/**/*.test.ts',
         ],
         // `*.real.test.ts` are REAL hosting tests — they spawn the bundled Caddy /
         // php-cgi / Docker and bind real ports, and need `npm run build:runtime`

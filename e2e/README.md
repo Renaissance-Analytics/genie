@@ -41,8 +41,10 @@ npx playwright test
   Node ABI for vitest with `npm rebuild better-sqlite3` (the `pretest` script
   does this automatically before `npm test`).
 
-- **node-pty's ConPTY files (Windows).** `pretest:e2e` also puts them back when
-  something has rebuilt node-pty. On Windows, ConPTY needs `conpty.dll` +
+- **node-pty's ConPTY files (Windows).** The postinstall puts them back when a
+  rebuild has taken them away, and `pretest:e2e` checks again — fatally, since a
+  gate running against a node-pty that cannot spawn proves nothing. On Windows,
+  ConPTY needs `conpty.dll` +
   `OpenConsole.exe` in a `conpty/` folder beside the binding, and those are
   COPIED by node-pty's own `postinstall` rather than compiled. A rebuild through
   `electron-builder install-app-deps` calls node-gyp directly and runs no
