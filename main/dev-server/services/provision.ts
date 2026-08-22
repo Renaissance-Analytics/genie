@@ -193,13 +193,32 @@ function mysqlSteps(admin: EngineAdmin, slice: WorkspaceSlice): ProvisionStep[] 
  *
  * Deliberately an explicit deny-list rather than `-@dangerous`: that category
  * also removes `KEYS`, `INFO` and `CLIENT`, which developers use constantly in
- * a dev cache. These five are the ones that would either reach outside the key
+ * a dev cache. These are the ones that would either reach outside the key
  * prefix (`FLUSHALL`, `FLUSHDB`), end the shared engine for every other
  * workspace (`SHUTDOWN`), or change the rules themselves (`CONFIG`, `ACL`).
+ *
+ * The key pattern (`~ws_x:*`) is what scopes everything else, and the limit of
+ * it is the reason this list is longer than it looks like it should be: a
+ * pattern constrains commands that address a KEY, and says nothing about
+ * commands that address the KEYSPACE or the server. `SWAPDB` moves every
+ * workspace's keys between logical databases without naming one, and the
+ * FUNCTION library is server-global — `FUNCTION FLUSH` empties it for everybody
+ * and `FUNCTION LOAD REPLACE` overwrites what another workspace loaded. Neither
+ * is caught by the prefix, and both destroy other workspaces' data as thoroughly
+ * as `FLUSHALL` does (Tynn #250, step 4).
+ *
+ * `-function` is the whole container command, read-only subcommands included,
+ * and that cost is real: a workspace cannot use Redis Functions on a SHARED
+ * engine. It is the honest answer rather than a gap, because the library has no
+ * per-user namespace to scope — anything one workspace loads, every workspace
+ * gets. A project that genuinely needs them flips `dedicated` and has its own
+ * server to load into.
  */
 const REDIS_DENIED = [
     '-flushall',
     '-flushdb',
+    '-swapdb',
+    '-function',
     '-shutdown',
     '-config',
     '-acl',

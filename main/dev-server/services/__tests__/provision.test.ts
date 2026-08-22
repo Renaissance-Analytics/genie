@@ -99,6 +99,20 @@ describe('redis — an ACL user per workspace', () => {
             expect(argv).toContain(denied);
         }
     });
+
+    /**
+     * A key pattern scopes commands that address a KEY. It does nothing to
+     * commands that address the KEYSPACE or the server, and two of those destroy
+     * other workspaces' data as thoroughly as FLUSHALL does (Tynn #250, step 4).
+     */
+    it('denies the commands a key pattern cannot scope', () => {
+        const argv = steps[0].argv.join(' ');
+        // Swaps two logical databases wholesale — every workspace's keys move.
+        expect(argv).toContain('-swapdb');
+        // The function library is server-global; FUNCTION FLUSH empties it for
+        // everyone, and it is not addressed by key.
+        expect(argv).toContain('-function');
+    });
 });
 
 describe('namespace engines', () => {
