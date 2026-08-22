@@ -39,6 +39,18 @@ let seed: MasterSeed;
 
 test.beforeAll(async () => {
     ({ app, page } = await launchGenieE2E('master'));
+
+    // A machine missing dev tools gets the first-run toolchain wizard raised over
+    // the whole window (master.tsx probes on boot), and every CI runner is such a
+    // machine. It is real behaviour with a story of its own; here it is simply a
+    // modal standing in front of the window under test — on macOS its backdrop
+    // swallowed the click that switches workspaces. Take the app's OWN remembered
+    // dismissal, which is the state every machine is in after the first launch,
+    // and reload into it.
+    await page.evaluate(() => localStorage.setItem('toolchain-setup-dismissed', '1'));
+    await page.reload();
+    await page.waitForLoadState('domcontentloaded');
+
     const seeded = await readMasterSeed(app);
     if (!seeded) {
         throw new Error(
@@ -108,13 +120,20 @@ test('a workspace switch never fits the panel it hid (genie#229)', async () => {
     // null here would mean no terminal ever started, and every comparison below
     // would be comparing nothing to nothing.
     await expect
-        .poll(async () => (await readPtyGrid(app, seed.terminalId))?.cols ?? 0, {
+        .poll(async () => await readPtyGrid(app, seed.terminalId), {
             message: 'the fixture terminal never applied a grid to its pty',
             timeout: 30_000,
         })
+        .not.toBeNull();
+    const onScreen = (await readPtyGrid(app, seed.terminalId))!;
+
+    // The grid a VISIBLE panel measured. Stated as its own assertion because the
+    // failure means something specific: a terminal that is on screen and was told
+    // it has a handful of columns has already been fitted against something that
+    // was not its container.
+    expect(onScreen.cols, 'a visible panel was fitted to a grid no window has')
         .toBeGreaterThan(20);
-    const onScreen = await readPtyGrid(app, seed.terminalId);
-    expect(onScreen!.rows).toBeGreaterThan(4);
+    expect(onScreen.rows).toBeGreaterThan(4);
 
     // Switch away. The panel is not unmounted — it is kept mounted-hidden so its
     // pty survives — and a hidden element measures 0×0.
