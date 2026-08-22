@@ -9,14 +9,25 @@ import '../styles/globals.css';
 import '../styles/master.css';
 import ErrorBoundary from '../components/ErrorBoundary';
 import { FilePickerHost } from '../components/FilePickerModal';
+import {
+    PREFERS_DARK_QUERY,
+    THEME_STORAGE_KEY,
+    resolveDarkTheme,
+} from '../lib/theme-boot';
 
 export default function App({ Component, pageProps }: AppProps) {
-    // Apply the persisted theme preference ('system' | 'light' | 'dark').
-    // 'system' (the default, incl. an unset/legacy value) tracks the OS pref
-    // live via a matchMedia listener so flipping the OS theme re-themes the app
-    // while it's open. An explicit 'light'/'dark' pins the class and ignores the
-    // OS. Settings → Customization writes 'genie.theme' and applies live too;
-    // this effect re-syncs on every window/page (re)load.
+    // Keep the persisted theme preference ('system' | 'light' | 'dark') applied
+    // WHILE THE WINDOW IS OPEN. 'system' (the default, incl. an unset/legacy
+    // value) tracks the OS pref live via a matchMedia listener so flipping the
+    // OS theme re-themes the app; an explicit 'light'/'dark' pins the class and
+    // ignores the OS. Settings → Customization writes 'genie.theme' and applies
+    // live too; this effect re-syncs on every window/page (re)load.
+    //
+    // It is NOT what decides the FIRST frame — React runs this after paint, and
+    // an unclassed <html> is Genie's LIGHT theme, so relying on it painted a
+    // white full-screen window until hydration (genie#229). `_document.tsx`
+    // resolves the same preference in a blocking head script before anything
+    // paints; both sides share `resolveDarkTheme` so they cannot drift.
     useEffect(() => {
         if (typeof window === 'undefined') return;
         const apply = (dark: boolean) => {
@@ -25,16 +36,23 @@ export default function App({ Component, pageProps }: AppProps) {
         let mql: MediaQueryList | null = null;
         let onChange: ((e: MediaQueryListEvent) => void) | null = null;
         try {
-            const saved = window.localStorage.getItem('genie.theme');
-            if (saved === 'dark') return apply(true);
-            if (saved === 'light') return apply(false);
+            let saved: string | null = null;
+            try {
+                saved = window.localStorage.getItem(THEME_STORAGE_KEY);
+            } catch {
+                /* private mode — fall through to the OS preference */
+            }
+            if (saved === 'dark' || saved === 'light') {
+                return apply(resolveDarkTheme(saved, false));
+            }
             // 'system' or unset → follow the OS, and keep following it live.
-            mql = window.matchMedia('(prefers-color-scheme: dark)');
-            apply(mql.matches);
-            onChange = (e: MediaQueryListEvent) => apply(e.matches);
+            mql = window.matchMedia(PREFERS_DARK_QUERY);
+            apply(resolveDarkTheme(saved, mql.matches));
+            onChange = (e: MediaQueryListEvent) =>
+                apply(resolveDarkTheme(saved, e.matches));
             mql.addEventListener('change', onChange);
         } catch {
-            /* private mode */
+            /* no matchMedia — the head script already made the call */
         }
         return () => {
             if (mql && onChange) mql.removeEventListener('change', onChange);
