@@ -11,6 +11,9 @@
       "@renderer/*": ["renderer/*"],
       "@particle-academy/fancy-term-host/service": [
         "node_modules/@particle-academy/fancy-term-host/dist/service.d.ts"
+      ],
+      "@particle-academy/fancy-flow/engine": [
+        "node_modules/@particle-academy/fancy-flow/dist/engine.d.ts"
       ]
     }
   },
