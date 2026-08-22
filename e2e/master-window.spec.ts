@@ -41,12 +41,6 @@ let seed: MasterSeed;
 test.beforeAll(async () => {
     ({ app, page } = await launchGenieE2E('master'));
 
-    // TEMPORARY — removed once the Windows leg's missing pty is understood. Main
-    // announces which terminal backend won at boot, and Electron prints the reason
-    // an ipcMain handler rejected; neither reaches the test output on its own.
-    app.process().stdout?.on('data', (d) => console.log(`[main] ${d}`.trimEnd()));
-    app.process().stderr?.on('data', (d) => console.log(`[main!] ${d}`.trimEnd()));
-
     // A machine missing dev tools is offered the first-run toolchain setup, raised
     // over the whole window — and a clean CI runner is exactly the machine that
     // offer exists for, so it opens on every leg. It is real behaviour with a story

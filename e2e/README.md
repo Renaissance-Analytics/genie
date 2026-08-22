@@ -41,6 +41,17 @@ npx playwright test
   Node ABI for vitest with `npm rebuild better-sqlite3` (the `pretest` script
   does this automatically before `npm test`).
 
+- **node-pty's ConPTY files (Windows).** `pretest:e2e` also puts them back when
+  something has rebuilt node-pty. On Windows, ConPTY needs `conpty.dll` +
+  `OpenConsole.exe` in a `conpty/` folder beside the binding, and those are
+  COPIED by node-pty's own `postinstall` rather than compiled. A rebuild through
+  `electron-builder install-app-deps` calls node-gyp directly and runs no
+  lifecycle scripts, so it leaves a fresh `build/Release/pty.node` with no
+  `conpty/` next to it — and node-pty prefers `build/Release` over its shipped
+  `prebuilds/`, so every spawn then throws `Cannot find conpty.dll`. Nothing
+  notices until something opens a terminal, which is how the Windows leg reached
+  the master-window spec with panels, xterms and no ptys at all.
+
 ## The launch invocation
 
 `e2e/helpers/launch.ts`:
