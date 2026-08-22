@@ -11,10 +11,10 @@
 // matches the Electron ABI from install) — but where something ELSE has rebuilt
 // it, its ConPTY support files need putting back; see the second half.
 import { execFileSync } from 'node:child_process';
-import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { restoreNodePtyConpty } from './node-pty-conpty.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
@@ -43,45 +43,15 @@ execFileSync(
     },
 );
 
-// ---------------------------------------------------------------------------
 // node-pty's ConPTY support files, when a native rebuild has been through here.
 //
-// On Windows node-pty spawns through ConPTY, which needs `conpty.dll` +
-// `OpenConsole.exe` sitting in a `conpty/` folder BESIDE the binding it loaded.
-// Those are not compiled: node-pty's own `postinstall` copies them out of its
-// `third_party/` into `build/Release/conpty/`.
+// The postinstall already repairs this (scripts/node-pty-conpty.mjs explains the
+// whole mechanism), so on a freshly installed tree this is a no-op. It stays here
+// because the E2E suite is the one place that FINDS the damage: it boots the real
+// app and spawns real ptys, so a tree repaired at install time and re-broken since
+// by a hand-run `electron-rebuild` would otherwise reach the suite as four
+// mysterious failures about panels with no terminals in them.
 //
-// `electron-builder install-app-deps` (our npm postinstall) drives @electron/
-// rebuild, which calls node-gyp DIRECTLY and runs no npm lifecycle scripts. So on
-// a machine where that rebuild succeeds — every windows-latest runner, which ships
-// the C++ toolchain — node-pty ends up with a freshly built `build/Release/pty.node`
-// and NO `conpty/` beside it. node-pty's loader prefers `build/Release` over the
-// shipped `prebuilds/`, so it then loads a binding that immediately throws
-// `Cannot find conpty.dll`, and NOTHING in the app can open a terminal.
-//
-// That is invisible until something actually spawns a pty. The master-window E2E
-// does (genie#228), and on the Windows leg it found exactly this: panels mounted,
-// xterms mounted, and main holding no pty at all.
-//
-// The fix is to run node-pty's OWN post-install step, not to copy files by hand —
-// it knows its arch mapping and its vendored ConPTY version. Guarded on the file
-// actually being missing, so a correctly-installed tree is left alone.
-const nodePty = path.join(root, 'node_modules', 'node-pty');
-const ptyRelease = path.join(nodePty, 'build', 'Release');
-const conptyDll = path.join(ptyRelease, 'conpty', 'conpty.dll');
-if (
-    process.platform === 'win32' &&
-    fs.existsSync(ptyRelease) &&
-    !fs.existsSync(conptyDll)
-) {
-    console.log('[e2e] node-pty was rebuilt without its ConPTY files — running its post-install');
-    execFileSync(process.execPath, [path.join(nodePty, 'scripts', 'post-install.js')], {
-        cwd: nodePty,
-        stdio: 'inherit',
-    });
-    if (!fs.existsSync(conptyDll)) {
-        throw new Error(
-            `[e2e] node-pty still has no ConPTY support files at ${conptyDll} — every terminal would fail to spawn`,
-        );
-    }
-}
+// Unlike the postinstall this one is FATAL when the repair does not take: a gate
+// that runs against a node-pty which cannot spawn proves nothing.
+restoreNodePtyConpty(root, (m) => console.log(`[e2e] ${m}`));
