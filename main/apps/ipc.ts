@@ -28,6 +28,14 @@ import {
     setWorkspaceDevSites,
 } from '../db';
 import { forceQuestion } from '../ask/force-question';
+import {
+    appBackupSettings,
+    backupAppNow,
+    setAppBackupOverride,
+    setWorkstationBackupSettings,
+    workstationBackupSettings,
+} from './backup';
+import type { BackupOverride, BackupSettings } from '../dev-server/services/backup';
 import { createAgiEnvelope } from '../workspace/create-agi';
 import { toolchainMachineFacts } from './machine';
 import { installAppFromFolder, type AppInstallIO, type AppInstallResult } from './install';
@@ -619,6 +627,32 @@ export function registerAppsIpc(): void {
         if (result.ok && revoked) closeAppWindows(String(appId));
         return result;
     });
+
+    // --- backups (Tynn #250, step 4) ---------------------------------------
+    //
+    // Read and write BOTH levels through one pair of channels, because the two
+    // are only meaningful together: a folder shown without saying whether it came
+    // from this app or from the workstation is a value nobody can safely edit.
+
+    ipcMain.handle('apps:backup-settings', (_e, appId?: string) =>
+        appId ? appBackupSettings(String(appId)) : { workstation: workstationBackupSettings() },
+    );
+
+    ipcMain.handle(
+        'apps:set-backup',
+        (_e, appId: string | null, patch: Partial<BackupSettings> | BackupOverride | null) => {
+            // No appId ⇒ the WORKSTATION default. `null` for an app clears its
+            // override so it follows that default again — a different state from
+            // "copy the current default in", and the one Reset means.
+            if (!appId) {
+                return { ok: true, workstation: setWorkstationBackupSettings(patch ?? {}) };
+            }
+            setAppBackupOverride(String(appId), (patch as BackupOverride | null) ?? null);
+            return { ok: true, ...appBackupSettings(String(appId)) };
+        },
+    );
+
+    ipcMain.handle('apps:backup', (_e, appId: string) => backupAppNow(String(appId)));
 
     ipcMain.handle('apps:uninstall', async (_e, appId: string) => {
         const app = appsGet(String(appId));

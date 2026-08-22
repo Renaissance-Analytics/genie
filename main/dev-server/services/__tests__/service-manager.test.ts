@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { SERVICE_LABEL, SHARED_SERVICES_NETWORK, WORKSPACE_LABEL } from '../../argv';
+import { workspaceSqlIdentifier } from '../catalog';
 import { createDevServiceManager } from '../service-manager';
 import type { DevServiceManagerDeps } from '../service-manager';
 import type { DevServices } from '../services-config';
@@ -215,7 +216,13 @@ function deps(
         listWorkspaces: () =>
             Object.keys(services).map((id) => ({ id, path: `/work/${id}`, label: id })),
         devServicesFor: (id) => services[id] ?? {},
-        engineAdmin: (req) => ({ user: req.adminUser, password: `admin_pw_for_${req.recordKey}` }),
+        // Base64url-shaped, like the real `generateServicePassword` — a DEDICATED
+        // engine's recordKey carries an `@`, and `provision.ts` rightly refuses an
+        // admin password that is not a generated one.
+        engineAdmin: (req) => ({
+            user: req.adminUser,
+            password: `admin_pw_for_${req.recordKey.replace(/[^A-Za-z0-9_-]/g, '_')}`,
+        }),
         // Nothing real to probe in a unit test; readiness is proven live.
         probeReady: async () => true,
         readyTimeoutMs: 50,
@@ -937,5 +944,101 @@ describe('a published port that changed underneath us', () => {
 
         await expect(manager.refresh()).resolves.toBeUndefined();
         expect(manager.list('a')[0]?.endpoints?.[0]?.hostPort).toBe(before);
+    });
+});
+
+/**
+ * PURGING A SHARED VOLUME (Tynn #250, step 4).
+ *
+ * A shared engine's data volume is ONE volume for the whole machine —
+ * `genie-svc-postgres-16-data` holds every workspace's database on Postgres 16.
+ * The original guard asked whether anyone was HOLDING the engine, which counts
+ * workspaces live in this process right now. A Genie App whose window is closed
+ * holds nothing, and neither does a workspace nobody has opened since Genie
+ * started — so a single `manageService remove … purge=true` from the only open
+ * workspace deleted their data and reported success.
+ *
+ * Co-tenancy on a shared volume is a property of who has a SLICE PROVISIONED in
+ * it, not of who happens to be connected.
+ */
+describe('purging a shared volume', () => {
+    it('refuses when another workspace has a slice in it, even though that workspace is NOT running', async () => {
+        const runtime = fakeRuntime();
+        // `b` is configured for the same shared PG16 and is never acquired —
+        // a Genie App with its window closed, or a project nobody has opened.
+        const manager = createDevServiceManager(
+            deps(runtime, { a: pgFor('svc-a'), b: pgFor('svc-b') }),
+        );
+        await manager.acquire('a', 'svc-a');
+
+        const result = await manager.remove('a', 'svc-a', { purge: true });
+
+        expect(runtime.removedVolumes).toEqual([]);
+        expect(runtime.removed).toEqual([]);
+        expect(result.purged).toBe(false);
+    });
+
+    it('names the slice it protected, and why', async () => {
+        const runtime = fakeRuntime();
+        const manager = createDevServiceManager(
+            deps(runtime, { a: pgFor('svc-a'), b: pgFor('svc-b') }),
+        );
+        await manager.acquire('a', 'svc-a');
+
+        const result = await manager.remove('a', 'svc-a', { purge: true });
+
+        expect(result.declined).toBeTruthy();
+        // The workspace, and the name its data actually goes by inside the engine.
+        expect(result.declined).toContain('b');
+        expect(result.declined).toContain(workspaceSqlIdentifier('b'));
+        expect(result.tenants).toEqual([expect.objectContaining({ workspaceId: 'b' })]);
+    });
+
+    it('still purges when this workspace is the volume’s only tenant', async () => {
+        const runtime = fakeRuntime();
+        const manager = createDevServiceManager(deps(runtime, { a: pgFor('svc-a') }));
+        await manager.acquire('a', 'svc-a');
+
+        const result = await manager.remove('a', 'svc-a', { purge: true });
+
+        expect(result.purged).toBe(true);
+        expect(runtime.removedVolumes).toContain('genie-svc-postgres-16-data');
+    });
+
+    it('fails CLOSED when a workspace’s stored services cannot be read', async () => {
+        const runtime = fakeRuntime();
+        const services: Record<string, DevServices> = { a: pgFor('svc-a'), b: pgFor('svc-b') };
+        const manager = createDevServiceManager(
+            deps(runtime, services, {
+                devServicesFor: (id) => {
+                    // `b`'s row is unreadable. Its tenancy is UNKNOWN, and an
+                    // unknown tenancy is the one case where guessing destroys data.
+                    if (id === 'b') throw new Error('services_json is not JSON');
+                    return services[id] ?? {};
+                },
+            }),
+        );
+        await manager.acquire('a', 'svc-a');
+
+        const result = await manager.remove('a', 'svc-a', { purge: true });
+
+        expect(result.purged).toBe(false);
+        expect(runtime.removedVolumes).toEqual([]);
+    });
+
+    it('purges a DEDICATED engine, whose volume is this workspace’s alone', async () => {
+        const runtime = fakeRuntime();
+        const manager = createDevServiceManager(
+            deps(runtime, {
+                a: { 'svc-a': { ...PG16, dedicated: true } },
+                b: pgFor('svc-b'),
+            }),
+        );
+        await manager.acquire('a', 'svc-a');
+
+        const result = await manager.remove('a', 'svc-a', { purge: true });
+
+        expect(result.purged).toBe(true);
+        expect(runtime.removedVolumes).toContain('genie-svc-postgres-16-a-data');
     });
 });

@@ -127,10 +127,14 @@ describe('the catalog', () => {
         expect(engineSpecFor('postgres').provision).toBe('sql-database-role');
         expect(engineSpecFor('mysql').provision).toBe('sql-database-role');
         expect(engineSpecFor('redis').provision).toBe('redis-acl');
-        // The owner's decision for these three is a per-workspace NAMESPACE, not
-        // a per-workspace credential — asserted so it cannot drift silently.
+        // MinIO carves a real slice: an IAM user per workspace, admitted by
+        // policy to its own bucket. It was NAMESPACE-isolated until Tynn #250
+        // step 4, which meant handing every workspace the ROOT credential.
+        expect(engineSpecFor('minio').provision).toBe('s3-scoped-user');
+        // These two genuinely are a per-workspace NAMESPACE and not a
+        // per-workspace credential — asserted so it cannot drift silently, and
+        // so the claim in `summary` stays true.
         expect(engineSpecFor('meilisearch').provision).toBe('namespace');
-        expect(engineSpecFor('minio').provision).toBe('namespace');
         expect(engineSpecFor('mailpit').provision).toBe('namespace');
     });
 

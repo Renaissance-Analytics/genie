@@ -198,6 +198,15 @@ export interface DevWorkspace {
     path: string;
     /** Human name, used for the default `<site>.<workspace>.gen`. */
     label?: string;
+    /**
+     * This workspace hosts an installed Genie App (`app`), or is one being
+     * developed (`app-dev`). Absent on an ordinary workspace (Tynn #250).
+     *
+     * Carried across the port seam because a shared engine's volume cannot tell
+     * an app's database from a project's, and a purge that is about to delete
+     * both has to be able to SAY so — see `services/tenancy.ts`.
+     */
+    appKind?: 'app' | 'app-dev';
 }
 
 export interface ResolvedRuntimeLike {

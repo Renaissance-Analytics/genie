@@ -99,14 +99,79 @@ describe('redis — an ACL user per workspace', () => {
             expect(argv).toContain(denied);
         }
     });
+
+    /**
+     * A key pattern scopes commands that address a KEY. It does nothing to
+     * commands that address the KEYSPACE or the server, and two of those destroy
+     * other workspaces' data as thoroughly as FLUSHALL does (Tynn #250, step 4).
+     */
+    it('denies the commands a key pattern cannot scope', () => {
+        const argv = steps[0].argv.join(' ');
+        // Swaps two logical databases wholesale — every workspace's keys move.
+        expect(argv).toContain('-swapdb');
+        // The function library is server-global; FUNCTION FLUSH empties it for
+        // everyone, and it is not addressed by key.
+        expect(argv).toContain('-function');
+    });
 });
 
 describe('namespace engines', () => {
     it('run NO commands — separation is by name, and it says so', () => {
         expect(provisionSteps('meilisearch', ADMIN, SLICE)).toEqual([]);
-        expect(provisionSteps('minio', ADMIN, SLICE)).toEqual([]);
         expect(provisionSteps('mailpit', ADMIN, SLICE)).toEqual([]);
         expect(provisionSteps('custom', ADMIN, SLICE)).toEqual([]);
+    });
+});
+
+/**
+ * MINIO — a scoped IAM user per workspace (Tynn #250, step 4).
+ *
+ * MinIO used to be a namespace engine: every workspace got a bucket NAME and
+ * the engine's ROOT credential to reach it with. A name is not a boundary — any
+ * workspace holding that credential could `mc rb --force` any other workspace's
+ * bucket, including an installed Genie App's.
+ *
+ * MinIO has a real mechanism of its own, so the boundary moves to the engine
+ * where the SQL engines already keep theirs: an IAM user per workspace, and a
+ * policy that admits it to one bucket.
+ */
+describe('minio — a scoped IAM user per workspace', () => {
+    const MINIO_ADMIN = { user: 'genie', password: 'admin_pw-1' };
+    const steps = provisionSteps('minio', MINIO_ADMIN, SLICE);
+    const all = flatten(steps);
+
+    it('creates the workspace bucket', () => {
+        expect(all).toContain('ws-acme-1a2b3c4d');
+        expect(all).toContain('mb --ignore-existing');
+    });
+
+    it('gives the workspace ITS OWN credential, never the root one', () => {
+        // The access key is the bucket name and the secret is the workspace's
+        // own generated password — the same credential every other engine hands
+        // out, rather than the engine's root account.
+        expect(all).toContain('ws-acme-1a2b3c4d pw-Abc_123');
+    });
+
+    it('scopes that user to its own bucket with a policy', () => {
+        expect(all).toContain('policy');
+        expect(all).toContain('attach');
+    });
+
+    it('uses a CONSTANT policy document, so there is nothing to inject', () => {
+        // `${aws:username}` is resolved by MinIO at request time, so one policy
+        // scopes every workspace to the bucket named after it. No derived value
+        // is interpolated into the JSON at all.
+        const policy = steps.find((s) => s.argv.join(' ').includes('Version'));
+        expect(policy?.argv.join(' ')).toContain('${aws:username}');
+        expect(policy?.argv.join(' ')).not.toContain('ws-acme-1a2b3c4d');
+    });
+
+    it('refuses an admin password that is not a generated one', () => {
+        // It goes into an `mc alias set` URL, where a stray character would
+        // re-point the client at another host — the same reason postgres asserts it.
+        expect(() =>
+            provisionSteps('minio', { user: 'genie', password: 'p@ss word' }, SLICE),
+        ).toThrow(/not a generated one/);
     });
 });
 

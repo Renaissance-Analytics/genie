@@ -185,7 +185,8 @@ releases it. Actions (\`action\`):
   workspace network, and injects the connection env.
 - \`start\` / \`stop\` / \`logs\` — by \`id\`. \`connection\` — the connection surface +
   the exact env keys injected. \`dedicated\` — flip one service to its own
-  container. \`remove\` — release it (\`purge\` also drops the data volume).
+  container. \`remove\` — release it (\`purge\` also drops the data volume, and is
+  REFUSED while any other workspace still has a database in it — open or not).
 A service is BACKEND: it is never given a browser-facing name — reach it
 in-container through the injected \`envKeys\` (\`DATABASE_URL\`, …), which are also
 present in a site's BUILD steps, so a \`manageSite\` app needs no \`.env\` edit.

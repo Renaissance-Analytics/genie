@@ -37,12 +37,13 @@ import type {
  * ## A shared engine's isolation is not uniform
  *
  * Postgres and MySQL get a real database + role the other workspaces' roles
- * cannot reach. Redis gets an ACL user scoped to a key prefix. The three
- * namespace engines — Mailpit, Meilisearch, MinIO — share a master credential
- * and are separated by an index prefix, a bucket or an inbox. That is the
- * owner's decision and it is fine, but rendering all three as "isolated" would
- * claim a boundary that does not exist, so {@link isolationNote} says which one
- * a workspace actually has.
+ * cannot reach. Redis gets an ACL user scoped to a key prefix. MinIO gets an IAM
+ * user admitted to one bucket. The remaining namespace engines — Mailpit and
+ * Meilisearch — share a master credential and are separated by an inbox tag or
+ * an index prefix. Rendering them all as "isolated" would claim a boundary that
+ * does not exist, so {@link isolationNote} says which one a workspace actually
+ * has — and an unknown strategy must never fall through to the DEDICATED
+ * wording, which promises a container of one's own.
  */
 
 export type DevTone = 'running' | 'starting' | 'failed' | 'idle';
@@ -448,6 +449,8 @@ export function isolationNote(provision: string): string {
             return 'This workspace gets its own database and role on the shared engine; another workspace’s role cannot reach it.';
         case 'redis-acl':
             return 'This workspace gets its own ACL user on the shared engine, restricted to its own key prefix.';
+        case 's3-scoped-user':
+            return 'This workspace gets its own IAM user on the shared engine, admitted to its own bucket and no other.';
         case 'namespace':
             return 'This workspace gets its own namespace on the shared engine, but shares the engine’s master credential — treat it as separated, not sealed.';
         default:

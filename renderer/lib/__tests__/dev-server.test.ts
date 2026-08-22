@@ -272,6 +272,17 @@ describe('service status', () => {
         expect(namespace).not.toMatch(/cannot reach/i);
     });
 
+    it('does not describe MinIO’s scoped user as a container of its own', () => {
+        // MinIO stopped being a namespace engine in Tynn #250 step 4: it now gets
+        // an IAM user admitted to one bucket. An unknown strategy falls through
+        // to the DEDICATED wording, which would tell the user this workspace has
+        // a container to itself — false, and reassuring in the wrong direction.
+        const s3 = isolationNote('s3-scoped-user');
+        expect(s3).toMatch(/bucket/i);
+        expect(s3).not.toMatch(/own container/i);
+        expect(s3).not.toMatch(/master credential/i);
+    });
+
     it('surfaces a failed engine’s reason', () => {
         expect(serviceStatusTone({ ...PG, state: 'failed' })).toBe('failed');
         expect(
