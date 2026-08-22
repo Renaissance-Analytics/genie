@@ -107,22 +107,40 @@ describe('namespace engines', () => {
         expect(env.MEILISEARCH_INDEX_PREFIX).toBe('ws_acme_');
     });
 
+    const MINIO = {
+        engine: 'minio' as const,
+        host: 'genie-svc-minio-latest',
+        port: 9000,
+        slice: { identifier: 'ws_acme', dnsName: 'ws-acme', password: 'slice-pw_123' },
+    };
+
     it('gives MinIO the DNS-safe bucket name, never the SQL one', () => {
-        const env = serviceEnv([
-            {
-                engine: 'minio',
-                host: 'genie-svc-minio-latest',
-                port: 9000,
-                slice: { identifier: 'ws_acme', dnsName: 'ws-acme', password: 'unused' },
-                adminUser: 'genie',
-                adminPassword: 'root-pw',
-            },
-        ]);
+        const env = serviceEnv([MINIO]);
         // An S3 bucket may not contain an underscore.
         expect(env.AWS_BUCKET).toBe('ws-acme');
-        expect(env.AWS_ACCESS_KEY_ID).toBe('genie');
         expect(env.AWS_ENDPOINT).toBe('http://genie-svc-minio-latest:9000');
         expect(env.AWS_USE_PATH_STYLE_ENDPOINT).toBe('true');
+    });
+
+    /**
+     * MinIO used to hand every workspace `AWS_ACCESS_KEY_ID=genie` and the
+     * engine's ROOT password, because it was a namespace engine and had no
+     * per-workspace credential to give. That made every other workspace's
+     * bucket — an installed Genie App's included — one `mc rb --force` away
+     * (Tynn #250, step 4). It now has an IAM user of its own.
+     */
+    it('gives MinIO the WORKSPACE credential, and never the root one', () => {
+        const env = serviceEnv([MINIO]);
+        expect(env.AWS_ACCESS_KEY_ID).toBe('ws-acme');
+        expect(env.AWS_SECRET_ACCESS_KEY).toBe('slice-pw_123');
+    });
+
+    it('leaks no root credential even when one is passed alongside', () => {
+        // Belt and braces: a caller that still attaches the engine admin must
+        // not be able to put it back into the environment by accident.
+        const env = serviceEnv([{ ...MINIO, adminUser: 'genie', adminPassword: 'root-pw' }]);
+        expect(Object.values(env)).not.toContain('root-pw');
+        expect(env.AWS_ACCESS_KEY_ID).toBe('ws-acme');
     });
 
     it('points mail at the shared catch-all', () => {

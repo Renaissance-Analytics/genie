@@ -28,11 +28,19 @@ import { workspaceSlugFor } from '../argv';
  *     numbered logical DBs carry no auth at all. Redis 6's ACLs do: a
  *     per-workspace user, restricted to a key prefix. Weaker than a separate
  *     database, stronger than a shared password, and the owner's call.
- *   - **`namespace`** (Meilisearch, MinIO, Mailpit) — the owner's decision for
- *     these three is a per-workspace **namespace** (index prefix / bucket /
- *     inbox), not a per-workspace credential. Say so plainly rather than
- *     implying an isolation that is not there: workspaces sharing one of these
- *     share its master key, and separation is by name.
+ *   - **`s3-scoped-user`** (MinIO) — an IAM user per workspace, admitted by
+ *     policy to the one bucket named after it. MinIO was a `namespace` engine
+ *     until Tynn #250 step 4, which is to say every workspace was handed the
+ *     ROOT credential and separation was by bucket NAME. A name is not a
+ *     boundary: anyone holding root could delete anyone's bucket, an installed
+ *     Genie App's included. MinIO has a real mechanism, so it uses it.
+ *   - **`namespace`** (Meilisearch, Mailpit) — the owner's decision for these
+ *     two is a per-workspace **namespace** (index prefix / inbox), not a
+ *     per-workspace credential. Say so plainly rather than implying an isolation
+ *     that is not there: workspaces sharing one of these share its master key,
+ *     and separation is by name. Meilisearch could be scoped the same way MinIO
+ *     now is — it has scoped API keys — but it GENERATES the key value
+ *     server-side, and provisioning has no way to read a step's output back.
  *
  * ## Why `image()` is a function
  *
@@ -62,7 +70,12 @@ export function isServiceEngine(value: unknown): value is ServiceEngine {
 }
 
 /** How a workspace's slice of an engine is carved out. See the file header. */
-export type ProvisionStrategy = 'sql-database-role' | 'redis-acl' | 'namespace' | 'none';
+export type ProvisionStrategy =
+    | 'sql-database-role'
+    | 'redis-acl'
+    | 's3-scoped-user'
+    | 'namespace'
+    | 'none';
 
 /** One reachable surface of an engine. Non-HTTP ones are published and LISTED —
  *  the point of P3 is that a user, a program or an agent can connect. */
@@ -198,7 +211,7 @@ const MINIO: EngineSpec = {
     engine: 'minio',
     label: 'MinIO (S3)',
     summary:
-        'S3-compatible object storage. Shared instance; each workspace gets its own bucket name (namespace isolation, shared root credential).',
+        'S3-compatible object storage. Shared instance; each workspace gets its own bucket and its own IAM user, admitted by policy to that bucket alone.',
     // MinIO tags are release TIMESTAMPS, not majors, so there is no stable
     // major to pin the way every other engine here is pinned. `latest` is the
     // honest default; pass an exact `RELEASE.…` tag as the version to pin.
@@ -209,7 +222,7 @@ const MINIO: EngineSpec = {
         { name: 'console', container: 9001, kind: 'http' },
     ],
     volumes: [{ suffix: 'data', target: '/data' }],
-    provision: 'namespace',
+    provision: 's3-scoped-user',
     adminUser: 'genie',
     adminEnv: (password) => ({ MINIO_ROOT_USER: 'genie', MINIO_ROOT_PASSWORD: password }),
     command: () => ['server', '/data', '--console-address', ':9001'],
