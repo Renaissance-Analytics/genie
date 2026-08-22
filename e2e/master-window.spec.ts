@@ -40,16 +40,22 @@ let seed: MasterSeed;
 test.beforeAll(async () => {
     ({ app, page } = await launchGenieE2E('master'));
 
-    // A machine missing dev tools gets the first-run toolchain wizard raised over
-    // the whole window (master.tsx probes on boot), and every CI runner is such a
-    // machine. It is real behaviour with a story of its own; here it is simply a
-    // modal standing in front of the window under test — on macOS its backdrop
-    // swallowed the click that switches workspaces. Take the app's OWN remembered
-    // dismissal, which is the state every machine is in after the first launch,
-    // and reload into it.
-    await page.evaluate(() => localStorage.setItem('toolchain-setup-dismissed', '1'));
-    await page.reload();
-    await page.waitForLoadState('domcontentloaded');
+    // A machine missing dev tools is offered the first-run toolchain setup, raised
+    // over the whole window — and a clean CI runner is exactly the machine that
+    // offer exists for, so it opens on every leg. It is real behaviour with a story
+    // of its own; here it is a modal standing in front of the window under test,
+    // and on macOS its backdrop swallowed the click that switches workspaces.
+    //
+    // Closed the way a user closes it: that button records the dismissal, so it
+    // cannot come back later in the session. Reloading into a pre-set dismissal
+    // flag also works and is one line shorter — but it tears the freshly-created
+    // pty down mid-handshake, and the Windows leg then had no terminal at all.
+    const wizard = page.locator('.toolchain-wizard');
+    await wizard.waitFor({ state: 'visible', timeout: 20_000 }).catch(() => {});
+    if (await wizard.count()) {
+        await wizard.getByRole('button', { name: /^(Close|Done)$/ }).click();
+        await expect(wizard).toHaveCount(0);
+    }
 
     const seeded = await readMasterSeed(app);
     if (!seeded) {
