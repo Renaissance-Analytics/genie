@@ -60,6 +60,31 @@ export function isE2EMobile(): boolean {
     return isE2E() && process.env.GENIE_E2E_MOBILE === '1';
 }
 
+/**
+ * True when the harness window is the REAL master page (genie#228).
+ *
+ * Derived from the page itself rather than from a flag of its own — unlike the
+ * hosting harness, whose containers a spec might want on a page other than its
+ * own. The one thing this gates is the sign-in read, and that is needed by
+ * exactly one page: `master.html` is the only route that refuses to render
+ * without a session. Reading `GENIE_E2E_PAGE` makes a flag/page mismatch
+ * impossible, so no other spec can end up running against a faked identity.
+ */
+export function isE2EMaster(): boolean {
+    return isE2E() && process.env.GENIE_E2E_PAGE === 'master';
+}
+
+/**
+ * The signed-in identity the master harness sees. ONE backend connected and the
+ * other not — the smallest state that gets past the page's sign-in gate, and a
+ * shape the app really produces (most users connect Tynn or Aionima, not both).
+ */
+const E2E_MASTER_USER = {
+    backend: 'tynn' as const,
+    id: 'e2e-master-user',
+    name: 'Genie E2E',
+};
+
 type FlowStatus =
     | { kind: 'idle' }
     | { kind: 'pending'; userCode: string; verificationUri: string; expiresInSec: number }
@@ -346,6 +371,26 @@ export function registerE2EMocks(): void {
         e2eState.openedUrls.push(pathOrUrl);
         return { ok: true };
     });
+
+    // --- Sign-in (the master harness only) -------------------------------
+    // `master.tsx` returns early to `SignInPrompt` when the auth check comes
+    // back signed-out, and the E2E profile is a throwaway with no session — so
+    // without this the master spec would assert against the sign-in screen and
+    // never reach the window at all.
+    //
+    // ONE channel, one read. `auth:whoami` is the whole gate: the page derives
+    // `signedIn` from it and does nothing else with the user. Everything the
+    // spec then asserts on — the workspace rail, the floor, the panel, the
+    // status bar — comes from the real database through the real IPC. Stubbing
+    // any further (a fake workspace list, a fake spec list) would replace the
+    // window under test with a picture of one.
+    if (isE2EMaster()) {
+        override('auth:whoami', async (_e, kind?: string) => {
+            // Called per-backend by the page; the no-kind form returns the map.
+            if (!kind) return { tynn: E2E_MASTER_USER };
+            return kind === 'tynn' ? E2E_MASTER_USER : null;
+        });
+    }
 
     // --- Hosting Manager (GENIE_E2E_HOSTING=1 only) ----------------------
     // The `dev:*` channels are containers, and a CI runner has none. Scoped to

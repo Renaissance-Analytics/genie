@@ -111,8 +111,44 @@ The spec scripts it through `globalThis.__GENIE_E2E_HOSTING__`
 runtime away mid-session with a REAL broadcast so the page has to repaint from
 the push rather than from a reload.
 
+### The master window is not a harness page (`GENIE_E2E_PAGE=master`)
+
+`showE2EWindow` loads `${page}.html`, so allowing `master` in its route list
+points the window at **`renderer/pages/master.tsx` itself** — the app's real main
+window, not a mount of one of its components. That is the whole value of the
+gate: the harness *is* the product page.
+
+One thing stands in for production, because it has to. `master.tsx` returns early
+to `SignInPrompt` when the auth check comes back signed-out, and the E2E profile
+is a throwaway with no session, so the window would otherwise open on the sign-in
+screen with every assertion out of reach. `main/e2e/mock.ts` therefore answers
+**one channel** — `auth:whoami` — with a connected backend, and only when
+`GENIE_E2E_PAGE=master` (`isE2EMaster()`, derived from the page rather than a
+flag of its own, so no other spec can run against a faked identity). Everything
+else is real: the workspaces and terminals come from `main/e2e/master.ts` as
+database rows, and the rail, the floor, the panels and the ptys are the shipped
+code acting on them.
+
+`main/e2e/master.ts` is idempotent AND resetting, like the agent-access fixture —
+plus one thing that one does not need. The master page persists each window's
+panel layout in `view_state_json`, and that store WINS on launch: a run that hid
+a panel would hand the next run an empty floor while every seeded row sits in the
+database. The seed drops its own workspaces' entries (`pruneFixtureViews`, unit
+tested) and pins `active_workspace`, so the window always opens on the fixture.
+
 ## Tests
 
+- `master-window.spec.ts` — the master window itself (genie#228): it comes up
+  signed in on the two-column frame, the rail lists both seeded workspaces with
+  the launch target active, the floor lays out the seeded terminal and the status
+  bar counts it. The last test is the genie#229 regression gate: switch
+  workspaces and the panel that was hidden must NOT be refitted. Off-workspace
+  panels stay mounted-hidden to keep their ptys alive, a hidden element measures
+  0×0, and fitting there pushed a nonsense geometry to the pty — which a TUI
+  answers by reflowing its scrollback to a width the window never had. The
+  assertion is on the grid main last APPLIED to the pty
+  (`main/terminal/size-tracker`), because by the time the panel is back on screen
+  the DOM looks perfectly fine and only the pty remembers.
 - `hosting-manager.spec.ts` — the Hosting Manager, both surfaces: the
   workstation settings page (runtime probes, dev-base toolchain, the grouped
   shared-engine inventory) and the per-workspace Hosting panel
