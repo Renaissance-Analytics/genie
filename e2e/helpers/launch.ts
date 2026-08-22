@@ -43,6 +43,11 @@ export const E2E_USERDATA = path.join(os.tmpdir(), 'genie-e2e-profile');
  * `hosting` mounts the real Hosting Manager settings section + the real
  * per-workspace Hosting panel. Maps to `GENIE_E2E_PAGE`, which `showE2EWindow`
  * (background.ts) reads to pick the route.
+ *
+ * `master` is the odd one out and deliberately so: it is NOT a harness page. It
+ * loads `master.html` — the app's real main window — against the fixture in
+ * main/e2e/master.ts. Every other entry here mounts a component in isolation;
+ * this one mounts the product.
  */
 export type E2EHarnessPage =
     | 'issuewatch'
@@ -53,7 +58,8 @@ export type E2EHarnessPage =
     | 'repo-panel'
     | 'terminal-recovery'
     | 'tynn-health'
-    | 'agent-pulse';
+    | 'agent-pulse'
+    | 'master';
 
 const HARNESS_ROUTE: Record<E2EHarnessPage, string> = {
     issuewatch: 'e2e-issuewatch',
@@ -65,6 +71,7 @@ const HARNESS_ROUTE: Record<E2EHarnessPage, string> = {
     'terminal-recovery': 'e2e-terminal-recovery',
     'tynn-health': 'e2e-tynn-health',
     'agent-pulse': 'e2e-agent-pulse',
+    master: 'master',
 };
 
 export async function launchGenieE2E(
@@ -388,6 +395,59 @@ export async function readAgentAccessSeed(app: ElectronApplication): Promise<{
                 peerName: string;
             }) ?? null
         );
+    });
+}
+
+/** What `seedMasterE2E` (main/e2e/master.ts) put in the database. */
+export interface MasterSeed {
+    workspaceId: string;
+    workspaceName: string;
+    terminalId: string;
+    terminalLabel: string;
+    peerId: string;
+    peerName: string;
+    peerTerminalId: string;
+    peerTerminalLabel: string;
+}
+
+/**
+ * Read the master-window fixture's ids. Returns null when seeding never ran, so
+ * the spec fails naming the cause instead of asserting against `undefined`.
+ */
+export async function readMasterSeed(app: ElectronApplication): Promise<MasterSeed | null> {
+    return app.evaluate(() => {
+        const h = (globalThis as Record<string, any>).__GENIE_E2E_MASTER__;
+        return (h?.seed as MasterSeed) ?? null;
+    });
+}
+
+/**
+ * The grid last APPLIED to a terminal's pty, from main's size tracker.
+ *
+ * The half of genie#229 the DOM cannot show. A panel fitted while it was hidden
+ * looks perfectly normal by the time it comes back — what lasts is the geometry
+ * that reached the pty while the panel was off screen, and the scrollback the TUI
+ * reflowed to fit it. Null means nothing was ever applied (no live pty).
+ */
+export async function readPtyGrid(
+    app: ElectronApplication,
+    terminalId: string,
+): Promise<{ cols: number; rows: number } | null> {
+    return app.evaluate((_e, id) => {
+        const h = (globalThis as Record<string, any>).__GENIE_E2E_MASTER__;
+        return h?.ptyGrid?.(id) ?? null;
+    }, terminalId);
+}
+
+/**
+ * Kill the fixture's ptys. Call this BEFORE `app.close()`: a manual quit with a
+ * live terminal and a window open raises the keep-or-shut-down confirmation, and
+ * because this harness IS the real master page it really renders that modal —
+ * quit then sits for its 30s decision timeout with nobody there to answer.
+ */
+export async function killMasterTerminals(app: ElectronApplication): Promise<void> {
+    await app.evaluate(() => {
+        (globalThis as Record<string, any>).__GENIE_E2E_MASTER__?.killTerminals?.();
     });
 }
 

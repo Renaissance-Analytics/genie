@@ -268,6 +268,7 @@ import {
 import { seedAgentAccessE2E } from './e2e/agent-access';
 import { seedRepoE2E } from './e2e/repo';
 import { seedAgentPulseE2E } from './e2e/agent-pulse';
+import { seedMasterE2E } from './e2e/master';
 
 /**
  * Genie — Tynn desktop companion.
@@ -2108,6 +2109,11 @@ app.whenReady().then(async () => {
  *   - `e2e-ghcaps`     → GithubCapabilitiesFlyout (per-install resolve flow),
  *   - `e2e-hosting`    → the Hosting Manager: the workstation settings section
  *     plus the per-workspace panel, against the fixture in main/e2e/hosting.ts.
+ *   - `master`         → NOT a harness page: the REAL master window
+ *     (renderer/pages/master.tsx), against the fixture in main/e2e/master.ts.
+ *     The `${page}.html` load makes the product page reachable here directly,
+ *     which is the whole value of that gate — nothing else mounts the app's own
+ *     main window end to end.
  * Plain BrowserWindow, shown immediately so Playwright can attach to its first
  * window.
  */
@@ -2125,6 +2131,8 @@ function showE2EWindow(): void {
         'e2e-terminal-recovery',
         'e2e-tynn-health',
         'e2e-agent-pulse',
+        // The product page, not a harness (genie#228). See the doc comment.
+        'master',
     ] as const;
     const page = (ALLOWED as readonly string[]).includes(requested)
         ? requested
@@ -2156,6 +2164,18 @@ function showE2EWindow(): void {
             seedAgentPulseE2E();
         } catch (e) {
             console.error('[e2e] agent-pulse seed failed', e);
+        }
+    }
+    if (page === 'master') {
+        // Seed the fixture workspaces + terminals BEFORE the window loads: the
+        // real page lists them on mount and restores its launch grid from what it
+        // finds, so a row that arrives afterwards is a row the floor never lays
+        // out. Also resets the persisted layout + active workspace, since the E2E
+        // profile is reused across runs.
+        try {
+            seedMasterE2E();
+        } catch (e) {
+            console.error('[e2e] master seed failed', e);
         }
     }
     if (page === 'e2e-terminal-recovery') {
