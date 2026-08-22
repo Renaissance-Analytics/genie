@@ -177,9 +177,7 @@ export default function Terminal({
                 // to that width. The damage was already written by the time the
                 // panel came back, which is why switching workspaces returned a
                 // terminal wrapped at a width the window never had.
-                // TEMPORARY — restored in the next commit. The guard is off so CI
-                // can show the new master-window spec catching genie#229.
-                void shouldFit;
+                if (!shouldFit(el.getBoundingClientRect())) return;
                 handleRef.current?.fit();
             });
         });
