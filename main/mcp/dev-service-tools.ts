@@ -469,11 +469,20 @@ export async function runManageService(
                 if ('error' in target) return fail(target.error);
                 // Release FIRST: forgetting the definition while the engine is
                 // held would leave this workspace counted as a holder forever.
-                await manager.remove(ws.id, target.serviceId, {
+                const removal = await manager.remove(ws.id, target.serviceId, {
                     ...(req.purge ? { purge: true } : {}),
                 });
                 deleteWorkspaceDevService(ws.id, target.serviceId);
-                return { ok: true, services: services(), affectedId: target.serviceId, runtime };
+                return {
+                    ok: true,
+                    services: services(),
+                    affectedId: target.serviceId,
+                    // The service definition IS gone — that part succeeded — but
+                    // a declined purge left the data exactly where it was, and
+                    // saying nothing would read as "the data is gone too".
+                    ...(removal.declined ? { note: removal.declined } : {}),
+                    runtime,
+                };
             }
 
             default:

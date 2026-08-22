@@ -18,10 +18,12 @@ import {
 import { serviceEnv } from './env-wiring';
 import { buildEngineInventory, inventoryImages } from './inventory';
 import { provisionSteps, runProvisionSteps } from './provision';
+import { purgeVerdict, sliceTenantsOf } from './tenancy';
 import type { EngineSpec, ServiceEngine } from './catalog';
 import type { EngineInventoryRow } from './inventory';
 import type { ProvisionedService } from './env-wiring';
 import type { EngineAdmin, WorkspaceSlice } from './provision';
+import type { SliceTenancy, SliceTenant } from './tenancy';
 import type { DevServiceConfig, DevServices } from './services-config';
 import type { ContainerRuntime, ContainerState, RuntimeDetection } from '../container-runtime';
 import type { DevWorkspace } from '../site-manager';
@@ -249,8 +251,13 @@ export interface DevServiceManager {
     list(workspaceId?: string): DevServiceRow[];
     /** A bounded log tail for the engine behind one service. Never throws. */
     logs(serviceId: string, tail?: number): Promise<string>;
-    /** Release, and — only when nobody else holds it — remove the engine. */
-    remove(workspaceId: string, serviceId: string, opts?: { purge?: boolean }): Promise<void>;
+    /** Release, and — only when this workspace is the volume's sole tenant —
+     *  remove the engine and its data. See {@link DevServiceRemoval}. */
+    remove(
+        workspaceId: string,
+        serviceId: string,
+        opts?: { purge?: boolean },
+    ): Promise<DevServiceRemoval>;
     /** The env this workspace's SITE containers get (engine reached by container
      *  name — for a sibling container on the workspace network). */
     envFor(workspaceId: string): Record<string, string>;
@@ -285,6 +292,24 @@ export interface DevServiceManager {
      * because it is the manager doing it, the reference count follows.
      */
     engineAction(req: EngineActionRequest): Promise<EngineActionResult>;
+}
+
+/**
+ * What a `remove` actually did.
+ *
+ * `remove` used to return `void`, which made the purge guard a SILENT no-op: the
+ * caller asked to drop the engine's data, nothing was dropped, and the tool
+ * reported success. A refusal nobody is told about is indistinguishable from the
+ * action having worked, so the verdict comes back with the result.
+ */
+export interface DevServiceRemoval {
+    /** True only when the container and its data volumes were really dropped. */
+    purged: boolean;
+    /** Set when a requested purge was DECLINED: the whole reason, naming the
+     *  slices it protected. Absent when none was requested, or it went ahead. */
+    declined?: string;
+    /** The other workspaces with data in that volume, when they are why. */
+    tenants?: SliceTenant[];
 }
 
 export interface EngineActionRequest {
@@ -982,31 +1007,71 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
             const entry = live.get(serviceId);
             const config = entry?.config ?? deps.devServicesFor(workspaceId)[serviceId];
             await release(workspaceId, serviceId);
-            if (!opts.purge || !entry || !config) return;
+            if (!opts.purge || !entry || !config) return { purged: false };
 
-            // Only when NOBODY holds the engine. Dropping a shared volume while
-            // another workspace is using it would destroy that workspace's data
-            // — the single most destructive thing this module could do.
-            if (holdersOf(entry.recordKey).size > 0) return;
-            const { runtime } = await deps.resolveRuntime();
-            if (!runtime) return;
             const spec = engineSpecFor(config.engine);
             const dedicated = config.dedicated || Boolean(spec.alwaysDedicated);
+            const volumes = spec.volumes.map((volume) =>
+                serviceVolumeNameFor(
+                    entry.engineKey,
+                    volume.suffix,
+                    dedicated ? workspaceId : undefined,
+                ),
+            );
+
+            // WHO ELSE HAS DATA IN THERE. Not who is holding the engine: holding
+            // is a live connection, and a Genie App with its window closed holds
+            // nothing while its database sits in this very volume. See
+            // `tenancy.ts` — this distinction is the whole point of that module.
+            //
+            // Reading the workspace list can itself throw; that is a tenancy we
+            // could not establish, which is the same answer as "occupied".
+            let tenancy: SliceTenancy;
+            try {
+                tenancy = sliceTenantsOf({
+                    recordKey: entry.recordKey,
+                    askingWorkspaceId: workspaceId,
+                    workspaces: deps.listWorkspaces(),
+                    servicesFor: (id) => deps.devServicesFor(id),
+                });
+            } catch (e) {
+                tenancy = { tenants: [], unreadable: [`this workstation (${messageOf(e)})`] };
+            }
+
+            const verdict = purgeVerdict({
+                engine: config.engine,
+                version: config.version,
+                // A stateless engine has no volume to name; the container is
+                // still shared, and removing it is still not this workspace's
+                // call to make alone.
+                volume: volumes[0] ?? serviceContainerNameFor(entry.engineKey),
+                tenancy,
+            });
+            if (!verdict.allowed) {
+                return {
+                    purged: false,
+                    declined: verdict.reason,
+                    ...(tenancy.tenants.length ? { tenants: tenancy.tenants } : {}),
+                };
+            }
+
+            const { runtime } = await deps.resolveRuntime();
+            if (!runtime) {
+                return {
+                    purged: false,
+                    declined:
+                        'No container runtime is available, so the engine and its data volume are ' +
+                        'still on this machine.',
+                };
+            }
             try {
                 await runtime.remove(entry.containerId);
-                for (const volume of spec.volumes) {
-                    await runtime.volumeRemove(
-                        serviceVolumeNameFor(
-                            entry.engineKey,
-                            volume.suffix,
-                            dedicated ? workspaceId : undefined,
-                        ),
-                    );
-                }
+                for (const volume of volumes) await runtime.volumeRemove(volume);
             } catch {
                 /* tolerant: removal has to converge */
             }
             changed();
+            return { purged: true };
         },
 
         envFor(workspaceId) {

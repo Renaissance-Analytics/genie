@@ -1940,13 +1940,19 @@ export function isWorkstationOperator(id: string): boolean {
  */
 export type WorkspaceAppKind = 'app' | 'app-dev';
 
+/** PURE. The same narrowing, for a row already in hand — so a LIST of workspaces
+ *  does not become one query each just to learn which are Apps. */
+export function toWorkspaceAppKind(value: unknown): WorkspaceAppKind | null {
+    return value === 'app' || value === 'app-dev' ? value : null;
+}
+
 export function getWorkspaceAppKind(id: string): WorkspaceAppKind | null {
     const row = getDb()
         .prepare<[string], { app_kind: string | null } | undefined>(
             'SELECT app_kind FROM workspaces WHERE id = ?',
         )
         .get(id);
-    return row?.app_kind === 'app' || row?.app_kind === 'app-dev' ? row.app_kind : null;
+    return toWorkspaceAppKind(row?.app_kind);
 }
 
 /** Mark (or unmark) a workspace as hosting an installed GApp. */
