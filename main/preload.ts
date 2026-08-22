@@ -190,6 +190,12 @@ const api = {
         setRevoked: (appId: string, revoked: boolean) =>
             ipcRenderer.invoke('apps:set-revoked', appId, revoked),
         uninstall: (appId: string) => ipcRenderer.invoke('apps:uninstall', appId),
+        // Backups (Tynn #250, step 4). `appId` omitted reads/writes the
+        // WORKSTATION default; passing one reads/writes that app's override.
+        backupSettings: (appId?: string) => ipcRenderer.invoke('apps:backup-settings', appId),
+        setBackup: (appId: string | null, patch: unknown) =>
+            ipcRenderer.invoke('apps:set-backup', appId, patch),
+        backup: (appId: string) => ipcRenderer.invoke('apps:backup', appId),
     },
 
     // The GApp window's own bridge. NOT the app's — this is Genie's renderer

@@ -129,6 +129,72 @@ export function resolveBackupSettings(
     return { enabled, dir, keep, from };
 }
 
+// --- reading what was stored ------------------------------------------------
+
+/**
+ * A week of dumps by default. Long enough that a problem noticed on Monday can
+ * be rolled back to Friday, short enough that a database nobody thought about
+ * does not quietly fill a disk.
+ */
+export const DEFAULT_KEEP = 7;
+
+function asRecord(raw: string | null | undefined): Record<string, unknown> | null {
+    if (!raw?.trim()) return null;
+    try {
+        const parsed: unknown = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+            ? (parsed as Record<string, unknown>)
+            : null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * The workstation setting, from the blob `db.ts` persisted.
+ *
+ * Anything unreadable — hand-edited, half-written, from a newer Genie — lands on
+ * the DEFAULTS rather than on "off". The failure mode of a bad parse must be
+ * "backs up to the usual place", never "silently stopped backing up".
+ *
+ * `defaults.dir` is Genie's own data folder, supplied by the shell because only
+ * the shell knows it. Configuring this setting is how the owner points it
+ * somewhere else — a shared folder being the case that motivated it.
+ */
+export function parseBackupSettings(
+    raw: string | null | undefined,
+    defaults: { dir: string },
+): BackupSettings {
+    const parsed = asRecord(raw);
+    const dir = typeof parsed?.dir === 'string' && parsed.dir.trim() ? parsed.dir.trim() : defaults.dir;
+    const keep =
+        typeof parsed?.keep === 'number' && Number.isFinite(parsed.keep)
+            ? Math.max(MIN_KEEP, Math.floor(parsed.keep))
+            : DEFAULT_KEEP;
+    const enabled = typeof parsed?.enabled === 'boolean' ? parsed.enabled : true;
+    return { enabled, dir, keep };
+}
+
+/**
+ * One app's override, or `null` when it has none.
+ *
+ * A field that is absent stays ABSENT — never coerced to `false` or to a number.
+ * `resolveBackupSettings` reads presence to decide which level won, so an app
+ * that set only a folder would otherwise have its backups turned off by the act
+ * of choosing where they go.
+ */
+export function parseBackupOverride(raw: string | null | undefined): BackupOverride | null {
+    const parsed = asRecord(raw);
+    if (!parsed) return null;
+    const override: BackupOverride = {};
+    if (typeof parsed.enabled === 'boolean') override.enabled = parsed.enabled;
+    if (typeof parsed.dir === 'string' && parsed.dir.trim()) override.dir = parsed.dir.trim();
+    if (typeof parsed.keep === 'number' && Number.isFinite(parsed.keep)) {
+        override.keep = Math.floor(parsed.keep);
+    }
+    return Object.keys(override).length ? override : null;
+}
+
 // --- jobs -------------------------------------------------------------------
 
 /** One live engine holding a slice of this app's data. */

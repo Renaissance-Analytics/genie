@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { backupJobsFor, prunableDumps, resolveBackupSettings } from '../backup';
+import {
+    backupJobsFor,
+    parseBackupOverride,
+    parseBackupSettings,
+    prunableDumps,
+    resolveBackupSettings,
+} from '../backup';
 import type { BackupSettings, DumpTarget } from '../backup';
 
 /**
@@ -200,5 +206,53 @@ describe('prunableDumps', () => {
 
     it('leaves a half-written .part alone — the runner owns those', () => {
         expect(prunableDumps([...names, '20260823T010203Z.dump.part'], 3)).toEqual([]);
+    });
+});
+
+/**
+ * READING what was stored. `db.ts` keeps the blob; this module interprets it —
+ * the same split as `services-config.ts`, so the database never has an opinion
+ * about a shape it only persisted.
+ */
+describe('parsing what was stored', () => {
+    const FALLBACK = { dir: '/Users/glenn/Library/Application Support/Genie/backups' };
+
+    it('falls back to the Genie folder when nothing has been configured', () => {
+        const s = parseBackupSettings(null, FALLBACK);
+        expect(s.dir).toBe(FALLBACK.dir);
+        expect(s.enabled).toBe(true);
+        expect(s.keep).toBe(7);
+    });
+
+    it('survives a blob that is not settings at all', () => {
+        // Hand-edited, half-written, or from a newer Genie. Anything unreadable
+        // must land on the defaults rather than disabling backups silently.
+        for (const raw of ['', 'not json', '[]', 'null', '{"dir":42}']) {
+            const s = parseBackupSettings(raw, FALLBACK);
+            expect(s.dir).toBe(FALLBACK.dir);
+            expect(s.keep).toBe(7);
+        }
+    });
+
+    it('round-trips a configured shared folder', () => {
+        const s = parseBackupSettings(
+            JSON.stringify({ enabled: false, dir: '/Volumes/Shared/genie', keep: 30 }),
+            FALLBACK,
+        );
+        expect(s).toMatchObject({ enabled: false, dir: '/Volumes/Shared/genie', keep: 30 });
+    });
+
+    it('reads an override, and treats an absent field as absent rather than false', () => {
+        const o = parseBackupOverride(JSON.stringify({ dir: '/Volumes/Vault' }));
+        expect(o).toEqual({ dir: '/Volumes/Vault' });
+        // `enabled` unset must NOT become `false` — that would silently turn an
+        // app's backups off the moment it set a folder.
+        expect(o?.enabled).toBeUndefined();
+    });
+
+    it('reads no override from an empty or broken value', () => {
+        for (const raw of [null, '', '{}', 'nonsense', '[]']) {
+            expect(parseBackupOverride(raw)).toBeNull();
+        }
     });
 });
