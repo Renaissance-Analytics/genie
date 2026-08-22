@@ -72,6 +72,21 @@ const GENERATED_PASSWORD = /^[A-Za-z0-9_-]{8,128}$/;
 /** Exactly what `workspaceDnsName` produces — an S3 bucket label. */
 const DNS_NAME = /^[a-z][a-z0-9-]{2,62}$/;
 
+/**
+ * EXPORTED so everything that puts a slice on a command line asserts the SAME
+ * thing. `backup.ts` builds `pg_dump` argv from the same identifier and password
+ * this file builds `CREATE ROLE` from; two copies of "what a derived name looks
+ * like" is how one of them ends up out of date.
+ */
+export function assertSliceIdentifier(value: string): string {
+    return assertIdentifier(value);
+}
+
+/** See {@link assertSliceIdentifier}. */
+export function assertSlicePassword(value: string, whose = 'workspace'): string {
+    return assertPassword(value, whose);
+}
+
 function assertIdentifier(value: string): string {
     if (!SQL_IDENTIFIER.test(value)) {
         throw new Error(
