@@ -38,6 +38,22 @@ import {
 /** Node clamps a longer `setTimeout` delay to 1ms, so long waits hop instead. */
 const MAX_TIMEOUT_MS = 2 ** 31 - 1;
 
+/**
+ * How a `flow` fire runs its workflow.
+ *
+ * Injected, like {@link setScheduledRunEndHandler}, rather than imported: the
+ * flow runner reaches the GApp bridge and the database, and this module is the
+ * timer. Wiring it the other way would make the scheduler depend on the whole
+ * apps subsystem to arm a cron expression. Null until `main` wires it, and a
+ * fire with no handler is recorded as failed rather than silently dropped.
+ */
+type FlowFireHandler = (flowId: string) => Promise<boolean>;
+let fireFlow: FlowFireHandler | null = null;
+
+export function setFlowFireHandler(handler: FlowFireHandler | null): void {
+    fireFlow = handler;
+}
+
 interface ScheduleState {
     timer: ReturnType<typeof setTimeout> | null;
     /** Epoch ms of the occurrence the timer is aimed at, or null when disarmed. */
@@ -281,6 +297,35 @@ function run(specId: string, trigger: 'schedule' | 'manual'): void {
     if (spec.meta?.schedule_kind === 'agent-nudge') {
         const ok = deliverNudge(spec);
         recordRun(specId, { last_run_at: at, last_run_status: ok ? 'ok' : 'failed' });
+        return;
+    }
+
+    if (spec.meta?.schedule_kind === 'flow') {
+        // A scheduled workflow fires HERE rather than through a second cron of
+        // its own, which is what makes a flow's schedule survive quit and update
+        // and fire with nobody watching — the owner's rule that ops must not
+        // depend on an agent being asked.
+        //
+        // `inFlight` is held across the run so the overlap guard above covers a
+        // long flow the same way it covers a long command: a nightly job still
+        // going at the next occurrence SKIPS rather than doubling up.
+        const flowId = typeof spec.meta.flow_id === 'string' ? spec.meta.flow_id : '';
+        if (!flowId || !fireFlow) {
+            recordRun(specId, { last_run_at: at, last_run_status: 'failed' });
+            return;
+        }
+        st.inFlight = true;
+        recordRun(specId, { last_run_at: at, last_run_status: undefined });
+        void fireFlow(flowId)
+            .then((ok) => {
+                recordRun(specId, { last_run_at: at, last_run_status: ok ? 'ok' : 'failed' });
+            })
+            .catch(() => {
+                recordRun(specId, { last_run_at: at, last_run_status: 'failed' });
+            })
+            .finally(() => {
+                st.inFlight = false;
+            });
         return;
     }
 
