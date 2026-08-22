@@ -2,6 +2,7 @@ import { test, expect, type ElectronApplication, type Page } from '@playwright/t
 import {
     killMasterTerminals,
     launchGenieE2E,
+    readLiveTerminals,
     readMasterSeed,
     readPtyGrid,
     type MasterSeed,
@@ -116,18 +117,32 @@ test('the floor lays out the seeded terminal, and the status bar counts it', asy
     // is not selected yet, so nothing else is mounted.
     await expect(page.locator('.tpanel')).toHaveCount(1);
 
+    // A panel with no terminal in it is a box. The floor's job is to host a live
+    // shell, so the assertion goes as far as the xterm the panel mounts.
+    await expect(panel(seed.terminalLabel).locator('.xterm')).toBeVisible();
+
     const status = page.locator('.gstatus');
     await expect(status).toContainText('1 panel');
     await expect(status).toContainText('1 project');
+    // `live` drops back to 0 when a panel's terminal EXITS, so this says the shell
+    // is still running and not just that a panel was mounted.
+    await expect(status).toContainText('1 live');
 });
 
 test('a workspace switch never fits the panel it hid (genie#229)', async () => {
-    // The pty's grid is applied once the create round-trip lands. Poll for it:
-    // null here would mean no terminal ever started, and every comparison below
-    // would be comparing nothing to nothing.
+    // Two stages, so a failure says which half broke rather than "no grid".
+    // First: main has a live pty for this spec at all.
     await expect
-        .poll(async () => await readPtyGrid(app, seed.terminalId), {
-            message: 'the fixture terminal never applied a grid to its pty',
+        .poll(() => readLiveTerminals(app), {
+            message: 'main never had a live pty for the fixture terminal — the shell did not start, or started and exited',
+            timeout: 30_000,
+        })
+        .toContain(seed.terminalId);
+    // Then: a grid was applied to it. The create round-trip sends one as soon as
+    // it lands, so this is only ever a short wait behind the spawn.
+    await expect
+        .poll(() => readPtyGrid(app, seed.terminalId), {
+            message: 'the pty is live but was never given a grid',
             timeout: 30_000,
         })
         .not.toBeNull();

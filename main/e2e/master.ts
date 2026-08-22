@@ -12,6 +12,7 @@ import {
 } from '../db';
 import { getTerminalSize } from '../terminal/size-tracker';
 import { killTerminalById } from '../terminal/ipc';
+import { liveHostTerminals } from '../terminal/quit-confirm';
 
 /**
  * Deterministic fixture for the MASTER WINDOW E2E spec (e2e/master-window.spec.ts,
@@ -201,6 +202,12 @@ export function seedMasterE2E(): MasterSeed {
          * scrollback the TUI reflowed to it.
          */
         ptyGrid: (id: string) => getTerminalSize(id),
+        /**
+         * The ids main currently has a LIVE pty for. Read alongside `ptyGrid` so a
+         * missing grid says WHICH half failed: no live pty means the spawn never
+         * happened (or died); a live pty with no grid means the resize did.
+         */
+        liveTerminals: (): string[] => liveHostTerminals().map((t) => t.id),
         /**
          * Kill the fixture's ptys. The spec calls this BEFORE closing the app: a
          * manual quit with a live terminal and a window open raises the

@@ -440,6 +440,18 @@ export async function readPtyGrid(
 }
 
 /**
+ * The terminal ids main currently has a LIVE pty for. Read alongside
+ * {@link readPtyGrid} so a missing grid says which half failed: no live pty means
+ * the spawn never happened (or died), a live pty with no grid means the resize did.
+ */
+export async function readLiveTerminals(app: ElectronApplication): Promise<string[]> {
+    return app.evaluate(() => {
+        const h = (globalThis as Record<string, any>).__GENIE_E2E_MASTER__;
+        return (h?.liveTerminals?.() as string[]) ?? [];
+    });
+}
+
+/**
  * Kill the fixture's ptys. Call this BEFORE `app.close()`: a manual quit with a
  * live terminal and a window open raises the keep-or-shut-down confirmation, and
  * because this harness IS the real master page it really renders that modal —
