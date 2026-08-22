@@ -11,6 +11,67 @@ export type { TynnHealth };
 
 export type BackendKind = 'tynn' | 'aionima';
 
+/** A Genie tool presented as a droppable step. Derived from the capability model. */
+export interface FlowNodeKindView {
+    kind: string;
+    tool: string;
+    capability: string;
+    label: string;
+    risk: 'standard' | 'high';
+}
+
+/** What starts a flow, read off its graph. */
+export interface FlowTriggerView {
+    nodeId: string;
+    kind: 'manual' | 'schedule' | 'webhook';
+    cron?: string;
+    /** Set when Genie recognises the trigger but cannot arm it yet. */
+    unsupported?: string;
+}
+
+export interface FlowSummaryView {
+    id: string;
+    appId: string;
+    name: string;
+    enabled: boolean;
+    updatedAt: string;
+    triggers: FlowTriggerView[];
+    /** False when the stored graph could not be parsed — say so, do not hide it. */
+    readable: boolean;
+}
+
+export interface FlowView {
+    id: string;
+    appId: string;
+    name: string;
+    graph: unknown;
+    enabled: boolean;
+    createdAt: string;
+    updatedAt: string;
+}
+
+export interface FlowNodeRefusalView {
+    nodeId: string;
+    label?: string;
+    reason: string;
+}
+
+export interface FlowAdmissionView {
+    allowed: boolean;
+    capabilities: string[];
+    refusals: FlowNodeRefusalView[];
+    /** Set when the whole graph is refused for a reason no single node caused. */
+    reason?: string;
+}
+
+export interface FlowRunOutcomeView {
+    ok: boolean;
+    error?: string;
+    refusals?: FlowNodeRefusalView[];
+    capabilities?: string[];
+    outputs?: Record<string, unknown>;
+}
+
 export interface BackendUser {
     backend: BackendKind;
     id: string;
@@ -2533,6 +2594,32 @@ export interface GenieApi {
         setCapabilities: (appId: string, capabilities: string[]) => Promise<AppActionResult>;
         setRevoked: (appId: string, revoked: boolean) => Promise<AppActionResult>;
         uninstall: (appId: string) => Promise<AppActionResult>;
+    };
+    /**
+     * fancy-flow workflows owned by a Genie App — Genie's own editing surface.
+     *
+     * Saving grants nothing. A graph reaching past the app's permissions saves
+     * fine, because an author is allowed to be mid-edit; it is refused at RUN.
+     * `check` is how the canvas shows that before anyone waits for 3am.
+     */
+    flows: {
+        list: (appId: string) => Promise<FlowSummaryView[]>;
+        get: (flowId: string) => Promise<FlowView | null>;
+        save: (input: {
+            id: string;
+            appId: string;
+            name: string;
+            graph: unknown;
+            enabled?: boolean;
+        }) => Promise<FlowView | null>;
+        remove: (flowId: string) => Promise<boolean>;
+        setEnabled: (flowId: string, enabled: boolean) => Promise<FlowView | null>;
+        check: (appId: string, graph: unknown) => Promise<FlowAdmissionView>;
+        palette: (appId: string) => Promise<{
+            available: FlowNodeKindView[];
+            all: FlowNodeKindView[];
+        }>;
+        run: (flowId: string) => Promise<FlowRunOutcomeView>;
     };
     /**
      * The GApp window's own surface. Only a GApp window answers these; Genie's

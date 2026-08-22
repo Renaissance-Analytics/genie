@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Text } from '@particle-academy/react-fancy';
 import { api, hasGenieBridge, type InstalledAppView, type WorkspaceRow } from '../lib/genie';
 import Floor from '../components/Master/Floor';
+import FlowsTab from '../components/Flows/FlowsTab';
 import { useFloorState } from '../lib/use-floor-state';
 
 /**
@@ -56,6 +57,18 @@ export default function GAppWindow() {
         void api().gapp.showTab(active).catch(() => {});
     }, [active, tabs.length]);
 
+    /**
+     * The strip Genie actually draws: the app's tabs, then Genie's own Flows tab.
+     *
+     * APPENDED, never inserted. `layout()` in `apps/window.ts` maps embedded view
+     * `i` to tab `i + 1`, so an index past the last app tab hides every app view
+     * and leaves the space to this renderer — which is exactly what a Genie-drawn
+     * tab needs. A tab inserted anywhere earlier would shift those indices and
+     * show an app's view behind the wrong tab.
+     */
+    const stripTabs = [...tabs, { kind: 'flows' as const, title: 'Flows' }];
+    const flowsTabIndex = stripTabs.length - 1;
+
     if (error) {
         return (
             <main style={{ padding: 24 }}>
@@ -84,7 +97,7 @@ export default function GAppWindow() {
                     zIndex: 2,
                 }}
             >
-                {tabs.map((tab, i) => (
+                {stripTabs.map((tab, i) => (
                     <button
                         key={`${tab.kind}-${tab.title}-${i}`}
                         type="button"
@@ -144,6 +157,21 @@ export default function GAppWindow() {
                     }}
                 >
                     {app ? <Floor {...floor} /> : <Text size="sm">Loading…</Text>}
+                </div>
+
+                {/* The FLOWS tab — Genie's, not the app's. It is where a flow's
+                    permissions are shown, and an app must not be able to paint the
+                    screen that says what it is allowed to do. */}
+                <div
+                    data-testid="gapp-flows-panel"
+                    style={{
+                        display: active === flowsTabIndex ? 'flex' : 'none',
+                        flexDirection: 'column',
+                        flex: 1,
+                        minHeight: 0,
+                    }}
+                >
+                    {app ? <FlowsTab appId={app.id} /> : <Text size="sm">Loading…</Text>}
                 </div>
             </div>
         </div>
