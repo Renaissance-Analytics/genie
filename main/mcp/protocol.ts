@@ -439,7 +439,14 @@ export interface ManagedProcessInfo {
     schedule?: string;
     /** Human rendering of {@link schedule}, e.g. "Daily at 03:00". */
     scheduleDescription?: string;
-    scheduleKind?: 'command' | 'agent-nudge';
+    /**
+     * What a fire does. `flow` appears here but NOT in the create request below:
+     * a flow's schedule is declared on its own canvas and reconciled into a spec,
+     * so it can be listed and understood but never hand-created. A schedule
+     * created by hand would be a second way to arm a flow, outside the
+     * declaration that is supposed to be the only one.
+     */
+    scheduleKind?: 'command' | 'agent-nudge' | 'flow';
     /** ISO timestamp of the armed next occurrence; absent when not armed. */
     nextRunAt?: string;
     /** ISO timestamp the last run started. */
