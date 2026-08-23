@@ -33,7 +33,7 @@ export interface OpenAppWindowOpts {
     name: string;
     /** `https://<slug>.gen/` — where Genie serves this app. */
     homeUrl: string;
-    /** The app is being BUILT here: dev tools on, and the title says so. */
+    /** The app is being BUILT here: dev tools on. */
     devMode?: boolean;
     /** The app's manifest — what its tabs and panels are. */
     manifest?: AppManifest;

@@ -34,8 +34,7 @@ export interface LivePreview {
     /**
      * The manifest as the DEVELOPER wrote it.
      *
-     * What `me()` reports and what the window's title says, because that is what
-     * the app IS. A developer whose code branches on its own id must not silently
+     * What `me()` reports, because that is what the app IS. A developer whose code branches on its own id must not silently
      * take a different branch because Genie renamed it for bookkeeping.
      */
     source: AppManifest;
@@ -129,8 +128,11 @@ export function previewAppView(live: LivePreview): InstalledAppView {
         scope: live.grant.scope,
         workspaces: live.grant.workspaces ?? [],
         revoked: false,
-        // Dev tools ON, and the title says "development" — a preview is a place an
-        // app is being built, and you have to be able to inspect it.
+        // Dev tools ON — a preview is a place an app is being built, and you have
+        // to be able to inspect what you are looking at. The window says
+        // "Preview" rather than "Development": both have dev tools, but only one
+        // of them disappears when the window closes, and that is the distinction
+        // the developer needs.
         devMode: true,
         homeUrl: gappHomeUrl(live.manifest.slug),
         permissions: grantableCapabilities(declared).map((c) => ({
