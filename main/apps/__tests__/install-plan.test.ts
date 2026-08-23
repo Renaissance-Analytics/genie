@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { appInstallPlan } from '../install-plan';
+import { appCopyPlan, appInstallPlan } from '../install-plan';
 import { validateAppManifest, type AppManifest } from '../manifest';
 import { parseDevSitesValue } from '../../dev-server/sites-config';
 
@@ -177,5 +177,54 @@ describe('the plan survives the envelope, not just our own types', () => {
             // not serve what the manifest asked for.
             expect(parsed?.[plan.siteId]).toEqual(plan.site);
         }
+    });
+});
+
+/**
+ * What travels with the app when it is copied into its workspace (Tynn #250).
+ *
+ * A GApp with named components is copied component by component — the manifest
+ * says which folders are the app, and the rest of the developer's directory is
+ * not. That rule is right, and it is exactly why `.agents/` has to be named here:
+ * it is ENVELOPE-owned, so it is in none of the components, and an app whose
+ * personas were left behind would install, pass every check, and then have nothing
+ * to run its declared agents from.
+ */
+describe('what gets copied into the workspace', () => {
+    it('copies the whole folder when the app names no components', () => {
+        const plan = appCopyPlan(manifest({ frontend: { serve: { mode: 'static', root: '.' } } }));
+        expect(plan.wholeFolder).toBe(true);
+    });
+
+    it('copies each named component, and the manifest itself', () => {
+        // The manifest travels so its DECLARED permissions stay readable after
+        // install — that is the ceiling the permissions screen narrows to.
+        const plan = appCopyPlan(
+            manifest({
+                services: [{ name: 'api', repo: 'backend', command: ['uvicorn', 'app:api'] }],
+            }),
+        );
+
+        expect(plan.wholeFolder).toBe(false);
+        expect(plan.components.sort()).toEqual(['backend', 'desktop']);
+        expect(plan.envelopePaths).toContain('genie-app.json');
+    });
+
+    it('carries `.agents/` when the app declares agents', () => {
+        // `.agents/` sits beside `repos/`, so component-by-component copying misses
+        // it. The failure that would cause: a valid install whose declared agents
+        // have no persona on the machine to run from.
+        const plan = appCopyPlan(
+            manifest({ agents: [{ name: 'Reviewer', persona: 'reviewer.md' }] }),
+        );
+
+        expect(plan.envelopePaths).toContain('.agents');
+    });
+
+    it('does NOT carry `.agents/` for an app that declared none', () => {
+        // Copying a folder nobody declared would smuggle discovery back in through
+        // the copier: files would land on the machine that no consent screen ever
+        // described.
+        expect(appCopyPlan(manifest()).envelopePaths).not.toContain('.agents');
     });
 });

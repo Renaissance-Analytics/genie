@@ -1,7 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import { describe, expect, it } from 'vitest';
-import { validateAppManifest, APP_MANIFEST_FILENAME } from '../manifest';
+import { validateAppManifest, APP_AGENTS_DIR, APP_MANIFEST_FILENAME } from '../manifest';
+import { validateAppFolder } from '../validate';
 import { appInstallPlan } from '../install-plan';
 
 /**
@@ -70,6 +71,33 @@ describe('the shipped example app', () => {
             const entry = path.join(EXAMPLE_DIR, service.repo ?? '', service.command[1] ?? '');
             expect(fs.existsSync(entry), entry).toBe(true);
         }
+    });
+
+    it('ships an AGENT, declared in the manifest with its persona on disk', () => {
+        // `.agents/` is the newest half of the manifest and the one with no prior
+        // art to copy, so the example is where it gets demonstrated. It also gives
+        // the folder check a real directory to be right about: declaration and
+        // folder drifting apart is the failure declaring agents exists to catch,
+        // and every other test for it uses a probe.
+        const m = manifest();
+        expect(m.agents?.length).toBeGreaterThan(0);
+        for (const agent of m.agents ?? []) {
+            const persona = path.join(EXAMPLE_DIR, APP_AGENTS_DIR, agent.persona);
+            expect(fs.existsSync(persona), persona).toBe(true);
+        }
+    });
+
+    it('passes the folder check Genie runs before installing it', () => {
+        // The example is documentation people copy. An example that would be
+        // REFUSED at install teaches that the system is broken, not the example.
+        const report = validateAppFolder(EXAMPLE_DIR, {
+            readManifest: (folder) =>
+                fs.readFileSync(path.join(folder, APP_MANIFEST_FILENAME), 'utf8'),
+            exists: (p) => fs.existsSync(p),
+            slugTaken: () => false,
+        });
+
+        expect(report.errors).toEqual([]);
     });
 
     it('never reaches for window.genie', () => {

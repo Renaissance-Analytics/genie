@@ -1,3 +1,4 @@
+import path from 'path';
 import { describe, expect, it } from 'vitest';
 import { validateAppFolder, type FolderProbe } from '../validate';
 
@@ -200,5 +201,86 @@ describe('advice — it will run, but think about it', () => {
 
     it('stays quiet about a modest app', () => {
         expect(validateAppFolder('C:/src/trader', probe()).advice).toEqual([]);
+    });
+});
+
+/**
+ * The consequence that makes DECLARING agents worth its cost (owner, 2026-08-22).
+ *
+ * Agents are declared in the manifest rather than discovered from `.agents/`,
+ * because a GApp's agents run under the app's granted capabilities and a consent
+ * screen cannot describe a set it has to go looking for. The accepted cost is two
+ * places to keep in step — and this is what stops them drifting silently.
+ *
+ * A declared agent with no persona file behind it is the same class of failure as
+ * a front end pointed at a `dist` nobody built: the manifest is valid, the install
+ * succeeds, and the thing it promised is not there.
+ */
+describe('the agents a GApp declared, against the folder it shipped', () => {
+    const withAgents = () =>
+        manifest({
+            agents: [
+                { name: 'Strategist', persona: 'strategist.md' },
+                { name: 'Reviewer', persona: 'reviewer/persona.md' },
+            ],
+        });
+
+    it('passes when every declared persona is there', () => {
+        const report = validateAppFolder(
+            'C:/src/trader',
+            probe({ readManifest: () => withAgents() }),
+        );
+
+        expect(report.ok).toBe(true);
+        expect(report.errors).toEqual([]);
+    });
+
+    it('FAILS when a declared agent has no persona file', () => {
+        const report = validateAppFolder(
+            'C:/src/trader',
+            probe({
+                readManifest: () => withAgents(),
+                exists: (p) => !p.includes('reviewer'),
+            }),
+        );
+
+        expect(report.ok).toBe(false);
+        // Named, so the developer knows which of the two to fix.
+        expect(report.errors.join(' ')).toContain('Reviewer');
+        expect(report.errors.join(' ')).toContain('persona');
+    });
+
+    it('reports EVERY missing persona, not just the first', () => {
+        // Same rule the manifest validator follows: fixing one problem at a time
+        // wastes the developer's day.
+        const report = validateAppFolder(
+            'C:/src/trader',
+            probe({ readManifest: () => withAgents(), exists: (p) => !p.includes('.agents') }),
+        );
+
+        expect(report.errors.filter((e) => e.includes('persona'))).toHaveLength(2);
+    });
+
+    it('looks for personas under `.agents/` in the ENVELOPE, not inside a repo', () => {
+        // `.agents/` is envelope-owned, beside `repos/` and `project.json` — an
+        // agent belongs to the APP, not to any one of its repos.
+        const looked: string[] = [];
+        validateAppFolder(
+            'C:/src/trader',
+            probe({
+                readManifest: () => withAgents(),
+                exists: (p) => {
+                    looked.push(p.split(path.sep).join('/'));
+                    return true;
+                },
+            }),
+        );
+
+        expect(looked).toContain('C:/src/trader/.agents/strategist.md');
+    });
+
+    it('says nothing about agents when the app ships none', () => {
+        const report = validateAppFolder('C:/src/trader', probe());
+        expect(report.errors.join(' ')).not.toContain('persona');
     });
 });

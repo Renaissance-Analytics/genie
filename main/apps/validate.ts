@@ -23,7 +23,12 @@
 
 import path from 'path';
 import { findCapability } from './capabilities';
-import { APP_MANIFEST_FILENAME, validateAppManifest, type AppManifest } from './manifest';
+import {
+    APP_AGENTS_DIR,
+    APP_MANIFEST_FILENAME,
+    validateAppManifest,
+    type AppManifest,
+} from './manifest';
 
 export interface FolderProbe {
     /** The raw `genie-app.json`, or null when the folder has none. */
@@ -103,6 +108,30 @@ export function validateAppFolder(folder: string, probe: FolderProbe): AppFolder
         if (!probe.exists(dir)) {
             errors.push(
                 `The service "${service.name}" runs in "${service.repo ?? '.'}", but ${dir} does not exist.`,
+            );
+        }
+    }
+
+    // The consequence that makes DECLARING agents worth its cost (owner,
+    // 2026-08-22). They are declared in the manifest rather than discovered from
+    // `.agents/`, because a GApp's agents run under the app's GRANTED
+    // capabilities — a file appearing in the folder would add an agent nobody
+    // agreed to, and a consent screen cannot describe a set it has to go looking
+    // for. The accepted cost is two places to keep in step, and this check is what
+    // stops them drifting silently: a declared agent with nothing behind it is the
+    // same failure as a front end pointed at a `dist` nobody built.
+    //
+    // `.agents/` is ENVELOPE-owned, beside `repos/` and `project.json`. An agent
+    // belongs to the app, not to any one of its repos, so it is never resolved
+    // through `componentDir`.
+    for (const agent of manifest.agents ?? []) {
+        const persona = path.join(folder, APP_AGENTS_DIR, agent.persona);
+        if (!probe.exists(persona)) {
+            errors.push(
+                `The agent "${agent.name}" is declared with a persona at ` +
+                    `"${APP_AGENTS_DIR}/${agent.persona}", but ${persona} does not exist. ` +
+                    'Add the file, or drop the agent from `agents` — the user is asked to consent ' +
+                    'to this roster, so it has to be real.',
             );
         }
     }

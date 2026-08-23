@@ -54,6 +54,10 @@ At the root of your app's folder.
     { "tool": "docker", "reason": "runs the strategy sandbox" }
   ],
 
+  "agents": [
+    { "name": "Strategist", "persona": "strategist.md", "description": "Designs trades." }
+  ],
+
   "permissions": {
     "scope": "self",
     "capabilities": ["hosting", "knowledge"]
@@ -72,10 +76,44 @@ At the root of your app's folder.
 | `frontend.browserExposed` | Reachable from the user's real browser, not only the Genie window. Costs a one-time admin prompt; ask for it only if you need it. |
 | `services[].command` | **A literal argv array**, never a shell string. `["uvicorn", "app:api"]`, not `"uvicorn app:api"`. |
 | `requires` | Runtimes you need. Genie installs what it can on this machine and shows the user, prominently, what it cannot. Always give a `reason` — "install Docker" is an instruction; "install Docker — it runs the strategy sandbox" is a decision. |
+| `agents` | The agents your app ships. Each names a persona file under **`.agents/`**. Declared here, never discovered from the folder — see below. |
 
 A missing runtime does **not** block installation. Your app lands; whatever needs
 the missing tool will not start until the user provides it. Write your app so that
 reads as a clear state, not a crash.
+
+### The agents your app ships — `.agents/`
+
+A Genie App is a `.gapp` envelope, and beside `repos/` it has an `.agents/` folder
+holding the persona and config for each agent your app can run. It pairs with
+`panels.agents`: the manifest says how many agent panels the window lays out,
+`.agents/` says who those agents ARE.
+
+```
+trader.gapp/
+├── genie-app.json
+├── .agents/
+│   ├── strategist.md
+│   └── reviewer/persona.md
+└── repos/
+```
+
+**Dropping a file in `.agents/` does not add an agent.** Only what the manifest
+lists is real. That is the opposite of the convention you know from
+`.claude/agents/*.md`, and it costs you something — adding an agent means adding it
+in two places — so here is why:
+
+Your agents run under the capabilities **the user granted your app**. An agent that
+appeared merely by existing as a file would be an agent nobody agreed to, and the
+install screen cannot describe a roster it has to go looking for. Declaring them is
+what lets Genie show the user your agents *before* granting anything. It is also
+what every other part of the manifest already does — `capabilities`, `panels`,
+`tabs`, `services`, `requires` — so it is one rule, not two.
+
+Genie holds both halves together: a declared agent whose persona file is missing
+**fails the folder check**, in the same breath as a front end pointed at a `dist`
+nobody built. `persona` is a path relative to `.agents/` and may not climb out of
+it.
 
 ---
 

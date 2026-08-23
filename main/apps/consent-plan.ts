@@ -75,6 +75,35 @@ function originChangeWarning(context: ConsentContext): string {
 }
 
 /**
+ * The agents the app ships — the whole reason they are DECLARED (owner,
+ * 2026-08-22).
+ *
+ * A GApp's agents run under the app's GRANTED capabilities. Discovering them from
+ * `.agents/` would mean a file could add an agent nobody agreed to, and this
+ * screen could not describe a set it had to go looking for. Declaring them buys
+ * exactly one thing: this list. Leaving it off the screen would mean the cost of
+ * declaration — two places to keep in step — bought nothing at all.
+ *
+ * The closing sentence is doing as much work as the names. Without it the roster
+ * reads as trivia; with it, ticking a permission below is visibly ticking it for
+ * these agents too.
+ */
+function agentsSection(manifest: AppManifest): string {
+    const agents = manifest.agents ?? [];
+    // Most GApps ship none, and a heading over an empty list is noise on the one
+    // screen that has to stay readable.
+    if (agents.length === 0) return '';
+    const lines = agents.map(
+        (a) => `- **${a.name}**${a.description ? ` — ${a.description}` : ''}`,
+    );
+    return (
+        `\n\nIt ships ${agents.length === 1 ? 'an agent' : `${agents.length} agents`}, ` +
+        'which run with the permissions you grant below:\n\n' +
+        lines.join('\n')
+    );
+}
+
+/**
  * The requirements section — the "distinctive spot in the installer" the owner
  * asked for. A runtime the user has to fetch themselves is a thing they need to
  * SEE, not a line that scrolls past in a log.
@@ -168,6 +197,7 @@ export function buildConsentPlan(
                 `Install the Genie App **${manifest.name}** (version ${manifest.version})?\n\n` +
                 originChangeWarning(context) +
                 `${whatItSetsUp(manifest)}\n` +
+                agentsSection(manifest) +
                 requirementsSection(requirements),
             options: [
                 { label: installLabel, description: `Set up ${manifest.name} on this machine.` },

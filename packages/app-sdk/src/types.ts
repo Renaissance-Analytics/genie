@@ -70,6 +70,36 @@ export interface GenieAppManifest {
     }>;
     /** Runtimes the app needs. Genie installs what it can and shows the rest. */
     requires?: Array<{ tool: string; version?: string; reason?: string }>;
+    /**
+     * How the window's first tab — Genie's own panel management — is laid out.
+     * Defaults to a single agent panel.
+     */
+    panels?: {
+        /** Concurrent agent panels, 1 to 8. */
+        agents: number;
+        /** Which surfaces to offer. Absent means Genie's default set. */
+        kinds?: Array<'terminal' | 'files' | 'editor'>;
+    };
+    /** Tabs YOUR app serves, right of the Agent tab. `path` stays on your origin. */
+    tabs?: Array<{ title: string; path: string }>;
+    /**
+     * The agents this app ships, each with a persona file under `.agents/`.
+     *
+     * DECLARED, not discovered. Dropping a file in `.agents/` does not add an
+     * agent: your agents run under the capabilities the USER granted this app, so
+     * Genie puts this list on the install screen before granting anything, and it
+     * cannot describe a roster it has to go looking for. The cost is that adding
+     * an agent means adding it here too — and a declared agent whose persona file
+     * is missing fails the folder check.
+     */
+    agents?: Array<{
+        /** What the install screen calls it. Unique within the manifest. */
+        name: string;
+        /** Path to its persona, relative to `.agents/`. */
+        persona: string;
+        /** One line: what it is for. Shown to the user at install. */
+        description?: string;
+    }>;
     permissions: {
         scope: GenieAppScope;
         /** Required when scope is `workspaces`. */

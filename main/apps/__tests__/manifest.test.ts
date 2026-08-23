@@ -309,3 +309,124 @@ describe('the window a GApp gets — panels and tabs', () => {
         expect(result.value.tabs).toBeUndefined();
     });
 });
+
+/**
+ * The agents a GApp ships (Tynn #250, owner-directed 2026-08-22).
+ *
+ * A `.gapp` envelope holds a `.agents/` folder — the persona and config for each
+ * agent the app can run. It pairs with `panels.agents`: the manifest says how many
+ * agent panels the window lays out, `.agents/` says who those agents ARE.
+ *
+ * They are DECLARED here rather than discovered from the folder, and the reason is
+ * the whole point of this block. A GApp's agents run under the app's GRANTED
+ * capabilities, so a file appearing in `.agents/` would add an agent nobody agreed
+ * to, and a consent screen cannot describe a set it has to go looking for.
+ * Declaration is also what every other GApp capability already does —
+ * `capabilities`, `panels`, `tabs`, `services`, `requires` — so this keeps one
+ * rule rather than two.
+ */
+describe('the agents a GApp ships', () => {
+    it('declares each one, with the persona file it runs from', () => {
+        const result = validateAppManifest({
+            ...valid(),
+            agents: [
+                { name: 'Strategist', persona: 'strategist.md', description: 'Designs trades.' },
+                { name: 'Reviewer', persona: 'reviewer.md' },
+            ],
+        });
+
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.value.agents).toEqual([
+            { name: 'Strategist', persona: 'strategist.md', description: 'Designs trades.' },
+            { name: 'Reviewer', persona: 'reviewer.md' },
+        ]);
+    });
+
+    it('leaves `agents` ABSENT for an app that ships none', () => {
+        // Absent, not empty. Most GApps ship no agent of their own, and an empty
+        // array would read as a roster that happens to be empty this time.
+        const result = validateAppManifest(valid());
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.value.agents).toBeUndefined();
+    });
+
+    it('refuses an agent with no name, since the consent screen has to name it', () => {
+        const result = validateAppManifest({ ...valid(), agents: [{ persona: 'x.md' }] });
+        expect(result.ok).toBe(false);
+        if (result.ok) return;
+        expect(result.errors.join(' ')).toContain('agents[0].name');
+    });
+
+    it('refuses an agent with no persona file', () => {
+        // Without one there is nothing to check against the folder, and the
+        // declaration would be a name with nothing behind it.
+        const result = validateAppManifest({ ...valid(), agents: [{ name: 'Reviewer' }] });
+        expect(result.ok).toBe(false);
+        if (result.ok) return;
+        expect(result.errors.join(' ')).toContain('agents[0].persona');
+    });
+
+    it('refuses a persona path that climbs OUT of `.agents/`', () => {
+        // The persona is read and becomes an agent's instructions. A path that
+        // escapes the folder would let a manifest point that at anything on the
+        // machine — an SSH key, a .env — and have Genie hand it to a model.
+        for (const persona of [
+            '../../../.ssh/id_rsa',
+            '/etc/passwd',
+            'C:/Windows/win.ini',
+            '..\\..\\secrets.md',
+            '.agents\\..\\..\\secrets.md',
+            'nested/../../out.md',
+            './x.md',
+            '',
+        ]) {
+            const result = validateAppManifest({
+                ...valid(),
+                agents: [{ name: 'Reviewer', persona }],
+            });
+            expect(result.ok, `"${persona}" must be refused`).toBe(false);
+        }
+    });
+
+    it('allows a persona in a sub-folder of `.agents/`', () => {
+        // "Persona and config for each agent" is often more than one file, so an
+        // agent gets to own a directory.
+        const result = validateAppManifest({
+            ...valid(),
+            agents: [{ name: 'Reviewer', persona: 'reviewer/persona.md' }],
+        });
+        expect(result.ok).toBe(true);
+    });
+
+    it('refuses two agents with the same name', () => {
+        // The consent screen lists them by name. Two identical rows describe a
+        // roster the user cannot tell apart.
+        const result = validateAppManifest({
+            ...valid(),
+            agents: [
+                { name: 'Reviewer', persona: 'a.md' },
+                { name: 'reviewer ', persona: 'b.md' },
+            ],
+        });
+        expect(result.ok).toBe(false);
+        if (result.ok) return;
+        expect(result.errors.join(' ')).toMatch(/twice|already/i);
+    });
+
+    it('refuses a roster too long for anybody to read', () => {
+        // Same reasoning as the panel cap: every declared agent is a line on the
+        // consent screen, and a roster nobody reads is the failure mode consent
+        // exists to prevent.
+        const many = Array.from({ length: 40 }, (_, i) => ({
+            name: `Agent ${i}`,
+            persona: `a${i}.md`,
+        }));
+        expect(validateAppManifest({ ...valid(), agents: many }).ok).toBe(false);
+    });
+
+    it('refuses `agents` that is not an array', () => {
+        expect(validateAppManifest({ ...valid(), agents: { name: 'x' } }).ok).toBe(false);
+    });
+});

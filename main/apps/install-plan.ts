@@ -1,5 +1,5 @@
 import { devSiteIdFor, type DevSiteConfig } from '../dev-server/sites-config';
-import type { AppManifest } from './manifest';
+import { APP_AGENTS_DIR, APP_MANIFEST_FILENAME, type AppManifest } from './manifest';
 
 /**
  * PURE. What installing a GApp actually configures (Tynn #250).
@@ -40,6 +40,53 @@ function repoPath(repo: string | undefined): string {
     return repo ? `repos/${repo}` : '';
 }
 
+/** What of the source folder becomes the installed app. */
+export interface AppCopyPlan {
+    /** The app named no components, so the whole folder IS the app. */
+    wholeFolder: boolean;
+    /** Component folders, each landing at `repos/<name>`. */
+    components: string[];
+    /** Envelope-level paths that travel whatever the components are. */
+    envelopePaths: string[];
+}
+
+/**
+ * Which paths of the source folder travel into the workspace.
+ *
+ * A GApp with named components is copied component by component: the manifest
+ * says which folders are the app, and the rest of the developer's directory is
+ * not. That rule is right, and it is precisely why the envelope-level paths have
+ * to be enumerated here — they belong to no component, so nothing else would
+ * carry them.
+ *
+ * `.agents/` is carried only when the app DECLARED agents. Copying it
+ * unconditionally would smuggle discovery back in through the copier: files would
+ * land on the machine that no consent screen ever described. What travels is the
+ * folder — a persona is often more than one file — but what may RUN is only what
+ * the manifest declared, which `validateAppFolder` has already checked is there.
+ *
+ * Pure, because the assertion that matters is about a path that must NOT be
+ * forgotten, and a copier made of `fs` calls cannot state that.
+ */
+export function appCopyPlan(manifest: AppManifest): AppCopyPlan {
+    const components = new Set<string>();
+    if (manifest.frontend.repo) components.add(manifest.frontend.repo);
+    for (const service of manifest.services ?? []) {
+        if (service.repo) components.add(service.repo);
+    }
+
+    return {
+        wholeFolder: components.size === 0,
+        components: [...components],
+        envelopePaths: [
+            // The manifest travels so its DECLARED permissions stay readable after
+            // install — that is the ceiling the permissions screen narrows to.
+            APP_MANIFEST_FILENAME,
+            ...((manifest.agents ?? []).length > 0 ? [APP_AGENTS_DIR] : []),
+        ],
+    };
+}
+
 export function appInstallPlan(workspaceId: string, manifest: AppManifest): AppInstallPlan {
     const { slug, frontend } = manifest;
 
@@ -48,6 +95,21 @@ export function appInstallPlan(workspaceId: string, manifest: AppManifest): AppI
         // A bare `<slug>.gen`, matching what the real apps use (`orr.gen`,
         // `ripple.gen`) rather than the `<site>.<workspace>.gen` default: a GApp is
         // its own product, and its address should read like one.
+        //
+        // PENDING CORRECTION (owner, 2026-08-22): hosted GApp sites are to move to
+        // the `.gapp` TLD — `<slug>.gapp`, distinct from the `.gapp` ENVELOPE
+        // suffix, which is a different thing that also exists. This is the one
+        // place a GApp's address is minted, so it is where that migration starts.
+        //
+        // Deliberately NOT changed here. `.gen` is assumed in about fifteen places,
+        // including `window-policy.ts`, where it is part of the same-origin
+        // navigation check that keeps an app inside its own partition. Moving the
+        // TLD in one file and not the others would leave the installer minting an
+        // address the navigation policy does not recognise — an app that installs
+        // and then cannot load itself, with the failure surfacing far from here.
+        // The alternative considered was migrating all of it in this change; it was
+        // rejected because it is a security-surface change that wants its own
+        // review, not a rider on a manifest feature.
         genName: `${slug}.gen`,
         repo: frontend.repo ?? '',
         // HOST-NATIVE, not a container. A GApp runs against live source on the
