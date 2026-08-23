@@ -31,6 +31,7 @@
  */
 
 import { narrowGrant } from './manage-core';
+import { devSiteIdFor, slugLabel, type DevSiteConfig } from '../dev-server/sites-config';
 import type { AppGrant } from './bridge-decision';
 import type { AppManifest, AppScope } from './manifest';
 
@@ -202,4 +203,91 @@ export function mayTearDownPreviewWorkspace(
  */
 export function orphanedPreviewWorkspaces(rows: readonly PreviewWorkspaceRow[]): string[] {
     return rows.filter((r) => r.app_kind === PREVIEW_APP_KIND).map((r) => r.id);
+}
+
+
+/* -------------------------------------------------------------------------- */
+/* Where a preview is SERVED                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The front end's directory, in the SOURCE layout.
+ *
+ * An install COPIES each declared component to `repos/<name>` and
+ * `appInstallPlan` writes a site config that says so. A preview copies nothing —
+ * the developer's folder IS the workspace — and there the component sits at
+ * `web/`, not `repos/web/`. So the component folder is folded into the serve root
+ * and the site is pointed at the workspace root instead.
+ *
+ * The two layouts are a real difference between installing and previewing, not an
+ * accident, which is why this is a stated function rather than a `repos/` string
+ * quietly dropped at the call site.
+ */
+function sourceServeRoot(repo: string | undefined, root: string): string {
+    const rel = root.replace(/^\.\//, '').replace(/\/+$/, '');
+    if (!repo) return rel || '.';
+    // `root: '.'` is what the scaffold writes, and `web/.` is a docroot nobody
+    // should have to reason about.
+    return rel && rel !== '.' ? `${repo}/${rel}` : repo;
+}
+
+export interface PreviewSitePlan {
+    siteId: string;
+    site: DevSiteConfig;
+}
+
+/**
+ * The hosting a preview needs: an ORDINARY Genie dev site, at the preview address.
+ *
+ * Deliberately the same {@link DevSiteConfig} an installed GApp gets, for the same
+ * reason `appInstallPlan` emits one — a preview that invented its own serving path
+ * would be a second hosting implementation to keep working, and the whole claim of
+ * this feature is that a preview is the real thing.
+ *
+ * Two things differ from the installed plan, and both follow from what a preview
+ * IS:
+ *
+ *   - the SOURCE layout, above, because nothing was copied;
+ *   - no `browserExposed`, ever. Reaching the real browser installs a certificate
+ *     and edits the hosts file — a one-time ADMIN prompt. An install may ask for
+ *     that because the app declared it and the user agreed to install it. A
+ *     throwaway preview window is not a reason to mutate the machine's trust
+ *     store, and the developer can see their app perfectly well inside Genie.
+ */
+export function previewSitePlan(
+    workspaceId: string,
+    manifest: AppManifest,
+): PreviewSitePlan {
+    const { slug, frontend } = manifest;
+    // The ADDRESS keeps the dotted, collision-proof name. The site's NAME cannot:
+    // a dev site name must be a single DNS label. Slugging it is safe where
+    // slugging the address would not be — a name is scoped to ONE workspace, and a
+    // preview's workspace is created for it and deleted with it.
+    const name = slugLabel(slug);
+
+    const site: DevSiteConfig = {
+        name,
+        genName: `${slug}.gen`,
+        // The component is in the serve root now, so the site is rooted at the
+        // workspace — which for a preview is the developer's folder itself.
+        repo: '',
+        runMode: 'host',
+        kind: 'http',
+        enabled: true,
+        ...(frontend.serve.mode === 'static'
+            ? {
+                  hostServe: {
+                      mode: 'static' as const,
+                      root: sourceServeRoot(frontend.repo, frontend.serve.root),
+                      ...(frontend.serve.spa ? { spa: true } : {}),
+                  },
+              }
+            : // A `proxy` front end is the developer's OWN dev server on a port
+              // they are already running. Genie fronts it and starts nothing,
+              // which also makes previewing one the closest thing to free: the
+              // reload loop is the dev server's.
+              { hostPort: frontend.serve.hostPort }),
+    };
+
+    return { siteId: devSiteIdFor(workspaceId, name), site };
 }

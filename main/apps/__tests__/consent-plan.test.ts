@@ -303,4 +303,93 @@ describe('the agents a GApp ships, at install', () => {
         const text = plan().questions[0]?.question ?? '';
         expect(text.toLowerCase()).not.toContain('agent');
     });
+
+    it('names them on the PREVIEW screen too', () => {
+        // A preview's grant is a REAL grant — `previewGrant` narrows the declared
+        // set exactly as the install path does — so its agents really do run on the
+        // permissions ticked below. Showing the roster at install and hiding it at
+        // preview would put the one screen a developer is guaranteed to read on the
+        // wrong side of the thing declaration exists to buy.
+        const text =
+            buildConsentPlan(
+                manifest({ agents: [{ name: 'Strategist', persona: 'strategist.md' }] }),
+                noRequirements,
+                { preview: true },
+            ).questions[0]?.question ?? '';
+
+        expect(text).toContain('Strategist');
+        expect(text).toMatch(/permissions you grant/i);
+    });
+});
+
+describe('the PREVIEW framing', () => {
+    const previewable = () =>
+        manifest({
+            permissions: { scope: 'workstation', capabilities: ['terminals', 'hosting'] },
+        });
+
+    it('asks the same permission and reach questions, word for word', () => {
+        // The reason a preview shows a consent screen AT ALL is that a developer
+        // who never sees their own consent screen never learns what it says. That
+        // only holds while it is the SAME screen — so everything below the first
+        // question is the install plan's, unchanged, and this test is what keeps
+        // it that way when either is edited.
+        const install = buildConsentPlan(previewable(), noRequirements);
+        const preview = buildConsentPlan(previewable(), noRequirements, { preview: true });
+
+        expect(preview.questions.slice(1)).toEqual(install.questions.slice(1));
+        expect(preview.optionGrants).toEqual(install.optionGrants);
+        expect(preview.scopeChoices).toEqual(install.scopeChoices);
+    });
+
+    it('does not offer to install something', () => {
+        const plan = buildConsentPlan(previewable(), noRequirements, { preview: true });
+
+        expect(plan.installLabel).toBe('Preview');
+        expect(plan.questions[0]!.header).toBe('Preview');
+        expect(plan.questions[0]!.question).toContain('Preview');
+        // The developer is about to be shown a permission screen. If they read it
+        // as an install prompt they will hesitate over the wrong decision — and if
+        // they read it as free they will not read it at all.
+        expect(plan.questions[0]!.question).toMatch(/not installed|nothing is installed/i);
+    });
+
+    it('names the preview address, never the app’s real one', () => {
+        // `whatItSetsUp` tells the user which site appears. For a preview it has to
+        // be the preview's own address: telling a developer that `trader.gen` is
+        // about to be served would describe a takeover of their installed copy that
+        // is precisely what previewing refuses to do.
+        const plan = buildConsentPlan(
+            { ...previewable(), slug: 'trader.preview' },
+            noRequirements,
+            { preview: true },
+        );
+
+        expect(plan.questions[0]!.question).toContain('trader.preview.gen');
+    });
+
+    it('reads a yes exactly as the install plan does', () => {
+        const plan = buildConsentPlan(previewable(), noRequirements, { preview: true });
+
+        const outcome = readConsent(plan, {
+            cancelled: false,
+            answers: [
+                { header: 'Preview', question: '', selected: ['Preview'], note: '' },
+                {
+                    header: 'Permissions',
+                    question: '',
+                    selected: Object.keys(plan.optionGrants),
+                    note: '',
+                },
+            ],
+        });
+
+        expect(outcome.install).toBe(true);
+        expect(outcome.capabilities.sort()).toEqual(['hosting', 'terminals']);
+    });
+
+    it('creates nothing when the modal is dismissed', () => {
+        const plan = buildConsentPlan(previewable(), noRequirements, { preview: true });
+        expect(readConsent(plan, { cancelled: true, answers: [] }).install).toBe(false);
+    });
 });

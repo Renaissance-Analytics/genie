@@ -7,8 +7,10 @@ import {
     previewGrant,
     previewIdentityFor,
     previewManifest,
+    previewSitePlan,
 } from '../preview';
 import { validateAppManifest, type AppManifest } from '../manifest';
+import { devSiteIdFor } from '../../dev-server/sites-config';
 
 function manifest(over: Record<string, unknown> = {}): AppManifest {
     const parsed = validateAppManifest({
@@ -170,5 +172,105 @@ describe('tearing a preview down', () => {
         ];
 
         expect(orphanedPreviewWorkspaces(rows)).toEqual(['left-behind', 'also-left']);
+    });
+});
+
+describe('previewSitePlan', () => {
+    it('serves the SOURCE layout, not the installed one', () => {
+        // An install COPIES each declared component to `repos/<name>`, and
+        // `appInstallPlan` writes a site config that says so. A preview copies
+        // nothing — the developer's folder IS the workspace, and there the
+        // component sits at `web/`, not `repos/web/`. A preview that reused the
+        // installed plan would serve a directory that does not exist and show a
+        // 404 the developer would reasonably read as a bug in their app.
+        const plan = previewSitePlan(
+            'preview-ws',
+            previewManifest(
+                manifest({ frontend: { repo: 'web', serve: { mode: 'static', root: 'dist' } } }),
+            ),
+        );
+
+        expect(plan.site.repo).toBe('');
+        expect(plan.site.hostServe).toEqual({ mode: 'static', root: 'web/dist' });
+    });
+
+    it('serves the preview address, so an installed copy keeps its own', () => {
+        const plan = previewSitePlan('preview-ws', previewManifest(manifest()));
+
+        // The ADDRESS is the dotted, collision-proof one. The site's NAME is not:
+        // a dev site's name must be a single DNS label (`sanitizeDevSitePatch`
+        // drops anything else), so it is slugged. That is safe where the address
+        // would not be — a site name is scoped to ONE workspace, and a preview's
+        // workspace is created for it and deleted with it, so there is nothing
+        // there for `trader-preview` to collide with.
+        expect(plan.site.genName).toBe('trader.preview.gen');
+        expect(plan.site.name).toBe('trader-preview');
+        expect(plan.siteId).toBe(devSiteIdFor('preview-ws', 'trader-preview'));
+    });
+
+    it('collapses a serve root that is just the component itself', () => {
+        // What the scaffold produces: `repo: 'web'`, `root: '.'`. Naively joined
+        // that is `web/.`, which is a directory name Caddy has no reason to like.
+        const plan = previewSitePlan(
+            'preview-ws',
+            previewManifest(
+                manifest({ frontend: { repo: 'web', serve: { mode: 'static', root: '.' } } }),
+            ),
+        );
+
+        expect(plan.site.hostServe).toEqual({ mode: 'static', root: 'web' });
+    });
+
+    it('leaves a component-less app serving the folder root', () => {
+        const plan = previewSitePlan(
+            'preview-ws',
+            previewManifest(manifest({ frontend: { serve: { mode: 'static', root: 'public' } } })),
+        );
+
+        expect(plan.site.repo).toBe('');
+        expect(plan.site.hostServe).toEqual({ mode: 'static', root: 'public' });
+    });
+
+    it('carries an SPA fallback through', () => {
+        const plan = previewSitePlan(
+            'preview-ws',
+            previewManifest(
+                manifest({
+                    frontend: { repo: 'web', serve: { mode: 'static', root: 'dist', spa: true } },
+                }),
+            ),
+        );
+
+        expect(plan.site.hostServe).toEqual({ mode: 'static', root: 'web/dist', spa: true });
+    });
+
+    it('fronts a dev server the developer is already running, and starts nothing', () => {
+        // `proxy` means the app's own dev server owns the port. Genie fronts it
+        // and writes no serve config, exactly as an install does — which is also
+        // what makes previewing a `proxy` app the closest thing to free: the
+        // reload loop is the dev server's own.
+        const plan = previewSitePlan(
+            'preview-ws',
+            previewManifest(
+                manifest({ frontend: { repo: 'web', serve: { mode: 'proxy', hostPort: 5173 } } }),
+            ),
+        );
+
+        expect(plan.site.hostServe).toBeUndefined();
+        expect(plan.site.hostPort).toBe(5173);
+    });
+
+    it('never asks the machine for a browser-exposed address', () => {
+        // `browserExposed` costs the user an ADMIN prompt — a certificate and a
+        // hosts entry. Install asks for it only because the app declared it and
+        // the user agreed to install. A throwaway preview window is not a reason
+        // to mutate the machine's trust store, and the developer can see their app
+        // perfectly well inside Genie without it.
+        const plan = previewSitePlan(
+            'preview-ws',
+            previewManifest(manifest({ frontend: { repo: 'web', serve: { mode: 'static', root: 'dist' }, browserExposed: true } })),
+        );
+
+        expect(plan.site.browserExposed).toBeUndefined();
     });
 });
