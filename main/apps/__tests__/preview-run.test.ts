@@ -332,3 +332,42 @@ describe('sweeping after a crash', () => {
         expect(deps.workspaces.has('installed')).toBe(true);
     });
 });
+
+describe('a closing window’s teardown is scoped to ITS preview', () => {
+    it('a stale close callback cannot destroy the preview that replaced it', async () => {
+        /**
+         * A real race, and a nasty one.
+         *
+         * Re-previewing tears the previous preview down first — which asks Electron
+         * to close its window. `closed` fires ASYNCHRONOUSLY, and `openPreview`
+         * awaits the site start in between, so the old window's teardown callback
+         * routinely runs AFTER the new preview has been registered under the same
+         * app id. Unscoped, it would find the new preview and dismantle it: the
+         * developer presses preview, the window appears, and its panels and
+         * workspace vanish underneath it for no visible reason.
+         */
+        const deps = io();
+
+        const first = await openPreview('C:/dev/trader', deps);
+        const second = await openPreview('C:/dev/trader', deps);
+
+        // The first window's `closed` finally fires, long after its preview was
+        // replaced. It names the workspace IT opened.
+        await closePreview('com.example.trader~preview', deps, first.workspaceId);
+
+        expect(listPreviews()).toHaveLength(1);
+        expect(livePreview('com.example.trader~preview')?.workspaceId).toBe(second.workspaceId);
+        expect(deps.workspaces.has(second.workspaceId!)).toBe(true);
+        expect(deps.panels.length).toBeGreaterThan(0);
+    });
+
+    it('still tears down when the callback names the preview that IS live', async () => {
+        const deps = io();
+        const opened = await openPreview('C:/dev/trader', deps);
+
+        await closePreview('com.example.trader~preview', deps, opened.workspaceId);
+
+        expect(listPreviews()).toEqual([]);
+        expect(deps.workspaces.has(opened.workspaceId!)).toBe(false);
+    });
+});

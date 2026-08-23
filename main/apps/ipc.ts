@@ -599,14 +599,20 @@ export function previewIO(): PreviewIO {
             await manageSiteForMcp(callerId, { action: 'stop', workspaceId, name: siteName });
         },
         clearStorage: (appId) => clearAppStorage(appId),
-        openWindow: (opts) =>
+        openWindow: ({ workspaceId, ...opts }) =>
             void openAppWindow({
                 ...opts,
                 // Closing the window IS the cleanup, so the teardown hangs off the
                 // window rather than off a button somebody has to remember to
                 // press. It covers the developer closing it, Genie quitting, and
                 // the window being closed by anything else.
-                onClosed: () => void closePreview(opts.appId, previewIO()),
+                //
+                // SCOPED to the workspace this window opened. `closed` fires
+                // asynchronously, so a window being replaced by a re-preview fires
+                // its callback after the NEW preview has registered under the same
+                // app id — and an unscoped teardown would dismantle the window the
+                // developer is looking at.
+                onClosed: () => void closePreview(opts.appId, previewIO(), workspaceId),
             }),
         closeWindow: (appId) => closeAppWindows(appId),
     };

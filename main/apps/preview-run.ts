@@ -96,6 +96,13 @@ export interface PreviewIO {
         homeUrl: string;
         devMode: boolean;
         manifest: AppManifest;
+        /**
+         * The workspace THIS window's preview owns.
+         *
+         * Carried so the window's close callback can scope its teardown to the
+         * preview it actually belongs to — see the race in {@link closePreview}.
+         */
+        workspaceId: string;
     }) => void;
     closeWindow: (appId: string) => void;
 }
@@ -270,6 +277,7 @@ export async function openPreview(folder: string, io: PreviewIO): Promise<Previe
         slug: preview.slug,
         name: manifest.name,
         homeUrl,
+        workspaceId,
         // A preview is a place an app is being BUILT, so dev tools are on for the
         // same reason they are in a dev install: you have to be able to inspect
         // what you are looking at. Nothing else about the isolation moves.
@@ -297,9 +305,29 @@ export async function openPreview(folder: string, io: PreviewIO): Promise<Previe
  * be half-removed is worse than one removed in the wrong order — the whole promise
  * is that closing the window leaves nothing behind.
  */
-export async function closePreview(appId: string, io: PreviewIO): Promise<void> {
+export async function closePreview(
+    appId: string,
+    io: PreviewIO,
+    /**
+     * Only tear down if the live preview is still THIS one.
+     *
+     * Passed by a window's own close callback, and it closes a real race.
+     * Re-previewing tears the previous preview down first, which asks Electron to
+     * close its window — and `closed` fires ASYNCHRONOUSLY, while `openPreview`
+     * awaits the site start in between. So the old window's callback routinely
+     * runs AFTER the new preview has been registered under the same app id.
+     * Unscoped, it would find the new preview and dismantle it: the developer
+     * presses preview, the window appears, and its panels and workspace vanish
+     * underneath it for no visible reason.
+     *
+     * Omitted by a caller acting on "whatever is being previewed now" — the Store
+     * drawer's Close button, which means exactly that.
+     */
+    onlyWorkspaceId?: string,
+): Promise<void> {
     const live = livePreview(appId);
     if (!live) return;
+    if (onlyWorkspaceId !== undefined && live.workspaceId !== onlyWorkspaceId) return;
 
     // Forget it FIRST. Everything below can fail, and a preview whose window is
     // going away must stop answering as the app the moment that is decided — a
