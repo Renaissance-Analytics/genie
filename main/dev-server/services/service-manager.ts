@@ -18,6 +18,7 @@ import {
 import { serviceEnv } from './env-wiring';
 import { buildEngineInventory, inventoryImages } from './inventory';
 import { provisionSteps, runProvisionSteps } from './provision';
+import { planServicePorts, preferredServicePort } from './service-ports';
 import { purgeVerdict, sliceTenantsOf } from './tenancy';
 import type { EngineSpec, ServiceEngine } from './catalog';
 import type { EngineInventoryRow } from './inventory';
@@ -180,6 +181,36 @@ export interface DevServiceManagerDeps {
      * every readiness poll is a file nobody will trust to hold their own edits.
      */
     onServiceEnvChanged?: (workspaceId: string) => void;
+    /**
+     * Where an engine's PUBLISHED HOST PORTS are remembered, by engine record.
+     *
+     * The port is derived first (`service-ports.ts`), so this store is empty in the
+     * ordinary case and stays empty. It exists for the exception: when the derived
+     * port was occupied and Genie had to use another, re-deriving next time would
+     * hop back the day the squatter left — a move, which is the thing being fixed.
+     *
+     * ABSENT (together with {@link isPortFree}) ⇒ the old behaviour: publish with
+     * no host port and let the runtime pick. A host that has not wired this seam
+     * keeps working; it simply keeps the moving port.
+     */
+    servicePorts?: {
+        read: (recordKey: string) => Record<string, number>;
+        save: (recordKey: string, ports: Record<string, number>) => void;
+    };
+    /** Can this host port be bound right now? `port-probe.isPortFree` in
+     *  production. Required alongside {@link servicePorts}. */
+    isPortFree?: (port: number) => Promise<boolean>;
+    /**
+     * The engine's published address had to CHANGE — the one moment stable ports
+     * cannot prevent, when the port it wants is held by something else.
+     *
+     * Genie rewrites the repo's `.env` so the next read is correct, but it cannot
+     * reach inside a process that captured the old address at spawn (a
+     * `queue:work`, a host-native dev server). Announcing the move is what stops
+     * that looking like a broken database. Fires ONLY on a real move; a message on
+     * every acquire is noise nobody reads.
+     */
+    onPortMoved?: (message: string) => void;
 }
 
 /**
@@ -568,6 +599,40 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
             adminUser: spec.adminUser ?? 'admin',
         });
 
+        // WHICH host port this engine publishes on.
+        //
+        // Before this, the publication was `{ container, hostIp }` with no host
+        // port, i.e. "anything free", so the runtime handed out a new number every
+        // time the container was created — which a Genie restart does. The repo's
+        // `.env` then chased it, and everything in the gap dialled a dead socket.
+        // See `service-ports.ts`.
+        const publishable =
+            config.engine === 'custom' && config.port
+                ? [{ name: 'service', container: config.port }]
+                : spec.ports.map((p) => ({ name: p.name, container: p.container }));
+        const isPortFree = deps.isPortFree;
+        const portStore = deps.servicePorts;
+        const stablePorts = Boolean(portStore && isPortFree) && publishable.length > 0;
+        const remembered = portStore ? portStore.read(recordKey) : {};
+        /**
+         * The host port each surface SHOULD already hold.
+         *
+         * Read from the LEDGER (falling back to the derivation for an engine that
+         * predates it) — deliberately NOT from a freshly planned one. A running
+         * engine occupies its own published port, so probing freeness on a later
+         * acquire truthfully reports "taken" ABOUT OURSELVES; planning from that
+         * moves the port, which makes the healthy container look misplaced and
+         * restarts the database on every acquire.
+         */
+        const expectedPorts = new Map<string, number>(
+            stablePorts
+                ? publishable.map((p) => [
+                      p.name,
+                      remembered[p.name] ?? preferredServicePort(recordKey, p.name),
+                  ])
+                : [],
+        );
+
         // Create the engine container, published to LOOPBACK so a person, a
         // program or an agent on this machine can connect. Shared by the create
         // and the re-publish-an-adopted-one paths, so the publication is defined
@@ -590,10 +655,35 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
                           [ROLE_LABEL]: SERVICE_ROLE,
                       })
                   ).name;
-            const ports =
-                config.engine === 'custom' && config.port
-                    ? [{ container: config.port, hostIp: '127.0.0.1' }]
-                    : spec.ports.map((p) => ({ container: p.container, hostIp: '127.0.0.1' }));
+            // Planned HERE rather than up front, and the timing is load-bearing:
+            // at this point the engine's container does not exist (it never did, or
+            // it was just removed), so asking whether its port is free gets an
+            // honest answer instead of our own container's reflection.
+            const portPlan =
+                stablePorts && isPortFree
+                    ? await planServicePorts({
+                          recordKey,
+                          ports: publishable,
+                          reserved: remembered,
+                          isFree: isPortFree,
+                      })
+                    : null;
+            for (const note of portPlan?.notes ?? []) {
+                try {
+                    deps.onPortMoved?.(`${spec.label} (${engineKey}): ${note}`);
+                } catch {
+                    /* a listener must not be able to fail a lifecycle call */
+                }
+            }
+            const ports = portPlan
+                ? portPlan.assignments.map((a) => ({
+                      container: a.container,
+                      hostIp: '127.0.0.1',
+                      // No `host` ⇒ the runtime picks. Only ever the last resort,
+                      // and `portPlan.notes` says so out loud when it happens.
+                      ...(a.host === undefined ? {} : { host: a.host }),
+                  }))
+                : publishable.map((p) => ({ container: p.container, hostIp: '127.0.0.1' }));
             const created = await runtime.runContainer({
                 workspaceId: ownerId,
                 name: containerName,
@@ -621,6 +711,16 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
                 restart: 'unless-stopped',
                 init: true,
             });
+            // Remember what it actually got, so the NEXT create asks for the same
+            // numbers rather than re-deriving — which would move the port back the
+            // day whatever blocked the derived one goes away.
+            const assigned = (portPlan?.assignments ?? []).filter((a) => a.host !== undefined);
+            if (portStore && assigned.length > 0) {
+                portStore.save(
+                    recordKey,
+                    Object.fromEntries(assigned.map((a) => [a.name, a.host as number])),
+                );
+            }
             return { ok: true, id: created.id };
         };
 
@@ -645,11 +745,22 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
                 // exposes NONE, re-create it WITH the publication (the named
                 // volume keeps the data). Guarded so a runtime that simply fails
                 // to report ports can never loop us into endless re-creation.
+                //
+                // The SECOND reason to re-create is the same shape: a container
+                // created before stable ports existed holds an ephemeral one, so it
+                // would keep moving on every recreate and keep invalidating the
+                // `.env`. Moving it onto its assigned port once ends that, and the
+                // named volume is what makes doing so safe. Guarded by the same
+                // at-most-once set, so a runtime that cannot honour the request
+                // still cannot loop us.
                 const expectsPublish =
                     (config.engine === 'custom' && Boolean(config.port)) || spec.ports.length > 0;
                 if (expectsPublish && !republished.has(containerName)) {
                     const adopted = await endpointsFor(runtime, spec, config, containerName, containerId);
-                    if (!adopted.some((e) => e.hostPort)) {
+                    const misplaced = [...expectedPorts].some(
+                        ([name, host]) => adopted.find((e) => e.name === name)?.hostPort !== host,
+                    );
+                    if (!adopted.some((e) => e.hostPort) || misplaced) {
                         republished.add(containerName);
                         await runtime.stop(containerId).catch(() => {});
                         await runtime.remove(containerId).catch(() => {});

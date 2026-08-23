@@ -1278,6 +1278,40 @@ export function runMigrations(d: Database.Database): void {
                 `);
             },
         },
+        {
+            // v48: the host port each engine surface is PUBLISHED on (genie#242
+            // follow-up).
+            //
+            // Engine containers were published with no host port, so the runtime
+            // picked a fresh one every time one was created — and a Genie restart
+            // creates one. v46 removed the machinery for TELLING people the number
+            // had moved; this is the machinery for it not moving.
+            //
+            // The number is derived first (`services/service-ports.ts`), so the
+            // common case needs no row at all and a forgotten database still lands
+            // on the same port. This table exists for the case derivation cannot
+            // cover: when the preferred port was occupied and Genie had to pick
+            // another, re-deriving later would hop BACK the day the squatter went
+            // away — a move, which is the whole thing being fixed. So what was
+            // actually used is remembered and re-requested.
+            //
+            // Keyed like `dev_service_engines`: the engine RECORD (engine+version,
+            // plus the workspace for a dedicated one), because that is the unit a
+            // container and its publication belong to — not the workspace, which
+            // may be one of several sharing it.
+            version: 48,
+            runner: (db) => {
+                db.exec(`
+                    CREATE TABLE IF NOT EXISTS dev_service_ports (
+                        record_key TEXT NOT NULL,
+                        port_name TEXT NOT NULL,
+                        host_port INTEGER NOT NULL,
+                        created_at INTEGER NOT NULL,
+                        PRIMARY KEY (record_key, port_name)
+                    )
+                `);
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -2821,6 +2855,44 @@ export function getOrCreateDevServiceEngine(req: {
  *  volume, since the credential is baked into the data directory. */
 export function deleteDevServiceEngine(recordKey: string): void {
     getDb().prepare('DELETE FROM dev_service_engines WHERE key = ?').run(recordKey);
+    deleteDevServicePorts(recordKey);
+}
+
+/**
+ * The host ports this engine was published on last time, by surface name.
+ *
+ * Empty for an engine that has never run, or one whose preferred (derived) port
+ * has always been available — the derivation is the default and needs no row. See
+ * `dev-server/services/service-ports.ts` for why the exceptions are remembered.
+ */
+export function getDevServicePorts(recordKey: string): Record<string, number> {
+    const rows = getDb()
+        .prepare<[string], { port_name: string; host_port: number }>(
+            'SELECT port_name, host_port FROM dev_service_ports WHERE record_key = ?',
+        )
+        .all(recordKey);
+    return Object.fromEntries(rows.map((r) => [r.port_name, r.host_port]));
+}
+
+/** Remember what an engine was actually published on, so the next create asks for
+ *  the same numbers rather than re-deriving and moving. */
+export function saveDevServicePorts(recordKey: string, ports: Record<string, number>): void {
+    const db = getDb();
+    const stmt = db.prepare(
+        `INSERT INTO dev_service_ports (record_key, port_name, host_port, created_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(record_key, port_name) DO UPDATE SET host_port = excluded.host_port`,
+    );
+    const write = db.transaction((entries: Array<[string, number]>) => {
+        for (const [name, port] of entries) stmt.run(recordKey, name, port, Date.now());
+    });
+    write(Object.entries(ports).filter(([, port]) => Number.isInteger(port)));
+}
+
+/** Forget an engine's publication. Only alongside removing its container — a
+ *  reservation outliving nothing is a port held against a machine for no reason. */
+export function deleteDevServicePorts(recordKey: string): void {
+    getDb().prepare('DELETE FROM dev_service_ports WHERE record_key = ?').run(recordKey);
 }
 
 // Fork → upstream cache -------------------------------------------------

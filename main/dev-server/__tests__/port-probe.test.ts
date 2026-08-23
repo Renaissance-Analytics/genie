@@ -1,7 +1,7 @@
 import net from 'node:net';
 import https from 'node:https';
 import { afterEach, describe, expect, it } from 'vitest';
-import { allocateFreePort, waitForHttp, waitForHttpsSni, waitForPort } from '../port-probe';
+import { allocateFreePort, isPortFree, waitForHttp, waitForHttpsSni, waitForPort } from '../port-probe';
 
 /**
  * READINESS — and the Docker Desktop trap that makes the obvious probe lie.
@@ -324,5 +324,40 @@ describe('a server on the OTHER loopback', () => {
         // is ambiguous, and only the default gets both.
         const port = await listen((socket) => socket.destroy());
         expect(await waitForPort(port, 400, '203.0.113.1')).toBe(false);
+    });
+});
+
+/**
+ * CAN WE HAVE THIS EXACT PORT? — the question behind a service port that does not
+ * move (genie#242 follow-up).
+ *
+ * A stable published port is only stable if Genie can tell "free" from "somebody
+ * else is on it" BEFORE asking the runtime to bind it. `waitForPort` answers the
+ * opposite question (is something listening) and answers it wrongly here: on
+ * Docker Desktop its forwarder accepts connections for ports nothing serves, so a
+ * connect-based free check would call an occupied port free and the engine would
+ * fail to start. The honest test is to try to bind it.
+ */
+describe('isPortFree', () => {
+    it('is FALSE for a port something is already listening on', async () => {
+        const port = await listen((socket) => socket.destroy());
+        expect(await isPortFree(port)).toBe(false);
+    });
+
+    it('is TRUE for a port nothing holds', async () => {
+        expect(await isPortFree(await closedPort())).toBe(true);
+    });
+
+    it('does not LEAVE the port bound — asking twice both times says free', async () => {
+        // The probe binds to find out. If it forgot to release, the very act of
+        // checking would make every port unusable.
+        const port = await closedPort();
+        expect(await isPortFree(port)).toBe(true);
+        expect(await isPortFree(port)).toBe(true);
+    });
+
+    it('is FALSE rather than throwing for a port that cannot be bound at all', async () => {
+        expect(await isPortFree(0.5)).toBe(false);
+        expect(await isPortFree(70000)).toBe(false);
     });
 });

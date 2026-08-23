@@ -1,6 +1,7 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import {
     resolveEnvTarget,
     applySetEnv,
@@ -205,5 +206,119 @@ describe('applyEnvBlock', () => {
         const dir = makeTmpDir('env-block-empty');
         expect(applyEnvBlock(dir, { vars: {} })).toMatchObject({ ok: true, changed: false });
         expect(fs.existsSync(path.join(dir, '.env'))).toBe(false);
+    });
+});
+
+/**
+ * ADVERSARIAL, at the FILESYSTEM boundary.
+ *
+ * `upsertEnvBlock` decides the bytes; this layer puts them on a disk, unattended,
+ * over a file somebody may have open, made read-only, symlinked somewhere else, or
+ * committed to git. The pure writer being careful buys nothing if the write itself
+ * can truncate the file or replace their symlink with a copy.
+ */
+describe('applyEnvBlock — the write itself must never destroy anything', () => {
+    it('leaves the ORIGINAL file byte-intact when the write fails halfway', () => {
+        const dir = makeTmpDir('env-block-atomic');
+        const file = path.join(dir, '.env');
+        const original = '# hand-written\nAPP_KEY=base64:xyz\nDB_PORT=51157\n';
+        fs.writeFileSync(file, original);
+
+        // The commit step fails — a crash, a full disk, a virus scanner holding the
+        // handle. An in-place `writeFileSync` has ALREADY truncated by this point.
+        const rename = vi.spyOn(fs, 'renameSync').mockImplementation(() => {
+            throw new Error('ENOSPC: no space left on device');
+        });
+        const r = applyEnvBlock(dir, { vars: { DB_PORT: '58377' } });
+        rename.mockRestore();
+
+        expect(r.ok).toBe(false);
+        expect(r.changed).toBe(false);
+        expect(fs.readFileSync(file, 'utf8')).toBe(original);
+        // And no half-written scratch file left behind next to it.
+        expect(fs.readdirSync(dir).filter((n) => n !== '.env' && n !== '.gitignore')).toEqual([]);
+    });
+
+    it('writes THROUGH a symlinked .env instead of replacing the link with a file', () => {
+        const dir = makeTmpDir('env-block-symlink');
+        const real = path.join(dir, 'shared.env');
+        fs.writeFileSync(real, 'DB_PORT=51157\n');
+        const link = path.join(dir, '.env');
+        try {
+            fs.symlinkSync(real, link, 'file');
+        } catch {
+            // Unprivileged Windows without Developer Mode cannot create one.
+            return;
+        }
+
+        const r = applyEnvBlock(dir, { vars: { DB_PORT: '58377' } });
+
+        expect(r.ok).toBe(true);
+        expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+        expect(fs.readFileSync(real, 'utf8')).toBe('DB_PORT=58377\n');
+    });
+
+    it('reports a READ-ONLY .env without losing a byte of it', () => {
+        const dir = makeTmpDir('env-block-ro');
+        const file = path.join(dir, '.env');
+        const original = '# mine\nDB_PORT=51157\n';
+        fs.writeFileSync(file, original);
+        fs.chmodSync(file, 0o444);
+        // Windows honours the read-only ATTRIBUTE rather than the mode bits.
+        const readOnly = (() => {
+            try {
+                fs.accessSync(file, fs.constants.W_OK);
+                return false;
+            } catch {
+                return true;
+            }
+        })();
+        if (!readOnly) return;
+
+        const r = applyEnvBlock(dir, { vars: { DB_PORT: '58377' } });
+
+        expect(r.ok).toBe(false);
+        // Named explicitly, not inferred from an errno: on POSIX a rename over a
+        // read-only file SUCCEEDS when the directory is writable, so without this
+        // check the atomic write would have started bulldozing locked files.
+        expect(r.error).toMatch(/read-only/i);
+        expect(fs.readFileSync(file, 'utf8')).toBe(original);
+    });
+
+    it('does NOT touch a .gitignore that already covers .env by a broader pattern', () => {
+        const dir = makeTmpDir('env-block-gitignore-broad');
+        const ignore = path.join(dir, '.gitignore');
+        // `.gitignore` is itself a TRACKED file. Appending a redundant `.env` to it
+        // is an unrequested diff in the user's repository.
+        for (const pattern of ['*.env', '.env*', '/.env', '**/.env']) {
+            fs.writeFileSync(ignore, `node_modules\n${pattern}\n`);
+            const before = fs.readFileSync(ignore, 'utf8');
+            applyEnvBlock(dir, { vars: { DB_PORT: `1${pattern.length}` } });
+            expect(fs.readFileSync(ignore, 'utf8')).toBe(before);
+        }
+    });
+
+    it('REPORTS that a git-TRACKED .env cannot be protected by gitignoring it', () => {
+        const dir = makeTmpDir('env-block-tracked');
+        execFileSync('git', ['init', '-q'], { cwd: dir });
+        fs.writeFileSync(path.join(dir, '.env'), 'DB_PORT=51157\n');
+        execFileSync('git', ['add', '-f', '.env'], { cwd: dir });
+
+        const r = applyEnvBlock(dir, { vars: { DB_PORT: '58377', DB_PASSWORD: 's3cr3t' } });
+
+        // The app still has to work, so the value is written — but a credential
+        // landing in a file git already follows is not something to do quietly.
+        expect(r.ok).toBe(true);
+        expect(r.gitTracked).toBe(true);
+        expect(r.warning).toMatch(/tracked/i);
+    });
+
+    it('says nothing about git for an ordinary untracked .env', () => {
+        const dir = makeTmpDir('env-block-untracked');
+        execFileSync('git', ['init', '-q'], { cwd: dir });
+        const r = applyEnvBlock(dir, { vars: { DB_PORT: '58377' } });
+        expect(r.ok).toBe(true);
+        expect(r.gitTracked).toBeFalsy();
+        expect(r.warning).toBeUndefined();
     });
 });

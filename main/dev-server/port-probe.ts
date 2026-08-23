@@ -152,6 +152,41 @@ export async function allocateFreePort(exclude: Set<number> = new Set()): Promis
     throw new Error('could not allocate a free port after 1000 attempts');
 }
 
+/**
+ * Can THIS EXACT loopback port be bound right now?
+ *
+ * The question behind a service port that does not move (`services/service-ports.ts`).
+ * Genie has to know whether the port it wants is genuinely occupied BEFORE asking
+ * the runtime to publish on it, so a collision becomes a deliberate, reported move
+ * rather than a failed engine start.
+ *
+ * It BINDS rather than connects, and the distinction is not academic:
+ * {@link waitForPort} answers "is something listening", which on Docker Desktop is
+ * a lie in both directions — its userland forwarder accepts connections for ports
+ * nothing serves, so a connect-based free check would call an occupied port free
+ * and the engine would fail to come up. A bind either succeeds or it does not.
+ *
+ * Releases the port immediately, so asking does not consume the answer. The tiny
+ * release→publish window is the same port-race stance as the rest of this file:
+ * the runtime reports a bind failure loudly, which is the backstop.
+ */
+export async function isPortFree(port: number): Promise<boolean> {
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return false;
+    return new Promise<boolean>((resolve) => {
+        const server = net.createServer();
+        let settled = false;
+        const done = (result: boolean) => {
+            if (settled) return;
+            settled = true;
+            resolve(result);
+        };
+        server.once('error', () => done(false));
+        server.listen(port, '127.0.0.1', () => {
+            server.close(() => done(true));
+        });
+    });
+}
+
 /** One HTTP attempt. True only when a response actually arrives. */
 function requestOnce(
     host: string,

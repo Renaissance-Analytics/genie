@@ -33,6 +33,8 @@ import {
     setHostedSitesSync,
     getWorkspaceDevServices,
     getOrCreateDevServiceEngine,
+    getDevServicePorts,
+    saveDevServicePorts,
 } from './db';
 import { listLocalEnabledGenSites, resolveEnabledSite } from './sites/local-sites';
 import { remoteGenUrl } from './sites/gen-url';
@@ -1158,6 +1160,13 @@ app.whenReady().then(async () => {
         // Machine-scoped, minted once per engine CONTAINER: a shared engine's
         // superuser credential cannot live in any one workspace's row.
         engineAdmin: (req) => getOrCreateDevServiceEngine(req),
+        // Machine-scoped for the same reason the credential is: the publication
+        // belongs to the CONTAINER, which several workspaces may share. Keeping it
+        // is what stops a port moving when the derived one was unavailable once.
+        servicePorts: {
+            read: (recordKey) => getDevServicePorts(recordKey),
+            save: (recordKey, ports) => saveDevServicePorts(recordKey, ports),
+        },
         // This workspace's provisioned services, as environment. `initHosting`
         // ENSURES they are up (acquire) before handing them to a starting site,
         // so a dev server never comes up pointed at an engine that is not there.
@@ -1194,6 +1203,13 @@ app.whenReady().then(async () => {
         onChanged: () => {
             broadcastDevServerChanged();
             hostBrowserReconciler?.schedule();
+        },
+        // A repo `.env` Genie could not keep current (read-only, open, not checked
+        // out), or one it kept current inside a git-TRACKED file. Both used to be
+        // discarded, which left a moved port looking exactly like a broken
+        // database. Logged rather than thrown: an engine must still come up.
+        onServiceEnvProblem: (message) => {
+            console.warn(`[genie] service .env: ${message}`);
         },
         // Live site START progress (Gap 2) — pushed to any open Site Manager so a
         // card shows `pulling → building → starting → ready` with the build log
