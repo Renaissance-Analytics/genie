@@ -219,3 +219,62 @@ describe('upsertEnvBlock', () => {
         expect(upsertEnvBlock('APP_NAME=Tynn\n', {}, HEADER)).toBe('APP_NAME=Tynn\n');
     });
 });
+
+/**
+ * ADVERSARIAL. The writer runs UNATTENDED, on a service lifecycle tick, against a
+ * file the user owns and hand-edits. "Preserves their content" has to hold for the
+ * files people actually have — not only the tidy LF one with each key written once.
+ *
+ * Each case below is a way the previous writer silently damaged or defeated itself.
+ */
+describe('upsertEnvBlock — never harms the file, even an awkward one', () => {
+    it('keeps CRLF endings when a value ACTUALLY CHANGES', () => {
+        // The no-change case was already covered. The change case reflowed the
+        // WHOLE file to LF: on Windows that is every line of the user's `.env`
+        // showing up as a diff because one port moved.
+        const crlf = '# note\r\nAPP_NAME=Tynn\r\nDB_PORT=51157\r\n';
+        const after = upsertEnvBlock(crlf, { DB_PORT: '58377' }, HEADER);
+        expect(after).toBe('# note\r\nAPP_NAME=Tynn\r\nDB_PORT=58377\r\n');
+    });
+
+    it('appends a NEW key using the file’s own CRLF endings', () => {
+        const after = upsertEnvBlock('APP_NAME=Tynn\r\n', { DB_HOST: '127.0.0.1' }, HEADER);
+        // No bare LF anywhere: a mixed-ending .env is a file some tools misread.
+        expect(after.replace(/\r\n/g, '')).not.toContain('\n');
+        expect(after).toContain('DB_HOST=127.0.0.1');
+        expect(after.startsWith('APP_NAME=Tynn\r\n')).toBe(true);
+    });
+
+    it('rewrites the EFFECTIVE duplicate — the last one, which is what dotenv reads', () => {
+        // A hand-edited file with the key twice. parseEnv, dotenv, and a shell all
+        // take the LAST assignment. Rewriting the FIRST leaves the app reading the
+        // stale second one — precisely the stale-port bug this feature exists to end,
+        // reintroduced by the fix for it.
+        const before = 'DB_PORT=51157\nOTHER=x\nDB_PORT=51157\n';
+        const after = upsertEnvBlock(before, { DB_PORT: '58377' }, HEADER);
+        expect(parseEnv(after).get('DB_PORT')).toBe('58377');
+    });
+
+    it('never DELETES a duplicate line the user wrote', () => {
+        // Making the write effective must not become a licence to prune their file.
+        const after = upsertEnvBlock('DB_PORT=51157\nDB_PORT=51157\n', { DB_PORT: '58377' }, HEADER);
+        expect(after.match(/^DB_PORT=/gm)).toHaveLength(2);
+    });
+
+    it('IGNORES a key that is not a legal env name instead of matching it as a regex', () => {
+        // The key was interpolated straight into a RegExp. `DB.*` matched the line
+        // `DB_PORT=1` and overwrote it — silent corruption of an unrelated key.
+        const before = 'DB_PORT=51157\n';
+        expect(upsertEnvBlock(before, { 'DB.*': 'x' }, HEADER)).toBe(before);
+    });
+
+    it('preserves a file that ends WITHOUT a trailing newline', () => {
+        expect(upsertEnvBlock('DB_PORT=51157', { DB_PORT: '58377' }, HEADER)).toBe('DB_PORT=58377');
+    });
+
+    it('leaves a COMMENTED-OUT key commented out, and writes the real one', () => {
+        const after = upsertEnvBlock('# DB_PORT=51157\nDB_PORT=51157\n', { DB_PORT: '58377' }, HEADER);
+        expect(after).toContain('# DB_PORT=51157');
+        expect(parseEnv(after).get('DB_PORT')).toBe('58377');
+    });
+});

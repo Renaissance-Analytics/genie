@@ -187,6 +187,93 @@ describe('createServiceEnvSync', () => {
         expect(() => sync('a')).not.toThrow();
         expect(written).toEqual(['tynn']);
     });
+
+    /**
+     * A refusal nobody is told about is indistinguishable from success.
+     *
+     * Tolerating a failed `.env` write is right — an engine must still come up.
+     * Discarding the REASON is not: the port then moves, the file keeps the old
+     * one, and the user is left with `Connection refused` and no thread to pull.
+     * That is the same silence the terminal-injection bug hid behind.
+     */
+    it('REPORTS a `.env` it could not write, instead of swallowing the reason', () => {
+        const problems: string[] = [];
+        const sync = createServiceEnvSync({
+            workspaceFor: () => ({ path: '/work/a' }),
+            devSitesFor: () => ({ s1: site('web', 'tynn') }),
+            hostEnvFor: () => ({ DB_PORT: '58377' }),
+            write: () => ({
+                ok: false,
+                changed: false,
+                keys: [],
+                file: 'repos/tynn/.env',
+                error: '.env is read-only — Genie left it untouched',
+            }),
+            onProblem: (m) => problems.push(m),
+        });
+
+        sync('a');
+
+        expect(problems).toHaveLength(1);
+        expect(problems[0]).toContain('repos/tynn/.env');
+        expect(problems[0]).toContain('read-only');
+    });
+
+    it('REPORTS a warning from a write that otherwise succeeded', () => {
+        const problems: string[] = [];
+        const sync = createServiceEnvSync({
+            workspaceFor: () => ({ path: '/work/a' }),
+            devSitesFor: () => ({ s1: site('web', 'tynn') }),
+            hostEnvFor: () => ({ DB_PASSWORD: 'hunter2' }),
+            write: () => ({
+                ok: true,
+                changed: true,
+                keys: ['DB_PASSWORD'],
+                file: 'repos/tynn/.env',
+                gitTracked: true,
+                warning: 'repos/tynn/.env is TRACKED by git',
+            }),
+            onProblem: (m) => problems.push(m),
+        });
+
+        sync('a');
+
+        expect(problems).toEqual(['repos/tynn/.env is TRACKED by git']);
+    });
+
+    it('reports the THROWN failure too, and still writes the other repos', () => {
+        const problems: string[] = [];
+        const written: string[] = [];
+        const sync = createServiceEnvSync({
+            workspaceFor: () => ({ path: '/work/a' }),
+            devSitesFor: () => ({ s1: site('web', 'gone'), s2: site('api', 'tynn') }),
+            hostEnvFor: () => ({ DB_PORT: '58377' }),
+            write: (_root, req) => {
+                if (req.target === 'gone') throw new Error('repo is not checked out');
+                written.push(req.target ?? 'workspace');
+                return { ok: true, changed: true, keys: [], file: 'x' };
+            },
+            onProblem: (m) => problems.push(m),
+        });
+
+        sync('a');
+
+        expect(written).toEqual(['tynn']);
+        expect(problems.join(' ')).toContain('not checked out');
+    });
+
+    it('a broken onProblem listener can never fail the sync', () => {
+        const sync = createServiceEnvSync({
+            workspaceFor: () => ({ path: '/work/a' }),
+            devSitesFor: () => ({ s1: site('web', 'tynn') }),
+            hostEnvFor: () => ({ DB_PORT: '58377' }),
+            write: () => ({ ok: false, changed: false, keys: [], error: 'nope' }),
+            onProblem: () => {
+                throw new Error('listener exploded');
+            },
+        });
+        expect(() => sync('a')).not.toThrow();
+    });
 });
 
 /**

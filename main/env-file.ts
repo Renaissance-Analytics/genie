@@ -50,31 +50,100 @@ function formatValue(value: string): string {
     return value;
 }
 
+// --- byte-preserving line model ---------------------------------------------
+
+/**
+ * One physical line and THE TERMINATOR IT ACTUALLY HAD.
+ *
+ * The writer used to `split(/\r?\n/)` and `join('\n')`, which silently converted
+ * the entire file to LF the moment any single value changed. On Windows that is
+ * every line of somebody's `.env` turning up as a diff because a port moved. So
+ * each line carries its own ending, untouched lines are re-emitted byte for byte,
+ * and only the lines Genie rewrites are Genie's to shape.
+ */
+interface EnvLine {
+    text: string;
+    /** `\r\n`, `\n`, `\r`, or `''` for a final line with no terminator. */
+    eol: string;
+}
+
+function splitLines(content: string): EnvLine[] {
+    const out: EnvLine[] = [];
+    const re = /\r\n|\n|\r/g;
+    let last = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(content)) !== null) {
+        out.push({ text: content.slice(last, m.index), eol: m[0] });
+        last = re.lastIndex;
+    }
+    if (last < content.length) out.push({ text: content.slice(last), eol: '' });
+    return out;
+}
+
+/** Exactly inverse to {@link splitLines}: `joinLines(splitLines(x)) === x`. */
+function joinLines(lines: readonly EnvLine[]): string {
+    let out = '';
+    for (const line of lines) out += line.text + line.eol;
+    return out;
+}
+
+/** The ending NEW lines should use: whatever the file already mostly uses. A file
+ *  with no newline at all (or a brand-new one) gets LF. */
+function dominantEol(content: string): string {
+    const crlf = (content.match(/\r\n/g) ?? []).length;
+    const lf = (content.match(/\n/g) ?? []).length - crlf;
+    return crlf > lf ? '\r\n' : '\n';
+}
+
+/**
+ * Where `key` is assigned, or `-1`.
+ *
+ * The LAST assignment, not the first — because that is the one that takes effect.
+ * `parseEnv`, every dotenv implementation and a shell all let a later duplicate
+ * win, so rewriting the first copy in a hand-edited file with two of them leaves
+ * the application reading the stale second one. That is the exact
+ * `.env`-says-51157-but-the-port-is-58377 failure this whole feature exists to
+ * end, and the writer was capable of causing it itself.
+ *
+ * Refuses a key that is not a legal env name: it goes into a RegExp, and `DB.*`
+ * matched — and overwrote — the unrelated line `DB_PORT=51157`.
+ */
+function keyLineIndex(lines: readonly EnvLine[], key: string): number {
+    if (!isValidEnvKey(key)) return -1;
+    const re = new RegExp(`^\\s*(?:export\\s+)?${key}\\s*=`);
+    for (let i = lines.length - 1; i >= 0; i--) {
+        if (re.test(lines[i].text)) return i;
+    }
+    return -1;
+}
+
+/** Append `add` to `lines`, terminating a final line that had no ending. */
+function appendLines(lines: EnvLine[], add: readonly string[], eol: string): void {
+    if (add.length === 0) return;
+    const last = lines[lines.length - 1];
+    if (last && last.eol === '') last.eol = eol;
+    for (const text of add) lines.push({ text, eol });
+}
+
 /**
  * Upsert `KEY=value` into `.env` content, PRESERVING every other line + comment.
- * Replaces the key's existing line in place (the first match, honouring an
- * `export ` prefix); appends it (with a trailing newline) when absent.
+ * Replaces the key's EFFECTIVE assignment in place (the last one, honouring an
+ * `export ` prefix); appends it when absent. Untouched lines keep their exact
+ * bytes, including their line endings.
  */
 export function upsertEnvLine(content: string, key: string, value: string): string {
+    if (!isValidEnvKey(key)) return content;
     const line = `${key}=${formatValue(value)}`;
-    const lines = content.split(/\r?\n/);
-    const re = new RegExp(`^\\s*(?:export\\s+)?${key}\\s*=`);
-    for (let i = 0; i < lines.length; i++) {
-        if (re.test(lines[i])) {
-            lines[i] = line;
-            return lines.join('\n');
-        }
+    const lines = splitLines(content);
+    const at = keyLineIndex(lines, key);
+    if (at !== -1) {
+        lines[at] = { text: line, eol: lines[at].eol };
+        return joinLines(lines);
     }
     // Append. Keep exactly one trailing newline after the new line.
     if (content === '') return line + '\n';
-    const sep = content.endsWith('\n') ? '' : '\n';
-    return content + sep + line + '\n';
-}
-
-/** True when `content` already assigns `key` (honouring an `export ` prefix). */
-function keyLineIndex(lines: string[], key: string): number {
-    const re = new RegExp(`^\\s*(?:export\\s+)?${key}\\s*=`);
-    return lines.findIndex((line) => re.test(line));
+    appendLines(lines, [line], dominantEol(content));
+    return joinLines(lines);
 }
 
 /**
@@ -96,6 +165,17 @@ function keyLineIndex(lines: string[], key: string): number {
  *    rewriting a CRLF file to LF, or requoting a value, is a diff the user did
  *    not ask for, and a `.env` that churns on every service tick is one nobody
  *    will trust to hold their own edits.
+ *
+ * Two more, learned from the files people actually have rather than the tidy one:
+ *
+ *  - **A line Genie does not rewrite keeps its exact bytes, ENDING INCLUDED.** The
+ *    first version split on `/\r?\n/` and joined with `\n`, so the moment one value
+ *    changed the whole file was converted to LF — every line of somebody's `.env`
+ *    turning up as a diff because a port moved.
+ *  - **The assignment that WINS is the one rewritten.** In a hand-edited file with
+ *    the key twice, dotenv reads the last; rewriting the first left the app on the
+ *    stale value — this feature's own bug, reintroduced by its fix. Nothing is
+ *    deleted to achieve that: the user's earlier line is theirs.
  */
 export function upsertEnvBlock(
     content: string,
@@ -103,36 +183,46 @@ export function upsertEnvBlock(
     header: string,
 ): string {
     // Compare against the PARSED values, so a differently-quoted but equal value
-    // counts as agreement and buys the no-op above.
+    // counts as agreement and buys the no-op above. An illegal key is dropped
+    // here rather than turned into a RegExp that could match somebody else's line.
     const current = parseEnv(content);
-    const pending = Object.entries(vars).filter(([key, value]) => current.get(key) !== value);
+    const pending = Object.entries(vars).filter(
+        ([key, value]) => isValidEnvKey(key) && current.get(key) !== value,
+    );
     if (pending.length === 0) return content;
 
-    const lines = content.split(/\r?\n/);
+    const eol = dominantEol(content);
+    const lines = splitLines(content);
     const appended: string[] = [];
     for (const [key, value] of pending) {
         const at = keyLineIndex(lines, key);
-        if (at === -1) appended.push(`${key}=${formatValue(value)}`);
-        else lines[at] = `${key}=${formatValue(value)}`;
+        const text = `${key}=${formatValue(value)}`;
+        if (at === -1) appended.push(text);
+        else lines[at] = { text, eol: lines[at].eol };
     }
-    if (appended.length === 0) return lines.join('\n');
+    if (appended.length === 0) return joinLines(lines);
 
-    const headerAt = lines.findIndex((line) => line.trim() === header);
+    const headerAt = lines.findIndex((line) => line.text.trim() === header);
     if (headerAt !== -1) {
         // Grow the existing block: insert after its last contiguous assignment.
         let end = headerAt + 1;
-        while (end < lines.length && /^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=/.test(lines[end])) {
+        while (
+            end < lines.length &&
+            /^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=/.test(lines[end].text)
+        ) {
             end += 1;
         }
-        lines.splice(end, 0, ...appended);
-        return lines.join('\n');
+        if (end === lines.length) appendLines(lines, appended, eol);
+        else lines.splice(end, 0, ...appended.map((text) => ({ text, eol })));
+        return joinLines(lines);
     }
 
     // No block yet — start one at the end, separated from the user's content by a
     // blank line (but not preceded by one in an empty file).
-    const body = lines.join('\n');
-    const lead = body === '' ? '' : body.endsWith('\n') ? '\n' : '\n\n';
-    return `${body}${lead}${header}\n${appended.join('\n')}\n`;
+    if (content === '') return `${header}${eol}${appended.join(eol)}${eol}`;
+    appendLines(lines, ['', header, ...appended], eol);
+    if (lines[lines.length - 1].eol === '') lines[lines.length - 1].eol = eol;
+    return joinLines(lines);
 }
 
 // --- secret detection + obfuscation -----------------------------------------

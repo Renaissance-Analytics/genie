@@ -129,6 +129,16 @@ export interface ServiceEnvSyncDeps {
     /** The write itself — `env-store.applyEnvBlock` in production. Injected so
      *  the whole decision is testable without touching a disk. */
     write: (workspaceRoot: string, req: EnvBlockRequest) => EnvBlockResult;
+    /**
+     * A `.env` that could not be written, or was written somewhere it should not
+     * stay (a git-tracked file).
+     *
+     * Tolerating the failure is right — an engine must still come up. Throwing the
+     * REASON away is not. Without this the port moves, the file keeps the old one,
+     * and the user gets `Connection refused` with nothing to pull on: exactly the
+     * silence the terminal-injection bug hid behind.
+     */
+    onProblem?: (message: string) => void;
 }
 
 /**
@@ -155,14 +165,26 @@ export function createServiceEnvSync(deps: ServiceEnvSyncDeps): (workspaceId: st
             // a worse failure than the stale value this exists to fix.
             if (Object.keys(vars).length === 0) return;
 
-            for (const target of dotEnvTargetsFor(deps.devSitesFor(workspaceId))) {
+            const report = (message: string) => {
                 try {
-                    deps.write(workspace.path, {
+                    deps.onProblem?.(message);
+                } catch {
+                    /* a listener must never fail a lifecycle call */
+                }
+            };
+
+            for (const target of dotEnvTargetsFor(deps.devSitesFor(workspaceId))) {
+                const label = target === 'workspace' ? '.env' : `repos/${target}/.env`;
+                try {
+                    const result = deps.write(workspace.path, {
                         ...(target === 'workspace' ? {} : { target }),
                         vars,
                     });
-                } catch {
-                    /* one repo's failure is not the others' */
+                    if (!result.ok) report(`${result.file ?? label}: ${result.error ?? 'write failed'}`);
+                    else if (result.warning) report(result.warning);
+                } catch (e) {
+                    // One repo's failure is not the others' — but it is still news.
+                    report(`${label}: ${e instanceof Error ? e.message : String(e)}`);
                 }
             }
         } catch {

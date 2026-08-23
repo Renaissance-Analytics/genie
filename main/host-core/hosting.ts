@@ -43,7 +43,7 @@ import { initDevLifecycle } from '../dev-server/lifecycle';
 import type { DevServerLifecycle, DevServerLifecycleDeps } from '../dev-server/lifecycle';
 import { registerDevSiteTools } from '../mcp/dev-site-tools';
 import type { DevSiteToolsDeps } from '../mcp/dev-site-tools';
-import { waitForHttp, waitForPort } from '../dev-server/port-probe';
+import { isPortFree, waitForHttp, waitForPort } from '../dev-server/port-probe';
 import type { DevSites } from '../dev-server/sites-config';
 import type { DevServices } from '../dev-server/services/services-config';
 import type { EngineAdmin } from '../dev-server/services/provision';
@@ -102,6 +102,14 @@ export interface HostingPorts {
     /** The `.gen` change event — desktop broadcasts to the renderer, the cloud
      *  host over the relay. Fires for both managers. */
     onChanged: () => void;
+    /** A repo `.env` Genie could not keep current, or kept current somewhere it
+     *  should not stay (a git-tracked file). Absent ⇒ the reason is dropped, which
+     *  is the silence this exists to end — wire it. */
+    onServiceEnvProblem?: (message: string) => void;
+    /** Where an engine's published host ports are REMEMBERED, so they stop moving
+     *  (desktop: `dev_service_ports` in genie.db). Absent ⇒ the old ephemeral
+     *  publication, which still works and still moves. */
+    servicePorts?: DevServiceManagerDeps['servicePorts'];
     /** Live site START progress (pulling → building → starting → ready). */
     onSiteProgress: (progress: DevSiteProgress) => void;
     /** Open a `.gen` site in the viewer. Desktop wires the Testing Browser;
@@ -153,6 +161,15 @@ export function buildHostingDeps(ports: HostingPorts): HostingDeps {
         // immediately and every acquire of those fails.
         probeReady: ({ port, kind, timeoutMs }) =>
             kind === 'http' ? waitForHttp(port, timeoutMs) : waitForPort(port, timeoutMs),
+        // "Can I have this exact port?" — a BIND, not a connect, because Docker
+        // Desktop's forwarder answers a connect for ports nothing serves. Always
+        // available: it is a plain loopback probe with no host-shaped dependency.
+        isPortFree,
+        ...(ports.servicePorts ? { servicePorts: ports.servicePorts } : {}),
+        // A move is the one moment an address genuinely changes. The `.env` is
+        // rewritten either way; this is for the processes that already captured the
+        // old one and cannot be reached.
+        ...(ports.onServiceEnvProblem ? { onPortMoved: ports.onServiceEnvProblem } : {}),
         onChanged: ports.onChanged,
         // The `.env` WRITE (genie#242). This seam is where the two halves meet:
         // the service manager knows a workspace's published connection has moved,
@@ -170,6 +187,7 @@ export function buildHostingDeps(ports: HostingPorts): HostingDeps {
             devSitesFor: ports.devSitesFor,
             hostEnvFor: ports.devServiceHostEnvFor,
             write: applyEnvBlock,
+            ...(ports.onServiceEnvProblem ? { onProblem: ports.onServiceEnvProblem } : {}),
         }),
     };
 

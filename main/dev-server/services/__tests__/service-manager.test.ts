@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { SERVICE_LABEL, SHARED_SERVICES_NETWORK, WORKSPACE_LABEL } from '../../argv';
 import { workspaceSqlIdentifier } from '../catalog';
 import { createDevServiceManager } from '../service-manager';
+import { preferredServicePort } from '../service-ports';
 import type { DevServiceManagerDeps } from '../service-manager';
 import type { DevServices } from '../services-config';
 import type {
@@ -150,7 +151,10 @@ function fakeRuntime(
                           container: p.container,
                           protocol: 'tcp' as const,
                           hostIp: p.hostIp ?? '127.0.0.1',
-                          hostPort: (nextHostPort += 1),
+                          // A real runtime honours an explicit host port and picks
+                          // only when asked to — publishing on a number other than
+                          // the one requested is not a thing Docker does.
+                          hostPort: p.host ?? (nextHostPort += 1),
                       })),
             );
             return { id, name: spec.name };
@@ -1141,5 +1145,270 @@ describe('the service env reaches the repo .env', () => {
         const status = await manager.acquire('a', 'svc-a');
 
         expect(status.state).toBe('running');
+    });
+});
+
+/**
+ * A PUBLISHED PORT THAT DOES NOT MOVE (genie#242 follow-up).
+ *
+ * The engine container was created with no host port — "anything free" — so the
+ * runtime picked a new number every time one was created, and a Genie restart
+ * creates one. genie#242 answered by rewriting the repo `.env` whenever the number
+ * moved. That is necessary, but it is a RACE, and five agents in one week landed
+ * inside it: `.env` saying 51157 while Postgres answered on 58377.
+ *
+ * These tests are the other half — the number stops moving. See
+ * `../service-ports.ts` for the derive-then-remember rule.
+ */
+describe('a published port that does not move', () => {
+    const PG16_KEY = 'postgres-16';
+    const wanted = preferredServicePort(PG16_KEY, 'postgres');
+
+    /** A ledger backed by a plain object, standing in for `dev_service_ports`. */
+    function ledger(seed: Record<string, Record<string, number>> = {}) {
+        const rows: Record<string, Record<string, number>> = { ...seed };
+        return {
+            rows,
+            read: (recordKey: string) => rows[recordKey] ?? {},
+            save: (recordKey: string, ports: Record<string, number>) => {
+                rows[recordKey] = { ...(rows[recordKey] ?? {}), ...ports };
+            },
+        };
+    }
+
+    const stable = (
+        store: ReturnType<typeof ledger>,
+        isPortFree: (port: number) => Promise<boolean> = async () => true,
+    ) => ({
+        servicePorts: { read: store.read, save: store.save },
+        isPortFree,
+    });
+
+    it('asks the runtime for a DERIVED host port, not for whatever is free', async () => {
+        const runtime = fakeRuntime();
+        const store = ledger();
+        const manager = createDevServiceManager(deps(runtime, { a: pgFor('svc-a') }, stable(store)));
+
+        await manager.acquire('a', 'svc-a');
+
+        expect(runtime.ran[0].ports?.[0]).toMatchObject({ container: 5432, host: wanted });
+    });
+
+    it('asks for the SAME port when the container is created again', async () => {
+        const store = ledger();
+        const first = fakeRuntime();
+        await createDevServiceManager(deps(first, { a: pgFor('svc-a') }, stable(store))).acquire(
+            'a',
+            'svc-a',
+        );
+
+        // A fresh Genie, a fresh runtime, the container gone: the old code handed
+        // out a brand-new ephemeral number here, and the `.env` went stale.
+        const second = fakeRuntime();
+        await createDevServiceManager(deps(second, { a: pgFor('svc-a') }, stable(store))).acquire(
+            'a',
+            'svc-a',
+        );
+
+        // Asserted to be a NUMBER first: "both undefined" is the bug, not the fix.
+        expect(first.ran[0].ports?.[0].host).toBe(wanted);
+        expect(second.ran[0].ports?.[0].host).toBe(first.ran[0].ports?.[0].host);
+    });
+
+    it('REMEMBERS the port it was given', async () => {
+        const runtime = fakeRuntime();
+        const store = ledger();
+        const manager = createDevServiceManager(deps(runtime, { a: pgFor('svc-a') }, stable(store)));
+
+        await manager.acquire('a', 'svc-a');
+
+        expect(store.rows[PG16_KEY]).toEqual({ postgres: wanted });
+    });
+
+    it('re-requests a REMEMBERED port ahead of the derived one', async () => {
+        const runtime = fakeRuntime();
+        const store = ledger({ [PG16_KEY]: { postgres: 34567 } });
+        const manager = createDevServiceManager(deps(runtime, { a: pgFor('svc-a') }, stable(store)));
+
+        await manager.acquire('a', 'svc-a');
+
+        expect(runtime.ran[0].ports?.[0].host).toBe(34567);
+    });
+
+    it('MOVES when the port it wants is genuinely taken — and remembers where to', async () => {
+        const runtime = fakeRuntime();
+        const store = ledger();
+        const manager = createDevServiceManager(
+            deps(runtime, { a: pgFor('svc-a') }, stable(store, async (p: number) => p !== wanted)),
+        );
+
+        await manager.acquire('a', 'svc-a');
+
+        const got = runtime.ran[0].ports?.[0].host as number;
+        expect(got).not.toBe(wanted);
+        expect(store.rows[PG16_KEY]).toEqual({ postgres: got });
+    });
+
+    it('SAYS SO when the port had to move', async () => {
+        // A move is the one moment an address genuinely changes, and anything that
+        // captured the old one at spawn — a `queue:work`, a host-native dev server —
+        // is now holding a dead socket. Genie rewrites the `.env` so the next read
+        // is right; it cannot reach inside a running process. The least it owes
+        // anyone is to say the address moved, instead of letting it look like a
+        // broken database.
+        const runtime = fakeRuntime();
+        const store = ledger();
+        const said: string[] = [];
+        const manager = createDevServiceManager(
+            deps(runtime, { a: pgFor('svc-a') }, {
+                ...stable(store, async (p: number) => p !== wanted),
+                onPortMoved: (m: string) => said.push(m),
+            }),
+        );
+
+        await manager.acquire('a', 'svc-a');
+
+        expect(said).toHaveLength(1);
+        expect(said[0]).toContain(String(wanted));
+        expect(said[0]).toContain(String(runtime.ran[0].ports?.[0].host));
+    });
+
+    it('says NOTHING when the port did not move', async () => {
+        // The corpse check for the test above: a message on every acquire would be
+        // noise nobody reads, which is the same as no message at all.
+        const runtime = fakeRuntime();
+        const store = ledger();
+        const said: string[] = [];
+        const manager = createDevServiceManager(
+            deps(runtime, { a: pgFor('svc-a') }, { ...stable(store), onPortMoved: (m: string) => said.push(m) }),
+        );
+
+        await manager.acquire('a', 'svc-a');
+
+        expect(said).toEqual([]);
+    });
+
+    it('a broken onPortMoved listener cannot fail an acquire', async () => {
+        const runtime = fakeRuntime();
+        const store = ledger();
+        const manager = createDevServiceManager(
+            deps(runtime, { a: pgFor('svc-a') }, {
+                ...stable(store, async (p: number) => p !== wanted),
+                onPortMoved: () => {
+                    throw new Error('listener exploded');
+                },
+            }),
+        );
+
+        expect((await manager.acquire('a', 'svc-a')).state).toBe('running');
+    });
+
+    it('still brings the engine up when no port ledger is wired at all', async () => {
+        // A host that has not adopted this seam keeps working — it simply gets the
+        // old ephemeral publication rather than failing to start.
+        const runtime = fakeRuntime();
+        const manager = createDevServiceManager(deps(runtime, { a: pgFor('svc-a') }));
+
+        const status = await manager.acquire('a', 'svc-a');
+
+        expect(status.state).toBe('running');
+        expect(runtime.ran[0].ports?.[0].host).toBeUndefined();
+    });
+
+    it('re-creates an ADOPTED engine that is published on the wrong port', async () => {
+        // A container from before this change holds an ephemeral port, so it would
+        // keep moving on every recreate. The named VOLUME is what makes re-creating
+        // it safe — the same reasoning the beta.245 adoption repair already uses.
+        const runtime = fakeRuntime();
+        const store = ledger();
+        runtime.containers.set('genie-svc-postgres-16', {
+            id: 'old-id',
+            name: 'genie-svc-postgres-16',
+            image: 'postgres:16',
+            state: 'running',
+        });
+        runtime.ports.set('old-id', [
+            { container: 5432, protocol: 'tcp', hostIp: '127.0.0.1', hostPort: 51157 },
+        ]);
+        const manager = createDevServiceManager(deps(runtime, { a: pgFor('svc-a') }, stable(store)));
+
+        await manager.acquire('a', 'svc-a');
+
+        expect(runtime.removed).toContain('old-id');
+        expect(runtime.ran[0].ports?.[0].host).toBe(wanted);
+    });
+
+    it('does NOT re-create a healthy engine just because it is holding its OWN port', async () => {
+        // Once the engine is running it OCCUPIES its published port, so a freeness
+        // probe run on the next acquire truthfully answers "taken" — about ourselves.
+        // Planning from that answer moves the port, which makes the perfectly
+        // healthy running container look misplaced and restarts the database on
+        // every single acquire. The adoption check must therefore compare against
+        // what was REMEMBERED, never against a freshly probed plan.
+        const runtime = fakeRuntime();
+        const store = ledger();
+        const held = new Set<number>();
+        const manager = createDevServiceManager(
+            deps(
+                runtime,
+                { a: pgFor('svc-a'), b: pgFor('svc-b') },
+                stable(store, async (p: number) => !held.has(p)),
+            ),
+        );
+
+        await manager.acquire('a', 'svc-a');
+        held.add(runtime.ran[0].ports?.[0].host as number);
+        await manager.acquire('b', 'svc-b');
+
+        expect(runtime.ran).toHaveLength(1);
+        expect(runtime.removed).toEqual([]);
+    });
+
+    it('LEAVES an adopted engine alone when it already holds the right port', async () => {
+        const runtime = fakeRuntime();
+        const store = ledger();
+        runtime.containers.set('genie-svc-postgres-16', {
+            id: 'good-id',
+            name: 'genie-svc-postgres-16',
+            image: 'postgres:16',
+            state: 'running',
+        });
+        runtime.ports.set('good-id', [
+            { container: 5432, protocol: 'tcp', hostIp: '127.0.0.1', hostPort: wanted },
+        ]);
+        const manager = createDevServiceManager(deps(runtime, { a: pgFor('svc-a') }, stable(store)));
+
+        await manager.acquire('a', 'svc-a');
+
+        expect(runtime.removed).toEqual([]);
+        expect(runtime.ran).toEqual([]);
+    });
+
+    it('re-creates the mis-published engine ONCE and then SETTLES', async () => {
+        // Repair, then stop repairing. The second workspace adopts a container that
+        // is now on the right port and must leave it alone — a repair that re-fires
+        // is a database restarted on every acquire. (The loop guard for a runtime
+        // that never honours the request is covered by the `publishNothing` test
+        // above, which this must not regress.)
+        const runtime = fakeRuntime();
+        const store = ledger();
+        runtime.containers.set('genie-svc-postgres-16', {
+            id: 'old-id',
+            name: 'genie-svc-postgres-16',
+            image: 'postgres:16',
+            state: 'running',
+        });
+        runtime.ports.set('old-id', [
+            { container: 5432, protocol: 'tcp', hostIp: '127.0.0.1', hostPort: 51157 },
+        ]);
+        const manager = createDevServiceManager(
+            deps(runtime, { a: pgFor('svc-a'), b: pgFor('svc-b') }, stable(store)),
+        );
+
+        await manager.acquire('a', 'svc-a');
+        await manager.release('a', 'svc-a');
+        await manager.acquire('b', 'svc-b');
+
+        expect(runtime.removed).toEqual(['old-id']);
     });
 });

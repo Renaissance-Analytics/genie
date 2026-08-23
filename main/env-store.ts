@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
@@ -70,8 +71,107 @@ function readFileOrEmpty(file: string): string {
 }
 
 /**
- * Append `.env` to a directory's `.gitignore` when absent (a `.env` carries
- * secrets — never commit it). Best-effort, mirroring ensureMcpGitignored.
+ * Replace a file's contents with NO window in which it is truncated or partial.
+ *
+ * `fs.writeFileSync` opens with `O_TRUNC`: the user's `.env` is empty from that
+ * instant until the new bytes land. A crash, a full disk or a killed process in
+ * between leaves them with nothing — and this writer runs unattended on a service
+ * lifecycle tick, so nobody is watching when it happens. Write a sibling temp file
+ * and `rename` it over the target instead; rename is atomic on both NTFS and every
+ * POSIX filesystem, so a reader sees either all the old bytes or all the new ones.
+ *
+ * Two things this must NOT do while being careful:
+ *
+ *  - **Replace a symlink with a regular file.** A `.env` symlinked to a shared
+ *    secrets file is a real setup, and renaming onto the LINK silently detaches it.
+ *    Resolve to the real path first and write there — which is what the old
+ *    `writeFileSync` did by accident, and what this must keep doing on purpose.
+ *  - **Bulldoze a read-only file.** On POSIX, renaming over a read-only file
+ *    SUCCEEDS as long as the directory is writable, so switching to rename would
+ *    have started overwriting files the user had deliberately locked — a
+ *    regression dressed as a fix. Writability is therefore checked explicitly, and
+ *    the answer is the same on every platform.
+ */
+function writeFileAtomic(file: string, content: string): void {
+    // A symlink is followed; a path that does not exist yet resolves to itself.
+    let target = file;
+    try {
+        target = fs.realpathSync(file);
+    } catch {
+        /* not there yet — we are creating it */
+    }
+
+    // "Does not exist" (fine, we create it) and "exists but is not writable" (the
+    // user's decision, which we honour) are different answers, so ask separately.
+    let mode: number | undefined;
+    try {
+        mode = fs.statSync(target).mode & 0o777;
+    } catch {
+        /* not there yet — we are creating it */
+    }
+    if (mode !== undefined) {
+        try {
+            fs.accessSync(target, fs.constants.W_OK);
+        } catch {
+            throw new Error(`${path.basename(target)} is read-only — Genie left it untouched`);
+        }
+    }
+
+    const dir = path.dirname(target);
+    const unique = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const temp = path.join(dir, `.${path.basename(target)}.genie-${unique}.tmp`);
+    try {
+        fs.writeFileSync(temp, content, mode === undefined ? undefined : { mode });
+        fs.renameSync(temp, target);
+    } catch (e) {
+        try {
+            fs.unlinkSync(temp);
+        } catch {
+            /* nothing to clean up */
+        }
+        throw e;
+    }
+}
+
+/** Turn one `.gitignore` pattern into a matcher for a bare filename. */
+function ignorePatternMatches(pattern: string, name: string): boolean {
+    // Anchoring and directory prefixes are irrelevant for "does this cover a
+    // `.env` sitting right here": `/.env`, `**/.env` and `.env` all do.
+    const glob = pattern.replace(/^\/+/, '').replace(/^\*\*\//, '');
+    if (glob === '' || glob.includes('/')) return false;
+    const re = new RegExp(
+        `^${glob.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]')}$`,
+    );
+    return re.test(name);
+}
+
+/**
+ * Is `.env` ALREADY ignored by this `.gitignore`?
+ *
+ * The old check was `lines.includes('.env')`, which sees only the literal spelling
+ * — so a repo whose `.gitignore` says `*.env`, `.env*` or `/.env` (all common, all
+ * already correct) got a redundant entry appended. `.gitignore` is a TRACKED file:
+ * that is an unrequested diff in somebody's repository, produced by a tool they
+ * asked to manage a different file entirely.
+ *
+ * Last matching rule wins, so a later `!.env` genuinely un-ignores it.
+ */
+function gitignoreCovers(content: string, name = '.env'): boolean {
+    let covered = false;
+    for (const raw of content.split(/\r?\n/)) {
+        const line = raw.trim();
+        if (!line || line.startsWith('#')) continue;
+        const negated = line.startsWith('!');
+        const pattern = negated ? line.slice(1) : line;
+        if (ignorePatternMatches(pattern, name)) covered = !negated;
+    }
+    return covered;
+}
+
+/**
+ * Append `.env` to a directory's `.gitignore` when it is not ALREADY covered (a
+ * `.env` carries secrets — never commit it). Best-effort, mirroring
+ * ensureMcpGitignored.
  */
 export function ensureEnvGitignored(dir: string): void {
     const file = path.join(dir, '.gitignore');
@@ -82,13 +182,36 @@ export function ensureEnvGitignored(dir: string): void {
         } catch {
             /* no .gitignore yet — we create one */
         }
-        const lines = content.split(/\r?\n/).map((l) => l.trim());
-        if (lines.includes('.env')) return;
+        if (gitignoreCovers(content)) return;
         const prefix = content.length === 0 || content.endsWith('\n') ? '' : '\n';
         const block = `${prefix}\n# Genie: .env carries secrets (e.g. the Tynn agent token) — never commit it.\n.env\n`;
-        fs.writeFileSync(file, content + block);
+        writeFileAtomic(file, content + block);
     } catch {
         /* best-effort */
+    }
+}
+
+/**
+ * Does git already TRACK this `.env`?
+ *
+ * Gitignoring a file git is already following does nothing at all — the next
+ * `git add -A` still stages it, and Genie is about to write a service password
+ * into it. Genie cannot fix this itself (`git rm --cached` on somebody's index is
+ * not a thing an unattended service tick may do), so the honest move is to write
+ * the value the app needs and SAY SO, rather than quietly making a credential
+ * committable. Only ever asked when a write is actually happening.
+ */
+function envIsGitTracked(file: string): boolean {
+    try {
+        const r = spawnSync('git', ['ls-files', '--error-unmatch', '--', path.basename(file)], {
+            cwd: path.dirname(file),
+            stdio: 'ignore',
+            windowsHide: true,
+        });
+        return r.status === 0;
+    } catch {
+        // No git, not a repo, nothing to warn about.
+        return false;
     }
 }
 
@@ -150,7 +273,7 @@ export function applySetEnv(workspaceRoot: string, req: SetEnvRequest): SetEnvRe
     const next = upsertEnvLine(readFileOrEmpty(t.target.path), req.key, String(req.value ?? ''));
     try {
         fs.mkdirSync(t.target.dir, { recursive: true });
-        fs.writeFileSync(t.target.path, next);
+        writeFileAtomic(t.target.path, next);
     } catch (e) {
         return { ok: false, error: `write failed: ${e instanceof Error ? e.message : String(e)}` };
     }
@@ -178,6 +301,11 @@ export interface EnvBlockResult {
     changed: boolean;
     /** The keys this write moved. Empty when nothing had drifted. */
     keys: string[];
+    /** The `.env` is TRACKED by git, so gitignoring it protects nothing. */
+    gitTracked?: boolean;
+    /** Something the user needs to know about a write that otherwise SUCCEEDED —
+     *  surfaced rather than logged, because nobody is watching this happen. */
+    warning?: string;
 }
 
 /** The default marker for the appended block. Deliberately says WHO wrote it and
@@ -230,7 +358,7 @@ export function applyEnvBlock(workspaceRoot: string, req: EnvBlockRequest): EnvB
     ensureEnvGitignored(t.target.dir);
     try {
         fs.mkdirSync(t.target.dir, { recursive: true });
-        fs.writeFileSync(t.target.path, after);
+        writeFileAtomic(t.target.path, after);
     } catch (e) {
         return {
             ok: false,
@@ -238,6 +366,23 @@ export function applyEnvBlock(workspaceRoot: string, req: EnvBlockRequest): EnvB
             file: t.target.label,
             changed: false,
             keys: [],
+        };
+    }
+
+    // Asked only now, because the answer only matters when bytes actually landed.
+    if (envIsGitTracked(t.target.path)) {
+        const secrets = keys.filter((key) => isSecret(key, vars[key] ?? ''));
+        return {
+            ok: true,
+            file: t.target.label,
+            changed: true,
+            keys,
+            gitTracked: true,
+            warning:
+                `${t.target.label} is TRACKED by git, so adding it to .gitignore does not protect it` +
+                (secrets.length
+                    ? ` — and this update wrote ${secrets.join(', ')} into it. Run \`git rm --cached ${t.target.label}\` to stop committing it.`
+                    : '. Run `git rm --cached ' + t.target.label + '` to stop committing it.'),
         };
     }
     return { ok: true, file: t.target.label, changed: true, keys };
