@@ -242,24 +242,27 @@ export async function openPreview(folder: string, io: PreviewIO): Promise<Previe
     const site = previewSitePlan(workspaceId, preview);
     const warnings: string[] = [];
     io.persistSites(workspaceId, { [site.siteId]: site.site });
+    // A site that will not come up is a WARNING, never a failure. The Agent tab is
+    // Genie's own and needs no hosting at all, so a machine with no dev-server
+    // stack still gets the half of this feature the panels live in — and the
+    // reason the app's tabs are empty is said out loud rather than left looking
+    // like a bug in the app being built.
     try {
         const started = await io.startSite(workspaceId, site.site.name, callerIdForApp(identity.appId));
         if (!started.ok) {
             warnings.push(`The preview site did not start: ${started.error ?? 'no reason given'}`);
         }
     } catch (e) {
+        // A supervisor that throws must not be worse than one that says no.
         warnings.push(`The preview site did not start: ${(e as Error).message}`);
     }
 
-    // A site that will not come up must NOT stop the window. The Agent tab is
-    // Genie's own and needs no hosting at all, so a machine with no dev-server
-    // stack still gets the half of this feature that panels live in — and the
-    // reason the app's tabs are empty is said out loud rather than left to look
-    // like a bug in the app.
     if (manifest.services?.length) {
         // Stated, not silently skipped. A preview starts no background services:
         // they outlive a window, and "closing the window is the whole cleanup"
-        // stops being true the moment one is running.
+        // stops being true the moment one is running. An app whose front end sits
+        // waiting on a backend needs to know WHY rather than conclude its own code
+        // is broken.
         warnings.push(
             `${manifest.services.length} background service(s) are not started in a preview — ` +
                 'install the app for development to run them.',
