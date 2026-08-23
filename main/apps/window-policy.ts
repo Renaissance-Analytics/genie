@@ -64,12 +64,19 @@ export function appWindowOptions(
         minWidth: 480,
         minHeight: 360,
         show: false,
-        // The app's own name, never Genie's. The window chrome is Genie-drawn and
-        // not themeable — the structural half of anti-impersonation — and the title
-        // is where the user reads whose window this is.
-        title: options.devMode
-            ? `${app.slug} — Genie App (development)`
-            : `${app.slug} — Genie App`,
+        // NO TITLE. It used to name the app here, and the value contained its
+        // SLUG — which is its address. A GApp window never exposes that anywhere
+        // (owner, 2026-08-22): no address bar, no origin, nothing in the chrome.
+        //
+        // Nothing read it even before that, because `openAppWindow` builds its own
+        // window and this function survives to be the single source
+        // `appViewOptions` is derived from. Leaving a plausible title in the file
+        // named "how a GApp's window is locked down" was a trap waiting for
+        // somebody to use it for a real window and put the address back.
+        //
+        // Naming a window is `window-title.ts` — `[{GApp Name}] - {page title}`,
+        // the app's NAME rather than its address, and it drops a page title that
+        // is really a URL.
         autoHideMenuBar: true,
         backgroundColor: '#0a0a0c',
         webPreferences: {

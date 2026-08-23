@@ -201,7 +201,7 @@ import {
 import { setSecretEncryptor } from './secrets/store';
 import { buildHostServerDeps } from './host-core/server-deps';
 import { registerAppBridge } from './apps/bridge';
-import { registerAppsIpc } from './apps/ipc';
+import { registerAppsIpc, sweepPreviewsAtBoot } from './apps/ipc';
 import { registerFlowsIpc } from './flows/ipc';
 import { registerAppsE2E } from './e2e/apps';
 import type { HostCorePorts } from './host-core/ports';
@@ -1564,6 +1564,12 @@ app.whenReady().then(async () => {
     // reconciles every declared schedule, which is what makes a time-based trigger
     // arm itself rather than waiting for anyone to ask.
     registerFlowsIpc(mcpDeps);
+    // A GApp PREVIEW cannot outlive its window, and a window cannot outlive this
+    // process — so any preview workspace still in the database now is the residue
+    // of a crash or a kill, with no window, no grant and no site behind it. This
+    // is what keeps "closing the window is the whole cleanup" true in the one case
+    // where the window never got the chance to close.
+    sweepPreviewsAtBoot();
     // E2E seam (GENIE_E2E=1 only): publish the handle a spec uses to open a REAL
     // GApp window over the REAL bridge. The property it exists to prove is a
     // negative -- `window.genie` is absent inside a GApp's page -- and a negative

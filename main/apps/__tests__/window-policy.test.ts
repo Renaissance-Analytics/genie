@@ -51,12 +51,18 @@ describe('the window a GApp gets', () => {
         expect(appPartitionFor(app.id)).toMatch(/^persist:/);
     });
 
-    it('names the app in its own title, and does not claim to be Genie', () => {
-        // The window chrome is Genie-drawn and not themeable — the structural half
-        // of anti-impersonation. The title is where the user reads whose window
-        // this is.
-        expect(opts.title).toContain('trader');
-        expect(opts.title?.toLowerCase().startsWith('genie')).toBe(false);
+    it('decides no title at all — that moved, and had to', () => {
+        // It used to name the app here, and the value contained the app's SLUG.
+        // After the owner's correction of 2026-08-22 a GApp window never exposes
+        // its address anywhere, so that string could not stay — and nothing ever
+        // read it, because `openAppWindow` builds its own window and this function
+        // survives only to be the single source of `appViewOptions`.
+        //
+        // Left in place it was a trap: a plausible-looking title, in the file
+        // named "how a GApp's window is locked down", waiting for someone to use
+        // it for a real window and put the address back in the chrome. Naming the
+        // app is `gappWindowTitle`'s job now, and it is asserted there.
+        expect(opts.title).toBeUndefined();
     });
 });
 
@@ -141,8 +147,20 @@ describe('a window for an app you are BUILDING', () => {
         expect(dev?.partition).toBe(normal?.partition);
     });
 
-    it('says so in the title, since the user should know which windows these are', () => {
-        expect(appWindowOptions(app, '/p.js', { devMode: true }).title).toMatch(/development/i);
+    it('changes NOTHING but the dev-tools switch', () => {
+        // The claim this file exists to make, stated as an equality rather than
+        // flag by flag: a developer's window differs from a user's in exactly one
+        // boolean. Anything else that ever diverged would be an isolation a
+        // developer never discovers is missing until their users have it too.
+        const dev = appWindowOptions(app, '/p.js', { devMode: true });
+        const normal = appWindowOptions(app, '/p.js');
+
+        expect({ ...dev.webPreferences, devTools: undefined }).toEqual({
+            ...normal.webPreferences,
+            devTools: undefined,
+        });
+        expect(dev.webPreferences?.devTools).toBe(true);
+        expect(normal.webPreferences?.devTools).toBe(false);
     });
 });
 

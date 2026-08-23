@@ -37,7 +37,9 @@ import { openAppWindow, appViewWebContents } from '../apps/window';
 import { scaffoldApp, slugify } from '../apps/scaffold';
 import { validateAppFolder, type AppFolderReport } from '../apps/validate';
 import { installAppFromFolder, type AppInstallResult } from '../apps/install';
-import { ensureAppAgentPanels, installIO } from '../apps/ipc';
+import { ensureAppAgentPanels, installIO, previewIO } from '../apps/ipc';
+import { closePreview, openPreview } from '../apps/preview-run';
+import { livePreview } from '../apps/preview-registry';
 import { appsList } from '../apps/manage';
 import { APP_MANIFEST_FILENAME, validateAppManifest, type AppPanels } from '../apps/manifest';
 
@@ -157,6 +159,7 @@ export function registerAppsE2E(): void {
         },
 
         scaffoldCheckInstall: () => scaffoldCheckInstall(),
+        previewScaffolded: (panels: AppPanels) => previewScaffolded(panels),
         seedAgentPanelsTwice: (appId: string, panels: AppPanels) =>
             seedAgentPanelsTwice(appId, panels),
         // The installed-apps list, read through the SAME function the panel
@@ -257,4 +260,129 @@ export function seedAgentPanelsTwice(
     const second = labels();
 
     return { first, second };
+}
+
+/**
+ * Open a REAL preview window over a scaffolded folder, and report what it did.
+ *
+ * This is the piece the unit suite structurally cannot reach. `preview-run.test.ts`
+ * proves the decisions against fakes: it asserts that a manifest declaring three
+ * agent panels produces three `createPanel` calls. What it cannot prove is that
+ * three panels then EXIST — in a real `terminal_specs` table, in a real workspace
+ * row, for a folder that was never installed. Between the decision and the rows
+ * sit the database, the workspace registry and the window, and that gap is exactly
+ * where "the field is validated and nothing lays it out" lived in the first place.
+ *
+ * So this runs the ACTUAL chain — `openPreview` over the real `previewIO()` — with
+ * the OS consent modal as the ONLY substitution, the same treatment
+ * `scaffoldCheckInstall` gets and for the same reason: a modal would block a
+ * headless run forever, and what it decides is covered exhaustively by the
+ * consent-plan unit tests.
+ *
+ * It reports the three claims the previewer stands or falls on:
+ *   - the panels the manifest declared are really there,
+ *   - NOTHING was installed,
+ *   - and closing it leaves nothing behind.
+ */
+export async function previewScaffolded(panels: AppPanels): Promise<{
+    ok: boolean;
+    errors: string[];
+    appId: string | null;
+    /** The throwaway workspace the preview ran in, captured BEFORE teardown. */
+    workspaceId: string;
+    /** What `genieApp.me()` answered inside the preview's own view. */
+    identity: unknown;
+    /** Panel labels in the preview's workspace, in order. */
+    panels: string[];
+    /** Installed app ids at the moment the preview was open. */
+    installedWhileOpen: string[];
+    /** After closing: the workspace row, and any specs still pointing at it. */
+    afterClose: { workspace: boolean; specs: number };
+}> {
+    const name = 'Preview Thing';
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'gapp-preview-e2e-'));
+    const folder = path.join(parent, slugify(name));
+    for (const file of scaffoldApp({ name, id: 'com.genie.previewed' })) {
+        const target = path.join(folder, file.path);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, file.contents, 'utf8');
+    }
+
+    // The scaffold asks for one panel. Rewrite the manifest so the spec can assert
+    // a MULTI-panel declaration — the case that was broken, and the only one where
+    // "it laid out what was declared" says anything.
+    const manifestFile = path.join(folder, APP_MANIFEST_FILENAME);
+    const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+    fs.writeFileSync(manifestFile, JSON.stringify({ ...manifest, panels }, null, 4), 'utf8');
+
+    const result = await openPreview(folder, {
+        ...previewIO(),
+        // The one substitution. Answers exactly as someone who said yes and
+        // granted nothing — which is all the scaffold asks for anyway.
+        ask: async (questions) => ({
+            cancelled: false,
+            answers: [
+                {
+                    header: questions[0]!.header,
+                    question: '',
+                    selected: [questions[0]!.options[0]!.label],
+                    note: '',
+                },
+            ],
+        }),
+        // Hosting is not what this proves, and a CI box has no `.gen` stack. The
+        // Agent tab is Genie's own and needs none — which is the whole reason a
+        // site that will not start is a warning rather than a failure.
+        startSite: async () => ({ ok: true }),
+        stopSite: async () => {},
+    });
+
+    const live = result.appId ? livePreview(result.appId) : null;
+    const workspaceId = live?.workspaceId ?? result.workspaceId ?? '';
+
+    // THE BRIDGE, asked from inside the preview's own embedded view.
+    //
+    // A preview deliberately has no grant ROW — that is what "installs nothing"
+    // means — so `me()` and `call()` answer from the live registry instead. Wiring
+    // that touched two lookups (the bridge, and the MCP caller resolver), and
+    // teaching one and not the other produces an app that looks alive and can do
+    // nothing: `me()` answering while every call resolves to no workspace. Only
+    // asking the real page can tell those apart.
+    //
+    // The view is pointed at loopback because `<slug>.preview.gen` has no hosting
+    // behind it on a CI box — the same substitution `openExample` makes, and for
+    // the same reason. What is under test is the bridge, not the address.
+    let identity: unknown = null;
+    if (result.appId) {
+        const view = appViewWebContents(result.appId)[0];
+        if (view) {
+            await view.loadURL(await serveExample(path.join(folder, 'web')));
+            identity = await view.executeJavaScript(
+                'window.genieApp ? window.genieApp.me() : null',
+                true,
+            );
+        }
+    }
+    const labels = listTerminalSpecs()
+        .filter((s) => s.workspace_id === workspaceId && s.type !== 'process')
+        .map((s) => s.label);
+    const installedWhileOpen = appsList().map((a) => a.id);
+
+    if (result.appId) {
+        await closePreview(result.appId, { ...previewIO(), stopSite: async () => {} });
+    }
+
+    return {
+        ok: result.ok,
+        errors: result.errors ?? [],
+        appId: result.appId ?? null,
+        workspaceId,
+        identity,
+        panels: labels,
+        installedWhileOpen,
+        afterClose: {
+            workspace: Boolean(workspaceId && getWorkspace(workspaceId)),
+            specs: listTerminalSpecs().filter((s) => s.workspace_id === workspaceId).length,
+        },
+    };
 }

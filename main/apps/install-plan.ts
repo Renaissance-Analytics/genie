@@ -1,4 +1,5 @@
 import { devSiteIdFor, type DevSiteConfig } from '../dev-server/sites-config';
+import { gappHostname } from './hostname';
 import { APP_AGENTS_DIR, APP_MANIFEST_FILENAME, type AppManifest } from './manifest';
 
 /**
@@ -98,19 +99,14 @@ export function appInstallPlan(workspaceId: string, manifest: AppManifest): AppI
         //
         // PENDING CORRECTION (owner, 2026-08-22): hosted GApp sites are to move to
         // the `.gapp` TLD — `<slug>.gapp`, distinct from the `.gapp` ENVELOPE
-        // suffix, which is a different thing that also exists. This is the one
-        // place a GApp's address is minted, so it is where that migration starts.
-        //
-        // Deliberately NOT changed here. `.gen` is assumed in about fifteen places,
-        // including `window-policy.ts`, where it is part of the same-origin
-        // navigation check that keeps an app inside its own partition. Moving the
-        // TLD in one file and not the others would leave the installer minting an
-        // address the navigation policy does not recognise — an app that installs
-        // and then cannot load itself, with the failure surfacing far from here.
-        // The alternative considered was migrating all of it in this change; it was
-        // rejected because it is a security-surface change that wants its own
-        // review, not a rider on a manifest feature.
-        genName: `${slug}.gen`,
+        // suffix, which is a different thing that also exists. That migration does
+        // NOT start here any more: `hostname.ts` is now the single place a GApp's
+        // address is minted, and its header carries the reason the TLD has not been
+        // flipped yet (the site sanitiser, `GEN_HOST_RE`, the multi-SAN certificate
+        // and the host-header allowlist all assume `.gen`, so moving it in one file
+        // and not the others would mint an address the navigation policy does not
+        // recognise). Tracked as genie#237.
+        genName: gappHostname(slug),
         repo: frontend.repo ?? '',
         // HOST-NATIVE, not a container. A GApp runs against live source on the
         // host, which is the model both target apps already use.

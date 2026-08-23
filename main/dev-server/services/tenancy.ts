@@ -60,9 +60,10 @@ export interface SliceTenant {
      *  role, or key prefix. Naming it is what makes a refusal checkable: the
      *  reader can go and look. */
     identifier: string;
-    /** Set when this workspace hosts a Genie App (`app`) or is one under
-     *  development (`app-dev`). Both hold real app data. */
-    appKind?: 'app' | 'app-dev';
+    /** Set when this workspace hosts a Genie App (`app`), is one under
+     *  development (`app-dev`), or is the throwaway workspace of a PREVIEW
+     *  window (`app-preview`). All three hold real app data. */
+    appKind?: 'app' | 'app-dev' | 'app-preview';
 }
 
 export interface SliceTenancy {
@@ -142,7 +143,9 @@ function nameOf(tenant: SliceTenant): string {
             ? `the Genie App “${tenant.label}”`
             : tenant.appKind === 'app-dev'
               ? `“${tenant.label}”, where a Genie App is being developed`
-              : `“${tenant.label}”`;
+              : tenant.appKind === 'app-preview'
+                ? `“${tenant.label}”, a Genie App open in a preview window`
+                : `“${tenant.label}”`;
     return `${tenant.identifier} — ${what}`;
 }
 

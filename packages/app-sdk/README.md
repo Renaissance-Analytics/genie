@@ -228,7 +228,25 @@ All of it lives in **Settings → Genie Apps**.
    the manifest points at that are not there, and — listed separately — the
    things that will work but are worth a second thought. This is the loop to work
    in: change, check, fix.
-4. **Install for development** runs it from *your* folder rather than a copy, so
+4. **Preview an app…** opens the **real app window** over your folder, without
+   installing anything. A check tells you the manifest is coherent; a preview is
+   the only thing that answers what your users will actually see.
+
+   It is not a mock-up. Same window, same tab strip, same Agent tab laying out
+   the panels your `panels.agents` declares, same embedded views under the same
+   sandbox and the same two-call bridge — because a previewer that showed you
+   something your users do not get would be worse than none at all.
+
+   What it does *not* do is install: no entry in your apps, no tray pill, nothing
+   to uninstall. **Closing the window is the whole cleanup.** It runs at its own
+   address and in its own storage, so previewing an app you already have
+   installed cannot read or corrupt the installed copy's data.
+
+   It asks what to allow the first time you preview a folder, and again whenever
+   you change what your manifest asks for — the moments the screen has something
+   new to say. Your background **services** are not started; a preview is about
+   the window, and a supervised process would outlive it.
+5. **Install for development** runs it from *your* folder rather than a copy, so
    an edit shows up on reload instead of needing a reinstall, and opens its window
    with dev tools. It still asks what to allow — building an app is not a reason
    to grant it anything, and a developer who never sees their own consent screen

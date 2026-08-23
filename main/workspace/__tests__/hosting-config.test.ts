@@ -104,3 +104,72 @@ describe('persistDevSites — writes the truth, keeps the mirror', () => {
         expect(persisted).toHaveLength(0);
     });
 });
+
+describe('an EPHEMERAL workspace never touches the folder it sits on', () => {
+    /**
+     * A GApp PREVIEW registers a throwaway workspace whose path is the
+     * DEVELOPER'S OWN SOURCE FOLDER — which is very often a `.gapp` envelope with
+     * a tracked project.json. Nothing else in Genie has that shape: every other
+     * workspace either owns its folder or is a plain directory.
+     *
+     * The envelope rule exists so hosting config travels with the repo. A
+     * preview's site config must NOT travel with the repo: it is Genie's
+     * scaffolding for a window that will be gone in a minute, at an address
+     * (`<slug>.preview.gen`) the app does not serve at. Writing it would put a
+     * spurious diff in the developer's tracked config, and it would outlive the
+     * preview — which is the one thing a preview promises never to do.
+     */
+    it('persists to genie.db only, even on an envelope', () => {
+        const { store, writes, persisted } = fakeStore({ envelope: true });
+        const ephemeral: DevSitesStore = { ...store, isEphemeral: () => true };
+
+        persistDevSites(ephemeral, 'w', { a: SITE('a') });
+
+        expect(writes.db).toHaveLength(1);
+        expect(writes.envelope).toHaveLength(0);
+        // Nothing is mirrored onward either — there is nothing here Tynn should
+        // learn about a window that is about to close.
+        expect(persisted).toHaveLength(0);
+    });
+
+    it('reads its OWN sites, not the ones the folder happens to carry', () => {
+        // The half that would be missed by only guarding the write: with the
+        // envelope authoritative on READ, a preview's site would be written to
+        // genie.db and then never seen again — the site would not start, and the
+        // reason would be nowhere.
+        const { store } = fakeStore({
+            envelope: true,
+            envelopeSites: { theirs: SITE('theirs') },
+            db: { mine: SITE('mine') },
+        });
+        const ephemeral: DevSitesStore = { ...store, isEphemeral: () => true };
+
+        expect(resolveDevSites(ephemeral, 'w')).toEqual({ mine: SITE('mine') });
+    });
+
+    it('never seeds the envelope from an ephemeral workspace’s db map', () => {
+        // The migration path is the sneaky one: an envelope with no `sites` key
+        // gets seeded from genie.db on first read. For a preview that would write
+        // the preview's own site into the developer's project.json, on a plain
+        // read, with nobody having asked for anything.
+        const { store, writes } = fakeStore({
+            envelope: true,
+            envelopeSites: null,
+            db: { mine: SITE('mine') },
+        });
+        const ephemeral: DevSitesStore = { ...store, isEphemeral: () => true };
+
+        resolveDevSites(ephemeral, 'w');
+
+        expect(writes.envelope).toHaveLength(0);
+    });
+
+    it('leaves an ordinary workspace on the envelope rule', () => {
+        const { store, writes } = fakeStore({ envelope: true });
+        const ordinary: DevSitesStore = { ...store, isEphemeral: () => false };
+
+        persistDevSites(ordinary, 'w', { a: SITE('a') });
+
+        expect(writes.envelope).toHaveLength(1);
+    });
+});

@@ -25,7 +25,7 @@ const PG16 = {
     enabled: true,
 };
 
-const ws = (id: string, over: { label?: string; appKind?: 'app' | 'app-dev' } = {}) => ({
+const ws = (id: string, over: { label?: string; appKind?: 'app' | 'app-dev' | 'app-preview' } = {}) => ({
     id,
     path: `/work/${id}`,
     label: over.label ?? id,
@@ -171,5 +171,31 @@ describe('purgeVerdict', () => {
         expect(v.allowed).toBe(false);
         expect(v.allowed === false && v.reason).not.toMatch(/Genie App/);
         expect(v.allowed === false && v.reason).toContain('ws_api_9f8e7d6c');
+    });
+});
+
+describe('a workspace opened for a GApp PREVIEW', () => {
+    it('is named for what it is, so a purge refusal is still checkable', () => {
+        // A preview's workspace sits on the developer's own folder for as long as
+        // its window is open. It is unlikely to hold a slice — a preview starts no
+        // services — but if one is ever there it holds the DEVELOPER'S data, and
+        // `nameOf` falling through to the bare-workspace wording would describe it
+        // as an ordinary project. The whole value of this refusal is that the
+        // person reading it can go and look at the thing it names.
+        const v = purgeVerdict({
+            engine: 'postgres',
+            version: '16',
+            volume: 'genie-pg16',
+            tenancy: sliceTenantsOf(
+                query(
+                    { a: { 'svc-a': { ...PG16 } }, b: { 'svc-b': { ...PG16 } } },
+                    { workspaces: [ws('a'), ws('b', { label: 'Trader', appKind: 'app-preview' })] },
+                ),
+            ),
+        });
+
+        expect(v.allowed).toBe(false);
+        expect(v.allowed === false && v.reason).toMatch(/preview/i);
+        expect(v.allowed === false && v.reason).toMatch(/Trader/);
     });
 });

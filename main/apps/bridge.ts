@@ -15,10 +15,9 @@
  */
 
 import { ipcMain, type WebContents } from 'electron';
-import { getAppGrant } from '../db';
-import { decideAppCall, type AppGrant } from './bridge-decision';
+import { appGrantFor, appIdentityFor } from './grant-lookup';
+import { decideAppCall } from './bridge-decision';
 import { prepareAppToolCall } from './call-prep';
-import { APP_CAPABILITIES } from './capabilities';
 import { callerIdForApp } from '../mcp/caller-identity';
 import { handleMcpMessage } from '../mcp/protocol';
 import type { ServerDeps } from '../mcp/server';
@@ -42,20 +41,6 @@ export function unregisterAppWindow(webContentsId: number): void {
 /** Every window currently open for an app — used to close them on revoke/uninstall. */
 export function windowIdsForApp(appId: string): number[] {
     return [...windowApps.entries()].filter(([, id]) => id === appId).map(([wcId]) => wcId);
-}
-
-function grantFor(appId: string): AppGrant | null {
-    const row = getAppGrant(appId);
-    if (!row) return null;
-    return {
-        appId: row.appId,
-        appName: row.name,
-        workspaceId: row.workspaceId,
-        scope: row.scope,
-        workspaces: row.workspaces,
-        capabilities: row.capabilities,
-        revoked: row.revoked,
-    };
 }
 
 export interface AppCallResult {
@@ -112,7 +97,7 @@ export async function dispatchAppCall(
     const tool = typeof input.tool === 'string' ? input.tool : '';
     const workspaceId = typeof input.workspaceId === 'string' ? input.workspaceId : undefined;
 
-    const decision = decideAppCall({ tool, workspaceId }, grantFor(appId));
+    const decision = decideAppCall({ tool, workspaceId }, appGrantFor(appId));
     if (!decision.allowed) return { ok: false, error: decision.reason };
 
     const message = prepareAppToolCall(decision, { tool, args: input.args });
@@ -149,19 +134,11 @@ export function registerAppBridge(deps: ServerDeps): void {
 
     ipcMain.handle(APP_ME_CHANNEL, (event) => {
         const appId = windowApps.get(event.sender.id);
-        const grant = appId ? grantFor(appId) : null;
-        if (!grant) return null;
         // What the app is allowed to know about itself: who it is, and what it may
         // do — so it can hide a feature it was not granted instead of offering a
-        // button that fails.
-        return {
-            id: grant.appId,
-            name: grant.appName,
-            workspaceId: grant.workspaceId,
-            scope: grant.scope,
-            capabilities: grant.capabilities.filter((c) =>
-                APP_CAPABILITIES.some((cap) => cap.key === c),
-            ),
-        };
+        // button that fails. Decided in `preview-registry.ts`, because a PREVIEWED
+        // app's identity and its authority come from two different places and
+        // getting that split wrong is not visible from here.
+        return appId ? appIdentityFor(appId) : null;
     });
 }

@@ -2055,12 +2055,12 @@ export function isWorkstationOperator(id: string): boolean {
  * Genie's kind, a hand edit — reads as "not an App workspace" instead of being
  * treated as one.
  */
-export type WorkspaceAppKind = 'app' | 'app-dev';
+export type WorkspaceAppKind = 'app' | 'app-dev' | 'app-preview';
 
 /** PURE. The same narrowing, for a row already in hand — so a LIST of workspaces
  *  does not become one query each just to learn which are Apps. */
 export function toWorkspaceAppKind(value: unknown): WorkspaceAppKind | null {
-    return value === 'app' || value === 'app-dev' ? value : null;
+    return value === 'app' || value === 'app-dev' || value === 'app-preview' ? value : null;
 }
 
 export function getWorkspaceAppKind(id: string): WorkspaceAppKind | null {
@@ -2072,7 +2072,15 @@ export function getWorkspaceAppKind(id: string): WorkspaceAppKind | null {
     return toWorkspaceAppKind(row?.app_kind);
 }
 
-/** Mark (or unmark) a workspace as hosting an installed GApp. */
+/**
+ * Mark (or unmark) a workspace as hosting a GApp.
+ *
+ * `app-preview` is the THROWAWAY kind: a workspace opened for a preview window,
+ * living on the developer's own folder, removed when the window closes and swept
+ * at boot if it did not get to. It is a distinct value rather than a flag because
+ * both of those deletions have to be able to recognise it with certainty — a
+ * preview's workspace is one confused id away from being somebody's real project.
+ */
 export function setWorkspaceAppKind(id: string, kind: WorkspaceAppKind | null): void {
     getDb().prepare('UPDATE workspaces SET app_kind = ? WHERE id = ?').run(kind, id);
 }
@@ -2592,6 +2600,11 @@ export function setHostedSitesSync(
 const devSitesStore: DevSitesStore = {
     workspacePath: (id) => getWorkspace(id)?.path ?? null,
     isEnvelope: (folder) => isEnvelopeFolder(folder),
+    // A GApp preview's workspace sits on the DEVELOPER'S folder, which is usually
+    // an envelope. Its site config is Genie's scaffolding for a throwaway window,
+    // not the app's, so it stays in genie.db and dies with the row instead of
+    // landing in somebody's tracked project.json.
+    isEphemeral: (id) => getWorkspaceAppKind(id) === 'app-preview',
     // Through the SAME sanitizer a write goes through. project.json is tracked, so
     // its `sites` arrives from a clone, a merge or a hand edit — raw it would feed
     // unvalidated values to a spawn and a cert, and a shape we cannot read would

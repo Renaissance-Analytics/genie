@@ -26,6 +26,7 @@ import {
     type ArrivingVersion,
     type InstalledAppVersion,
 } from './updates';
+import { gappHomeUrl } from './hostname';
 import { buildConsentPlan, readConsent } from './consent-plan';
 import { decideStorageOnInstall } from './data-retention';
 import { validateAppManifest, APP_MANIFEST_FILENAME, type AppManifest } from './manifest';
@@ -351,7 +352,7 @@ export async function installAppFromFolder(
         ok: true,
         appId: manifest.id,
         workspaceId: workspace.workspaceId,
-        homeUrl: `https://${manifest.slug}.gen/`,
+        homeUrl: gappHomeUrl(manifest.slug),
         ...(warnings.length > 0 ? { warnings } : {}),
         userProvides: requirements.userProvides,
     };

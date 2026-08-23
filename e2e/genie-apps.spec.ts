@@ -210,3 +210,106 @@ test('a GApp gets the agent panels it declared — and no more on the next open'
     // Opening it again changes nothing at all.
     expect(outcome.second).toEqual(['Terminal', 'Files', 'Terminal']);
 });
+
+/**
+ * THE PREVIEWER (Tynn #250).
+ *
+ * A GApp developer could scaffold a folder, check it, and install it — and had no
+ * way to SEE the app in the window its users get without installing it first. This
+ * opens a real GApp window over a folder that was never installed and asks the
+ * three questions the previewer stands or falls on.
+ *
+ * The panels one is the headline, and it is the one a unit test cannot answer.
+ * `preview-run.test.ts` proves the DECISION against fakes: a manifest declaring
+ * three agent panels produces three `createPanel` calls. Between that decision and
+ * three panels EXISTING sit the database, the workspace registry and the window —
+ * and that gap is precisely where "the field is validated and nothing lays it out"
+ * lived before any of this was built.
+ */
+test('a PREVIEW lays out the panels its manifest declared, without installing anything', async () => {
+    const outcome = await app.evaluate(() =>
+        (globalThis as Record<string, any>).__GENIE_E2E_APPS__.previewScaffolded({
+            agents: 3,
+            kinds: ['terminal', 'files'],
+        }),
+    );
+
+    expect(outcome.errors).toEqual([]);
+    expect(outcome.ok).toBe(true);
+
+    // THE headline. Three real panels in a real workspace, cycling the declared
+    // palette, for a folder nobody installed.
+    expect(outcome.panels).toEqual(['Terminal', 'Files', 'Terminal']);
+
+    // It runs as the PREVIEW identity, never as the app itself — the property that
+    // stops a preview reading or corrupting an installed copy's storage, since the
+    // partition is derived from this id.
+    expect(outcome.appId).toBe('com.genie.previewed~preview');
+
+    // And NOTHING was installed, while the window was open. Not the preview id,
+    // not the app's own: no entry in the Apps list means no tray pill and nothing
+    // to uninstall afterwards.
+    expect(outcome.installedWhileOpen).not.toContain('com.genie.previewed');
+    expect(outcome.installedWhileOpen).not.toContain('com.genie.previewed~preview');
+});
+
+test('the two-call bridge answers inside a preview, which has no grant row at all', async () => {
+    /**
+     * "Installs nothing" and "the bridge is live" pull against each other, and this
+     * is where they meet. An installed app's `me()` and `call()` are answered from
+     * a grant ROW; a preview deliberately has none and never will. So both lookups
+     * had to learn about the live registry — the bridge, and the MCP caller
+     * resolver that decides which workspace an allowed call lands in.
+     *
+     * Teaching one and not the other is the failure this test exists for, and it
+     * is legible from neither file: `me()` answers happily while every `call()`
+     * resolves to no workspace. An app that looks alive and can do nothing.
+     */
+    const outcome = await app.evaluate(() =>
+        (globalThis as Record<string, any>).__GENIE_E2E_APPS__.previewScaffolded({ agents: 1 }),
+    );
+
+    const me = outcome.identity as {
+        id: string;
+        name: string;
+        workspaceId: string;
+        capabilities: string[];
+        preview?: true;
+    } | null;
+    expect(me).not.toBeNull();
+
+    // The app's REAL id, not the `~preview` one Genie keys its storage by. That is
+    // what the app IS, and a developer whose code branches on its own id must not
+    // silently take a different branch because Genie renamed it for bookkeeping.
+    expect(me!.id).toBe('com.genie.previewed');
+
+    // A real workspace — the preview's own. This is the half that fails silently
+    // if only the bridge is taught and the caller resolver is not.
+    expect(me!.workspaceId).toBeTruthy();
+    expect(me!.workspaceId).toBe(outcome.workspaceId);
+
+    // The scaffold asks for NOTHING, and the harness consents to exactly that. A
+    // preview holding capabilities nobody granted would be the whole permission
+    // model quietly not applying to the fast path.
+    expect(me!.capabilities).toEqual([]);
+
+    // And it is TOLD it is a preview, explicitly. An app that wanted to seed demo
+    // data rather than touch anything real has to be able to ask, and sniffing its
+    // own id for a suffix would make Genie's internal naming a public contract.
+    expect(me!.preview).toBe(true);
+});
+
+test('closing a preview is the whole cleanup', async () => {
+    // The other half of "it installs nothing": what it DID create has to go. The
+    // throwaway workspace and every panel row in it — otherwise previewing ten
+    // folders leaves ten dead workspaces holding terminals that were once live.
+    const outcome = await app.evaluate(() =>
+        (globalThis as Record<string, any>).__GENIE_E2E_APPS__.previewScaffolded({
+            agents: 2,
+        }),
+    );
+
+    expect(outcome.panels).toHaveLength(2);
+    expect(outcome.afterClose.workspace).toBe(false);
+    expect(outcome.afterClose.specs).toBe(0);
+});

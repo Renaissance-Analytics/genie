@@ -16,6 +16,7 @@ import { ipcMain, dialog } from 'electron';
 import {
     addWorkspace,
     createTerminalSpec,
+    deleteTerminalSpec,
     getWorkspace,
     listTerminalSpecs,
     listWorkspaces,
@@ -52,7 +53,16 @@ import {
     type AppPanels,
 } from './manifest';
 import { ensureAgentPanels } from './panels';
-import { broadcastTerminalSpecsChanged } from '../terminal/ipc';
+import { gappHomeUrl } from './hostname';
+import {
+    closePreview,
+    openPreview,
+    sweepPreviewWorkspaces,
+    type PreviewIO,
+    type RememberedConsent,
+} from './preview-run';
+import { listPreviews, livePreview, previewAppView } from './preview-registry';
+import { broadcastTerminalSpecsChanged, killTerminalById } from '../terminal/ipc';
 import {
     appsGet,
     appsList,
@@ -491,6 +501,159 @@ export function unregisterAppShell(webContentsId: number): void {
     shellWindows.delete(webContentsId);
 }
 
+/* ---- PREVIEW: the same window, from a folder that is not installed ------ */
+
+/**
+ * The real preview I/O.
+ *
+ * Every decision it feeds is tested against fakes in `preview-run.test.ts`; this
+ * is the filesystem, the database, the OS modal and the hosting manager it runs
+ * against for real. Exported so the E2E harness can drive the ACTUAL chain with
+ * only the modal swapped out — the same treatment `installIO` gets, for the same
+ * reason: what a unit test structurally cannot reach here is whether a preview
+ * window ends up with real panels in a real workspace.
+ */
+export function previewIO(): PreviewIO {
+    return {
+        readManifest: (folder) => {
+            const file = path.join(folder, APP_MANIFEST_FILENAME);
+            return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
+        },
+        exists: (p) => fs.existsSync(p),
+        machine: (required) => toolchainMachineFacts(required),
+        ask: (questions) => forceQuestion(questions, 'high'),
+        rememberedConsent: (folder) => previewConsents.get(folder) ?? null,
+        recordConsent: (folder, remembered) => {
+            // In MEMORY, for this run of Genie only. A preview's grant is not a
+            // decision the machine should carry forward: it was never an install,
+            // and a remembered yes on disk would outlive every folder it was
+            // about. The friction it removes is within one working session, which
+            // is where the loop this feature exists for actually happens.
+            previewConsents.set(folder, remembered);
+        },
+        createWorkspace: ({ appId, name, path: folder }) => {
+            // Always a NEW row, never an adopt-if-the-path-matches like dev mode.
+            // A preview deletes the workspace it created when its window closes,
+            // and the developer very often already has a real workspace on this
+            // exact folder — adopting it would make closing a preview window
+            // delete their project.
+            const row = addWorkspace({
+                id: `preview-${randomUUID()}`,
+                backend: 'aionima',
+                // The PREVIEW app id, not a random one and not the app's own.
+                // `project_id` is what `buildTerminalEnv` looks Tynn-managed
+                // provider credentials up by, so this is the line that decides a
+                // preview's terminals inherit NOBODY's credentials — a preview id
+                // is not a Tynn project id and never matches one. Naming it makes
+                // that deliberate rather than a happy accident of randomness, and
+                // makes a stray row in the database say what it was for.
+                project_id: appId,
+                project_name: name,
+                tynn_project_id: appId,
+                tynn_project_name: name,
+                // 'simple' even on a `.gapp` envelope: this row is Genie's
+                // scaffolding, not the folder's own registration, and its sites
+                // stay in genie.db (see `isEphemeral` in db.ts).
+                shape: 'simple',
+                path: folder,
+                editor: null,
+                editor_cmd: null,
+                start_cmd: null,
+                env_file: null,
+                last_opened_at: null,
+                created_by_genie: 0,
+            });
+            setWorkspaceAppKind(row.id, 'app-preview');
+            return { workspaceId: row.id };
+        },
+        workspaceRow: (workspaceId) => getWorkspace(workspaceId) ?? null,
+        removeWorkspace: (workspaceId) => removeWorkspaceRow(workspaceId),
+        listWorkspaceRows: () => listWorkspaces(),
+        countPanels: (workspaceId) =>
+            listTerminalSpecs().filter(
+                (s) => s.workspace_id === workspaceId && s.type !== 'process',
+            ).length,
+        createPanel: (workspaceId, panel) => {
+            const workspace = getWorkspace(workspaceId);
+            createTerminalSpec({
+                id: `gapp-${randomUUID()}`,
+                workspace_id: workspaceId,
+                label: panel.label,
+                cwd: workspace?.path ?? '',
+                type: panel.type,
+            });
+        },
+        removePanels: (workspaceId) => {
+            for (const spec of listTerminalSpecs().filter((s) => s.workspace_id === workspaceId)) {
+                // Kill BEFORE delete: a pty whose spec has already gone is one
+                // nothing owns, and it would outlive the preview holding the
+                // developer's folder open.
+                killTerminalById(spec.id);
+                deleteTerminalSpec(spec.id);
+            }
+        },
+        panelsChanged: () => broadcastTerminalSpecsChanged(),
+        persistSites: (workspaceId, sites) => setWorkspaceDevSites(workspaceId, sites),
+        startSite: async (workspaceId, siteName, callerId) => {
+            const r = await manageSiteForMcp(callerId, {
+                action: 'start',
+                workspaceId,
+                name: siteName,
+            });
+            return { ok: r.ok, ...(r.error ? { error: r.error } : {}) };
+        },
+        stopSite: async (workspaceId, siteName, callerId) => {
+            await manageSiteForMcp(callerId, { action: 'stop', workspaceId, name: siteName });
+        },
+        clearStorage: (appId) => clearAppStorage(appId),
+        openWindow: ({ workspaceId, ...opts }) =>
+            void openAppWindow({
+                ...opts,
+                // Closing the window IS the cleanup, so the teardown hangs off the
+                // window rather than off a button somebody has to remember to
+                // press. It covers the developer closing it, Genie quitting, and
+                // the window being closed by anything else.
+                //
+                // SCOPED to the workspace this window opened. `closed` fires
+                // asynchronously, so a window being replaced by a re-preview fires
+                // its callback after the NEW preview has registered under the same
+                // app id — and an unscoped teardown would dismantle the window the
+                // developer is looking at.
+                onClosed: () => void closePreview(opts.appId, previewIO(), workspaceId),
+            }),
+        closeWindow: (appId) => closeAppWindows(appId),
+    };
+}
+
+/**
+ * What each folder answered, and what it was answering ABOUT.
+ *
+ * Keyed by folder, holding a fingerprint of the manifest's permissions, so the
+ * consent screen reappears exactly when the app changes what it asks for — which
+ * is both the moment it has something new to say and the moment a developer most
+ * wants to see how their own ask reads. Anything else would be either friction on
+ * every preview or a screen they never meet.
+ *
+ * By FOLDER and not by hosted site, and that stays right when a manifest can
+ * declare several (genie#238). Permissions are declared once for the whole app —
+ * a GApp with three hosted sites has one `permissions` block, not three — so
+ * asking again per site would be asking the same question three times and
+ * recording three answers that can never legitimately differ.
+ */
+const previewConsents = new Map<string, RememberedConsent>();
+
+/**
+ * Remove preview workspaces that outlived the process. Called once at boot.
+ *
+ * A preview cannot outlive its window and a window cannot outlive Genie, so one
+ * found here is the residue of a crash or a kill. Sweeping it is what keeps
+ * "closing the window is the whole cleanup" true in the case where the window
+ * never got the chance to close.
+ */
+export function sweepPreviewsAtBoot(): void {
+    sweepPreviewWorkspaces(previewIO());
+}
+
 export function registerAppsIpc(): void {
     ipcMain.handle('apps:list', () => appsList());
 
@@ -501,6 +664,25 @@ export function registerAppsIpc(): void {
     ipcMain.handle('gapp:describe', (event) => {
         const appId = shellWindows.get(event.sender.id);
         if (!appId) return null;
+
+        // A PREVIEW answers from the live registry, because it deliberately has no
+        // grant row and never will. Checked FIRST: a preview's app id cannot
+        // belong to an installed app, so there is nothing to fall through to, and
+        // reading the registry second would mean an installed app of a similar
+        // name could answer for it.
+        const live = livePreview(appId);
+        if (live) {
+            return {
+                app: previewAppView(live),
+                workspace: getWorkspace(live.workspaceId) ?? null,
+                tabs: appWindowTabs(live.manifest).map((t) => ({ kind: t.kind, title: t.title })),
+                // The window has to keep saying what did not come up. An app tab
+                // showing nothing, with no explanation, reads as a bug in the app
+                // being built — the wrong lesson for a previewer to teach.
+                preview: { folder: live.folder, warnings: live.warnings },
+            };
+        }
+
         const app = appsGet(appId);
         const row = getAppGrant(appId);
         if (!app || !row) return null;
@@ -519,6 +701,42 @@ export function registerAppsIpc(): void {
             return null;
         }
     });
+
+    /**
+     * Open a folder in a real GApp window without installing it.
+     *
+     * The folder picker is here for the same reason install's is: it needs a
+     * native dialog and a path on the machine the user is sitting at.
+     */
+    ipcMain.handle('apps:preview-folder', async (_e, folder?: string) => {
+        const dir = folder || (await pickFolder('Preview a Genie App'));
+        if (!dir) return { ok: false, errors: ['No folder chosen.'] };
+        return openPreview(dir, previewIO());
+    });
+
+    /**
+     * Close a preview from Genie's side.
+     *
+     * The window closing already tears everything down; this is for the Store
+     * drawer, which shows what is open and should be able to end it without the
+     * user hunting for the window.
+     */
+    ipcMain.handle('apps:preview-close', async (_e, appId: string) => {
+        closeAppWindows(String(appId));
+        await closePreview(String(appId), previewIO());
+        return { ok: true };
+    });
+
+    /** What is being previewed right now — for the Store drawer. */
+    ipcMain.handle('apps:previews', () =>
+        listPreviews().map((live) => ({
+            appId: live.identity.appId,
+            name: live.source.name,
+            folder: live.folder,
+            homeUrl: gappHomeUrl(live.manifest.slug),
+            warnings: live.warnings,
+        })),
+    );
 
     /** Show a tab: the shell paints the strip, main moves the embedded view. */
     ipcMain.handle('gapp:show-tab', (event, index: number) => {

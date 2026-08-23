@@ -17,6 +17,7 @@
  */
 
 import { APP_CAPABILITIES, findCapability } from './capabilities';
+import { gappHostname } from './hostname';
 import type { AppManifest, AppScope } from './manifest';
 import type { AppRequirementPlan } from './requirements';
 import type { ForceAnswer, ForceQuestion } from '../mcp/protocol';
@@ -26,6 +27,15 @@ const MAX_OPTIONS = 4;
 
 export interface ConsentPlan {
     questions: ForceQuestion[];
+    /**
+     * The header of the accept/decline question.
+     *
+     * Read back rather than assumed, because a PREVIEW's first question is not an
+     * install question and must not be worded as one. Everything below it is
+     * identical either way, which is the entire point of previewing behind the
+     * real screen.
+     */
+    acceptHeader: string;
     /** Option label → the capabilities ticking it grants. */
     optionGrants: Record<string, string[]>;
     /** Option label → the reach choosing it grants. */
@@ -41,10 +51,30 @@ export interface ConsentOutcome {
 }
 
 const DECLINE_LABEL = "Don't install";
+const PREVIEW_DECLINE_LABEL = "Don't preview";
+
+/**
+ * What a PREVIEW does, in plain terms.
+ *
+ * The developer needs two facts that pull in opposite directions: this window is
+ * REAL — its permissions are real, its terminals are real, whatever it is granted
+ * it can actually do — and it is TEMPORARY, so saying yes does not put an app on
+ * the machine. A screen that made only the first point would read as an install
+ * prompt and get over-thought; one that made only the second would read as free
+ * and not get read at all.
+ */
+function whatPreviewSetsUp(manifest: AppManifest): string {
+    return [
+        `- A temporary site at **${gappHostname(manifest.slug)}**, separate from any installed copy`,
+        '- A throwaway workspace on the folder you are building in',
+        '- **Nothing is installed.** No entry in your apps, no tray pill, nothing to ' +
+            'uninstall — closing the window removes all of it',
+    ].join('\n');
+}
 
 /** What the app will set up on this machine, in plain terms. */
 function whatItSetsUp(manifest: AppManifest): string {
-    const lines = [`- A site at **${manifest.slug}.gen**, served by Genie`];
+    const lines = [`- A site at **${gappHostname(manifest.slug)}**, served by Genie`];
     if (manifest.frontend.browserExposed) {
         lines.push('- Reachable from your normal browser, not only inside Genie');
     }
@@ -182,6 +212,16 @@ export interface ConsentContext {
     replacing?: { origin: string };
     /** Where this copy comes from. */
     source?: { origin: string };
+    /**
+     * This is a PREVIEW, not an install.
+     *
+     * It changes the accept/decline question and NOTHING below it, and that
+     * asymmetry is the feature. A developer who never sees their own consent
+     * screen never learns what it says — so a preview shows the real one, with the
+     * same permission wording, the same reach wording and the same bundling, and
+     * differs only where being honest requires it.
+     */
+    preview?: boolean;
 }
 
 export function buildConsentPlan(
@@ -189,21 +229,56 @@ export function buildConsentPlan(
     requirements: AppRequirementPlan,
     context: ConsentContext = {},
 ): ConsentPlan {
-    const installLabel = 'Install';
+    const preview = context.preview === true;
+    // Both halves of the pair change together: a screen headed "Preview" whose
+    // button still said "Install" would be the worst of the two.
+    const acceptHeader = preview ? 'Preview' : 'Install';
+    const installLabel = acceptHeader;
     const questions: ForceQuestion[] = [
-        {
-            header: 'Install',
-            question:
-                `Install the Genie App **${manifest.name}** (version ${manifest.version})?\n\n` +
-                originChangeWarning(context) +
-                `${whatItSetsUp(manifest)}\n` +
-                agentsSection(manifest) +
-                requirementsSection(requirements),
-            options: [
-                { label: installLabel, description: `Set up ${manifest.name} on this machine.` },
-                { label: DECLINE_LABEL, description: 'Nothing is created or changed.' },
-            ],
-        },
+        preview
+            ? {
+                  header: acceptHeader,
+                  question:
+                      `Preview the Genie App **${manifest.name}** (version ${manifest.version})?\n\n` +
+                      'It opens in a real Genie App window with real permissions — but it is ' +
+                      '**not installed**.\n\n' +
+                      `${whatPreviewSetsUp(manifest)}\n` +
+                      // The roster belongs on the preview screen too. A preview's
+                      // grant is a REAL grant, so its agents really do run with the
+                      // permissions ticked below, and the sentence that makes the
+                      // list mean something is just as true here.
+                      agentsSection(manifest) +
+                      // The requirements section stays. A preview of an app whose
+                      // runtime is missing is exactly where a developer wants to
+                      // find that out, and it is the same text their users get.
+                      requirementsSection(requirements),
+                  options: [
+                      {
+                          label: installLabel,
+                          description: `Open ${manifest.name} in a window. Nothing is installed.`,
+                      },
+                      {
+                          label: PREVIEW_DECLINE_LABEL,
+                          description: 'Nothing is created or changed.',
+                      },
+                  ],
+              }
+            : {
+                  header: acceptHeader,
+                  question:
+                      `Install the Genie App **${manifest.name}** (version ${manifest.version})?\n\n` +
+                      originChangeWarning(context) +
+                      `${whatItSetsUp(manifest)}\n` +
+                      agentsSection(manifest) +
+                      requirementsSection(requirements),
+                  options: [
+                      {
+                          label: installLabel,
+                          description: `Set up ${manifest.name} on this machine.`,
+                      },
+                      { label: DECLINE_LABEL, description: 'Nothing is created or changed.' },
+                  ],
+              },
     ];
 
     const optionGrants: Record<string, string[]> = {};
@@ -259,7 +334,7 @@ export function buildConsentPlan(
         });
     }
 
-    return { questions, optionGrants, scopeChoices, installLabel };
+    return { questions, acceptHeader, optionGrants, scopeChoices, installLabel };
 }
 
 export function readConsent(
@@ -272,7 +347,10 @@ export function readConsent(
     if (result.cancelled) return nothing;
 
     const answerFor = (header: string) => result.answers.find((a) => a.header === header);
-    if (!answerFor('Install')?.selected.includes(plan.installLabel)) return nothing;
+    // The plan's OWN header, not a literal: an install and a preview ask a
+    // differently-worded first question, and a hardcoded 'Install' here would read
+    // a preview's yes as a dismissal and silently create nothing.
+    if (!answerFor(plan.acceptHeader)?.selected.includes(plan.installLabel)) return nothing;
 
     const capabilities: string[] = [];
     for (const label of answerFor('Permissions')?.selected ?? []) {
