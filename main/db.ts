@@ -1246,6 +1246,38 @@ export function runMigrations(d: Database.Database): void {
                 db.exec(`DROP TABLE IF EXISTS terminal_service_env;`);
             },
         },
+        {
+            // v47: fancy-flow workflows owned by a Genie App.
+            //
+            // The row is stored graph JSON that Genie will later EXECUTE, so two
+            // things live in the SCHEMA rather than in whoever writes to it:
+            //
+            //   `app_id` is NOT NULL and a foreign key ON DELETE CASCADE. There is
+            //   no ownerless flow, because a flow with no owner has no grant to be
+            //   bounded by and the run path would have nothing to ask
+            //   `decideAppCall` about. And uninstalling an app takes its flows with
+            //   it — a scheduled flow outliving its app is exactly the thing that
+            //   keeps firing after the user thought they had removed it.
+            //
+            // `enabled` is how a schedule is stopped without deleting the flow.
+            // The graph itself carries the trigger, so there is nothing else to
+            // turn off.
+            version: 47,
+            runner: (db) => {
+                db.exec(`
+                    CREATE TABLE IF NOT EXISTS flows (
+                        id         TEXT PRIMARY KEY,
+                        app_id     TEXT NOT NULL REFERENCES app_grants(app_id) ON DELETE CASCADE,
+                        name       TEXT NOT NULL,
+                        graph_json TEXT NOT NULL,
+                        enabled    INTEGER NOT NULL DEFAULT 1,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_flows_app ON flows(app_id);
+                `);
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -2900,9 +2932,17 @@ export interface TerminalSpecMeta {
      * SCHEDULED TASK: what a fire actually does. `command` (the default) spawns
      * `command` exactly like a process run; `agent-nudge` delivers
      * `nudge_prompt` to an agent terminal through AgentInbox, waking it if it is
-     * provably idle.
+     * provably idle; `flow` runs the fancy-flow workflow named by `flow_id`.
+     *
+     * `flow` exists so a scheduled workflow reuses THIS scheduler rather than
+     * growing a second one. It also satisfies the rule that ops must not depend
+     * on an agent being asked: a flow's schedule is declared on its canvas, Genie
+     * reconciles a spec for it, and the fire happens on the Host whether or not
+     * anyone has Genie open.
      */
-    schedule_kind?: 'command' | 'agent-nudge';
+    schedule_kind?: 'command' | 'agent-nudge' | 'flow';
+    /** flow: the workflow this fire runs. Reconciled from the flow's own graph. */
+    flow_id?: string;
     /** agent-nudge: the terminal to nudge (preferred — it is the stable handle). */
     nudge_target_terminal_id?: string;
     /** agent-nudge: the AgentInbox agent id to nudge, when the terminal isn't known. */

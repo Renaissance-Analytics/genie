@@ -202,6 +202,7 @@ import { setSecretEncryptor } from './secrets/store';
 import { buildHostServerDeps } from './host-core/server-deps';
 import { registerAppBridge } from './apps/bridge';
 import { registerAppsIpc } from './apps/ipc';
+import { registerFlowsIpc } from './flows/ipc';
 import { registerAppsE2E } from './e2e/apps';
 import type { HostCorePorts } from './host-core/ports';
 import {
@@ -1558,6 +1559,11 @@ app.whenReady().then(async () => {
     // never finds a dead channel.
     registerAppBridge(mcpDeps);
     registerAppsIpc();
+    // Flows ride the SAME bridge, so a workflow is bounded by exactly the grant
+    // its app already holds. This also wires the scheduler's flow-fire handler and
+    // reconciles every declared schedule, which is what makes a time-based trigger
+    // arm itself rather than waiting for anyone to ask.
+    registerFlowsIpc(mcpDeps);
     // E2E seam (GENIE_E2E=1 only): publish the handle a spec uses to open a REAL
     // GApp window over the REAL bridge. The property it exists to prove is a
     // negative -- `window.genie` is absent inside a GApp's page -- and a negative

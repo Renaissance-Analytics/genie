@@ -206,6 +206,25 @@ const api = {
         backup: (appId: string) => ipcRenderer.invoke('apps:backup', appId),
     },
 
+    // fancy-flow workflows owned by a Genie App. This is Genie's own editing
+    // surface: an installed app never sees it, and it grants nothing — a graph
+    // reaching past the app's permissions saves fine (an author is mid-edit) and
+    // is refused at RUN by `decideFlowAdmission`.
+    flows: {
+        list: (appId: string) => ipcRenderer.invoke('flows:list', appId),
+        get: (flowId: string) => ipcRenderer.invoke('flows:get', flowId),
+        save: (input: { id: string; appId: string; name: string; graph: unknown; enabled?: boolean }) =>
+            ipcRenderer.invoke('flows:save', input),
+        remove: (flowId: string) => ipcRenderer.invoke('flows:delete', flowId),
+        setEnabled: (flowId: string, enabled: boolean) =>
+            ipcRenderer.invoke('flows:set-enabled', flowId, enabled),
+        // What this graph WOULD be allowed to do, without running it — so a
+        // refusal lands on the canvas rather than at 3am on the first fire.
+        check: (appId: string, graph: unknown) => ipcRenderer.invoke('flows:check', appId, graph),
+        palette: (appId: string) => ipcRenderer.invoke('flows:palette', appId),
+        run: (flowId: string) => ipcRenderer.invoke('flows:run', flowId),
+    },
+
     // The GApp window's own bridge. NOT the app's — this is Genie's renderer
     // drawing the frame and the tab strip; the app's two-call surface is the
     // separate `app-preload`, in a view with none of this.
