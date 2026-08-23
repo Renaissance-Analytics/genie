@@ -36,12 +36,22 @@ interface Hold {
     buffer: string;
     /** When the swap began (epoch ms), for the watchdog. */
     beganAt: number;
+    /** Still CAPTURING. Goes false when a limit trips; the hold stays registered
+     *  either way, until the swap that owns it releases. */
+    capturing: boolean;
 }
 
 /**
  * Per-terminal keystroke holds. One swap at a time per terminal: a second
  * notice arriving mid-swap is refused rather than allowed to swap the same box
  * twice.
+ *
+ * Note the two states are deliberately distinct. A hold that hits a limit stops
+ * CAPTURING but stays REGISTERED until its swap releases it. Deregistering there
+ * would let a second swap `begin` on a terminal whose first is still running —
+ * the very thing `begin` exists to prevent — and that second release would then
+ * hand back its own buffer while discarding the bytes the first had already
+ * taken from the person.
  */
 export class InputHolds {
     private holds = new Map<string, Hold>();
@@ -50,13 +60,13 @@ export class InputHolds {
      *  running there — the caller must not start a second one. */
     begin(terminalId: string, now: number): boolean {
         if (this.holds.has(terminalId)) return false;
-        this.holds.set(terminalId, { buffer: '', beganAt: now });
+        this.holds.set(terminalId, { buffer: '', beganAt: now, capturing: true });
         return true;
     }
 
-    /** Whether a swap is currently holding this terminal's keyboard. */
+    /** Whether this terminal's keystrokes are currently being captured. */
     isHeld(terminalId: string): boolean {
-        return this.holds.has(terminalId);
+        return this.holds.get(terminalId)?.capturing ?? false;
     }
 
     /**
@@ -64,38 +74,27 @@ export class InputHolds {
      * BUFFERED — the caller must not write it to the pty — and false when it
      * should go straight through.
      *
-     * Both limits drop the hold outright rather than merely declining this
-     * chunk: once we have stopped holding, continuing to hold later bytes would
-     * interleave the person's typing out of order.
+     * Both limits stop capture for the rest of the swap rather than declining
+     * this chunk alone: resuming later would interleave the person's typing out
+     * of order.
      */
     hold(terminalId: string, data: string, now: number): boolean {
         const h = this.holds.get(terminalId);
-        if (!h) return false;
-        if (now - h.beganAt > HOLD_MAX_MS) {
-            // Presumed-dead swap: stop holding, but keep what we already took so
-            // a release still replays it.
-            this.holds.delete(terminalId);
-            this.orphaned.set(terminalId, h);
-            return false;
-        }
-        if (h.buffer.length >= HOLD_MAX_BYTES) {
-            this.holds.delete(terminalId);
-            this.orphaned.set(terminalId, h);
+        if (!h || !h.capturing) return false;
+        // Presumed-dead swap, or an implausible amount of typing: let the person
+        // talk to their terminal again. What was already taken is still owed back.
+        if (now - h.beganAt > HOLD_MAX_MS || h.buffer.length >= HOLD_MAX_BYTES) {
+            h.capturing = false;
             return false;
         }
         h.buffer += data;
         return true;
     }
 
-    /** Buffers whose hold was dropped by a limit but whose bytes are still owed
-     *  back to the person on the next release. */
-    private orphaned = new Map<string, Hold>();
-
     /** End the hold and return the keystrokes to replay, in the order typed. */
     release(terminalId: string): string {
-        const h = this.holds.get(terminalId) ?? this.orphaned.get(terminalId);
+        const h = this.holds.get(terminalId);
         this.holds.delete(terminalId);
-        this.orphaned.delete(terminalId);
         return h?.buffer ?? '';
     }
 }

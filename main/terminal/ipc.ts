@@ -1400,8 +1400,8 @@ export function releaseInputHold(id: string): string {
  * so the person needs to know it is sitting behind their draft. Surfaced as a
  * top-centre toast.
  */
-export function broadcastInboxIncoming(id: string, from: string): void {
-    broadcastLocal('agentinbox:incoming', { id, from });
+export function broadcastInboxIncoming(id: string): void {
+    broadcastLocal('agentinbox:incoming', { id });
 }
 
 export function broadcastTerminalAttention(id: string, on: boolean): void {

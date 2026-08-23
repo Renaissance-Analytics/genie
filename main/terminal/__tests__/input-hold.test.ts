@@ -117,3 +117,39 @@ describe('InputHolds — every limit fails OPEN, never swallowing keystrokes', (
         expect(h.release(T)).toBe('y'.repeat(HOLD_MAX_BYTES));
     });
 });
+
+/**
+ * A hold that stops CAPTURING must still stay REGISTERED until it is released.
+ *
+ * Dropping the registration when a limit trips looked tidy but opened two holes
+ * at once: a second notice could `begin` a swap on a terminal whose first swap
+ * was still running — the exact thing `begin` exists to prevent — and that
+ * second swap's release would then return its own buffer and discard the bytes
+ * the first one had already taken from the person.
+ */
+describe('InputHolds — a stopped hold still blocks a second swap', () => {
+    it('refuses a new swap even after the watchdog stopped capture', () => {
+        const h = new InputHolds();
+        h.begin(T, NOW);
+        h.hold(T, 'a', NOW + HOLD_MAX_MS + 1); // capture stops here
+        expect(h.begin(T, NOW + HOLD_MAX_MS + 2)).toBe(false);
+    });
+
+    it('refuses a new swap even after the buffer cap stopped capture', () => {
+        const h = new InputHolds();
+        h.begin(T, NOW);
+        h.hold(T, 'x'.repeat(HOLD_MAX_BYTES), NOW + 1);
+        h.hold(T, 'more', NOW + 2); // capture stops here
+        expect(h.begin(T, NOW + 3)).toBe(false);
+    });
+
+    it('the release that ends the swap still replays everything it took', () => {
+        const h = new InputHolds();
+        h.begin(T, NOW);
+        h.hold(T, 'taken', NOW + 1);
+        h.hold(T, 'dropped', NOW + HOLD_MAX_MS + 1); // passes through to the pty
+        expect(h.release(T)).toBe('taken');
+        // And only now may the next swap start.
+        expect(h.begin(T, NOW + HOLD_MAX_MS + 2)).toBe(true);
+    });
+});

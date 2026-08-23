@@ -967,7 +967,7 @@ async function deliverNudge(terminalId: string, text: string, plan: NudgePlan): 
             // Genie would not touch their draft, so the notice is sitting BEHIND
             // it, unsubmitted. Tell the person — otherwise it is just mystery
             // text in their prompt, and the message looks like it never arrived.
-            broadcastInboxIncoming(terminalId, text);
+            broadcastInboxIncoming(terminalId);
         }
     } catch {
         /* best-effort: the message is in the inbox regardless */

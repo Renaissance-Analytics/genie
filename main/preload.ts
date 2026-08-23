@@ -1705,9 +1705,8 @@ const api = {
          *  the notice was APPENDED there without being submitted. The renderer
          *  raises a top-centre toast — otherwise it is just mystery text in
          *  someone's prompt and the message looks like it never arrived. */
-        agentInboxIncoming: (cb: (payload: { id: string; from: string }) => void) => {
-            const handler = (_e: unknown, payload: { id: string; from: string }) =>
-                cb(payload);
+        agentInboxIncoming: (cb: (payload: { id: string }) => void) => {
+            const handler = (_e: unknown, payload: { id: string }) => cb(payload);
             ipcRenderer.on('agentinbox:incoming', handler);
             return () => ipcRenderer.off('agentinbox:incoming', handler);
         },
