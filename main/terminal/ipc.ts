@@ -18,9 +18,18 @@ import {
     workspaceMcpEnabled,
     createTerminalSpec,
     getWorkspace,
+    getWorkspaceAgentCap,
     type TerminalSpecRow,
     type TerminalSpecMeta,
 } from '../db';
+import {
+    UNLIMITED,
+    countAgentTerminals,
+    decideAgentSpawn,
+    type AgentCapValue,
+    type AgentSpawnDecision,
+    type SpawnActor,
+} from './agent-cap';
 import { agentInboxBroker } from '../agentinbox/broker';
 import { workspaceSlug } from '../agentinbox/slug';
 import {
@@ -398,6 +407,15 @@ export function createAgentTerminal(opts: {
     rows?: number;
     /** Marks this terminal as running an agent (surfaced in the list). */
     agentMeta?: { agent: 'claude' | 'codex' | 'custom'; command: string };
+    /**
+     * Who asked for this terminal (Tynn #117). Recorded because it cannot be
+     * inferred afterwards: a plain shell an agent opened through
+     * `manageTerminals create` is byte-identical to one a person opened, and the
+     * agent-terminal cap has to be able to tell them apart. Defaults to `'human'`,
+     * which is the safe direction — the cap counts agents, so guessing "agent"
+     * would ration somebody's own terminals.
+     */
+    createdBy?: 'human' | 'agent';
     /** Specialized terminals: AgentInbox accessibility to stamp + join with. */
     agentInbox?: {
         purpose?: string;
@@ -458,6 +476,11 @@ export function createAgentTerminal(opts: {
             ...(chatSessionId ? { chat_session_id: chatSessionId } : {}),
         };
     }
+
+    // Only 'agent' is stamped (Tynn #117). Absence means human — both for the
+    // terminals a person opens now and for every terminal that predates the field,
+    // so the cap never applies retroactively to work already running.
+    if (opts.createdBy === 'agent') meta.created_by = 'agent';
 
     // Persist a spec so the terminal is a first-class member of the workspace
     // (appears in lists, can be reattached by a window, killed by the user). A
@@ -1227,6 +1250,48 @@ export function liveTerminalCount(): number {
     } catch {
         return 0;
     }
+}
+
+/**
+ * May this workspace start another agent terminal (Tynn #117)?
+ *
+ * Reads the workstation default and the workspace override, counts what is
+ * actually running, and hands the decision to the pure resolver. Lives here
+ * because this module already owns both halves of "what is alive" — the specs and
+ * the pty manager.
+ *
+ * Callers must pass the real `actor`. A person is the authority over the limit and
+ * is never refused by it; an agent is, which is the entire point.
+ */
+export function decideAgentTerminalSpawn(
+    workspaceId: string,
+    actor: SpawnActor,
+): AgentSpawnDecision {
+    let workstation: AgentCapValue = null;
+    let workspace: AgentCapValue = null;
+    try {
+        const raw = getAllSettings().max_agent_terminals;
+        if (raw === UNLIMITED) workstation = UNLIMITED;
+        else if (raw) {
+            const parsed = Number.parseInt(raw, 10);
+            workstation = Number.isFinite(parsed) ? parsed : null;
+        }
+        workspace = getWorkspaceAgentCap(workspaceId);
+    } catch {
+        // Unreadable settings fall through to the built-in default rather than to
+        // "uncapped": a failed read must not be the thing that removes the limit.
+    }
+
+    let live: number;
+    try {
+        live = countAgentTerminals(listTerminalSpecs(), workspaceId, ptyIsLive);
+    } catch {
+        // -1 is not a count. The resolver reads it as "unknown" and fails closed
+        // for agents, which is the safe direction when we cannot see the state.
+        live = -1;
+    }
+
+    return decideAgentSpawn({ actor, live, settings: { workstation, workspace } });
 }
 
 /** Forward the broadcast helper for callers that want it. */

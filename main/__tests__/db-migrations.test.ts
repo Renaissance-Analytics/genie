@@ -1,4 +1,6 @@
 import Database from 'better-sqlite3';
+import fs from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
     runMigrations,
@@ -1199,6 +1201,91 @@ describe('v37 — App workspaces (Tynn #250)', () => {
         runMigrations(db);
         expect(() => runMigrations(db)).not.toThrow();
         expect(cols(db, 'workspaces').has('app_kind')).toBe(true);
+    });
+});
+
+/**
+ * v45 — how many agent terminals a workspace may run (Tynn #117).
+ *
+ * The column is only half the feature. The other half is that an AGENT cannot
+ * write it, and that half is structural rather than a runtime check: the column is
+ * absent from `updateWorkspace`'s allowlist, so a patch naming it is dropped. That
+ * omission is easy to "fix" by someone adding the column to the allowlist for
+ * consistency, which would silently hand agents the ability to raise their own
+ * cap — so it is pinned here.
+ */
+describe('migration v45 — the agent-terminal cap', () => {
+    const insertWorkspace = (db: Database.Database, id: string) =>
+        db
+            .prepare(
+                `INSERT INTO workspaces
+                    (id, project_id, project_name, tynn_project_id, tynn_project_name, shape, path, sort_order)
+                 VALUES (?, 'p1', 'A Project', 'p1', 'A Project', 'simple', '/tmp/a', 0)`,
+            )
+            .run(id);
+
+    it('adds max_agent_terminals, and every existing workspace inherits', () => {
+        // NULL is the only honest default: a workspace that predates this expressed
+        // no opinion, and stamping one on it would either loosen or tighten a limit
+        // nobody chose.
+        const db = new Database(':memory:');
+        runMigrations(db);
+        insertWorkspace(db, 'ws-1');
+
+        expect(cols(db, 'workspaces').has('max_agent_terminals')).toBe(true);
+        const row = db
+            .prepare<[], { max_agent_terminals: number | null }>(
+                'SELECT max_agent_terminals FROM workspaces',
+            )
+            .get();
+        expect(row?.max_agent_terminals ?? null).toBeNull();
+    });
+
+    it('is idempotent — re-running converges without throwing', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(() => runMigrations(db)).not.toThrow();
+        expect(cols(db, 'workspaces').has('max_agent_terminals')).toBe(true);
+    });
+
+    it('is NOT writable through the generic workspace patch', () => {
+        // The load-bearing guard. `updateWorkspace` UPDATEs a hardcoded column list;
+        // governed columns are deliberately missing from it, so a patch naming one
+        // is dropped rather than applied. If someone ever adds this column to that
+        // list, an agent calling the generic update path could raise its own cap,
+        // and this test is what says so.
+        const source = fs.readFileSync(path.join(__dirname, '..', 'db.ts'), 'utf8');
+        const updateFn = source.slice(source.indexOf('export function updateWorkspace'));
+        const body = updateFn.slice(0, updateFn.indexOf('\n}'));
+
+        expect(body).not.toContain('max_agent_terminals');
+        // Positive control: the same slice DOES contain a column the patch path is
+        // supposed to write, so this is asserting against a real function body and
+        // not an empty string that would pass no matter what.
+        expect(body).toContain('editor_cmd');
+    });
+
+    it('has no setter reachable from the MCP surface', () => {
+        // The other half of "only a person sets this". An agent-facing tool that
+        // imported the setter would defeat the column-allowlist guard above without
+        // touching db.ts at all.
+        const mcpDir = path.join(__dirname, '..', 'mcp');
+        const sources = fs
+            .readdirSync(mcpDir)
+            .filter((f) => f.endsWith('.ts'))
+            .map((f) => [f, fs.readFileSync(path.join(mcpDir, f), 'utf8')] as const);
+
+        const mentions = (symbol: string) =>
+            sources.filter(([, src]) => src.includes(symbol)).map(([f]) => f);
+
+        expect(mentions('setWorkspaceAgentCap')).toEqual([]);
+
+        // POSITIVE CONTROL. "No file mentions X" passes just as happily when the
+        // directory failed to read, the filter is wrong, or the files are empty.
+        // `isWorkstationOperator` is the READ side of the sibling human-only
+        // setting and is definitely imported here, so finding it proves this scan
+        // can actually see the source it claims to be checking.
+        expect(mentions('isWorkstationOperator').length).toBeGreaterThan(0);
     });
 });
 
