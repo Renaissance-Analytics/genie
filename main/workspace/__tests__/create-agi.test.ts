@@ -211,19 +211,37 @@ describe('createAgiEnvelope — the .gapp envelope', () => {
         expect(agents).toMatch(/`\.gapp` envelope/);
     });
 
-    it('is still an envelope as far as DETECTION is concerned', async () => {
-        // Detection reads the folder's contents, not its name — which is what lets
-        // a `.gapp` be opened, analysed and upgraded by every path that already
-        // handles a `.agi`, with no second branch to keep in step.
-        const parent = makeTmpDir('cae-gapp-detect');
-        const res = await createAgiEnvelope({
+    it('detects the same as a .agi, because the NAME is not what decides', async () => {
+        // The claim the whole no-migration promise rests on. Every install already
+        // on disk keeps its `.agi` folder, and nothing is renamed, so "both
+        // suffixes work" has to be true of one code path rather than of two lists.
+        //
+        // Asserted as a TRIO on purpose. `.gapp` detecting correctly would also
+        // pass if someone taught `detectFolder` to look for two suffixes instead
+        // of none — and then the third envelope suffix would silently not be one.
+        // The renamed folder is the assertion that actually pins it down: same
+        // contents, no envelope suffix at all, still an envelope.
+        const parent = makeTmpDir('cae-both-suffixes');
+        const agi = await createAgiEnvelope({
+            slug: 'legacy',
+            name: 'Legacy',
+            parent_path: parent,
+        });
+        const gapp = await createAgiEnvelope({
             slug: 'trader',
             name: 'Trader',
             parent_path: parent,
             suffix: 'gapp',
         });
+        const renamed = path.join(parent, 'named-like-nothing-in-particular');
+        fs.renameSync(agi.path, renamed);
 
-        expect(detectFolder(res.path).state).toBe('FULL_ENVELOPE');
+        expect(detectFolder(gapp.path).state).toBe('FULL_ENVELOPE');
+        expect(detectFolder(renamed).state).toBe('FULL_ENVELOPE');
+        // And the suffix helper agrees about which names carry one, so the two
+        // never drift into disagreeing about what an envelope is called.
+        expect(hasEnvelopeSuffix(path.basename(gapp.path))).toBe(true);
+        expect(hasEnvelopeSuffix(path.basename(renamed))).toBe(false);
     });
 
     it('defaults to .agi, so every existing caller is untouched', async () => {
