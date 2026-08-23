@@ -39,6 +39,15 @@ const execFileAsync = promisify(execFile);
  * here rather than a second creator. A forked builder would drift from this one
  * the first time either changed, and "a `.gapp` is just a `.agi`" would quietly
  * stop being true in whichever ways nobody had written down.
+ *
+ * NOT THE TLD. A GApp's hosted sites are also moving to `.gapp` (from `.gen`),
+ * and that is a different thing that happens to share a word: it lives in
+ * `main/apps/install-plan.ts`, `main/dev-server/sites-config.ts`,
+ * `hosts-file.ts`, `host-ca.ts` and `host-allowlist.ts`, and it is about what a
+ * site is SERVED at. This list is about what a FOLDER is CALLED. If you arrived
+ * here by grepping for `gapp` while implementing the TLD, this is the wrong
+ * file — adding a hostname suffix to this array would make Genie treat a
+ * directory as an envelope because of what a web server answers to.
  */
 export type EnvelopeSuffix = 'agi' | 'gapp';
 
