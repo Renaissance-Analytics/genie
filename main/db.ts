@@ -1540,6 +1540,16 @@ export interface Settings {
     agent_flags_codex?: string;
     /** Always-on launch flags appended to a `custom` agent's command. Default ''. */
     agent_flags_custom?: string;
+    /** GApp AI Provider (genie#245): which AI TUI a Genie App's DECLARED agents
+     *  launch under — `claude` | `codex` | `custom`. The user's choice, once per
+     *  WORKSTATION, never the app's: a GApp says it needs an agent and the
+     *  workstation decides what that agent is, for the same reason as the
+     *  agent-terminal cap — it is asking for someone else's compute and
+     *  subscription. Human-only, like `max_agent_terminals`: written by the
+     *  Settings page, and never imported into `main/mcp/`. Resolve through
+     *  `resolveGappProvider`, never read raw — an unset value inherits
+     *  `agent_default` rather than asking the same question twice. Default ''. */
+    gapp_ai_provider?: string;
     /** Workstation Setup: the owner's chosen DEFAULT agent id (claude/codex/custom),
      *  written by the desktop setup wizard. HOST-SOURCED. Default '' (none chosen). */
     agent_default?: string;
@@ -1656,6 +1666,11 @@ export function getAllSettings(): Settings {
         agent_flags_claude: out['agent_flags_claude'] ?? '',
         agent_flags_codex: out['agent_flags_codex'] ?? '',
         agent_flags_custom: out['agent_flags_custom'] ?? '',
+        // '' is a real answer meaning "no workstation opinion yet", which
+        // `resolveGappProvider` resolves to the user's setup-wizard default. It is
+        // deliberately NOT defaulted to 'claude' here: that would make the
+        // inheritance invisible and freeze the answer at whatever this file said.
+        gapp_ai_provider: out['gapp_ai_provider'] ?? '',
         plugins_developer_mode:
             (out['plugins_developer_mode'] as 'on' | 'off') ?? 'off',
         // Local-workstation identity (design brief §2a). No default — absent means
@@ -3065,6 +3080,20 @@ export interface TerminalSpecMeta {
      * + `system: true` and is grouped under the System Workspace in the UI.
      */
     system?: boolean;
+    /**
+     * GApp agent panels (genie#245): the app whose declared agent runs here, the
+     * agent's NAME as the manifest declared it (and as the consent screen said
+     * it), and the ABSOLUTE path of the persona it was launched against.
+     *
+     * On the spec's meta rather than a new table, for the reason every other
+     * agent-terminal fact is: the spec is what survives a restart, so the binding
+     * has to ride it or a relaunched panel forgets who it was. It is also what
+     * makes "this app's agents are actually running" answerable by looking, which
+     * is the whole complaint in genie#245.
+     */
+    gapp_id?: string;
+    gapp_agent?: string;
+    gapp_persona?: string;
     /** Agent terminals (runAgent / specialized): which AI TUI this runs. */
     agent?: 'claude' | 'codex' | 'custom';
     /** Agent terminals: the CLI command line that was launched (display). */

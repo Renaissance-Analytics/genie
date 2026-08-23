@@ -1154,6 +1154,12 @@ export interface Settings {
     agent_flags_codex?: string;
     /** Specialized terminals: always-on launch flags for a Custom agent. */
     agent_flags_custom?: string;
+    /** GApp AI Provider (genie#245): which AI TUI a Genie App's DECLARED agents run
+     *  as — `claude` | `codex` | `custom`, or '' to follow `agent_default`. The
+     *  user's choice per WORKSTATION, never the app's: it is spending this
+     *  machine's compute and this user's subscription. HOST-SOURCED — the host is
+     *  what launches the TUI. */
+    gapp_ai_provider?: string;
     /** Workstation Setup: the owner's chosen DEFAULT agent id (claude/codex/custom).
      *  Written by the setup wizard; lets a re-run pre-fill and a future picker pick
      *  a default. HOST-SOURCED — it describes the host's agent environment. */

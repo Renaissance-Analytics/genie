@@ -59,9 +59,13 @@ function io(over: Partial<PreviewIO> = {}): PreviewIO & {
         },
         listWorkspaceRows: () => [...workspaces.values()],
         countPanels: () => panels.length,
-        createPanel: (_ws, panel) => {
+        createPanel: (_appId, _ws, panel) => {
             panels.push(panel.label);
         },
+        // A preview starts REAL agents, so it meets the real cap. Allowed here so
+        // no assertion in this file turns on the limit — that is covered where the
+        // cap lives (panels.test.ts + gapp-agents-launch.test.ts).
+        mayStartAgents: () => ({ allowed: true }),
         removePanels: () => {
             panels.length = 0;
         },

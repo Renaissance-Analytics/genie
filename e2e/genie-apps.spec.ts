@@ -47,6 +47,19 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
+    // The agent panels the roster spec starts are REAL agent terminals with REAL
+    // ptys, and Genie's default pty-host is DETACHED — it outlives the app on
+    // purpose. Every spec here shares one profile directory and they run serially,
+    // so anything left running is still holding its port and its MCP endpoint while
+    // the NEXT spec boots its own Genie over the same profile. Killing them is part
+    // of this spec, not tidiness.
+    await app
+        ?.evaluate(() =>
+            (globalThis as Record<string, any>).__GENIE_E2E_APPS__.killAppPanels(
+                'com.genie.harness',
+            ),
+        )
+        .catch(() => 0);
     await app?.close();
 });
 
@@ -209,6 +222,48 @@ test('a GApp gets the agent panels it declared — and no more on the next open'
     expect(outcome.first).toEqual(['Terminal', 'Files', 'Terminal']);
     // Opening it again changes nothing at all.
     expect(outcome.second).toEqual(['Terminal', 'Files', 'Terminal']);
+});
+
+/**
+ * The DECLARED agents actually launching (genie#245).
+ *
+ * The bug this closes: a GApp could declare agents, ship personas, pass validation
+ * and be named on the consent screen, and the seeder still wrote a bare terminal —
+ * so the developer got N empty shells and no error. The unit suite proves the spec
+ * is written with the binding; what only a running Genie can show is that the
+ * binding survives the real database, the real workspace, and the real agent
+ * terminal path — with a real pty behind it.
+ *
+ * Note what is asserted: not "three panels exist" (that passed on the broken
+ * behaviour), but WHO each panel is and WHAT it was briefed with.
+ */
+test('a GApp’s declared agents are bound to their personas and launched', async () => {
+    const outcome = await app.evaluate(() =>
+        (globalThis as Record<string, any>).__GENIE_E2E_APPS__.seedAgentPanelsTwice(
+            'com.genie.harness',
+            { agents: 3, kinds: ['terminal', 'files'] },
+            [
+                { name: 'Strategist', persona: 'strategist.md' },
+                { name: 'Reviewer', persona: 'reviewer/persona.md' },
+            ],
+        ),
+    );
+
+    // The panels are named after the agents, and the code panel between them is
+    // NOT bound — an agent cannot run in the Files surface.
+    expect(outcome.first).toEqual(['Strategist', 'Files', 'Reviewer']);
+    expect(outcome.second).toEqual(['Strategist', 'Files', 'Reviewer']);
+
+    expect(outcome.bindings[0]?.[0]).toBe('Strategist');
+    expect(outcome.bindings[0]?.[1]).toContain('strategist.md');
+    expect(outcome.bindings[1]).toBeNull();
+    expect(outcome.bindings[2]?.[0]).toBe('Reviewer');
+    expect(outcome.bindings[2]?.[1]).toContain('persona.md');
+
+    // Under the WORKSTATION's provider — nothing in the manifest chose it.
+    expect(outcome.providers[0]).toBe('claude');
+    expect(outcome.providers[1]).toBeNull();
+    expect(outcome.providers[2]).toBe('claude');
 });
 
 /**

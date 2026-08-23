@@ -357,6 +357,23 @@ export default function SettingsPage() {
                 host={restricted}
             >
                 <SettingRow
+                    label="GApp AI Provider"
+                    desc="Which AI agent a Genie App's own agents run as. The app declares that it needs an agent; you decide what that agent is — it runs on your machine, under your subscription, so the choice is not the app's. Blank follows your default agent."
+                    keywords="gapp genie app ai provider agent tui claude codex custom persona"
+                    grow
+                >
+                    <Select
+                        value={s.gapp_ai_provider ?? ''}
+                        onValueChange={(v) => patch({ gapp_ai_provider: v })}
+                        list={[
+                            { value: '', label: 'Follow my default agent' },
+                            { value: 'claude', label: 'Claude Code' },
+                            { value: 'codex', label: 'Codex' },
+                            { value: 'custom', label: 'Custom agent' },
+                        ]}
+                    />
+                </SettingRow>
+                <SettingRow
                     label="Claude Code command"
                     desc="Launched when you add a Claude Code terminal. Blank uses the built-in default (claude)."
                     keywords="claude code agent command specialized terminal launch"

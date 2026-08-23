@@ -120,6 +120,8 @@ describe('host-sourced (bucket 2) classification', () => {
                 'agent_flags_codex',
                 'agent_command_custom',
                 'agent_flags_custom',
+                // GApp AI Provider: which TUI a Genie App's declared agents run as.
+                'gapp_ai_provider',
                 // Workstation Setup: the owner's default + enabled agents.
                 'agent_default',
                 'agent_enabled',
@@ -141,6 +143,7 @@ describe('host-sourced (bucket 2) classification', () => {
             'agent_flags_codex',
             'agent_command_custom',
             'agent_flags_custom',
+            'gapp_ai_provider',
         ]) {
             expect(isHostSourcedSettingKey(k)).toBe(true);
         }

@@ -115,6 +115,26 @@ Genie holds both halves together: a declared agent whose persona file is missing
 nobody built. `persona` is a path relative to `.agents/` and may not climb out of
 it.
 
+#### What actually happens at runtime
+
+Each declared agent gets an agent panel in your app's Agent tab, named after it,
+running a real AI coding-agent TUI in your app's workspace and briefed with its
+persona file. Slots are filled in order; if you declare more panels than agents,
+the roster cycles (three panels and one agent means three sessions of that agent).
+A `files` or `editor` slot is the code surface and never runs an agent, so the
+roster skips it.
+
+**You do not choose which TUI.** Claude Code, Codex or a custom command is the
+user's **GApp AI Provider**, set once per workstation in Genie's Settings. Your
+app is asking for someone else's machine and someone else's subscription, so it
+says that it needs an agent and the workstation decides what that agent is. Write
+personas that do not assume a particular harness.
+
+Agents you declare count against the user's **agent-terminal limit**, like every
+other agent on the machine. If the workspace has no room for your whole roster,
+Genie starts **none** of it and tells the user why — you never silently get fewer
+agents than the install screen named.
+
 ---
 
 ## Permissions — ask for the least that works

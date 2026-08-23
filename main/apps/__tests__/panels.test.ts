@@ -72,14 +72,75 @@ describe('the layout a manifest asks for', () => {
     });
 });
 
+/**
+ * The declared roster reaching the layout (genie#245).
+ *
+ * `manifest.agents` had three consumers — the validator, the copy plan and the
+ * consent screen — and the panel seeder was not one of them. A developer shipped a
+ * persona, passed validation, was named on the consent screen, and got an empty
+ * terminal. Binding is what makes the roster mean something at runtime.
+ */
+describe('binding the declared agents to their panels', () => {
+    const STRATEGIST = { name: 'Strategist', persona: 'strategist.md' };
+    const REVIEWER = { name: 'Reviewer', persona: 'reviewer/persona.md' };
+
+    it('binds each slot to the agent that runs in it', () => {
+        expect(agentPanelLayout({ agents: 2 }, [STRATEGIST, REVIEWER])).toEqual([
+            { label: 'Strategist', type: 'terminal', agent: STRATEGIST },
+            { label: 'Reviewer', type: 'terminal', agent: REVIEWER },
+        ]);
+    });
+
+    it('names the panel after the agent, not "Terminal"', () => {
+        // The visible half of the bug: N panels all called "Terminal" is what an
+        // app whose roster was never read looks like from the outside.
+        expect(agentPanelLayout({ agents: 1 }, [STRATEGIST])[0]?.label).toBe('Strategist');
+    });
+
+    it('leaves an app with no declared agents exactly as it was', () => {
+        // Most GApps ship no agent of their own. They must still get their panels,
+        // and those panels must still be plain.
+        expect(agentPanelLayout({ agents: 2 })).toEqual([TERMINAL, TERMINAL]);
+        expect(agentPanelLayout({ agents: 2 }, [])).toEqual([TERMINAL, TERMINAL]);
+    });
+
+    it('cycles the roster when the app declared more panels than agents', () => {
+        // Same rule the palette already has: the COUNT is the explicit, bounded
+        // declaration, so it wins, and the roster cycles under it. An app asking
+        // for three panels with one agent wants three sessions of that agent.
+        expect(agentPanelLayout({ agents: 3 }, [STRATEGIST]).map((p) => p.agent?.name)).toEqual([
+            'Strategist',
+            'Strategist',
+            'Strategist',
+        ]);
+    });
+
+    it('only binds a slot an agent can actually run in', () => {
+        // `files` and `editor` are the code surface. Binding a persona to one would
+        // record an agent that no TUI is ever launched for — the same silent lie in
+        // a different place — so the roster skips them and lands on the next
+        // terminal, which is also how every declared agent still gets a home.
+        const layout = agentPanelLayout({ agents: 3, kinds: ['terminal', 'files'] }, [
+            STRATEGIST,
+            REVIEWER,
+        ]);
+        expect(layout.map((p) => [p.type, p.agent?.name])).toEqual([
+            ['terminal', 'Strategist'],
+            ['code', undefined],
+            ['terminal', 'Reviewer'],
+        ]);
+    });
+});
+
 /** A workspace's panels, as the seeder sees them. */
-function fakeWorkspace(existing: PlannedPanel[] = []) {
+function fakeWorkspace(existing: PlannedPanel[] = [], mayStartAgents?: AgentPanelIO['mayStartAgents']) {
     const panels = [...existing];
     const io: AgentPanelIO = {
         countPanels: () => panels.length,
         createPanel: (panel) => {
             panels.push(panel);
         },
+        ...(mayStartAgents ? { mayStartAgents } : {}),
     };
     return { io, panels };
 }
@@ -88,7 +149,7 @@ describe('seeding an app workspace', () => {
     it('lays the declared panels out on a workspace that has none', () => {
         const { io, panels } = fakeWorkspace();
 
-        expect(ensureAgentPanels(io, { agents: 3, kinds: ['terminal', 'files'] })).toEqual([
+        expect(ensureAgentPanels(io, { agents: 3, kinds: ['terminal', 'files'] }).created).toEqual([
             TERMINAL,
             FILES,
             TERMINAL,
@@ -101,7 +162,7 @@ describe('seeding an app workspace', () => {
         const { io, panels } = fakeWorkspace();
         ensureAgentPanels(io, { agents: 3 });
 
-        expect(ensureAgentPanels(io, { agents: 3 })).toEqual([]);
+        expect(ensureAgentPanels(io, { agents: 3 }).created).toEqual([]);
         expect(panels).toHaveLength(3);
     });
 
@@ -110,7 +171,7 @@ describe('seeding an app workspace', () => {
         // still cycles across the two runs rather than restarting.
         const { io, panels } = fakeWorkspace([TERMINAL]);
 
-        expect(ensureAgentPanels(io, { agents: 3, kinds: ['terminal', 'files'] })).toEqual([
+        expect(ensureAgentPanels(io, { agents: 3, kinds: ['terminal', 'files'] }).created).toEqual([
             FILES,
             TERMINAL,
         ]);
@@ -122,7 +183,61 @@ describe('seeding an app workspace', () => {
         // the person using it is allowed to have.
         const { io, panels } = fakeWorkspace([TERMINAL, TERMINAL, TERMINAL, FILES]);
 
-        expect(ensureAgentPanels(io, { agents: 2 })).toEqual([]);
+        expect(ensureAgentPanels(io, { agents: 2 }).created).toEqual([]);
         expect(panels).toHaveLength(4);
+    });
+});
+
+/**
+ * The agent-terminal cap (Tynn #117) meeting a GApp.
+ *
+ * A GApp seeding N agent panels is precisely the runaway the cap exists for, so
+ * its agents COUNT against it — they are agent terminals like any other, and the
+ * app is spending someone else's compute to open them.
+ *
+ * Refusal is ALL-OR-NOTHING, for two reasons. Half a roster is the same silent
+ * lie the whole issue is about — the user consented to a named set and would
+ * quietly get fewer. And the seeder converges by counting what the workspace
+ * already has, so a partial seed would leave the SKIPPED slots permanently
+ * unreachable: the next open would slice past them.
+ */
+describe('a GApp meeting the agent-terminal cap', () => {
+    const ROSTER = [{ name: 'Strategist', persona: 'strategist.md' }];
+
+    it('asks for exactly as many agent terminals as it is about to start', () => {
+        const asked: number[] = [];
+        const { io } = fakeWorkspace([], (n) => {
+            asked.push(n);
+            return { allowed: true };
+        });
+
+        ensureAgentPanels(io, { agents: 3, kinds: ['terminal', 'files'] }, ROSTER);
+        expect(asked).toEqual([2]);
+    });
+
+    it('creates NOTHING and says why when the cap refuses', () => {
+        const { io, panels } = fakeWorkspace([], () => ({
+            allowed: false,
+            reason: 'This workspace is at its limit of 2 agent terminals.',
+        }));
+
+        const seeded = ensureAgentPanels(io, { agents: 2 }, ROSTER);
+        expect(seeded.created).toEqual([]);
+        expect(seeded.refused).toContain('at its limit');
+        expect(panels).toHaveLength(0);
+    });
+
+    it('never asks about an app that declared no agents', () => {
+        // A plain panel is not an agent terminal; rationing a GApp's Files tab
+        // against the agent cap would be the cap applying to the wrong thing.
+        let asked = false;
+        const { io, panels } = fakeWorkspace([], () => {
+            asked = true;
+            return { allowed: false, reason: 'no' };
+        });
+
+        expect(ensureAgentPanels(io, { agents: 2 }).created).toHaveLength(2);
+        expect(asked).toBe(false);
+        expect(panels).toHaveLength(2);
     });
 });
