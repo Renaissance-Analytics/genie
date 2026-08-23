@@ -23,6 +23,13 @@ import { useFloorState } from '../lib/use-floor-state';
  * which tab is showing; main positions the embedded view. Rendering app HTML in
  * here would put third-party markup in Genie's own renderer, which is the one
  * thing the whole design is arranged to prevent.
+ *
+ * A PREVIEW window is this page, unchanged. That is the whole claim of the
+ * previewer: a developer looking at an uninstalled folder is looking at the same
+ * strip, the same Agent tab and the same embedded views their users will get, not
+ * at a lookalike. Only two things here know the difference — the strip says
+ * "preview" instead of "development", and a warning band says what did not come
+ * up — and both exist because the alternative is a window that quietly lies.
  */
 export default function GAppWindow() {
     const [app, setApp] = useState<InstalledAppView | null>(null);
@@ -30,6 +37,7 @@ export default function GAppWindow() {
     const [active, setActive] = useState(0);
     const [error, setError] = useState<string | null>(null);
     const [workspace, setWorkspace] = useState<WorkspaceRow | null>(null);
+    const [preview, setPreview] = useState<{ folder: string; warnings: string[] } | null>(null);
 
     useEffect(() => {
         if (!hasGenieBridge()) return;
@@ -43,6 +51,7 @@ export default function GAppWindow() {
                 setApp(info.app);
                 setTabs(info.tabs);
                 setWorkspace(info.workspace);
+                setPreview(info.preview ?? null);
             })
             .catch((e: Error) => setError(e.message));
     }, []);
@@ -122,20 +131,67 @@ export default function GAppWindow() {
                     </button>
                 ))}
                 <span style={{ flex: 1 }} />
-                {app && (
+                {/* NO ADDRESS. A GApp window is technically a browser and none of
+                    its UX may read as one (owner, 2026-08-22): no address bar, no
+                    origin, anywhere. This corner used to print `{slug}.gen`.
+
+                    What survives is the one thing the address was standing in for
+                    — WHICH KIND of window this is. "preview" rather than
+                    "development": both have dev tools on, but only one of them
+                    disappears when the window closes, and that is the fact the
+                    developer actually needs from this corner. */}
+                {preview ? (
                     <span
                         style={{
                             alignSelf: 'center',
                             fontSize: 11,
-                            color: 'var(--fg-3, #9aa0aa)',
-                            paddingRight: 4,
+                            letterSpacing: 0.3,
+                            textTransform: 'uppercase',
+                            color: 'var(--indigo-300, #a5b4fc)',
+                            paddingRight: 6,
                         }}
                     >
-                        {app.devMode ? 'development · ' : ''}
-                        {app.slug}.gen
+                        Preview
                     </span>
-                )}
+                ) : app?.devMode ? (
+                    <span
+                        style={{
+                            alignSelf: 'center',
+                            fontSize: 11,
+                            letterSpacing: 0.3,
+                            textTransform: 'uppercase',
+                            color: 'var(--fg-3, #9aa0aa)',
+                            paddingRight: 6,
+                        }}
+                    >
+                        Development
+                    </span>
+                ) : null}
             </nav>
+
+            {/* What is NOT true of this window, said out loud and kept on screen.
+                A preview whose site never came up shows empty app tabs, and an
+                empty tab with no explanation is read as a bug in the app being
+                built — the single wrong lesson a previewer could teach. */}
+            {preview && preview.warnings.length > 0 && (
+                <div
+                    data-testid="gapp-preview-warnings"
+                    style={{
+                        padding: '6px 12px',
+                        fontSize: 11,
+                        lineHeight: 1.5,
+                        color: 'var(--amber-200, #fde68a)',
+                        background: 'var(--amber-950, rgba(120, 80, 10, 0.35))',
+                        borderBottom: '1px solid rgba(180, 130, 40, 0.35)',
+                        position: 'relative',
+                        zIndex: 2,
+                    }}
+                >
+                    {preview.warnings.map((w) => (
+                        <div key={w}>{w}</div>
+                    ))}
+                </div>
+            )}
 
             {/* The AGENT tab. Genie's own panel management — terminals and files,
                 exactly as a workspace has them. Every other tab is an embedded view

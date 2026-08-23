@@ -4,6 +4,7 @@ import { IconX } from './icons';
 import {
     api,
     hasGenieBridge,
+    type AppPreviewView,
     type AppUpdateState,
     type GithubInstallReview,
     type InstalledAppView,
@@ -32,6 +33,7 @@ export default function AppStoreFlyout({
     onClose: () => void;
 }) {
     const [apps, setApps] = useState<InstalledAppView[]>([]);
+    const [previews, setPreviews] = useState<AppPreviewView[]>([]);
     const [updates, setUpdates] = useState<Record<string, AppUpdateState>>({});
     const [busy, setBusy] = useState(false);
     const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
@@ -44,6 +46,12 @@ export default function AppStoreFlyout({
         api()
             .apps.list()
             .then(setApps)
+            .catch(() => {});
+        // Previews are not apps and never appear in that list — that is the point
+        // of them — so they are read separately, from the live registry in main.
+        api()
+            .apps.previews()
+            .then(setPreviews)
             .catch(() => {});
     }, []);
 
@@ -84,6 +92,36 @@ export default function AppStoreFlyout({
                     r.warnings?.length
                         ? { kind: 'err', text: `Installed, but: ${r.warnings.join(' ')}` }
                         : { kind: 'ok', text: 'Installed.' },
+                );
+            } else if (r.errors?.length) {
+                setMsg({ kind: 'err', text: r.errors.join(' ') });
+            }
+        } catch (e) {
+            setMsg({ kind: 'err', text: (e as Error).message });
+        } finally {
+            setBusy(false);
+            refresh();
+        }
+    };
+
+    /**
+     * Open a folder in a real GApp window without installing it.
+     *
+     * Read the same way an install's result is: `errors` mean it did not open and
+     * nothing was created; `warnings` mean it DID open and something in it did not
+     * come up. Collapsing the two would either hide a dead site or report a
+     * perfectly good preview as a failure.
+     */
+    const previewFolder = async () => {
+        setBusy(true);
+        setMsg(null);
+        try {
+            const r = await api().apps.previewFolder();
+            if (r.ok) {
+                setMsg(
+                    r.warnings?.length
+                        ? { kind: 'err', text: `Previewing, but: ${r.warnings.join(' ')}` }
+                        : { kind: 'ok', text: 'Previewing. Close the window to end it.' },
                 );
             } else if (r.errors?.length) {
                 setMsg({ kind: 'err', text: r.errors.join(' ') });
@@ -280,6 +318,14 @@ export default function AppStoreFlyout({
                             <strong>From a folder</strong>
                         </Text>
                         <div className="set-actions">
+                            {/* Preview comes FIRST, because it is the one that
+                                changes nothing. A developer reaching for this row
+                                usually wants to look at their app, not to put it
+                                on the machine, and the reversible action being
+                                first is what makes that the easy choice. */}
+                            <Action variant="ghost" icon="eye" disabled={busy} onClick={() => void previewFolder()}>
+                                Preview an app…
+                            </Action>
                             <Action variant="ghost" icon="folder" disabled={busy} onClick={() => void installFolder(false)}>
                                 Install an app…
                             </Action>
@@ -287,7 +333,60 @@ export default function AppStoreFlyout({
                                 Install for development…
                             </Action>
                         </div>
+                        <Text size="xs" className="text-zinc-500">
+                            A preview opens the real app window — the real tab strip, the real Agent tab
+                            with the panels its manifest declares — from a folder that is not installed.
+                            Closing the window is the whole cleanup.
+                        </Text>
                     </section>
+
+                    {previews.length > 0 && (
+                        <section style={{ display: 'grid', gap: 8 }}>
+                            <Text size="sm">
+                                <strong>Previewing now</strong>
+                            </Text>
+                            {/* Listed here because a preview leaves nothing behind
+                                to find it by — no tray pill, no entry in Installed
+                                — so without this the only way to end one is to go
+                                and find its window. */}
+                            {previews.map((live) => (
+                                <div
+                                    key={live.appId}
+                                    className="plugin-card"
+                                    style={{ padding: '10px 12px' }}
+                                >
+                                    <div className="plugin-card-head">
+                                        <span className="set-row-main">
+                                            <span className="set-row-label">
+                                                {live.name}{' '}
+                                                <Badge color="indigo" size="sm">
+                                                    preview
+                                                </Badge>
+                                            </span>
+                                            <span className="set-row-desc">{live.folder}</span>
+                                        </span>
+                                        <Action
+                                            variant="ghost"
+                                            disabled={busy}
+                                            onClick={() =>
+                                                void run(
+                                                    () => api().apps.closePreview(live.appId),
+                                                    'Preview closed.',
+                                                )
+                                            }
+                                        >
+                                            Close
+                                        </Action>
+                                    </div>
+                                    {live.warnings.map((w) => (
+                                        <Text key={w} size="xs" className="text-amber-400">
+                                            {w}
+                                        </Text>
+                                    ))}
+                                </div>
+                            ))}
+                        </section>
+                    )}
 
                     <section style={{ display: 'grid', gap: 8 }}>
                         <Text size="sm">

@@ -23,6 +23,7 @@
  */
 
 import { agentPanelLayout, type PlannedPanel } from './panels';
+import { gappHomeUrl } from './hostname';
 import { buildConsentPlan, readConsent } from './consent-plan';
 import { resolveAppRequirements, type RequirementMachine } from './requirements';
 import { validateAppFolder } from './validate';
@@ -260,9 +261,10 @@ export async function openPreview(folder: string, io: PreviewIO): Promise<Previe
         workspaceId,
         grant: previewGrant(manifest, identity, workspaceId, consent),
         siteId: site.siteId,
+        warnings,
     });
 
-    const homeUrl = `https://${preview.slug}.gen/`;
+    const homeUrl = gappHomeUrl(preview.slug);
     io.openWindow({
         appId: identity.appId,
         slug: preview.slug,

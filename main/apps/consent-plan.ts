@@ -17,6 +17,7 @@
  */
 
 import { APP_CAPABILITIES, findCapability } from './capabilities';
+import { gappHostname } from './hostname';
 import type { AppManifest, AppScope } from './manifest';
 import type { AppRequirementPlan } from './requirements';
 import type { ForceAnswer, ForceQuestion } from '../mcp/protocol';
@@ -64,7 +65,7 @@ const PREVIEW_DECLINE_LABEL = "Don't preview";
  */
 function whatPreviewSetsUp(manifest: AppManifest): string {
     return [
-        `- A temporary site at **${manifest.slug}.gen**, separate from any installed copy`,
+        `- A temporary site at **${gappHostname(manifest.slug)}**, separate from any installed copy`,
         '- A throwaway workspace on the folder you are building in',
         '- **Nothing is installed.** No entry in your apps, no tray pill, nothing to ' +
             'uninstall — closing the window removes all of it',
@@ -73,7 +74,7 @@ function whatPreviewSetsUp(manifest: AppManifest): string {
 
 /** What the app will set up on this machine, in plain terms. */
 function whatItSetsUp(manifest: AppManifest): string {
-    const lines = [`- A site at **${manifest.slug}.gen**, served by Genie`];
+    const lines = [`- A site at **${gappHostname(manifest.slug)}**, served by Genie`];
     if (manifest.frontend.browserExposed) {
         lines.push('- Reachable from your normal browser, not only inside Genie');
     }

@@ -31,6 +31,7 @@
  */
 
 import { narrowGrant } from './manage-core';
+import { gappHostname } from './hostname';
 import { devSiteIdFor, slugLabel, type DevSiteConfig } from '../dev-server/sites-config';
 import type { AppGrant } from './bridge-decision';
 import type { AppManifest, AppScope } from './manifest';
@@ -267,7 +268,7 @@ export function previewSitePlan(
 
     const site: DevSiteConfig = {
         name,
-        genName: `${slug}.gen`,
+        genName: gappHostname(slug),
         // The component is in the serve root now, so the site is rooted at the
         // workspace — which for a preview is the developer's folder itself.
         repo: '',

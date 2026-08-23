@@ -2227,6 +2227,35 @@ export interface AppInstallResult {
     userProvides?: AppRequirementView[];
 }
 
+/**
+ * What opening a preview produced.
+ *
+ * Same shape as an install's result and read the same way, with the same split
+ * between `errors` (it did not open, and nothing was created) and `warnings` (it
+ * opened, and something in it did not come up — a site with no hosting stack
+ * behind it, background services a preview deliberately does not start).
+ */
+export interface AppPreviewResult {
+    ok: boolean;
+    /** The PREVIEW's app id — never the app's own. */
+    appId?: string;
+    workspaceId?: string;
+    /** `https://<slug>.preview.gen/` — its own address, not the installed one's. */
+    homeUrl?: string;
+    errors?: string[];
+    warnings?: string[];
+}
+
+/** A preview that is open right now. */
+export interface AppPreviewView {
+    appId: string;
+    name: string;
+    /** The developer's folder — a preview runs on live source, never a copy. */
+    folder: string;
+    homeUrl: string;
+    warnings: string[];
+}
+
 export interface InstalledPluginView {
     id: string;
     name: string;
@@ -2635,6 +2664,18 @@ export interface GenieApi {
         checkUpdates: () => Promise<Record<string, AppUpdateState>>;
         installFolder: (folder?: string, devMode?: boolean) => Promise<AppInstallResult>;
         checkFolder: (folder?: string) => Promise<AppFolderReport>;
+        /**
+         * Open a folder in a REAL GApp window without installing it.
+         *
+         * Same window, same tab strip, same Agent tab with the panels the manifest
+         * declared, same isolation — at its own address and in its own storage
+         * partition, so it can never touch an installed copy. Closing the window
+         * is the whole cleanup.
+         */
+        previewFolder: (folder?: string) => Promise<AppPreviewResult>;
+        /** What is being previewed right now. */
+        previews: () => Promise<AppPreviewView[]>;
+        closePreview: (appId: string) => Promise<{ ok: boolean }>;
         scaffold: (req: { name: string; id?: string; parent?: string }) => Promise<{
             ok: boolean;
             folder?: string;
@@ -2704,6 +2745,14 @@ export interface GenieApi {
             /** The app's workspace — the Agent tab's Floor runs over it. */
             workspace: WorkspaceRow | null;
             tabs: { kind: 'agent' | 'app'; title: string }[];
+            /**
+             * Present only when this window is a PREVIEW.
+             *
+             * The strip uses it to say so, and to keep saying what did not come
+             * up: an app tab showing nothing, with no explanation, reads as a bug
+             * in the app being built rather than as a preview limitation.
+             */
+            preview?: { folder: string; warnings: string[] };
         } | null>;
         showTab: (index: number) => Promise<void>;
     };

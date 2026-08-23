@@ -21,6 +21,9 @@
  * to the app RUNTIME and invisible to the app REGISTRY, and the boundary is here.
  */
 
+import { grantableCapabilities } from './manage-core';
+import { gappHomeUrl } from './hostname';
+import type { InstalledAppView } from './manage';
 import type { AppGrant } from './bridge-decision';
 import type { AppManifest } from './manifest';
 import type { PreviewIdentity } from './preview';
@@ -47,6 +50,15 @@ export interface LivePreview {
     grant: AppGrant;
     /** The dev-site row serving it, so teardown can stop exactly this one. */
     siteId: string;
+    /**
+     * What did not come up, in words.
+     *
+     * Carried on the record rather than returned once, because the window has to
+     * keep saying it. A preview whose site never started shows empty app tabs, and
+     * an empty tab with no explanation is read as a bug in the app being built —
+     * which is precisely the wrong lesson for a previewer to teach.
+     */
+    warnings: string[];
 }
 
 /** Keyed by PREVIEW app id (`<id>~preview`), never by the app's own. */
@@ -83,6 +95,56 @@ export function previewForWorkspace(workspaceId: string): LivePreview | null {
 
 export function listPreviews(): LivePreview[] {
     return [...previews.values()];
+}
+
+/**
+ * A preview as the WINDOW needs to see itself.
+ *
+ * The same {@link InstalledAppView} an installed app's window gets, because the
+ * window is the same window — `gapp.tsx` reads a name, a slug and a workspace id
+ * and should not have to know which kind of app it is showing. Building a second
+ * shape here would fork the one page this whole design keeps unforked.
+ *
+ * Two fields say the truth rather than the bookkeeping:
+ *
+ *   - `id` is the app's REAL id, not the `~preview` one. That is what the app IS,
+ *     and a developer whose code branches on its own id must not silently take a
+ *     different branch because Genie renamed it internally. The preview id keys
+ *     the bridge, the partition and the caller — none of which the page sees.
+ *   - `installPath` is the developer's folder, because that is where this app is
+ *     actually running from.
+ */
+export function previewAppView(live: LivePreview): InstalledAppView {
+    const declared = live.source.permissions.capabilities;
+    return {
+        id: live.source.id,
+        name: live.source.name,
+        // The PREVIEW slug: the strip shows the address, and showing the app's own
+        // would tell the developer they are looking at something they are not.
+        slug: live.manifest.slug,
+        version: live.source.version,
+        workspaceId: live.workspaceId,
+        installPath: live.folder,
+        scope: live.grant.scope,
+        workspaces: live.grant.workspaces ?? [],
+        revoked: false,
+        // Dev tools ON, and the title says "development" — a preview is a place an
+        // app is being built, and you have to be able to inspect it.
+        devMode: true,
+        homeUrl: gappHomeUrl(live.manifest.slug),
+        permissions: grantableCapabilities(declared).map((c) => ({
+            key: c.key,
+            label: c.label,
+            grantDescription: c.grantDescription,
+            risk: c.risk,
+            granted: live.grant.capabilities.includes(c.key),
+        })),
+        // A preview is not installed, so there is no install date to report. The
+        // field is on the shape the window shares with an installed app; leaving
+        // it empty says "never" more honestly than a timestamp for an event that
+        // did not happen.
+        installedAt: '',
+    };
 }
 
 export interface GrantLookups {

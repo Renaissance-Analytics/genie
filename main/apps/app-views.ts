@@ -20,6 +20,7 @@
  */
 
 import { appViewOptions, type AppViewPreferences, type AppWindowOptions } from './window-policy';
+import { gappHomeUrl } from './hostname';
 import type { AppWindowTab } from './window-tabs';
 import type { AppManifest } from './manifest';
 
@@ -54,7 +55,7 @@ export function attachAppTabViews<V>(
     options: AppWindowOptions = {},
 ): AttachedAppView<V>[] {
     const identity = { id: manifest.id, slug: manifest.slug };
-    const home = `https://${manifest.slug}.gen/`;
+    const home = gappHomeUrl(manifest.slug);
 
     return tabs
         .filter((tab): tab is AppWindowTab & { url: string } => tab.kind === 'app' && !!tab.url)

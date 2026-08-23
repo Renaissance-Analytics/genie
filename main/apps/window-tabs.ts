@@ -11,6 +11,7 @@
  * or at the app?" answerable at a glance.
  */
 
+import { gappOrigin } from './hostname';
 import type { AppManifest } from './manifest';
 
 export interface AppWindowTab {
@@ -37,7 +38,7 @@ export interface AppWindowTab {
  * the whole value here is that there is only one.
  */
 export function appWindowTabs(manifest: AppManifest): AppWindowTab[] {
-    const origin = `https://${manifest.slug}.gen`;
+    const origin = gappOrigin(manifest.slug);
     const resolve = (path: string): string => new URL(path, `${origin}/`).toString();
 
     const agent: AppWindowTab = {

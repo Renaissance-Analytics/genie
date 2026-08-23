@@ -17,6 +17,7 @@ import { BrowserWindow, WebContentsView, session, shell } from 'electron';
 import { registerAppWindow, windowIdsForApp } from './bridge';
 import { attachAppTabViews, appViewBounds, type AttachedAppView } from './app-views';
 import { appWindowTabs } from './window-tabs';
+import { gappWindowTitle } from './window-title';
 import { ensureAppAgentPanels, registerAppShell, unregisterAppShell } from './ipc';
 import type { AppManifest } from './manifest';
 import {
@@ -36,6 +37,17 @@ export interface OpenAppWindowOpts {
     devMode?: boolean;
     /** The app's manifest — what its tabs and panels are. */
     manifest?: AppManifest;
+    /**
+     * Run when this window is gone.
+     *
+     * A PREVIEW is the caller that needs it: closing its window is the whole
+     * cleanup, so something has to remove the throwaway workspace, the panels and
+     * the site the moment the window goes. It is a callback rather than a
+     * `preview` flag on purpose — this module knows about windows, and teaching it
+     * what a preview is would put the teardown rules in the one file that has no
+     * way to test them.
+     */
+    onClosed?: () => void;
 }
 
 
@@ -47,6 +59,36 @@ interface OpenApp {
     window: BrowserWindow;
     views: AttachedAppView<WebContentsView>[];
     active: number;
+    /** For the title — see {@link retitle}. */
+    appName: string;
+}
+
+/**
+ * `[{GApp Name}] - {the page's own title}` (owner, 2026-08-22).
+ *
+ * The prefix GROUPS an app's windows: one GApp gets one window per hosted site, so
+ * `[Trader]` on each is what says they are one app. The suffix is the page's own
+ * title, live — which means it has to be re-applied on navigation, not set once.
+ *
+ * Index 0 in the strip is the Agent tab, which is GENIE'S renderer and has no page
+ * of its own. It gets the prefix alone: an app's page title has nothing to do with
+ * a tab the app cannot draw.
+ *
+ * The formatting — including refusing a "title" that is really a URL, which is
+ * what Chromium hands a page with no `<title>` — is decided in `window-title.ts`
+ * and asserted there.
+ */
+function retitle(open: OpenApp): void {
+    if (open.window.isDestroyed()) return;
+    const attached = open.views[open.active - 1];
+    const wc = attached?.view.webContents;
+    open.window.setTitle(
+        gappWindowTitle(
+            open.appName,
+            wc && !wc.isDestroyed() ? wc.getTitle() : '',
+            attached?.url ?? '',
+        ),
+    );
 }
 
 const openApps = new Map<string, OpenApp>();
@@ -90,6 +132,8 @@ export function showAppTab(appId: string, index: number): void {
     if (!open || open.window.isDestroyed()) return;
     open.active = index;
     layout(open);
+    // The window is named after whatever tab is showing, so switching renames it.
+    retitle(open);
 }
 
 
@@ -125,9 +169,10 @@ export function openAppWindow(opts: OpenAppWindowOpts): BrowserWindow {
         show: false,
         autoHideMenuBar: true,
         backgroundColor: '#0a0a0c',
-        title: opts.devMode
-            ? `${opts.name} — Genie App (development)`
-            : `${opts.name} — Genie App`,
+        // The prefix alone until a hosted page says otherwise. It never says
+        // "Genie App" and never carries an address: the window is technically a
+        // browser and none of its chrome may read as one.
+        title: gappWindowTitle(opts.name, '', ''),
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,
@@ -138,11 +183,22 @@ export function openAppWindow(opts: OpenAppWindowOpts): BrowserWindow {
 
     registerAppShell(win.webContents.id, opts.appId);
 
-    const open: OpenApp = { window: win, views: [], active: 0 };
+    // The SHELL's own document.title must never reach the window. Electron applies
+    // a loaded page's title by default, and this page is Genie's renderer — so
+    // without this the window would be named by Genie's own markup instead of by
+    // the app, and `[Trader] - Positions` would be overwritten a frame after it
+    // was set.
+    win.webContents.on('page-title-updated', (event) => event.preventDefault());
+
+    const open: OpenApp = { window: win, views: [], active: 0, appName: opts.name };
     openApps.set(opts.appId, open);
     win.on('closed', () => {
         unregisterAppShell(win.webContents.id);
         openApps.delete(opts.appId);
+        // AFTER the bookkeeping above, so a teardown that reaches back in here —
+        // a preview's does, to close whatever else the app has open — finds this
+        // window already gone rather than recursing into it.
+        opts.onClosed?.();
     });
     win.on('resize', () => layout(open));
 
@@ -165,7 +221,20 @@ export function openAppWindow(opts: OpenAppWindowOpts): BrowserWindow {
             },
             { devMode: opts.devMode === true },
         );
+        // LIVE, not once. A single-page app changes its title by navigating
+        // in-page, and a title set at load would go stale the moment the user
+        // clicked anything — which is the failure that makes a window title
+        // useless rather than merely wrong.
+        for (const attached of open.views) {
+            attached.view.webContents.on('page-title-updated', (event) => {
+                // Genie owns this window's chrome, so the page does not get to
+                // set the title directly — it gets to inform ours.
+                event.preventDefault();
+                retitle(open);
+            });
+        }
         layout(open);
+        retitle(open);
     }
 
     void win.loadURL(shellUrl());

@@ -20,6 +20,7 @@ import {
     type AppGrantRow,
 } from '../db';
 import { validateAppManifest } from './manifest';
+import { gappHomeUrl } from './hostname';
 import { resolveAppRequirements, type AppRequirementPlan, type RequirementMachine } from './requirements';
 import { toolchainMachineFacts } from './machine';
 import { grantableCapabilities, narrowGrant } from './manage-core';
@@ -78,7 +79,7 @@ function toView(row: AppGrantRow): InstalledAppView {
         workspaces: row.workspaces,
         revoked: row.revoked,
         devMode: row.devMode,
-        homeUrl: `https://${row.slug}.gen/`,
+        homeUrl: gappHomeUrl(row.slug),
         permissions: grantableCapabilities(declared).map((c) => ({
             key: c.key,
             label: c.label,

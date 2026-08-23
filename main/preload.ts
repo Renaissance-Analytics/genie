@@ -182,6 +182,12 @@ const api = {
             ipcRenderer.invoke('apps:install-folder', folder, devMode),
         // Check a folder WITHOUT installing — the loop a developer works in.
         checkFolder: (folder?: string) => ipcRenderer.invoke('apps:check-folder', folder),
+        // OPEN a folder WITHOUT installing — the other half of that loop. A check
+        // says the manifest is coherent; only the window answers what the app
+        // actually looks like to the people who will use it.
+        previewFolder: (folder?: string) => ipcRenderer.invoke('apps:preview-folder', folder),
+        previews: () => ipcRenderer.invoke('apps:previews'),
+        closePreview: (appId: string) => ipcRenderer.invoke('apps:preview-close', appId),
         scaffold: (req: { name: string; id?: string; parent?: string }) =>
             ipcRenderer.invoke('apps:scaffold', req),
         // Install from GitHub is TWO steps, and both belong to a human: read

@@ -39,6 +39,7 @@ function preview(source: AppManifest, workspaceId = 'preview-ws-1'): LivePreview
             capabilities: ['hosting'],
         }),
         siteId: 'site-preview-1',
+        warnings: [],
     };
 }
 
