@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
     TYPING_QUIET_MS,
     inboxNoticeText,
+    containsHumanInput,
     noteKeystrokes,
     shouldNotifyNow,
     type TypingState,
@@ -131,5 +132,112 @@ describe('noteKeystrokes', () => {
 
     it('a bare control byte does not start a draft', () => {
         expect(noteKeystrokes(false, '\t')).toBe(false);
+    });
+});
+
+/**
+ * REGRESSION — the `terminal:write` IPC is NOT "what a human typed".
+ *
+ * xterm emits terminal REPLIES through the same `onData` the renderer forwards
+ * to `terminal:write`: cursor-position and device-status reports, device
+ * attributes, focus in/out, window-size reports, OSC colour answers — and,
+ * decisively, Genie's OWN OSC 52 clipboard response, which Terminal.tsx writes
+ * back with `api().terminal.write(id, "\x1b]" + body + "\x07")`. Genie's code
+ * comment there records that Claude Code POLLS the clipboard over OSC 52.
+ *
+ * `noteKeystrokes` only understood CSI (`\x1b[…`) and two-character escapes, so
+ * an OSC reply survived stripping as printable text and latched `pendingInput`
+ * true. Nothing clears that flag except Enter / Ctrl-C / Ctrl-U arriving on the
+ * same IPC — and Genie's own injections never do — so the draft guard jammed on
+ * and immediate notices stopped firing for that agent, permanently.
+ */
+describe('noteKeystrokes — terminal REPLIES are not a human draft', () => {
+    it("an OSC 52 clipboard reply (Genie's own answer to a polling TUI) is not a draft", () => {
+        expect(noteKeystrokes(false, '\x1b]52;c;SGVsbG8gd29ybGQ=\x07')).toBe(false);
+    });
+
+    it('an OSC reply terminated by ST rather than BEL is not a draft', () => {
+        expect(noteKeystrokes(false, '\x1b]11;rgb:1e1e/1e1e/2e2e\x1b\x5c')).toBe(false);
+    });
+
+    it('an SGR mouse report is not a draft', () => {
+        // `\x1b[<35;40;12M` — the `<` is a CSI parameter-prefix byte, which the old
+        // `[0-9;?]` character class did not admit, so the whole report survived.
+        expect(noteKeystrokes(false, '\x1b[<35;40;12M')).toBe(false);
+    });
+
+    it('an X10 mouse report is not a draft', () => {
+        // `\x1b[M` followed by three RAW bytes that are themselves printable.
+        expect(noteKeystrokes(false, '\x1b[M !!')).toBe(false);
+    });
+
+    it('a cursor-position report is not a draft', () => {
+        expect(noteKeystrokes(false, '\x1b[38;1R')).toBe(false);
+    });
+
+    it('a device-attributes reply is not a draft', () => {
+        expect(noteKeystrokes(false, '\x1b[>0;276;0c')).toBe(false);
+    });
+
+    it('a device-status-report OK is not a draft', () => {
+        expect(noteKeystrokes(false, '\x1b[0n')).toBe(false);
+    });
+
+    it('focus in / focus out reports are not a draft', () => {
+        expect(noteKeystrokes(false, '\x1b[I')).toBe(false);
+        expect(noteKeystrokes(false, '\x1b[O')).toBe(false);
+    });
+
+    it('a window-size report is not a draft', () => {
+        expect(noteKeystrokes(false, '\x1b[6;24;80t')).toBe(false);
+    });
+
+    it('a real paste still counts as a draft, brackets and all', () => {
+        // The guard must keep working for what it was built for.
+        expect(noteKeystrokes(false, '\x1b[200~deploy the thing\x1b[201~')).toBe(true);
+    });
+
+    it('a reply arriving mid-draft does not CLEAR an existing draft', () => {
+        expect(noteKeystrokes(true, '\x1b]52;c;SGVsbG8=\x07')).toBe(true);
+    });
+});
+
+/**
+ * The other half of the same defect: `noteUserInput` stamped `lastUserInputAt`
+ * on every `terminal:write`, so a polling TUI's replies kept the "human is
+ * typing" window permanently fresh even with the draft flag correct.
+ */
+describe('containsHumanInput — did a person actually touch the keyboard?', () => {
+    it('a keystroke is human input', () => {
+        expect(containsHumanInput('h')).toBe(true);
+    });
+
+    it('Enter is human input', () => {
+        expect(containsHumanInput('\r')).toBe(true);
+    });
+
+    it('an arrow key is human input', () => {
+        // Navigating history is not a DRAFT, but it IS a person at the keyboard.
+        expect(containsHumanInput('\x1b[A')).toBe(true);
+    });
+
+    it('an OSC 52 clipboard reply is NOT human input', () => {
+        expect(containsHumanInput('\x1b]52;c;SGVsbG8=\x07')).toBe(false);
+    });
+
+    it('a cursor-position report is NOT human input', () => {
+        expect(containsHumanInput('\x1b[38;1R')).toBe(false);
+    });
+
+    it('a focus in/out report is NOT human input', () => {
+        expect(containsHumanInput('\x1b[I')).toBe(false);
+    });
+
+    it('a device-attributes reply is NOT human input', () => {
+        expect(containsHumanInput('\x1b[>0;276;0c')).toBe(false);
+    });
+
+    it('an empty chunk is not human input', () => {
+        expect(containsHumanInput('')).toBe(false);
     });
 });

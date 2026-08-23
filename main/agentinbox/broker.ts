@@ -18,7 +18,7 @@ import {
 } from './types';
 import { noopAgentInboxStore, type AgentInboxStore, type StoredAttachment } from './store';
 import { shouldWakeAgent, wakeNudgeText } from './wake';
-import { inboxNoticeText, noteKeystrokes, shouldNotifyNow } from './notify';
+import { containsHumanInput, inboxNoticeText, noteKeystrokes, shouldNotifyNow } from './notify';
 
 /**
  * AgentInbox broker — the in-memory registry + channels + inboxes powering the
@@ -253,12 +253,18 @@ export class AgentInboxBroker {
      * (a renderer sending what a person typed), NOT from Genie's own injection
      * path, so the draft state reflects the person and never our own bytes.
      * No-op for a terminal with no agent.
+     *
+     * That IPC is not keystrokes ALONE, though: xterm answers the TUI's queries
+     * down the same channel, and Genie writes its OSC 52 clipboard response back
+     * through it. Stamping `lastUserInputAt` for those made a polling TUI look
+     * like a person typing forever, so the timestamp now moves only for input a
+     * human actually produced.
      */
     noteUserInput(terminalId: string, data: string): void {
         const a = this.agentForTerminal(terminalId);
         if (!a) return;
         a.pendingInput = noteKeystrokes(a.pendingInput, data);
-        a.lastUserInputAt = this.now();
+        if (containsHumanInput(data)) a.lastUserInputAt = this.now();
     }
 
     /** Whether a terminal is a registered agent (drives the mid-turn AgentPulse glow). */
@@ -340,6 +346,7 @@ export class AgentInboxBroker {
             wakeOnDm: target.wakeOnDm,
             lastTurnEndAt: target.lastTurnEndAt,
             lastOutputAt: target.lastOutputAt,
+            lastUserInputAt: target.lastUserInputAt,
             lastWokenAt: target.lastWokenAt,
             now: this.now(),
         });
@@ -372,6 +379,7 @@ export class AgentInboxBroker {
             wakeOnDm: true,
             lastTurnEndAt: a.lastTurnEndAt,
             lastOutputAt: a.lastOutputAt,
+            lastUserInputAt: a.lastUserInputAt,
             lastWokenAt: a.lastWokenAt,
             now: this.now(),
         });
