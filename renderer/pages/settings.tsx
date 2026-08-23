@@ -53,6 +53,10 @@ import {
     type ToolchainInstallsInfo,
 } from '../lib/genie';
 import {
+    workstationAgentCapField,
+    writeWorkstationAgentCap,
+} from '../lib/agent-cap-field';
+import {
     agentCliRows,
     defaultChangeNotice,
     devToolRows,
@@ -144,6 +148,16 @@ export default function SettingsPage() {
     // through the defensive reader so a hand-edited or half-synced value shows an
     // empty list here rather than throwing on the settings page.
     const promptLibrary = parsePromptLibrary(s?.saved_prompts);
+
+    // The workstation agent-terminal cap (Tynn #117) as its two controls. Derived
+    // rather than held in state — the setting string IS the state, so there is
+    // nothing to keep in sync. What an empty box or a low number means is decided
+    // once in renderer/lib/agent-cap-field.ts, shared with the per-workspace
+    // override so the two surfaces cannot drift.
+    const agentCapRow = workstationAgentCapField(s?.max_agent_terminals);
+    // What "Limit to…" lands on when coming back from "No limit" — the built-in
+    // default rather than an empty box: a number to adjust, not a blank to read.
+    const agentCapSeed = agentCapRow.limit || workstationAgentCapField(undefined).limit;
     const savePrompts = (next: SavedPrompt[]) =>
         patch({ saved_prompts: serializePromptLibrary(next) });
 
@@ -443,6 +457,45 @@ export default function SettingsPage() {
                             }
                         }}
                     />
+                </SettingRow>
+                <SettingRow
+                    label="Max agent terminals"
+                    desc="The most agent terminals one workspace may run at once. Agents are refused past this and told to wait; you are not, and they cannot raise it. Each agent terminal is a shell, a model session, and something asking for your attention. A workspace can override this in its own settings."
+                    keywords="max agent terminals limit cap runaway fan-out fanout concurrency spawn workspace"
+                    grow
+                >
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <Select
+                            value={agentCapRow.mode}
+                            onValueChange={(v) => {
+                                const next = writeWorkstationAgentCap(
+                                    v as 'limit' | 'unlimited',
+                                    agentCapSeed,
+                                );
+                                if (next !== null) patch({ max_agent_terminals: next });
+                            }}
+                            list={[
+                                { value: 'limit', label: 'Limit to…' },
+                                { value: 'unlimited', label: 'No limit — never refuse an agent' },
+                            ]}
+                        />
+                        {agentCapRow.mode === 'limit' && (
+                            <Input
+                                type="number"
+                                min={1}
+                                value={agentCapRow.limit}
+                                onValueChange={(v) => {
+                                    // Clamp low, ignore garbage — the same shape as
+                                    // Max views above, decided in one tested place
+                                    // so this row and the per-workspace override
+                                    // cannot drift apart on what a box means.
+                                    const next = writeWorkstationAgentCap('limit', v);
+                                    if (next !== null) patch({ max_agent_terminals: next });
+                                }}
+                                aria-label="Maximum agent terminals per workspace"
+                            />
+                        )}
+                    </div>
                 </SettingRow>
                 <SettingRow
                     label="Env file name"
