@@ -288,6 +288,10 @@ export async function previewScaffolded(panels: AppPanels): Promise<{
     ok: boolean;
     errors: string[];
     appId: string | null;
+    /** The throwaway workspace the preview ran in, captured BEFORE teardown. */
+    workspaceId: string;
+    /** What `genieApp.me()` answered inside the preview's own view. */
+    identity: unknown;
     /** Panel labels in the preview's workspace, in order. */
     panels: string[];
     /** Installed app ids at the moment the preview was open. */
@@ -335,6 +339,30 @@ export async function previewScaffolded(panels: AppPanels): Promise<{
 
     const live = result.appId ? livePreview(result.appId) : null;
     const workspaceId = live?.workspaceId ?? result.workspaceId ?? '';
+
+    // THE BRIDGE, asked from inside the preview's own embedded view.
+    //
+    // A preview deliberately has no grant ROW — that is what "installs nothing"
+    // means — so `me()` and `call()` answer from the live registry instead. Wiring
+    // that touched two lookups (the bridge, and the MCP caller resolver), and
+    // teaching one and not the other produces an app that looks alive and can do
+    // nothing: `me()` answering while every call resolves to no workspace. Only
+    // asking the real page can tell those apart.
+    //
+    // The view is pointed at loopback because `<slug>.preview.gen` has no hosting
+    // behind it on a CI box — the same substitution `openExample` makes, and for
+    // the same reason. What is under test is the bridge, not the address.
+    let identity: unknown = null;
+    if (result.appId) {
+        const view = appViewWebContents(result.appId)[0];
+        if (view) {
+            await view.loadURL(await serveExample(path.join(folder, 'web')));
+            identity = await view.executeJavaScript(
+                'window.genieApp ? window.genieApp.me() : null',
+                true,
+            );
+        }
+    }
     const labels = listTerminalSpecs()
         .filter((s) => s.workspace_id === workspaceId && s.type !== 'process')
         .map((s) => s.label);
@@ -348,6 +376,8 @@ export async function previewScaffolded(panels: AppPanels): Promise<{
         ok: result.ok,
         errors: result.errors ?? [],
         appId: result.appId ?? null,
+        workspaceId,
+        identity,
         panels: labels,
         installedWhileOpen,
         afterClose: {

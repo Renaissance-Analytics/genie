@@ -253,6 +253,46 @@ test('a PREVIEW lays out the panels its manifest declared, without installing an
     expect(outcome.installedWhileOpen).not.toContain('com.genie.previewed~preview');
 });
 
+test('the two-call bridge answers inside a preview, which has no grant row at all', async () => {
+    /**
+     * "Installs nothing" and "the bridge is live" pull against each other, and this
+     * is where they meet. An installed app's `me()` and `call()` are answered from
+     * a grant ROW; a preview deliberately has none and never will. So both lookups
+     * had to learn about the live registry — the bridge, and the MCP caller
+     * resolver that decides which workspace an allowed call lands in.
+     *
+     * Teaching one and not the other is the failure this test exists for, and it
+     * is legible from neither file: `me()` answers happily while every `call()`
+     * resolves to no workspace. An app that looks alive and can do nothing.
+     */
+    const outcome = await app.evaluate(() =>
+        (globalThis as Record<string, any>).__GENIE_E2E_APPS__.previewScaffolded({ agents: 1 }),
+    );
+
+    const me = outcome.identity as {
+        id: string;
+        name: string;
+        workspaceId: string;
+        capabilities: string[];
+    } | null;
+    expect(me).not.toBeNull();
+
+    // The app's REAL id, not the `~preview` one Genie keys its storage by. That is
+    // what the app IS, and a developer whose code branches on its own id must not
+    // silently take a different branch because Genie renamed it for bookkeeping.
+    expect(me!.id).toBe('com.genie.previewed');
+
+    // A real workspace — the preview's own. This is the half that fails silently
+    // if only the bridge is taught and the caller resolver is not.
+    expect(me!.workspaceId).toBeTruthy();
+    expect(me!.workspaceId).toBe(outcome.workspaceId);
+
+    // The scaffold asks for NOTHING, and the harness consents to exactly that. A
+    // preview holding capabilities nobody granted would be the whole permission
+    // model quietly not applying to the fast path.
+    expect(me!.capabilities).toEqual([]);
+});
+
 test('closing a preview is the whole cleanup', async () => {
     // The other half of "it installs nothing": what it DID create has to go. The
     // throwaway workspace and every panel row in it — otherwise previewing ten
