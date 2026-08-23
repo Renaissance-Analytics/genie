@@ -148,7 +148,7 @@ export interface WorkspaceQuestionGroupSpec {
 }
 
 /**
- * Issue Watch: per-workspace tallies by bucket (the 3-dot pill). The three
+ * Issue Watch: per-workspace tallies by bucket (the 4-dot pill). The three
  * security-alert kinds (dependabot / code-scanning / secret-scanning) collapse
  * into one `security` bucket — the pill shows one security dot, not three.
  * Mirrors `TypeCounts` in main/issue-watch/index.ts.
@@ -158,6 +158,11 @@ export interface WatchTypeCounts {
     pr: number;
     /** dependabot + code-scanning + secret-scanning. */
     security: number;
+    /**
+     * Unresolved project feedback in Tynn — the one bucket with no GitHub
+     * stream behind it, and 0 on a workspace Tynn is not feeding.
+     */
+    feedback: number;
     /** False until Tynn has delivered this workspace at least once. */
     knownToServer: boolean;
 }

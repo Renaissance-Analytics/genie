@@ -73,22 +73,42 @@ export interface ResolvedRepo {
 }
 
 /**
- * Per-bucket tallies for the workspace 3-dot pill. The three security-alert
+ * Per-bucket tallies for the workspace 4-dot pill. The three security-alert
  * kinds (dependabot / code-scanning / secret-scanning) collapse into one
  * `security` bucket — the pill shows one security dot, not three — while the
  * per-kind detail lives on each WatchItem in the feed.
+ *
+ * `feedback` is the odd bucket out and stays that way on purpose: it is
+ * unresolved customer feedback on the workspace's Tynn project, counted by Tynn
+ * and pushed with the delta. Nothing local can compute it (there is no GitHub
+ * stream behind it), so it is 0 on a workspace that is NOT server-fed — which is
+ * honest: with no Tynn feed there is no feedback to know about.
  */
 export interface TypeCounts {
     issue: number;
     pr: number;
     /** dependabot + code-scanning + secret-scanning (the security dot). */
     security: number;
+    /** Unresolved (`open`) project feedback in Tynn — server-fed only. */
+    feedback: number;
 }
 
 /** The bucket a WatchItem kind tallies into (security kinds → `security`). */
 function bucketOf(kind: WatchItem['kind']): 'issue' | 'pr' | 'security' {
     if (isSecurityKind(kind)) return 'security';
     return kind; // 'issue' | 'pr'
+}
+
+/**
+ * A zeroed tally. One definition, so the several places that start from nothing
+ * cannot drift into carrying different sets of buckets.
+ *
+ * `feedback` is always 0 here: no WatchItem maps to it (see {@link bucketOf} —
+ * the item kinds are GitHub streams only), so the item-counting helpers below
+ * leave it untouched by construction. Only a Tynn delta ever fills it in.
+ */
+function zeroCounts(): TypeCounts {
+    return { issue: 0, pr: 0, security: 0, feedback: 0 };
 }
 
 /** Pure: count items updated strictly after the seen-at high-water mark. */
@@ -98,7 +118,7 @@ export function unreadCount(items: WatchItem[], seenAt: string): number {
 
 /** Pure: bucket unread (updated after seenAt) by bucket (security aggregated). */
 export function unreadByKind(items: WatchItem[], seenAt: string): TypeCounts {
-    const out: TypeCounts = { issue: 0, pr: 0, security: 0 };
+    const out: TypeCounts = zeroCounts();
     for (const i of items) if (i.updatedAt > seenAt) out[bucketOf(i.kind)] += 1;
     return out;
 }
@@ -112,7 +132,7 @@ export function unreadByKind(items: WatchItem[], seenAt: string): TypeCounts {
  * the feed's per-item "new since you looked" highlight.
  */
 export function countByKind(items: WatchItem[]): TypeCounts {
-    const out: TypeCounts = { issue: 0, pr: 0, security: 0 };
+    const out: TypeCounts = zeroCounts();
     for (const i of items) out[bucketOf(i.kind)] += 1;
     return out;
 }
@@ -140,6 +160,7 @@ export type WorkspaceFeedItem = WatchItem & {
  */
 export interface PushedIssueWatchDelta {
     workspaceId: string;
+    /** Every bucket Tynn computed, `feedback` included — see {@link TypeCounts}. */
     counts: TypeCounts;
     items: Array<{
         kind: WatchItem['kind'];
@@ -714,7 +735,7 @@ export async function getOpenCounts(): Promise<
         // No server delivery is not a confident zero. Keep the workspace in the
         // payload with an explicit unknown marker so badges cannot collapse it
         // into the same shape as a genuinely quiet feed.
-        out[ws.id] = { issue: 0, pr: 0, security: 0, knownToServer: false };
+        out[ws.id] = { ...zeroCounts(), knownToServer: false };
         let repos: ResolvedRepo[];
         try {
             repos = await resolveWorkspaceRepos(ws.id);
@@ -725,10 +746,11 @@ export async function getOpenCounts(): Promise<
         const watches = listIssueWatches(ws.id);
         const granularity = getWorkspaceIssuewatchGranularity(ws.id);
         const byKey = new Map(watches.map((w) => [cacheKey(w.owner, w.repo), w]));
+        // `feedback` stays 0 down this arm: it is a Tynn-computed number with no
+        // local source, so a workspace that is not server-fed genuinely has none
+        // to report rather than a count that was lost.
         const acc: TypeCounts & { knownToServer: boolean } = {
-            issue: 0,
-            pr: 0,
-            security: 0,
+            ...zeroCounts(),
             knownToServer: false,
         };
         for (const r of repos) {

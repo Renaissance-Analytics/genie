@@ -9,6 +9,7 @@ import {
     type WatchFeedItem,
     type WatchFetchError,
     type WatchRepoView,
+    type WatchTypeCounts,
 } from '../../lib/genie';
 import {
     useGithubCapabilities,
@@ -149,6 +150,15 @@ export default function IssueWatchFlyout({
      * unused) in a local window — there the gate keys off `useGithubCapabilities`.
      */
     const [hostMissingCaps, setHostMissingCaps] = useState<GithubCapabilityKey[]>([]);
+    /**
+     * Unresolved project feedback in Tynn for this workspace.
+     *
+     * Read from the COUNTS rather than the feed because feedback has no items on
+     * this feed — Tynn sends a tally, and the entries themselves live in Tynn.
+     * Without this the pill's feedback dot would light and open a panel that
+     * never mentions feedback, which is a dead end rather than a signal.
+     */
+    const [feedbackCount, setFeedbackCount] = useState(0);
 
     const refresh = async () => {
         if (!workspaceId || !hasGenieBridge()) return;
@@ -193,6 +203,12 @@ export default function IssueWatchFlyout({
             // (a local window uses its own useGithubCapabilities instead, so
             // leaving this untouched keeps local render behavior identical).
             if (remote) setHostMissingCaps(st.missingCapabilities ?? []);
+            // Best-effort and deliberately last: the GitHub feed above is the
+            // panel's job, and a counts read that fails must not take it down.
+            const all = await api()
+                .issueWatch.counts()
+                .catch((): Record<string, WatchTypeCounts> => ({}));
+            setFeedbackCount(all[workspaceId]?.feedback ?? 0);
         } finally {
             setLoading(false);
             setLoaded(true);
@@ -463,6 +479,18 @@ export default function IssueWatchFlyout({
                                             )}
                                         </label>
                                     ))}
+                                </div>
+                            )}
+
+                            {/* Above Activity, and worded as waiting rather than
+                                broken: everything in the list below is a defect,
+                                and feedback is not one. It carries no items here
+                                because the entries live in Tynn. */}
+                            {feedbackCount > 0 && (
+                                <div className="iw-feedback-note">
+                                    {feedbackCount} unresolved{' '}
+                                    {feedbackCount === 1 ? 'piece' : 'pieces'} of project
+                                    feedback in Tynn, waiting on triage.
                                 </div>
                             )}
 

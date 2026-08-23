@@ -622,7 +622,16 @@ export interface AssignmentSubscriptionHandle {
 export interface IssueWatchDeltaPush {
     workspaceId: string;
     projectId: string;
-    counts: { issue: number; pr: number; security: number };
+    /**
+     * Every bucket is REQUIRED, deliberately. The coercion that builds this
+     * (`toIssueWatchDelta`) rebuilds the object key by key, so an optional
+     * bucket would be droppable without any error at all; requiring each one
+     * turns "forgot to carry it across" into a compile failure.
+     *
+     * `feedback` is unresolved project feedback in Tynn — the one bucket that is
+     * not a GitHub stream (Tynn Wish #118).
+     */
+    counts: { issue: number; pr: number; security: number; feedback: number };
     items: unknown[];
 }
 

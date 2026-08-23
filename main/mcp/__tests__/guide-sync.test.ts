@@ -209,6 +209,32 @@ describe('the guide describes the Hosting Manager, not the retired dev-site prox
     });
 });
 
+describe('the guide documents the IssueWatch feedback bucket', () => {
+    it('tells agents imDone reports unresolved project feedback, and how to act on it', () => {
+        // A datapoint the guide never mentions is one no agent acts on. The
+        // feedback bucket needs MORE explanation than the GitHub three, not
+        // less: every other number on that line is a defect, so an unexplained
+        // tally reads as a fourth kind of breakage and invites an agent to
+        // close entries until it reaches zero.
+        expect(GENIE_MCP_GUIDE).toMatch(/feedback:/);
+        expect(GENIE_MCP_GUIDE).toMatch(/not a failure|not an error/i);
+        expect(GENIE_MCP_GUIDE).toMatch(/human call|human judgement/i);
+    });
+
+    it('advertises the feedback bucket in the checkIssues tool description', async () => {
+        // Agents pick tools by description, and `checkIssues` is where they are
+        // sent for the detail behind an imDone count.
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 11, method: 'tools/list' },
+            makeCtx(),
+        );
+        const tools = (res?.result as { tools: Array<{ name: string; description: string }> }).tools;
+        const check = tools.find((t) => t.name === 'checkIssues');
+        if (!check) throw new Error('checkIssues tool not advertised');
+        expect(check.description).toMatch(/feedback/i);
+    });
+});
+
 describe('the guide documents manageProcess scheduled tasks (cron)', () => {
     it('tells agents manageProcess also runs scheduled/cron tasks', () => {
         // `manageProcess` grew a `schedule` (cron) shape; the guide described only

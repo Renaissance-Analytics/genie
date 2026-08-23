@@ -182,12 +182,26 @@ export interface IssueWatchItem {
     unread: boolean;
 }
 
-/** Per-bucket open-item tallies for a workspace (security = the three alert kinds). */
+/**
+ * Per-bucket open-item tallies for a workspace (security = the three alert kinds).
+ *
+ * Three of the four are GitHub streams Tynn polled. `feedback` is not: it is
+ * unresolved customer feedback recorded against the workspace's Tynn project,
+ * counted server-side and carried on this same wire because the point of the
+ * datapoint is that it reaches `imDone` (Tynn Wish #118) — the one message an
+ * agent reliably sends when it stops.
+ */
 export interface IssueWatchCounts {
     issue: number;
     pr: number;
     /** dependabot + code-scanning + secret-scanning. */
     security: number;
+    /**
+     * Unresolved (`open`) project feedback in Tynn. NOT a GitHub item and NOT a
+     * failure — work waiting on triage. It has no `items` here: an agent reads
+     * the entries themselves through the Tynn `feedback` MCP tool.
+     */
+    feedback: number;
 }
 
 /**
@@ -207,7 +221,14 @@ export interface IssueWatchSnapshot {
     /** The user's PER-BUCKET remediation preference (workspace settings), folded
      *  into the imDone count line so the agent knows how to act on EACH bucket.
      *  Omitted (or every OPEN bucket 'surface') reports only; 'fix' /
-     *  'fix-and-ship' ask the agent to remediate that bucket when idle. */
+     *  'fix-and-ship' ask the agent to remediate that bucket when idle.
+     *
+     *  Deliberately covers the three GITHUB buckets only. `fix` and
+     *  `fix-and-ship` are verbs for a defect in the code; the response to
+     *  feedback is triage (convert / resolve / discard), and whether a given
+     *  complaint is worth acting on is a human judgement. Giving feedback a
+     *  remediation mode would tell an agent to go and clear the list, which is
+     *  the one behaviour this datapoint must not produce. */
     policy?: {
         security: 'surface' | 'fix' | 'fix-and-ship';
         issue: 'surface' | 'fix' | 'fix-and-ship';
@@ -1324,7 +1345,7 @@ const IMDONE_TOOL = {
 const CHECK_ISSUES_TOOL = {
     name: 'checkIssues',
     description:
-        "Get a detailed list of the open GitHub Issues, Pull Requests, and SECURITY ALERTS (Dependabot, Code-scanning, Secret-scanning) that Genie's IssueWatch is tracking for THIS terminal's workspace — across every repo in the workspace. Use it to see what needs attention before you finish, or whenever you want the current open items with their numbers, titles, severities, and URLs. Read-only. (The same per-bucket counts are also appended to every `imDone` response.) Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; required when the workspace has more than one terminal.",
+        "Get a detailed list of the open GitHub Issues, Pull Requests, and SECURITY ALERTS (Dependabot, Code-scanning, Secret-scanning) that Genie's IssueWatch is tracking for THIS terminal's workspace — across every repo in the workspace, plus a count of the workspace's unresolved project FEEDBACK in Tynn. Use it to see what needs attention before you finish, or whenever you want the current open items with their numbers, titles, severities, and URLs. Read-only. (The same per-bucket counts are also appended to every `imDone` response.) Feedback is NOT a GitHub item and NOT a failure — it is people's input waiting on triage; read the entries with the Tynn `feedback` tool, and leave the judgement of what is worth acting on to a human. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; required when the workspace has more than one terminal.",
     inputSchema: {
         type: 'object',
         properties: { ...TERMINAL_ID_PROP },
@@ -2317,32 +2338,65 @@ export function formatWorkspaceMap(map: WorkspaceMap): string {
 }
 
 /**
+ * How the `feedback` bucket explains itself in the count line.
+ *
+ * The audience is an AGENT deciding what to do next, and every other number on
+ * this line is a defect of some kind — so a bare tally reads as another thing
+ * that has gone wrong, and the obvious response to "4 open" is to go and make it
+ * zero. Both readings are wrong. Feedback is input from outside the build that
+ * has not been triaged yet, and deciding whether a given piece is worth acting
+ * on is the part that stays with a human; an agent that closes entries to tidy
+ * the list destroys exactly the signal the count exists to surface.
+ */
+function feedbackNote(count: number): string {
+    return (
+        `feedback:${count} is unresolved project feedback in Tynn — people's input waiting on ` +
+        'triage, not a failure and not a list to clear for tidiness. Read it with the Tynn ' +
+        '`feedback` tool and convert what should become work; judging whether a piece of ' +
+        'feedback is worth acting on stays a human call.'
+    );
+}
+
+/**
  * The concise IssueWatch counts line appended to an `imDone` response (and
- * usable standalone), e.g. `IssueWatch — issues:3, PR:1, sec:3`. Returns null
- * when there's nothing to report (not connected, no workspace, or zero items),
- * so callers can omit the line entirely rather than print a noisy "none".
+ * usable standalone), e.g. `IssueWatch — issues:3, PR:1, sec:3, feedback:2`.
+ * Returns null when there's nothing to report (not connected, no workspace, or
+ * zero items), so callers can omit the line entirely rather than print a noisy
+ * "none".
  */
 export function formatIssueCountsLine(snap: IssueWatchSnapshot): string | null {
     if (!snap.connected || !snap.workspaceResolved) return null;
     if (snap.knownToServer === false) {
         return 'IssueWatch — unknown / not tracking this workspace yet';
     }
-    const { issue, pr, security } = snap.counts;
-    if (!issue && !pr && !security) return null;
-    const base = `IssueWatch — issues:${issue}, PR:${pr}, sec:${security}`;
+    const { issue, pr, security, feedback } = snap.counts;
+    // Feedback counts toward "is there anything to say" on its own. A workspace
+    // with no repositories registered has an all-zero GitHub triple by
+    // definition, and that is precisely where feedback may be the only thing
+    // waiting — suppressing the line there would hide the datapoint exactly
+    // where it is the whole message.
+    if (!issue && !pr && !security && !feedback) return null;
+    const base = `IssueWatch — issues:${issue}, PR:${pr}, sec:${security}, feedback:${feedback}`;
     // Fold the user's PER-BUCKET remediation preference in so the count line
     // actually steers the agent per bucket. Only buckets with something OPEN get a
     // directive; security is listed first (fix it first — NO bandaids). When every
     // OPEN bucket is 'surface' (or there's no policy at all) the bare counts are
     // kept — backward compatible with the old single-'surface' behaviour.
+    //
+    // The feedback note is appended AFTER any remediation clause so the
+    // actionable GitHub directive stays next to the numbers it refers to, and
+    // so feedback is visibly not part of it.
+    const suffix = feedback > 0 ? ` · ${feedbackNote(feedback)}` : '';
     const policy = snap.policy;
-    if (!policy) return base;
+    if (!policy) return base + suffix;
+    // GITHUB buckets only — see IssueWatchSnapshot.policy for why feedback has
+    // no remediation mode.
     const active = [
         { label: 'security', count: security, mode: policy.security },
         { label: 'issues', count: issue, mode: policy.issue },
         { label: 'PRs', count: pr, mode: policy.pr },
     ].filter((b) => b.count > 0);
-    if (active.every((b) => b.mode === 'surface')) return base;
+    if (active.every((b) => b.mode === 'surface')) return base + suffix;
     const describe = (mode: 'surface' | 'fix' | 'fix-and-ship'): string =>
         mode === 'fix-and-ship'
             ? 'fix at the ROOT CAUSE (NO bandaids) and ship right away'
@@ -2350,7 +2404,7 @@ export function formatIssueCountsLine(snap: IssueWatchSnapshot): string | null {
                 ? 'fix at the ROOT CAUSE (NO bandaids), then report before shipping'
                 : 'surface only (hold)';
     const parts = active.map((b) => `${b.label}: ${describe(b.mode)}`);
-    return `${base} · remediation — ${parts.join('; ')} (act on these when no other work is in progress).`;
+    return `${base} · remediation — ${parts.join('; ')} (act on these when no other work is in progress).${suffix}`;
 }
 
 /**
@@ -2549,13 +2603,23 @@ export function formatIssueWatchFeed(snap: IssueWatchSnapshot): string {
     if (snap.knownToServer === false) {
         return "IssueWatch — Tynn isn't tracking this workspace yet. The feed is unknown, not all-clear; wait for the first server delivery or verify this workspace is registered for IssueWatch.";
     }
+    const { issue, pr, security, feedback } = snap.counts;
+    // Feedback has no items on this feed (it is a count from Tynn, read in full
+    // through the Tynn `feedback` tool), so an empty GitHub feed still has
+    // something to report when feedback is waiting. Saying "nothing open" over a
+    // non-zero feedback tally would be a false all-clear.
     if (snap.items.length === 0) {
-        return 'IssueWatch — nothing open across this workspace\'s repos (no Issues, PRs, or security alerts).';
+        const nothingOpen =
+            "IssueWatch — nothing open across this workspace's repos (no Issues, PRs, or security alerts).";
+        return feedback > 0 ? `${nothingOpen}\n\n${feedbackNote(feedback)}` : nothingOpen;
     }
-    const { issue, pr, security } = snap.counts;
     const lines: string[] = [
         `IssueWatch — ${issue} issue(s), ${pr} PR(s), ${security} security alert(s) across this workspace's repos:`,
     ];
+    if (feedback > 0) {
+        lines.push('');
+        lines.push(feedbackNote(feedback));
+    }
     for (const kind of ISSUE_KIND_ORDER) {
         const group = snap.items.filter((i) => i.kind === kind);
         if (group.length === 0) continue;

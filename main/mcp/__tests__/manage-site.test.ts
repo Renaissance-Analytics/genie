@@ -29,7 +29,7 @@ function ctx(over: Partial<McpContext> = {}): McpContext {
         checkIssues: vi.fn().mockResolvedValue({
             connected: true,
             workspaceResolved: true,
-            counts: { issue: 0, pr: 0, security: 0 },
+            counts: { issue: 0, pr: 0, security: 0, feedback: 0 },
             items: [],
         }),
         onForceQuestion: vi.fn().mockResolvedValue({ cancelled: true, answers: [] }),

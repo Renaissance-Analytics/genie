@@ -127,7 +127,7 @@ import {
 
 const delta = (workspaceId: string) => ({
     workspaceId,
-    counts: { issue: 2, pr: 1, security: 0 },
+    counts: { issue: 2, pr: 1, security: 0, feedback: 0 },
     items: [
         {
             kind: 'issue' as const,
@@ -171,6 +171,7 @@ describe('server delta ↔ local workspace id resolution (tynn.ai#134)', () => {
             issue: 2,
             pr: 1,
             security: 0,
+            feedback: 0,
             knownToServer: true,
         });
     });

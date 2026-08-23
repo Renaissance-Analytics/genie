@@ -1,6 +1,14 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { TailscaleStatus } from './tailscale';
 import type { AgentInboxScope } from './agentinbox/types';
+// The IssueWatch bucket tallies, from the module that OWNS them. This boundary
+// used to restate the shape by hand in two places, and they had already drifted
+// apart — the `issue-watch:update` payload still declared a `dependabot` key
+// that stopped existing when the three alert kinds collapsed into `security`.
+// Nothing failed, because a hand-written duplicate cannot disagree with
+// anything. `import type` is fully erased (isolatedModules), so this costs no
+// runtime import across the context bridge.
+import type { TypeCounts } from './issue-watch';
 import type { TynnHealth } from './mcp/tynn-health';
 import {
     TERMINAL_RECOVER_CHANNEL,
@@ -122,7 +130,7 @@ const api = {
             ipcRenderer.invoke('issue-watch:mark-seen', workspaceId),
         counts: () =>
             ipcRenderer.invoke('issue-watch:counts') as Promise<
-                Record<string, { issue: number; pr: number; security: number }>
+                Record<string, TypeCounts & { knownToServer: boolean }>
             >,
         status: (workspaceId: string) =>
             ipcRenderer.invoke('issue-watch:status', workspaceId),
@@ -1387,7 +1395,7 @@ const api = {
         // worst read detail + whether the GitHub session is dead, changed.
         issueWatchUpdate: (
             cb: (payload: {
-                counts: Record<string, { issue: number; pr: number; dependabot: number }>;
+                counts: Record<string, TypeCounts & { knownToServer: boolean }>;
                 errors?: Record<string, unknown>;
                 needsReauth?: boolean;
             }) => void,

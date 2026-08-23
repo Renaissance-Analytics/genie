@@ -137,6 +137,7 @@ import type {
     WorkspaceRepoInfo,
     IssueWatchSnapshot,
     IssueWatchItem,
+    IssueWatchCounts,
     ManageProcessRequest,
     ManageProcessResult,
     ManagedProcessInfo,
@@ -338,7 +339,10 @@ export async function describeWorkspaceForMcp(
  * instead of implying "nothing open".
  */
 export async function checkIssuesForMcp(terminalId: string): Promise<IssueWatchSnapshot> {
-    const empty = { issue: 0, pr: 0, security: 0 };
+    // Every bucket the wire defines. Spelled out rather than spread from a
+    // partial, so adding a bucket to IssueWatchCounts is a compile error here
+    // instead of a zero that silently never arrives.
+    const empty: IssueWatchCounts = { issue: 0, pr: 0, security: 0, feedback: 0 };
     const wsId = callerWorkspaceIdFor(terminalId);
     if (!wsId || !getWorkspace(wsId)) {
         return { connected: false, workspaceResolved: false, counts: empty, items: [] };

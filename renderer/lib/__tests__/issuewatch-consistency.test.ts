@@ -28,13 +28,32 @@ const feedItem = (
 
 describe('issueWatchBadge — delivered vs unknown', () => {
     it('is unknown for a workspace Tynn has never reported', () => {
-        expect(issueWatchBadge({ issue: 0, pr: 0, security: 0, knownToServer: false }))
+        expect(issueWatchBadge({ issue: 0, pr: 0, security: 0, feedback: 0, knownToServer: false }))
             .toEqual({ count: null, unknown: true });
     });
 
     it('is confidently zero only for a known quiet workspace', () => {
-        expect(issueWatchBadge({ issue: 0, pr: 0, security: 0, knownToServer: true }))
+        expect(issueWatchBadge({ issue: 0, pr: 0, security: 0, feedback: 0, knownToServer: true }))
             .toEqual({ count: 0, unknown: false });
+    });
+
+    it('counts unresolved feedback toward the badge', () => {
+        // The badge answers "is there anything here wanting attention?", and
+        // feedback nobody has triaged wants attention as much as an open issue.
+        // Leaving it out would show a bare 0 over a workspace with four people
+        // waiting on a reply.
+        expect(issueWatchBadge({ issue: 1, pr: 0, security: 0, feedback: 4, knownToServer: true }))
+            .toEqual({ count: 5, unknown: false });
+    });
+
+    it('survives a snapshot cached before the feedback bucket existed', () => {
+        // A count object persisted by an older client has no `feedback` key.
+        // Summing it raw yields NaN, which renders as a badge reading "NaN" —
+        // so the guard is load-bearing, not defensive decoration.
+        const legacy = { issue: 2, pr: 1, security: 0, knownToServer: true } as Parameters<
+            typeof issueWatchBadge
+        >[0];
+        expect(issueWatchBadge(legacy)).toEqual({ count: 3, unknown: false });
     });
 });
 

@@ -104,6 +104,12 @@ export function isIssueWatchDelta(frame: PusherFrame, channel: string): boolean 
  * into an IssueWatchDeltaPush. Null when it carries no usable workspace id
  * (dropped, never fatal). Counts default to 0; items pass through opaquely (the
  * issue-watch module owns their shape). Mirrors genie-cloud's `toIssueWatchDelta`.
+ *
+ * NOTE FOR ANYONE ADDING A BUCKET: `counts` is rebuilt key by key here, so a
+ * bucket this function does not name is dropped with NO error — the server keeps
+ * sending it, nothing throws, and the number simply never arrives anywhere
+ * downstream. `IssueWatchDeltaPush['counts']` is a fully-required type precisely
+ * so the omission is a compile error instead of a silent zero; keep it that way.
  */
 export function toIssueWatchDelta(raw: unknown): IssueWatchDeltaPush | null {
     if (!raw || typeof raw !== 'object') return null;
@@ -114,7 +120,15 @@ export function toIssueWatchDelta(raw: unknown): IssueWatchDeltaPush | null {
     return {
         workspaceId,
         projectId: str(r.projectId) ?? workspaceId,
-        counts: { issue: num(c.issue), pr: num(c.pr), security: num(c.security) },
+        counts: {
+            issue: num(c.issue),
+            pr: num(c.pr),
+            security: num(c.security),
+            // A Tynn that predates the feedback bucket sends no key at all;
+            // `num` reads that as 0, so an older server reports "no feedback"
+            // rather than leaking `undefined` into a downstream sum.
+            feedback: num(c.feedback),
+        },
         items: Array.isArray(r.items) ? r.items : [],
     };
 }
