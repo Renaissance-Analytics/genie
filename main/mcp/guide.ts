@@ -372,6 +372,13 @@ single terminal when there is only one. It explains clearly when GitHub isn't co
 the terminal maps to no workspace, or nothing is open. (The same per-bucket
 counts are also appended to every \`imDone\` response — see below.)
 
+Alongside the three GitHub buckets it reports \`feedback:\` — **unresolved
+project feedback recorded in Tynn**. That one is NOT a GitHub item and **not a
+failure**: it is input from outside the build that nobody has triaged yet. Read
+the entries with the Tynn \`feedback\` tool and convert what should become work;
+whether a given piece of feedback is worth acting on stays a **human call**, so
+never close entries just to bring the number down.
+
 ### imDone
 Call this the moment you **finish your work / hand back to the user** in THIS
 terminal. Genie pulses the terminal's glow in the workspace rail, the flyout row,
@@ -382,9 +389,10 @@ workspace's only terminal when unambiguous. Prefer this over silently ending: a
 finished task the user never notices isn't really done. **Better yet, automate
 it** — see "Automate imDone" below to fire this on every finish via a harness
 hook. The response also reports your workspace's open IssueWatch counts (e.g.
-\`IssueWatch — issues:3, PR:1, sec:3\`, where \`sec\` is the security-alert
-aggregate), so you see what's still open the moment you hand back; call
-\`checkIssues\` for the full list.
+\`IssueWatch — issues:3, PR:1, sec:3, feedback:2\`, where \`sec\` is the
+security-alert aggregate and \`feedback:\` is unresolved project feedback waiting
+on triage in Tynn — work waiting, **not a failure**), so you see what's still
+open the moment you hand back; call \`checkIssues\` for the full list.
 
 ### openFileForUser
 **Put a file in front of the user** in Genie's built-in editor (a Code panel on

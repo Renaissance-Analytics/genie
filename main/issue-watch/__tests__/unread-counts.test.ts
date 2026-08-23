@@ -84,7 +84,7 @@ describe('getOpenCounts — presence of open items', () => {
 
     it('counts a default-on repo (no persisted row) so the pill lights up', async () => {
         const counts = await getOpenCounts();
-        expect(counts['ws-1']).toMatchObject({ issue: 1, pr: 1, security: 0 });
+        expect(counts['ws-1']).toMatchObject({ issue: 1, pr: 1, security: 0, feedback: 0 });
     });
 
     it('aggregates the three security kinds into one security bucket', async () => {
@@ -97,7 +97,7 @@ describe('getOpenCounts — presence of open items', () => {
         ];
         await pollWorkspace('ws-1'); // re-prime the feed cache with the security items
         const counts = await getOpenCounts();
-        expect(counts['ws-1']).toMatchObject({ issue: 1, pr: 0, security: 3 });
+        expect(counts['ws-1']).toMatchObject({ issue: 1, pr: 0, security: 3, feedback: 0 });
     });
 
     it('stays green even when everything is already seen (presence, not unread)', async () => {
@@ -105,7 +105,7 @@ describe('getOpenCounts — presence of open items', () => {
         // items are still OPEN, so the dot must stay green.
         WATCHES = [{ owner: 'o', repo: 'r', enabled: 1, seen_at: '2999-01-01T00:00:00.000Z' }];
         const counts = await getOpenCounts();
-        expect(counts['ws-1']).toMatchObject({ issue: 1, pr: 1, security: 0 });
+        expect(counts['ws-1']).toMatchObject({ issue: 1, pr: 1, security: 0, feedback: 0 });
     });
 
     it('keeps the workspace unknown when no enabled repo has been delivered', async () => {
@@ -115,6 +115,7 @@ describe('getOpenCounts — presence of open items', () => {
             issue: 0,
             pr: 0,
             security: 0,
+            feedback: 0,
             knownToServer: false,
         });
     });
@@ -140,10 +141,10 @@ describe('countByKind', () => {
             item('code-scanning', '2026-04-01T00:00:00.000Z'),
             item('secret-scanning', '2026-05-01T00:00:00.000Z'),
         ];
-        expect(countByKind(items)).toEqual({ issue: 2, pr: 1, security: 3 });
+        expect(countByKind(items)).toEqual({ issue: 2, pr: 1, security: 3, feedback: 0 });
     });
 
     it('is zero for an empty list', () => {
-        expect(countByKind([])).toEqual({ issue: 0, pr: 0, security: 0 });
+        expect(countByKind([])).toEqual({ issue: 0, pr: 0, security: 0, feedback: 0 });
     });
 });

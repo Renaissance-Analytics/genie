@@ -222,7 +222,7 @@ const deps = (
     checkIssues: async () => ({
         connected: true,
         workspaceResolved: true,
-        counts: { issue: 0, pr: 0, security: 0 },
+        counts: { issue: 0, pr: 0, security: 0, feedback: 0 },
         items: [],
     }),
     onForceQuestion,

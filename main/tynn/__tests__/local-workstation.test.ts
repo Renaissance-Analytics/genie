@@ -51,7 +51,7 @@ describe('pusher-protocol (lifted codec)', () => {
                 channel: chan,
                 data: JSON.stringify({
                     workspaceId: 'p1',
-                    counts: { issue: 2, pr: 1, security: 0 },
+                    counts: { issue: 2, pr: 1, security: 0, feedback: 0 },
                     items: [{ key: 'o/r:issue:1' }],
                 }),
             }),
@@ -60,7 +60,7 @@ describe('pusher-protocol (lifted codec)', () => {
         expect(toIssueWatchDelta(frame!.data)).toMatchObject({
             workspaceId: 'p1',
             projectId: 'p1',
-            counts: { issue: 2, pr: 1, security: 0 },
+            counts: { issue: 2, pr: 1, security: 0, feedback: 0 },
         });
         expect(toIssueWatchDelta(frame!.data)!.items).toHaveLength(1);
     });
@@ -68,10 +68,40 @@ describe('pusher-protocol (lifted codec)', () => {
     it('coerces a bare projectId + drops an id-less payload', () => {
         expect(toIssueWatchDelta({ projectId: 'p2' })).toMatchObject({
             workspaceId: 'p2',
-            counts: { issue: 0, pr: 0, security: 0 },
+            counts: { issue: 0, pr: 0, security: 0, feedback: 0 },
             items: [],
         });
         expect(toIssueWatchDelta({ counts: {} })).toBeNull();
+    });
+
+    it('carries the FEEDBACK bucket through the coercion', () => {
+        // This coercion rebuilds `counts` key by key, so a bucket it does not
+        // name is dropped here with no error at all — the server keeps sending
+        // it, nothing throws, and the number simply never arrives. Tynn's
+        // feedback tally is the newest such bucket, so it is pinned explicitly.
+        const delta = toIssueWatchDelta({
+            workspaceId: 'p1',
+            counts: { issue: 1, pr: 0, security: 0, feedback: 4 },
+            items: [],
+        });
+        expect(delta!.counts.feedback).toBe(4);
+    });
+
+    it('reads a server that has not learned the feedback bucket as zero, not absent', () => {
+        // An older Tynn sends the three GitHub buckets only. The client must
+        // still produce a complete shape, so every downstream reader sees a
+        // number rather than `undefined` leaking into an arithmetic sum.
+        //
+        // The payload below MUST NOT gain a `feedback` key — the absence IS the
+        // fixture. It is typed through `unknown` on purpose: this function takes
+        // untrusted wire input, and a server older than the bucket is exactly
+        // the case being pinned.
+        const delta = toIssueWatchDelta({
+            workspaceId: 'p1',
+            counts: { issue: 1, pr: 0, security: 0 },
+            items: [],
+        });
+        expect(delta!.counts.feedback).toBe(0);
     });
 });
 
@@ -187,10 +217,10 @@ describe('WorkstationPusherTransport', () => {
         sock.emit('message', frame({
             event: 'issuewatch.delta',
             channel,
-            data: frame({ workspaceId: 'p1', projectId: 'p1', counts: { issue: 3, pr: 0, security: 1 }, items: [{ key: 'o/r:issue:5' }] }),
+            data: frame({ workspaceId: 'p1', projectId: 'p1', counts: { issue: 3, pr: 0, security: 1, feedback: 0 }, items: [{ key: 'o/r:issue:5' }] }),
         }));
         expect(onIssueWatchDelta).toHaveBeenCalledTimes(1);
-        expect(onIssueWatchDelta.mock.calls[0][0]).toMatchObject({ workspaceId: 'p1', counts: { issue: 3, pr: 0, security: 1 } });
+        expect(onIssueWatchDelta.mock.calls[0][0]).toMatchObject({ workspaceId: 'p1', counts: { issue: 3, pr: 0, security: 1, feedback: 0 } });
 
         // An id-less delta is dropped (coercion → null), never dispatched.
         sock.emit('message', frame({ event: 'issuewatch.delta', channel, data: frame({ counts: {} }) }));
@@ -325,9 +355,9 @@ describe('parseIssueWatchSnapshot', () => {
     it('coerces { workspaces: [...] } rows, dropping id-less ones', () => {
         const out = parseIssueWatchSnapshot({
             workspaces: [
-                { workspaceId: 'p1', counts: { issue: 1, pr: 0, security: 0 }, items: [] },
+                { workspaceId: 'p1', counts: { issue: 1, pr: 0, security: 0, feedback: 0 }, items: [] },
                 { counts: {} }, // no id → dropped
-                { projectId: 'p2', counts: { issue: 0, pr: 2, security: 0 }, items: [{ key: 'x' }] },
+                { projectId: 'p2', counts: { issue: 0, pr: 2, security: 0, feedback: 0 }, items: [{ key: 'x' }] },
             ],
         });
         expect(out.map((d) => d.workspaceId)).toEqual(['p1', 'p2']);
@@ -486,8 +516,8 @@ describe('startLocalWorkstation', () => {
         const { transport, handlers } = fakeTransport();
         const applyDelta = vi.fn();
         const snapshot: IssueWatchDeltaPush[] = [
-            { workspaceId: 'p1', projectId: 'p1', counts: { issue: 1, pr: 0, security: 0 }, items: [] },
-            { workspaceId: 'p2', projectId: 'p2', counts: { issue: 0, pr: 3, security: 0 }, items: [] },
+            { workspaceId: 'p1', projectId: 'p1', counts: { issue: 1, pr: 0, security: 0, feedback: 0 }, items: [] },
+            { workspaceId: 'p2', projectId: 'p2', counts: { issue: 0, pr: 3, security: 0, feedback: 0 }, items: [] },
         ];
 
         const handle = await startLocalWorkstation({
@@ -511,7 +541,7 @@ describe('startLocalWorkstation', () => {
         expect(applyDelta.mock.calls.map((c) => c[0].workspaceId)).toEqual(['p1', 'p2']);
 
         // A live push feeds the same store.
-        handlers.onIssueWatchDelta!({ workspaceId: 'p3', projectId: 'p3', counts: { issue: 5, pr: 0, security: 0 }, items: [] });
+        handlers.onIssueWatchDelta!({ workspaceId: 'p3', projectId: 'p3', counts: { issue: 5, pr: 0, security: 0, feedback: 0 }, items: [] });
         expect(applyDelta).toHaveBeenCalledTimes(3);
         expect(applyDelta.mock.calls[2][0].workspaceId).toBe('p3');
     });

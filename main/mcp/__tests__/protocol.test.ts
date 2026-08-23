@@ -14,7 +14,7 @@ function ctx(overrides: Partial<McpContext> = {}): McpContext {
         checkIssues: vi.fn().mockResolvedValue({
             connected: true,
             workspaceResolved: true,
-            counts: { issue: 0, pr: 0, security: 0 },
+            counts: { issue: 0, pr: 0, security: 0, feedback: 0 },
             items: [],
         }),
         onForceQuestion: vi.fn().mockResolvedValue({ cancelled: true, answers: [] }),
@@ -1146,7 +1146,7 @@ describe('handleMcpMessage', () => {
         const checkIssues = vi.fn().mockResolvedValue({
             connected: true,
             workspaceResolved: true,
-            counts: { issue: 3, pr: 1, security: 2 },
+            counts: { issue: 3, pr: 1, security: 2, feedback: 0 },
             items: [],
         });
         const res = await handleMcpMessage(
@@ -1163,7 +1163,7 @@ describe('handleMcpMessage', () => {
         const checkIssues = vi.fn().mockResolvedValue({
             connected: true,
             workspaceResolved: true,
-            counts: { issue: 0, pr: 0, security: 2 },
+            counts: { issue: 0, pr: 0, security: 2, feedback: 0 },
             items: [],
             policy: { security: 'fix-and-ship', issue: 'fix-and-ship', pr: 'fix-and-ship' },
         });
@@ -1183,7 +1183,7 @@ describe('handleMcpMessage', () => {
         const checkIssues = vi.fn().mockResolvedValue({
             connected: true,
             workspaceResolved: true,
-            counts: { issue: 1, pr: 0, security: 0 },
+            counts: { issue: 1, pr: 0, security: 0, feedback: 0 },
             items: [],
             policy: { security: 'surface', issue: 'surface', pr: 'surface' },
         });
@@ -1200,7 +1200,7 @@ describe('handleMcpMessage', () => {
         const checkIssues = vi.fn().mockResolvedValue({
             connected: true,
             workspaceResolved: true,
-            counts: { issue: 3, pr: 0, security: 2 },
+            counts: { issue: 3, pr: 0, security: 2, feedback: 0 },
             items: [],
             policy: { security: 'fix-and-ship', issue: 'surface', pr: 'fix' },
         });
@@ -1217,11 +1217,93 @@ describe('handleMcpMessage', () => {
         expect(text).not.toContain('PRs:');
     });
 
+    it('imDone reports unresolved project feedback alongside the GitHub buckets', async () => {
+        // The whole point of the datapoint (Tynn Wish #118): `imDone` is the one
+        // message an agent reliably delivers when it stops, so feedback waiting
+        // in Tynn has to arrive HERE, not only on a sidebar dot.
+        const checkIssues = vi.fn().mockResolvedValue({
+            connected: true,
+            workspaceResolved: true,
+            counts: { issue: 3, pr: 1, security: 2, feedback: 4 },
+            items: [],
+        });
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 63, method: 'tools/call', params: { name: 'imDone', arguments: {} } },
+            ctx({ checkIssues }),
+        );
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toContain('IssueWatch — issues:3, PR:1, sec:2, feedback:4');
+        // Read by an AGENT deciding what to do next, so the wording has to say
+        // what feedback IS: work waiting on triage, not a failed build, and not
+        // a list to close down for tidiness.
+        expect(text).toContain('unresolved project feedback in Tynn');
+        expect(text).toContain('not a failure');
+        expect(text).toContain('stays a human call');
+        expect(text).not.toContain('ROOT CAUSE');
+    });
+
+    it('imDone reports feedback even when every GitHub bucket is empty', async () => {
+        // The counts line used to be suppressed on an all-zero GitHub triple.
+        // Feedback-only is the common case for a workspace with no repos, and
+        // suppressing it there would hide the datapoint exactly where it is the
+        // only thing to report.
+        const checkIssues = vi.fn().mockResolvedValue({
+            connected: true,
+            workspaceResolved: true,
+            counts: { issue: 0, pr: 0, security: 0, feedback: 2 },
+            items: [],
+        });
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 64, method: 'tools/call', params: { name: 'imDone', arguments: {} } },
+            ctx({ checkIssues }),
+        );
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toContain('feedback:2');
+    });
+
+    it('imDone says nothing about feedback when none is waiting', async () => {
+        const checkIssues = vi.fn().mockResolvedValue({
+            connected: true,
+            workspaceResolved: true,
+            counts: { issue: 1, pr: 0, security: 0, feedback: 0 },
+            items: [],
+        });
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 65, method: 'tools/call', params: { name: 'imDone', arguments: {} } },
+            ctx({ checkIssues }),
+        );
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toContain('IssueWatch — issues:1, PR:0, sec:0, feedback:0');
+        expect(text).not.toContain('unresolved project feedback');
+    });
+
+    it('imDone leaves the feedback bucket OUT of the remediation policy clause', async () => {
+        // Deliberate: `fix` / `fix-and-ship` are remediation verbs for a GitHub
+        // defect. Feedback is triaged (convert / resolve / discard), and judging
+        // it is a human call — so it must never inherit a directive telling an
+        // agent to go and clear it.
+        const checkIssues = vi.fn().mockResolvedValue({
+            connected: true,
+            workspaceResolved: true,
+            counts: { issue: 0, pr: 0, security: 0, feedback: 3 },
+            items: [],
+            policy: { security: 'fix-and-ship', issue: 'fix-and-ship', pr: 'fix-and-ship' },
+        });
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 66, method: 'tools/call', params: { name: 'imDone', arguments: {} } },
+            ctx({ checkIssues }),
+        );
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toContain('feedback:3');
+        expect(text).not.toContain('remediation');
+        expect(text).not.toContain('ROOT CAUSE');
+    });
+
     it('imDone omits the counts line when there is nothing open', async () => {
         const checkIssues = vi.fn().mockResolvedValue({
             connected: true,
             workspaceResolved: true,
-            counts: { issue: 0, pr: 0, security: 0 },
+            counts: { issue: 0, pr: 0, security: 0, feedback: 0 },
             items: [],
         });
         const res = await handleMcpMessage(
@@ -1237,7 +1319,7 @@ describe('handleMcpMessage', () => {
             connected: true,
             workspaceResolved: true,
             knownToServer: false,
-            counts: { issue: 0, pr: 0, security: 0 },
+            counts: { issue: 0, pr: 0, security: 0, feedback: 0 },
             items: [],
         });
         const res = await handleMcpMessage(
@@ -1253,7 +1335,7 @@ describe('handleMcpMessage', () => {
             connected: true,
             workspaceResolved: true,
             knownToServer: false,
-            counts: { issue: 0, pr: 0, security: 0 },
+            counts: { issue: 0, pr: 0, security: 0, feedback: 0 },
             items: [],
         });
         const res = await handleMcpMessage(
@@ -1282,7 +1364,7 @@ describe('handleMcpMessage', () => {
         const checkIssues = vi.fn().mockResolvedValue({
             connected: true,
             workspaceResolved: true,
-            counts: { issue: 1, pr: 1, security: 2 },
+            counts: { issue: 1, pr: 1, security: 2, feedback: 0 },
             items: [
                 { kind: 'issue', owner: 'o', repo: 'r', number: 1, title: 'A bug', url: 'https://gh/o/r/issues/1', unread: true },
                 { kind: 'pr', owner: 'o', repo: 'r', number: 2, title: 'A fix', url: 'https://gh/o/r/pull/2', unread: false },
@@ -1316,7 +1398,7 @@ describe('handleMcpMessage', () => {
                     connected: false,
                     workspaceResolved: true,
                     serviceState: 'disabled',
-                    counts: { issue: 0, pr: 0, security: 0 },
+                    counts: { issue: 0, pr: 0, security: 0, feedback: 0 },
                     items: [],
                 }),
             }),
@@ -1331,7 +1413,7 @@ describe('handleMcpMessage', () => {
                 checkIssues: vi.fn().mockResolvedValue({
                     connected: true,
                     workspaceResolved: false,
-                    counts: { issue: 0, pr: 0, security: 0 },
+                    counts: { issue: 0, pr: 0, security: 0, feedback: 0 },
                     items: [],
                 }),
             }),

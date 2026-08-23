@@ -856,10 +856,12 @@ Search the knowledge graph before adding a node. Keep memories small and reusabl
         ),
         'genie-issuewatch': skill(
             'genie-issuewatch',
-            'Use when inspecting Genie IssueWatch issues, pull requests, and security alerts.',
+            'Use when inspecting Genie IssueWatch issues, pull requests, security alerts, and unresolved project feedback.',
             `# Genie IssueWatch
 
-Use \`checkIssues\` for the detailed workspace feed. \`imDone\` also reports open counts. Treat security alerts according to workspace policy and fix root causes rather than masking them.`,
+Use \`checkIssues\` for the detailed workspace feed. \`imDone\` also reports open counts. Treat security alerts according to workspace policy and fix root causes rather than masking them.
+
+The \`feedback:\` count is unresolved project feedback in Tynn — NOT a GitHub item and NOT a failure. It is input from outside the build waiting on triage: read it with the Tynn \`feedback\` tool and convert what should become work, but never close entries to bring the number down, because judging whether a piece of feedback is worth acting on is a human call.`,
         ),
     };
 }

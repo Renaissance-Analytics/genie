@@ -806,7 +806,7 @@ describe('WorkspaceAssignmentSubscriber', () => {
         sub.start();
 
         const push: IssueWatchDeltaPush = {
-            workspaceId: 'p1', projectId: 'p1', counts: { issue: 2, pr: 0, security: 1 }, items: [{ key: 'o/r:issue:1' }],
+            workspaceId: 'p1', projectId: 'p1', counts: { issue: 2, pr: 0, security: 1, feedback: 0 }, items: [{ key: 'o/r:issue:1' }],
         };
         t.pushDelta(push);
         expect(applyIssueWatchDelta).toHaveBeenCalledWith(push);

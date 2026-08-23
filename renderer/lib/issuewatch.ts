@@ -8,7 +8,16 @@ import type {
 } from './genie';
 import type { WatchTypeCounts } from './genie';
 
-/** Badge state that preserves "never delivered" separately from a true zero. */
+/**
+ * Badge state that preserves "never delivered" separately from a true zero.
+ *
+ * Every bucket counts toward the badge, feedback included: the badge answers
+ * "is there anything here wanting attention?", and unresolved feedback wants
+ * attention as much as an open issue does. `?? 0` guards the one shape that can
+ * legitimately lack the newest bucket — a snapshot cached by an older client
+ * before it existed — so a missing key reads as none rather than turning the
+ * whole sum into NaN.
+ */
 export function issueWatchBadge(
     counts: WatchTypeCounts | undefined,
 ): { count: number | null; unknown: boolean } {
@@ -16,7 +25,7 @@ export function issueWatchBadge(
         return { count: null, unknown: true };
     }
     return {
-        count: counts.issue + counts.pr + counts.security,
+        count: counts.issue + counts.pr + counts.security + (counts.feedback ?? 0),
         unknown: false,
     };
 }

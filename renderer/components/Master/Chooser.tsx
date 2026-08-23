@@ -931,11 +931,13 @@ export default function Chooser({
                             {live > 0 && <span className="cnt">{live}</span>}
                             {(() => {
                                 const c = issueWatchCounts[ws.id];
-                                const n = c ? c.issue + c.pr + c.security : 0;
+                                const n = c
+                                    ? c.issue + c.pr + c.security + (c.feedback ?? 0)
+                                    : 0;
                                 return n > 0 ? (
                                     <span
                                         className="iw-rail-dot"
-                                        title={`${n} unread issue/PR/alert`}
+                                        title={`${n} open issue/PR/alert/feedback`}
                                     />
                                 ) : null;
                             })()}
@@ -1144,7 +1146,7 @@ export default function Chooser({
                                             tabIndex={-1}
                                             title={issueWatchBadge(issueWatchCounts[ws.id]).unknown
                                                 ? 'Issue Watch — unknown / not tracking yet (click to inspect)'
-                                                : 'Issue Watch — Issues · PRs · Security alerts (click to open)'}
+                                                : 'Issue Watch — Issues · PRs · Security alerts · Feedback (click to open)'}
                                             onClick={(e) => {
                                                 e.stopPropagation();
                                                 onShowIssueWatch(ws.id);
@@ -1173,6 +1175,20 @@ export default function Chooser({
                                                         : ''
                                                 }`}
                                                 title="Security alerts (Dependabot · Code scanning · Secret scanning)"
+                                            />
+                                            {/* Feedback lights its OWN colour, not the
+                                                shared green: the other three dots mean
+                                                "something is wrong in the code" and this
+                                                one means "someone said something and
+                                                nobody has looked yet". Same green would
+                                                read as a fourth defect. */}
+                                            <i
+                                                className={`iw-dot iw-dot-feedback${
+                                                    (issueWatchCounts[ws.id]?.feedback ?? 0) > 0
+                                                        ? ' on'
+                                                        : ''
+                                                }`}
+                                                title="Unresolved project feedback in Tynn (waiting on triage)"
                                             />
                                         </span>
                                     )}

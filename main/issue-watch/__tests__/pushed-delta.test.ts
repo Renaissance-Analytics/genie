@@ -60,7 +60,7 @@ import {
 
 const delta = (over: Partial<Parameters<typeof applyPushedDelta>[0]> = {}) => ({
     workspaceId: 'ws-1',
-    counts: { issue: 1, pr: 0, security: 2 },
+    counts: { issue: 1, pr: 0, security: 2, feedback: 0 },
     items: [
         { kind: 'issue' as const, key: 'o/r:issue:1', number: 1, title: 'Bug', url: 'u', updatedAt: '2026-07-09T00:00:00Z', owner: 'o', repo: 'r', source: 'own' as const, unread: true },
     ],
@@ -80,7 +80,7 @@ describe('server-fed IssueWatch override (#197)', () => {
         applyPushedDelta(delta());
 
         expect(isServerFed('ws-1')).toBe(true);
-        expect(await getOpenCounts()).toEqual({ 'ws-1': { issue: 1, pr: 0, security: 2, knownToServer: true } });
+        expect(await getOpenCounts()).toEqual({ 'ws-1': { issue: 1, pr: 0, security: 2, feedback: 0, knownToServer: true } });
         const feed = await getWorkspaceFeed('ws-1');
         expect(feed).toHaveLength(1);
         expect(feed[0]).toMatchObject({ key: 'o/r:issue:1', kind: 'issue', unread: true, owner: 'o', repo: 'r' });
@@ -97,7 +97,7 @@ describe('server-fed IssueWatch override (#197)', () => {
             // the flag is that an empty feed can no longer masquerade as healthy.
             knownToServer: true,
         });
-        expect(await getOpenCounts()).toEqual({ 'ws-1': { issue: 1, pr: 0, security: 2, knownToServer: true } });
+        expect(await getOpenCounts()).toEqual({ 'ws-1': { issue: 1, pr: 0, security: 2, feedback: 0, knownToServer: true } });
     });
 
     it('carries the author and BOTH dates Tynn sends, so a row can say who and when', async () => {
@@ -155,9 +155,9 @@ describe('server-fed IssueWatch override (#197)', () => {
     });
 
     it('keeps a zero-count server-fed workspace distinguishable from unknown', async () => {
-        applyPushedDelta(delta({ counts: { issue: 0, pr: 0, security: 0 } }));
+        applyPushedDelta(delta({ counts: { issue: 0, pr: 0, security: 0, feedback: 0 } }));
         expect(await getOpenCounts()).toEqual({
-            'ws-1': { issue: 0, pr: 0, security: 0, knownToServer: true },
+            'ws-1': { issue: 0, pr: 0, security: 0, feedback: 0, knownToServer: true },
         });
     });
 });

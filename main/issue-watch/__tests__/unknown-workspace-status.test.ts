@@ -87,6 +87,7 @@ describe('workspace the server does not know about', () => {
             issue: 0,
             pr: 0,
             security: 0,
+            feedback: 0,
             knownToServer: false,
         });
     });
@@ -99,7 +100,7 @@ describe('workspace the server does not know about', () => {
         // Now the server DOES report it — with zero open items. Genuinely quiet.
         applyPushedDelta({
             workspaceId: 'ws-1',
-            counts: { issue: 0, pr: 0, security: 0 },
+            counts: { issue: 0, pr: 0, security: 0, feedback: 0 },
             items: [],
         });
         const quiet = await getWorkspaceStatus('ws-1');
@@ -117,7 +118,7 @@ describe('workspace the server does not know about', () => {
         setReconcileDelivered(true);
         applyPushedDelta({
             workspaceId: 'ws-1',
-            counts: { issue: 1, pr: 0, security: 0 },
+            counts: { issue: 1, pr: 0, security: 0, feedback: 0 },
             items: [],
         });
 

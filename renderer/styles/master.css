@@ -775,8 +775,9 @@
     background: var(--blue-500, #3b82f6);
     box-shadow: 0 0 0 2px var(--shell);
 }
-/* Per-workspace Issue Watch pill in the flyout row: 3 dots (Issues · PRs ·
-   Dependabot), grey when nothing to act on, green when there's unread. */
+/* Per-workspace Issue Watch pill in the flyout row: 4 dots (Issues · PRs ·
+   Security · Feedback), grey when nothing to act on, lit when there's something
+   open. */
 .iw-pill {
     display: inline-flex;
     align-items: center;
@@ -814,6 +815,14 @@
     opacity: 1;
     box-shadow: 0 0 5px rgba(52, 211, 153, 0.6);
 }
+/* Feedback is not a defect, so it does not borrow the defect colour. Amber
+   reads as "someone is waiting on you", which is what an unresolved piece of
+   feedback actually is — distinguishable at a glance from the three dots that
+   mean something is broken. */
+.iw-pill .iw-dot-feedback.on {
+    background: #fbbf24;
+    box-shadow: 0 0 5px rgba(251, 191, 36, 0.6);
+}
 .iw-flyout .iw-body {
     flex: 1;
     overflow-y: auto;
@@ -826,6 +835,18 @@
     color: var(--fg-4);
     font-size: 12px;
     padding: 6px 2px;
+}
+/* Matches the amber feedback dot on the pill, so the two read as the same
+   signal. Deliberately not the warning red the failure states use — nothing has
+   gone wrong here, someone is just waiting. */
+.iw-feedback-note {
+    margin: 10px 2px 0;
+    padding: 7px 9px;
+    border-radius: 6px;
+    border: 1px solid rgba(251, 191, 36, 0.35);
+    background: rgba(251, 191, 36, 0.08);
+    color: var(--fg-2, #d4d4d8);
+    font-size: 12px;
 }
 .iw-linkbtn {
     background: none;
