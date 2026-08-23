@@ -1042,3 +1042,104 @@ describe('purging a shared volume', () => {
         expect(runtime.removedVolumes).toContain('genie-svc-postgres-16-a-data');
     });
 });
+
+/**
+ * THE REPO'S `.env` FOLLOWS THE SERVICE (genie#242).
+ *
+ * A workspace's service connection is the application's configuration, and the
+ * application reads it out of `.env`. Genie never wrote that file — it injected
+ * the values into a terminal at spawn instead, where a hosted site, a
+ * `manageProcess` worker and a shell the user opened themselves never saw them,
+ * and where (Laravel's dotenv being immutable) a value that had since gone stale
+ * OVERRODE the `.env` somebody had just corrected.
+ *
+ * The manager is where the truth about a published port lives, so it is what has
+ * to say when the file needs rewriting. These tests pin WHEN it says so —
+ * especially the third, which is the reported failure: a restart moved Postgres
+ * from 51157 to 58377 and nothing updated the file.
+ */
+describe('the service env reaches the repo .env', () => {
+    it('announces a workspace when a service is BOUND', async () => {
+        const runtime = fakeRuntime();
+        const synced: string[] = [];
+        const manager = createDevServiceManager({
+            ...deps(runtime, { a: pgFor('svc-a') }),
+            onServiceEnvChanged: (id) => synced.push(id),
+        });
+
+        await manager.acquire('a', 'svc-a');
+
+        expect(synced).toContain('a');
+    });
+
+    it('announces it again when a REFRESH finds the published port has MOVED', async () => {
+        // The reported bug, exactly: live Postgres on 58377, `repos/tynn/.env`
+        // still saying 51157. A port moves on a container recreate — and a Genie
+        // restart is one of the things that recreates one — so binding alone is
+        // not enough; the file has to follow the port.
+        const runtime = fakeRuntime();
+        const synced: string[] = [];
+        const manager = createDevServiceManager({
+            ...deps(runtime, { a: pgFor('svc-a') }),
+            onServiceEnvChanged: (id) => synced.push(id),
+        });
+        const acquired = await manager.acquire('a', 'svc-a');
+        const before = acquired.endpoints?.[0]?.hostPort;
+        if (before === undefined) throw new Error('the fake published no port');
+        synced.length = 0;
+
+        runtime.ports.set(acquired.containerId ?? '', [
+            { container: 5432, hostPort: before + 7000, protocol: 'tcp', hostIp: '127.0.0.1' },
+        ]);
+        await manager.refresh();
+
+        expect(synced).toEqual(['a']);
+    });
+
+    it('stays SILENT when a refresh finds nothing has moved', async () => {
+        // Otherwise every readiness tick rewrites the user's `.env`. The write is
+        // idempotent, but a lifecycle that announces a change on every poll is one
+        // nobody can reason about.
+        const runtime = fakeRuntime();
+        const synced: string[] = [];
+        const manager = createDevServiceManager({
+            ...deps(runtime, { a: pgFor('svc-a') }),
+            onServiceEnvChanged: (id) => synced.push(id),
+        });
+        await manager.acquire('a', 'svc-a');
+        synced.length = 0;
+
+        await manager.refresh();
+
+        expect(synced).toEqual([]);
+    });
+
+    it('announces a workspace when a service is RELEASED', async () => {
+        const runtime = fakeRuntime();
+        const synced: string[] = [];
+        const manager = createDevServiceManager({
+            ...deps(runtime, { a: pgFor('svc-a') }),
+            onServiceEnvChanged: (id) => synced.push(id),
+        });
+        await manager.acquire('a', 'svc-a');
+        synced.length = 0;
+
+        await manager.release('a', 'svc-a');
+
+        expect(synced).toEqual(['a']);
+    });
+
+    it('a listener that throws cannot fail bringing a database up', async () => {
+        const runtime = fakeRuntime();
+        const manager = createDevServiceManager({
+            ...deps(runtime, { a: pgFor('svc-a') }),
+            onServiceEnvChanged: () => {
+                throw new Error('the .env is read-only');
+            },
+        });
+
+        const status = await manager.acquire('a', 'svc-a');
+
+        expect(status.state).toBe('running');
+    });
+});

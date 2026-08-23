@@ -45,7 +45,11 @@ right-click the workspace) with two tabs:
   `postgres:16` backs every workspace that asks for Postgres 16 — and each
   workspace gets its own database, role and credentials on it. The connection
   env (`DATABASE_URL`, …) is injected into the workspace's sites automatically,
-  at runtime and during their build.
+  at runtime and during their build — **and written into the repo's own `.env`**
+  (gitignored), so a terminal, a `manageProcess` worker, an editor task or a
+  shell you opened yourself all read the same, current values. Genie rewrites
+  those keys in place whenever a port moves; the rest of your `.env` is left
+  exactly as you wrote it.
 
 Agents manage exactly the same thing over MCP via the `manageSite` and
 `manageService` tools — the panel and the tools drive one shared implementation,

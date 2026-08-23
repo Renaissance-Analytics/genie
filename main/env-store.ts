@@ -3,6 +3,7 @@ import path from 'node:path';
 import {
     parseEnv,
     upsertEnvLine,
+    upsertEnvBlock,
     isValidEnvKey,
     isSecret,
     obfuscateSecret,
@@ -155,6 +156,91 @@ export function applySetEnv(workspaceRoot: string, req: SetEnvRequest): SetEnvRe
     }
     ensureEnvGitignored(t.target.dir);
     return { ok: true, file: t.target.label };
+}
+
+// --- the managed service block (genie#242) ----------------------------------
+
+export interface EnvBlockRequest {
+    /** `workspace` (default) or a repo name → `repos/<name>/.env`. */
+    target?: string;
+    /** The managed keys and their CURRENT values. */
+    vars: Record<string, string>;
+    /** The comment that marks where NEW managed keys are appended. */
+    header?: string;
+}
+
+export interface EnvBlockResult {
+    ok: boolean;
+    error?: string;
+    /** The `.env` written (label), e.g. `repos/tynn/.env`. */
+    file?: string;
+    /** True only when bytes actually changed on disk. */
+    changed: boolean;
+    /** The keys this write moved. Empty when nothing had drifted. */
+    keys: string[];
+}
+
+/** The default marker for the appended block. Deliberately says WHO wrote it and
+ *  that it is maintained, so nobody hand-edits a port back and wonders why it
+ *  reverts. */
+export const MANAGED_ENV_HEADER =
+    '# --- Genie: managed service connection — updated automatically (genie#242) ---';
+
+/**
+ * Write Genie's managed service keys into a repo's `.env` (genie#242).
+ *
+ * Read-modify-write over the user's own file: {@link upsertEnvBlock} holds the
+ * safety contract (their edits survive, a key is rewritten where it already is,
+ * new keys land in one marked block). This layer adds the things that touch the
+ * disk:
+ *
+ *  - **Nothing changed ⇒ nothing written.** Not an identical rewrite — no write
+ *    call at all, so the mtime a watcher or a build tool keys off does not move.
+ *  - **The file is gitignored before it holds a credential.** A service password
+ *    is about to land in it, and this is the same guarantee {@link applySetEnv}
+ *    already makes for site env (genie#168).
+ *  - **A write that cannot happen is REPORTED, never thrown.** This runs on a
+ *    service lifecycle tick; a `.env` the user made read-only, or has open in an
+ *    editor that holds a lock, must not be able to fail an engine acquire.
+ */
+export function applyEnvBlock(workspaceRoot: string, req: EnvBlockRequest): EnvBlockResult {
+    const t = resolveEnvTarget(workspaceRoot, req.target);
+    if (!t.ok) return { ok: false, error: t.error, changed: false, keys: [] };
+    if (t.target.kind === 'repo' && !fs.existsSync(t.target.dir)) {
+        return { ok: false, error: `repo '${req.target}' not found under repos/`, changed: false, keys: [] };
+    }
+
+    // Skip anything that is not a legal env name rather than writing a line no
+    // parser would read back — one bad key must not cost the whole block.
+    const vars = Object.fromEntries(
+        Object.entries(req.vars).filter(([key]) => isValidEnvKey(key)),
+    );
+
+    const before = readFileOrEmpty(t.target.path);
+    const after = upsertEnvBlock(before, vars, req.header ?? MANAGED_ENV_HEADER);
+    if (after === before) {
+        return { ok: true, file: t.target.label, changed: false, keys: [] };
+    }
+
+    const current = parseEnv(before);
+    const keys = Object.keys(vars).filter((key) => current.get(key) !== vars[key]);
+    // Gitignore FIRST: the bytes about to be written include a service password,
+    // so the ordering is what makes "never committable" true even if the process
+    // dies between the two writes.
+    ensureEnvGitignored(t.target.dir);
+    try {
+        fs.mkdirSync(t.target.dir, { recursive: true });
+        fs.writeFileSync(t.target.path, after);
+    } catch (e) {
+        return {
+            ok: false,
+            error: `write failed: ${e instanceof Error ? e.message : String(e)}`,
+            file: t.target.label,
+            changed: false,
+            keys: [],
+        };
+    }
+    return { ok: true, file: t.target.label, changed: true, keys };
 }
 
 /** Presence (default) or value lookup of a key in the resolved `.env`, with the

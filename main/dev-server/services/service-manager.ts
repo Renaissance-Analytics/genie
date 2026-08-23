@@ -169,6 +169,17 @@ export interface DevServiceManagerDeps {
     readyTimeoutMs?: number;
     /** Fired whenever the live set changes, so the UX and other agents follow. */
     onChanged?: () => void;
+    /**
+     * Fired when a workspace's SERVICE CONNECTION has changed — bound, released,
+     * or its published port moved — so the repo's `.env` can be rewritten
+     * (genie#242).
+     *
+     * Separate from {@link onChanged}, which is a "something happened, re-render"
+     * broadcast with no workspace: this one names the workspace, and it fires
+     * ONLY when a connection value actually moved. A `.env` that is rewritten on
+     * every readiness poll is a file nobody will trust to hold their own edits.
+     */
+    onServiceEnvChanged?: (workspaceId: string) => void;
 }
 
 /**
@@ -382,6 +393,17 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
     const changed = () => {
         try {
             deps.onChanged?.();
+        } catch {
+            /* a listener must not be able to fail a lifecycle call */
+        }
+    };
+
+    /** This workspace's connection has moved — the repo's `.env` needs rewriting
+     *  (genie#242). Same tolerance as {@link changed}: an unwritable `.env` must
+     *  not be able to fail bringing a database up. */
+    const envChanged = (workspaceId: string) => {
+        try {
+            deps.onServiceEnvChanged?.(workspaceId);
         } catch {
             /* a listener must not be able to fail a lifecycle call */
         }
@@ -810,6 +832,11 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
         const { runtime } = await deps.resolveRuntime();
         if (!runtime) return;
 
+        /** Workspaces whose published address actually MOVED — the ones whose
+         *  `.env` is now wrong (genie#242). Announced once each, after the sweep,
+         *  so a workspace with two engines is not written twice. */
+        const moved = new Set<string>();
+
         for (const entry of live.values()) {
             let endpoints: ServiceEndpoint[];
             try {
@@ -835,6 +862,11 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
             if (entry.endpoints.some((e) => e.hostPort) && !endpoints.some((e) => e.hostPort)) {
                 continue;
             }
+            // Compare BEFORE overwriting: a moved publication is precisely the
+            // event that leaves a repo's `.env` naming a port nothing listens on.
+            const publication = (list: ServiceEndpoint[]): string =>
+                list.map((e) => `${e.name}:${e.port}:${e.hostPort ?? ''}`).sort().join(',');
+            if (publication(entry.endpoints) !== publication(endpoints)) moved.add(entry.workspaceId);
             entry.endpoints = endpoints;
 
             const primary = endpoints.find((e) => e.hostPort);
@@ -844,6 +876,8 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
                     .catch(() => entry.ready);
             }
         }
+
+        for (const workspaceId of moved) envChanged(workspaceId);
     }
 
     function statusOf(entry: Live): DevServiceStatus {
@@ -871,8 +905,12 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
         if (inFlight) return inFlight;
         const promise = acquireOnce(workspaceId, serviceId)
             .then((status) => {
-                if (status.state === 'running') lastFailure.delete(serviceId);
-                else lastFailure.set(serviceId, status);
+                if (status.state === 'running') {
+                    lastFailure.delete(serviceId);
+                    // The connection this workspace's apps read now exists (or has
+                    // been re-published on a new port) — write it to their `.env`.
+                    envChanged(workspaceId);
+                } else lastFailure.set(serviceId, status);
                 return status;
             })
             .finally(() => acquiring.delete(serviceId));
@@ -912,6 +950,7 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
             }
         }
         changed();
+        envChanged(workspaceId);
     }
 
     return {
