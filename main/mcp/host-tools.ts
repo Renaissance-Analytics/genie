@@ -46,6 +46,7 @@ import {
     broadcastTerminalSpecsChanged,
     killTerminalById,
     createAgentTerminal,
+    decideAgentTerminalSpawn,
     writeToTerminal,
     readTerminalOutput,
     agentSessionTranscriptExists,
@@ -1327,6 +1328,18 @@ export async function manageTerminalsForMcp(
                     return { ok: false, error: cwdR.error, terminals: listAgentTerminals(ws) };
                 }
                 const label = req.label?.trim() || 'Agent terminal';
+                // The cap (Tynn #117) is checked BEFORE the approval modal: asking
+                // someone to approve a terminal that is about to be refused anyway
+                // spends their attention on nothing, and attention is the thing the
+                // cap exists to protect.
+                const cap = decideAgentTerminalSpawn(ws.id, 'agent');
+                if (!cap.allowed) {
+                    return {
+                        ok: false,
+                        error: cap.reason ?? 'This workspace is at its agent-terminal limit.',
+                        terminals: listAgentTerminals(ws),
+                    };
+                }
                 const approved = await approveTerminalAction(ws, {
                     title: 'An agent wants to open a terminal (it can run any command):',
                     lines: [label, `in: ${cwdR.cwd}`],
@@ -1342,6 +1355,7 @@ export async function manageTerminalsForMcp(
                     workspaceId: ws.id,
                     cwd: cwdR.cwd,
                     label,
+                    createdBy: 'agent',
                 });
                 // Give the shell a moment, then return its initial scrollback.
                 const r = readTerminalOutput(id, {});
@@ -1677,6 +1691,15 @@ export async function runAgentForMcp(
                 const cwdR = resolveAgentCwd(ws, { repo: req.repo, cwd: req.cwd });
                 if ('error' in cwdR) return { ok: false, error: cwdR.error };
 
+                // The agent-terminal cap (Tynn #117), before the modal — see the
+                // matching check in `manageTerminals create`.
+                const cap = decideAgentTerminalSpawn(ws.id, 'agent');
+                if (!cap.allowed) {
+                    return {
+                        ok: false,
+                        error: cap.reason ?? 'This workspace is at its agent-terminal limit.',
+                    };
+                }
                 const approved = await approveTerminalAction(ws, {
                     title: `An agent wants to LAUNCH a ${agent} coding agent (it can read, write, and run code on its own):`,
                     lines: [`command: ${command}`, `in: ${cwdR.cwd}`],

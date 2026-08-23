@@ -1200,6 +1200,32 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // v45: how many agent terminals this workspace may run (Tynn #117).
+            //
+            // An orchestrating agent fanned out six agent terminals in one session
+            // and nothing would have stopped it at sixteen. Each is a pty, a model
+            // session, and a share of the owner's attention.
+            //
+            // This is the workspace OVERRIDE; the default lives in `settings`
+            // (`max_agent_terminals`). NULL means inherit, which is the only honest
+            // default — a workspace that predates this expressed no opinion, and
+            // stamping one on it would either loosen or tighten a limit nobody set.
+            //
+            // Deliberately NOT added to `updateWorkspace`'s allowlist, and its
+            // setter is never imported into `main/mcp/`. An agent that can raise its
+            // own cap has no cap, so the limit is reachable only from the IPC a
+            // person's window calls — the same structural rule as
+            // `workstation_operator` (v36).
+            version: 45,
+            runner: (db) => {
+                if (!workspaceColumns(db).has('max_agent_terminals')) {
+                    db.exec(
+                        `ALTER TABLE workspaces ADD COLUMN max_agent_terminals INTEGER`,
+                    );
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -1262,6 +1288,12 @@ export interface Settings {
     terminal_custom_cmd?: string;
     /** Max panels visible at once per workspace. String-encoded (settings are k/v text). Default '4'. */
     max_views?: string;
+    /** WORKSTATION DEFAULT for how many agent terminals one workspace may run
+     *  (Tynn #117). String-encoded; `'unlimited'` turns the cap off. A workspace
+     *  may override it (`workspaces.max_agent_terminals`), and only a person can —
+     *  no agent-facing tool writes either. Resolve via `effectiveAgentCap`, never
+     *  read raw. Default '8'. */
+    max_agent_terminals?: string;
     /** Per-workspace draggable-grid track sizes, JSON-encoded. Keyed by
      *  `${connKey}|${workspaceId}|${signature}` — connKey scopes it per window
      *  (local vs a driven host) so different hosts don't collide. */
@@ -1492,6 +1524,7 @@ export function getAllSettings(): Settings {
         terminal_shell: out['terminal_shell'] ?? '',
         terminal_custom_cmd: out['terminal_custom_cmd'] ?? '',
         max_views: out['max_views'] ?? '4',
+        max_agent_terminals: out['max_agent_terminals'] ?? '8',
         layout_json: out['layout_json'] ?? '{}',
         view_state_json: out['view_state_json'] ?? '{}',
         track_cwd: (out['track_cwd'] as 'on' | 'off') ?? 'on',
@@ -2225,6 +2258,57 @@ export function setWorkstationOperator(id: string, on: boolean): void {
         .run(on ? 1 : 0, id);
 }
 
+/**
+ * How `unlimited` survives an INTEGER column (Tynn #117).
+ *
+ * The column has to distinguish three states — inherit, a number, and explicitly
+ * uncapped — and NULL is already spoken for by inherit. The sentinel is confined
+ * to these two accessors so it never reaches a caller or a decision function.
+ */
+const AGENT_CAP_UNLIMITED_SENTINEL = -1;
+
+/**
+ * This workspace's agent-terminal override: a positive maximum, `'unlimited'`, or
+ * `null` to inherit the workstation default.
+ *
+ * Never read the column directly — resolve through `effectiveAgentCap`, which
+ * knows what to do when this is absent or unusable.
+ */
+export function getWorkspaceAgentCap(id: string): number | 'unlimited' | null {
+    const row = getDb()
+        .prepare<[string], { max_agent_terminals: number | null } | undefined>(
+            'SELECT max_agent_terminals FROM workspaces WHERE id = ?',
+        )
+        .get(id);
+
+    const raw = row?.max_agent_terminals;
+    if (raw === AGENT_CAP_UNLIMITED_SENTINEL) return 'unlimited';
+    // Anything else unusable (NULL, 0, a negative that is not the sentinel) reads
+    // as "no opinion" so the workstation default applies. Inheriting is the safe
+    // direction; treating a corrupt row as uncapped would delete the limit.
+    if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1) return null;
+    return raw;
+}
+
+/**
+ * Set or clear this workspace's override. `null` clears it back to inheriting.
+ *
+ * NOT reachable from any agent-facing surface: this setter is never imported into
+ * `main/mcp/`, and the column is absent from {@link updateWorkspace}'s allowlist,
+ * so a patch naming it is dropped rather than applied. An agent that can raise its
+ * own cap has no cap.
+ */
+export function setWorkspaceAgentCap(id: string, cap: number | 'unlimited' | null): void {
+    let value: number | null;
+    if (cap === 'unlimited') value = AGENT_CAP_UNLIMITED_SENTINEL;
+    else if (typeof cap === 'number' && Number.isInteger(cap) && cap >= 1) value = cap;
+    else value = null;
+
+    getDb()
+        .prepare('UPDATE workspaces SET max_agent_terminals = ? WHERE id = ?')
+        .run(value, id);
+}
+
 export type IssuewatchPolicy = 'surface' | 'fix' | 'fix-and-ship';
 
 /**
@@ -2840,6 +2924,10 @@ export interface TerminalSpecMeta {
     agent?: 'claude' | 'codex' | 'custom';
     /** Agent terminals: the CLI command line that was launched (display). */
     agent_command?: string;
+    /** Who asked for this terminal (Tynn #117). Absent on terminals created before
+     *  the field existed, which read as `'human'` — the cap must not apply
+     *  retroactively to work already running. */
+    created_by?: 'human' | 'agent';
     /**
      * AgentInbox identity + accessibility (Specialized Terminals). These ride
      * the spec's meta so an agent's AgentInbox registration is durable across a
