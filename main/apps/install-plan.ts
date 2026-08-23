@@ -95,6 +95,21 @@ export function appInstallPlan(workspaceId: string, manifest: AppManifest): AppI
         // A bare `<slug>.gen`, matching what the real apps use (`orr.gen`,
         // `ripple.gen`) rather than the `<site>.<workspace>.gen` default: a GApp is
         // its own product, and its address should read like one.
+        //
+        // PENDING CORRECTION (owner, 2026-08-22): hosted GApp sites are to move to
+        // the `.gapp` TLD — `<slug>.gapp`, distinct from the `.gapp` ENVELOPE
+        // suffix, which is a different thing that also exists. This is the one
+        // place a GApp's address is minted, so it is where that migration starts.
+        //
+        // Deliberately NOT changed here. `.gen` is assumed in about fifteen places,
+        // including `window-policy.ts`, where it is part of the same-origin
+        // navigation check that keeps an app inside its own partition. Moving the
+        // TLD in one file and not the others would leave the installer minting an
+        // address the navigation policy does not recognise — an app that installs
+        // and then cannot load itself, with the failure surfacing far from here.
+        // The alternative considered was migrating all of it in this change; it was
+        // rejected because it is a security-surface change that wants its own
+        // review, not a rider on a manifest feature.
         genName: `${slug}.gen`,
         repo: frontend.repo ?? '',
         // HOST-NATIVE, not a container. A GApp runs against live source on the
