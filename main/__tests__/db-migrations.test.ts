@@ -1389,3 +1389,32 @@ describe('v43 — the service env baked into a terminal (genie#222)', () => {
         expect(cols(db, 'terminal_service_env').has('env_json')).toBe(true);
     });
 });
+
+describe('v44 — where a GApp’s backups go (Tynn #250, step 4)', () => {
+    it('adds a per-app override column, and every existing app keeps the workstation default', () => {
+        // NULL means "no override", which is the only honest default: an app
+        // installed before this had no opinion about where its dumps land.
+        const db = new Database(':memory:');
+        runMigrations(db);
+        db.prepare(
+            `INSERT INTO app_grants
+                (app_id, workspace_id, name, version, slug, scope, manifest_json, install_path,
+                 installed_at, updated_at)
+             VALUES ('app-1', 'ws-1', 'Notes', '1.0.0', 'notes', 'self', '{}', '/tmp/notes',
+                     '2026-08-22', '2026-08-22')`,
+        ).run();
+
+        expect(cols(db, 'app_grants').has('backup_json')).toBe(true);
+        const row = db
+            .prepare<[], { backup_json: string | null }>('SELECT backup_json FROM app_grants')
+            .get();
+        expect(row?.backup_json ?? null).toBeNull();
+    });
+
+    it('is idempotent — re-running converges without throwing', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(() => runMigrations(db)).not.toThrow();
+        expect(cols(db, 'app_grants').has('backup_json')).toBe(true);
+    });
+});

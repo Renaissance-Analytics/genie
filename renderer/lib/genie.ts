@@ -2036,6 +2036,46 @@ export interface InstalledAppView {
     installedAt: string;
 }
 
+/** The backup policy, at either level (Tynn #250, step 4). */
+export interface AppBackupPolicy {
+    enabled: boolean;
+    /** Absolute host path. A shared or synced folder is the point. */
+    dir: string;
+    /** How many dumps to keep per app, per engine version. */
+    keep: number;
+}
+
+export interface AppBackupSettingsView {
+    workstation: AppBackupPolicy;
+    /** Null when this app simply follows the workstation default. */
+    override?: Partial<AppBackupPolicy> | null;
+    resolved?: AppBackupPolicy & {
+        from: { enabled: 'workstation' | 'app'; dir: 'workstation' | 'app'; keep: 'workstation' | 'app' };
+        reason?: string;
+    };
+}
+
+export interface AppBackupResultView {
+    engine: string;
+    version: string;
+    ok: boolean;
+    path?: string;
+    bytes?: number;
+    error?: string;
+    pruned: string[];
+}
+
+export interface AppBackupRunView {
+    ok: boolean;
+    /** Set when nothing ran, with the reason. */
+    skipped?: string;
+    dir?: string;
+    results: AppBackupResultView[];
+    /** Live engines this app uses that no dump covers yet — stated, never
+     *  left to be inferred from an absence. */
+    notCovered: string[];
+}
+
 export interface AppActionResult {
     ok: boolean;
     error?: string;
@@ -2533,6 +2573,22 @@ export interface GenieApi {
         setCapabilities: (appId: string, capabilities: string[]) => Promise<AppActionResult>;
         setRevoked: (appId: string, revoked: boolean) => Promise<AppActionResult>;
         uninstall: (appId: string) => Promise<AppActionResult>;
+        /**
+         * Where this app's database dumps land (Tynn #250, step 4).
+         *
+         * Omit `appId` for the WORKSTATION default; pass one to read that app's
+         * override alongside it. `resolved.from` says which level decided each
+         * field, so a folder is never shown without saying where it came from.
+         */
+        backupSettings: (appId?: string) => Promise<AppBackupSettingsView>;
+        /** `appId: null` writes the workstation default; a `null` patch for an
+         *  app CLEARS its override so it follows that default again. */
+        setBackup: (
+            appId: string | null,
+            patch: Partial<AppBackupPolicy> | null,
+        ) => Promise<{ ok: boolean } & Partial<AppBackupSettingsView>>;
+        /** Dump this app's live database engines now. */
+        backup: (appId: string) => Promise<AppBackupRunView>;
     };
     /**
      * The GApp window's own surface. Only a GApp window answers these; Genie's

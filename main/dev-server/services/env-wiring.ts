@@ -199,8 +199,16 @@ export function serviceEnv(entries: ProvisionedService[]): Record<string, string
             case 'minio': {
                 Object.assign(env, {
                     AWS_ENDPOINT: `http://${host}:${port}`,
-                    ...(entry.adminUser ? { AWS_ACCESS_KEY_ID: entry.adminUser } : {}),
-                    ...(entry.adminPassword ? { AWS_SECRET_ACCESS_KEY: entry.adminPassword } : {}),
+                    // The workspace's OWN IAM user, never the engine's root
+                    // account (Tynn #250, step 4). The access key IS the bucket
+                    // name, which is what lets one constant `${aws:username}`
+                    // policy scope every workspace — see `provision.ts`.
+                    //
+                    // Read off the slice rather than from `entry.admin*`, so a
+                    // caller that still attaches the engine admin cannot put the
+                    // root credential back into an app's environment by accident.
+                    AWS_ACCESS_KEY_ID: slice.dnsName,
+                    AWS_SECRET_ACCESS_KEY: slice.password,
                     // A bucket name is a DNS label — the SQL identifier's
                     // underscores are illegal there.
                     AWS_BUCKET: slice.dnsName,

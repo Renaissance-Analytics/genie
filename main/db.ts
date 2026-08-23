@@ -1176,6 +1176,30 @@ export function runMigrations(d: Database.Database): void {
                 `);
             },
         },
+        {
+            // v44: where THIS app's backups go (Tynn #250, step 4).
+            //
+            // The workstation setting is the default and lives in `settings`; this
+            // is the per-app OVERRIDE the owner asked for, and it is resolved per
+            // FIELD (`services/backup.ts`) so an app that wants a different folder
+            // does not have to restate retention to get one.
+            //
+            // NULL means no override, which is the only honest default: an app
+            // installed before this had no opinion about where its dumps land, and
+            // inventing one would move somebody's backups.
+            version: 44,
+            runner: (db) => {
+                const cols = new Set(
+                    db
+                        .prepare<[], { name: string }>(`PRAGMA table_info(app_grants)`)
+                        .all()
+                        .map((r) => r.name),
+                );
+                if (!cols.has('backup_json')) {
+                    db.exec(`ALTER TABLE app_grants ADD COLUMN backup_json TEXT`);
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -1369,6 +1393,14 @@ export interface Settings {
      *  entry is ignored at read time (`defaultVersionFor`). Written by the
      *  Toolchain page's `toolchain:set-default` ipc. Default '{}'. */
     toolchain_defaults?: string;
+    /** The WORKSTATION's default GApp backup policy, JSON-encoded
+     *  (`{"enabled":true,"dir":"/Volumes/Shared/genie","keep":7}`). This is the
+     *  default an installed app inherits; an app may override any FIELD of it
+     *  (`app_grants.backup_json`). Read through `parseBackupSettings`
+     *  (`dev-server/services/backup.ts`), which falls back to Genie's own data
+     *  folder — never to "off" — so an unreadable value cannot silently stop the
+     *  backups. Tynn #250, step 4. */
+    gapp_backup?: string;
     /** The CLI invocation the runAgent MCP tool launches for a `claude` agent.
      *  Default 'claude'. The user can set the real command (e.g. a wrapper or a
      *  full path with flags). */
@@ -1940,13 +1972,19 @@ export function isWorkstationOperator(id: string): boolean {
  */
 export type WorkspaceAppKind = 'app' | 'app-dev';
 
+/** PURE. The same narrowing, for a row already in hand — so a LIST of workspaces
+ *  does not become one query each just to learn which are Apps. */
+export function toWorkspaceAppKind(value: unknown): WorkspaceAppKind | null {
+    return value === 'app' || value === 'app-dev' ? value : null;
+}
+
 export function getWorkspaceAppKind(id: string): WorkspaceAppKind | null {
     const row = getDb()
         .prepare<[string], { app_kind: string | null } | undefined>(
             'SELECT app_kind FROM workspaces WHERE id = ?',
         )
         .get(id);
-    return row?.app_kind === 'app' || row?.app_kind === 'app-dev' ? row.app_kind : null;
+    return toWorkspaceAppKind(row?.app_kind);
 }
 
 /** Mark (or unmark) a workspace as hosting an installed GApp. */
@@ -2144,6 +2182,25 @@ export function upsertAppGrant(
 }
 
 /** Turn an app's permissions off (or back on) without uninstalling it. */
+/**
+ * One app's BACKUP override, as stored. The raw blob, because `db.ts` does not
+ * interpret what it persisted — `parseBackupOverride` owns that shape, the same
+ * split `dev_services` already uses (Tynn #250, step 4).
+ */
+export function getAppBackupJson(appId: string): string | null {
+    const row = getDb()
+        .prepare<[string], { backup_json: string | null } | undefined>(
+            'SELECT backup_json FROM app_grants WHERE app_id = ?',
+        )
+        .get(appId);
+    return row?.backup_json ?? null;
+}
+
+/** `null` clears the override, so the app follows the workstation default again. */
+export function setAppBackupJson(appId: string, json: string | null): void {
+    getDb().prepare('UPDATE app_grants SET backup_json = ? WHERE app_id = ?').run(json, appId);
+}
+
 export function setAppGrantRevoked(appId: string, revoked: boolean): void {
     getDb()
         .prepare('UPDATE app_grants SET revoked = ?, updated_at = ? WHERE app_id = ?')

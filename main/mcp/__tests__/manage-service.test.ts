@@ -299,3 +299,48 @@ describe('manageServiceSummary', () => {
         expect(text).toContain('postgres');
     });
 });
+
+/**
+ * A CONSEQUENCE the caller must be told about (Tynn #250, step 4).
+ *
+ * `ManageServiceResult.note` exists for the case where the action succeeded but
+ * something the caller cares about did NOT happen — the shape a declined purge
+ * takes. It was never rendered, so it reached an agent only if that agent read
+ * the JSON body, and `remove` in particular falls through every branch of the
+ * summary (the service it names is gone from the list by then). A refusal
+ * nobody is shown is indistinguishable from the purge having worked.
+ */
+describe('manageServiceSummary — a note is not optional reading', () => {
+    it('LEADS with the note rather than burying it under a count', () => {
+        const text = manageServiceSummary({
+            ok: true,
+            affectedId: 'svc',
+            services: [],
+            note: 'Purging would delete genie-svc-postgres-16-data, which also holds ws_notes_1a2b3c4d.',
+        });
+        expect(text.startsWith('Purging would delete')).toBe(true);
+        expect(text).toContain('ws_notes_1a2b3c4d');
+    });
+
+    it('keeps the note when the action also has a service to report', () => {
+        const text = manageServiceSummary({
+            ok: true,
+            affectedId: 'svc',
+            services: [
+                {
+                    id: 'svc',
+                    engine: 'postgres',
+                    version: '17',
+                    engineKey: 'postgres-17',
+                    dedicated: false,
+                    enabled: true,
+                    state: 'running',
+                    ready: true,
+                },
+            ],
+            note: 'The newly active version starts empty — the old one keeps its own volume.',
+        });
+        expect(text).toContain('starts empty');
+        expect(text).toContain('postgres 17');
+    });
+});

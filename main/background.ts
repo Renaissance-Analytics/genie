@@ -24,6 +24,7 @@ import {
     setSettings,
     getTerminalSpec,
     getWorkspace,
+    toWorkspaceAppKind,
     createTerminalSpec,
     workspaceProcessApproval,
     workspaceTerminalApproval,
@@ -1100,13 +1101,19 @@ app.whenReady().then(async () => {
         routes: () => devServerHostBrowserRoutes(),
         log: (m) => console.warn('[host-browser]', m),
     });
+    // A workspace as the hosting managers see it. `appKind` travels with it so a
+    // purge about to drop a SHARED engine's data volume can say whose data is in
+    // there — an installed Genie App's, or an ordinary project's (Tynn #250).
+    const asDevWorkspace = (w: { id: string; path: string; project_name: string; app_kind?: string | null }) => {
+        const appKind = toWorkspaceAppKind(w.app_kind);
+        return { id: w.id, path: w.path, label: w.project_name, ...(appKind ? { appKind } : {}) };
+    };
     initHosting({
         resolveRuntime: () => resolveContainerRuntime(),
-        listWorkspaces: () =>
-            listWorkspaces().map((w) => ({ id: w.id, path: w.path, label: w.project_name })),
+        listWorkspaces: () => listWorkspaces().map(asDevWorkspace),
         workspaceFor: (id) => {
             const row = getWorkspace(id);
-            return row ? { id: row.id, path: row.path, label: row.project_name } : null;
+            return row ? asDevWorkspace(row) : null;
         },
         devSitesFor: (id) => getWorkspaceDevSites(id),
         devServicesFor: (id) => getWorkspaceDevServices(id),

@@ -69,11 +69,39 @@ const SQL_IDENTIFIER = /^[a-z][a-z0-9_]{0,62}$/;
 /** Exactly what `generateServicePassword` produces, and nothing else. */
 const GENERATED_PASSWORD = /^[A-Za-z0-9_-]{8,128}$/;
 
+/** Exactly what `workspaceDnsName` produces — an S3 bucket label. */
+const DNS_NAME = /^[a-z][a-z0-9-]{2,62}$/;
+
+/**
+ * EXPORTED so everything that puts a slice on a command line asserts the SAME
+ * thing. `backup.ts` builds `pg_dump` argv from the same identifier and password
+ * this file builds `CREATE ROLE` from; two copies of "what a derived name looks
+ * like" is how one of them ends up out of date.
+ */
+export function assertSliceIdentifier(value: string): string {
+    return assertIdentifier(value);
+}
+
+/** See {@link assertSliceIdentifier}. */
+export function assertSlicePassword(value: string, whose = 'workspace'): string {
+    return assertPassword(value, whose);
+}
+
 function assertIdentifier(value: string): string {
     if (!SQL_IDENTIFIER.test(value)) {
         throw new Error(
             `dev-server: refusing to provision with the identifier ${JSON.stringify(value)} — ` +
                 'it is not a derived workspace slug',
+        );
+    }
+    return value;
+}
+
+function assertDnsName(value: string): string {
+    if (!DNS_NAME.test(value)) {
+        throw new Error(
+            `dev-server: refusing to provision with the bucket name ${JSON.stringify(value)} — ` +
+                'it is not a derived workspace name',
         );
     }
     return value;
@@ -193,13 +221,32 @@ function mysqlSteps(admin: EngineAdmin, slice: WorkspaceSlice): ProvisionStep[] 
  *
  * Deliberately an explicit deny-list rather than `-@dangerous`: that category
  * also removes `KEYS`, `INFO` and `CLIENT`, which developers use constantly in
- * a dev cache. These five are the ones that would either reach outside the key
+ * a dev cache. These are the ones that would either reach outside the key
  * prefix (`FLUSHALL`, `FLUSHDB`), end the shared engine for every other
  * workspace (`SHUTDOWN`), or change the rules themselves (`CONFIG`, `ACL`).
+ *
+ * The key pattern (`~ws_x:*`) is what scopes everything else, and the limit of
+ * it is the reason this list is longer than it looks like it should be: a
+ * pattern constrains commands that address a KEY, and says nothing about
+ * commands that address the KEYSPACE or the server. `SWAPDB` moves every
+ * workspace's keys between logical databases without naming one, and the
+ * FUNCTION library is server-global — `FUNCTION FLUSH` empties it for everybody
+ * and `FUNCTION LOAD REPLACE` overwrites what another workspace loaded. Neither
+ * is caught by the prefix, and both destroy other workspaces' data as thoroughly
+ * as `FLUSHALL` does (Tynn #250, step 4).
+ *
+ * `-function` is the whole container command, read-only subcommands included,
+ * and that cost is real: a workspace cannot use Redis Functions on a SHARED
+ * engine. It is the honest answer rather than a gap, because the library has no
+ * per-user namespace to scope — anything one workspace loads, every workspace
+ * gets. A project that genuinely needs them flips `dedicated` and has its own
+ * server to load into.
  */
 const REDIS_DENIED = [
     '-flushall',
     '-flushdb',
+    '-swapdb',
+    '-function',
     '-shutdown',
     '-config',
     '-acl',
@@ -245,13 +292,97 @@ function redisSteps(admin: EngineAdmin, slice: WorkspaceSlice): ProvisionStep[] 
 }
 
 /**
+ * The policy that admits a MinIO user to its OWN bucket and nothing else.
+ *
+ * ONE document for every workspace, because `${aws:username}` is resolved by
+ * MinIO at request time: a user named `ws-acme-1a2b3c4d` reaches the bucket of
+ * that name, and no other. That is what makes this constant — no derived value
+ * is interpolated into it, so unlike the SQL statements there is not even a
+ * closed alphabet to reason about. It also means a re-provision writes the same
+ * bytes, which is how the step converges.
+ *
+ * Compact and single-quote-free on purpose: it is written from a `printf` inside
+ * a single-quoted `sh -c`.
+ */
+const MINIO_WORKSPACE_POLICY =
+    '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:*"],' +
+    '"Resource":["arn:aws:s3:::${aws:username}","arn:aws:s3:::${aws:username}/*"]}]}';
+
+/** Where the policy document is staged inside the engine container. */
+const MINIO_POLICY_PATH = '/tmp/genie-workspace-policy.json';
+
+/** The name the policy is registered under, on the engine. */
+const MINIO_POLICY_NAME = 'genie-workspace';
+
+/**
+ * MinIO: an IAM user per workspace, admitted to one bucket.
+ *
+ * This engine used to be NAMESPACE-isolated — a bucket name per workspace and
+ * the engine's ROOT credential to reach it with. Separation by name is not a
+ * boundary: any workspace holding root could `mc rb --force` any other
+ * workspace's bucket, an installed Genie App's included (Tynn #250, step 4).
+ *
+ * The user's access key is the workspace's DNS name (which is also its bucket,
+ * so the policy variable lines up) and its secret is the same generated password
+ * every other engine already uses. Nothing here needs to be read back out of the
+ * engine, which is why MinIO can adopt this and Meilisearch — whose key values
+ * are generated server-side — cannot without a way to capture step output.
+ *
+ * Every step converges: `mb --ignore-existing`, `policy create` overwrites,
+ * `user add` resets the secret (which also repairs a drifted credential, exactly
+ * as the Postgres role branch does), and re-attaching an attached policy is a
+ * no-op. Verified against a real `minio/minio` rather than assumed.
+ */
+function minioSteps(admin: EngineAdmin, slice: WorkspaceSlice): ProvisionStep[] {
+    const bucket = assertDnsName(slice.dnsName);
+    const password = assertPassword(slice.password, 'workspace');
+    // It goes into an `mc alias set` URL, where a stray character would re-point
+    // the client at another host entirely — the same reason postgres asserts it.
+    assertPassword(admin.password, 'admin');
+
+    const alias = 'genie';
+    const mc = (...argv: string[]) => ['mc', ...argv];
+
+    return [
+        {
+            label: 'engine alias',
+            argv: mc('alias', 'set', alias, 'http://127.0.0.1:9000', admin.user, admin.password),
+        },
+        {
+            label: 'bucket',
+            argv: mc('mb', '--ignore-existing', `${alias}/${bucket}`),
+        },
+        {
+            label: 'policy',
+            // A file is the only shape `mc admin policy create` takes, so this is
+            // the one step that needs a shell. Safe by construction rather than
+            // by escaping: everything inside the single quotes is a CONSTANT.
+            argv: [
+                'sh',
+                '-c',
+                `printf '%s' '${MINIO_WORKSPACE_POLICY}' > ${MINIO_POLICY_PATH} && ` +
+                    `mc admin policy create ${alias} ${MINIO_POLICY_NAME} ${MINIO_POLICY_PATH}`,
+            ],
+        },
+        {
+            label: 'user',
+            argv: mc('admin', 'user', 'add', alias, bucket, password),
+        },
+        {
+            label: 'policy attachment',
+            argv: mc('admin', 'policy', 'attach', alias, MINIO_POLICY_NAME, '--user', bucket),
+        },
+    ];
+}
+
+/**
  * PURE. The commands that carve a workspace's slice out of an engine.
  *
- * An empty list is a real answer, not a gap: for Meilisearch, MinIO and Mailpit
- * the owner's decision is a per-workspace NAMESPACE — an index prefix, a
- * bucket, an inbox tag — which is computed and injected as env rather than
- * created by a command. Those workspaces share the engine's master credential,
- * and `catalog.ts` says so where it says `provision: 'namespace'`.
+ * An empty list is a real answer, not a gap: for Meilisearch and Mailpit the
+ * owner's decision is a per-workspace NAMESPACE — an index prefix, an inbox tag
+ * — which is computed and injected as env rather than created by a command.
+ * Those workspaces share the engine's master credential, and `catalog.ts` says
+ * so where it says `provision: 'namespace'`.
  */
 export function provisionSteps(
     engine: ServiceEngine,
@@ -263,6 +394,8 @@ export function provisionSteps(
             return engine === 'mysql' ? mysqlSteps(admin, slice) : postgresSteps(admin, slice);
         case 'redis-acl':
             return redisSteps(admin, slice);
+        case 's3-scoped-user':
+            return minioSteps(admin, slice);
         default:
             return [];
     }
