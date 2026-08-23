@@ -49,13 +49,13 @@ function looksLikeALocation(title: string): boolean {
 /**
  * The window title for a GApp window.
  *
- * `pageUrl` is taken but not read into the output — it is here so that a future
- * rule which needs to compare the title against the page's own origin has the
- * fact available, and so that no caller is tempted to build the title from a URL
- * because it was the only thing to hand.
+ * Deliberately takes NO url. The rule above is about the window rather than about
+ * trust — any location is dropped, not just this page's own — so an origin to
+ * compare against would be an argument nothing reads, and an argument nothing
+ * reads is an invitation to build the title out of a URL because it was the only
+ * thing to hand.
  */
-export function gappWindowTitle(appName: string, pageTitle: string, pageUrl: string): string {
-    void pageUrl;
+export function gappWindowTitle(appName: string, pageTitle: string): string {
     const prefix = `[${appName}]`;
     const title = pageTitle.trim();
     // No title, or a title that is really an address: the prefix alone. Not

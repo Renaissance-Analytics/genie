@@ -83,11 +83,7 @@ function retitle(open: OpenApp): void {
     const attached = open.views[open.active - 1];
     const wc = attached?.view.webContents;
     open.window.setTitle(
-        gappWindowTitle(
-            open.appName,
-            wc && !wc.isDestroyed() ? wc.getTitle() : '',
-            attached?.url ?? '',
-        ),
+        gappWindowTitle(open.appName, wc && !wc.isDestroyed() ? wc.getTitle() : ''),
     );
 }
 
@@ -172,7 +168,7 @@ export function openAppWindow(opts: OpenAppWindowOpts): BrowserWindow {
         // The prefix alone until a hosted page says otherwise. It never says
         // "Genie App" and never carries an address: the window is technically a
         // browser and none of its chrome may read as one.
-        title: gappWindowTitle(opts.name, '', ''),
+        title: gappWindowTitle(opts.name, ''),
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,
