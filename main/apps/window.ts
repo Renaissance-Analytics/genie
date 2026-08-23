@@ -17,7 +17,7 @@ import { BrowserWindow, WebContentsView, session, shell } from 'electron';
 import { registerAppWindow, windowIdsForApp } from './bridge';
 import { attachAppTabViews, appViewBounds, type AttachedAppView } from './app-views';
 import { appWindowTabs } from './window-tabs';
-import { registerAppShell, unregisterAppShell } from './ipc';
+import { ensureAppAgentPanels, registerAppShell, unregisterAppShell } from './ipc';
 import type { AppManifest } from './manifest';
 import {
     APP_PRELOAD_FILENAME,
@@ -100,6 +100,14 @@ export function openAppWindow(opts: OpenAppWindowOpts): BrowserWindow {
         existing.window.focus();
         return existing.window;
     }
+
+    // The panels the manifest declared, laid out BEFORE the shell loads, so the
+    // Agent tab's first read of the workspace already has them and nothing has to
+    // be pushed in afterwards. It tops the workspace up to what the app asked for
+    // and creates nothing when that is already true — a GApp's panels are
+    // workspace state, so a seed that ran unconditionally would leave a user three
+    // more terminals every time they clicked the app's pill.
+    if (opts.manifest) ensureAppAgentPanels(opts.appId, opts.manifest.panels);
 
     // GENIE'S window, running Genie's own renderer — NOT the app's. The frame, the
     // tab strip and the Agent tab belong to Genie, which is what makes "am I

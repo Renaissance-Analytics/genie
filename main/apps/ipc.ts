@@ -15,7 +15,9 @@ import path from 'path';
 import { ipcMain, dialog } from 'electron';
 import {
     addWorkspace,
+    createTerminalSpec,
     getWorkspace,
+    listTerminalSpecs,
     listWorkspaces,
     removeWorkspace as removeWorkspaceRow,
     setWorkspaceAppKind,
@@ -42,7 +44,14 @@ import { installAppFromFolder, type AppInstallIO, type AppInstallResult } from '
 import { manageProcessForMcp } from '../mcp/host-tools';
 import { manageSiteForMcp } from '../mcp/dev-site-tools';
 import { callerIdForApp } from '../mcp/caller-identity';
-import { APP_MANIFEST_FILENAME, validateAppManifest, type AppManifest } from './manifest';
+import {
+    APP_MANIFEST_FILENAME,
+    validateAppManifest,
+    type AppManifest,
+    type AppPanels,
+} from './manifest';
+import { ensureAgentPanels } from './panels';
+import { broadcastTerminalSpecsChanged } from '../terminal/ipc';
 import {
     appsGet,
     appsList,
@@ -65,6 +74,7 @@ import {
 import { cloneRepo } from '../workspace/clone';
 import { simpleGit } from 'simple-git';
 import os from 'os';
+import { randomUUID } from 'crypto';
 import { scaffoldApp, slugify } from './scaffold';
 import { listAppGrants } from '../db';
 
@@ -411,6 +421,52 @@ async function checkAppUpdates(): Promise<Record<string, AppUpdateState>> {
 
 
 /* ---- The GApp WINDOW's own surface ------------------------------------ */
+
+/**
+ * Lay out the agent panels an app's manifest declared, in the app's workspace.
+ *
+ * The decision — how many, of which kind, and how many are still missing — is
+ * `ensureAgentPanels`, and it is tested there. This is the I/O half: which
+ * workspace the app has, what already lives in it, and how a panel gets written.
+ *
+ * PROCESS specs are excluded from the count deliberately. A GApp's services are
+ * background jobs, not panels; counting them would make an app with two services
+ * believe its panels were already laid out and give the user an empty Agent tab.
+ *
+ * Fails soft. An app with no workspace row is one whose install did not finish,
+ * and refusing to open its window over a missing panel would turn a partial
+ * install into an app that cannot be looked at, let alone repaired.
+ */
+export function ensureAppAgentPanels(appId: string, panels: AppPanels): void {
+    const app = appsGet(appId);
+    const workspace = app ? getWorkspace(app.workspaceId) : null;
+    if (!workspace) return;
+
+    const seeded = ensureAgentPanels(
+        {
+            countPanels: () =>
+                listTerminalSpecs().filter(
+                    (s) => s.workspace_id === workspace.id && s.type !== 'process',
+                ).length,
+            createPanel: (panel) => {
+                createTerminalSpec({
+                    id: `gapp-${randomUUID()}`,
+                    workspace_id: workspace.id,
+                    label: panel.label,
+                    cwd: workspace.path,
+                    type: panel.type,
+                });
+            },
+        },
+        panels,
+    );
+
+    // Same broadcast every other spec-creating path makes. A GApp's workspace is a
+    // workspace, so the master window may already be looking at it — and a panel
+    // that only appears after something unrelated pokes the list is a panel the
+    // user reports as missing.
+    if (seeded.length > 0) broadcastTerminalSpecsChanged();
+}
 
 /**
  * Which app a Genie-drawn GApp window belongs to, keyed by its SHELL webContents.

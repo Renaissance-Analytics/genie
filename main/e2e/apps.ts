@@ -32,14 +32,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
-import { getWorkspace, upsertAppGrant } from '../db';
+import { getWorkspace, listTerminalSpecs, upsertAppGrant } from '../db';
 import { openAppWindow, appViewWebContents } from '../apps/window';
 import { scaffoldApp, slugify } from '../apps/scaffold';
 import { validateAppFolder, type AppFolderReport } from '../apps/validate';
 import { installAppFromFolder, type AppInstallResult } from '../apps/install';
-import { installIO } from '../apps/ipc';
+import { ensureAppAgentPanels, installIO } from '../apps/ipc';
 import { appsList } from '../apps/manage';
-import { APP_MANIFEST_FILENAME, validateAppManifest } from '../apps/manifest';
+import { APP_MANIFEST_FILENAME, validateAppManifest, type AppPanels } from '../apps/manifest';
 
 const APP_ID = 'com.genie.example';
 
@@ -157,6 +157,8 @@ export function registerAppsE2E(): void {
         },
 
         scaffoldCheckInstall: () => scaffoldCheckInstall(),
+        seedAgentPanelsTwice: (appId: string, panels: AppPanels) =>
+            seedAgentPanelsTwice(appId, panels),
         // The installed-apps list, read through the SAME function the panel
         // uses. Exposed here because the compiled main is one bundle — a spec
         // cannot `require` a module out of it.
@@ -222,4 +224,37 @@ export async function scaffoldCheckInstall(): Promise<{
         : null;
 
     return { folder, report, install, workspacePath };
+}
+
+/**
+ * Lay a real app's declared panels out in its real workspace — twice.
+ *
+ * The unit suite proves the arithmetic against a fake workspace. What it cannot
+ * reach is the half that only exists here: a real `terminal_specs` table, a real
+ * workspace row, and the question of whether the SECOND open sees the first one's
+ * work. That is the property the whole design turns on — a GApp's panels are
+ * workspace state, so a seeder that could not see what it had already written
+ * would hand somebody N more terminals every time they opened the app.
+ *
+ * `panels` comes from the caller so a spec can exercise a multi-panel declaration
+ * without a second scaffolded app to carry one.
+ */
+export function seedAgentPanelsTwice(
+    appId: string,
+    panels: AppPanels,
+): { first: string[]; second: string[] } {
+    const app = appsList().find((a) => a.id === appId);
+    if (!app) throw new Error(`no such installed app: ${appId}`);
+
+    const labels = (): string[] =>
+        listTerminalSpecs()
+            .filter((s) => s.workspace_id === app.workspaceId && s.type !== 'process')
+            .map((s) => s.label);
+
+    ensureAppAgentPanels(appId, panels);
+    const first = labels();
+    ensureAppAgentPanels(appId, panels);
+    const second = labels();
+
+    return { first, second };
 }

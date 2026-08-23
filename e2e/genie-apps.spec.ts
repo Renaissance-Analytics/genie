@@ -185,3 +185,28 @@ test('the installed app is visible to Genie afterwards, with what it was granted
     expect(harness.permissions).toEqual([]);
     expect(harness.revoked).toBe(false);
 });
+
+/**
+ * `panels` in the manifest, against a real workspace (Tynn #250).
+ *
+ * The unit suite proves the arithmetic against a fake workspace. What it cannot
+ * reach is the half that only exists in a running Genie: a real `terminal_specs`
+ * table, a real workspace row, and whether the SECOND open sees what the first one
+ * wrote. That last one is the property the design turns on — a GApp's panels are
+ * workspace state, not window state, so a seeder blind to its own past work would
+ * hand somebody three more terminals every time they clicked the app's pill.
+ */
+test('a GApp gets the agent panels it declared — and no more on the next open', async () => {
+    const outcome = await app.evaluate(() =>
+        (globalThis as Record<string, any>).__GENIE_E2E_APPS__.seedAgentPanelsTwice(
+            'com.genie.harness',
+            { agents: 3, kinds: ['terminal', 'files'] },
+        ),
+    );
+
+    // Three panels, cycling the declared palette: the count and the kinds are both
+    // honoured, and a `files` kind becomes Genie's code panel.
+    expect(outcome.first).toEqual(['Terminal', 'Files', 'Terminal']);
+    // Opening it again changes nothing at all.
+    expect(outcome.second).toEqual(['Terminal', 'Files', 'Terminal']);
+});
