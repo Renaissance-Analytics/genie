@@ -31,10 +31,28 @@ import { terminalServiceEnv } from '../env-wiring';
  *  - `PG*` / `MYSQL_*` are what `psql` and `mysql` read. Nothing treats them as
  *    "the datastore this app uses", so they cannot redirect a framework, and
  *    keeping them is what makes `psql` work with nothing typed.
- *  - `DB_*`, `DATABASE_URL` and `REDIS_*` are names frameworks reserve for their
- *    own config. Ambient values silently outrank the project's test settings, so
- *    they are withheld — and re-exposed under `GENIE_`, so nothing is lost and an
- *    agent that genuinely wants the managed connection can still read it.
+ *  - Everything else a framework reads as its own config is withheld — and
+ *    re-exposed under `GENIE_`, so nothing is lost and an agent that genuinely
+ *    wants the managed connection can still read it.
+ *
+ * ## Why this became an ALLOWLIST (genie#242)
+ *
+ * genie#221 narrowed the datastore names by DENYLIST — `DB_*`, `DATABASE_URL`,
+ * `REDIS_*` — and deliberately let `MAIL_*`, `AWS_*`, `REVERB_*` and
+ * `MEILISEARCH_*` through, on the reasoning that shadowing them could not lose
+ * data and taking them away would break a dev server started from a terminal
+ * "for no gain".
+ *
+ * Both halves of that stopped being true. Those names ARE read by a framework as
+ * its own config, and an ambient one still beats a correct `.env` — losing mail
+ * or knocking Scout onto the wrong index prefix is a smaller failure than a
+ * dropped database, but it is the same failure, and it is just as invisible. And
+ * the gain now exists: Genie writes the connection into the repo's `.env`
+ * (genie#242), so a dev server started from a terminal reads it from the file —
+ * which is where it should have been reading it from all along.
+ *
+ * So the passthrough is now exactly the client tools, and nothing else can
+ * silently outrank the file the app reads.
  *
  * SITES and PROCESSES are untouched: a served app and a `queue:work` genuinely
  * are the application and need its configuration. Only the interactive shell —
@@ -58,7 +76,13 @@ const FULL = {
     REDIS_HOST: '127.0.0.1',
     REVERB_APP_ID: 'ws_abc',
     MAIL_MAILER: 'smtp',
+    MAIL_HOST: '127.0.0.1',
+    MAIL_PORT: '51888',
+    MEILISEARCH_HOST: 'http://127.0.0.1:51890',
+    MEILISEARCH_INDEX_PREFIX: 'ws_abc_',
     AWS_BUCKET: 'ws-abc',
+    AWS_ENDPOINT: 'http://127.0.0.1:51891',
+    AWS_ACCESS_KEY_ID: 'ws-abc',
 };
 
 describe('the names a framework reads as its own config', () => {
@@ -106,15 +130,52 @@ describe('the client-tool credentials', () => {
         expect(env.PGDATABASE).toBe('ws_abc');
     });
 
-    it('leaves everything that is not a datastore alone', () => {
-        // Deliberately NOT stripped. These cannot destroy state a test run
-        // touches, and taking them away would break a dev server someone starts
-        // from a terminal for no safety gain.
+    it('are the ONLY thing that passes through unprefixed', () => {
+        // The allowlist, asserted as an allowlist: anything the wiring starts
+        // emitting tomorrow is withheld by DEFAULT rather than silently joining
+        // the set of names that can outrank a `.env`.
         const env = terminalServiceEnv(FULL);
 
-        expect(env.REVERB_APP_ID).toBe('ws_abc');
-        expect(env.MAIL_MAILER).toBe('smtp');
-        expect(env.AWS_BUCKET).toBe('ws-abc');
+        for (const key of Object.keys(env)) {
+            expect(/^(PG[A-Z]+|MYSQL_|GENIE_)/.test(key), `${key} must not pass through bare`).toBe(
+                true,
+            );
+        }
+    });
+});
+
+describe('the OTHER framework-config names (genie#242)', () => {
+    it('no longer reach a terminal bare — an ambient one beats the repo .env', () => {
+        // genie#221 let these through: shadowing them cannot DESTROY data the way
+        // a redirected `migrate:fresh` can. But the mechanism is identical — an
+        // already-set variable outranks `.env` — so a stale `MAIL_PORT` or
+        // `AWS_ENDPOINT` breaks the app just as silently, and now that Genie
+        // writes the connection into the repo's `.env` there is nothing to gain
+        // by keeping the collision.
+        const env = terminalServiceEnv(FULL);
+
+        for (const key of [
+            'MAIL_MAILER',
+            'MAIL_HOST',
+            'MAIL_PORT',
+            'MEILISEARCH_HOST',
+            'MEILISEARCH_INDEX_PREFIX',
+            'AWS_BUCKET',
+            'AWS_ENDPOINT',
+            'AWS_ACCESS_KEY_ID',
+            'REVERB_APP_ID',
+        ]) {
+            expect(env, `${key} must not be in a terminal's environment`).not.toHaveProperty(key);
+        }
+    });
+
+    it('are still readable under GENIE_, so nothing is lost', () => {
+        const env = terminalServiceEnv(FULL);
+
+        expect(env.GENIE_MAIL_PORT).toBe('51888');
+        expect(env.GENIE_AWS_ENDPOINT).toBe('http://127.0.0.1:51891');
+        expect(env.GENIE_REVERB_APP_ID).toBe('ws_abc');
+        expect(env.GENIE_MEILISEARCH_HOST).toBe('http://127.0.0.1:51890');
     });
 });
 

@@ -34,6 +34,8 @@ import type {
     EngineAdminRequest,
     HostEnvReport,
 } from '../dev-server/services/service-manager';
+import { createServiceEnvSync } from '../dev-server/services/env-sync';
+import { applyEnvBlock } from '../env-store';
 import { createHostProcessRun } from '../dev-server/host-process-run';
 import { createEngineMismatchNote } from '../dev-server/host-engine-probe';
 import { createSiteEngineResolver } from '../dev-server/toolchain-manager';
@@ -152,6 +154,23 @@ export function buildHostingDeps(ports: HostingPorts): HostingDeps {
         probeReady: ({ port, kind, timeoutMs }) =>
             kind === 'http' ? waitForHttp(port, timeoutMs) : waitForPort(port, timeoutMs),
         onChanged: ports.onChanged,
+        // The `.env` WRITE (genie#242). This seam is where the two halves meet:
+        // the service manager knows a workspace's published connection has moved,
+        // the site config knows which repos that workspace's apps live in, and
+        // neither knows the other.
+        //
+        // It is the whole fix. Before it, a service's connection existed only in
+        // the environment of terminals spawned since it last changed — invisible
+        // to a hosted site, a `manageProcess` worker or a shell the user opened,
+        // and (dotenv being immutable in Laravel) able to OVERRIDE the `.env`
+        // somebody had just corrected. The app reads `.env`; `.env` is now what
+        // Genie keeps true.
+        onServiceEnvChanged: createServiceEnvSync({
+            workspaceFor: ports.workspaceFor,
+            devSitesFor: ports.devSitesFor,
+            hostEnvFor: ports.devServiceHostEnvFor,
+            write: applyEnvBlock,
+        }),
     };
 
     const sites: DevSiteManagerDeps = {

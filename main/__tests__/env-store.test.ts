@@ -6,6 +6,7 @@ import {
     applySetEnv,
     applyCheckEnv,
     loadWorkspaceEnvVars,
+    applyEnvBlock,
 } from '../env-store';
 import { cleanupTmpRoot, makeTmpDir } from '../../test/helpers';
 
@@ -117,5 +118,92 @@ describe('loadWorkspaceEnvVars', () => {
         applySetEnv(dir, { key: 'TYNN_AGENT_TOKEN', value: 'rpk_abc.def' });
         applySetEnv(dir, { key: 'PORT', value: '3000' });
         expect(loadWorkspaceEnvVars(dir)).toEqual({ TYNN_AGENT_TOKEN: 'rpk_abc.def', PORT: '3000' });
+    });
+});
+
+/**
+ * Writing the MANAGED SERVICE BLOCK into a repo's `.env` (genie#242).
+ *
+ * This is the file a Laravel app actually reads, and Genie rewrites it every
+ * time a service port moves. It is also a file the user hand-edits. The tests
+ * below are the safety contract: their edits survive, a write that changes
+ * nothing touches nothing, and a file Genie cannot write fails with a reason
+ * instead of an exception.
+ */
+describe('applyEnvBlock', () => {
+    it('creates a gitignored repo .env and writes the managed block', () => {
+        const dir = makeTmpDir('env-block-create');
+        fs.mkdirSync(path.join(dir, 'repos', 'tynn'), { recursive: true });
+
+        const r = applyEnvBlock(dir, {
+            target: 'tynn',
+            vars: { DB_PORT: '58377', DB_HOST: '127.0.0.1' },
+        });
+
+        expect(r).toMatchObject({ ok: true, changed: true, file: 'repos/tynn/.env' });
+        expect(r.keys.sort()).toEqual(['DB_HOST', 'DB_PORT']);
+        const content = fs.readFileSync(path.join(dir, 'repos', 'tynn', '.env'), 'utf8');
+        expect(content).toContain('DB_PORT=58377');
+        expect(fs.readFileSync(path.join(dir, 'repos', 'tynn', '.gitignore'), 'utf8')).toContain('.env');
+    });
+
+    it("PRESERVES the user's own file and moves the port they had", () => {
+        const dir = makeTmpDir('env-block-preserve');
+        const file = path.join(dir, '.env');
+        fs.writeFileSync(file, '# mine\nAPP_KEY=base64:xyz\nDB_PORT=51157\n# tail\n');
+
+        applyEnvBlock(dir, { vars: { DB_PORT: '58377' } });
+
+        expect(fs.readFileSync(file, 'utf8')).toBe('# mine\nAPP_KEY=base64:xyz\nDB_PORT=58377\n# tail\n');
+    });
+
+    it('a SECOND write with the same values does not touch the file at all', () => {
+        const dir = makeTmpDir('env-block-idem');
+        const file = path.join(dir, '.env');
+        applyEnvBlock(dir, { vars: { DB_PORT: '58377' } });
+        const before = fs.readFileSync(file, 'utf8');
+        const stat = fs.statSync(file);
+
+        const again = applyEnvBlock(dir, { vars: { DB_PORT: '58377' } });
+
+        expect(again).toMatchObject({ ok: true, changed: false });
+        expect(again.keys).toEqual([]);
+        expect(fs.readFileSync(file, 'utf8')).toBe(before);
+        // Untouched means UNTOUCHED — not rewritten with identical bytes.
+        expect(fs.statSync(file).mtimeMs).toBe(stat.mtimeMs);
+    });
+
+    it('reports a write failure instead of throwing', () => {
+        const dir = makeTmpDir('env-block-readonly');
+        // A DIRECTORY where the `.env` should be: unwritable on every platform,
+        // unlike a read-only file bit, which Windows administrators bypass.
+        fs.mkdirSync(path.join(dir, '.env'));
+
+        const r = applyEnvBlock(dir, { vars: { DB_PORT: '58377' } });
+
+        expect(r.ok).toBe(false);
+        expect(r.changed).toBe(false);
+        expect(r.error).toMatch(/write failed/i);
+    });
+
+    it('refuses a repo that is not there, and creates nothing', () => {
+        const dir = makeTmpDir('env-block-ghost');
+        const r = applyEnvBlock(dir, { target: 'ghost', vars: { DB_PORT: '1' } });
+        expect(r.ok).toBe(false);
+        expect(fs.existsSync(path.join(dir, 'repos', 'ghost'))).toBe(false);
+    });
+
+    it('drops an invalid key rather than corrupting the file with it', () => {
+        const dir = makeTmpDir('env-block-badkey');
+        const r = applyEnvBlock(dir, { vars: { '9bad': 'x', GOOD: 'y' } });
+        expect(r.ok).toBe(true);
+        expect(r.keys).toEqual(['GOOD']);
+        expect(fs.readFileSync(path.join(dir, '.env'), 'utf8')).not.toContain('9bad');
+    });
+
+    it('writing an empty set is a successful no-op', () => {
+        const dir = makeTmpDir('env-block-empty');
+        expect(applyEnvBlock(dir, { vars: {} })).toMatchObject({ ok: true, changed: false });
+        expect(fs.existsSync(path.join(dir, '.env'))).toBe(false);
     });
 });

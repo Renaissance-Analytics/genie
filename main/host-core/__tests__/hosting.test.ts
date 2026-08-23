@@ -1,8 +1,11 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { buildHostingDeps, initHosting, type HostingPorts } from '../hosting';
 import { devSiteManager } from '../../dev-server/site-manager';
 import { devServiceManager } from '../../dev-server/services/service-manager';
 import { devLifecycle } from '../../dev-server/lifecycle';
+import { makeTmpDir } from '../../../test/helpers';
 
 /**
  * The host-owned HOSTING seam.
@@ -93,5 +96,73 @@ describe('initHosting — stands the managers up from ports', () => {
         expect(devSiteManager()).not.toBeNull();
         expect(devServiceManager()).not.toBeNull();
         expect(devLifecycle()).not.toBeNull();
+    });
+});
+
+/**
+ * THE `.env` WRITE, END TO END (genie#242).
+ *
+ * The seam is where the two halves meet: the service manager knows a workspace's
+ * connection has moved, and the site config knows which repos that workspace's
+ * apps live in. Neither knows the other, so the wiring is here — and it is worth
+ * asserting against a REAL file, because every interesting property of this fix
+ * (the user's edits survive, a moved port is rewritten in place, a second write
+ * changes nothing) is a property of bytes on a disk.
+ */
+describe('a workspace service connection lands in the repo .env', () => {
+    function workspaceWithRepo(name: string): { root: string; envPath: string } {
+        const root = makeTmpDir(`hosting-env-${name}`);
+        fs.mkdirSync(path.join(root, 'repos', 'tynn'), { recursive: true });
+        return { root, envPath: path.join(root, 'repos', 'tynn', '.env') };
+    }
+
+    function portsFor(root: string, hostEnv: Record<string, string>): HostingPorts {
+        return fakePorts({
+            workspaceFor: () => ({ id: 'a', path: root, label: 'a' }),
+            devSitesFor: () => ({
+                s1: { name: 'web', genName: 'web.gen', repo: 'tynn', runMode: 'host' } as never,
+            }),
+            devServiceHostEnvFor: () => hostEnv,
+        });
+    }
+
+    it("writes the app's connection into the site repo's .env", () => {
+        const { root, envPath } = workspaceWithRepo('write');
+        const d = buildHostingDeps(portsFor(root, { DB_PORT: '58377', DB_HOST: '127.0.0.1', PGPORT: '58377' }));
+
+        d.services.onServiceEnvChanged?.('a');
+
+        const content = fs.readFileSync(envPath, 'utf8');
+        expect(content).toContain('DB_PORT=58377');
+        expect(content).toContain('DB_HOST=127.0.0.1');
+        // The client-tool names are a shell's business, not an app's.
+        expect(content).not.toContain('PGPORT');
+        // A file about to hold a service password is never committable.
+        expect(fs.readFileSync(path.join(root, 'repos', 'tynn', '.gitignore'), 'utf8')).toContain('.env');
+    });
+
+    it("moves the port in a hand-edited .env and leaves everything else alone", () => {
+        // The reported failure: live Postgres on 58377, the file still saying
+        // 51157 — in a file the user owns, with their own keys around it.
+        const { root, envPath } = workspaceWithRepo('moved');
+        fs.writeFileSync(envPath, '# mine\nAPP_KEY=base64:xyz\nDB_PORT=51157\nMY_OWN=keep\n');
+        const d = buildHostingDeps(portsFor(root, { DB_PORT: '58377' }));
+
+        d.services.onServiceEnvChanged?.('a');
+
+        expect(fs.readFileSync(envPath, 'utf8')).toBe(
+            '# mine\nAPP_KEY=base64:xyz\nDB_PORT=58377\nMY_OWN=keep\n',
+        );
+    });
+
+    it('a repeat announcement does not touch the file', () => {
+        const { root, envPath } = workspaceWithRepo('idem');
+        const d = buildHostingDeps(portsFor(root, { DB_PORT: '58377' }));
+        d.services.onServiceEnvChanged?.('a');
+        const mtime = fs.statSync(envPath).mtimeMs;
+
+        d.services.onServiceEnvChanged?.('a');
+
+        expect(fs.statSync(envPath).mtimeMs).toBe(mtime);
     });
 });

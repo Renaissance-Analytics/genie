@@ -1155,6 +1155,9 @@ export function runMigrations(d: Database.Database): void {
         {
             // v43: the service env BAKED into a terminal at spawn (genie#222).
             //
+            // SUPERSEDED, and dropped again by v46 — kept only so an old database
+            // replays the same sequence. See v46 for why the whole idea went away.
+            //
             // A shell's environment is fixed once it starts, so when an engine's
             // published port moves, every terminal opened before the change carries
             // a port that no longer exists — and in a framework whose dotenv is
@@ -1224,6 +1227,23 @@ export function runMigrations(d: Database.Database): void {
                         `ALTER TABLE workspaces ADD COLUMN max_agent_terminals INTEGER`,
                     );
                 }
+            },
+        },
+        {
+            // v46: drop v43's `terminal_service_env` (genie#242).
+            //
+            // v43 recorded what Genie baked into each pty so a later read could
+            // notice the values had moved and tell the user to open a new terminal.
+            // That was a signal ABOUT a bug — the app's configuration living in a
+            // shell's environment instead of in the `.env` the app reads — and the
+            // bug is now fixed at the source: Genie writes the connection into the
+            // repo's `.env` and keeps it current, and a terminal no longer carries
+            // any name a framework reads. There is nothing left to drift, so there
+            // is nothing to record. Dropped rather than left inert: a table nothing
+            // writes is a question for whoever reads the schema next.
+            version: 46,
+            runner: (db) => {
+                db.exec(`DROP TABLE IF EXISTS terminal_service_env;`);
             },
         },
     ];
@@ -3681,45 +3701,3 @@ export function forgetRetainedAppData(appId: string): void {
 }
 
 
-/* -------------------------------------------------------------------------- */
-/* The service env baked into a terminal at spawn (genie#222)                   */
-/* -------------------------------------------------------------------------- */
-
-/** Record what Genie injected into a pty, so drift can be spotted later. */
-export function recordTerminalServiceEnv(
-    terminalId: string,
-    env: Record<string, string>,
-): void {
-    getDb()
-        .prepare(
-            `INSERT INTO terminal_service_env (terminal_id, env_json, injected_at)
-             VALUES (?, ?, ?)
-             ON CONFLICT(terminal_id) DO UPDATE SET
-                env_json = excluded.env_json,
-                injected_at = excluded.injected_at`,
-        )
-        .run(terminalId, JSON.stringify(env), new Date().toISOString());
-}
-
-/** What a terminal was given at spawn. Empty when nothing was recorded. */
-export function terminalServiceEnvFor(terminalId: string): Record<string, string> {
-    const row = getDb()
-        .prepare<[string], { env_json: string } | undefined>(
-            'SELECT env_json FROM terminal_service_env WHERE terminal_id = ?',
-        )
-        .get(terminalId);
-    if (!row) return {};
-    try {
-        const parsed: unknown = JSON.parse(row.env_json);
-        return typeof parsed === 'object' && parsed !== null
-            ? (parsed as Record<string, string>)
-            : {};
-    } catch {
-        return {};
-    }
-}
-
-/** Forget a terminal's record when the terminal goes. */
-export function forgetTerminalServiceEnv(terminalId: string): void {
-    getDb().prepare('DELETE FROM terminal_service_env WHERE terminal_id = ?').run(terminalId);
-}

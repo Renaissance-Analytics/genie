@@ -1450,30 +1450,35 @@ describe('v42 — data kept from an uninstalled app (Tynn #250)', () => {
     });
 });
 
-describe('v43 — the service env baked into a terminal (genie#222)', () => {
-    it('keeps what was injected, so drift can be spotted after a restart', () => {
-        // PERSISTED, not in memory: a Genie restart is one of the things that
-        // moves a published port, so an in-memory record would be lost at exactly
-        // the moment it became worth having — while the terminal itself survives
-        // in the pty host.
+describe('v46 — the terminal service-env record is GONE (genie#242)', () => {
+    it('drops v43’s table, because there is nothing left to drift', () => {
+        // v43 persisted what Genie baked into each pty so a later read could
+        // notice the values had moved and tell the user to open a new terminal.
+        // That was a signal ABOUT a bug: the app's configuration lived in a
+        // shell's environment instead of in the `.env` the app reads, where a
+        // stale copy silently OVERRODE a correct file. The bug is fixed at the
+        // source now — Genie writes the connection into the repo's `.env` and
+        // keeps it current, and a terminal carries no name a framework reads —
+        // so there is nothing to record and no notice to give.
         const db = new Database(':memory:');
         runMigrations(db);
-        db.prepare(
-            `INSERT INTO terminal_service_env (terminal_id, env_json, injected_at)
-             VALUES ('term-1', '{"DB_PORT":"51157"}', 'now')`,
-        ).run();
 
-        const row = db
-            .prepare<[], { env_json: string }>('SELECT env_json FROM terminal_service_env')
-            .get();
-        expect(JSON.parse(row?.env_json ?? '{}')).toEqual({ DB_PORT: '51157' });
+        const tables = db
+            .prepare<[], { name: string }>(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'terminal_service_env'",
+            )
+            .all();
+        expect(tables).toEqual([]);
     });
 
     it('is idempotent — re-running converges without throwing', () => {
+        // A POSITIVE control alongside the absence above: a migrator that failed
+        // to run at all would also leave no `terminal_service_env`, so assert the
+        // rest of the schema is genuinely there.
         const db = new Database(':memory:');
         runMigrations(db);
         expect(() => runMigrations(db)).not.toThrow();
-        expect(cols(db, 'terminal_service_env').has('env_json')).toBe(true);
+        expect(cols(db, 'workspaces').has('max_agent_terminals')).toBe(true);
     });
 });
 

@@ -152,7 +152,10 @@ poll \`status\` with the returned \`id\` until \`phase\` is \`ready\` or \`faile
 reporting the site live. SERVICES: a host-native dev server
 runs ON THE HOST, so it reaches a \`manageProcess\` service and the managed DB/cache
 on \`127.0.0.1:<published port>\` — the host-form env (\`DATABASE_URL\`, …) Genie
-injects, the SAME env terminals get. (A sandbox (\`explicit\`) site instead reaches
+injects, and which Genie also WRITES into the repo's \`.env\` (gitignored) so anything
+reading that file agrees. A TERMINAL gets only the client-tool credentials
+(\`PG*\`/\`MYSQL_*\`, plus the rest under \`GENIE_\`) — read the app's own config from
+\`.env\`, never from the shell. (A sandbox (\`explicit\`) site instead reaches
 services by engine name on the workspace network; there its \`localhost\` is the
 sandbox and a host \`manageProcess\` service is at \`\${GENIE_HOST_GATEWAY}:<port>\`.)
 A DATABASE OR CACHE IS NEVER EXPOSED. Only what the BROWSER connects to is exposed,
@@ -519,8 +522,9 @@ stable \`https://<name>.gen\` whether the viewer is local or connected remotely:
 
 **Reachability:** a host-native dev server runs ON THE HOST, so its \`localhost\`
 IS the host — it reaches the workspace's managed DB/cache and any \`manageProcess\`
-service on \`127.0.0.1:<published port>\` through the host-form env Genie injects
-(the same env terminals get). (A sandbox (\`explicit\`) site instead reaches services
+service on \`127.0.0.1:<published port>\` through the host-form env Genie injects —
+the same values Genie writes into the repo's \`.env\`, which is where anything not
+started by Genie reads them. (A sandbox (\`explicit\`) site instead reaches services
 by engine name on the workspace network, with host processes at
 \`\${GENIE_HOST_GATEWAY}:<port>\`.) **Backends are never exposed** — a database or
 cache has no \`.gen\` name. Only BROWSER-facing surfaces are published: the site at

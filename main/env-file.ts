@@ -71,6 +71,70 @@ export function upsertEnvLine(content: string, key: string, value: string): stri
     return content + sep + line + '\n';
 }
 
+/** True when `content` already assigns `key` (honouring an `export ` prefix). */
+function keyLineIndex(lines: string[], key: string): number {
+    const re = new RegExp(`^\\s*(?:export\\s+)?${key}\\s*=`);
+    return lines.findIndex((line) => re.test(line));
+}
+
+/**
+ * Upsert a WHOLE SET of managed keys into `.env` content (genie#242).
+ *
+ * The file belongs to the USER — hand-edited, commented, ordered how they left
+ * it — and Genie now rewrites it whenever a service port moves. So three
+ * properties are load-bearing, and each has a test:
+ *
+ *  - **Read-modify-write, never regenerate.** Every other key, comment, blank
+ *    line and trailing byte survives. A key Genie manages is rewritten where it
+ *    ALREADY IS, wherever the user moved it to — so a second copy can never
+ *    appear and shadow the one they are reading.
+ *  - **New keys land in one marked block.** Appended under `header`, and a later
+ *    addition joins that block instead of writing a second header, so the
+ *    managed region stays one contiguous, recognisable thing.
+ *  - **Byte-identical when nothing moved.** The content is returned UNCHANGED —
+ *    the same string — when every managed value already agrees. Not "equivalent":
+ *    rewriting a CRLF file to LF, or requoting a value, is a diff the user did
+ *    not ask for, and a `.env` that churns on every service tick is one nobody
+ *    will trust to hold their own edits.
+ */
+export function upsertEnvBlock(
+    content: string,
+    vars: Record<string, string>,
+    header: string,
+): string {
+    // Compare against the PARSED values, so a differently-quoted but equal value
+    // counts as agreement and buys the no-op above.
+    const current = parseEnv(content);
+    const pending = Object.entries(vars).filter(([key, value]) => current.get(key) !== value);
+    if (pending.length === 0) return content;
+
+    const lines = content.split(/\r?\n/);
+    const appended: string[] = [];
+    for (const [key, value] of pending) {
+        const at = keyLineIndex(lines, key);
+        if (at === -1) appended.push(`${key}=${formatValue(value)}`);
+        else lines[at] = `${key}=${formatValue(value)}`;
+    }
+    if (appended.length === 0) return lines.join('\n');
+
+    const headerAt = lines.findIndex((line) => line.trim() === header);
+    if (headerAt !== -1) {
+        // Grow the existing block: insert after its last contiguous assignment.
+        let end = headerAt + 1;
+        while (end < lines.length && /^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=/.test(lines[end])) {
+            end += 1;
+        }
+        lines.splice(end, 0, ...appended);
+        return lines.join('\n');
+    }
+
+    // No block yet — start one at the end, separated from the user's content by a
+    // blank line (but not preceded by one in an empty file).
+    const body = lines.join('\n');
+    const lead = body === '' ? '' : body.endsWith('\n') ? '\n' : '\n\n';
+    return `${body}${lead}${header}\n${appended.join('\n')}\n`;
+}
+
 // --- secret detection + obfuscation -----------------------------------------
 
 /** Key-name patterns that mark a value as a secret (case-insensitive). Broad on

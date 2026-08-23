@@ -20,9 +20,6 @@ import {
 import { devServiceManager } from '../dev-server/services/service-manager';
 import { runtimeInfo } from './dev-site-tools';
 import { resolveAgentTarget } from './host-tools';
-import { terminalServiceEnvFor } from '../db';
-import { terminalServiceEnv } from '../dev-server/services/env-wiring';
-import { driftNotice, serviceEnvDrift } from '../dev-server/services/env-drift';
 import type { DevServiceRow } from '../dev-server/services/service-manager';
 import type { EngineInventoryRow } from '../dev-server/services/inventory';
 import type { DevServiceConfig } from '../dev-server/services/services-config';
@@ -134,31 +131,6 @@ export interface DevServiceTarget {
 }
 
 
-/**
- * Is the CALLING terminal carrying a service env the workspace has moved on from?
- *
- * Attached to the read actions because those are what somebody calls WHEN a
- * connection is already failing — which is the moment "your shell is the problem"
- * explains everything. Best effort: a bookkeeping gap must never turn a working
- * answer into an error.
- */
-function staleEnvFor(
-    terminalId: string | undefined,
-    workspaceId: string,
-    manager: { hostEnvFor: (id: string) => Record<string, string> },
-): { staleTerminalEnv?: string } {
-    if (!terminalId) return {};
-    try {
-        const baked = terminalServiceEnvFor(terminalId);
-        if (Object.keys(baked).length === 0) return {};
-        const live = terminalServiceEnv(manager.hostEnvFor(workspaceId));
-        const notice = driftNotice(serviceEnvDrift(baked, live));
-        return notice ? { staleTerminalEnv: notice } : {};
-    } catch {
-        return {};
-    }
-}
-
 export async function manageServiceForMcp(
     terminalId: string,
     req: ManageServiceRequest,
@@ -169,12 +141,12 @@ export async function manageServiceForMcp(
     // terminal could not be resolved would be a dead end.
     const { decision, ws } = await resolveAgentTarget(terminalId, req.workspaceId);
     if (req.action === 'catalog' || req.action === 'inventory') {
-        return runManageService(ws ?? null, req, terminalId);
+        return runManageService(ws ?? null, req);
     }
     if (!decision.allowed || !ws) {
         return { ok: false, error: decision.reason, services: [], runtime: await runtimeInfo() };
     }
-    return runManageService(ws, req, terminalId);
+    return runManageService(ws, req);
 }
 
 /**
@@ -186,10 +158,6 @@ export async function manageServiceForMcp(
 export async function runManageService(
     ws: DevServiceTarget | null,
     req: ManageServiceRequest,
-    /** The CALLING terminal, when there is one — used only to notice that its
-     *  baked-in service env has gone stale (genie#222). A host route has none,
-     *  and simply gets no notice. */
-    callerTerminalId?: string,
 ): Promise<ManageServiceResult> {
     const runtime = await runtimeInfo();
     const bare = (error: string): ManageServiceResult => ({
@@ -280,7 +248,6 @@ export async function runManageService(
                     services: services(),
                     runtime,
                     ...(req.id ? { affectedId: req.id } : {}),
-                    ...staleEnvFor(callerTerminalId, ws.id, manager),
                 };
 
             case 'add': {
@@ -391,7 +358,6 @@ export async function runManageService(
                     ok: true,
                     services: services(),
                     affectedId: target.serviceId,
-                    ...staleEnvFor(callerTerminalId, ws.id, manager),
                     // The whole point of the action: what a site container is
                     // actually given, so an agent can reason about the app's
                     // config without guessing at key names.

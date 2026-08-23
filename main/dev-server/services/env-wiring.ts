@@ -272,49 +272,62 @@ export function serviceEnv(entries: ProvisionedService[]): Record<string, string
 // --- what an interactive TERMINAL may inherit (genie#221) --------------------
 
 /**
- * Names a framework reads as ITS OWN datastore configuration.
+ * The ONLY names that reach an interactive terminal unprefixed: the CLIENT-TOOL
+ * credentials.
  *
- * Ambient values for these silently outrank a project's test settings, which is
- * how a Laravel suite run from a Genie terminal came to drop the development
- * database while reporting `99 passed`: PHPUnit's `<env>` defaults to
+ * `psql` reads `PG*`; `mysql` reads `MYSQL_*`. Nothing treats either set as "the
+ * datastore this application uses", so neither can redirect a framework — and
+ * they are what make `psql` connect with nothing typed, which is the half of
+ * this feature worth having.
+ *
+ * ## Why an ALLOWLIST (genie#242), and what the denylist cost
+ *
+ * genie#221 listed the DATASTORE names instead — `DB_*`, `DATABASE_URL`,
+ * `REDIS_*` — because those are the ones a test run DESTROYS. That was the bug
+ * of the day: a Laravel suite run from a Genie terminal dropped the development
+ * database and reported `99 passed`. PHPUnit's `<env>` defaults to
  * `force="false"`, so the `DB_CONNECTION=sqlite` / `DB_DATABASE=:memory:` lines
  * every Laravel skeleton ships were skipped because Genie had already exported
- * `DB_CONNECTION`. `RefreshDatabase` then ran `migrate:fresh` against the live
- * workspace Postgres.
+ * `DB_CONNECTION`, and `RefreshDatabase` ran `migrate:fresh` against the live
+ * workspace Postgres. (`force="true"` is no fix: PHPUnit writes `<env>` to
+ * `$_ENV` and `putenv()`, never `$_SERVER`, and Laravel's Dotenv chain reads
+ * `$_SERVER` first — where the shell's variables are.)
  *
- * `force="true"` is not a fix either: PHPUnit writes `<env>` to `$_ENV` and
- * `putenv()` and never to `$_SERVER`, and Laravel's Dotenv chain consults
- * `$_SERVER` first — where the shell's variables are.
+ * `MAIL_*`, `REVERB_*`, `AWS_*` and `MEILISEARCH_*` were deliberately left
+ * through: shadowing them cannot lose data, and withholding them would have
+ * broken a dev server started from a terminal for no gain. Both halves of that
+ * have since stopped holding. They are read as a framework's own config by the
+ * exact same immutable-dotenv rule, so a stale one beats a correct `.env` and
+ * breaks mail or points Scout at the wrong index — quieter than a dropped
+ * database, equally invisible. And the gain now exists: Genie writes the
+ * connection into the repo's `.env` (genie#242, `env-sync.ts`), so that dev
+ * server reads it from the file, which is where it should have come from.
  *
- * Only DATASTORES are listed. These are the ones a test run will DESTROY —
- * `migrate:fresh` drops the schema, a cache flush empties Redis. `MAIL_*`,
- * `REVERB_*` and `AWS_*` are left alone: shadowing them cannot lose data, and
- * taking them away would break a dev server started from a terminal for no gain.
+ * Inverting the test also changes what happens to the NEXT name the wiring
+ * emits: under a denylist a new key passed through until somebody noticed, under
+ * this it is withheld until somebody decides otherwise. Default-safe.
  */
-const TERMINAL_RESERVED = /^(DATABASE_URL$|DB_|REDIS_)/;
+const TERMINAL_CLIENT_TOOL = /^(PG[A-Z]+$|MYSQL_)/;
 
 /**
  * The service env an interactive TERMINAL is allowed to inherit.
  *
  * A terminal gets the CLIENT credentials, not the APPLICATION's configuration:
- * `PG*`/`MYSQL_*` pass through (that is what makes `psql` work with nothing
- * typed, and nothing treats them as an app's datastore), while the framework's
- * own names are moved under `GENIE_` — withheld from being picked up by
- * accident, but still there for an agent that wants the managed connection.
+ * `PG*`/`MYSQL_*` pass through, while every other name is moved under `GENIE_` —
+ * withheld from being picked up by accident, but still there for an agent that
+ * wants the managed connection.
  *
  * SITES and PROCESSES do NOT go through here and are unchanged: a served app and
- * a `queue:work` ARE the application and need its configuration. The narrowing
- * is only where a test suite gets typed.
+ * a `queue:work` ARE the application and need its configuration, handed to them
+ * at start and therefore never stale.
  */
 export function terminalServiceEnv(env: Record<string, string>): Record<string, string> {
     const out: Record<string, string> = {};
     for (const [key, value] of Object.entries(env)) {
-        if (key.startsWith('GENIE_')) {
+        if (key.startsWith('GENIE_') || TERMINAL_CLIENT_TOOL.test(key)) {
             out[key] = value;
-        } else if (TERMINAL_RESERVED.test(key)) {
-            out[`GENIE_${key}`] = value;
         } else {
-            out[key] = value;
+            out[`GENIE_${key}`] = value;
         }
     }
     return out;

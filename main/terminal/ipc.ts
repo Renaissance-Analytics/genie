@@ -51,7 +51,7 @@ import { computeOrphans } from './orphans';
 import { buildProcessArgs } from './process-spawn';
 import { devServiceHostEnvFor } from '../dev-server';
 import { terminalServiceEnv } from '../dev-server/services/env-wiring';
-import { recordTerminalServiceEnv } from '../db';
+import { withoutManagedServiceKeys } from '../dev-server/services/env-sync';
 import {
     TerminalReadBuffer,
     type ReadResult,
@@ -505,7 +505,15 @@ export function createAgentTerminal(opts: {
     let env: Record<string, string> = {};
     const ws = getWorkspace(opts.workspaceId);
     const wsRoot = ws?.path;
-    env = buildTerminalEnv(wsRoot, ws?.project_id);
+    // MINUS the keys Genie itself wrote into that file (genie#242). A site's
+    // `repo` defaults to the workspace ROOT, so `<workspace>/.env` is very often
+    // the very file Genie keeps the service connection in — and re-exporting it
+    // here would hand every shell an ambient `DB_PORT` that outranks EVERY repo's
+    // `.env`, which is the bug this feature removes, enlarged.
+    env = withoutManagedServiceKeys(
+        buildTerminalEnv(wsRoot, ws?.project_id),
+        devServiceHostEnvFor(opts.workspaceId),
+    );
     if (workspaceMcpEnabled(opts.workspaceId)) {
         const mcpUrl = registerTerminalEndpoint(id);
         if (mcpUrl) {
@@ -886,7 +894,10 @@ export function registerTerminalIpc(): void {
             // revoked since the last spawn is simply gone from this one.
             const specWs = spec?.workspace_id ? getWorkspace(spec.workspace_id) : undefined;
             const wsRoot = specWs?.path;
-            const envFileVars = buildTerminalEnv(wsRoot, specWs?.project_id);
+            const envFileVars = withoutManagedServiceKeys(
+                buildTerminalEnv(wsRoot, specWs?.project_id),
+                spec?.workspace_id ? devServiceHostEnvFor(spec.workspace_id) : {},
+            );
             if (Object.keys(envFileVars).length) {
                 opts = { ...opts, env: { ...envFileVars, ...opts.env } };
             }
@@ -899,34 +910,27 @@ export function registerTerminalIpc(): void {
             // workspace's services with nothing typed. (Host-native hosting, Wish
             // #102.)
             //
-            // NARROWED through `terminalServiceEnv` (genie#221). This used to hand a
-            // terminal the app's own configuration too — `DB_CONNECTION`,
-            // `DB_DATABASE`, the lot — so that `artisan test` would "reach the DB
-            // with nothing typed". It did: running a Laravel suite here dropped the
-            // development database and reported `99 passed`. PHPUnit's `<env>` is
-            // `force="false"`, so the `sqlite`/`:memory:` lines every Laravel
-            // skeleton ships were skipped because the variable was already set, and
-            // `RefreshDatabase` ran `migrate:fresh` against the live Postgres.
+            // NARROWED through `terminalServiceEnv` (genie#221, tightened to an
+            // allowlist by genie#242). This used to hand a terminal the app's own
+            // configuration too — `DB_CONNECTION`, `DB_DATABASE`, the lot — so that
+            // `artisan test` would "reach the DB with nothing typed". It did:
+            // running a Laravel suite here dropped the development database and
+            // reported `99 passed`. PHPUnit's `<env>` is `force="false"`, so the
+            // `sqlite`/`:memory:` lines every Laravel skeleton ships were skipped
+            // because the variable was already set, and `RefreshDatabase` ran
+            // `migrate:fresh` against the live Postgres.
             //
-            // A terminal now gets the CLIENT credentials (`PG*`, `MYSQL_*`) and the
-            // rest under `GENIE_`. SITES and PROCESSES still receive the full set —
-            // they ARE the application; an interactive shell is where a test suite
-            // gets typed.
+            // A terminal now gets ONLY the CLIENT credentials (`PG*`, `MYSQL_*`);
+            // everything a framework reads as its own config is under `GENIE_`. The
+            // app's configuration reaches it the way the app reads it — out of the
+            // repo's `.env`, which Genie keeps current (genie#242). SITES and
+            // PROCESSES still receive the full set directly: they ARE the
+            // application, and their env is computed at start, so it cannot go
+            // stale the way a shell's can.
             if (spec?.workspace_id) {
                 const svcEnv = terminalServiceEnv(devServiceHostEnvFor(spec.workspace_id));
                 if (Object.keys(svcEnv).length) {
                     opts = { ...opts, env: { ...opts.env, ...svcEnv } };
-                    // RECORD what was baked in (genie#222). A shell's environment is
-                    // fixed once it starts, so when a published port later moves this
-                    // terminal keeps pointing at an address that no longer exists —
-                    // and in a framework with an immutable dotenv, that stale value
-                    // beats a correct `.env`. Without a record of what was injected,
-                    // nothing can ever tell the user their SHELL is the problem.
-                    try {
-                        recordTerminalServiceEnv(opts.id, svcEnv);
-                    } catch {
-                        // A bookkeeping failure must never stop a terminal opening.
-                    }
                 }
             }
             // Agent-integration MCP: when the spec's workspace has opted in, mint
