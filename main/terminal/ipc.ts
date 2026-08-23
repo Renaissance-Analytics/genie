@@ -1367,11 +1367,6 @@ function releaseReadBuffersWithoutSpec(specIds: string[]): void {
 }
 
 /**
- * Push a terminal's "attention" state to every window (agent-integration MCP).
- * The renderer pulses the matching terminal's glow in the rail, the flyout row,
- * and the panel border until it gets focus. Called by the MCP `imDone` tool.
- */
-/**
  * Keystroke holds for in-flight draft swaps (see main/terminal/input-hold).
  * Module-level because `terminal:write` is the choke point every human keystroke
  * passes through, and background.ts drives the swap around it.
@@ -1404,6 +1399,11 @@ export function broadcastInboxIncoming(id: string): void {
     broadcastLocal('agentinbox:incoming', { id });
 }
 
+/**
+ * Push a terminal's "attention" state to every window (agent-integration MCP).
+ * The renderer pulses the matching terminal's glow in the rail, the flyout row,
+ * and the panel border until it gets focus. Called by the MCP `imDone` tool.
+ */
 export function broadcastTerminalAttention(id: string, on: boolean): void {
     // LOCAL-only (mirrors broadcastWorkspacePulse): a host terminal's attention
     // arrives via its host's /ws/events, so a LOCAL terminal:attention must not
