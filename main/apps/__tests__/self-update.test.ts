@@ -266,3 +266,90 @@ describe('apps Genie must not update at all', () => {
         }
     });
 });
+
+/**
+ * A command the user never approved (owner, 2026-08-22).
+ *
+ * The agent's argument was that this is NOT an escalation: the app's own source
+ * changes with every update anyway, so an app that could already run a service can
+ * already run any code, and gating on the argv buys nothing.
+ *
+ * The owner disagreed, and the disagreement is worth recording rather than
+ * flattening. `services[].command` is the one line in a manifest that is code
+ * execution rather than a permission — which is exactly why the GitHub review
+ * gives it its own section ABOVE the permissions. Something a user was shown as a
+ * distinct decision should not change underneath them without being shown again,
+ * whatever else is true about what the app could theoretically do.
+ */
+describe('a service command that was not in the approved version', () => {
+    const withService = (command: string[], name = 'api') =>
+        declared({ services: [{ name, repo: 'backend', command }] });
+
+    const installedWithService = () =>
+        installed({ declared: withService(['uvicorn', 'app:api']) });
+
+    it('sends a CHANGED command back through consent', () => {
+        const decision = decideAppUpdate(
+            installedWithService(),
+            arriving({ manifest: withService(['uvicorn', 'app:api', '--reload']) }),
+        );
+
+        expect(decision.kind).toBe('consent');
+        if (decision.kind !== 'consent') return;
+        // The command itself, because "a service changed" is not something anybody
+        // can make a decision about.
+        expect(decision.reasons.join(' ')).toContain('--reload');
+    });
+
+    it('sends a NEW service back through consent', () => {
+        const decision = decideAppUpdate(
+            installedWithService(),
+            arriving({
+                manifest: declared({
+                    services: [
+                        { name: 'api', repo: 'backend', command: ['uvicorn', 'app:api'] },
+                        { name: 'worker', repo: 'backend', command: ['python', 'worker.py'] },
+                    ],
+                }),
+            }),
+        );
+
+        expect(decision.kind).toBe('consent');
+        if (decision.kind !== 'consent') return;
+        expect(decision.reasons.join(' ')).toContain('worker.py');
+    });
+
+    it('treats the same argv in a DIFFERENT repo as a different command', () => {
+        // `node server.mjs` in another folder is another program. The argv reads
+        // identically and runs something else entirely.
+        const decision = decideAppUpdate(
+            installedWithService(),
+            arriving({
+                manifest: declared({
+                    services: [{ name: 'api', repo: 'vendor', command: ['uvicorn', 'app:api'] }],
+                }),
+            }),
+        );
+
+        expect(decision.kind).toBe('consent');
+    });
+
+    it('stays quiet when the commands are exactly what was approved', () => {
+        const decision = decideAppUpdate(
+            installedWithService(),
+            arriving({ manifest: withService(['uvicorn', 'app:api']) }),
+        );
+
+        expect(decision.kind).toBe('quiet');
+    });
+
+    it('stays quiet when a service was REMOVED', () => {
+        // Fewer things running is the direction nobody needs protecting from.
+        const decision = decideAppUpdate(
+            installedWithService(),
+            arriving({ manifest: declared({}) }),
+        );
+
+        expect(decision.kind).toBe('quiet');
+    });
+});

@@ -387,6 +387,12 @@ export interface AppUpdateContext {
  * cannot be reviewed and would be one bug away from being wrong; the whole point
  * of `decideAppUpdate` is that a caller cannot assert its way past it.
  *
+ * NOT WIRED TO ANYTHING YET, on purpose (owner, 2026-08-22): this is a dev-preview
+ * release in which GApps can be built but not published, so there is nowhere for a
+ * new version to come from. The mechanism lands first so that the eventual trigger
+ * — the user pressing Update in the Store — has nothing to invent. See the header
+ * of `updates.ts`.
+ *
  * What the quiet path does NOT do is the load-bearing half:
  *
  *   - it never calls `io.ask`, because there is nothing new to ask,

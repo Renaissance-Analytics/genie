@@ -34,10 +34,23 @@
  * hash of the whole tree, so verifying that what arrived is the commit Genie
  * resolved is content integrity against the recorded version. Publisher SIGNING is
  * a further step and waits on a store that does not exist yet; this does not.
+ *
+ * ## No TRIGGER ships in this release, deliberately (owner, 2026-08-22)
+ *
+ * This is a dev-preview build: GApps can be BUILT, not published. With no store
+ * there is nothing to publish a new version to, so nothing to update from, and a
+ * button offering to update would be offering something that cannot happen.
+ *
+ * So {@link decideAppUpdate} and `updateAppFromFolder` have no caller yet. That is
+ * the intended order rather than an oversight. The decision lives in the installer
+ * BEFORE the first trigger exists, which means whatever eventually calls it — the
+ * owner's answer was the user pressing Update in the Store — cannot be written in
+ * a way that skips consent. A trigger built first, with the rules bolted on after,
+ * is how the friendly-named escalation path gets built by accident.
  */
 
 import type { AppGrantSource } from '../db';
-import type { AppManifest, AppScope } from './manifest';
+import type { AppManifest, AppScope, AppService } from './manifest';
 
 export type AppUpdateState =
     /** Pinned to what the repo has. */
@@ -153,6 +166,21 @@ export type AppUpdateDecision =
 
 /** self < workspaces < workstation. */
 const SCOPE_RANK: Record<AppScope, number> = { self: 0, workspaces: 1, workstation: 2 };
+
+/**
+ * What makes one declared service the SAME command as another.
+ *
+ * The repo is part of the identity, not decoration: `node server.mjs` in another
+ * folder is another program. Two argvs can read identically and run something
+ * else entirely, so comparing the command alone would let a rewrite pass as
+ * unchanged.
+ *
+ * A NUL joins the parts because it cannot occur in any of them. Joining on a
+ * space would let one field's contents spell another field's boundary.
+ */
+function commandIdentity(service: AppService): string {
+    return [service.name, service.repo ?? '', ...service.command].join(String.fromCharCode(0));
+}
 
 /**
  * Everything the user has already been SHOWN being asked for.
@@ -278,6 +306,32 @@ export function decideAppUpdate(
     const newWorkspaces = (asking.workspaces ?? []).filter((w) => !seen.workspaces.has(w));
     if (newWorkspaces.length > 0) {
         reasons.push(`It asks for workspaces it did not before: ${newWorkspaces.join(', ')}.`);
+    }
+
+    // A command the user was never shown (owner, 2026-08-22).
+    //
+    // The argument against gating this was that it is not really an escalation:
+    // the app's own source changes with every update anyway, so an app that could
+    // already run a service can already run any code. The owner decided otherwise,
+    // and the reason is worth keeping: `services[].command` is the one line in a
+    // manifest that is code EXECUTION rather than a permission, which is why the
+    // GitHub review gives it its own section above the permissions. Something
+    // shown to the user as a distinct decision does not get to change underneath
+    // them without being shown again.
+    //
+    // Only ADDED and CHANGED commands. A service that went away is fewer things
+    // running, which is the direction nobody needs protecting from.
+    const approvedCommands = new Set(
+        (installed.declared.services ?? []).map(commandIdentity),
+    );
+    const unapproved = (arriving.manifest.services ?? []).filter(
+        (s) => !approvedCommands.has(commandIdentity(s)),
+    );
+    if (unapproved.length > 0) {
+        reasons.push(
+            'It runs commands that were not in the version you approved: ' +
+                `${unapproved.map((s) => `${s.name} — ${s.command.join(' ')}`).join('; ')}.`,
+        );
     }
 
     if (arriving.manifest.frontend.browserExposed === true && !seen.browserExposed) {
