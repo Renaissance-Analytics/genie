@@ -48,7 +48,15 @@ or converting an existing folder via Genie's Interactive Upgrade
 wizard, a top-level `k/` directory is recognised as a knowledge root
 and its contents are spread directly into the new envelope's `.ai/`.
 
-## The `.gapp` suffix (Genie Apps)
+## The `.gapp` envelope suffix (Genie Apps)
+
+> **Two different things are called `.gapp`, and conflating them will cost
+> somebody an afternoon.** This section is about the FOLDER a GApp's
+> workspace lives in, on disk. Separately, a GApp's *hosted sites* are
+> served at `<name>.gapp` rather than `<name>.gen` — a TLD, decided in
+> `main/apps/install-plan.ts` and the site manager, with nothing to do with
+> the envelope format documented here. A change to one is never a change to
+> the other.
 
 A Genie App's workspace is an envelope in this exact format, written to
 `<slug>.gapp` instead of `<slug>.agi`. The suffix is the only difference:
