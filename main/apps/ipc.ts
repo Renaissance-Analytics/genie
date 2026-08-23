@@ -531,7 +531,7 @@ export function previewIO(): PreviewIO {
             // is where the loop this feature exists for actually happens.
             previewConsents.set(folder, remembered);
         },
-        createWorkspace: ({ name, path: folder }) => {
+        createWorkspace: ({ appId, name, path: folder }) => {
             // Always a NEW row, never an adopt-if-the-path-matches like dev mode.
             // A preview deletes the workspace it created when its window closes,
             // and the developer very often already has a real workspace on this
@@ -540,9 +540,16 @@ export function previewIO(): PreviewIO {
             const row = addWorkspace({
                 id: `preview-${randomUUID()}`,
                 backend: 'aionima',
-                project_id: `preview-${randomUUID()}`,
+                // The PREVIEW app id, not a random one and not the app's own.
+                // `project_id` is what `buildTerminalEnv` looks Tynn-managed
+                // provider credentials up by, so this is the line that decides a
+                // preview's terminals inherit NOBODY's credentials — a preview id
+                // is not a Tynn project id and never matches one. Naming it makes
+                // that deliberate rather than a happy accident of randomness, and
+                // makes a stray row in the database say what it was for.
+                project_id: appId,
                 project_name: name,
-                tynn_project_id: '',
+                tynn_project_id: appId,
                 tynn_project_name: name,
                 // 'simple' even on a `.gapp` envelope: this row is Genie's
                 // scaffolding, not the folder's own registration, and its sites

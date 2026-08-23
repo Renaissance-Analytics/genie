@@ -68,7 +68,12 @@ export interface PreviewIO {
      * install; here it would be catastrophic, because closing the preview window
      * removes the workspace it created — and it must never be the developer's own.
      */
-    createWorkspace: (input: { name: string; path: string }) => { workspaceId: string };
+    createWorkspace: (input: {
+        /** The PREVIEW app id — what this workspace is for. */
+        appId: string;
+        name: string;
+        path: string;
+    }) => { workspaceId: string };
     workspaceRow: (workspaceId: string) => PreviewWorkspaceRow | null;
     removeWorkspace: (workspaceId: string) => void;
     listWorkspaceRows: () => PreviewWorkspaceRow[];
@@ -216,6 +221,7 @@ export async function openPreview(folder: string, io: PreviewIO): Promise<Previe
 
     // --- Create --------------------------------------------------------------
     const { workspaceId } = io.createWorkspace({
+        appId: identity.appId,
         name: `${manifest.name} (preview)`,
         // The developer's OWN folder. A preview shows live source, not a copy —
         // which is also why teardown has to be so careful about what it deletes.
