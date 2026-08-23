@@ -47,6 +47,19 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
+    // The agent panels the roster spec starts are REAL agent terminals with REAL
+    // ptys, and Genie's default pty-host is DETACHED — it outlives the app on
+    // purpose. Every spec here shares one profile directory and they run serially,
+    // so anything left running is still holding its port and its MCP endpoint while
+    // the NEXT spec boots its own Genie over the same profile. Killing them is part
+    // of this spec, not tidiness.
+    await app
+        ?.evaluate(() =>
+            (globalThis as Record<string, any>).__GENIE_E2E_APPS__.killAppPanels(
+                'com.genie.harness',
+            ),
+        )
+        .catch(() => 0);
     await app?.close();
 });
 

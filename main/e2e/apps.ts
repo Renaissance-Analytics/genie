@@ -169,6 +169,7 @@ export function registerAppsE2E(): void {
         previewScaffolded: (panels: AppPanels) => previewScaffolded(panels),
         seedAgentPanelsTwice: (appId: string, panels: AppPanels, agents?: AppAgentDecl[]) =>
             seedAgentPanelsTwice(appId, panels, agents),
+        killAppPanels: (appId: string) => killAppPanels(appId),
         // The installed-apps list, read through the SAME function the panel
         // uses. Exposed here because the compiled main is one bundle — a spec
         // cannot `require` a module out of it.
@@ -249,6 +250,35 @@ export async function scaffoldCheckInstall(): Promise<{
  * `panels` comes from the caller so a spec can exercise a multi-panel declaration
  * without a second scaffolded app to carry one.
  */
+/**
+ * Tear an app's panels down — ptys included. The spec's own cleanup.
+ *
+ * Not housekeeping: a GApp's agent panels are REAL agent terminals with REAL
+ * ptys, and Genie's default is a DETACHED pty-host that deliberately outlives the
+ * app so terminals survive a restart. Every E2E spec shares one profile directory
+ * (`E2E_USERDATA`) and they run serially, so ptys this spec leaves running are
+ * still there — and still holding ports and MCP endpoints — while every LATER
+ * spec boots its own Genie over the same profile. A spec that starts agents has
+ * to stop them, or it is a landmine for whatever runs next.
+ */
+export function killAppPanels(appId: string): number {
+    const app = appsList().find((a) => a.id === appId);
+    if (!app) return 0;
+    let killed = 0;
+    for (const spec of listTerminalSpecs()) {
+        if (spec.workspace_id !== app.workspaceId) continue;
+        try {
+            // Kill BEFORE delete: a pty whose spec has gone is one nothing owns.
+            killTerminalById(spec.id);
+            deleteTerminalSpec(spec.id);
+            killed += 1;
+        } catch {
+            /* best-effort — one stubborn pty must not abort the sweep */
+        }
+    }
+    return killed;
+}
+
 export function seedAgentPanelsTwice(
     appId: string,
     panels: AppPanels,
