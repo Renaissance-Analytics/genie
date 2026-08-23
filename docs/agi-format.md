@@ -48,6 +48,20 @@ or converting an existing folder via Genie's Interactive Upgrade
 wizard, a top-level `k/` directory is recognised as a knowledge root
 and its contents are spread directly into the new envelope's `.ai/`.
 
+## The `.gapp` suffix (Genie Apps)
+
+A Genie App's workspace is an envelope in this exact format, written to
+`<slug>.gapp` instead of `<slug>.agi`. The suffix is the only difference:
+same skeleton, same `project.json`, same `repos/`, same `.ai/`, produced
+by the same `createAgiEnvelope` with a `suffix` argument rather than by a
+second creator. It exists so a GApp's workspace is recognisable as one on
+disk rather than only in `genie.db`.
+
+Detection below is content-based, so a `.gapp` classifies as
+**FULL_ENVELOPE** and every path that opens, analyses or upgrades a `.agi`
+handles it unchanged. Envelopes already on disk keep the suffix they were
+created with — nothing is renamed or migrated.
+
 ## Detection (when Genie opens a folder)
 
 Genie classifies an arbitrary folder as one of:

@@ -12,12 +12,14 @@ import {
     createAgiEnvelope,
     deriveRepoName,
     envelopeFolderName,
+    hasEnvelopeSuffix,
     repairWorkspaceDocs,
     structureDocStatus,
     symlinksSupported,
     syncClaudeFromAgents,
     workspaceDocHealth,
 } from '../create-agi';
+import { detectFolder } from '../detect';
 import { readProjectJson } from '../project-json';
 import { cleanupTmpRoot, makeTmpDir, seedGitRepo } from '../../../test/helpers';
 
@@ -57,6 +59,28 @@ describe('envelopeFolderName', () => {
     it('does not double the suffix', () => {
         expect(envelopeFolderName('brain-v2.agi')).toBe('brain-v2.agi');
         expect(envelopeFolderName('brain-v2.AGI')).toBe('brain-v2.AGI');
+    });
+    it('gives a Genie App the .gapp suffix when asked for one', () => {
+        expect(envelopeFolderName('trader', 'gapp')).toBe('trader.gapp');
+    });
+    it('leaves a name alone when it already carries EITHER envelope suffix', () => {
+        // Either counts, because the clone path derives the folder from a remote
+        // url: `foo.gapp` coming back as `foo.gapp.agi` would be a folder nobody
+        // asked for and a workspace that no longer matches its own repo.
+        expect(envelopeFolderName('trader.gapp', 'gapp')).toBe('trader.gapp');
+        expect(envelopeFolderName('trader.gapp')).toBe('trader.gapp');
+        expect(envelopeFolderName('brain-v2.agi', 'gapp')).toBe('brain-v2.agi');
+    });
+});
+
+describe('hasEnvelopeSuffix', () => {
+    it('recognises both envelope suffixes, whatever their casing', () => {
+        expect(hasEnvelopeSuffix('brain-v2.agi')).toBe(true);
+        expect(hasEnvelopeSuffix('trader.GAPP')).toBe(true);
+    });
+    it('says no to anything else', () => {
+        expect(hasEnvelopeSuffix('trader')).toBe(false);
+        expect(hasEnvelopeSuffix('trader.app')).toBe(false);
     });
 });
 
@@ -149,6 +173,68 @@ describe('createAgiEnvelope', () => {
         const remotes = await git.getRemotes(true);
         const origin = remotes.find((r) => r.name === 'origin');
         expect(origin?.refs.push).toBe('git@github.com:owner/with-remote.agi.git');
+    });
+});
+
+/**
+ * A Genie App's workspace is an envelope too (Tynn #250) — the SAME format,
+ * wearing a suffix that says what it is. That is the whole point of taking a
+ * suffix rather than forking the creator: a second envelope builder would drift
+ * from this one the first time either changed, and then `.gapp` would stop being
+ * "the same as `.agi`" in exactly the ways nobody had written down.
+ */
+describe('createAgiEnvelope — the .gapp envelope', () => {
+    it('scaffolds a Genie App envelope under the .gapp suffix', async () => {
+        const parent = makeTmpDir('cae-gapp');
+        const res = await createAgiEnvelope({
+            slug: 'trader',
+            name: 'Trader',
+            parent_path: parent,
+            suffix: 'gapp',
+        });
+
+        expect(res.path).toBe(path.join(parent, 'trader.gapp'));
+        expect(res.git_log_count).toBe(1);
+
+        // Same skeleton, because it is the same format.
+        for (const d of ['repos', '.ai/knowledge', '.ai/plans', 'sandbox', '.trash']) {
+            expect(fs.existsSync(path.join(res.path, d)), `missing dir ${d}`).toBe(true);
+        }
+        expect(fs.existsSync(path.join(res.path, 'project.json'))).toBe(true);
+
+        // And the docs name the envelope it actually is. A `.gapp` telling its
+        // reader it is a `.agi` is how a format grows a second story about itself.
+        const readme = fs.readFileSync(path.join(res.path, 'README.md'), 'utf8');
+        expect(readme).toMatch(/trader\.gapp/);
+        expect(readme).toMatch(/`\.gapp` envelope/);
+        const agents = fs.readFileSync(path.join(res.path, 'AGENTS.md'), 'utf8');
+        expect(agents).toMatch(/`\.gapp` envelope/);
+    });
+
+    it('is still an envelope as far as DETECTION is concerned', async () => {
+        // Detection reads the folder's contents, not its name — which is what lets
+        // a `.gapp` be opened, analysed and upgraded by every path that already
+        // handles a `.agi`, with no second branch to keep in step.
+        const parent = makeTmpDir('cae-gapp-detect');
+        const res = await createAgiEnvelope({
+            slug: 'trader',
+            name: 'Trader',
+            parent_path: parent,
+            suffix: 'gapp',
+        });
+
+        expect(detectFolder(res.path).state).toBe('FULL_ENVELOPE');
+    });
+
+    it('defaults to .agi, so every existing caller is untouched', async () => {
+        const parent = makeTmpDir('cae-default');
+        const res = await createAgiEnvelope({
+            slug: 'plain',
+            name: 'Plain',
+            parent_path: parent,
+        });
+
+        expect(res.path).toBe(path.join(parent, 'plain.agi'));
     });
 });
 

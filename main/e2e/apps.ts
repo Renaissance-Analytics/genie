@@ -32,7 +32,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
-import { upsertAppGrant } from '../db';
+import { getWorkspace, upsertAppGrant } from '../db';
 import { openAppWindow, appViewWebContents } from '../apps/window';
 import { scaffoldApp, slugify } from '../apps/scaffold';
 import { validateAppFolder, type AppFolderReport } from '../apps/validate';
@@ -181,6 +181,8 @@ export async function scaffoldCheckInstall(): Promise<{
     folder: string;
     report: AppFolderReport;
     install: AppInstallResult;
+    /** Where the install actually put the app's envelope, read back from the db. */
+    workspacePath: string | null;
 }> {
     const name = 'Harness Thing';
     // Its own throwaway parent: an install writes a real envelope, and a spec that
@@ -213,5 +215,11 @@ export async function scaffoldCheckInstall(): Promise<{
         }),
     });
 
-    return { folder, report, install };
+    // Read the workspace back out of the real database rather than reporting what
+    // the installer intended: the claim under test is where the envelope LANDED.
+    const workspacePath = install.workspaceId
+        ? (getWorkspace(install.workspaceId)?.path ?? null)
+        : null;
+
+    return { folder, report, install, workspacePath };
 }

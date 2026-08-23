@@ -158,6 +158,12 @@ export function installIO(): AppInstallIO {
                 slug: manifest.slug,
                 name: manifest.name,
                 parent_path: parent,
+                // A GApp's workspace is an envelope wearing a name that says so.
+                // Same format, same creator — `.gapp` is a suffix, not a fork, and
+                // detection reads a folder's CONTENTS, so everything that already
+                // opens a `.agi` opens this too. Envelopes already on disk keep
+                // whatever suffix they were created with; nothing is renamed.
+                suffix: 'gapp',
                 remote: { kind: 'none' },
             });
             const row = addWorkspace({

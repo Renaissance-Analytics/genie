@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { test, expect, type ElectronApplication } from '@playwright/test';
 import { launchGenieE2E } from './helpers/launch';
 
@@ -162,6 +164,13 @@ test('a scaffolded app passes Genie’s own check and then installs', async () =
     expect(outcome.install.ok).toBe(true);
     expect(outcome.install.workspaceId).toBeTruthy();
     expect(outcome.install.homeUrl).toBe('https://harness-thing.gen/');
+
+    // And it lands in a `.gapp` envelope. Asserted HERE rather than in a unit test
+    // because the unit suite fakes `createWorkspace` outright — the suffix is a
+    // one-word argument in the real I/O, and the only place it can be observed is
+    // the folder that actually appeared on disk.
+    expect(outcome.workspacePath).toMatch(/harness-thing\.gapp$/);
+    expect(fs.existsSync(path.join(String(outcome.workspacePath), 'project.json'))).toBe(true);
 });
 
 test('the installed app is visible to Genie afterwards, with what it was granted', async () => {

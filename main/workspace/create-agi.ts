@@ -20,20 +20,36 @@ import { githubCloneAuth, isHostGithubGhConfigured, redactSecrets } from './git-
 const execFileAsync = promisify(execFile);
 
 /**
- * Auto-create a fresh `{slug}.agi` envelope. Implements the public
- * `.agi` format contract documented in `docs/agi-format.md`.
+ * Auto-create a fresh `{slug}.agi` envelope — or a `{slug}.gapp` one, which is
+ * the same format under a Genie App's name. Implements the public `.agi` format
+ * contract documented in `docs/agi-format.md`.
  *
  *   1. Scaffold skeleton (project.json, repos/, .ai/{plans,knowledge,pm,chat,memory,issues}/, sandbox/, .trash/)
  *   2. git init
  *   3. Write .gitignore that excludes the sandbox + trash
  *   4. Initial commit of project.json + skeleton
- *   5. Optional: set up `github.com/<owner>/<slug>.agi` remote
+ *   5. Optional: set up `github.com/<owner>/<slug>.<suffix>` remote
  */
+
+/**
+ * The suffixes an envelope folder can carry.
+ *
+ * `.agi` is a project envelope. `.gapp` is a Genie App's, and it is the SAME
+ * format under a name that says what it is (Tynn #250) — so it is a parameter
+ * here rather than a second creator. A forked builder would drift from this one
+ * the first time either changed, and "a `.gapp` is just a `.agi`" would quietly
+ * stop being true in whichever ways nobody had written down.
+ */
+export type EnvelopeSuffix = 'agi' | 'gapp';
+
+export const ENVELOPE_SUFFIXES: readonly EnvelopeSuffix[] = ['agi', 'gapp'];
 
 export interface CreateAgiOpts {
     slug: string;            // becomes folder name and {slug} in remote
     name: string;            // human-readable display name
     parent_path: string;     // where the envelope folder will be created
+    /** Which envelope this is. Defaults to `agi`. */
+    suffix?: EnvelopeSuffix;
     remote?:
         | { kind: 'none' }
         | { kind: 'paste'; url: string }
@@ -81,24 +97,33 @@ Thumbs.db
 *.log
 `;
 
+/** Whether a folder or repo name already ends in one of the envelope suffixes. */
+export function hasEnvelopeSuffix(name: string): boolean {
+    return ENVELOPE_SUFFIXES.some((s) => new RegExp(`\\.${s}$`, 'i').test(name));
+}
+
 /**
- * The on-disk envelope folder name. The `.agi` suffix is the envelope
- * convention (it's what the GitHub remote uses too) and keeps the
- * envelope distinct from the SOURCE repo when both live under the same
- * parent — e.g. upgrading `…/civicognita-web` writes the envelope to
- * `…/civicognita-web.agi` instead of colliding with the source. Idempotent
- * if the slug already carries the suffix.
+ * The on-disk envelope folder name. The suffix is the envelope convention (it's
+ * what the GitHub remote uses too) and keeps the envelope distinct from the
+ * SOURCE repo when both live under the same parent — e.g. upgrading
+ * `…/civicognita-web` writes the envelope to `…/civicognita-web.agi` instead of
+ * colliding with the source.
+ *
+ * Idempotent against EITHER suffix, not just the one being asked for: the clone
+ * path derives this name from a remote url, so a `foo.gapp` repo coming back as
+ * `foo.gapp.agi` would be a folder nobody named and a workspace that no longer
+ * matches its own remote.
  */
-export function envelopeFolderName(slug: string): string {
-    return /\.agi$/i.test(slug) ? slug : `${slug}.agi`;
+export function envelopeFolderName(slug: string, suffix: EnvelopeSuffix = 'agi'): string {
+    return hasEnvelopeSuffix(slug) ? slug : `${slug}.${suffix}`;
 }
 
 /** Human-facing structure guide written to the envelope root. */
-function readmeTemplate(name: string, slug: string): string {
-    const folder = envelopeFolderName(slug);
+function readmeTemplate(name: string, slug: string, suffix: EnvelopeSuffix = 'agi'): string {
+    const folder = envelopeFolderName(slug, suffix);
     return `# ${name}
 
-This is a **\`.agi\` envelope** — an Aionima project monorepo that bundles
+This is a **\`.${suffix}\` envelope** — an Aionima project monorepo that bundles
 one or more code repositories together with shared knowledge, planning,
 and scratch space. Created with Genie.
 
@@ -141,10 +166,10 @@ For the agent-oriented version of this guide, see \`AGENTS.md\`
 }
 
 /** Agent-facing structure guide. CLAUDE.md symlinks to this. */
-function agentsTemplate(name: string): string {
-    return `# AGENTS.md — ${name} (.agi envelope)
+function agentsTemplate(name: string, suffix: EnvelopeSuffix = 'agi'): string {
+    return `# AGENTS.md — ${name} (.${suffix} envelope)
 
-You are working inside a **\`.agi\` envelope**: an Aionima project monorepo.
+You are working inside a **\`.${suffix}\` envelope**: an Aionima project monorepo.
 \`CLAUDE.md\` is a symlink to this file.
 
 ## Structure
@@ -392,9 +417,10 @@ export function syncClaudeFromAgents(envelopePath: string): ClaudeSyncResult {
 export async function createAgiEnvelope(
     opts: CreateAgiOpts,
 ): Promise<CreateAgiResult> {
+    const suffix = opts.suffix ?? 'agi';
     const envelopePath = path.join(
         opts.parent_path,
-        envelopeFolderName(opts.slug),
+        envelopeFolderName(opts.slug, suffix),
     );
     if (fs.existsSync(envelopePath)) {
         const entries = fs.readdirSync(envelopePath);
@@ -431,12 +457,12 @@ export async function createAgiEnvelope(
     // CLAUDE.md symlink is materialised at the git layer after `git add`.)
     fs.writeFileSync(
         path.join(envelopePath, 'README.md'),
-        readmeTemplate(opts.name, opts.slug),
+        readmeTemplate(opts.name, opts.slug, suffix),
         'utf8',
     );
     fs.writeFileSync(
         path.join(envelopePath, 'AGENTS.md'),
-        agentsTemplate(opts.name),
+        agentsTemplate(opts.name, suffix),
         'utf8',
     );
     fs.writeFileSync(path.join(envelopePath, 'CLAUDE.md'), 'AGENTS.md');
@@ -455,7 +481,7 @@ export async function createAgiEnvelope(
     await applyCommitIdentity(git);
     await git.add('.');
     await makeClaudeSymlink(git, envelopePath);
-    await git.commit('Initial commit — {slug}.agi envelope scaffolded by Genie');
+    await git.commit(`Initial commit — {slug}.${suffix} envelope scaffolded by Genie`);
 
     let remote: string | undefined;
     if (opts.remote) {
@@ -466,7 +492,7 @@ export async function createAgiEnvelope(
             // The actual GitHub API call is owned by main/git/remote.ts
             // because it needs auth + error handling. We just record the
             // intended URL so the caller can run that step separately.
-            const url = `https://github.com/${opts.remote.owner}/${opts.slug}.agi.git`;
+            const url = `https://github.com/${opts.remote.owner}/${envelopeFolderName(opts.slug, suffix)}.git`;
             await git.addRemote('origin', url);
             remote = url;
         }
