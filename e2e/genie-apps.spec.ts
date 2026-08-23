@@ -210,3 +210,60 @@ test('a GApp gets the agent panels it declared — and no more on the next open'
     // Opening it again changes nothing at all.
     expect(outcome.second).toEqual(['Terminal', 'Files', 'Terminal']);
 });
+
+/**
+ * THE PREVIEWER (Tynn #250).
+ *
+ * A GApp developer could scaffold a folder, check it, and install it — and had no
+ * way to SEE the app in the window its users get without installing it first. This
+ * opens a real GApp window over a folder that was never installed and asks the
+ * three questions the previewer stands or falls on.
+ *
+ * The panels one is the headline, and it is the one a unit test cannot answer.
+ * `preview-run.test.ts` proves the DECISION against fakes: a manifest declaring
+ * three agent panels produces three `createPanel` calls. Between that decision and
+ * three panels EXISTING sit the database, the workspace registry and the window —
+ * and that gap is precisely where "the field is validated and nothing lays it out"
+ * lived before any of this was built.
+ */
+test('a PREVIEW lays out the panels its manifest declared, without installing anything', async () => {
+    const outcome = await app.evaluate(() =>
+        (globalThis as Record<string, any>).__GENIE_E2E_APPS__.previewScaffolded({
+            agents: 3,
+            kinds: ['terminal', 'files'],
+        }),
+    );
+
+    expect(outcome.errors).toEqual([]);
+    expect(outcome.ok).toBe(true);
+
+    // THE headline. Three real panels in a real workspace, cycling the declared
+    // palette, for a folder nobody installed.
+    expect(outcome.panels).toEqual(['Terminal', 'Files', 'Terminal']);
+
+    // It runs as the PREVIEW identity, never as the app itself — the property that
+    // stops a preview reading or corrupting an installed copy's storage, since the
+    // partition is derived from this id.
+    expect(outcome.appId).toBe('com.genie.previewed~preview');
+
+    // And NOTHING was installed, while the window was open. Not the preview id,
+    // not the app's own: no entry in the Apps list means no tray pill and nothing
+    // to uninstall afterwards.
+    expect(outcome.installedWhileOpen).not.toContain('com.genie.previewed');
+    expect(outcome.installedWhileOpen).not.toContain('com.genie.previewed~preview');
+});
+
+test('closing a preview is the whole cleanup', async () => {
+    // The other half of "it installs nothing": what it DID create has to go. The
+    // throwaway workspace and every panel row in it — otherwise previewing ten
+    // folders leaves ten dead workspaces holding terminals that were once live.
+    const outcome = await app.evaluate(() =>
+        (globalThis as Record<string, any>).__GENIE_E2E_APPS__.previewScaffolded({
+            agents: 2,
+        }),
+    );
+
+    expect(outcome.panels).toHaveLength(2);
+    expect(outcome.afterClose.workspace).toBe(false);
+    expect(outcome.afterClose.specs).toBe(0);
+});
