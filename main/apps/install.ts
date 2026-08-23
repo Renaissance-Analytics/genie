@@ -21,6 +21,11 @@
  */
 
 import { appInstallPlan, type AppProcessPlan } from './install-plan';
+import {
+    decideAppUpdate,
+    type ArrivingVersion,
+    type InstalledAppVersion,
+} from './updates';
 import { buildConsentPlan, readConsent } from './consent-plan';
 import { decideStorageOnInstall } from './data-retention';
 import { validateAppManifest, APP_MANIFEST_FILENAME, type AppManifest } from './manifest';
@@ -178,6 +183,52 @@ export interface InstallOptions {
     source?: AppSource;
 }
 
+/**
+ * Start the app's services and its site, reporting what would not come up.
+ *
+ * Shared by install and update on purpose. An updated app has to come up the same
+ * way a freshly installed one does — same processes, same site, same order — and a
+ * second implementation of "bring it up" is a second place for the two to diverge
+ * over a release.
+ *
+ * Nothing here fails the caller. The owner's rule for a missing runtime applies to
+ * all of it: the app lands, and whatever cannot start is REPORTED with its reason
+ * rather than taking a good install down with it.
+ */
+async function bringUp(
+    io: AppInstallIO,
+    workspaceId: string,
+    manifest: AppManifest,
+    plan: { processes: AppProcessPlan[] },
+): Promise<string[]> {
+    const warnings: string[] = [];
+    const attempt = async (
+        what: string,
+        run: () => Promise<{ ok: boolean; error?: string }>,
+    ): Promise<void> => {
+        try {
+            const r = await run();
+            if (!r.ok) warnings.push(`${what} did not start: ${r.error ?? 'no reason given'}`);
+        } catch (e) {
+            // A supervisor that throws must not be worse than one that says no.
+            warnings.push(`${what} did not start: ${(e as Error).message}`);
+        }
+    };
+
+    // Services first, and each independently: an app whose backend is missing
+    // should still serve its front end, which is where it can EXPLAIN that.
+    for (const service of plan.processes) {
+        if (!io.createService) break;
+        await attempt(`The service “${service.label}”`, () =>
+            io.createService!(workspaceId, service),
+        );
+    }
+    if (io.startSite) {
+        await attempt(`The site “${manifest.slug}”`, () => io.startSite!(workspaceId, manifest.slug));
+    }
+    return warnings;
+}
+
 export async function installAppFromFolder(
     sourceFolder: string,
     io: AppInstallIO,
@@ -294,33 +345,7 @@ export async function installAppFromFolder(
     // below rolls it back. The owner's rule for a missing runtime applies to
     // everything here — the app lands, and whatever cannot start is REPORTED with
     // the reason rather than taking the install down with it.
-    const warnings: string[] = [];
-    const attempt = async (
-        what: string,
-        run: () => Promise<{ ok: boolean; error?: string }>,
-    ): Promise<void> => {
-        try {
-            const r = await run();
-            if (!r.ok) warnings.push(`${what} did not start: ${r.error ?? 'no reason given'}`);
-        } catch (e) {
-            // A supervisor that throws must not be worse than one that says no.
-            warnings.push(`${what} did not start: ${(e as Error).message}`);
-        }
-    };
-
-    // Services first, and each independently: an app whose backend is missing
-    // should still serve its front end, which is where it can EXPLAIN that.
-    for (const service of plan.processes) {
-        if (!io.createService) break;
-        await attempt(`The service “${service.label}”`, () =>
-            io.createService!(workspace.workspaceId, service),
-        );
-    }
-    if (io.startSite) {
-        await attempt(`The site “${manifest.slug}”`, () =>
-            io.startSite!(workspace.workspaceId, manifest.slug),
-        );
-    }
+    const warnings = await bringUp(io, workspace.workspaceId, manifest, plan);
 
     return {
         ok: true,
@@ -329,5 +354,158 @@ export async function installAppFromFolder(
         homeUrl: `https://${manifest.slug}.gen/`,
         ...(warnings.length > 0 ? { warnings } : {}),
         userProvides: requirements.userProvides,
+    };
+}
+
+
+/* -------------------------------------------------------------------------- */
+/* Updating one                                                               */
+/* -------------------------------------------------------------------------- */
+
+export interface AppUpdateResult extends AppInstallResult {
+    /** Which of the three paths this version took. */
+    applied: 'quiet' | 'consent' | 'blocked';
+}
+
+export interface AppUpdateContext {
+    /** The installed copy and what the user actually granted it. */
+    installed: InstalledAppVersion;
+    /** Where this version came from and the commit Genie announced before fetching. */
+    arriving: Omit<ArrivingVersion, 'manifest'>;
+}
+
+/**
+ * Apply a fetched version to an app that is already installed (Tynn #250).
+ *
+ * The owner's requirement is that a GApp updates on its own development lifecycle,
+ * with no Genie release involved. The security model's requirement is that a
+ * version asking for more than the user granted goes back through consent. This is
+ * where they meet, and the shape is: DECIDE, then act on the decision.
+ *
+ * The decision is made HERE, from the manifest that arrived — never handed in by
+ * the caller. A `skipConsent` argument would put a security decision somewhere it
+ * cannot be reviewed and would be one bug away from being wrong; the whole point
+ * of `decideAppUpdate` is that a caller cannot assert its way past it.
+ *
+ * What the quiet path does NOT do is the load-bearing half:
+ *
+ *   - it never calls `io.ask`, because there is nothing new to ask,
+ *   - it carries the EXISTING grant forward untouched — same capabilities, same
+ *     reach, same revoked flag — so the app's authority cannot grow by updating,
+ *   - and it stays in the workspace the app already has, because a second
+ *     workspace would orphan the first with the user's data inside it.
+ */
+export async function updateAppFromFolder(
+    sourceFolder: string,
+    io: AppInstallIO,
+    context: AppUpdateContext,
+): Promise<AppUpdateResult> {
+    const { installed, arriving } = context;
+
+    const raw = io.readManifest(sourceFolder);
+    if (raw === null) {
+        return {
+            ok: false,
+            applied: 'blocked',
+            errors: [`The version that arrived has no ${APP_MANIFEST_FILENAME}.`],
+        };
+    }
+
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(raw);
+    } catch (e) {
+        return {
+            ok: false,
+            applied: 'blocked',
+            errors: [`${APP_MANIFEST_FILENAME} is not valid JSON: ${(e as Error).message}`],
+        };
+    }
+
+    const validated = validateAppManifest(parsed);
+    if (!validated.ok) return { ok: false, applied: 'blocked', errors: validated.errors };
+    const manifest = validated.value;
+
+    const decision = decideAppUpdate(installed, { ...arriving, manifest });
+
+    if (decision.kind === 'blocked') {
+        // Not a decision to put to the user: there is nothing they could usefully
+        // say yes to, so the modal never opens.
+        return { ok: false, applied: 'blocked', errors: decision.reasons };
+    }
+
+    const source: AppSource = {
+        kind: 'github',
+        origin: arriving.origin,
+        commit: arriving.commit,
+    };
+
+    if (decision.kind === 'consent') {
+        // The ordinary install path, unchanged — review, consent, and a grant made
+        // of what the user ticks THIS time. `installAppFromFolder` already reuses
+        // the existing workspace and already refuses to inherit the old grant.
+        const result = await installAppFromFolder(sourceFolder, io, { source });
+        return {
+            ...result,
+            applied: 'consent',
+            ...(result.errors ? { errors: result.errors } : {}),
+            // Why it had to ask, so the caller can say so rather than presenting a
+            // consent screen out of nowhere.
+            warnings: [...(result.warnings ?? []), ...decision.reasons],
+        };
+    }
+
+    // --- The quiet path ------------------------------------------------------
+    const existing = io.existingApp(manifest.id);
+    if (!existing) {
+        // The caller said this app is installed and the registry disagrees. Doing
+        // nothing is the only safe reading of that.
+        return {
+            ok: false,
+            applied: 'blocked',
+            errors: ['That app is no longer installed, so there was nothing to update.'],
+        };
+    }
+
+    const plan = appInstallPlan(existing.workspaceId, manifest);
+    try {
+        io.copyAppSource(sourceFolder, existing.path, manifest);
+        io.persistSites(existing.workspaceId, { [plan.siteId]: plan.site });
+        io.recordGrant({
+            appId: manifest.id,
+            workspaceId: existing.workspaceId,
+            // The NEW name and version: this is what is on the machine now.
+            name: manifest.name,
+            version: manifest.version,
+            slug: manifest.slug,
+            // The OLD authority, every field of it. This is the line that makes a
+            // quiet update safe, and it is the one to look at first if this ever
+            // has to be re-audited.
+            scope: installed.scope,
+            workspaces: installed.workspaces,
+            capabilities: installed.capabilities,
+            // A revoked app stays revoked. Updating is not a way to switch its
+            // permissions back on.
+            revoked: installed.revoked,
+            manifestJson: raw,
+            installPath: existing.path,
+            // The verified commit, so the NEXT update has a real version to
+            // compare against rather than the one before it.
+            source,
+            devMode: false,
+        });
+    } catch (e) {
+        return { ok: false, applied: 'blocked', errors: [(e as Error).message] };
+    }
+
+    const warnings = await bringUp(io, existing.workspaceId, manifest, plan);
+
+    return {
+        ok: true,
+        applied: 'quiet',
+        appId: manifest.id,
+        workspaceId: existing.workspaceId,
+        homeUrl: `https://${manifest.slug}.gen/`,
+        ...(warnings.length > 0 ? { warnings } : {}),
     };
 }
