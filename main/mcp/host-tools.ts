@@ -21,7 +21,6 @@ import {
     deleteTerminalSpec,
     getWorkspaceIssuewatchPolicyBuckets,
     removeWorkspace,
-    getAppGrant,
     type TerminalSpecMeta,
     type TerminalSpecRow,
 } from '../db';
@@ -79,6 +78,7 @@ import { resolveWorkspaceRepos, getWorkspaceFeed, getOpenCounts, getWorkspaceSta
 import { forceQuestion } from '../ask/force-question';
 import { resolveTargetWorkspace, type TargetDecision } from './target-workspace';
 import { resolveCaller, type Caller } from './caller-identity';
+import { appGrantFor } from '../apps/grant-lookup';
 import { decideAppTarget } from '../apps/scope';
 
 /**
@@ -93,20 +93,11 @@ import { decideAppTarget } from '../apps/scope';
 function resolveCallerFor(callerId: string): Caller {
     return resolveCaller(callerId, {
         terminalWorkspaceId: (id) => getTerminalSpec(id)?.workspace_id ?? null,
-        appGrant: (appId) => {
-            const row = getAppGrant(appId);
-            return row
-                ? {
-                      appId: row.appId,
-                      appName: row.name,
-                      workspaceId: row.workspaceId,
-                      scope: row.scope,
-                      workspaces: row.workspaces,
-                      capabilities: row.capabilities,
-                      revoked: row.revoked,
-                  }
-                : null;
-        },
+        // Installed OR being PREVIEWED. A preview's grant is never written to
+        // the app registry, so a lookup that only read the table would let its
+        // `me()` answer while every `call()` it made resolved to no workspace at
+        // all — an app that looks alive and can do nothing.
+        appGrant: (appId) => appGrantFor(appId),
     });
 }
 
