@@ -257,3 +257,50 @@ describe('reading the answer', () => {
         }
     });
 });
+
+/**
+ * The agents the app ships, on the screen where they are agreed to.
+ *
+ * This is the entire reason agents are DECLARED in the manifest instead of being
+ * discovered from `.agents/` (owner, 2026-08-22). A GApp's agents run under the
+ * app's granted capabilities, so a file appearing in the folder would add an agent
+ * nobody agreed to — and a consent screen cannot describe a set it has to go
+ * looking for. Declaring them buys exactly one thing: this list. If it were not
+ * shown, the cost of declaration would have bought nothing.
+ */
+describe('the agents a GApp ships, at install', () => {
+    const withAgents = () =>
+        manifest({
+            agents: [
+                { name: 'Strategist', persona: 'strategist.md', description: 'Designs trades.' },
+                { name: 'Reviewer', persona: 'reviewer.md' },
+            ],
+        });
+
+    it('names every agent the app will run', () => {
+        const text = plan(withAgents()).questions[0]?.question ?? '';
+
+        expect(text).toContain('Strategist');
+        expect(text).toContain('Reviewer');
+    });
+
+    it('shows what an agent is FOR when the app said', () => {
+        const text = plan(withAgents()).questions[0]?.question ?? '';
+        expect(text).toContain('Designs trades.');
+    });
+
+    it('says the agents run on the permissions being granted here', () => {
+        // The sentence that makes the list mean something. Without it the roster
+        // reads as trivia; with it, ticking a permission is visibly ticking it for
+        // these agents too.
+        const text = plan(withAgents()).questions[0]?.question ?? '';
+        expect(text).toMatch(/permissions you grant/i);
+    });
+
+    it('says nothing at all about agents when the app ships none', () => {
+        // Most GApps ship none. A heading over an empty list is noise on the one
+        // screen that must stay readable.
+        const text = plan().questions[0]?.question ?? '';
+        expect(text.toLowerCase()).not.toContain('agent');
+    });
+});

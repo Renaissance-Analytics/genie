@@ -1,5 +1,5 @@
 import { devSiteIdFor, type DevSiteConfig } from '../dev-server/sites-config';
-import type { AppManifest } from './manifest';
+import { APP_AGENTS_DIR, APP_MANIFEST_FILENAME, type AppManifest } from './manifest';
 
 /**
  * PURE. What installing a GApp actually configures (Tynn #250).
@@ -38,6 +38,53 @@ export interface AppInstallPlan {
 /** `repos/<name>`, or '' for the workspace root — the envelope's own spelling. */
 function repoPath(repo: string | undefined): string {
     return repo ? `repos/${repo}` : '';
+}
+
+/** What of the source folder becomes the installed app. */
+export interface AppCopyPlan {
+    /** The app named no components, so the whole folder IS the app. */
+    wholeFolder: boolean;
+    /** Component folders, each landing at `repos/<name>`. */
+    components: string[];
+    /** Envelope-level paths that travel whatever the components are. */
+    envelopePaths: string[];
+}
+
+/**
+ * Which paths of the source folder travel into the workspace.
+ *
+ * A GApp with named components is copied component by component: the manifest
+ * says which folders are the app, and the rest of the developer's directory is
+ * not. That rule is right, and it is precisely why the envelope-level paths have
+ * to be enumerated here — they belong to no component, so nothing else would
+ * carry them.
+ *
+ * `.agents/` is carried only when the app DECLARED agents. Copying it
+ * unconditionally would smuggle discovery back in through the copier: files would
+ * land on the machine that no consent screen ever described. What travels is the
+ * folder — a persona is often more than one file — but what may RUN is only what
+ * the manifest declared, which `validateAppFolder` has already checked is there.
+ *
+ * Pure, because the assertion that matters is about a path that must NOT be
+ * forgotten, and a copier made of `fs` calls cannot state that.
+ */
+export function appCopyPlan(manifest: AppManifest): AppCopyPlan {
+    const components = new Set<string>();
+    if (manifest.frontend.repo) components.add(manifest.frontend.repo);
+    for (const service of manifest.services ?? []) {
+        if (service.repo) components.add(service.repo);
+    }
+
+    return {
+        wholeFolder: components.size === 0,
+        components: [...components],
+        envelopePaths: [
+            // The manifest travels so its DECLARED permissions stay readable after
+            // install — that is the ceiling the permissions screen narrows to.
+            APP_MANIFEST_FILENAME,
+            ...((manifest.agents ?? []).length > 0 ? [APP_AGENTS_DIR] : []),
+        ],
+    };
 }
 
 export function appInstallPlan(workspaceId: string, manifest: AppManifest): AppInstallPlan {

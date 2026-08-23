@@ -44,6 +44,7 @@ import { installAppFromFolder, type AppInstallIO, type AppInstallResult } from '
 import { manageProcessForMcp } from '../mcp/host-tools';
 import { manageSiteForMcp } from '../mcp/dev-site-tools';
 import { callerIdForApp } from '../mcp/caller-identity';
+import { appCopyPlan } from './install-plan';
 import {
     APP_MANIFEST_FILENAME,
     validateAppManifest,
@@ -86,20 +87,16 @@ import { listAppGrants } from '../db';
  * and the process `cwd` from `appInstallPlan` point at real directories.
  */
 function copyAppSource(sourceFolder: string, workspacePath: string, manifest: AppManifest): void {
-    const components = new Set<string>();
-    if (manifest.frontend.repo) components.add(manifest.frontend.repo);
-    for (const service of manifest.services ?? []) {
-        if (service.repo) components.add(service.repo);
-    }
+    const plan = appCopyPlan(manifest);
 
     // An app with no named components is a single-folder app: the whole thing is
-    // the workspace root.
-    if (components.size === 0) {
+    // the workspace root, envelope paths included.
+    if (plan.wholeFolder) {
         fs.cpSync(sourceFolder, workspacePath, { recursive: true, force: true });
         return;
     }
 
-    for (const component of components) {
+    for (const component of plan.components) {
         const from = path.join(sourceFolder, component);
         if (!fs.existsSync(from)) {
             throw new Error(
@@ -111,12 +108,19 @@ function copyAppSource(sourceFolder: string, workspacePath: string, manifest: Ap
             force: true,
         });
     }
-    // The manifest travels with the app so its DECLARED permissions stay readable
-    // after install — that is the ceiling the permissions screen narrows to.
-    fs.copyFileSync(
-        path.join(sourceFolder, APP_MANIFEST_FILENAME),
-        path.join(workspacePath, APP_MANIFEST_FILENAME),
-    );
+
+    // Envelope-level paths belong to no component, so nothing above carries them —
+    // the manifest itself, and `.agents/` when the app declared agents. Which ones
+    // is decided in `appCopyPlan` and asserted there; this only moves them.
+    for (const relative of plan.envelopePaths) {
+        const from = path.join(sourceFolder, relative);
+        if (!fs.existsSync(from)) {
+            throw new Error(
+                `The app declares "${relative}", but there is no such path in ${sourceFolder}.`,
+            );
+        }
+        fs.cpSync(from, path.join(workspacePath, relative), { recursive: true, force: true });
+    }
 }
 
 

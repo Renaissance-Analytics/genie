@@ -136,6 +136,41 @@ export interface AppTab {
     path: string;
 }
 
+/**
+ * The folder inside a `.gapp` envelope holding one file (or directory) per agent.
+ *
+ * Envelope-owned, beside `repos/` and `project.json` — an agent belongs to the
+ * APP, not to any one of its repos, and it travels with the app the way its
+ * services do.
+ */
+export const APP_AGENTS_DIR = '.agents';
+
+/**
+ * One agent a GApp ships.
+ *
+ * DECLARED here rather than discovered by reading `.agents/` (owner, 2026-08-22).
+ * Discovery is the ecosystem convention and it keeps one source of truth, so the
+ * reason it lost is worth stating: a GApp's agents run under the app's GRANTED
+ * capabilities, so a file appearing in `.agents/` would add an agent nobody agreed
+ * to, and a consent screen cannot describe a set it has to go looking for.
+ * Declaration is also what every other GApp capability already does —
+ * `capabilities`, `panels`, `tabs`, `services`, `requires` — so this keeps one
+ * rule rather than two.
+ *
+ * The accepted cost is two places to keep in step when an agent is added. What
+ * stops them drifting is `validateAppFolder`: a declared agent whose persona file
+ * is missing fails the folder check, in the same breath as a front end pointed at
+ * a `dist` nobody built.
+ */
+export interface AppAgentDecl {
+    /** What the consent screen calls it. Unique within the manifest. */
+    name: string;
+    /** Path to its persona, RELATIVE to `.agents/`. */
+    persona: string;
+    /** One line: what this agent is for. Shown at install. */
+    description?: string;
+}
+
 export interface AppManifest {
     /** Reverse-DNS, globally unique. */
     id: string;
@@ -152,6 +187,8 @@ export interface AppManifest {
     panels: AppPanels;
     /** Extra tabs the app serves, in the order the strip shows them. */
     tabs?: AppTab[];
+    /** The agents this app ships, each with a persona under `.agents/`. */
+    agents?: AppAgentDecl[];
     permissions: AppPermissions;
 }
 
@@ -163,6 +200,14 @@ const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const SEMVER = /^\d+\.\d+\.\d+(?:[-+].+)?$/;
 /** A window is a layout, not an appetite. */
 const MAX_AGENT_PANELS = 8;
+/**
+ * A roster is something the user has to READ.
+ *
+ * Every declared agent is a line on the consent screen, and the failure mode
+ * consent exists to prevent is a screen nobody finishes. Same reasoning as the
+ * panel cap, applied to the other half of the pair.
+ */
+const MAX_DECLARED_AGENTS = 16;
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
     typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -317,6 +362,78 @@ function validateTabs(raw: unknown, errors: string[]): AppTab[] | undefined {
     return out;
 }
 
+/**
+ * A persona path, RELATIVE to `.agents/` and unable to leave it.
+ *
+ * This is the strict half of the pair, and it is strict for a concrete reason: the
+ * persona is read and becomes an agent's instructions. A path that climbed out of
+ * the folder would let a manifest point that at anything on the machine — an SSH
+ * key, a `.env` — and have Genie hand it to a model. So: forward slashes only, and
+ * each segment drawn from a small allow-list that cannot spell traversal.
+ */
+const PERSONA_SEGMENT = /^[A-Za-z0-9._-]+$/;
+
+function isPersonaPath(value: unknown): value is string {
+    if (!nonEmpty(value)) return false;
+    // An ALLOW-list, not a list of things to reject. A deny-list here would have to
+    // enumerate every spelling of "leave the folder" — a Windows separator, a drive
+    // letter, a leading slash, a URL — and the one that gets forgotten is the one
+    // that gets used. Segments of `[A-Za-z0-9._-]` cannot express any of them.
+    return value.split('/').every((seg) => PERSONA_SEGMENT.test(seg) && seg !== '.' && seg !== '..');
+}
+
+/**
+ * The agents this app ships — every one of them named, and every one of them
+ * pointed at a persona under `.agents/`.
+ *
+ * Absent stays ABSENT rather than becoming `[]`: most GApps ship no agent of their
+ * own, and an empty roster would read as one that happens to be empty this time.
+ */
+function validateAgents(raw: unknown, errors: string[]): AppAgentDecl[] | undefined {
+    if (raw === undefined) return undefined;
+    if (!Array.isArray(raw)) {
+        errors.push('`agents` must be an array when present');
+        return undefined;
+    }
+    if (raw.length > MAX_DECLARED_AGENTS) {
+        errors.push(
+            `\`agents\` declares ${raw.length} agents; at most ${MAX_DECLARED_AGENTS} can be ` +
+                'put to the user at install, and a roster nobody reads is not consent.',
+        );
+        return undefined;
+    }
+
+    const out: AppAgentDecl[] = [];
+    const seen = new Set<string>();
+    raw.forEach((entry, i) => {
+        if (!isRecord(entry) || !nonEmpty(entry.name)) {
+            errors.push(`\`agents[${i}].name\` is required — the consent screen has to name it`);
+            return;
+        }
+        if (!isPersonaPath(entry.persona)) {
+            errors.push(
+                `\`agents[${i}].persona\` must be a path inside ${APP_AGENTS_DIR}/ — ` +
+                    'relative, forward slashes, and it may not climb out of the folder',
+            );
+            return;
+        }
+        // Names are what the user reads. Two identical rows describe a roster they
+        // cannot tell apart, which is the same as not being told.
+        const key = entry.name.trim().toLowerCase().replace(/\s+/g, ' ');
+        if (seen.has(key)) {
+            errors.push(`\`agents[${i}].name\` "${entry.name.trim()}" is declared twice`);
+            return;
+        }
+        seen.add(key);
+        out.push({
+            name: entry.name.trim(),
+            persona: entry.persona,
+            ...(nonEmpty(entry.description) ? { description: entry.description } : {}),
+        });
+    });
+    return out;
+}
+
 function validateServices(raw: unknown, errors: string[]): AppService[] | undefined {
     if (raw === undefined) return undefined;
     if (!Array.isArray(raw)) {
@@ -447,6 +564,7 @@ export function validateAppManifest(raw: unknown): ValidationResult<AppManifest>
     const requires = validateRequires(raw.requires, errors);
     const panels = validatePanels(raw.panels, errors);
     const tabs = validateTabs(raw.tabs, errors);
+    const agents = validateAgents(raw.agents, errors);
     const frontend = validateFrontend(raw.frontend, errors);
     const services = validateServices(raw.services, errors);
     const permissions = validatePermissions(raw.permissions, errors);
@@ -466,6 +584,7 @@ export function validateAppManifest(raw: unknown): ValidationResult<AppManifest>
             ...(requires && requires.length > 0 ? { requires } : {}),
             panels,
             ...(tabs && tabs.length > 0 ? { tabs } : {}),
+            ...(agents && agents.length > 0 ? { agents } : {}),
             permissions,
         },
     };

@@ -16,6 +16,13 @@
             "port": 8791
         }
     ],
+    "agents": [
+        {
+            "name": "Example Helper",
+            "persona": "helper.md",
+            "description": "Answers questions about this app and its data."
+        }
+    ],
     "requires": [
         { "tool": "node", "reason": "runs the example's backend service" }
     ],
