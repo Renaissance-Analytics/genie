@@ -90,16 +90,18 @@ import {
     writeToTerminal,
     readTerminalOutput,
     broadcastTerminalAttention,
+    broadcastInboxIncoming,
+    beginInputHold,
+    releaseInputHold,
 } from './terminal/ipc';
 import { installAgentInboxPresence } from './agentinbox/presence';
 import { agentInboxBroker } from './agentinbox/broker';
+import { buildNudgeSequence, type NudgePlan } from './agentinbox/draft';
 import { dbAgentInboxStore } from './agentinbox/store';
 import { getWorkspaceAgentAccess } from './db';
 import { getTynnBackend } from './backend/registry';
 import { installKnowledgeBroadcast } from './knowledge/presence';
 import {
-    PASTE_SUBMIT_DELAY_MS,
-    resolveTerminalInput,
     stripAnsi,
 } from './terminal/keystrokes';
 import {
@@ -941,6 +943,41 @@ function readPtyHostPid(): number | null {
 }
 
 /**
+ * Carry out one nudge against a terminal — the I/O half of preserve-and-restore
+ * (owner, JOB 2). The plan comes from the broker; the writes, the keyboard hold
+ * and the toast happen here.
+ *
+ * The keyboard is held for the whole sequence and ALWAYS given back, replaying
+ * whatever the person typed meanwhile. Those bytes were taken from them, so they
+ * come back even if a write throws — which is why the release sits in `finally`
+ * rather than on the happy path. Replaying them last also puts them exactly
+ * where they would have landed had no swap happened: after the restored draft.
+ *
+ * Note the OS clipboard is never touched. Cutting with Ctrl-A/Ctrl-K and pasting
+ * back with bracketed paste keeps the whole round-trip inside the terminal, so
+ * there is nothing of the user's to save or clobber in the first place.
+ */
+async function deliverNudge(terminalId: string, text: string, plan: NudgePlan): Promise<void> {
+    try {
+        for (const w of buildNudgeSequence(plan, text)) {
+            if (w.delayMs > 0) await new Promise((r) => setTimeout(r, w.delayMs));
+            writeToTerminal(terminalId, w.bytes);
+        }
+        if (plan.mode === 'append') {
+            // Genie would not touch their draft, so the notice is sitting BEHIND
+            // it, unsubmitted. Tell the person — otherwise it is just mystery
+            // text in their prompt, and the message looks like it never arrived.
+            broadcastInboxIncoming(terminalId);
+        }
+    } catch {
+        /* best-effort: the message is in the inbox regardless */
+    } finally {
+        const replay = releaseInputHold(terminalId);
+        if (replay) writeToTerminal(terminalId, replay);
+    }
+}
+
+/**
  * Render a DND-deferred ForceTheQuestion answer as the AgentInbox message the
  * asking agent pulls (genie #62). Restates each question with the option(s) the
  * user picked + any note, and echoes the questionId so the agent can correlate it
@@ -1298,23 +1335,15 @@ app.whenReady().then(async () => {
     try {
         installAgentInboxPresence();
         agentInboxBroker.setStore(dbAgentInboxStore);
-        // Wake-on-DM (issue #9): the broker decides IF an idle opted-in agent should
-        // be woken (fail-safe); this sink does the actual injection — submit the
-        // nudge to the agent's pty, like a bracketed-paste send.
-        agentInboxBroker.setWakeSink((terminalId, text) => {
-            // Through the SAME resolver every other terminal write uses, so the
-            // notice gets the split submit (genie#218). Written as one chunk with
-            // an inline CR, an agent TUI treats the ~180-character notice as a
-            // PASTE and the trailing Enter becomes a newline in its buffer — the
-            // nudge lands, sits at the prompt, and no turn ever starts. Which is
-            // the whole point of the nudge.
-            const built = resolveTerminalInput(text, { submit: true });
-            if ('error' in built) return;
-            writeToTerminal(terminalId, built.bytes);
-            if (built.submitAfter) {
-                const submit = built.submitAfter;
-                setTimeout(() => writeToTerminal(terminalId, submit), PASTE_SUBMIT_DELAY_MS);
-            }
+        // The broker decides WHAT to say and HOW it may land (see agentinbox/
+        // draft.ts); this sink performs it. Returns false when it cannot start,
+        // so the broker can fall back to the idle-only wake.
+        agentInboxBroker.setWakeSink(({ terminalId, text, plan }) => {
+            // One swap per terminal: a second notice must never cut the same box
+            // while the first is still putting the draft back.
+            if (!beginInputHold(terminalId)) return false;
+            void deliverNudge(terminalId, text, plan);
+            return true;
         });
         // AgentInbox OUTER tier: the broker asks the workspaces table who may reach
         // into a given workspace. Kept a seam so the broker stays db-free (and

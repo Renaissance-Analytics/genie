@@ -12,13 +12,33 @@
  *     receipts and can nudge manually.
  *   - A wrong wake corrupts a live agent.
  *
- * The load-bearing signal is `lastOutputAt <= lastTurnEndAt`: the agent's last
- * turn ENDED (it called imDone), and NO output has appeared since. A new turn —
- * or even a human typing at the prompt (keystroke echo is output) — pushes
- * `lastOutputAt` past `lastTurnEndAt` and gates the wake out. This can only fail
- * toward not-waking (if the TUI emits any idle redraw, we simply don't wake),
- * NEVER into a live turn. Plus a conservative quiet window and a one-wake-per-idle
- * -period guard. Pure so every branch is unit-tested.
+ * ## Why the ordering test had to go
+ *
+ * The original load-bearing signal was `lastOutputAt <= lastTurnEndAt` — the
+ * turn ended and NO output has appeared since. It read as the safest possible
+ * rule, and it was in fact DEAD: `markTurnEnd` is called from the imDone MCP
+ * handler, which runs MID-TURN. After it, the TUI still has to paint the tool
+ * result, the agent's closing message and the prompt. That trailing output
+ * always lands after `lastTurnEndAt`, so the gate latched shut on the very first
+ * turn and never reopened — a fail-safe that failed all the way to a dead
+ * feature, silently.
+ *
+ * ## What replaces it: SILENCE, and a separate signal per meaning
+ *
+ * Measured on live terminals: an idle Claude Code agent emitted 0 bytes over ten
+ * minutes at its prompt, while a mid-turn sibling emitted ~99 KB in the same
+ * window — a working TUI repaints its spinner continuously. So sustained
+ * silence, not output ordering, is what actually distinguishes them.
+ *
+ * The old rule also conflated two very different things behind one timestamp:
+ *
+ *   - "the agent is mid-turn emitting output" → {@link WakeState.lastOutputAt},
+ *     which must still block absolutely; and
+ *   - "a human is typing at an idle prompt" → {@link WakeState.lastUserInputAt},
+ *     which used to be caught only by accident, through keystroke ECHO.
+ *
+ * They are now separate inputs. Plus a conservative quiet window and a
+ * one-wake-per-idle-period guard. Pure so every branch is unit-tested.
  */
 
 /** Minimum quiet time (ms) since the turn ended before a wake — a margin past the
@@ -33,6 +53,9 @@ export interface WakeState {
     lastTurnEndAt: number | null;
     /** Epoch ms of the agent terminal's last output byte. null = no output seen. */
     lastOutputAt: number | null;
+    /** Epoch ms of the last REAL human keystroke at this terminal, or null. Not
+     *  the emulator's replies — see `containsHumanInput` in ./notify. */
+    lastUserInputAt: number | null;
     /** Epoch ms we last woke this agent. null = never. */
     lastWokenAt: number | null;
     /** Now (epoch ms). */
@@ -49,16 +72,20 @@ export function shouldWakeAgent(s: WakeState): boolean {
     if (!s.wakeOnDm) return false;
     // Never finished a turn → we don't know it's at a prompt. Don't touch it.
     if (s.lastTurnEndAt == null) return false;
-    // ANY output since the turn ended means a new turn (or a human typing) began
-    // — NOT idle. This is the core safety gate; fail closed.
-    if (s.lastOutputAt != null && s.lastOutputAt > s.lastTurnEndAt) return false;
     // The turn must have ended at least the quiet window ago (skip the imDone
     // output-flush tail, and require sustained quiet).
     if (s.now - s.lastTurnEndAt < WAKE_QUIET_MS) return false;
-    // And no output at all within the quiet window (belt-and-suspenders with the
-    // gate above, in case lastOutputAt is null).
+    // THE MID-TURN TRIPWIRE. A working agent's TUI paints continuously — its
+    // spinner, elapsed clock and status footer — so an unbroken quiet window is
+    // what proves the turn actually stopped. Output that arrived just after
+    // imDone is the ENDING turn's own tail and is allowed to have happened; what
+    // is never allowed is output that has not yet settled.
     const quietSince = s.lastOutputAt ?? s.lastTurnEndAt;
     if (s.now - quietSince < WAKE_QUIET_MS) return false;
+    // A human keystroke since the turn ended may have started a NEW turn that has
+    // not painted anything yet, and in any case means someone is at this prompt.
+    // Fail closed — the sender still sees the DM unseen in read-receipts.
+    if (s.lastUserInputAt != null && s.lastUserInputAt > s.lastTurnEndAt) return false;
     // One wake per idle period — don't re-nudge an agent we already woke since its
     // last turn ended (it's now processing our nudge, or chose not to).
     if (s.lastWokenAt != null && s.lastWokenAt >= s.lastTurnEndAt) return false;

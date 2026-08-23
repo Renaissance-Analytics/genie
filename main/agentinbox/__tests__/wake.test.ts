@@ -15,6 +15,7 @@ function state(over: Partial<WakeState> = {}): WakeState {
         wakeOnDm: true,
         lastTurnEndAt: OLD_TURN,
         lastOutputAt: OLD_TURN - 1_000, // last output was DURING the ended turn
+        lastUserInputAt: null,
         lastWokenAt: null,
         now: NOW,
         ...over,
@@ -40,13 +41,21 @@ describe('shouldWakeAgent — fail-closed safety gates (NEVER inject mid-turn)',
         expect(shouldWakeAgent(state({ lastTurnEndAt: null }))).toBe(false);
     });
 
-    it('CORE GATE: refuses when ANY output appeared since the turn ended (a new turn started)', () => {
-        expect(shouldWakeAgent(state({ lastOutputAt: OLD_TURN + 1 }))).toBe(false);
+    it('CORE GATE: refuses while output is still arriving — the agent is mid-turn', () => {
+        // Rewritten for the real contract. This used to assert that ANY output
+        // after the turn end blocks forever, which killed the feature outright:
+        // imDone is called mid-turn, so the turn's own closing paint always lands
+        // after `lastTurnEndAt`. What must block is output that has not SETTLED.
+        expect(shouldWakeAgent(state({ lastOutputAt: NOW - 1 }))).toBe(false);
     });
 
-    it('refuses on a human keystroke echo after the turn (output just past turn-end)', () => {
-        // Even a single output byte 1ms after the turn ended gates the wake out.
-        expect(shouldWakeAgent(state({ lastOutputAt: OLD_TURN + 1, now: NOW + 100 }))).toBe(false);
+    it('refuses on a human keystroke after the turn, with no output at all', () => {
+        // The case the old ordering gate caught only by accident, via keystroke
+        // ECHO. It is now its own signal, so it holds even for a TUI that echoes
+        // nothing — and it no longer depends on the agent having emitted anything.
+        expect(
+            shouldWakeAgent(state({ lastOutputAt: null, lastUserInputAt: OLD_TURN + 1 })),
+        ).toBe(false);
     });
 
     it('refuses while still inside the quiet window after a turn end (imDone flush tail)', () => {
@@ -55,13 +64,14 @@ describe('shouldWakeAgent — fail-closed safety gates (NEVER inject mid-turn)',
     });
 
     it('refuses when output is recent even if the turn-end is old', () => {
-        // lastOutputAt <= lastTurnEndAt (no new turn) but within the quiet window.
+        // Output within the quiet window — the agent has not settled.
         const recentOut = NOW - 1_000;
         expect(
             shouldWakeAgent({
                 wakeOnDm: true,
                 lastTurnEndAt: recentOut, // turn ended right at that output
                 lastOutputAt: recentOut,
+                lastUserInputAt: null,
                 lastWokenAt: null,
                 now: NOW,
             }),
@@ -95,5 +105,75 @@ describe('wakeNudgeText', () => {
         expect(wakeNudgeText(3)).toContain('3 unread AgentInbox messages;');
         // Never reports zero.
         expect(wakeNudgeText(0)).toContain('1 unread');
+    });
+});
+
+/**
+ * REGRESSION (owner: "the AgentInbox nudges aren't even firing anymore").
+ *
+ * The old gate was `lastOutputAt <= lastTurnEndAt` — ANY output after the turn
+ * end blocked the wake forever. That reads as a safe fail-closed rule, but
+ * `markTurnEnd` is called from the imDone MCP handler, i.e. MID-TURN: the TUI
+ * then still has to paint the tool result, the agent's closing message and the
+ * prompt. That trailing output ALWAYS lands after `lastTurnEndAt`, so the gate
+ * latched shut on the very first turn and never reopened.
+ *
+ * Measured on a live idle Claude Code terminal in this workspace: 0 bytes over
+ * ~10 minutes at the prompt, while a mid-turn sibling emitted ~99 KB in the same
+ * window. So SILENCE, not output ordering, is what actually separates the two —
+ * a working TUI paints its spinner continuously.
+ */
+describe('shouldWakeAgent — the turn TAIL must not latch the gate shut', () => {
+    it('wakes an agent whose TUI painted the turn tail AFTER imDone, then went quiet', () => {
+        // imDone at T; the TUI paints for another 1.5s; silence ever since.
+        const turnEnd = NOW - 10 * 60_000;
+        expect(
+            shouldWakeAgent(state({ lastTurnEndAt: turnEnd, lastOutputAt: turnEnd + 1_500 })),
+        ).toBe(true);
+    });
+
+    it('still REFUSES while the agent is actively painting (mid-turn)', () => {
+        // The safety property that must survive the fix: recent output = working.
+        const turnEnd = NOW - 10 * 60_000;
+        expect(
+            shouldWakeAgent(state({ lastTurnEndAt: turnEnd, lastOutputAt: NOW - 200 })),
+        ).toBe(false);
+    });
+
+    it('refuses when output stopped only just inside the quiet window', () => {
+        const turnEnd = NOW - 10 * 60_000;
+        expect(
+            shouldWakeAgent(
+                state({ lastTurnEndAt: turnEnd, lastOutputAt: NOW - (WAKE_QUIET_MS - 1) }),
+            ),
+        ).toBe(false);
+    });
+
+    it('a HUMAN keystroke since the turn ended fails closed — a new turn may be in flight', () => {
+        // Keystroke echo used to be caught only accidentally, via output. Now it is
+        // its own signal, separate from "the agent is emitting output".
+        const turnEnd = NOW - 10 * 60_000;
+        expect(
+            shouldWakeAgent(
+                state({
+                    lastTurnEndAt: turnEnd,
+                    lastOutputAt: turnEnd + 1_500,
+                    lastUserInputAt: turnEnd + 5_000,
+                }),
+            ),
+        ).toBe(false);
+    });
+
+    it('a human keystroke from BEFORE the turn ended does not block', () => {
+        const turnEnd = NOW - 10 * 60_000;
+        expect(
+            shouldWakeAgent(
+                state({
+                    lastTurnEndAt: turnEnd,
+                    lastOutputAt: turnEnd + 1_500,
+                    lastUserInputAt: turnEnd - 5_000,
+                }),
+            ),
+        ).toBe(true);
     });
 });

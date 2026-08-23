@@ -18,7 +18,8 @@ import {
 } from './types';
 import { noopAgentInboxStore, type AgentInboxStore, type StoredAttachment } from './store';
 import { shouldWakeAgent, wakeNudgeText } from './wake';
-import { inboxNoticeText, noteKeystrokes, shouldNotifyNow } from './notify';
+import { containsHumanInput, inboxNoticeText } from './notify';
+import { EMPTY_DRAFT, noteDraft, planNudge, type Draft, type NudgePlan } from './draft';
 
 /**
  * AgentInbox broker — the in-memory registry + channels + inboxes powering the
@@ -91,11 +92,25 @@ interface AgentInboxAgent extends Omit<AgentInboxAgentInfo, 'reachable'> {
     lastOutputAt: number | null;
     /** Epoch ms we last woke this agent, or null. One wake per idle period. */
     lastWokenAt: number | null;
-    /** The HUMAN has typed at this terminal since their last submit — a draft is
-     *  sitting in the box, so an immediate notice must not inject over it. */
-    pendingInput: boolean;
+    /** What Genie believes is in this terminal's input box, and whether it is
+     *  sure enough to cut the draft out and put it back. See ./draft. */
+    draft: Draft;
     /** Epoch ms of the last HUMAN keystroke at this terminal, or null. */
     lastUserInputAt: number | null;
+}
+
+/**
+ * One nudge, ready for the host to put into a terminal. The broker decides WHAT
+ * to say and HOW it may land given the state of the human's input box; the host
+ * does the pty writes, the keyboard hold and the toast.
+ */
+export interface NudgeDelivery {
+    terminalId: string;
+    /** The notice itself. */
+    text: string;
+    /** How it may be delivered — see {@link planNudge}. `append` means it must
+     *  NOT be submitted, and the person gets a toast instead. */
+    plan: NudgePlan;
 }
 
 /** Normalise a DM pair into a stable, order-independent log key. */
@@ -173,14 +188,18 @@ export class AgentInboxBroker {
         this.store = store;
     }
 
-    /** Deliver a wake nudge to a terminal (injects text + submit). Injected by the
-     *  host at boot (writes to the pty); absent in tests → wake is a no-op. Kept a
-     *  seam so the broker stays electron-free. */
-    private wakeSink: ((terminalId: string, text: string) => void) | null = null;
+    /** Deliver a nudge to a terminal. Injected by the host at boot (it writes to
+     *  the pty, holds the keyboard for the duration, and raises the toast);
+     *  absent in tests → delivery is a no-op. Kept a seam so the broker stays
+     *  electron-free.
+     *
+     *  Returns false when the host could NOT deliver — most often because a swap
+     *  is already in flight on that terminal — so the caller can fall back. */
+    private wakeSink: ((d: NudgeDelivery) => boolean | void) | null = null;
     /** Clock — injectable so wake-on-DM idle timing is deterministically testable. */
     private now: () => number = () => Date.now();
 
-    setWakeSink(fn: (terminalId: string, text: string) => void): void {
+    setWakeSink(fn: (d: NudgeDelivery) => boolean | void): void {
         this.wakeSink = fn;
     }
 
@@ -253,12 +272,18 @@ export class AgentInboxBroker {
      * (a renderer sending what a person typed), NOT from Genie's own injection
      * path, so the draft state reflects the person and never our own bytes.
      * No-op for a terminal with no agent.
+     *
+     * That IPC is not keystrokes ALONE, though: xterm answers the TUI's queries
+     * down the same channel, and Genie writes its OSC 52 clipboard response back
+     * through it. Stamping `lastUserInputAt` for those made a polling TUI look
+     * like a person typing forever, so the timestamp now moves only for input a
+     * human actually produced.
      */
     noteUserInput(terminalId: string, data: string): void {
         const a = this.agentForTerminal(terminalId);
         if (!a) return;
-        a.pendingInput = noteKeystrokes(a.pendingInput, data);
-        a.lastUserInputAt = this.now();
+        a.draft = noteDraft(a.draft, data);
+        if (containsHumanInput(data)) a.lastUserInputAt = this.now();
     }
 
     /** Whether a terminal is a registered agent (drives the mid-turn AgentPulse glow). */
@@ -268,19 +293,20 @@ export class AgentInboxBroker {
 
     /**
      * Announce a just-delivered message in the agent's own chat, IMMEDIATELY —
-     * the owner's beta.248 change.
+     * the owner's beta.248 change, now with PRESERVE-AND-RESTORE (JOB 2).
      *
-     * Wake-on-DM ({@link maybeWake}) waits for a provably-idle agent, which means
-     * a busy agent hears nothing until its turn ends. A TUI queues text that
-     * arrives mid-turn (it is how a human interjects), so the message can simply
-     * be announced when it lands, with its URGENCY, and the agent decides whether
-     * to break flow.
+     * A busy agent used to hear nothing until its turn ended. A TUI queues text
+     * that arrives mid-turn (it is how a human interjects), so the message is
+     * simply announced when it lands, with its urgency, and the agent decides
+     * whether to break flow.
      *
-     * The only thing held back for is the HUMAN's draft: {@link shouldNotifyNow}
-     * refuses while they have text in the box or are mid-keystroke, because
-     * injecting there would splice into their sentence and submit it. A held
-     * notice loses nothing — the message is in the inbox, the MCP stream was
-     * notified, and imDone still reports the count.
+     * What used to stop it was the HUMAN's draft: a half-written prompt in the
+     * box meant the notice was dropped entirely. It no longer is. Instead
+     * {@link planNudge} decides how it can land without costing them anything:
+     * an empty box takes it and submits; a draft Genie is CERTAIN of is cut out,
+     * the notice submitted, and the draft pasted back; and when Genie is not
+     * certain the notice is appended WITHOUT being submitted, so nothing of
+     * theirs is cut, and the host raises a toast telling them it is there.
      */
     private notifyNow(target: AgentInboxAgent, msg: AgentInboxMessage): boolean {
         if (!this.wakeSink || !target.terminalId) return false;
@@ -288,22 +314,25 @@ export class AgentInboxBroker {
         // who deliberately silenced an agent keeps that silence — a setting that
         // stops being honoured is worse than no setting.
         if (!target.wakeOnDm) return false;
-        if (
-            !shouldNotifyNow({
-                pendingInput: target.pendingInput,
-                lastUserInputAt: target.lastUserInputAt,
-                now: this.now(),
-            })
-        ) {
-            return false;
-        }
         const text = inboxNoticeText({
             from: msg.fromLabel,
             ...(msg.channel ? { channel: this.channelDisplayName(msg.channel) } : {}),
             priority: msg.interrupt ? 'high' : 'normal',
         });
+        const plan = planNudge(target.draft);
         try {
-            this.wakeSink(target.terminalId, text);
+            // The host refuses when a swap is already in flight on this terminal —
+            // two notices must never both cut the same box.
+            if (this.wakeSink({ terminalId: target.terminalId, text, plan }) === false) {
+                return false;
+            }
+            if (plan.mode === 'append') {
+                // Appended, not submitted: the notice is now sitting in the box
+                // behind their draft, so Genie no longer knows what is in there —
+                // and no turn was started, so this is NOT a wake.
+                target.draft = { ...target.draft, confident: false };
+                return true;
+            }
             // Submitting text to an idle TUI IS what starts a turn, so a delivered
             // notice is also the wake — the caller skips maybeWake and the agent
             // gets ONE injection, not two competing prompts.
@@ -340,6 +369,7 @@ export class AgentInboxBroker {
             wakeOnDm: target.wakeOnDm,
             lastTurnEndAt: target.lastTurnEndAt,
             lastOutputAt: target.lastOutputAt,
+            lastUserInputAt: target.lastUserInputAt,
             lastWokenAt: target.lastWokenAt,
             now: this.now(),
         });
@@ -347,7 +377,12 @@ export class AgentInboxBroker {
         const unread = target.inbox.filter((m) => m.seq > target.cursor).length;
         target.lastWokenAt = this.now();
         try {
-            this.wakeSink(target.terminalId, wakeNudgeText(unread));
+            // Provably idle, so the box is empty: submit it and start the turn.
+            this.wakeSink({
+                terminalId: target.terminalId,
+                text: wakeNudgeText(unread),
+                plan: planNudge(target.draft),
+            });
         } catch {
             /* a failed wake just leaves the DM for read-receipts + a manual nudge */
         }
@@ -372,13 +407,14 @@ export class AgentInboxBroker {
             wakeOnDm: true,
             lastTurnEndAt: a.lastTurnEndAt,
             lastOutputAt: a.lastOutputAt,
+            lastUserInputAt: a.lastUserInputAt,
             lastWokenAt: a.lastWokenAt,
             now: this.now(),
         });
         if (!wake) return false;
         a.lastWokenAt = this.now();
         try {
-            this.wakeSink(terminalId, text);
+            this.wakeSink({ terminalId, text, plan: planNudge(a.draft) });
             return true;
         } catch {
             return false;
@@ -632,7 +668,7 @@ export class AgentInboxBroker {
             lastWokenAt: existing?.lastWokenAt ?? null,
             // The human's draft state at this terminal — runtime state, carried
             // across a re-join like the idle timestamps.
-            pendingInput: existing?.pendingInput ?? false,
+            draft: existing?.draft ?? EMPTY_DRAFT,
             lastUserInputAt: existing?.lastUserInputAt ?? null,
         };
         this.agents.set(agent.agentId, agent);

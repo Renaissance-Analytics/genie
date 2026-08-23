@@ -18,8 +18,8 @@
 
 /** Bracketed-paste markers. The TUI treats everything between them as pasted
  *  literal text (no per-line Enter), so a multi-line body lands as one block. */
-const PASTE_START = '\x1b[200~';
-const PASTE_END = '\x1b[201~';
+export const PASTE_START = '\x1b[200~';
+export const PASTE_END = '\x1b[201~';
 
 /** A carriage return — what a real Enter keypress sends to a pty (NOT "\n"). */
 export const CR = '\r';
