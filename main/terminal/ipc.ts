@@ -505,11 +505,12 @@ export function createAgentTerminal(opts: {
     let env: Record<string, string> = {};
     const ws = getWorkspace(opts.workspaceId);
     const wsRoot = ws?.path;
-    // MINUS the keys Genie itself wrote into that file (genie#242). A site's
-    // `repo` defaults to the workspace ROOT, so `<workspace>/.env` is very often
-    // the very file Genie keeps the service connection in — and re-exporting it
-    // here would hand every shell an ambient `DB_PORT` that outranks EVERY repo's
-    // `.env`, which is the bug this feature removes, enlarged.
+    // The workspace `.env` reaches a terminal MINUS the keys Genie itself wrote
+    // into it (genie#242). A site's `repo` defaults to the workspace ROOT, so
+    // `<workspace>/.env` is very often the very file Genie keeps the service
+    // connection in — and re-exporting it here would hand every shell an ambient
+    // `DB_PORT` that outranks EVERY repo's `.env`, which is the bug this feature
+    // removes, enlarged. A key the USER put there is untouched.
     env = withoutManagedServiceKeys(
         buildTerminalEnv(wsRoot, ws?.project_id),
         devServiceHostEnvFor(opts.workspaceId),
