@@ -633,6 +633,12 @@ export function previewIO(): PreviewIO {
  * is both the moment it has something new to say and the moment a developer most
  * wants to see how their own ask reads. Anything else would be either friction on
  * every preview or a screen they never meet.
+ *
+ * By FOLDER and not by hosted site, and that stays right when a manifest can
+ * declare several (genie#238). Permissions are declared once for the whole app —
+ * a GApp with three hosted sites has one `permissions` block, not three — so
+ * asking again per site would be asking the same question three times and
+ * recording three answers that can never legitimately differ.
  */
 const previewConsents = new Map<string, RememberedConsent>();
 
