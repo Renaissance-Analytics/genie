@@ -1701,6 +1701,16 @@ const api = {
             ipcRenderer.on('terminal:host-status', handler);
             return () => ipcRenderer.off('terminal:host-status', handler);
         },
+        /** A message landed for an agent whose input box Genie would not touch, so
+         *  the notice was APPENDED there without being submitted. The renderer
+         *  raises a top-centre toast — otherwise it is just mystery text in
+         *  someone's prompt and the message looks like it never arrived. */
+        agentInboxIncoming: (cb: (payload: { id: string; from: string }) => void) => {
+            const handler = (_e: unknown, payload: { id: string; from: string }) =>
+                cb(payload);
+            ipcRenderer.on('agentinbox:incoming', handler);
+            return () => ipcRenderer.off('agentinbox:incoming', handler);
+        },
         /** Host-loss recovery (genie#203): main asks the renderer to remount these
          *  terminals so their create() rejoins the respawned host and replays
          *  scrollback after a mid-session pty-host death. */

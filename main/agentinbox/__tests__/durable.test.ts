@@ -3,7 +3,6 @@ import { AgentInboxBroker } from '../broker';
 import type { AgentInboxStore } from '../store';
 import type { AgentInboxJoinInput, AgentInboxMessage } from '../types';
 import { WAKE_QUIET_MS } from '../wake';
-import { TYPING_QUIET_MS } from '../notify';
 import { formatAgentInboxMailLine } from '../../mcp/protocol';
 
 /**
@@ -132,7 +131,7 @@ describe('AgentInbox durable inbox (Track B)', () => {
         b.setStore(store);
         b.setClock(() => clock);
         const woken: Array<{ terminalId: string; text: string }> = [];
-        b.setWakeSink((terminalId, text) => woken.push({ terminalId, text }));
+        b.setWakeSink((d) => { woken.push({ terminalId: d.terminalId, text: d.text }); });
 
         join(b, 'a');
         join(b, 'b'); // NOT opted in, and never finished a turn -- busy from birth.
@@ -154,7 +153,7 @@ describe('AgentInbox durable inbox (Track B)', () => {
         const b = new AgentInboxBroker();
         b.setStore(store);
         const woken: string[] = [];
-        b.setWakeSink((_tid, text) => woken.push(text));
+        b.setWakeSink((d) => { woken.push(d.text); });
 
         join(b, 'a');
         join(b, 'b');
@@ -171,7 +170,7 @@ describe('AgentInbox durable inbox (Track B)', () => {
         const b = new AgentInboxBroker();
         b.setStore(store);
         const woken: Array<{ terminalId: string; text: string }> = [];
-        b.setWakeSink((terminalId, text) => woken.push({ terminalId, text }));
+        b.setWakeSink((d) => { woken.push({ terminalId: d.terminalId, text: d.text }); });
 
         join(b, 'a');
         join(b, 'b');
@@ -185,33 +184,67 @@ describe('AgentInbox durable inbox (Track B)', () => {
         }
     });
 
-    it('IMMEDIATE notice: HELD while the human has a draft in the box, so it never splices their prompt', () => {
-        // The one hard rule that replaced the idle gate. `terminal:write` is the
-        // human keystroke path; a draft there must be untouchable.
-        let clock = 1_000_000;
+    it("IMMEDIATE notice: a human draft is PRESERVED, never dropped and never spliced", () => {
+        // Rewritten for the owner's JOB 2 contract. This used to assert that a
+        // draft in the box HELD the notice indefinitely — which is how a
+        // half-typed prompt silenced an agent's mail. The draft is still
+        // untouchable; the notice is no longer the thing that gives way.
         const b = new AgentInboxBroker();
         b.setStore(store);
-        b.setClock(() => clock);
-        const woken: string[] = [];
-        b.setWakeSink((tid) => woken.push(tid));
+        const sent: Array<{ terminalId: string; mode: string; restore?: string }> = [];
+        b.setWakeSink((d) => {
+            sent.push({
+                terminalId: d.terminalId,
+                mode: d.plan.mode,
+                ...(d.plan.mode === 'swap' ? { restore: d.plan.restore } : {}),
+            });
+        });
 
         join(b, 'a');
         join(b, 'b');
 
-        // The human starts typing at B's terminal.
-        b.noteUserInput('t-b', 'hold on, I am wri');
+        // Empty box: the notice is simply submitted, which starts the turn.
         b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping1' });
-        expect(woken).toHaveLength(0);
+        expect(sent[0]).toEqual({ terminalId: 't-b', mode: 'submit' });
 
-        // They submit; the box is empty again, but they are still mid-keystroke.
-        b.noteUserInput('t-b', '\r');
+        // The human types a plain prompt. Genie modelled every keystroke, so it
+        // may cut the draft out, deliver, and paste it back verbatim.
+        b.noteUserInput('t-b', 'hold on, I am writing');
         b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping2' });
-        expect(woken).toHaveLength(0);
+        expect(sent[1]).toEqual({
+            terminalId: 't-b',
+            mode: 'swap',
+            restore: 'hold on, I am writing',
+        });
 
-        // Typing has gone quiet -> the notice lands.
-        clock += TYPING_QUIET_MS + 1;
+        // They press the up-arrow: the cursor is now somewhere Genie does not
+        // track, so it stops claiming to know the box. The notice is APPENDED
+        // without being submitted rather than cutting text Genie cannot restore.
+        b.noteUserInput('t-b', '\x1b[A');
         b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping3' });
-        expect(woken).toEqual(['t-b']);
+        expect(sent[2]).toEqual({ terminalId: 't-b', mode: 'append' });
+
+        // They submit. The box is empty and known again, so the next notice
+        // simply starts a turn.
+        b.noteUserInput('t-b', '\r');
+        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping4' });
+        expect(sent[3]).toEqual({ terminalId: 't-b', mode: 'submit' });
+    });
+
+    it('IMMEDIATE notice: an APPENDED notice is not counted as a wake', () => {
+        // Nothing was submitted, so no turn started — and the agent must stay
+        // eligible for a real wake once its prompt is free again.
+        const b = new AgentInboxBroker();
+        b.setStore(store);
+        const modes: string[] = [];
+        b.setWakeSink((d) => { modes.push(d.plan.mode); });
+
+        join(b, 'a');
+        join(b, 'b');
+        b.noteUserInput('t-b', '\x1b[A'); // Genie is no longer certain
+        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping' });
+
+        expect(modes).toEqual(['append']);
     });
 
     it('an agent explicitly opted OUT is never announced to (owner: default ON, OFF is honoured)', () => {
@@ -222,7 +255,7 @@ describe('AgentInbox durable inbox (Track B)', () => {
         const b = new AgentInboxBroker();
         b.setStore(store);
         const woken: string[] = [];
-        b.setWakeSink((tid) => woken.push(tid));
+        b.setWakeSink((d) => { woken.push(d.terminalId); });
 
         join(b, 'a');
         join(b, 'quiet', { wakeOnDm: false }); // explicit OFF
@@ -235,23 +268,56 @@ describe('AgentInbox durable inbox (Track B)', () => {
         expect(woken).toEqual(['t-normal']);
     });
 
-    it('wake-on-DM remains the FALLBACK when a notice is held back by a human draft', () => {
-        // The opt-in idle nudge is not deleted: it still covers the case the
-        // immediate notice refuses (a draft in the box) for an agent that asked
-        // to be woken -- and it stays idle-gated, so it can never land mid-turn.
+    it('a human draft no longer costs the agent its notice — it is preserved instead', () => {
+        // Rewritten for the JOB 2 contract. This used to assert that a draft made
+        // the immediate notice give way to the idle-only nudge, which is how a
+        // busy agent with a half-typed prompt at its terminal heard nothing at
+        // all. Now the draft is cut and restored, and the notice lands as itself.
+        let clock = 1_000_000;
+        const b = new AgentInboxBroker();
+        b.setStore(store);
+        b.setClock(() => clock);
+        const woken: Array<{ terminalId: string; text: string; mode: string }> = [];
+        b.setWakeSink((d) => {
+            woken.push({ terminalId: d.terminalId, text: d.text, mode: d.plan.mode });
+        });
+
+        join(b, 'a');
+        join(b, 'b', { wakeOnDm: true });
+
+        b.noteUserInput('t-b', 'typing');
+        b.markTurnEnd('t-b');
+        clock += WAKE_QUIET_MS + 1;
+        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping' });
+
+        expect(woken).toHaveLength(1);
+        expect(woken[0].mode).toBe('swap');
+        // The notice itself, not the "you have N unread" fallback nudge.
+        expect(woken[0].text).toMatch(/just received a message/i);
+    });
+
+    it('wake-on-DM remains the FALLBACK when the host cannot deliver a notice', () => {
+        // The opt-in idle nudge is not deleted. It covers the case the host
+        // REFUSES — most often a swap already in flight on that terminal — and it
+        // stays idle-gated, so it can never land mid-turn.
         let clock = 1_000_000;
         const b = new AgentInboxBroker();
         b.setStore(store);
         b.setClock(() => clock);
         const woken: Array<{ terminalId: string; text: string }> = [];
-        b.setWakeSink((terminalId, text) => woken.push({ terminalId, text }));
+        let refuse = true;
+        b.setWakeSink((d) => {
+            if (refuse) {
+                refuse = false; // the fallback nudge itself gets through
+                return false;
+            }
+            woken.push({ terminalId: d.terminalId, text: d.text });
+            return true;
+        });
 
         join(b, 'a');
         join(b, 'b', { wakeOnDm: true });
 
-        // A draft holds the immediate notice back...
-        b.noteUserInput('t-b', 'typing');
-        // ...and B is idle + quiet, so the legacy nudge covers it.
         b.markTurnEnd('t-b');
         clock += WAKE_QUIET_MS + 1;
         b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping' });
@@ -266,7 +332,7 @@ describe('AgentInbox durable inbox (Track B)', () => {
         b.setStore(store);
         b.setClock(() => clock);
         const woken: Array<{ terminalId: string; text: string }> = [];
-        b.setWakeSink((terminalId, text) => woken.push({ terminalId, text }));
+        b.setWakeSink((d) => { woken.push({ terminalId: d.terminalId, text: d.text }); });
 
         // 'b' has NOT opted into wake-on-DM — the IssueWatch opt-in is independent.
         join(b, 'b');

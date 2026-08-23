@@ -81,6 +81,7 @@ import { getSnapshotStore, dbSettingsProvider } from './genie-adapter';
 import { listAllProcesses } from './process-list';
 import { logPtyOsc } from './osc-debug';
 import { agentPulse } from './agent-pulse';
+import { InputHolds } from './input-hold';
 import crypto from 'node:crypto';
 
 /**
@@ -969,10 +970,16 @@ export function registerTerminalIpc(): void {
     ipcMain.handle('terminal:write', (_event, id: string, data: string): boolean => {
         noteTerminalActivity(id);
         // HUMAN keystrokes (this IPC is a renderer sending what a person typed —
-        // Genie's own injection goes through `writeToTerminal`). Feeds the draft
-        // guard so an immediate AgentInbox notice never lands in the middle of a
-        // half-written prompt.
+        // Genie's own injection goes through `writeToTerminal`). Feeds the model
+        // of what is sitting in the input box, so a notice knows whether it may
+        // cut the draft out and put it back.
         agentInboxBroker.noteUserInput(id, data);
+        // A notice is swapping this terminal's draft RIGHT NOW: hold the
+        // keystrokes rather than letting them land mid-swap, where they would be
+        // swept into the cut or interleaved with the notice. They are replayed
+        // the moment the draft is back. The model above is fed either way — the
+        // person really did type them.
+        if (holdTerminalInput(id, data)) return true;
         return mgr().write(id, data);
     });
 
@@ -1364,6 +1371,39 @@ function releaseReadBuffersWithoutSpec(specIds: string[]): void {
  * The renderer pulses the matching terminal's glow in the rail, the flyout row,
  * and the panel border until it gets focus. Called by the MCP `imDone` tool.
  */
+/**
+ * Keystroke holds for in-flight draft swaps (see main/terminal/input-hold).
+ * Module-level because `terminal:write` is the choke point every human keystroke
+ * passes through, and background.ts drives the swap around it.
+ */
+const inputHolds = new InputHolds();
+
+/** Start holding this terminal's keyboard for a swap. False when one is already
+ *  running there — the caller must not start a second. */
+export function beginInputHold(id: string): boolean {
+    return inputHolds.begin(id, Date.now());
+}
+
+/** Offer human keystrokes to an in-flight hold. True = buffered, do NOT write. */
+export function holdTerminalInput(id: string, data: string): boolean {
+    return inputHolds.hold(id, data, Date.now());
+}
+
+/** End the hold and return everything typed while it was held, to be replayed. */
+export function releaseInputHold(id: string): string {
+    return inputHolds.release(id);
+}
+
+/**
+ * Tell the renderer a message has landed in an agent terminal whose input box
+ * Genie would not touch — the notice was APPENDED there without being submitted,
+ * so the person needs to know it is sitting behind their draft. Surfaced as a
+ * top-centre toast.
+ */
+export function broadcastInboxIncoming(id: string, from: string): void {
+    broadcastLocal('agentinbox:incoming', { id, from });
+}
+
 export function broadcastTerminalAttention(id: string, on: boolean): void {
     // LOCAL-only (mirrors broadcastWorkspacePulse): a host terminal's attention
     // arrives via its host's /ws/events, so a LOCAL terminal:attention must not

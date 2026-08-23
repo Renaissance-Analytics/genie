@@ -546,6 +546,28 @@ function MasterInner() {
         return api().on.terminalHostStatus((p) => setToast(p.message));
     }, []);
 
+    // A message came in HOT for an agent whose input box Genie would not touch:
+    // Genie could not be certain what was in there (history recall, an image, an
+    // exotic edit), so the notice was appended WITHOUT being submitted rather
+    // than cutting text it could not restore. Top-centre, because it is about
+    // the prompt the person is looking at, not about the app.
+    const [incoming, setIncoming] = useState<string | null>(null);
+    useEffect(() => {
+        if (!incoming) return;
+        const t = setTimeout(() => setIncoming(null), 8000);
+        return () => clearTimeout(t);
+    }, [incoming]);
+    useEffect(() => {
+        // Optional: the remote bridge does not carry it (a local-prompt concern).
+        return api().on.agentInboxIncoming?.(() =>
+            setIncoming(
+                'A message just came in for this agent. Genie left the notice in the ' +
+                    'prompt without sending it, so your draft is untouched — press Enter ' +
+                    'to deliver it, or delete the line to dismiss.',
+            ),
+        );
+    }, []);
+
     // Host-loss recovery (genie#203). When the shared pty-host dies mid-session,
     // main respawns a backend and asks us to remount the affected panes (their
     // create() rejoins + replays) via a per-id generation bump, plus a banner.
@@ -2074,6 +2096,17 @@ function MasterInner() {
             {toast && (
                 <div className="g-toast" role="status" onClick={() => setToast(null)}>
                     {toast}
+                </div>
+            )}
+
+            {incoming && (
+                <div
+                    className="g-toast g-toast--top"
+                    role="status"
+                    data-testid="agentinbox-incoming"
+                    onClick={() => setIncoming(null)}
+                >
+                    {incoming}
                 </div>
             )}
 

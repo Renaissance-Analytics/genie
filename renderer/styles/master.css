@@ -2311,6 +2311,27 @@
     }
 }
 
+/* Top-centre variant — for a message that landed in the prompt the person is
+   looking at, rather than a status note about the app. Sits above the panels so
+   it is seen before the mystery line in the input box is. */
+.g-toast--top {
+    top: 44px;
+    bottom: auto;
+    max-width: 560px;
+    border-color: var(--accent-2, #6366f1);
+    animation: g-toast-in-top 160ms var(--ease-out, ease-out);
+}
+@keyframes g-toast-in-top {
+    from {
+        opacity: 0;
+        transform: translate(-50%, -8px);
+    }
+    to {
+        opacity: 1;
+        transform: translate(-50%, 0);
+    }
+}
+
 /* status dots */
 .sdot.run {
     background: #10b981;

@@ -3798,6 +3798,12 @@ export interface GenieApi {
         terminalHostStatus: (
             cb: (payload: { message: string; level: 'info' | 'warn' }) => void,
         ) => () => void;
+        /** A message landed for an agent whose input box Genie would not touch, so
+         *  the notice was APPENDED there unsubmitted. Drives the top-centre toast.
+         *  Optional — absent on the remote bridge (a local-prompt concern). */
+        agentInboxIncoming?: (
+            cb: (payload: { id: string; from: string }) => void,
+        ) => () => void;
         /** Host-loss recovery (genie#203): main asks the renderer to remount these
          *  terminals so their create() rejoins the respawned host + replays
          *  scrollback. Optional — absent on the remote bridge (local-host concern). */
