@@ -79,6 +79,13 @@ export interface WorkspaceRow {
     /** 1 = this workspace is the designated WORKSTATION OPERATOR and its agent may
      *  act on every workspace on this machine (Tynn #248). */
     workstation_operator?: number | null;
+    /** How many agent terminals this workspace may run at once (Tynn #117). RAW —
+     *  NULL inherits the workstation default and unlimited is a main-side
+     *  sentinel, so read it via `workspaces.getMaxAgentTerminals`, which decodes
+     *  both. Write it ONLY via `workspaces.setMaxAgentTerminals`: the generic
+     *  `update` patch deliberately drops this column, which is what stops an agent
+     *  raising its own cap. */
+    max_agent_terminals?: number | null;
     /** Workspace ids admitted when `agent_access: 'specific'`, JSON-encoded.
      *  Resolve via `workspaces.getAgentAccess` rather than parsing here. */
     agent_access_workspaces?: string | null;
@@ -968,6 +975,11 @@ export interface Settings {
     terminal_custom_cmd?: string;
     /** Max panels visible at once per workspace. String-encoded; default '4'. */
     max_views?: string;
+    /** WORKSTATION DEFAULT for how many agent terminals one workspace may run at
+     *  once (Tynn #117). String-encoded; `'unlimited'` turns the cap off, empty
+     *  falls back to the built-in default. A workspace may override it via
+     *  `workspaces.setMaxAgentTerminals`. Only a person writes either. */
+    max_agent_terminals?: string;
     /** Per-workspace draggable-grid track sizes, JSON-encoded. Keyed per window
      *  (`${connKey}|${workspaceId}|${signature}`). */
     layout_json?: string;
@@ -2911,6 +2923,18 @@ export interface GenieApi {
         /** Designate (or clear) this workspace as the WORKSTATION OPERATOR — its
          *  agent may then act on every workspace on this machine (Tynn #248). */
         setWorkstationOperator: (id: string, on: boolean) => Promise<{ ok: boolean }>;
+        /** This workspace's agent-terminal cap: a maximum, `'unlimited'`, or `null`
+         *  to inherit the workstation default (Tynn #117). Read through here rather
+         *  than off the `list()` row — the column encodes unlimited as a sentinel
+         *  that main decodes. */
+        getMaxAgentTerminals: (id: string) => Promise<number | 'unlimited' | null>;
+        /** Set (or clear, with `null`) this workspace's agent-terminal cap. Its own
+         *  channel, reachable only from a window: an agent that can raise its own
+         *  cap has no cap, so no agent-facing tool writes this (Tynn #117). */
+        setMaxAgentTerminals: (
+            id: string,
+            cap: number | 'unlimited' | null,
+        ) => Promise<{ ok: boolean }>;
         /** Toggle "require approval before an agent starts a background process". */
         setProcessApproval: (
             id: string,

@@ -13,6 +13,8 @@ import {
     setWorkspaceMcp,
     setWorkspaceProcessApproval,
     setWorkstationOperator,
+    getWorkspaceAgentCap,
+    setWorkspaceAgentCap,
     setWorkspaceTerminalApproval,
     setWorkspaceScheduleApproval,
     getWorkspaceAgentAccess,
@@ -535,6 +537,28 @@ export function registerIpcHandlers(): void {
         'workspaces:set-workstation-operator',
         (_e, id: string, on: boolean) => {
             setWorkstationOperator(id, on);
+            return { ok: true };
+        },
+    );
+    // AGENT-TERMINAL CAP (Tynn #117) — how many agent terminals this workspace may
+    // run at once. An agent that can raise its own cap has no cap, so the setter is
+    // reachable from HERE and nowhere else: this channel is called by a real
+    // window's preload, `main/mcp/` never imports `setWorkspaceAgentCap`, and the
+    // column is deliberately absent from `updateWorkspace`'s allowlist so a generic
+    // patch naming it is dropped. Same structural rule as the workstation operator
+    // above. `null` clears the override back to inheriting the workstation default.
+    //
+    // Reading goes through its own channel rather than the `workspaces:list` row
+    // because the column encodes "unlimited" as a private sentinel that db.ts keeps
+    // inside its two accessors. The UI gets the decoded `number | 'unlimited' |
+    // null`, so the sentinel stays where it was documented to stay.
+    ipcMain.handle('workspaces:get-max-agent-terminals', (_e, id: string) =>
+        getWorkspaceAgentCap(id),
+    );
+    ipcMain.handle(
+        'workspaces:set-max-agent-terminals',
+        (_e, id: string, cap: number | 'unlimited' | null) => {
+            setWorkspaceAgentCap(id, cap);
             return { ok: true };
         },
     );

@@ -13,6 +13,22 @@ import type {
 } from '../../lib/genie';
 import { api } from '../../lib/genie';
 import { scopeValue, setScopeEntry } from '../../lib/ftq-availability';
+import {
+    agentCapField,
+    describeInheritedAgentCap,
+    readAgentCapField,
+    type AgentCapMode,
+} from '../../lib/agent-cap-field';
+
+/** Per-workspace agent-terminal cap — 'inherit' clears the override so the
+ *  workstation default applies, mirroring the availability selector above. The
+ *  inherit option's label is built at render time so it names the number this
+ *  workspace would actually fall back to. */
+const AGENT_CAP_OPTIONS = (inherited: string) => [
+    { value: 'inherit', label: `Inherit — the workstation default (${inherited})` },
+    { value: 'limit', label: 'Limit to…' },
+    { value: 'unlimited', label: 'No limit — never refuse an agent' },
+];
 
 /** Per-workspace ForceTheQuestion availability — 'inherit' clears the override so
  *  the workstation/global default applies; the two explicit values override it. */
@@ -85,6 +101,16 @@ export default function WorkspaceSettingsModal({
     const [granularity, setGranularity] = useState<IssuewatchGranularity | null>(null);
     // Per-workspace ForceTheQuestion availability override ('inherit' = unset).
     const [availability, setAvailability] = useState<ScopeAvailability>('inherit');
+    // Per-workspace AGENT-TERMINAL CAP override (Tynn #117). Two controls, one
+    // value: the mode ('inherit' = no override) and the number beside it. Null
+    // until the stored cap loads, which disables the controls so a slow read can't
+    // be mistaken for "this workspace is set to inherit" and saved as one.
+    const [agentCap, setAgentCap] = useState<{ mode: AgentCapMode; limit: string } | null>(
+        null,
+    );
+    // The RAW workstation default setting, so the field can say what an empty box
+    // inherits — the actual number, not the word "default".
+    const [capDefault, setCapDefault] = useState<string | undefined>(undefined);
 
     const saveName = async () => {
         const next = name.trim();
@@ -142,9 +168,21 @@ export default function WorkspaceSettingsModal({
                     setAvailability(
                         scopeValue(s.ftq_availability_workspaces, workspace.id) ?? 'inherit',
                     );
+                    setCapDefault(s.max_agent_terminals);
                 }
             } catch {
                 if (alive) setAvailability('inherit');
+                // capDefault stays undefined, which describes the BUILT-IN default —
+                // the same number enforcement falls back to when settings are
+                // unreadable, so the label never claims a limit that isn't applied.
+            }
+            try {
+                const cap = await api().workspaces.getMaxAgentTerminals(workspace.id);
+                if (alive) setAgentCap(agentCapField(cap));
+            } catch {
+                // Leave the controls disabled rather than rendering "inherit". A
+                // failed read is not an answer, and showing one invites a person to
+                // "confirm" it and overwrite a real override with nothing.
             }
         })();
         return () => {
@@ -167,6 +205,26 @@ export default function WorkspaceSettingsModal({
             await api().settings.set({ ftq_availability_workspaces: nextRaw });
         } catch {
             setAvailability(prev); // revert
+        }
+    };
+
+    // Persist this workspace's agent-terminal cap optimistically, reverting on
+    // failure. Takes the whole next field state because the mode and the number are
+    // two controls saying one thing — `readAgentCapField` decides what that is, and
+    // an `unusable` read (mid-typing, a zero) updates the box without writing, so
+    // the field stays typable and a stray keystroke never caps the workspace at 0.
+    const changeAgentCap = async (next: { mode: AgentCapMode; limit: string }) => {
+        const prev = agentCap;
+        setAgentCap(next); // optimistic
+        const value = readAgentCapField(next.mode, next.limit);
+        if (value.kind === 'unusable') return;
+        // `inherit` persists as null — clearing the override, not setting a zero.
+        const cap =
+            value.kind === 'limit' ? value.limit : value.kind === 'unlimited' ? 'unlimited' : null;
+        try {
+            await api().workspaces.setMaxAgentTerminals(workspace.id, cap);
+        } catch {
+            setAgentCap(prev); // revert
         }
     };
 
@@ -304,6 +362,36 @@ export default function WorkspaceSettingsModal({
                 {workspace.path && <OpsWorkspacesPanel workspacePath={workspace.path} />}
 
                 <Section title="Agent behavior">
+                    <Row
+                        label="Agent terminals — limit"
+                        sub={`The most agent terminals this workspace may run at once. Agents are refused past this and told to wait; you are not, and they cannot raise it. Leaving the number empty inherits the workstation default — currently ${describeInheritedAgentCap(capDefault)}.`}
+                        vertical
+                    >
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                            <Select
+                                value={agentCap?.mode ?? 'inherit'}
+                                disabled={agentCap === null}
+                                onValueChange={(v) =>
+                                    void changeAgentCap({
+                                        mode: v as AgentCapMode,
+                                        limit: agentCap?.limit ?? '',
+                                    })
+                                }
+                                list={AGENT_CAP_OPTIONS(describeInheritedAgentCap(capDefault))}
+                            />
+                            {agentCap?.mode === 'limit' && (
+                                <Input
+                                    type="number"
+                                    min={1}
+                                    value={agentCap.limit}
+                                    onValueChange={(v: string) =>
+                                        void changeAgentCap({ mode: 'limit', limit: v })
+                                    }
+                                    aria-label="Maximum agent terminals for this workspace"
+                                />
+                            )}
+                        </div>
+                    </Row>
                     <Row
                         label="Agent questions — availability"
                         sub="How ForceTheQuestion surfaces for this workspace — inherits the global / connection default unless set"

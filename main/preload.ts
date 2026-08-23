@@ -683,6 +683,10 @@ const api = {
             ipcRenderer.invoke('workspaces:set-mcp', id, enabled),
         setWorkstationOperator: (id: string, on: boolean) =>
             ipcRenderer.invoke('workspaces:set-workstation-operator', id, on),
+        getMaxAgentTerminals: (id: string) =>
+            ipcRenderer.invoke('workspaces:get-max-agent-terminals', id),
+        setMaxAgentTerminals: (id: string, cap: number | 'unlimited' | null) =>
+            ipcRenderer.invoke('workspaces:set-max-agent-terminals', id, cap),
         setProcessApproval: (id: string, require: boolean) =>
             ipcRenderer.invoke('workspaces:set-process-approval', id, require),
         setTerminalApproval: (id: string, require: boolean) =>
