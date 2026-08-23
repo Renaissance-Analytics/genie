@@ -123,6 +123,62 @@ describe('an agent asking to start another agent', () => {
     });
 });
 
+/**
+ * Starting several at once (genie#245).
+ *
+ * A GApp seeds its whole DECLARED roster in one go, and its agents count against
+ * the cap like anyone else's. Asked one at a time it would be let in whenever a
+ * single slot was free and then refused partway — leaving the user with fewer
+ * agents than the consent screen named, and nothing said about it. The batch has
+ * to be one question.
+ */
+describe('an agent asking to start SEVERAL at once', () => {
+    it('is allowed when the whole batch fits', () => {
+        expect(at(5, { want: 3 }).allowed).toBe(true);
+    });
+
+    it('is refused when only PART of the batch fits', () => {
+        // Six live, a limit of eight, three wanted: two would fit. One at a time
+        // this says yes, yes, no. As a batch it is a single, honest no.
+        const decision = at(6, { want: 3 });
+        expect(decision.allowed).toBe(false);
+        expect(decision.atLimit).toBe(true);
+    });
+
+    it('says how many it could not start, so the refusal is actionable', () => {
+        expect(at(6, { want: 3 }).reason).toContain('3');
+    });
+
+    it('reads exactly as before for a single spawn', () => {
+        // The sentence agents and users actually see must not grow a "and cannot
+        // start 1 more" tail on every ordinary refusal.
+        expect(at(8).reason).not.toMatch(/cannot start/i);
+        expect(at(8, { want: 1 }).reason).toBe(at(8).reason);
+    });
+
+    it('treats a nonsense batch as one, never as none', () => {
+        // These arrive from a manifest-driven count. Reading a bad one as zero
+        // would let a batch through the cap entirely.
+        expect(at(8, { want: 0 }).allowed).toBe(false);
+        expect(at(8, { want: -4 }).allowed).toBe(false);
+        expect(at(8, { want: 1.5 }).allowed).toBe(false);
+    });
+
+    it('never refuses a batch when the limit is off', () => {
+        expect(
+            at(500, { want: 50, settings: { workstation: 'unlimited', workspace: null } }).allowed,
+        ).toBe(true);
+    });
+
+    it('tells a PERSON their batch is over the limit without stopping them', () => {
+        // Same rule the single-spawn path has: the person owns the limit, so they
+        // are told, not refused.
+        const decision = at(6, { want: 3, actor: 'human' });
+        expect(decision.allowed).toBe(true);
+        expect(decision.reason).toBeTruthy();
+    });
+});
+
 describe('the refusal an agent actually reads', () => {
     const refusal = () => at(8).reason ?? '';
 

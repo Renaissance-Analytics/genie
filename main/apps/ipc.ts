@@ -17,9 +17,12 @@ import {
     addWorkspace,
     createTerminalSpec,
     deleteTerminalSpec,
+    getAllSettings,
+    getTerminalSpec,
     getWorkspace,
     listTerminalSpecs,
     listWorkspaces,
+    updateTerminalSpec,
     removeWorkspace as removeWorkspaceRow,
     setWorkspaceAppKind,
     upsertAppGrant,
@@ -42,17 +45,25 @@ import type { BackupOverride, BackupSettings } from '../dev-server/services/back
 import { createAgiEnvelope } from '../workspace/create-agi';
 import { toolchainMachineFacts } from './machine';
 import { installAppFromFolder, type AppInstallIO, type AppInstallResult } from './install';
-import { manageProcessForMcp } from '../mcp/host-tools';
+import { manageProcessForMcp, resolveAgentLaunch } from '../mcp/host-tools';
 import { manageSiteForMcp } from '../mcp/dev-site-tools';
 import { callerIdForApp } from '../mcp/caller-identity';
 import { appCopyPlan } from './install-plan';
 import {
+    APP_AGENTS_DIR,
     APP_MANIFEST_FILENAME,
     validateAppManifest,
+    type AppAgentDecl,
     type AppManifest,
     type AppPanels,
 } from './manifest';
-import { ensureAgentPanels } from './panels';
+import {
+    gappPersonaPath,
+    resolveGappProvider,
+    withPersonaBriefing,
+    type GappProvider,
+} from './agent-provider';
+import { ensureAgentPanels, type AgentPanelSeeding, type PlannedPanel } from './panels';
 import { gappHomeUrl } from './hostname';
 import {
     closePreview,
@@ -62,7 +73,12 @@ import {
     type RememberedConsent,
 } from './preview-run';
 import { listPreviews, livePreview, previewAppView } from './preview-registry';
-import { broadcastTerminalSpecsChanged, killTerminalById } from '../terminal/ipc';
+import {
+    broadcastTerminalSpecsChanged,
+    createAgentTerminal,
+    decideAgentTerminalSpawn,
+    killTerminalById,
+} from '../terminal/ipc';
 import {
     appsGet,
     appsList,
@@ -437,49 +453,233 @@ async function checkAppUpdates(): Promise<Record<string, AppUpdateState>> {
 /* ---- The GApp WINDOW's own surface ------------------------------------ */
 
 /**
- * Lay out the agent panels an app's manifest declared, in the app's workspace.
+ * The workstation's provider and the command it launches with — or why it cannot.
  *
- * The decision — how many, of which kind, and how many are still missing — is
- * `ensureAgentPanels`, and it is tested there. This is the I/O half: which
- * workspace the app has, what already lives in it, and how a panel gets written.
+ * ONE resolution for a whole seeding pass, because the answer is workstation-wide:
+ * every agent in a roster launches under the same TUI, so a provider that cannot
+ * be launched fails ALL of them, and it must fail them BEFORE anything is created
+ * rather than halfway down the list.
+ *
+ * The only real failure is `custom` with no command configured. That is a refusal,
+ * never a fallback to a bare terminal — a terminal that quietly is not an agent is
+ * the whole of genie#245.
+ */
+function gappAgentLaunch(
+    workspace: { id: string; path: string },
+): { provider: GappProvider; base: string } | { error: string } {
+    // The WORKSTATION's provider, never the app's. Read from settings rather than
+    // taken as a parameter, so there is no argument through which a manifest could
+    // reach it.
+    const provider = resolveGappProvider(getAllSettings());
+    const base = resolveAgentLaunch(provider, undefined, workspace);
+    if (!base) {
+        return {
+            error:
+                `Genie has no command for the "${provider}" agent, which this workstation uses ` +
+                'to run Genie App agents. Set one in Settings → Specialized terminals, or choose ' +
+                'a different GApp AI Provider.',
+        };
+    }
+    return { provider, base };
+}
+
+/**
+ * How a GApp's panel actually gets written — a bare view, or an AGENT.
+ *
+ * The whole of genie#245 is this branch. A slot with no declared agent behind it
+ * is a plain spec, exactly as before. A BOUND slot goes through
+ * `createAgentTerminal`, which is the one host-side routine that spawns the pty
+ * AND launches the TUI into it — the same path a specialized terminal takes, so a
+ * GApp agent is an ordinary Genie agent in every way that matters: it shows in the
+ * workspace, it has an AgentInbox identity, it survives a restart, and it counts
+ * against the agent-terminal cap.
+ *
+ * Shared by the installed path and the PREVIEW path so a developer previewing
+ * their app meets the same agents their users will.
+ */
+function createGappPanel(
+    appId: string,
+    workspace: { id: string; path: string },
+    panel: PlannedPanel,
+): void {
+    const id = `gapp-${randomUUID()}`;
+    if (!panel.agent) {
+        createTerminalSpec({
+            id,
+            workspace_id: workspace.id,
+            label: panel.label,
+            cwd: workspace.path,
+            type: panel.type,
+        });
+        return;
+    }
+
+    const launch = gappAgentLaunch(workspace);
+    // Unreachable in practice — both seeding paths ask `mayStartAgents` first, and
+    // that refuses the whole roster on this. Kept because the alternative if it
+    // ever IS reached is a bare terminal wearing an agent's name.
+    if ('error' in launch) throw new Error(launch.error);
+
+    const persona = gappPersonaPath(workspace.path, panel.agent.persona);
+    createAgentTerminal({
+        id,
+        workspaceId: workspace.id,
+        cwd: workspace.path,
+        label: panel.label,
+        agentMeta: {
+            agent: launch.provider,
+            command: withPersonaBriefing(launch.base, persona, panel.agent.name),
+        },
+        // The APP asked for this, not the person who clicked its pill. Stamped so
+        // the cap and the terminal list both attribute it to the thing that spent
+        // the compute.
+        createdBy: 'agent',
+        // Addressable in the AgentInbox by the name the user consented to, rather
+        // than as a nameless `general` agent.
+        agentInbox: { purpose: panel.agent.name },
+    });
+
+    // The binding, on the spec that survives a restart: which app, which declared
+    // agent, and the persona it was launched against.
+    const spec = getTerminalSpec(id);
+    if (spec) {
+        updateTerminalSpec(id, {
+            meta: {
+                ...spec.meta,
+                gapp_id: appId,
+                gapp_agent: panel.agent.name,
+                gapp_persona: persona,
+            },
+        });
+    }
+}
+
+/**
+ * Lay out the agent panels an app's manifest declared, in the app's workspace —
+ * and LAUNCH the agents it declared, under the workstation's provider (genie#245).
+ *
+ * The decision — how many, of which kind, which agent runs in which, how many are
+ * still missing, and whether the cap allows the roster — is `ensureAgentPanels`,
+ * and it is tested there. This is the I/O half: which workspace the app has, what
+ * already lives in it, and how a panel gets written.
  *
  * PROCESS specs are excluded from the count deliberately. A GApp's services are
  * background jobs, not panels; counting them would make an app with two services
  * believe its panels were already laid out and give the user an empty Agent tab.
  *
- * Fails soft. An app with no workspace row is one whose install did not finish,
- * and refusing to open its window over a missing panel would turn a partial
- * install into an app that cannot be looked at, let alone repaired.
+ * Fails soft on a missing workspace. An app with no workspace row is one whose
+ * install did not finish, and refusing to open its window over a missing panel
+ * would turn a partial install into an app that cannot be looked at, let alone
+ * repaired. A REFUSAL is different: it is reported, because a GApp that came up
+ * with fewer agents than its consent screen named, silently, is the defect.
  */
-export function ensureAppAgentPanels(appId: string, panels: AppPanels): void {
+export function ensureAppAgentPanels(
+    appId: string,
+    panels: AppPanels,
+    agents?: readonly AppAgentDecl[],
+): AgentPanelSeeding {
     const app = appsGet(appId);
     const workspace = app ? getWorkspace(app.workspaceId) : null;
-    if (!workspace) return;
+    if (!workspace) return { created: [] };
 
-    const seeded = ensureAgentPanels(
-        {
-            countPanels: () =>
-                listTerminalSpecs().filter(
-                    (s) => s.workspace_id === workspace.id && s.type !== 'process',
-                ).length,
-            createPanel: (panel) => {
-                createTerminalSpec({
-                    id: `gapp-${randomUUID()}`,
-                    workspace_id: workspace.id,
-                    label: panel.label,
-                    cwd: workspace.path,
-                    type: panel.type,
-                });
-            },
-        },
-        panels,
+    // A persona that is not on disk cannot brief anything. `validateAppFolder`
+    // refuses this at install, so reaching here means the folder changed under
+    // Genie — and launching a TUI against a path that is not there would open an
+    // agent with no instructions: the same empty terminal, now with a model session
+    // attached to it.
+    const missingPersona = (agents ?? []).find(
+        (agent) => !fs.existsSync(gappPersonaPath(workspace.path, agent.persona)),
     );
+
+    const seeded = missingPersona
+        ? {
+              created: [],
+              refused:
+                  `The agent “${missingPersona.name}” is declared with a persona at ` +
+                  `${APP_AGENTS_DIR}/${missingPersona.persona}, but that file is not in the ` +
+                  'app’s workspace. Reinstall the app, or put the persona back.',
+          }
+        : seedAppPanels(appId, workspace, panels, agents);
 
     // Same broadcast every other spec-creating path makes. A GApp's workspace is a
     // workspace, so the master window may already be looking at it — and a panel
     // that only appears after something unrelated pokes the list is a panel the
     // user reports as missing.
-    if (seeded.length > 0) broadcastTerminalSpecsChanged();
+    if (seeded.created.length > 0) broadcastTerminalSpecsChanged();
+    if (seeded.refused) reportAgentSeedingRefusal(app?.name ?? appId, seeded.refused);
+    return seeded;
+}
+
+/**
+ * May this workspace start `n` more GApp agents right now?
+ *
+ * Two questions, asked once for the whole roster and BEFORE anything is created.
+ *
+ * The cap (Tynn #117) is asked with the app as the ACTOR, not the person who
+ * clicked its pill: the app is spending someone else's compute, and a cap an app
+ * could seed past merely because a human opened its window would be a cap with a
+ * door in it. GApp agents are ordinary agent terminals, so they count like any
+ * others — that is the same reason they are subject to it at all.
+ */
+function mayStartGappAgents(
+    workspace: { id: string; path: string },
+    n: number,
+): { allowed: boolean; reason?: string } {
+    const launch = gappAgentLaunch(workspace);
+    if ('error' in launch) return { allowed: false, reason: launch.error };
+
+    const cap = decideAgentTerminalSpawn(workspace.id, 'agent', n);
+    return { allowed: cap.allowed, ...(cap.reason ? { reason: cap.reason } : {}) };
+}
+
+/** The seeding itself, with a failed LAUNCH reported like any other refusal. */
+function seedAppPanels(
+    appId: string,
+    workspace: { id: string; path: string },
+    panels: AppPanels,
+    agents?: readonly AppAgentDecl[],
+): AgentPanelSeeding {
+    try {
+        return ensureAgentPanels(
+            {
+                countPanels: () =>
+                    listTerminalSpecs().filter(
+                        (s) => s.workspace_id === workspace.id && s.type !== 'process',
+                    ).length,
+                createPanel: (panel) => createGappPanel(appId, workspace, panel),
+                mayStartAgents: (n) => mayStartGappAgents(workspace, n),
+            },
+            panels,
+            agents,
+        );
+    } catch (e) {
+        // A launch that threw halfway leaves whatever it created; the app is opened
+        // anyway (a window that will not open is worse than one with a short Agent
+        // tab) but the user is told why it is short.
+        return { created: [], refused: (e as Error).message };
+    }
+}
+
+/**
+ * Tell the user their app's agents did not start.
+ *
+ * An OS message box rather than a line in a log: the failure this reports is
+ * precisely a GApp coming up looking fine while quietly running fewer agents than
+ * the consent screen named, and a refusal nobody sees is that same failure with
+ * an extra step. Non-blocking — the window still opens.
+ */
+function reportAgentSeedingRefusal(appName: string, reason: string): void {
+    void dialog
+        .showMessageBox({
+            type: 'warning',
+            title: 'Genie App',
+            message: `${appName} did not start its agents.`,
+            detail: reason,
+            buttons: ['OK'],
+        })
+        .catch(() => {
+            /* best-effort — a modal that will not draw must not break the window */
+        });
 }
 
 /**
@@ -573,15 +773,16 @@ export function previewIO(): PreviewIO {
             listTerminalSpecs().filter(
                 (s) => s.workspace_id === workspaceId && s.type !== 'process',
             ).length,
-        createPanel: (workspaceId, panel) => {
+        createPanel: (appId, workspaceId, panel) => {
             const workspace = getWorkspace(workspaceId);
-            createTerminalSpec({
-                id: `gapp-${randomUUID()}`,
-                workspace_id: workspaceId,
-                label: panel.label,
-                cwd: workspace?.path ?? '',
-                type: panel.type,
-            });
+            // The SAME writer the installed path uses, so a developer previewing
+            // their app meets the agents their users will — not a bare terminal
+            // that behaves nothing like the shipped article.
+            createGappPanel(appId, { id: workspaceId, path: workspace?.path ?? '' }, panel);
+        },
+        mayStartAgents: (workspaceId, n) => {
+            const workspace = getWorkspace(workspaceId);
+            return mayStartGappAgents({ id: workspaceId, path: workspace?.path ?? '' }, n);
         },
         removePanels: (workspaceId) => {
             for (const spec of listTerminalSpecs().filter((s) => s.workspace_id === workspaceId)) {

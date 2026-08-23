@@ -32,7 +32,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
-import { getWorkspace, listTerminalSpecs, upsertAppGrant } from '../db';
+import { deleteTerminalSpec, getWorkspace, listTerminalSpecs, upsertAppGrant } from '../db';
+import { killTerminalById } from '../terminal/ipc';
 import { openAppWindow, appViewWebContents } from '../apps/window';
 import { scaffoldApp, slugify } from '../apps/scaffold';
 import { validateAppFolder, type AppFolderReport } from '../apps/validate';
@@ -41,7 +42,13 @@ import { ensureAppAgentPanels, installIO, previewIO } from '../apps/ipc';
 import { closePreview, openPreview } from '../apps/preview-run';
 import { livePreview } from '../apps/preview-registry';
 import { appsList } from '../apps/manage';
-import { APP_MANIFEST_FILENAME, validateAppManifest, type AppPanels } from '../apps/manifest';
+import {
+    APP_AGENTS_DIR,
+    APP_MANIFEST_FILENAME,
+    validateAppManifest,
+    type AppAgentDecl,
+    type AppPanels,
+} from '../apps/manifest';
 
 const APP_ID = 'com.genie.example';
 
@@ -160,8 +167,8 @@ export function registerAppsE2E(): void {
 
         scaffoldCheckInstall: () => scaffoldCheckInstall(),
         previewScaffolded: (panels: AppPanels) => previewScaffolded(panels),
-        seedAgentPanelsTwice: (appId: string, panels: AppPanels) =>
-            seedAgentPanelsTwice(appId, panels),
+        seedAgentPanelsTwice: (appId: string, panels: AppPanels, agents?: AppAgentDecl[]) =>
+            seedAgentPanelsTwice(appId, panels, agents),
         // The installed-apps list, read through the SAME function the panel
         // uses. Exposed here because the compiled main is one bundle — a spec
         // cannot `require` a module out of it.
@@ -245,21 +252,66 @@ export async function scaffoldCheckInstall(): Promise<{
 export function seedAgentPanelsTwice(
     appId: string,
     panels: AppPanels,
-): { first: string[]; second: string[] } {
+    agents?: AppAgentDecl[],
+): {
+    first: string[];
+    second: string[];
+    /** What each panel is BOUND to, in slot order — `[agent name, persona path]`
+     *  for a declared agent, `null` for a plain panel (genie#245). */
+    bindings: Array<[string, string] | null>;
+    /** Which TUI each bound panel launched, so a spec can check the WORKSTATION
+     *  provider decided it. */
+    providers: Array<string | null>;
+} {
     const app = appsList().find((a) => a.id === appId);
     if (!app) throw new Error(`no such installed app: ${appId}`);
 
-    const labels = (): string[] =>
-        listTerminalSpecs()
-            .filter((s) => s.workspace_id === app.workspaceId && s.type !== 'process')
-            .map((s) => s.label);
+    const own = () =>
+        listTerminalSpecs().filter(
+            (s) => s.workspace_id === app.workspaceId && s.type !== 'process',
+        );
+    const labels = (): string[] => own().map((s) => s.label);
 
-    ensureAppAgentPanels(appId, panels);
+    // Start from an EMPTY workspace. The seeder converges on what is already
+    // there, so a spec that ran before this one would leave its panels behind and
+    // this call would correctly create nothing — making the next assertion pass or
+    // fail on test ORDER rather than on behaviour. The harness owns this workspace,
+    // so clearing it is the honest reset; the idempotency this function exists to
+    // prove is still proved, by the two seeds below.
+    for (const spec of own()) {
+        killTerminalById(spec.id);
+        deleteTerminalSpec(spec.id);
+    }
+
+    // The personas the roster names, put where an INSTALL would have copied them
+    // (`appCopyPlan` carries `.agents/` into the workspace). The scaffold ships no
+    // agents of its own, and the seeder refuses a persona that is not on disk —
+    // rightly, since a TUI briefed with a missing file is an agent with no
+    // instructions. So the harness lays down what the roster claims.
+    const workspacePath = getWorkspace(app.workspaceId)?.path;
+    if (workspacePath) {
+        for (const agent of agents ?? []) {
+            const persona = path.join(workspacePath, APP_AGENTS_DIR, ...agent.persona.split('/'));
+            fs.mkdirSync(path.dirname(persona), { recursive: true });
+            fs.writeFileSync(persona, `# ${agent.name}\n`);
+        }
+    }
+
+    ensureAppAgentPanels(appId, panels, agents);
     const first = labels();
-    ensureAppAgentPanels(appId, panels);
+    ensureAppAgentPanels(appId, panels, agents);
     const second = labels();
 
-    return { first, second };
+    return {
+        first,
+        second,
+        bindings: own().map((s) =>
+            s.meta.gapp_agent
+                ? [String(s.meta.gapp_agent), String(s.meta.gapp_persona ?? '')]
+                : null,
+        ),
+        providers: own().map((s) => s.meta.agent ?? null),
+    };
 }
 
 /**

@@ -136,6 +136,16 @@ export interface AgentSpawnRequest {
     /** Agent terminals currently ALIVE in the workspace, so an exit frees a slot. */
     live: number;
     settings: AgentCapSettings;
+    /**
+     * How many are being started AT ONCE. Defaults to 1 — the shape every
+     * one-at-a-time spawn path has.
+     *
+     * A GApp seeds its whole declared roster in one go (genie#245), and asking
+     * "may I start one more" N times would let it in whenever the first slot was
+     * free and then refuse partway, leaving the user with fewer agents than the
+     * consent screen named and nothing said about it. The batch is one question.
+     */
+    want?: number;
 }
 
 export interface AgentSpawnDecision {
@@ -157,15 +167,21 @@ function whereToChange(source: AgentCapSource): string {
     return 'the workstation default, set in Settings › Workspaces › Defaults (a workspace can override it in Workspace settings › Agent behavior)';
 }
 
-function countPhrase(live: number, limit: number): string {
+function countPhrase(live: number, limit: number, want: number): string {
     const over = live > limit ? 'over' : 'at';
-    return `${over} its limit of ${limit} agent terminal${limit === 1 ? '' : 's'} (${live} running)`;
+    const at = `${over} its limit of ${limit} agent terminal${limit === 1 ? '' : 's'} (${live} running)`;
+    // Only a BATCH says how many it wanted. A one-at-a-time spawn reads exactly as
+    // it always has — the sentence is the thing agents and users actually see.
+    return want > 1 ? `${at}, and cannot start ${want} more` : at;
 }
 
 export function decideAgentSpawn(request: AgentSpawnRequest): AgentSpawnDecision {
     const { limit, source } = effectiveAgentCap(request.settings);
     const live = request.live;
     const human = request.actor === 'human';
+    // A batch of zero or a nonsense count is one spawn — the safe direction, and
+    // the shape every caller that doesn't ask for a batch already has.
+    const want = Number.isInteger(request.want) && request.want! > 1 ? request.want! : 1;
 
     // A count the caller could not determine. Granting one more would be a guess
     // in the unsafe direction, so an agent is refused — but a person is not held
@@ -187,7 +203,7 @@ export function decideAgentSpawn(request: AgentSpawnRequest): AgentSpawnDecision
         return { allowed: true, limit, live, source, atLimit: false };
     }
 
-    const atLimit = live >= limit;
+    const atLimit = live + want > limit;
     if (!atLimit) {
         return { allowed: true, limit, live, source, atLimit: false };
     }
@@ -202,7 +218,7 @@ export function decideAgentSpawn(request: AgentSpawnRequest): AgentSpawnDecision
             live,
             source,
             atLimit: true,
-            reason: `This workspace is ${countPhrase(live, limit)}. That is ${whereToChange(source)}.`,
+            reason: `This workspace is ${countPhrase(live, limit, want)}. That is ${whereToChange(source)}.`,
         };
     }
 
@@ -213,7 +229,7 @@ export function decideAgentSpawn(request: AgentSpawnRequest): AgentSpawnDecision
         source,
         atLimit: true,
         reason:
-            `This workspace is ${countPhrase(live, limit)}, so Genie did not start another. ` +
+            `This workspace is ${countPhrase(live, limit, want)}, so Genie did not start another. ` +
             `That is ${whereToChange(source)}. ` +
             'You cannot raise it yourself — only the person at this machine can. ' +
             'Wait for a running agent to finish and free a slot, or ask them to raise the limit.',

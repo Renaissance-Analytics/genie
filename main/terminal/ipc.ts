@@ -1274,10 +1274,15 @@ export function liveTerminalCount(): number {
  *
  * Callers must pass the real `actor`. A person is the authority over the limit and
  * is never refused by it; an agent is, which is the entire point.
+ *
+ * `want` is how many are being started AT ONCE — a GApp seeds its whole declared
+ * roster in one go (genie#245). Defaults to 1, the shape every one-at-a-time
+ * spawn path has.
  */
 export function decideAgentTerminalSpawn(
     workspaceId: string,
     actor: SpawnActor,
+    want = 1,
 ): AgentSpawnDecision {
     let workstation: AgentCapValue = null;
     let workspace: AgentCapValue = null;
@@ -1303,7 +1308,7 @@ export function decideAgentTerminalSpawn(
         live = -1;
     }
 
-    return decideAgentSpawn({ actor, live, settings: { workstation, workspace } });
+    return decideAgentSpawn({ actor, live, want, settings: { workstation, workspace } });
 }
 
 /** Forward the broadcast helper for callers that want it. */

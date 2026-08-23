@@ -147,7 +147,11 @@ export function openAppWindow(opts: OpenAppWindowOpts): BrowserWindow {
     // and creates nothing when that is already true — a GApp's panels are
     // workspace state, so a seed that ran unconditionally would leave a user three
     // more terminals every time they clicked the app's pill.
-    if (opts.manifest) ensureAppAgentPanels(opts.appId, opts.manifest.panels);
+    // ...and the agents it declared, LAUNCHED (genie#245) — `.agents/` says who
+    // those panels are, and a roster nothing starts is the empty-terminal bug.
+    if (opts.manifest) {
+        ensureAppAgentPanels(opts.appId, opts.manifest.panels, opts.manifest.agents);
+    }
 
     // GENIE'S window, running Genie's own renderer — NOT the app's. The frame, the
     // tab strip and the Agent tab belong to Genie, which is what makes "am I

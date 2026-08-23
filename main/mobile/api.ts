@@ -190,6 +190,9 @@ export const HOST_SOURCED_SETTINGS_KEYS = [
     'agent_flags_codex',
     'agent_command_custom',
     'agent_flags_custom',
+    // GApp AI Provider: which TUI a Genie App's declared agents run as (genie#245).
+    // The HOST launches them, so a remote desktop reads + writes it there.
+    'gapp_ai_provider',
     // Workstation Setup: the owner's default + enabled agents, chosen in the desktop
     // setup wizard. Host-sourced so the host's setup-status computation reads them
     // and a re-run pre-fills from the host. Mirrors renderer/lib/settings-nav.ts.

@@ -22,7 +22,7 @@
  * happen is only assertable if the call is visible.
  */
 
-import { agentPanelLayout, type PlannedPanel } from './panels';
+import { ensureAgentPanels, type PlannedPanel } from './panels';
 import { gappHomeUrl } from './hostname';
 import { buildConsentPlan, readConsent } from './consent-plan';
 import { resolveAppRequirements, type RequirementMachine } from './requirements';
@@ -80,7 +80,16 @@ export interface PreviewIO {
 
     /** Panels already in this workspace. Background processes are not panels. */
     countPanels: (workspaceId: string) => number;
-    createPanel: (workspaceId: string, panel: PlannedPanel) => void;
+    /**
+     * Write one panel. `appId` is the PREVIEW app id — a bound agent panel records
+     * which app it belongs to, and a preview's agents belong to the preview.
+     */
+    createPanel: (appId: string, workspaceId: string, panel: PlannedPanel) => void;
+    /**
+     * May this workspace start `n` more agent terminals (Tynn #117)? A preview
+     * starts REAL agents, so it meets the real cap.
+     */
+    mayStartAgents: (workspaceId: string, n: number) => { allowed: boolean; reason?: string };
     /** Drop every panel this preview's workspace holds, ptys included. */
     removePanels: (workspaceId: string) => void;
     panelsChanged: () => void;
@@ -230,17 +239,27 @@ export async function openPreview(folder: string, io: PreviewIO): Promise<Previe
 
     // The panels the manifest declared, laid out BEFORE the window loads, so the
     // Agent tab's first read of the workspace already has them. The workspace was
-    // created a moment ago, so `ensureAgentPanels`' idempotency has nothing to do
-    // here — but the LAYOUT is the same function the installed path uses, which is
-    // what makes a preview's Agent tab the app's real one.
-    for (const panel of agentPanelLayout(manifest.panels).slice(io.countPanels(workspaceId))) {
-        io.createPanel(workspaceId, panel);
-    }
+    // created a moment ago, so the idempotency has nothing to do here — but this is
+    // the same seeder the installed path uses, roster and cap included, which is
+    // what makes a preview's Agent tab the app's real one rather than a mock-up of
+    // it that behaves differently on the day it ships.
+    const warnings: string[] = [];
+    const seeded = ensureAgentPanels(
+        {
+            countPanels: () => io.countPanels(workspaceId),
+            createPanel: (panel) => io.createPanel(identity.appId, workspaceId, panel),
+            mayStartAgents: (n) => io.mayStartAgents(workspaceId, n),
+        },
+        manifest.panels,
+        manifest.agents,
+    );
     io.panelsChanged();
+    // A WARNING, not a failure. The developer still needs the window — seeing why
+    // their agents did not come up is most of the value of previewing at all.
+    if (seeded.refused) warnings.push(seeded.refused);
 
     // --- Serve ---------------------------------------------------------------
     const site = previewSitePlan(workspaceId, preview);
-    const warnings: string[] = [];
     io.persistSites(workspaceId, { [site.siteId]: site.site });
     // A site that will not come up is a WARNING, never a failure. The Agent tab is
     // Genie's own and needs no hosting at all, so a machine with no dev-server

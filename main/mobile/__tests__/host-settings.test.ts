@@ -25,6 +25,7 @@ describe('pickHostSettings — host-sourced allow-list', () => {
                 'agent_flags_codex',
                 'agent_command_custom',
                 'agent_flags_custom',
+                'gapp_ai_provider',
                 'agent_default',
                 'agent_enabled',
             ].sort(),
@@ -46,6 +47,7 @@ describe('pickHostSettings — host-sourced allow-list', () => {
             agent_flags_codex: '--yolo',
             agent_command_custom: 'my-agent',
             agent_flags_custom: '--interactive',
+            gapp_ai_provider: 'codex',
             agent_default: 'codex',
             agent_enabled: '["claude","codex"]',
             // host-machine / device / secret — must NOT leak:
@@ -73,6 +75,7 @@ describe('pickHostSettings — host-sourced allow-list', () => {
             agent_flags_codex: '--yolo',
             agent_command_custom: 'my-agent',
             agent_flags_custom: '--interactive',
+            gapp_ai_provider: 'codex',
             agent_default: 'codex',
             agent_enabled: '["claude","codex"]',
         });
