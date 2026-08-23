@@ -97,4 +97,29 @@ describe('handing the persona to the TUI', () => {
         const cmd = withPersonaBriefing('claude', 'C:/a"b/.agents/s.md', 'He said "hi"');
         expect(cmd.slice('claude '.length).slice(1, -1)).not.toContain('"');
     });
+
+    it('strips what every shell would expand, not just what THIS one would', () => {
+        // The line is typed into whichever shell the user has set, on whichever OS.
+        // `$`/backtick substitute in bash and PowerShell; `%VAR%` expands in cmd;
+        // and `!` history-expands in an interactive bash — where a FAILED expansion
+        // rejects the entire line, so an agent named "Fix It!" would never launch
+        // at all rather than launch slightly wrong.
+        const cmd = withPersonaBriefing(
+            'claude',
+            'C:/%USERPROFILE%/$HOME/.agents/s.md',
+            'Fix It! `whoami`',
+        );
+        const briefing = cmd.slice('claude '.length).slice(1, -1);
+        for (const ch of ['"', '`', '$', '!', '%', '\n', '\r']) {
+            expect(briefing).not.toContain(ch);
+        }
+    });
+
+    it('leaves the path readable after the strip, on Windows too', () => {
+        // Backslashes become forward slashes rather than vanishing: a trailing one
+        // escapes the closing quote, and every TUI opens the file either way.
+        expect(withPersonaBriefing('claude', 'C:\\Apps\\t\\.agents\\s.md', 'S')).toContain(
+            'C:/Apps/t/.agents/s.md',
+        );
+    });
 });

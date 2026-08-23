@@ -69,14 +69,33 @@ export function gappPersonaPath(workspaceRoot: string, persona: string): string 
  * Everything a double-quoted shell argument cannot survive.
  *
  * The briefing is assembled from a manifest-declared NAME and a path on the
- * user's disk, so neither is trusted to be quote-free. A `"` that survived would
- * close the argument and turn the remainder of the briefing into shell words —
- * on a line Genie types into a live shell. Backslashes go too, because a trailing
- * one would escape the closing quote (Windows paths are full of them, and the TUI
- * reads the path perfectly well with forward slashes).
+ * user's disk, so neither is trusted, and this line is TYPED INTO A LIVE SHELL —
+ * whichever one the user has set, on whichever OS. So the strip covers what is
+ * special inside double quotes across all of them, not just the one this machine
+ * happens to run:
+ *
+ *  - `"` closes the argument and turns the rest of the briefing into shell words.
+ *  - `` ` `` and `$` substitute in bash/zsh AND PowerShell.
+ *  - `!` history-expands in an INTERACTIVE bash — and a failed expansion rejects
+ *    the whole line, so an agent named "Fix It!" would simply never launch.
+ *  - `%` expands `%VAR%` in cmd.
+ *  - Newlines would submit half a command.
+ *
+ * Backslashes become forward slashes rather than being stripped: a trailing one
+ * escapes the closing quote, Windows paths are full of them, and every TUI opens
+ * the file perfectly well either way.
+ *
+ * Mangling prose is the right trade. The briefing is instructions, not data, and
+ * the alternative — a launch line that a shell parses differently than Genie
+ * meant — is the failure this whole change exists to remove, wearing a shell's
+ * clothes.
  */
 function quotable(value: string): string {
-    return value.replace(/\\/g, '/').replace(/["`$\r\n]/g, ' ').replace(/\s+/g, ' ').trim();
+    return value
+        .replace(/\\/g, '/')
+        .replace(/["`$!%\r\n]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
 }
 
 /**
