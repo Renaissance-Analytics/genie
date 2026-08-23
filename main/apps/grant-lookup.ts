@@ -18,7 +18,12 @@
  */
 
 import { getAppGrant } from '../db';
-import { livePreview, resolveAppGrant } from './preview-registry';
+import {
+    appIdentity,
+    livePreview,
+    resolveAppGrant,
+    type AppIdentityView,
+} from './preview-registry';
 import type { AppGrant } from './bridge-decision';
 
 /** The installed app's grant row, as the decision layer wants to see it. */
@@ -43,4 +48,16 @@ function installedGrant(appId: string): AppGrant | null {
  */
 export function appGrantFor(appId: string): AppGrant | null {
     return resolveAppGrant(appId, { preview: livePreview, installed: installedGrant });
+}
+
+/**
+ * What `me()` tells this app about itself — installed or previewed.
+ *
+ * Bound here beside {@link appGrantFor} because the two answer the same question
+ * from the same two sources, and splitting them across files is how a preview
+ * ends up visible to one and not the other. The decision itself is pure and
+ * tested in `preview-registry.ts`.
+ */
+export function appIdentityFor(appId: string): AppIdentityView | null {
+    return appIdentity(appGrantFor(appId), livePreview(appId));
 }

@@ -274,6 +274,7 @@ test('the two-call bridge answers inside a preview, which has no grant row at al
         name: string;
         workspaceId: string;
         capabilities: string[];
+        preview?: true;
     } | null;
     expect(me).not.toBeNull();
 
@@ -291,6 +292,11 @@ test('the two-call bridge answers inside a preview, which has no grant row at al
     // preview holding capabilities nobody granted would be the whole permission
     // model quietly not applying to the fast path.
     expect(me!.capabilities).toEqual([]);
+
+    // And it is TOLD it is a preview, explicitly. An app that wanted to seed demo
+    // data rather than touch anything real has to be able to ask, and sniffing its
+    // own id for a suffix would make Genie's internal naming a public contract.
+    expect(me!.preview).toBe(true);
 });
 
 test('closing a preview is the whole cleanup', async () => {

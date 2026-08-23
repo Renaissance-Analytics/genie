@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
+    appIdentity,
     forgetPreview,
     listPreviews,
     livePreview,
@@ -139,5 +140,73 @@ describe('resolveAppGrant', () => {
                 installed: () => null,
             }),
         ).toBeNull();
+    });
+});
+
+describe('what me() tells an app about itself', () => {
+    const installed: AppGrant = {
+        appId: 'com.example.trader',
+        appName: 'Example Trader',
+        workspaceId: 'installed-ws',
+        scope: 'self',
+        capabilities: ['hosting', 'terminals'],
+        revoked: false,
+    };
+
+    it('reports an installed app straight from its grant', () => {
+        expect(appIdentity(installed, null)).toEqual({
+            id: 'com.example.trader',
+            name: 'Example Trader',
+            workspaceId: 'installed-ws',
+            scope: 'self',
+            capabilities: ['hosting', 'terminals'],
+        });
+    });
+
+    it('drops a capability this build no longer has', () => {
+        // An app installed under an older Genie can hold a name this build does
+        // not know. Reporting it would have the app offer a feature that cannot
+        // work, which reads as the app being broken rather than as out of date.
+        const identity = appIdentity({ ...installed, capabilities: ['hosting', 'invented'] }, null);
+        expect(identity?.capabilities).toEqual(['hosting']);
+    });
+
+    it('tells a PREVIEWED app its own id, not the one Genie keys storage by', () => {
+        const live = preview(manifest());
+
+        const identity = appIdentity(live.grant, live);
+
+        // The app IS `com.example.trader`. `~preview` is Genie's bookkeeping — it
+        // keys the bridge, the partition and the caller id, none of which the page
+        // can see. A developer whose code branches on its own id must not silently
+        // take a different branch because Genie renamed it internally.
+        expect(identity?.id).toBe('com.example.trader');
+        expect(identity?.name).toBe('Example Trader');
+    });
+
+    it('says outright that this is a preview', () => {
+        // Explicit, rather than leaving an app to sniff its own id for a suffix.
+        // "Am I being previewed?" is a fair question for an app to ask — a
+        // developer may want a banner, or to seed demo data — and the answer
+        // should be a field, not a string trick that breaks when the mark changes.
+        const live = preview(manifest());
+
+        expect(appIdentity(live.grant, live)?.preview).toBe(true);
+        expect(appIdentity(installed, null)?.preview).toBeUndefined();
+    });
+
+    it('reports the PREVIEW’s workspace and the PREVIEW’s capabilities', () => {
+        // Everything about authority still comes from the preview's own grant —
+        // only the app's identity comes from the manifest it was built from.
+        const live = preview(manifest());
+
+        const identity = appIdentity(live.grant, live);
+
+        expect(identity?.workspaceId).toBe('preview-ws-1');
+        expect(identity?.capabilities).toEqual(['hosting']);
+    });
+
+    it('answers nothing at all without a grant', () => {
+        expect(appIdentity(null, null)).toBeNull();
     });
 });

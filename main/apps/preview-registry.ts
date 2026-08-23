@@ -22,6 +22,7 @@
  */
 
 import { grantableCapabilities } from './manage-core';
+import { APP_CAPABILITIES } from './capabilities';
 import { gappHomeUrl } from './hostname';
 import type { InstalledAppView } from './manage';
 import type { AppGrant } from './bridge-decision';
@@ -144,6 +145,57 @@ export function previewAppView(live: LivePreview): InstalledAppView {
         // it empty says "never" more honestly than a timestamp for an event that
         // did not happen.
         installedAt: '',
+    };
+}
+
+/** What an app is allowed to know about ITSELF — the answer to `genieApp.me()`. */
+export interface AppIdentityView {
+    id: string;
+    name: string;
+    workspaceId: string;
+    scope: AppGrant['scope'];
+    /** What the USER granted — never what the manifest asked for. */
+    capabilities: string[];
+    /** Present ONLY in a preview window. Absent for an installed app. */
+    preview?: true;
+}
+
+/**
+ * PURE. What `me()` answers.
+ *
+ * Authority comes from the GRANT, always — the workspace it may act in and the
+ * capabilities it holds. What comes from the manifest is only the app's IDENTITY,
+ * and only when it is being previewed.
+ *
+ * That split matters. A preview's grant is keyed by `<id>~preview` and named
+ * "X (preview)" — Genie's bookkeeping, so that its storage partition, its bridge
+ * registration and its MCP caller id can never be an installed app's. But the app
+ * IS `com.example.trader`, and a developer whose code branches on its own id must
+ * not silently take a different branch because Genie renamed it internally. So the
+ * page is told the truth about who it is and the truth about what it may do, from
+ * the two places that actually know.
+ *
+ * `preview: true` is how it finds out, EXPLICITLY. Leaving an app to sniff its own
+ * id for a suffix would make Genie's internal naming into a public contract, and
+ * it is a fair question for an app to ask — a developer may want a banner, or to
+ * seed demo data rather than touch anything real.
+ */
+export function appIdentity(
+    grant: AppGrant | null,
+    live: LivePreview | null,
+): AppIdentityView | null {
+    if (!grant) return null;
+    return {
+        id: live ? live.source.id : grant.appId,
+        name: live ? live.source.name : grant.appName,
+        workspaceId: grant.workspaceId,
+        scope: grant.scope,
+        // An app installed under an older Genie can hold a capability name this
+        // build no longer has. Reporting it would have the app offer a feature
+        // that cannot work — which reads as the app being broken rather than as
+        // out of date.
+        capabilities: grant.capabilities.filter((c) => APP_CAPABILITIES.some((cap) => cap.key === c)),
+        ...(live ? { preview: true as const } : {}),
     };
 }
 

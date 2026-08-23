@@ -30,6 +30,15 @@ export interface GenieAppIdentity {
     scope: 'self' | 'workspaces' | 'workstation';
     /** What the USER granted — not what the manifest asked for. */
     capabilities: string[];
+    /**
+     * This window is a PREVIEW: the app is running from a developer's folder and
+     * is not installed. Absent otherwise.
+     *
+     * Explicit, so an app never has to sniff its own id for a suffix — Genie's
+     * internal naming is not a contract. Worth branching on when a preview should
+     * seed demo data rather than touch anything real, or show a banner.
+     */
+    preview?: true;
 }
 
 export interface GenieAppCallResult {

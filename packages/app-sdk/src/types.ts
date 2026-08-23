@@ -116,6 +116,20 @@ export interface GenieAppIdentity {
     workspaceId: string;
     scope: GenieAppScope;
     capabilities: string[];
+    /**
+     * This window is a PREVIEW — the app is running from a folder somebody is
+     * building in, and is NOT installed. Absent otherwise.
+     *
+     * Everything else works exactly as it does when installed: real permissions,
+     * a real workspace, the real bridge. What differs is that it is temporary and
+     * it has its own storage, so nothing it writes reaches an installed copy.
+     *
+     * Branch on this when a preview should seed demo data instead of touching
+     * anything real, or should say so on screen. Never branch on `id` — the id
+     * you get here is always your own, and Genie's internal naming is not a
+     * contract.
+     */
+    preview?: true;
 }
 
 export interface GenieAppCallResult {

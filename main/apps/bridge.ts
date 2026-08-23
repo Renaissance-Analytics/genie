@@ -15,10 +15,9 @@
  */
 
 import { ipcMain, type WebContents } from 'electron';
-import { appGrantFor } from './grant-lookup';
+import { appGrantFor, appIdentityFor } from './grant-lookup';
 import { decideAppCall } from './bridge-decision';
 import { prepareAppToolCall } from './call-prep';
-import { APP_CAPABILITIES } from './capabilities';
 import { callerIdForApp } from '../mcp/caller-identity';
 import { handleMcpMessage } from '../mcp/protocol';
 import type { ServerDeps } from '../mcp/server';
@@ -135,19 +134,11 @@ export function registerAppBridge(deps: ServerDeps): void {
 
     ipcMain.handle(APP_ME_CHANNEL, (event) => {
         const appId = windowApps.get(event.sender.id);
-        const grant = appId ? appGrantFor(appId) : null;
-        if (!grant) return null;
         // What the app is allowed to know about itself: who it is, and what it may
         // do — so it can hide a feature it was not granted instead of offering a
-        // button that fails.
-        return {
-            id: grant.appId,
-            name: grant.appName,
-            workspaceId: grant.workspaceId,
-            scope: grant.scope,
-            capabilities: grant.capabilities.filter((c) =>
-                APP_CAPABILITIES.some((cap) => cap.key === c),
-            ),
-        };
+        // button that fails. Decided in `preview-registry.ts`, because a PREVIEWED
+        // app's identity and its authority come from two different places and
+        // getting that split wrong is not visible from here.
+        return appId ? appIdentityFor(appId) : null;
     });
 }
