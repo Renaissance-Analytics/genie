@@ -10,6 +10,7 @@ import {
     useCarousel,
 } from '@particle-academy/react-fancy';
 import { pickPath } from './FilePickerModal';
+import { projectPickerOptions } from '../lib/project-picker';
 import {
     api,
     ulid,
@@ -1545,7 +1546,12 @@ function EnvelopeStep({
                         onValueChange={setProjectId}
                         list={[
                             { value: '', label: '— No project (just a folder) —' },
-                            ...projects.map((p) => ({ value: p.id, label: p.name })),
+                            // Shared helper rather than a local `label: p.name`:
+                            // it is identical for a single-backend list, and it
+                            // is what marks a Genie App project (Tynn `is_gapp`)
+                            // and tags mixed backends — in the same words as
+                            // every other picker.
+                            ...projectPickerOptions(projects),
                         ]}
                         placeholder="— No project (just a folder) —"
                     />

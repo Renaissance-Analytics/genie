@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Action, Icon, Select, Text } from '@particle-academy/react-fancy';
 import { api } from '../lib/genie';
 import { shouldAutoProvisionOnOpen } from '../lib/tynn-autoprovision';
+import { GAPP_MARKER } from '../lib/project-picker';
 
 /**
  * Tynn auto-provisioning — per-workspace panel (the workspace settings modal).
@@ -18,7 +19,14 @@ export default function TynnProvisionPanel({ workspaceId }: { workspaceId?: stri
     >(null);
     const [link, setLink] = useState<{ owner?: string; project?: string } | null>(null);
     const [projects, setProjects] = useState<
-        Array<{ id: string; name: string; slug: string; owner_name?: string }>
+        Array<{
+            id: string;
+            name: string;
+            slug: string;
+            owner_name?: string;
+            /** Tynn `is_gapp` — this project is where a Genie App is developed. */
+            isGapp?: boolean;
+        }>
     >([]);
     const [picked, setPicked] = useState('');
     const [busy, setBusy] = useState(false);
@@ -158,7 +166,12 @@ export default function TynnProvisionPanel({ workspaceId }: { workspaceId?: stri
                             { value: '', label: 'Pick a Tynn project…' },
                             ...projects.map((p) => ({
                                 value: p.id,
-                                label: p.owner_name ? `${p.owner_name} / ${p.name}` : p.name,
+                                // `owner / name` is this panel's own long-standing
+                                // format; only the Genie App marker is shared, so
+                                // every picker words it identically.
+                                label:
+                                    (p.owner_name ? `${p.owner_name} / ${p.name}` : p.name) +
+                                    (p.isGapp ? ` ${GAPP_MARKER}` : ''),
                             })),
                         ]}
                     />
