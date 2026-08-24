@@ -159,6 +159,21 @@ describe('the front end a user will actually look at', () => {
         expect(find(report.findings, 'frontend.window-genie')).toBeUndefined();
     });
 
+    it('treats an UNTERMINATED comment as a comment, the way a browser does', () => {
+        // Caught by CodeQL as `js/incomplete-multi-character-sanitization`, and it
+        // is a real false-positive source rather than a theoretical one: a lazy
+        // `<!--…-->` never matches a comment with no closing marker, so everything
+        // after it survives the strip and gets scanned as if it were live code. An
+        // unterminated `<!--` comments out the rest of the document — so it has to
+        // be consumed to the end of the file.
+        const report = check(app(), {
+            ...TREE,
+            'web/dist/index.html': '<!doctype html>\n<!-- todo: window.genie is not a thing',
+        });
+
+        expect(find(report.findings, 'frontend.window-genie')).toBeUndefined();
+    });
+
     it('catches a front end reaching for Node inside a sandboxed window', () => {
         const report = check(app(), {
             ...TREE,

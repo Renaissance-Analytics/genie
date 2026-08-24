@@ -97,12 +97,26 @@ const SOURCE_FILE = /\.(m?[jt]sx?|cjs|html?|vue|svelte)$/i;
  * than what it says. A false positive on the reference app teaches developers to
  * ignore the whole suite, which costs more than the check is worth.
  *
+ * ## An UNTERMINATED comment runs to the end of the file
+ *
+ * `(?:-->|$)` rather than `-->`, and `(?:\*\/|$)` rather than `*\/`, and both
+ * halves of that matter. It is how a browser and a JS engine actually read an
+ * unclosed comment — everything after it is commented out — so a lazy match that
+ * simply failed would leave the whole remainder of the file to be scanned as live
+ * code, and report a `window.genie` nobody wrote.
+ *
+ * It is also what stops the strip leaving a dangling `<!--` behind, which CodeQL
+ * flags as `js/incomplete-multi-character-sanitization`: with the alternation
+ * every opener is consumed, terminated or not.
+ *
  * Whole-line `//` only — a naive `//` strip eats the rest of any line containing a
  * URL.
  */
 function stripComments(source: string, file: string): string {
-    const withoutHtml = /\.html?$/i.test(file) ? source.replace(/<!--[\s\S]*?-->/g, '') : source;
-    return withoutHtml.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    const withoutHtml = /\.html?$/i.test(file)
+        ? source.replace(/<!--[\s\S]*?(?:-->|$)/g, '')
+        : source;
+    return withoutHtml.replace(/\/\*[\s\S]*?(?:\*\/|$)/g, '').replace(/^\s*\/\/.*$/gm, '');
 }
 
 interface SourceRule {
