@@ -130,7 +130,12 @@ const SOURCE_RULES: readonly SourceRule[] = [
     {
         check: 'frontend.node-api',
         severity: 'error',
-        pattern: /\bwindow\.require\b|\brequire\(\s*['"]electron['"]\s*\)|\bwindow\.process\b/,
+        // Deliberately narrow: the two spellings that mean somebody expected an
+        // Electron renderer. A broader pattern — `window.process`, a bare
+        // `require(` — matches the polyfills bundlers emit into perfectly good
+        // front ends, and a false ERROR on a working app is how a developer learns
+        // to ignore the whole suite.
+        pattern: /\bwindow\.require\b|\brequire\(\s*['"]electron['"]\s*\)/,
         problem: (file) =>
             `${file} reaches for Node or Electron. A Genie App window runs in a full Chromium ` +
             'sandbox with no Node, no filesystem and no Electron API — that isolation is what ' +
