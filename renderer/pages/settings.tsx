@@ -38,7 +38,8 @@ import {
     type InstalledAppView,
     type AppRequirementPlanView,
     type AppUpdateState,
-    type AppFolderReport,
+    type AppCheckReport,
+    type AppFinding,
     type GithubInstallReview,
     type MarketplaceView,
     type OfficialPluginsResult,
@@ -3219,6 +3220,79 @@ function TrustBadge({ plugin }: { plugin: InstalledPluginView }) {
 /* ---- Genie Apps (Tynn #250) ------------------------------------------- */
 
 /**
+ * One thing the check found.
+ *
+ * WHERE, then WHAT, then WHAT TO DO — in that order and visibly separate, because
+ * the failure this suite exists to prevent is a developer staring at something
+ * that does not work and being told nothing they can act on. A run-together
+ * sentence puts the instruction at the end of the paragraph, which is where it
+ * stops being read.
+ */
+function CheckFinding({ finding }: { finding: AppFinding }) {
+    return (
+        <li key={finding.check + finding.where} style={{ marginBottom: 8 }}>
+            {finding.where && (
+                <div style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 11, opacity: 0.7 }}>
+                    {finding.where}
+                </div>
+            )}
+            <div>{finding.problem}</div>
+            <div style={{ marginTop: 2 }}>
+                <strong>→ </strong>
+                {finding.fix}
+            </div>
+        </li>
+    );
+}
+
+/**
+ * What "Check an app…" reports.
+ *
+ * Errors and advice stay under separate headings — merging them trains people to
+ * skim both, and advice stays visible on a PASSING check because it is the half a
+ * developer would otherwise never see.
+ */
+function AppCheckReportView({ report }: { report: AppCheckReport }) {
+    const errors = report.findings.filter((f) => f.severity === 'error');
+    const advice = report.findings.filter((f) => f.severity === 'advice');
+
+    return (
+        <div className={`set-note${report.ok ? '' : ' warn'}`}>
+            <strong>
+                {report.app ? `${report.app.name} v${report.app.version}` : 'This folder'}
+                {report.ok ? ' is ready to install.' : ' will not work yet.'}
+            </strong>
+            {/* A clean report has to say what it COVERED. "No problems" from a
+                check that quietly skipped everything is the same false reassurance
+                the suite exists to remove. */}
+            {report.ok && advice.length === 0 && (
+                <div style={{ marginTop: 4, opacity: 0.75 }}>
+                    {report.ran.length} checks ran — manifest, files, agents, services and the
+                    front end.
+                </div>
+            )}
+            {errors.length > 0 && (
+                <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                    {errors.map((f) => (
+                        <CheckFinding key={f.check + f.where} finding={f} />
+                    ))}
+                </ul>
+            )}
+            {advice.length > 0 && (
+                <>
+                    <div style={{ marginTop: 8 }}>Worth a second thought:</div>
+                    <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+                        {advice.map((f) => (
+                            <CheckFinding key={f.check + f.where} finding={f} />
+                        ))}
+                    </ul>
+                </>
+            )}
+        </div>
+    );
+}
+
+/**
  * The Apps panel.
  *
  * Its whole job is to make an app's authority legible AFTER install. The consent
@@ -3234,7 +3308,7 @@ function AppsSection() {
     const [apps, setApps] = useState<InstalledAppView[]>([]);
     const [busy, setBusy] = useState(false);
     const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
-    const [report, setReport] = useState<AppFolderReport | null>(null);
+    const [report, setReport] = useState<AppCheckReport | null>(null);
     const [newName, setNewName] = useState('');
     const [updates, setUpdates] = useState<Record<string, AppUpdateState>>({});
     const [repoUrl, setRepoUrl] = useState('');
@@ -3535,8 +3609,8 @@ function AppsSection() {
 
             <SettingRow
                 label="Check a folder"
-                desc="Validates an app without installing it: schema problems, files the manifest points at that are not there, and permissions worth a second thought."
-                keywords="check validate genie app lint gapp"
+                desc="Runs the whole Genie App suite without installing anything: the manifest, every file it points at, the agents against the panels that can run them, the front end against the API it actually has — and, separately, what will work and is worth a second thought."
+                keywords="check validate genie app lint gapp test suite"
             >
                 <Action variant="ghost" icon="circle-check" disabled={busy} onClick={check}>
                     Check an app…
@@ -3553,35 +3627,7 @@ function AppsSection() {
                 </Action>
             </SettingRow>
 
-            {report && (
-                <div className={`set-note${report.ok ? '' : ' warn'}`}>
-                    <strong>
-                        {report.app ? `${report.app.name} v${report.app.version}` : 'This folder'}
-                        {report.ok ? ' is ready to install.' : ' will not run yet.'}
-                    </strong>
-                    {report.errors.length > 0 && (
-                        <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
-                            {report.errors.map((e) => (
-                                <li key={e}>{e}</li>
-                            ))}
-                        </ul>
-                    )}
-                    {/* Advice is listed apart from errors, and stays visible on a
-                        PASSING check — it is the half a developer would otherwise
-                        never see, and merging it into the errors would train them
-                        to skim both. */}
-                    {report.advice.length > 0 && (
-                        <>
-                            <div style={{ marginTop: 8 }}>Worth a second thought:</div>
-                            <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
-                                {report.advice.map((a) => (
-                                    <li key={a}>{a}</li>
-                                ))}
-                            </ul>
-                        </>
-                    )}
-                </div>
-            )}
+            {report && <AppCheckReportView report={report} />}
 
             <SetSubhead>Installed</SetSubhead>
 

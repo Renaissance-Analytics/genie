@@ -89,7 +89,9 @@ import {
 } from './manage';
 import { clearAppStorage, closeAppWindows, openAppWindow, showAppTab } from './window';
 import { uninstallDataQuestion } from './data-retention';
-import { validateAppFolder, type AppFolderReport } from './validate';
+import { validateAppFolder } from './validate';
+import { checkApp, type AppCheckReport, type CheckProbe } from './checkup';
+import { fsCheckProbe } from './check-fs';
 import { appWindowTabs } from './window-tabs';
 import { appUpdateState, updatableApps, type AppUpdateState } from './updates';
 import {
@@ -312,19 +314,21 @@ async function pickFolder(title: string): Promise<string | null> {
     return picked.canceled ? null : (picked.filePaths[0] ?? null);
 }
 
-/** The folder probe, backed by the real filesystem and the real app registry. */
-function folderProbe() {
-    return {
-        readManifest: (folder: string) => {
-            const file = path.join(folder, APP_MANIFEST_FILENAME);
-            return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
-        },
-        exists: (p: string) => fs.existsSync(p),
+/**
+ * The folder probe, backed by the real filesystem and the real app registry.
+ *
+ * The filesystem half is `fsCheckProbe`, shared with the CLI and the fixture suite,
+ * so the check a developer runs in a terminal is byte for byte the one Genie runs
+ * here. Only the slug question is Genie's own — it is the one answer that lives in
+ * the database.
+ */
+function folderProbe(): CheckProbe {
+    return fsCheckProbe({
         // An app re-checking ITSELF must not report its own address as taken —
         // that would make every reinstall look like a collision.
         slugTaken: (slug: string, selfId: string) =>
             listAppGrants().some((g) => g.slug === slug && g.appId !== selfId),
-    };
+    });
 }
 
 
@@ -1016,13 +1020,33 @@ export function registerAppsIpc(): void {
 
     /**
      * Check a folder WITHOUT installing it — the loop a developer (or the agent
-     * writing the app) works in. Reports schema problems, missing files, and
-     * separately the things that will work but are worth a second thought.
+     * writing the app) works in.
+     *
+     * The whole SUITE, not just the install gate: schema problems, missing files,
+     * a roster the window cannot run, a front end reaching for an API that does not
+     * exist, and — separately — the things that will work and are worth a second
+     * thought. Being stricter than the installer is the point. An app that installs
+     * perfectly and opens on an empty window is the failure this exists to catch,
+     * and by definition the install gate has nothing to say about it.
      */
-    ipcMain.handle('apps:check-folder', async (_e, folder?: string): Promise<AppFolderReport> => {
+    ipcMain.handle('apps:check-folder', async (_e, folder?: string): Promise<AppCheckReport> => {
         const dir = folder ?? (await pickFolder('Check a Genie App'));
-        if (!dir) return { ok: false, errors: ['No folder was chosen.'], advice: [] };
-        return validateAppFolder(dir, folderProbe());
+        if (!dir) {
+            return {
+                ok: false,
+                ran: [],
+                findings: [
+                    {
+                        check: 'check.no-folder',
+                        severity: 'error',
+                        where: '',
+                        problem: 'No folder was chosen.',
+                        fix: `Pick the folder that holds your ${APP_MANIFEST_FILENAME}.`,
+                    },
+                ],
+            };
+        }
+        return checkApp(dir, folderProbe());
     });
 
     /**

@@ -170,6 +170,17 @@ if (me.capabilities.includes('hosting')) { /* show the control */ }
 
 \`command\` is a literal argv array, never a shell string.
 
+## Before you ship it
+
+**Settings → Genie Apps → Check an app…**, pointed at this folder, runs the whole
+Genie App suite without installing anything: the manifest through the real
+validator, every path it declares, the agents against the panels that can run
+them, and the front end against the API a Genie App window actually has.
+
+An app can be schema-valid, install without an error, and still open on an empty
+window. The check is what tells you — and it tells you where, what, and what to do
+about it. Run it after every change.
+
 Full reference: \`packages/app-sdk/README.md\` in the Genie repo.
 `;
 }

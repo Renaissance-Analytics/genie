@@ -10,6 +10,15 @@
  * manifest points at is actually there. A manifest can be perfectly valid and
  * describe an app that cannot possibly work.
  *
+ * ## This is the INSTALL GATE
+ *
+ * Everything here is a reason the app cannot be installed or cannot come up at all,
+ * which is why the installer, the previewer and the GitHub review all run it. The
+ * developer-facing SUITE is `checkup.ts`, which runs this and then keeps going into
+ * the checks that describe an app which installs fine and does not WORK. Keeping
+ * the two apart is what lets the suite be stricter than the gate without making
+ * Genie refuse apps it used to accept.
+ *
  * ## Errors and advice are separate, deliberately
  *
  * An ERROR means it will not run. ADVICE means it will run and the developer
@@ -17,12 +26,17 @@
  * Merging them trains people to ignore both, and the one that gets ignored is
  * always the one that mattered.
  *
+ * Every answer is a structured {@link AppFinding} — what is wrong, WHERE, and what
+ * to DO about it — and `errors` / `advice` are derived views of that list, so the
+ * callers that have always read strings keep working from the same single message.
+ *
  * The filesystem is a probe so every branch is asserted rather than depending on
  * whatever happens to be on the box running the tests.
  */
 
 import path from 'path';
 import { findCapability } from './capabilities';
+import { findingLine, type AppFinding } from './findings';
 import {
     APP_AGENTS_DIR,
     APP_MANIFEST_FILENAME,
@@ -45,6 +59,8 @@ export interface FolderProbe {
 
 export interface AppFolderReport {
     ok: boolean;
+    /** Every answer, structured. The two lists below are views of this one. */
+    findings: AppFinding[];
     /** It will not run until these are fixed. */
     errors: string[];
     /** It will run. Worth a second thought anyway. */
@@ -58,36 +74,91 @@ function componentDir(folder: string, repo: string | undefined): string {
     return repo ? path.join(folder, repo) : folder;
 }
 
+/** The report shape, built once from the findings so the two views cannot drift. */
+function reportFrom(
+    findings: AppFinding[],
+    app?: AppFolderReport['app'],
+): AppFolderReport {
+    return {
+        ok: !findings.some((f) => f.severity === 'error'),
+        findings,
+        errors: findings.filter((f) => f.severity === 'error').map(findingLine),
+        advice: findings.filter((f) => f.severity === 'advice').map(findingLine),
+        ...(app ? { app } : {}),
+    };
+}
+
 export function validateAppFolder(folder: string, probe: FolderProbe): AppFolderReport {
     const raw = probe.readManifest(folder);
     if (raw === null) {
-        return {
-            ok: false,
-            errors: [`No ${APP_MANIFEST_FILENAME} here — this folder is not a Genie App.`],
-            advice: [],
-        };
+        return reportFrom([
+            {
+                check: 'manifest.missing',
+                severity: 'error',
+                where: path.join(folder, APP_MANIFEST_FILENAME),
+                problem: `No ${APP_MANIFEST_FILENAME} here — this folder is not a Genie App.`,
+                fix:
+                    `Point the check at the folder that holds ${APP_MANIFEST_FILENAME}, or create ` +
+                    'one with “Start a new app” in Settings → Genie Apps.',
+            },
+        ]);
     }
 
     let parsed: unknown;
     try {
         parsed = JSON.parse(raw);
     } catch (e) {
-        return {
-            ok: false,
-            errors: [`${APP_MANIFEST_FILENAME} is not valid JSON: ${(e as Error).message}`],
-            advice: [],
-        };
+        return reportFrom([
+            {
+                check: 'manifest.json',
+                severity: 'error',
+                where: path.join(folder, APP_MANIFEST_FILENAME),
+                problem: `${APP_MANIFEST_FILENAME} is not valid JSON: ${(e as Error).message}`,
+                fix: 'Fix the syntax — a trailing comma or an unquoted key is the usual cause.',
+            },
+        ]);
     }
 
     const validated = validateAppManifest(parsed);
-    if (!validated.ok) return { ok: false, errors: validated.errors, advice: [] };
+    if (!validated.ok) {
+        // Straight through, one finding each. The validator's own messages already
+        // name the field and say what it must be; re-writing them here would be a
+        // second copy of the rule, and the two would disagree within a release.
+        return reportFrom(
+            validated.errors.map((message) => ({
+                check: 'manifest.schema',
+                severity: 'error' as const,
+                where: path.join(folder, APP_MANIFEST_FILENAME),
+                problem: message,
+                fix: `Correct ${APP_MANIFEST_FILENAME} and check again — every field is documented in the Genie App SDK README.`,
+            })),
+        );
+    }
     const manifest = validated.value;
 
-    const errors: string[] = [];
-    const advice: string[] = [];
+    const findings: AppFinding[] = [];
 
     // --- Does what it points at exist? --------------------------------------
-    if (manifest.frontend.serve.mode === 'static') {
+    //
+    // The component folders checked below are exactly the ones `appCopyPlan`
+    // enumerates, which is what makes this the right place to catch them: without
+    // it, `copyAppSource` throws PARTWAY THROUGH an install, after the workspace
+    // has already been created.
+    const frontendRepoMissing =
+        manifest.frontend.repo !== undefined &&
+        !probe.exists(path.join(folder, manifest.frontend.repo));
+
+    if (frontendRepoMissing) {
+        // "Build it first" is the wrong instruction when the component folder
+        // itself is absent: no build produces a folder nobody created.
+        findings.push({
+            check: 'frontend.repo-missing',
+            severity: 'error',
+            where: path.join(folder, manifest.frontend.repo!),
+            problem: `The front end lives in "${manifest.frontend.repo}", but there is no such folder in this app.`,
+            fix: 'Create it, or correct `frontend.repo` — it names a folder beside the manifest, which lands at `repos/<name>` when the app installs.',
+        });
+    } else if (manifest.frontend.serve.mode === 'static') {
         // A proxy front end has no built output — it is a dev server the developer
         // runs — so this check applies only to `static`. Demanding a directory
         // would fail every app of the Ripple shape.
@@ -96,21 +167,28 @@ export function validateAppFolder(folder: string, probe: FolderProbe): AppFolder
             manifest.frontend.serve.root,
         );
         if (!probe.exists(root)) {
-            errors.push(
-                `The front end is served from "${manifest.frontend.serve.root}", but ${root} does not exist. ` +
-                    'Build it first, or point `frontend.serve.root` at the directory you actually produce.',
-            );
+            findings.push({
+                check: 'frontend.root-missing',
+                severity: 'error',
+                where: root,
+                problem: `The front end is served from "${manifest.frontend.serve.root}", but ${root} does not exist.`,
+                fix: 'Build it first, or point `frontend.serve.root` at the directory you actually produce.',
+            });
         }
     }
 
-    for (const service of manifest.services ?? []) {
+    manifest.services?.forEach((service, i) => {
         const dir = componentDir(folder, service.repo);
         if (!probe.exists(dir)) {
-            errors.push(
-                `The service "${service.name}" runs in "${service.repo ?? '.'}", but ${dir} does not exist.`,
-            );
+            findings.push({
+                check: 'service.repo-missing',
+                severity: 'error',
+                where: dir,
+                problem: `The service "${service.name}" runs in "${service.repo ?? '.'}", but ${dir} does not exist.`,
+                fix: `Create that folder, or correct \`services[${i}].repo\`.`,
+            });
         }
-    }
+    });
 
     // The consequence that makes DECLARING agents worth its cost (owner,
     // 2026-08-22). They are declared in the manifest rather than discovered from
@@ -127,12 +205,17 @@ export function validateAppFolder(folder: string, probe: FolderProbe): AppFolder
     for (const agent of manifest.agents ?? []) {
         const persona = path.join(folder, APP_AGENTS_DIR, agent.persona);
         if (!probe.exists(persona)) {
-            errors.push(
-                `The agent "${agent.name}" is declared with a persona at ` +
-                    `"${APP_AGENTS_DIR}/${agent.persona}", but ${persona} does not exist. ` +
+            findings.push({
+                check: 'agents.persona-missing',
+                severity: 'error',
+                where: persona,
+                problem:
+                    `The agent "${agent.name}" is declared with a persona at ` +
+                    `"${APP_AGENTS_DIR}/${agent.persona}", but ${persona} does not exist.`,
+                fix:
                     'Add the file, or drop the agent from `agents` — the user is asked to consent ' +
                     'to this roster, so it has to be real.',
-            );
+            });
         }
     }
 
@@ -140,57 +223,73 @@ export function validateAppFolder(folder: string, probe: FolderProbe): AppFolder
     if (probe.slugTaken(manifest.slug, manifest.id)) {
         // Two apps at one address is one app the user cannot reach, and the
         // failure would surface at hosting time, far from its cause.
-        errors.push(
-            `Another installed app already serves ${manifest.slug}.gen. Choose a different \`slug\`.`,
-        );
+        findings.push({
+            check: 'slug.taken',
+            severity: 'error',
+            where: `${APP_MANIFEST_FILENAME} → slug`,
+            problem: `Another installed app already serves ${manifest.slug}.gen.`,
+            fix: 'Choose a different `slug`.',
+        });
     }
 
     // --- Advice --------------------------------------------------------------
     if (manifest.permissions.scope === 'workstation') {
-        advice.push(
-            '`scope: "workstation"` asks to act on EVERY workspace on the machine. That is the ' +
-                'widest thing a user can grant — ask for `self` unless the app is genuinely ' +
-                'cross-project, and expect to justify it.',
-        );
+        findings.push({
+            check: 'permissions.workstation-scope',
+            severity: 'advice',
+            where: `${APP_MANIFEST_FILENAME} → permissions.scope`,
+            problem:
+                '`scope: "workstation"` asks to act on EVERY workspace on the machine. That is the ' +
+                'widest thing a user can grant.',
+            fix: 'Ask for `self` unless the app is genuinely cross-project, and expect to justify it.',
+        });
     }
 
     for (const key of manifest.permissions.capabilities) {
         const capability = findCapability(key);
         if (capability?.risk === 'high') {
-            advice.push(
-                `“${capability.label}” is a high-risk permission — many users will decline it. ` +
-                    'Make sure the app still works without it.',
-            );
+            findings.push({
+                check: 'permissions.high-risk',
+                severity: 'advice',
+                where: `${APP_MANIFEST_FILENAME} → permissions.capabilities`,
+                problem: `“${capability.label}” is a high-risk permission — many users will decline it.`,
+                fix: 'Make sure the app still works without it.',
+            });
         }
     }
 
-    for (const requirement of manifest.requires ?? []) {
+    (manifest.requires ?? []).forEach((requirement, i) => {
         if (!requirement.reason) {
-            advice.push(
-                `The requirement "${requirement.tool}" has no \`reason\`. When Genie cannot install it, ` +
+            findings.push({
+                check: 'requires.no-reason',
+                severity: 'advice',
+                where: `${APP_MANIFEST_FILENAME} → requires[${i}]`,
+                problem:
+                    `The requirement "${requirement.tool}" has no \`reason\`. When Genie cannot install it, ` +
                     'the user is asked to — and "install docker" is an instruction where ' +
                     '"install docker — it runs the sandbox" is a decision.',
-            );
+                fix: `Add a \`reason\` to \`requires[${i}]\` saying what the app needs it for.`,
+            });
         }
-    }
+    });
 
     if (manifest.frontend.browserExposed) {
-        advice.push(
-            'This app asks to be reachable from the real browser, which costs the user a one-time ' +
-                'admin prompt (a certificate and a hosts entry). Ask only if it needs to be.',
-        );
+        findings.push({
+            check: 'frontend.browser-exposed',
+            severity: 'advice',
+            where: `${APP_MANIFEST_FILENAME} → frontend.browserExposed`,
+            problem:
+                'This app asks to be reachable from the real browser, which costs the user a one-time ' +
+                'admin prompt (a certificate and a hosts entry).',
+            fix: 'Ask only if it needs to be — inside the Genie App window it is reachable either way.',
+        });
     }
 
-    return {
-        ok: errors.length === 0,
-        errors,
-        advice,
-        app: {
-            id: manifest.id,
-            slug: manifest.slug,
-            name: manifest.name,
-            version: manifest.version,
-            ...(manifest.description ? { description: manifest.description } : {}),
-        },
-    };
+    return reportFrom(findings, {
+        id: manifest.id,
+        slug: manifest.slug,
+        name: manifest.name,
+        version: manifest.version,
+        ...(manifest.description ? { description: manifest.description } : {}),
+    });
 }

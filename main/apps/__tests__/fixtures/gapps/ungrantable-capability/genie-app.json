@@ -1,0 +1,10 @@
+{
+    "id": "com.example.ungrantable",
+    "slug": "ungrantable",
+    "name": "Ungrantable",
+    "version": "1.0.0",
+    "description": "Asks for a tool no app may ever have, by name.",
+    "frontend": { "repo": "web", "serve": { "mode": "static", "root": "public", "spa": true } },
+    "panels": { "agents": 1 },
+    "permissions": { "scope": "self", "capabilities": ["submitFeedback"] }
+}

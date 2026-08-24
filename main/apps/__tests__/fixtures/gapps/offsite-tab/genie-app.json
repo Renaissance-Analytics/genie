@@ -1,0 +1,11 @@
+{
+    "id": "com.example.offsitetab",
+    "slug": "offsite-tab",
+    "name": "Offsite Tab",
+    "version": "1.0.0",
+    "description": "Points a tab of Genie's own chrome at somebody else's origin.",
+    "frontend": { "repo": "web", "serve": { "mode": "static", "root": "public", "spa": true } },
+    "tabs": [{ "title": "Reports", "path": "https://reports.example.com/" }],
+    "panels": { "agents": 1 },
+    "permissions": { "scope": "self", "capabilities": [] }
+}

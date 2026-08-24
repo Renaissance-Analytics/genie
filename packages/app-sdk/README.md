@@ -244,10 +244,9 @@ All of it lives in **Settings → Genie Apps**.
    you need them, and be ready to say why.
 2. Build your front end to a directory (`dist`), or run a dev server and use
    `serve: { mode: "proxy", hostPort: … }`.
-3. **Check a folder** validates it *without installing*: schema problems, files
-   the manifest points at that are not there, and — listed separately — the
-   things that will work but are worth a second thought. This is the loop to work
-   in: change, check, fix.
+3. **Check an app…** runs the whole check suite over a folder, *without
+   installing*. This is the loop to work in: change, check, fix. It is described
+   in full below — read that section before you ship anything.
 4. **Preview an app…** opens the **real app window** over your folder, without
    installing anything. A check tells you the manifest is coherent; a preview is
    the only thing that answers what your users will actually see.
@@ -272,15 +271,72 @@ All of it lives in **Settings → Genie Apps**.
    to grant it anything, and a developer who never sees their own consent screen
    never finds out how it reads. Nothing else is relaxed: same sandbox, same
    isolation, same bridge.
-5. **Install an app…** for the real thing, and answer the consent prompt. Genie creates the
+6. **Install an app…** for the real thing, and answer the consent prompt. Genie creates the
    workspace, copies the source in, serves it at `<slug>.gen`, and starts your
    declared services beside it.
-6. Open it. Your front end renders in its own window with `window.genieApp` wired.
+7. Open it. Your front end renders in its own window with `window.genieApp` wired.
 
 If a service does not come up, the install still **succeeds** and says what did
 not start — an app with a broken part is not an app that failed to install.
 Runtimes Genie cannot provide on this machine are listed on the app's card, and
 stop being listed once you install them.
+
+---
+
+## Checking your app
+
+Your app can be schema-valid, install without a single error, and still open on an
+empty window. That is not hypothetical — it is what happened to the first person
+who shipped agents: personas declared, install clean, **N empty terminals and no
+error anywhere**. Nothing told them anything was wrong.
+
+The check is what tells you. Run it on a **folder**, before anything is installed.
+
+**In Genie** — Settings → Genie Apps → **Check an app…**, and pick your folder.
+
+**From a terminal**, which is what your CI and the agent building your app want:
+
+```
+npm run check:gapp -- path/to/your-app       # human-readable report; exit 1 on an error
+npm run check:gapp -- path/to/app --json     # the findings, for an agent to act on
+npm run check:gapp -- path/to/app --strict   # advice fails too
+```
+
+Both run the same code, and it is the same code the installer runs — so what it
+tells you is what Genie will actually do, not a second opinion about it.
+
+### What it checks
+
+| | |
+|---|---|
+| **The manifest** | Parsed by the *real* validator — the one install uses. Naming a tool where a capability belongs tells you which capability governs it. |
+| **Every path it declares** | The front-end root, each component folder, each service's entry file, and **each declared agent's persona under `.agents/`**. |
+| **The window a user opens** | The served directory has an `index.html`; the front end does not reach for `window.genie` (there isn't one) or for Node. |
+| **The roster against the panels** | Every agent you declare reaches a slot that can actually run one. Declare three and lay out one, and two of them never start — after the user consented to all three. |
+| **Personas** | Present, and not empty. An agent briefed with an empty file is an agent with no instructions. |
+| **Services** | No two share a name (Genie supervises by label) or a port; the runtime each one runs is declared in `requires`. |
+| **Requirements** | Every one names a real tool, with a `reason`. Genie installs `php, node, python, go, rust`; anything else, your users install themselves. |
+| **Tabs** | Titles a user can tell apart, and paths that resolve on your own origin. |
+
+Errors and advice are separate. An **error** means it will not work. **Advice**
+means it will, and you should think about it anyway. Every finding says three
+things — where to look, what is wrong, and what to do:
+
+```
+ERRORS — this must be fixed before the app will work
+
+  [agents.unreachable]  genie-app.json → panels.agents
+    The app declares 3 agents but its Agent tab lays out 1 slot(s) that can run one,
+    so "Reviewer", "Reporter" never start. The user is asked to consent to the whole
+    roster at install and would silently get fewer — which is the failure declaring
+    agents exists to prevent.
+    → Raise `panels.agents` to 3 (8 is the maximum), or remove the agents that will
+    not run from `agents`.
+```
+
+A clean report says how many checks ran, not just that it found nothing: "no
+problems" from a check that quietly skipped everything is the same false
+reassurance this exists to remove.
 
 ## Sharing it
 

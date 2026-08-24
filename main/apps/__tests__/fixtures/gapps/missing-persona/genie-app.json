@@ -1,0 +1,11 @@
+{
+    "id": "com.example.missingpersona",
+    "slug": "missing-persona",
+    "name": "Missing Persona",
+    "version": "1.0.0",
+    "description": "Declares an agent and ships no persona for it — genie#245, exactly.",
+    "frontend": { "repo": "web", "serve": { "mode": "static", "root": "public" } },
+    "panels": { "agents": 1 },
+    "agents": [{ "name": "Strategist", "persona": "strategist.md" }],
+    "permissions": { "scope": "self", "capabilities": [] }
+}

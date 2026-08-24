@@ -1,0 +1,11 @@
+{
+    "id": "com.example.noservice",
+    "slug": "no-service",
+    "name": "No Service",
+    "version": "1.0.0",
+    "description": "The service folder is there and the file the command runs is not.",
+    "frontend": { "repo": "web", "serve": { "mode": "static", "root": "public" } },
+    "services": [{ "name": "api", "repo": "service", "command": ["python", "server.py"] }],
+    "panels": { "agents": 1 },
+    "permissions": { "scope": "self", "capabilities": [] }
+}

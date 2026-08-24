@@ -1,9 +1,11 @@
 import fs from 'fs';
 import path from 'path';
 import { describe, expect, it } from 'vitest';
-import { validateAppManifest, APP_AGENTS_DIR, APP_MANIFEST_FILENAME } from '../manifest';
-import { validateAppFolder } from '../validate';
+import { validateAppManifest, APP_MANIFEST_FILENAME } from '../manifest';
 import { appInstallPlan } from '../install-plan';
+import { checkApp } from '../checkup';
+import { fsCheckProbe } from '../check-fs';
+import { formatCheckReport } from '../findings';
 
 /**
  * The reference GApp, checked against the real validator (Tynn #250).
@@ -58,59 +60,37 @@ describe('the shipped example app', () => {
         }
     });
 
-    it('every file the manifest points at is actually there', () => {
-        // The failure this catches is a rename: the manifest still validates, the
-        // install still succeeds, and the site serves a 404 the user reads as a
-        // broken product.
-        const m = manifest();
-        const frontendRoot = path.join(EXAMPLE_DIR, m.frontend.repo ?? '');
-        expect(fs.existsSync(frontendRoot), frontendRoot).toBe(true);
-        expect(fs.existsSync(path.join(frontendRoot, 'index.html'))).toBe(true);
-
-        for (const service of m.services ?? []) {
-            const entry = path.join(EXAMPLE_DIR, service.repo ?? '', service.command[1] ?? '');
-            expect(fs.existsSync(entry), entry).toBe(true);
-        }
+    it('ships an AGENT, which is the newest half of the manifest', () => {
+        // `.agents/` is the part with no prior art to copy, so the example is where
+        // it gets demonstrated. That the persona is actually THERE is the suite's
+        // job below — this is the claim that the example demonstrates the feature
+        // at all.
+        expect(manifest().agents?.length).toBeGreaterThan(0);
     });
 
-    it('ships an AGENT, declared in the manifest with its persona on disk', () => {
-        // `.agents/` is the newest half of the manifest and the one with no prior
-        // art to copy, so the example is where it gets demonstrated. It also gives
-        // the folder check a real directory to be right about: declaration and
-        // folder drifting apart is the failure declaring agents exists to catch,
-        // and every other test for it uses a probe.
-        const m = manifest();
-        expect(m.agents?.length).toBeGreaterThan(0);
-        for (const agent of m.agents ?? []) {
-            const persona = path.join(EXAMPLE_DIR, APP_AGENTS_DIR, agent.persona);
-            expect(fs.existsSync(persona), persona).toBe(true);
-        }
-    });
-
-    it('passes the folder check Genie runs before installing it', () => {
-        // The example is documentation people copy. An example that would be
-        // REFUSED at install teaches that the system is broken, not the example.
-        const report = validateAppFolder(EXAMPLE_DIR, {
-            readManifest: (folder) =>
-                fs.readFileSync(path.join(folder, APP_MANIFEST_FILENAME), 'utf8'),
-            exists: (p) => fs.existsSync(p),
-            slugTaken: () => false,
-        });
-
-        expect(report.errors).toEqual([]);
-    });
-
-    it('never reaches for window.genie', () => {
-        // The isolation claim, asserted against the shipped code rather than
-        // trusted: a GApp's window has no `window.genie`, and an example that
-        // reached for it would be teaching an API that does not exist.
+    it('DEMONSTRATES the real runtime surface', () => {
+        // The example uses `window.genieApp` directly rather than the SDK, on
+        // purpose: it is the proof of what the surface IS. That it never reaches
+        // for the `window.genie` that does not exist is checked generically by the
+        // suite, over the whole served directory rather than this one file.
         const source = fs.readFileSync(path.join(EXAMPLE_DIR, 'web', 'app.js'), 'utf8');
-        // Comments stripped first: the example NAMES `window.genie` when explaining
-        // that it does not exist, and a test that counted that as usage would be
-        // asserting something other than what it says.
-        const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
-        expect(code).not.toMatch(/\bwindow\.genie\b(?!App)/);
-        expect(code).toContain('genieApp');
+        expect(source).toContain('genieApp');
+    });
+
+    it('passes the WHOLE check suite, with nothing at all to say', () => {
+        // The example is documentation people copy, and the suite is what Genie
+        // tells them to run against their copy. An example that tripped it would
+        // teach that the system is broken rather than the example — so this is the
+        // one test that has to hold no matter which check gets added next.
+        //
+        // It also makes the example a live consumer: every generic rule (files
+        // where the manifest points, personas on disk, a roster the window can
+        // run, a front end that reaches for an API that exists) is asserted here
+        // through the same code path a developer runs, instead of being restated
+        // by hand and drifting.
+        const report = checkApp(EXAMPLE_DIR, fsCheckProbe({ slugTaken: () => false }));
+
+        expect(report.findings, formatCheckReport(report, EXAMPLE_DIR)).toEqual([]);
     });
 
     it('installs into an ordinary Genie site', () => {
