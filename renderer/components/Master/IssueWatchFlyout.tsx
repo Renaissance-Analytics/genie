@@ -15,7 +15,12 @@ import {
     useGithubCapabilities,
     CAPABILITY_LABEL,
 } from '../../lib/githubCapabilities';
-import { feedItemByline, issueWatchGate, openCountForRepo } from '../../lib/issuewatch';
+import {
+    feedbackPathForWorkspace,
+    feedItemByline,
+    issueWatchGate,
+    openCountForRepo,
+} from '../../lib/issuewatch';
 import {
     useGitHubReconnect,
     type GitHubReconnectState,
@@ -159,6 +164,16 @@ export default function IssueWatchFlyout({
      * never mentions feedback, which is a dead end rather than a signal.
      */
     const [feedbackCount, setFeedbackCount] = useState(0);
+    /**
+     * Where the feedback notice opens — Tynn's id-addressed feedback page for
+     * this workspace's project, or null when the workspace has no Tynn project
+     * (then the notice stays plain text rather than offering a dead link).
+     *
+     * Resolved from the workspace ROW, not from `workspaceId`: the local id and
+     * the Tynn project id coincide only by construction, and a locally
+     * scaffolded envelope's do not.
+     */
+    const [feedbackPath, setFeedbackPath] = useState<string | null>(null);
 
     const refresh = async () => {
         if (!workspaceId || !hasGenieBridge()) return;
@@ -244,6 +259,25 @@ export default function IssueWatchFlyout({
             await api().issueWatch.markSeen(workspaceId).catch(() => {});
         })();
         // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [open, workspaceId]);
+
+    // The workspace's Tynn project id lives on the workspace ROW, so resolving
+    // the notice's destination is a separate read from the counts refresh —
+    // keyed on the workspace alone, since the link cannot change while it is
+    // open. A failed read leaves the notice inert rather than guessing an id.
+    useEffect(() => {
+        if (!open || !workspaceId || !hasGenieBridge()) return;
+        let cancelled = false;
+        void (async () => {
+            const ws = await api()
+                .workspaces.list()
+                .then((all) => all.find((w) => w.id === workspaceId))
+                .catch(() => undefined);
+            if (!cancelled) setFeedbackPath(feedbackPathForWorkspace(ws));
+        })();
+        return () => {
+            cancelled = true;
+        };
     }, [open, workspaceId]);
 
     useEffect(() => {
@@ -484,15 +518,32 @@ export default function IssueWatchFlyout({
 
                             {/* Above Activity, and worded as waiting rather than
                                 broken: everything in the list below is a defect,
-                                and feedback is not one. It carries no items here
-                                because the entries live in Tynn. */}
-                            {feedbackCount > 0 && (
-                                <div className="iw-feedback-note">
-                                    {feedbackCount} unresolved{' '}
-                                    {feedbackCount === 1 ? 'piece' : 'pieces'} of project
-                                    feedback in Tynn, waiting on triage.
-                                </div>
-                            )}
+                                and feedback is not one. The entries themselves
+                                live in Tynn — this is a summary that OPENS them,
+                                not a tally that names a number and stops. Only
+                                a workspace with a Tynn project gets the button;
+                                without one there is nothing to open. */}
+                            {feedbackCount > 0 &&
+                                (feedbackPath ? (
+                                    <button
+                                        type="button"
+                                        className="iw-feedback-note as-link"
+                                        onClick={() =>
+                                            void api().tynn.openInBrowser(feedbackPath)
+                                        }
+                                        title="Open this project’s feedback in Tynn"
+                                    >
+                                        {feedbackCount} unresolved{' '}
+                                        {feedbackCount === 1 ? 'piece' : 'pieces'} of
+                                        project feedback in Tynn, waiting on triage.
+                                    </button>
+                                ) : (
+                                    <div className="iw-feedback-note">
+                                        {feedbackCount} unresolved{' '}
+                                        {feedbackCount === 1 ? 'piece' : 'pieces'} of
+                                        project feedback in Tynn, waiting on triage.
+                                    </div>
+                                ))}
 
                             <div className="iw-section-head">Activity</div>
                             {feed.length === 0 ? (

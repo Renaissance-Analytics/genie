@@ -4,6 +4,7 @@ import type {
     WatchFeedItem,
     WatchFetchError,
     WatchRepoView,
+    WorkspaceRow,
     WorkspaceWatchStatus,
 } from './genie';
 import type { WatchTypeCounts } from './genie';
@@ -199,4 +200,32 @@ export function feedItemByline(
     const when = age ? `${opened ? 'opened' : 'updated'} ${age}` : '';
 
     return [item.author, when].filter(Boolean).join(' · ');
+}
+
+/**
+ * Where the flyout's feedback notice sends the user — Tynn's id-addressed
+ * feedback entry point for this workspace's project, or null when there is no
+ * project to open.
+ *
+ * Tynn builds a project's canonical URL from an owner slug plus a project slug
+ * (`/u/<owner>/<project>/feedback`) and Genie stores NEITHER, so the desktop
+ * addresses the page by the one identifier a workspace does carry — its Tynn
+ * project id — and lets the server redirect to the canonical path.
+ *
+ * `tynn_project_id` wins over `id` because the two coincide only by
+ * construction: a workspace created FROM a Tynn project takes `id :=
+ * project.id`, but a locally scaffolded `.agi` envelope mints its own id and
+ * records the Tynn link separately (the same divergence that made pushed deltas
+ * land under an unread key in tynn.ai#134). Older rows leave `tynn_project_id`
+ * empty and ARE keyed by the project id, which is what the fallback covers.
+ *
+ * Null — rather than a half-built path — is what keeps an unlinked workspace's
+ * notice inert instead of opening a URL that cannot resolve.
+ */
+export function feedbackPathForWorkspace(
+    ws: Pick<WorkspaceRow, 'id' | 'tynn_project_id'> | undefined,
+): string | null {
+    const projectId = (ws?.tynn_project_id || ws?.id || '').trim();
+
+    return projectId ? `/p/${encodeURIComponent(projectId)}/feedback` : null;
 }

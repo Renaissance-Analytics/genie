@@ -889,6 +889,21 @@
     color: var(--fg-2, #d4d4d8);
     font-size: 12px;
 }
+/* The same note, but it opens the entries in Tynn. A <button> resets to the
+   note's own chrome so the two render identically — the only difference is the
+   pointer and the hover lift that say it goes somewhere. */
+button.iw-feedback-note.as-link {
+    display: block;
+    width: calc(100% - 4px);
+    font: inherit;
+    font-size: 12px;
+    text-align: left;
+    cursor: pointer;
+}
+button.iw-feedback-note.as-link:hover {
+    border-color: rgba(251, 191, 36, 0.6);
+    background: rgba(251, 191, 36, 0.14);
+}
 .iw-linkbtn {
     background: none;
     border: none;
