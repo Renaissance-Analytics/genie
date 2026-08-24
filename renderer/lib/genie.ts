@@ -2212,13 +2212,30 @@ export interface GithubInstallReview {
     confirmPhrase: string;
 }
 
+/**
+ * One thing the check found — mirrors `main/apps/findings.ts`.
+ *
+ * Three fields because a check answer owes three things: WHERE to look, WHAT is
+ * wrong, and WHAT TO DO. A single sentence is what the panel used to render, and it
+ * routinely left out the third.
+ */
+export interface AppFinding {
+    /** Stable id, e.g. `agents.persona-missing`. */
+    check: string;
+    /** `error` — it will not work. `advice` — it will, and think about it anyway. */
+    severity: 'error' | 'advice';
+    where: string;
+    problem: string;
+    fix: string;
+}
+
 /** The result of checking a folder without installing it. */
-export interface AppFolderReport {
+export interface AppCheckReport {
     ok: boolean;
-    /** It will not run until these are fixed. */
-    errors: string[];
-    /** It will run. Worth a second thought anyway. */
-    advice: string[];
+    /** Errors first, then advice. */
+    findings: AppFinding[];
+    /** Which checks were evaluated — so a clean report says what it covered. */
+    ran: string[];
     app?: { id: string; slug: string; name: string; version: string; description?: string };
 }
 
@@ -2669,7 +2686,7 @@ export interface GenieApi {
         requirements: (appId: string) => Promise<AppRequirementPlanView | null>;
         checkUpdates: () => Promise<Record<string, AppUpdateState>>;
         installFolder: (folder?: string, devMode?: boolean) => Promise<AppInstallResult>;
-        checkFolder: (folder?: string) => Promise<AppFolderReport>;
+        checkFolder: (folder?: string) => Promise<AppCheckReport>;
         /**
          * Open a folder in a REAL GApp window without installing it.
          *

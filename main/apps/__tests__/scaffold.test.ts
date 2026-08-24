@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { scaffoldApp } from '../scaffold';
 import { validateAppManifest, APP_MANIFEST_FILENAME } from '../manifest';
 import { validateAppFolder } from '../validate';
+import { checkApp } from '../checkup';
 
 /**
  * Creating a Genie App from nothing (Tynn #250, P2).
@@ -45,6 +46,27 @@ describe('what it writes', () => {
 
         expect(report.errors).toEqual([]);
         expect(report.ok).toBe(true);
+    });
+
+    it('produces a folder the whole CHECK SUITE passes, not just the install gate', () => {
+        // The gate above answers "can Genie install this". The suite answers the
+        // question a developer actually has — "will it WORK" — and it is stricter,
+        // so a scaffold that passed only the gate could still hand somebody an app
+        // that opens on an empty window. The first thing anyone does is copy what
+        // is in front of them, so what is in front of them has to be clean.
+        const written = files().map((f) => `C:/src/mything/${f.path}`);
+        const contents = new Map(files().map((f) => [`C:/src/mything/${f.path}`, f.contents]));
+        const at = (p: string) => p.replace(/\\/g, '/').replace(/\/\.$/, '');
+
+        const report = checkApp('C:/src/mything', {
+            readManifest: () => find('My Thing', APP_MANIFEST_FILENAME),
+            exists: (p) => written.some((w) => w === at(p) || w.startsWith(`${at(p)}/`)),
+            slugTaken: () => false,
+            listFiles: (dir) => written.filter((w) => w.startsWith(`${at(dir)}/`)),
+            readText: (p) => contents.get(at(p)) ?? null,
+        });
+
+        expect(report.findings, JSON.stringify(report.findings, null, 2)).toEqual([]);
     });
 
     it('gives the app a front end and something to read', () => {

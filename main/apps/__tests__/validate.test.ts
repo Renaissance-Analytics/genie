@@ -284,3 +284,94 @@ describe('the agents a GApp declared, against the folder it shipped', () => {
         expect(report.errors.join(' ')).not.toContain('persona');
     });
 });
+
+/**
+ * Every answer is a STRUCTURED finding (genie#245 follow-on).
+ *
+ * `errors: string[]` was enough while the only reader was a paragraph in a
+ * settings panel. It is not enough for a suite a developer runs against their own
+ * app: a bare sentence cannot be grouped, filtered, pointed at a file, or asserted
+ * on by id, and — the part that actually matters — nothing forced it to say what to
+ * DO. The string lists are now DERIVED from the findings, so there is one message
+ * per rule and every caller that joins them keeps working.
+ */
+describe('findings — what is wrong, where, and what to do', () => {
+    it('answers all three questions for every finding it emits', () => {
+        const report = validateAppFolder(
+            'C:/src/trader',
+            probe({
+                readManifest: () =>
+                    manifest({
+                        permissions: { scope: 'workstation', capabilities: ['terminals'] },
+                        requires: [{ tool: 'docker' }],
+                    }),
+                exists: () => false,
+            }),
+        );
+
+        expect(report.findings.length).toBeGreaterThan(0);
+        for (const finding of report.findings) {
+            expect(finding.check, 'check id').toBeTruthy();
+            expect(finding.where, `where for ${finding.check}`).toBeTruthy();
+            expect(finding.problem, `problem for ${finding.check}`).toBeTruthy();
+            // The half that was never enforced before, and the whole reason the
+            // shape changed: a diagnosis with no instruction is half a sentence.
+            expect(finding.fix, `fix for ${finding.check}`).toBeTruthy();
+        }
+    });
+
+    it('points a missing persona at the FILE, not at the manifest', () => {
+        const report = validateAppFolder(
+            'C:/src/trader',
+            probe({
+                readManifest: () =>
+                    manifest({ agents: [{ name: 'Reviewer', persona: 'reviewer.md' }] }),
+                exists: (p) => !p.includes('.agents'),
+            }),
+        );
+
+        const finding = report.findings.find((f) => f.check === 'agents.persona-missing');
+        expect(finding?.where.split(path.sep).join('/')).toBe('C:/src/trader/.agents/reviewer.md');
+        expect(finding?.severity).toBe('error');
+    });
+
+    it('keeps the legacy string lists as a VIEW of the findings', () => {
+        // Every existing caller — the installer, the previewer, the GitHub review,
+        // the settings panel — reads these. They must not drift from the findings
+        // they are made of, so they are computed, never written twice.
+        const report = validateAppFolder(
+            'C:/src/trader',
+            probe({
+                readManifest: () =>
+                    manifest({ permissions: { scope: 'workstation', capabilities: ['terminals'] } }),
+                exists: () => false,
+            }),
+        );
+
+        expect(report.errors).toHaveLength(
+            report.findings.filter((f) => f.severity === 'error').length,
+        );
+        expect(report.advice).toHaveLength(
+            report.findings.filter((f) => f.severity === 'advice').length,
+        );
+        // And the derived line SAYS what to do, rather than only what is wrong.
+        const persona = report.findings.find((f) => f.severity === 'error');
+        expect(report.errors.join(' ')).toContain(persona!.fix);
+    });
+
+    it('names the folder a component is missing from, instead of blaming the build', () => {
+        // "web/dist does not exist — build it first" is the wrong instruction when
+        // `web` itself is not there: no build produces a folder the manifest named
+        // and the developer never created.
+        const report = validateAppFolder(
+            'C:/src/trader',
+            probe({ exists: (p) => !p.endsWith('web') && !p.includes('web') }),
+        );
+
+        const finding = report.findings.find((f) => f.check === 'frontend.repo-missing');
+        expect(finding, 'a missing component folder is its own finding').toBeDefined();
+        expect(finding?.problem).toContain('web');
+        // And the root check does NOT also fire — one cause, one finding.
+        expect(report.findings.filter((f) => f.check === 'frontend.root-missing')).toEqual([]);
+    });
+});

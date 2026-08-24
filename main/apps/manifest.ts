@@ -24,7 +24,13 @@
  * model, because the one Genie has is already what these apps run on.
  */
 
-import { isAppCapability } from './capabilities';
+import {
+    APP_CAPABILITIES,
+    UNGRANTABLE_TOOLS,
+    capabilityForTool,
+    findCapability,
+    isAppCapability,
+} from './capabilities';
 
 export const APP_MANIFEST_FILENAME = 'genie-app.json';
 
@@ -522,14 +528,46 @@ function validateCapabilities(raw: unknown, errors: string[]): string[] {
     const out: string[] = [];
     for (const entry of raw) {
         if (!nonEmpty(entry) || !isAppCapability(entry)) {
-            errors.push(
-                `\`permissions.capabilities\` contains "${String(entry)}", which is not a Genie App capability`,
-            );
+            errors.push(unknownCapabilityMessage(entry));
             continue;
         }
         if (!out.includes(entry)) out.push(entry);
     }
     return out;
+}
+
+/**
+ * WHY a capability was refused, and what to write instead.
+ *
+ * The refusal alone is not enough. The SDK README lists capabilities and Genie's
+ * MCP lists tools, so naming a TOOL here is the obvious mistake to make — and
+ * "manageTerminals is not a Genie App capability" reads as "manageTerminals is off
+ * limits", which is the opposite of true. Three different answers are owed, so
+ * three are given: here is the capability that governs it, or nothing governs it
+ * and here is why, or it is simply not a name Genie knows.
+ */
+function unknownCapabilityMessage(entry: unknown): string {
+    const name = String(entry);
+    const prefix = `\`permissions.capabilities\` contains "${name}", which is not a Genie App capability`;
+
+    const ungrantable = UNGRANTABLE_TOOLS[name];
+    if (ungrantable) {
+        return (
+            `${prefix} — it is a Genie TOOL, and one no app may use at any permission level. ` +
+            `${ungrantable}`
+        );
+    }
+
+    const governing = capabilityForTool(name);
+    if (governing) {
+        const capability = findCapability(governing);
+        return (
+            `${prefix} — it is a Genie TOOL. Ask for the capability that governs it instead: ` +
+            `\`${governing}\`${capability ? ` (“${capability.label}”)` : ''}.`
+        );
+    }
+
+    return `${prefix}. The capabilities are: ${APP_CAPABILITIES.map((c) => c.key).join(', ')}.`;
 }
 
 /**

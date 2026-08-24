@@ -218,6 +218,44 @@ describe('the permissions a GApp asks the user for', () => {
         expect(result.ok).toBe(false);
     });
 
+    it('names the capability that GOVERNS a tool the manifest asked for by name', () => {
+        // Refusing is not enough. The SDK README lists capabilities and the Genie
+        // MCP lists tools, so reaching for a tool name is the obvious mistake to
+        // make — and "manageTerminals is not a Genie App capability" leaves the
+        // developer to work out what is, from a message that sounds like the tool
+        // is off limits entirely.
+        const result = validateAppManifest({
+            ...valid(),
+            permissions: { scope: 'self', capabilities: ['manageTerminals'] },
+        });
+
+        expect(result.ok).toBe(false);
+        if (result.ok) return;
+        const message = result.errors.join(' ');
+        expect(message).toContain('manageTerminals');
+        // The answer, not just the refusal.
+        expect(message).toContain('terminals');
+    });
+
+    it('says plainly that an UNGRANTABLE tool is not on offer at any level', () => {
+        // `submitFeedback` posts to the user's Tynn project in their name. No
+        // capability covers it and none ever will, so a developer who asks for it
+        // needs to be told that — not sent looking for the capability that grants
+        // it, because there is not one.
+        const result = validateAppManifest({
+            ...valid(),
+            permissions: { scope: 'self', capabilities: ['submitFeedback'] },
+        });
+
+        expect(result.ok).toBe(false);
+        if (result.ok) return;
+        const message = result.errors.join(' ');
+        expect(message).toContain('submitFeedback');
+        expect(message).toMatch(/no app|never|not available/i);
+        // And WHY, because a refusal with a reason is one a developer can design around.
+        expect(message).toMatch(/impersonat|in their name/i);
+    });
+
     it('drops a duplicate rather than asking the user twice', () => {
         const result = validateAppManifest({
             ...valid(),

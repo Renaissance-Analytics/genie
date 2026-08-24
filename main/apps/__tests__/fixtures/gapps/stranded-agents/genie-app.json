@@ -1,0 +1,15 @@
+{
+    "id": "com.example.stranded",
+    "slug": "stranded",
+    "name": "Stranded Agents",
+    "version": "1.0.0",
+    "description": "Puts three agents on the consent screen and lays out one slot to run them in.",
+    "frontend": { "repo": "web", "serve": { "mode": "static", "root": "public" } },
+    "panels": { "agents": 1 },
+    "agents": [
+        { "name": "Strategist", "persona": "strategist.md" },
+        { "name": "Reviewer", "persona": "reviewer.md" },
+        { "name": "Reporter", "persona": "reporter.md" }
+    ],
+    "permissions": { "scope": "self", "capabilities": [] }
+}

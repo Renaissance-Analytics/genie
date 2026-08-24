@@ -1,0 +1,10 @@
+{
+    "id": "com.example.blankwindow",
+    "slug": "blank-window",
+    "name": "Blank Window",
+    "version": "1.0.0",
+    "description": "Installs cleanly and opens on nothing: no index.html, and a front end reaching for an API that does not exist.",
+    "frontend": { "repo": "web", "serve": { "mode": "static", "root": "public" } },
+    "panels": { "agents": 1 },
+    "permissions": { "scope": "self", "capabilities": ["hosting"] }
+}

@@ -1,0 +1,15 @@
+{
+    "id": "com.example.sound",
+    "slug": "sound",
+    "name": "Sound App",
+    "version": "1.0.0",
+    "description": "The positive control: a GApp with nothing wrong with it.",
+    "frontend": { "repo": "web", "serve": { "mode": "static", "root": "public" } },
+    "services": [
+        { "name": "api", "repo": "service", "command": ["node", "server.mjs"], "port": 8931 }
+    ],
+    "requires": [{ "tool": "node", "reason": "runs the api service" }],
+    "panels": { "agents": 1 },
+    "agents": [{ "name": "Helper", "persona": "helper.md", "description": "Answers questions." }],
+    "permissions": { "scope": "self", "capabilities": ["hosting"] }
+}
