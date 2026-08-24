@@ -25,29 +25,33 @@ test.afterAll(async () => {
     await app?.close();
 });
 
-/** Script the mock: N open feedback, and a workspace row linked to a Tynn project. */
+/** Script the mock: N open feedback, and the workspace row behind the notice. */
 async function scriptFeedback(
     application: ElectronApplication,
     feedback: number,
-    tynnProjectId: string,
+    ws: { tynn_project_id: string; backend: 'tynn' | 'aionima' },
 ) {
     await application.evaluate(
-        ({}, args: { feedback: number; tynnProjectId: string }) => {
+        (
+            {},
+            args: {
+                feedback: number;
+                ws: { tynn_project_id: string; backend: 'tynn' | 'aionima' };
+            },
+        ) => {
             const state = (globalThis as Record<string, any>).__GENIE_E2E__.state;
             state.issueWatch.counts = {
                 'e2e-workspace': { issue: 0, pr: 0, security: 0, feedback: args.feedback },
             };
-            state.workspaces = [
-                { id: 'e2e-workspace', tynn_project_id: args.tynnProjectId },
-            ];
+            state.workspaces = [{ id: 'e2e-workspace', ...args.ws }];
             state.openedUrls.length = 0;
         },
-        { feedback, tynnProjectId },
+        { feedback, ws },
     );
 }
 
 test('the feedback notice opens the project feedback in Tynn', async () => {
-    await scriptFeedback(app, 5, 'PRJ-E2E');
+    await scriptFeedback(app, 5, { tynn_project_id: 'PRJ-E2E', backend: 'tynn' });
     await page.reload();
 
     const notice = page.getByRole('button', { name: /unresolved pieces of project feedback/i });
@@ -68,10 +72,10 @@ test('the feedback notice opens the project feedback in Tynn', async () => {
 });
 
 test('a workspace with no Tynn project shows the notice but offers no dead link', async () => {
-    // Same count, no linked project. The notice must still report the tally —
-    // it is true, and it comes from the server — but it must not present itself
-    // as something that opens.
-    await scriptFeedback(app, 5, '');
+    // Same count, but an Aionima-backed workspace — its id is local, so there is
+    // no Tynn project to open. The notice must still report the tally (it is
+    // true, and it comes from the server) without presenting itself as a door.
+    await scriptFeedback(app, 5, { tynn_project_id: '', backend: 'aionima' });
     await page.reload();
 
     await expect(page.getByText(/5 unresolved pieces of project feedback/i)).toBeVisible();
@@ -81,7 +85,7 @@ test('a workspace with no Tynn project shows the notice but offers no dead link'
 });
 
 test('no feedback means no notice at all', async () => {
-    await scriptFeedback(app, 0, 'PRJ-E2E');
+    await scriptFeedback(app, 0, { tynn_project_id: 'PRJ-E2E', backend: 'tynn' });
     await page.reload();
 
     await expect(page.getByText(/unresolved piece/i)).toHaveCount(0);

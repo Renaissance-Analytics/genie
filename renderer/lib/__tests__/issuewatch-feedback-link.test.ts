@@ -18,7 +18,11 @@ import { feedbackPathForWorkspace } from '../issuewatch';
 describe('feedbackPathForWorkspace', () => {
     it('addresses the feedback page by the workspace TYNN project id', () => {
         expect(
-            feedbackPathForWorkspace({ id: 'PRJ-TYNN', tynn_project_id: 'PRJ-TYNN' }),
+            feedbackPathForWorkspace({
+                id: 'PRJ-TYNN',
+                tynn_project_id: 'PRJ-TYNN',
+                backend: 'tynn',
+            }),
         ).toBe('/p/PRJ-TYNN/feedback');
     });
 
@@ -26,22 +30,40 @@ describe('feedbackPathForWorkspace', () => {
         // A locally scaffolded envelope: local id ≠ Tynn project id. Linking on
         // `id` here would open a project id Tynn has never heard of.
         expect(
-            feedbackPathForWorkspace({ id: 'local-prism-id', tynn_project_id: 'PRJ-PRISM' }),
+            feedbackPathForWorkspace({
+                id: 'local-prism-id',
+                tynn_project_id: 'PRJ-PRISM',
+                backend: 'tynn',
+            }),
         ).toBe('/p/PRJ-PRISM/feedback');
     });
 
     it('falls back to the local id when the Tynn project id column is empty', () => {
         // The live shape for older rows: `tynn_project_id` is '' and the local
         // id IS the project id (see the #134 link-resolution tests).
-        expect(feedbackPathForWorkspace({ id: 'PRJ-TYNN', tynn_project_id: '' })).toBe(
-            '/p/PRJ-TYNN/feedback',
-        );
+        expect(
+            feedbackPathForWorkspace({ id: 'PRJ-TYNN', tynn_project_id: '', backend: 'tynn' }),
+        ).toBe('/p/PRJ-TYNN/feedback');
     });
 
-    it('returns null when the workspace has no Tynn project at all', () => {
-        // An unlinked workspace has nothing to open. The notice must stay inert
-        // rather than send the user to a URL that cannot resolve.
-        expect(feedbackPathForWorkspace({ id: '', tynn_project_id: '' })).toBeNull();
+    it('offers nothing for a workspace that is not Tynn-backed', () => {
+        // The fallback above makes this check load-bearing: an Aionima
+        // workspace's `id` is a LOCAL identifier, so without the backend test it
+        // would be dressed up as a Tynn project id and linked to a page that
+        // cannot resolve.
+        expect(
+            feedbackPathForWorkspace({
+                id: 'local-only-id',
+                tynn_project_id: '',
+                backend: 'aionima',
+            }),
+        ).toBeNull();
+    });
+
+    it('returns null when there is no workspace or no id at all', () => {
+        expect(
+            feedbackPathForWorkspace({ id: '', tynn_project_id: '', backend: 'tynn' }),
+        ).toBeNull();
         expect(feedbackPathForWorkspace(undefined)).toBeNull();
     });
 
@@ -49,7 +71,7 @@ describe('feedbackPathForWorkspace', () => {
         // Ids are server-minted ULIDs, but this builds a URL opened in the
         // user's real browser — encode rather than trust the shape.
         expect(
-            feedbackPathForWorkspace({ id: 'a/b?x=1', tynn_project_id: '' }),
+            feedbackPathForWorkspace({ id: 'a/b?x=1', tynn_project_id: '', backend: 'tynn' }),
         ).toBe('/p/a%2Fb%3Fx%3D1/feedback');
     });
 });

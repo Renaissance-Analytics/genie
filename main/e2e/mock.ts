@@ -48,6 +48,7 @@ import {
     answerPendingQuestion,
 } from '../ask/force-question';
 import type { MobileDataDeps } from '../mobile/api';
+import { listWorkspaces } from '../db';
 import { isE2EHosting, registerHostingE2EMocks } from './hosting';
 
 /** True only in E2E test mode. Everything in this module no-ops otherwise. */
@@ -182,7 +183,7 @@ export interface E2EState {
      * harness has to own one — the E2E profile's real database has no row for
      * the pinned `e2e-workspace` id.
      */
-    workspaces: { id: string; tynn_project_id: string }[];
+    workspaces: { id: string; tynn_project_id: string; backend: 'tynn' | 'aionima' }[];
     /** Call counters — let a test assert e.g. "status was polled ≥ N times". */
     calls: { githubStatus: number; deviceStart: number; recheck: number };
     /** External URLs the flyout tried to open (kept inert; recorded for asserts). */
@@ -383,9 +384,16 @@ export function registerE2EMocks(): void {
     override('issue-watch:set', async () => ({ ok: true }));
 
     // The flyout reads the workspace ROW to resolve its Tynn project id (the
-    // feedback notice's link target). Answered from scriptable state so the
-    // harness's pinned workspace id can carry one.
-    override('workspaces:list', async () => e2eState.workspaces);
+    // feedback notice's link target), and the harness pins a workspace id the
+    // real database has no row for.
+    //
+    // DELEGATES when unscripted, and that is not a nicety: `override` REMOVES
+    // the real handler, and the master/agent-access/repo-panel specs all read
+    // the genuinely seeded workspace list through this channel. Returning a
+    // fake list unconditionally silently emptied it for every one of them.
+    override('workspaces:list', async () =>
+        e2eState.workspaces.length > 0 ? e2eState.workspaces : listWorkspaces(),
+    );
 
     // --- Inert externals -------------------------------------------------
     // The flyout opens the verification URL in the OS browser on reconnect.
