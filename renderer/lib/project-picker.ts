@@ -16,12 +16,26 @@
  *  a second kind of project. */
 const DEFAULT_BACKEND = 'tynn';
 
+/**
+ * How a Genie App project announces itself in a picker (Tynn `is_gapp`).
+ *
+ * Exported so the pickers that build their own label share the WORDING with the
+ * ones that use {@link projectPickerOptions} — two pickers naming the same thing
+ * differently is how a UI starts disagreeing with itself.
+ */
+export const GAPP_MARKER = '(Genie App)';
+
 export interface PickerProject {
     id: string;
     name: string;
     /** Optional on the wire; absent means {@link DEFAULT_BACKEND}. */
     backend?: string;
     owner_name?: string;
+    /**
+     * This project is where a Genie App is DEVELOPED (Tynn `is_gapp`).
+     * Optional on the wire; absent means "not a GApp", never "unknown".
+     */
+    isGapp?: boolean;
 }
 
 export interface PickerOption {
@@ -46,7 +60,11 @@ export function projectPickerOptions(
     return projects.map((p) => {
         const tag = tagged ? `[${(p.backend ?? DEFAULT_BACKEND).toUpperCase()}] ` : '';
         const owner = opts.withOwner && p.owner_name ? ` · ${p.owner_name}` : '';
+        // A parenthetical rather than a third ` · ` suffix: beside an owner name
+        // another dot-separated fragment reads as more owner. This also echoes
+        // how Ops mode announces itself ("(Ops project — full access)").
+        const gapp = p.isGapp ? ` ${GAPP_MARKER}` : '';
 
-        return { value: p.id, label: `${tag}${p.name}${owner}` };
+        return { value: p.id, label: `${tag}${p.name}${owner}${gapp}` };
     });
 }

@@ -89,6 +89,15 @@ export interface TynnProject {
     owner_type?: string;
     owner_name?: string;
     base_url?: string;
+    /**
+     * This project is where a Genie App is DEVELOPED (Tynn `is_gapp`,
+     * tynn.ai#204 / genie#245) — the developer's own work management, marked by
+     * a human on the Tynn project.
+     *
+     * NOT a link to an installed GApp: an installed app never receives a
+     * developer's Tynn data (`.ai/plans/gapp-store-and-tynn-linkage.md`).
+     */
+    isGapp?: boolean;
 }
 
 /**

@@ -34,6 +34,20 @@ export interface BackendProject {
     owner_name?: string;
     /** Web URL for the project's home page on this backend. */
     base_url?: string;
+    /**
+     * This project is where a Genie App is DEVELOPED (Tynn `is_gapp`,
+     * tynn.ai#204 / genie#245). A human sets it on the Tynn project; nothing
+     * infers it.
+     *
+     * It is NOT a link to an INSTALLED GApp. An installed app never receives a
+     * developer's Tynn data — the GApp store's service side owns the
+     * listing↔project relationship. See
+     * `.ai/plans/gapp-store-and-tynn-linkage.md`.
+     *
+     * Optional because only Tynn declares it; backends that have no such
+     * concept leave it undefined.
+     */
+    isGapp?: boolean;
 }
 
 export interface BackendInboxEvent {

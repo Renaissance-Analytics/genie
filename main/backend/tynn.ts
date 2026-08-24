@@ -120,6 +120,7 @@ export class TynnBackend implements Backend {
                           owner_type?: string;
                           owner_name?: string;
                           base_url?: string;
+                          is_gapp?: boolean;
                       }>;
                   }
                 | Array<{
@@ -129,6 +130,7 @@ export class TynnBackend implements Backend {
                       owner_type?: string;
                       owner_name?: string;
                       base_url?: string;
+                      is_gapp?: boolean;
                   }>
             >('/api/v1/projects');
             const rows = Array.isArray(data) ? data : data.data;
@@ -140,6 +142,12 @@ export class TynnBackend implements Backend {
                 owner_type: p.owner_type,
                 owner_name: p.owner_name,
                 base_url: p.base_url,
+                // This project is where a Genie App is DEVELOPED (tynn.ai#204).
+                // Tynn's `projectRow()` is the ONLY place Genie can learn it —
+                // it is NOT on the agent-token mint, unlike `is_ops_project`.
+                // Absent on an older Tynn: `!!` answers "not a GApp" rather than
+                // leaking undefined into the UI.
+                isGapp: !!p.is_gapp,
             }));
         } catch {
             return [];
@@ -191,6 +199,7 @@ export class TynnBackend implements Backend {
                 owner_type?: string;
                 owner_name?: string;
                 base_url?: string;
+                is_gapp?: boolean;
             };
         }>('/api/v1/projects', {
             method: 'POST',
@@ -210,6 +219,10 @@ export class TynnBackend implements Backend {
             owner_type: p.owner_type,
             owner_name: p.owner_name,
             base_url: p.base_url,
+            // Tynn shares ONE `projectRow()` between list and create so a new
+            // project is indistinguishable from a listed one. Mapping the flag
+            // here keeps that true on Genie's side.
+            isGapp: !!p.is_gapp,
         };
     }
 
