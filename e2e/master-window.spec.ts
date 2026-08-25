@@ -181,71 +181,15 @@ test('a GApp Development Workspace wears its own chrome; an ordinary one does no
     );
 });
 
-/**
- * THE ROW DOES TWO THINGS, AND A 13px TARGET DECIDES WHICH (genie#245).
- *
- * A GDW's row is a workspace switch that also carries a launcher for the app the
- * workspace builds. Nothing tested that those two stay separate, and the cost of
- * getting it wrong is not symmetric: switching when you meant to launch is a
- * shrug, and launching when you meant to switch opens a real app window, starts
- * its agents, and puts a permissions modal in front of someone who was trying to
- * change project.
- *
- * This is also the property the genie#229 failure was really about. That test
- * clicked the CENTRE of the row's bounding box, which was never the switch
- * affordance — it sat inside `.pname` only by the grace of the control cluster
- * being narrow, and a fourth control pushed the name's right edge past it so the
- * IssueWatch pill ate the click. The row was behaving exactly as designed; the
- * test was resting on a coordinate nothing promised.
- *
- * The launch is asserted through its FAILURE on purpose. The fixture folder has a
- * `project.json` but no `genie-app.json`, so the preview refuses with a message
- * instead of opening a real window in CI — which makes the toast a positive
- * control: it proves the control actually fired, so "the workspace did not
- * switch" cannot pass against a button that did nothing at all.
- */
-test('on a GDW the row switches and the GApp control launches — never each other', async () => {
-    const gdwRow = page.locator('.tproj').filter({ hasText: seed.peerName });
-    const plainRow = page.locator('.tproj').filter({ hasText: seed.workspaceName });
-    const control = gdwRow.locator('.gapp-ind');
-
-    // The affordance exists here and ONLY here — the ordinary workspace has no app
-    // to launch, and a control offering one would be lying.
-    await expect(control).toHaveCount(1);
-    await expect(plainRow.locator('.gapp-ind')).toHaveCount(0);
-    await expect(control).toHaveAttribute('title', /Launch .*Genie App/);
-
-    // Start from a known side: the ordinary workspace is active.
-    await switchToWorkspace(seed.workspaceName);
-    await expect(plainRow).toHaveClass(/\bis-active\b/);
-
-    // THE LAUNCHER MUST NOT SWITCH. It reports (the folder holds no manifest)…
-    await control.click();
-    // Filtered rather than asserted on `.g-toast` alone: this window has more than
-    // one toast surface, and a bare selector would be a strict-mode violation the
-    // day a second one happens to be up.
-    await expect(
-        page.locator('.g-toast').filter({ hasText: 'genie-app.json' }),
-    ).toBeVisible();
-    // …and the active workspace is untouched.
-    await expect(plainRow).toHaveClass(/\bis-active\b/);
-    await expect(gdwRow).not.toHaveClass(/\bis-active\b/);
-
-    // THE ROW MUST STILL SWITCH, with the control sitting right there in it.
-    await switchToWorkspace(seed.peerName);
-    await expect(gdwRow).toHaveClass(/\bis-active\b/);
-    await expect(plainRow).not.toHaveClass(/\bis-active\b/);
-
-    // Leave the fixture as it was found — the tests below start on the ordinary
-    // workspace and this file shares one window.
-    await switchToWorkspace(seed.workspaceName);
-    await expect(plainRow).toHaveClass(/\bis-active\b/);
-});
-
 test('the floor lays out the seeded terminal, and the status bar counts it', async () => {
     await expect(panel(seed.terminalLabel)).toBeVisible();
     // Only the ACTIVE workspace's selected specs are laid out; the peer's terminal
     // is not selected yet, so nothing else is mounted.
+    //
+    // ORDERING: this has to run BEFORE anything activates the peer workspace. A
+    // visited workspace's panel is kept mounted-hidden so its pty survives, so the
+    // count never comes back down and switching back does not restore it. Put any
+    // test that switches workspaces AFTER this one.
     await expect(page.locator('.tpanel')).toHaveCount(1);
 
     // A panel with no terminal in it is a box. The floor's job is to host a live
@@ -315,4 +259,73 @@ test('a workspace switch never fits the panel it hid (genie#229)', async () => {
     expect(host).not.toBeNull();
     expect(screen).not.toBeNull();
     expect(screen!.width).toBeGreaterThan(host!.width - 40);
+});
+
+/**
+ * THE ROW DOES TWO THINGS, AND A 13px TARGET DECIDES WHICH (genie#245).
+ *
+ * A GDW's row is a workspace switch that also carries a launcher for the app the
+ * workspace builds. Nothing tested that those two stay separate, and the cost of
+ * getting it wrong is not symmetric: switching when you meant to launch is a
+ * shrug, and launching when you meant to switch opens a real app window, starts
+ * its agents, and puts a permissions modal in front of someone who was trying to
+ * change project.
+ *
+ * This is also the property the genie#229 failure was really about. That test
+ * clicked the CENTRE of the row's bounding box, which was never the switch
+ * affordance — it sat inside `.pname` only by the grace of the control cluster
+ * being narrow, and a fourth control pushed the name's right edge past it so the
+ * IssueWatch pill ate the click. The row was behaving exactly as designed; the
+ * test was resting on a coordinate nothing promised.
+ *
+ * PLACED LAST, and that placement is load-bearing. Off-workspace panels are
+ * kept MOUNTED-hidden so their ptys survive — the premise of the genie#229
+ * test above — so ACTIVATING a workspace mounts its panel permanently and
+ * `.tpanel` never comes back down. This test switches workspaces, so anywhere
+ * earlier it raises the panel count under "the floor lays out the seeded
+ * terminal", which counts on the peer never having been visited. Switching
+ * back does not undo it: the active workspace is not the state that leaks —
+ * the MOUNT is. That cost a red build to learn, so it is written down here.
+ *
+ * The launch is asserted through its FAILURE on purpose. The fixture folder has a
+ * `project.json` but no `genie-app.json`, so the preview refuses with a message
+ * instead of opening a real window in CI — which makes the toast a positive
+ * control: it proves the control actually fired, so "the workspace did not
+ * switch" cannot pass against a button that did nothing at all.
+ */
+test('on a GDW the row switches and the GApp control launches — never each other', async () => {
+    const gdwRow = page.locator('.tproj').filter({ hasText: seed.peerName });
+    const plainRow = page.locator('.tproj').filter({ hasText: seed.workspaceName });
+    const control = gdwRow.locator('.gapp-ind');
+
+    // The affordance exists here and ONLY here — the ordinary workspace has no app
+    // to launch, and a control offering one would be lying.
+    await expect(control).toHaveCount(1);
+    await expect(plainRow.locator('.gapp-ind')).toHaveCount(0);
+    await expect(control).toHaveAttribute('title', /Launch .*Genie App/);
+
+    // Start from a known side: the ordinary workspace is active.
+    await switchToWorkspace(seed.workspaceName);
+    await expect(plainRow).toHaveClass(/\bis-active\b/);
+
+    // THE LAUNCHER MUST NOT SWITCH. It reports (the folder holds no manifest)…
+    await control.click();
+    // Filtered rather than asserted on `.g-toast` alone: this window has more than
+    // one toast surface, and a bare selector would be a strict-mode violation the
+    // day a second one happens to be up.
+    await expect(
+        page.locator('.g-toast').filter({ hasText: 'genie-app.json' }),
+    ).toBeVisible();
+    // …and the active workspace is untouched.
+    await expect(plainRow).toHaveClass(/\bis-active\b/);
+    await expect(gdwRow).not.toHaveClass(/\bis-active\b/);
+
+    // THE ROW MUST STILL SWITCH, with the control sitting right there in it.
+    await switchToWorkspace(seed.peerName);
+    await expect(gdwRow).toHaveClass(/\bis-active\b/);
+    await expect(plainRow).not.toHaveClass(/\bis-active\b/);
+
+    // Leave the window on the ordinary workspace, as this file's other tests do.
+    await switchToWorkspace(seed.workspaceName);
+    await expect(plainRow).toHaveClass(/\bis-active\b/);
 });
