@@ -384,7 +384,8 @@ tells you is what Genie will actually do, not a second opinion about it.
 | **Personas** | Present, and not empty. An agent briefed with an empty file is an agent with no instructions. |
 | **Services** | No two share a name (Genie supervises by label) or a port; the runtime each one runs is declared in `requires`. |
 | **Requirements** | Every one names a real tool, with a `reason`. Genie installs `php, node, python, go, rust`; anything else, your users install themselves. |
-| **Tabs** | Titles a user can tell apart, and paths that resolve on your own origin. |
+| **Tabs** | Titles a user can tell apart — including from **Genie's own** — and paths that resolve on your own origin. |
+| **Offered tools** | If you declare `contributes`, the `servedBy` service exists, each tool has a description and an object schema, and no two share a name. |
 
 Errors and advice are separate. An **error** means it will not work. **Advice**
 means it will, and you should think about it anyway. Every finding says three
