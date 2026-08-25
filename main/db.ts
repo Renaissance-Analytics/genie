@@ -1312,6 +1312,28 @@ export function runMigrations(d: Database.Database): void {
                 `);
             },
         },
+        {
+            // GApp Development Workspace (genie#245 / tynn.ai#204): the linked
+            // Tynn project is marked `is_gapp`, so this is where a GApp is BUILT.
+            //
+            // A SEPARATE column from `app_kind` deliberately. `app_kind` is INSTALL
+            // identity — Genie created or adopted this workspace to RUN a GApp, and
+            // `apps/manage.ts` clears it to NULL on uninstall. This is DEVELOPMENT
+            // identity, mirrored from a flag a human sets in Tynn. One column for
+            // both would mean an uninstall silently un-marking somebody's dev
+            // workspace, with "last writer wins" standing in for a precedence rule
+            // nobody wrote down. Precedence is instead explicit and tested, in
+            // renderer/lib/workspace-kind.ts.
+            //
+            // Nullable with no default: a pre-existing workspace is not retroactively
+            // a GDW, and the first sync against Tynn decides.
+            version: 49,
+            runner: (db) => {
+                if (!workspaceColumns(db).has('gapp_dev')) {
+                    db.exec(`ALTER TABLE workspaces ADD COLUMN gapp_dev INTEGER`);
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -1749,6 +1771,11 @@ export interface WorkspaceRow {
     /** GENIE APPS (Tynn #250): 'app' = this workspace hosts an installed GApp.
      *  NULL = an ordinary workspace. Resolve via {@link getWorkspaceAppKind}. */
     app_kind?: string | null;
+    /** GAPP DEVELOPMENT WORKSPACE (genie#245): 1 = the linked Tynn project is
+     *  marked `is_gapp`, so a GApp is DEVELOPED here. Mirrored from Tynn by
+     *  `syncGappDevWorkspaces`, never set by hand. Independent of `app_kind`,
+     *  which records what Genie INSTALLED here. Resolve via {@link isGappDevValue}. */
+    gapp_dev?: number | null;
     /** Workspace ids admitted when `agent_access: 'specific'`, JSON-encoded.
      *  NULL/absent = none admitted. Resolve via {@link getWorkspaceAgentAccess}. */
     agent_access_workspaces?: string | null;
@@ -2132,6 +2159,19 @@ export function getWorkspaceAppKind(id: string): WorkspaceAppKind | null {
  */
 export function setWorkspaceAppKind(id: string, kind: WorkspaceAppKind | null): void {
     getDb().prepare('UPDATE workspaces SET app_kind = ? WHERE id = ?').run(kind, id);
+}
+
+/**
+ * Mark (or unmark) a workspace as a GApp Development Workspace (genie#245).
+ *
+ * Written ONLY by `syncGappDevWorkspaces`, which mirrors Tynn's `is_gapp`. There
+ * is no user-facing toggle on purpose: the flag has exactly one home, and Genie
+ * converging on it is what makes "turn it on in Tynn and Genie notices" true.
+ */
+export function setWorkspaceGappDev(id: string, on: boolean): void {
+    getDb()
+        .prepare('UPDATE workspaces SET gapp_dev = ? WHERE id = ?')
+        .run(on ? 1 : 0, id);
 }
 
 /* -------------------------------------------------------------------------- */

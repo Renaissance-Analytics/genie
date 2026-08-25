@@ -31,6 +31,11 @@ import TerminalTypeSplitButton from './TerminalTypeSplitButton';
 import { terminalTypeForAgent, type TerminalTypeId } from '../../lib/terminal-types';
 import { workspaceNeedsAttention } from '../../lib/attention';
 import {
+    resolveWorkspaceKind,
+    workspaceKindClass,
+    workspaceKindLabel,
+} from '../../lib/workspace-kind';
+import {
     formatLastRun,
     formatNextRun,
     isScheduledSpec,
@@ -913,6 +918,12 @@ export default function Chooser({
                     const live = wsSpecs.filter((s) => activeIds.has(s.id)).length;
                     const wsAttention = workspaceNeedsAttention(wsSpecs, attentionIds);
                     const isActive = ws.id === activeWorkspaceId;
+                    // What KIND of workspace this is, resolved from Genie's own
+                    // columns only — see lib/workspace-kind.ts for why a GApp's
+                    // manifest cannot reach this.
+                    const kind = resolveWorkspaceKind(ws);
+                    const kindClass = workspaceKindClass(kind);
+                    const kindLabel = workspaceKindLabel(kind);
                     return (
                         <button
                             key={ws.id}
@@ -923,9 +934,11 @@ export default function Chooser({
                                 pulsingWs.has(ws.id) ? ' pulsing' : ''
                             }${activeWs.has(ws.id) ? ' agent-active' : ''}${
                                 enteringWs.has(ws.id) ? ' ws-enter' : ''
-                            }`}
+                            }${kindClass ? ` ${kindClass}` : ''}`}
                             onClick={() => onActivateWorkspace(ws.id)}
-                            title={`${ws.project_name}${live > 0 ? ` · ${live} live` : ''}`}
+                            title={`${ws.project_name}${kindLabel ? ` · ${kindLabel}` : ''}${
+                                live > 0 ? ` · ${live} live` : ''
+                            }`}
                         >
                             {workspaceIcon(ws)}
                             {live > 0 && <span className="cnt">{live}</span>}
@@ -1029,6 +1042,11 @@ export default function Chooser({
                         const wsAttention = workspaceNeedsAttention(wsAll, attentionIds);
                         const isActive = ws.id === activeWorkspaceId;
                         const dragging = draggingId.current === ws.id;
+                        // Same resolution the rail uses, from Genie's own columns
+                        // only — see lib/workspace-kind.ts.
+                        const kind = resolveWorkspaceKind(ws);
+                        const kindClass = workspaceKindClass(kind);
+                        const kindLabel = workspaceKindLabel(kind);
                         const toggleCollapse = () =>
                             setCollapsedWorkspaces((prev) => {
                                 const next = new Set(prev);
@@ -1054,7 +1072,7 @@ export default function Chooser({
                                     pulsingWs.has(ws.id) ? ' pulsing' : ''
                                 }${activeWs.has(ws.id) ? ' agent-active' : ''}${
                                     enteringWs.has(ws.id) ? ' ws-enter' : ''
-                                }`}
+                                }${kindClass ? ` ${kindClass}` : ''}`}
                                 onDragOver={(e) => {
                                     if (!draggingId.current) return;
                                     e.preventDefault();
@@ -1072,7 +1090,9 @@ export default function Chooser({
                                     title={
                                         system
                                             ? 'System Workspace — click to activate'
-                                            : 'Click to activate · drag to reorder'
+                                            : // The ring says a GDW is different; the
+                                              // tooltip is where it says WHAT.
+                                              `${kindLabel ? `${kindLabel} · ` : ''}Click to activate · drag to reorder`
                                     }
                                     onClick={() => onActivateWorkspace(ws.id)}
                                     onContextMenu={(e) => {

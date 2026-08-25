@@ -61,6 +61,8 @@ import {
     type HumanInboxAttachment,
 } from '../agentinbox/human';
 import { listAllProjects, getTynnBackend } from '../backend/registry';
+import { mobileEmit } from './bus';
+import { syncGappDevWorkspaces } from '../workspace/gapp-dev-sync';
 import { workspaceDocHealth, repairWorkspaceDocs } from '../workspace/create-agi';
 import { runHostSessionSave, type SessionSaveReport } from '../workspace/session-save';
 // Types only (erased at runtime): the Hosting-Manager request shapes. The
@@ -1837,6 +1839,13 @@ export async function handleApi(
             const projects = deps.listHostProjects
                 ? await deps.listHostProjects()
                 : await listAllProjects();
+            // Same reconcile the desktop does on `tynn:projects` (genie#245). On a
+            // HEADLESS host this is the only project fetch there is, so without it
+            // a cloud workstation's GApp Development Workspaces would never
+            // converge. Safe against the headless list being PARTIAL (only assigned
+            // workspaces): a project absent from the list is "no answer", and
+            // `planGappDevSync` leaves those rows alone.
+            if (syncGappDevWorkspaces(projects) > 0) mobileEmit('workspaces:changed');
             sendJson(res, 200, { projects });
             return true;
         }

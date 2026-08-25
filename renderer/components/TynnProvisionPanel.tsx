@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Action, Icon, Select, Text } from '@particle-academy/react-fancy';
 import { api } from '../lib/genie';
 import { shouldAutoProvisionOnOpen } from '../lib/tynn-autoprovision';
+import { nudgeGappDevSync } from '../lib/gapp-dev';
 import { GAPP_MARKER } from '../lib/project-picker';
 
 /**
@@ -101,6 +102,10 @@ export default function TynnProvisionPanel({ workspaceId }: { workspaceId?: stri
             });
             setMsg(provisionMessage(await api().tynn.provision(path, true)));
             await refresh();
+            // The workspace now points at a different project, which may be a
+            // Genie App one. `refresh()` will not learn that: it only fetches
+            // projects while the workspace is UNLINKED, and it just stopped being.
+            nudgeGappDevSync();
         } finally {
             setBusy(false);
         }
@@ -126,6 +131,10 @@ export default function TynnProvisionPanel({ workspaceId }: { workspaceId?: stri
             await api().tynn.unlink(path);
             setMsg('Unlinked from the Tynn project.');
             await refresh();
+            // An unlinked workspace is no longer a GDW. `refresh()` happens to
+            // fetch projects on this path (the workspace IS unlinked now), but
+            // saying so explicitly keeps the downgrade from depending on that.
+            nudgeGappDevSync();
         } finally {
             setBusy(false);
         }
