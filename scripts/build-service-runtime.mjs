@@ -409,14 +409,21 @@ async function main() {
         const caddyBin = await buildCaddy(tmpDir);
         if (caddyBin) log(`host Caddy → ${path.relative(REPO_ROOT, caddyBin)}`);
 
-        // Version marker, read by resolveShippedRuntime() to key the per-user
-        // MATERIALIZED copy of this runtime (<userData>/runtime/<key>/). The host
-        // runs from that copy — OUTSIDE the install dir — so an auto-update
-        // replacing the app never disturbs a running host. Same version ⇒ same
-        // key ⇒ the running host's copy is reused untouched across updates.
+        // Version marker, read by materializeRuntimeToUserData() to key the
+        // per-user MATERIALIZED copy of this runtime (<userData>/runtime/<key>/).
+        // The pty-host AND the bundled Caddy both run from that copy — OUTSIDE
+        // the install dir — so an auto-update replacing the app never disturbs
+        // either. Same key ⇒ the running copy is reused untouched across updates.
+        //
+        // IT MUST DESCRIBE EVERYTHING IN THIS DIRECTORY, not just node. The key
+        // decides whether an existing copy is reused, so a marker that omits a
+        // shipped binary's version pins the OLD one forever: with node alone in
+        // here, a Caddy-only bump reused the previous copy and every hosted site
+        // kept being served by the superseded Caddy. The dir is built as one
+        // unit, so the marker names the unit.
         await fs.writeFile(
             path.join(RUNTIME_DIR, 'version.txt'),
-            `${NODE_VERSION}-${platform}-${arch}\n`,
+            `${NODE_VERSION}-${platform}-${arch}-caddy${CADDY_VERSION}+rr${CADDY_REPLACE_RESPONSE_VERSION}\n`,
         );
 
         log('\x1b[32mresources/runtime/ built successfully.\x1b[0m');
@@ -426,7 +433,9 @@ async function main() {
         if (existsSync(path.join(RUNTIME_DIR, platform === 'win32' ? 'caddy.exe' : 'caddy'))) {
             log(`  resources/runtime/caddy${platform === 'win32' ? '.exe' : ''}  (Caddy ${CADDY_VERSION} + replace-response)`);
         }
-        log(`  resources/runtime/version.txt  (${NODE_VERSION}-${platform}-${arch})`);
+        log(
+            `  resources/runtime/version.txt  (${NODE_VERSION}-${platform}-${arch}-caddy${CADDY_VERSION})`,
+        );
     } finally {
         await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
     }

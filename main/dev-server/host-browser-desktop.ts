@@ -16,9 +16,16 @@ import { createHostBrowserReconciler, type HostBrowserReconciler } from './host-
 export interface HostBrowserPathOpts {
     /** Genie's per-user data dir (`app.getPath('userData')`). */
     userDataDir: string;
-    /** The packaged resources dir (`process.resourcesPath`), where the bundled
-     *  caddy lives under `runtime/` (see build-service-runtime.mjs). */
-    resourcesPath: string;
+    /**
+     * The bundled Caddy to RUN, already resolved by `resolveShippedCaddyBin()`.
+     *
+     * Passed in rather than derived from `process.resourcesPath` here: the
+     * binary must be the per-user COPY, outside the install dir, or the NSIS
+     * update sweep kills the `.gen` front door on every upgrade (genie#265).
+     * One resolution point in `background.ts` feeds both this and the
+     * `hostServe` site server, so the two can never drift onto different Caddys.
+     */
+    caddyBin: string;
     platform: NodeJS.Platform;
     /** Windows only: `%SystemRoot%` (default `process.env.SystemRoot`). */
     systemRoot?: string;
@@ -30,7 +37,7 @@ export interface HostBrowserPathOpts {
 export function hostBrowserPaths(opts: HostBrowserPathOpts): HostEffectPaths {
     const dir = path.join(opts.userDataDir, 'host-gen');
     const isWin = opts.platform === 'win32';
-    const caddyBin = path.join(opts.resourcesPath, 'runtime', isWin ? 'caddy.exe' : 'caddy');
+    const caddyBin = opts.caddyBin;
     const hostsFilePath = isWin
         ? path.join(opts.systemRoot ?? process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'drivers', 'etc', 'hosts')
         : '/etc/hosts';

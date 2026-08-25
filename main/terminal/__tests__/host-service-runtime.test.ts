@@ -42,6 +42,7 @@ vi.mock('@particle-academy/fancy-term-host/service', () => ({
 import {
     runtimeKeyFor,
     materializeRuntimeToUserData,
+    resolveShippedCaddyBin,
     hostKeyFor,
     materializeHostToUserData,
     runKeyVbsContents,
@@ -257,6 +258,186 @@ describe('materializeRuntimeToUserData — the update-survival copy', () => {
         const root = path.join(tmp, 'empty');
         fs.mkdirSync(root, { recursive: true });
         expect(materializeRuntimeToUserData(root, 'node.exe', path.join(tmp, 'b'))).toBeNull();
+    });
+});
+
+/**
+ * THE INSTALLER'S PATH SWEEP, as a predicate. Genie ships a `oneClick` per-user
+ * NSIS installer whose kill step is neither a tree walk nor a name match
+ * (app-builder-lib/templates/nsis/include/allowOnlyOneInstallerInstance.nsh):
+ *
+ *   Get-CimInstance -ClassName Win32_Process |
+ *     ? { $_.Path -and $_.Path.StartsWith('$INSTDIR','CurrentCultureIgnoreCase') } |
+ *     % { Stop-Process -Id $_.ProcessId -Force }
+ *
+ * `Stop-Process` does not touch children, so what decides life or death is ONLY
+ * where a binary sits. Case-insensitive, like the PowerShell.
+ */
+function installerSweepKills(exePath: string, instDir: string): boolean {
+    const norm = (p: string): string => path.resolve(p).replace(/\\/g, '/').toLowerCase();
+    return norm(exePath).startsWith(norm(instDir));
+}
+
+/**
+ * A fake PACKAGED install tree — `<INSTDIR>/resources/runtime/` holding the
+ * bundled node + caddy + the version marker, the exact layout
+ * build-service-runtime.mjs produces and `extraResources` ships.
+ */
+function makeInstalledRuntime(opts: { version?: string; caddy?: string } = {}): {
+    instDir: string;
+    root: string;
+} {
+    const instDir = path.join(tmp, 'INSTDIR');
+    const root = path.join(instDir, 'resources', 'runtime');
+    fs.mkdirSync(path.join(root, 'node-pty'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'node.exe'), 'FAKE-NODE-BINARY');
+    fs.writeFileSync(path.join(root, 'node-pty', 'index.js'), 'module.exports={}');
+    fs.writeFileSync(path.join(root, 'caddy.exe'), opts.caddy ?? 'FAKE-CADDY-BINARY');
+    fs.writeFileSync(path.join(root, 'version.txt'), `${opts.version ?? '20.20.2-win32-x64'}\n`);
+    return { instDir, root };
+}
+
+/**
+ * WHY HOSTED SITES DIED ON EVERY UPDATE — and the fix, which is a PATH change.
+ *
+ * Genie's bundled Caddy is the front door for every `https://<name>.gen`, and
+ * for `hostServe` (static / php) sites it IS the site's server process
+ * (serve-config.ts: "this Caddy IS the host process Genie tracks for the site").
+ * It ran from `<INSTDIR>\resources\runtime\caddy.exe` — inside the sweep above —
+ * so every update killed it. The dev servers survived; the thing serving them
+ * did not, which is why the symptom and the process measurements disagreed for
+ * so long.
+ *
+ * Reproduced end to end against a REAL caddy.exe serving a REAL url in
+ * `.ai/_discovery/genie-process-supervisor.md` §3.4: `caddyAliveAfter: false`,
+ * `urlAfterSweep: "DOWN"`, `controlAliveAfter: true`.
+ *
+ * `node.exe` was moved out of `$INSTDIR` for exactly this reason
+ * (materializeRuntimeToUserData, above). Caddy now gets the same treatment —
+ * the same helper, the same versioned per-user dir, the same copy.
+ */
+describe('resolveShippedCaddyBin — the caddy that survives the installer sweep', () => {
+    it('POSITIVE CONTROL: the sweep predicate really kills under $INSTDIR, and really spares outside it', () => {
+        const { instDir, root } = makeInstalledRuntime();
+        // A live process at the SHIPPED location is in the kill set…
+        expect(installerSweepKills(path.join(root, 'caddy.exe'), instDir)).toBe(true);
+        // …and one under userData is not. Without this the assertion below would
+        // pass against a predicate that never matches anything.
+        expect(installerSweepKills(path.join(tmp, 'userData', 'runtime', 'k', 'caddy.exe'), instDir)).toBe(
+            false,
+        );
+    });
+
+    it('resolves a caddy OUTSIDE the install dir, so the update sweep cannot reach it', () => {
+        const { instDir, root } = makeInstalledRuntime();
+
+        const bin = resolveShippedCaddyBin({
+            roots: [root],
+            platform: 'win32',
+            packaged: true,
+            baseDir: path.join(tmp, 'userData-runtime'),
+        });
+
+        expect(installerSweepKills(bin, instDir)).toBe(false);
+        expect(path.basename(bin)).toBe('caddy.exe');
+    });
+
+    it('the shipped binary stays the source of truth — userData holds a COPY of it', () => {
+        const { root } = makeInstalledRuntime({ caddy: 'CADDY-BYTES-v1' });
+
+        const bin = resolveShippedCaddyBin({
+            roots: [root],
+            platform: 'win32',
+            packaged: true,
+            baseDir: path.join(tmp, 'userData-runtime'),
+        });
+
+        expect(fs.readFileSync(bin, 'utf8')).toBe('CADDY-BYTES-v1');
+        // The original is untouched and still there — it is what the copy is made
+        // from on the next machine, the next user, and after a torn copy.
+        expect(fs.readFileSync(path.join(root, 'caddy.exe'), 'utf8')).toBe('CADDY-BYTES-v1');
+    });
+
+    it('reuses the SAME copy across calls — a running caddy is never written over', () => {
+        const { root } = makeInstalledRuntime();
+        const baseDir = path.join(tmp, 'userData-runtime');
+
+        const first = resolveShippedCaddyBin({ roots: [root], platform: 'win32', packaged: true, baseDir });
+        fs.writeFileSync(path.join(path.dirname(first), 'canary.txt'), 'still here');
+        const second = resolveShippedCaddyBin({ roots: [root], platform: 'win32', packaged: true, baseDir });
+
+        expect(second).toBe(first);
+        expect(fs.readFileSync(path.join(path.dirname(first), 'canary.txt'), 'utf8')).toBe('still here');
+    });
+
+    it('a NEW shipped runtime is served, not a stale copy of the old one', () => {
+        const baseDir = path.join(tmp, 'userData-runtime');
+        makeInstalledRuntime({ version: '20.20.2-win32-x64-caddy2.9.1', caddy: 'CADDY-BYTES-v1' });
+        const root = path.join(tmp, 'INSTDIR', 'resources', 'runtime');
+        const oldBin = resolveShippedCaddyBin({ roots: [root], platform: 'win32', packaged: true, baseDir });
+
+        // The next Genie release bundles a different Caddy. The version marker
+        // describes the whole runtime dir, so the key moves with it.
+        fs.writeFileSync(path.join(root, 'caddy.exe'), 'CADDY-BYTES-v2');
+        fs.writeFileSync(path.join(root, 'version.txt'), '20.20.2-win32-x64-caddy2.10.0\n');
+        const newBin = resolveShippedCaddyBin({ roots: [root], platform: 'win32', packaged: true, baseDir });
+
+        expect(newBin).not.toBe(oldBin);
+        expect(fs.readFileSync(newBin, 'utf8')).toBe('CADDY-BYTES-v2');
+        // The superseded copy is left alone — a caddy started before the update
+        // is still executing it.
+        expect(fs.readFileSync(oldBin, 'utf8')).toBe('CADDY-BYTES-v1');
+    });
+
+    it('runs the repo binary IN PLACE in dev — no install dir to be swept, no stale copy masking a rebuild', () => {
+        const { root } = makeInstalledRuntime();
+
+        const bin = resolveShippedCaddyBin({
+            roots: [root],
+            platform: 'win32',
+            packaged: false,
+            baseDir: path.join(tmp, 'userData-runtime'),
+        });
+
+        expect(bin).toBe(path.join(root, 'caddy.exe'));
+    });
+
+    it('falls back to the shipped binary when the copy cannot be made', () => {
+        const { root } = makeInstalledRuntime();
+        // An unwritable base (a FILE where the dir must go) makes materialize fail.
+        const baseDir = path.join(tmp, 'not-a-dir');
+        fs.writeFileSync(baseDir, 'blocked');
+
+        const bin = resolveShippedCaddyBin({ roots: [root], platform: 'win32', packaged: true, baseDir });
+
+        // Serving from the install dir is the OLD behaviour: sites still work,
+        // they just go down on the next update. Better than not serving at all.
+        expect(bin).toBe(path.join(root, 'caddy.exe'));
+    });
+
+    it('names the conventional shipped location when no caddy is bundled at all', () => {
+        // The build SKIPS caddy when Go is absent; the feature is unavailable and
+        // the path only has to produce a legible ENOENT.
+        const root = path.join(tmp, 'no-caddy');
+        fs.mkdirSync(root, { recursive: true });
+
+        expect(
+            resolveShippedCaddyBin({ roots: [root], platform: 'linux', packaged: true, baseDir: tmp }),
+        ).toBe(path.join(root, 'caddy'));
+    });
+
+    it('picks the platform binary name', () => {
+        const { root } = makeInstalledRuntime();
+        fs.writeFileSync(path.join(root, 'caddy'), 'FAKE-CADDY-BINARY');
+        for (const platform of ['linux', 'darwin'] as const) {
+            const bin = resolveShippedCaddyBin({
+                roots: [root],
+                platform,
+                packaged: false,
+                baseDir: path.join(tmp, 'userData-runtime'),
+            });
+            expect(path.basename(bin)).toBe('caddy');
+        }
     });
 });
 

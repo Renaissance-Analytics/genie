@@ -213,6 +213,7 @@ import {
     detachedHostPinsBinary,
     wireHostLossRecovery,
     recoverFromHostLoss,
+    resolveShippedCaddyBin,
 } from './terminal/host-service';
 import { runBackendSelection as runBackendSelectionCore } from './host-core/backend-selection';
 import {
@@ -1134,9 +1135,18 @@ app.whenReady().then(async () => {
         return file;
     }
 
+    // The ONE bundled-Caddy resolution, shared by the `.gen` front door and the
+    // `hostServe` (static / php) site server — the two roles Genie's Caddy plays.
+    // It resolves to the per-user COPY, outside the install dir: run from
+    // `<INSTDIR>\resources\runtime\caddy.exe` it sat inside the NSIS installer's
+    // path sweep, so every update killed the front door and every static/php
+    // site's server with it (genie#265; measured in
+    // `.ai/_discovery/genie-process-supervisor.md` §3.4). Resolved once so the
+    // two callers can never end up on different binaries.
+    const hostCaddyBin = resolveShippedCaddyBin();
     hostBrowserReconciler = createDesktopHostBrowserReconciler({
         userDataDir: app.getPath('userData'),
-        resourcesPath: process.resourcesPath,
+        caddyBin: hostCaddyBin,
         platform: process.platform,
         routes: () => devServerHostBrowserRoutes(),
         log: (m) => console.warn('[host-browser]', m),
@@ -1183,12 +1193,10 @@ app.whenReady().then(async () => {
         // Genie's bundled Caddy + where its generated per-site configs are written,
         // so a `hostServe` (static / php) site is served by Genie's own web server —
         // the agent declares a mode, Genie writes the config (moic/blockchain: no
-        // hand-rolled nginx). Same bundled binary the host `.gen` proxy uses.
-        caddyBin: path.join(
-            process.resourcesPath,
-            'runtime',
-            process.platform === 'win32' ? 'caddy.exe' : 'caddy',
-        ),
+        // hand-rolled nginx). The SAME resolved binary the host `.gen` proxy uses,
+        // which for these sites matters twice over: this Caddy IS the site's server
+        // process, so an update that killed it took the site down, not just its route.
+        caddyBin: hostCaddyBin,
         writeServeConfig: (siteId, content) => writeHostServeConfig(siteId, content),
         // Which php/node version this machine defaults to (Settings → Toolchain).
         // A Genie-served site follows it unless it pins one, and the spawn resolves

@@ -117,10 +117,10 @@ export const HOST_SERVICE_LABEL = 'ai.tynn.genie.ptyhost';
  * The shipped runtime (1) is the PRODUCTION path; (2) is a best-effort dev/CI
  * convenience. When neither yields a usable node, we return null → fallback.
  */
-export function resolveShippedRuntime(): ServiceRuntime | null {
-    // 1) Shipped standalone runtime (extraResources). In a packaged app this is
-    //    process.resourcesPath; in dev there is no resourcesPath sentinel, so we
-    //    probe the repo's resources/runtime too.
+export function shippedRuntimeRoots(): string[] {
+    // In a packaged app the runtime is `process.resourcesPath/runtime`; in dev
+    // there is no resourcesPath sentinel, so we probe the repo's
+    // resources/runtime too. Most-specific first.
     const candidateRoots: string[] = [];
     try {
         if (process.resourcesPath) {
@@ -135,6 +135,12 @@ export function resolveShippedRuntime(): ServiceRuntime | null {
     } catch {
         /* app may not be ready in some unit contexts */
     }
+    return candidateRoots;
+}
+
+export function resolveShippedRuntime(): ServiceRuntime | null {
+    // 1) Shipped standalone runtime (extraResources).
+    const candidateRoots = shippedRuntimeRoots();
 
     const nodeBin = process.platform === 'win32' ? 'node.exe' : 'node';
     for (const root of candidateRoots) {
@@ -189,11 +195,94 @@ export function resolveShippedRuntime(): ServiceRuntime | null {
     }
 }
 
+/** Options for {@link resolveShippedCaddyBin}; every field defaults to the real
+ *  machine, so production calls it with no arguments and tests inject a fake
+ *  install tree. */
+export interface ShippedCaddyOpts {
+    /** Candidate `resources/runtime` roots (default {@link shippedRuntimeRoots}). */
+    roots?: string[];
+    /** Default `process.platform` — decides `caddy.exe` vs `caddy`. */
+    platform?: NodeJS.Platform;
+    /** Default `app.isPackaged`. Only a packaged build has an install dir to be
+     *  swept, and only a packaged build should be pinned to a copy. */
+    packaged?: boolean;
+    /** Where the per-user copy is rooted (default `<userData>/runtime`). */
+    baseDir?: string;
+}
+
+/**
+ * Resolve the bundled Caddy to RUN — the same `resources/runtime` binary the
+ * build ships, but executed from the per-user copy that lives OUTSIDE the
+ * install dir.
+ *
+ * WHY THIS EXISTS (genie#265) — hosted sites went down on EVERY update. Genie's Caddy is the
+ * front door for every `https://<name>.gen`, and for `hostServe` (static / php)
+ * sites it IS the site's server process (`serve-config.ts`: "this Caddy IS the
+ * host process Genie tracks for the site"). It ran from
+ * `<INSTDIR>\resources\runtime\caddy.exe` — inside the NSIS installer's path
+ * sweep (see {@link materializeRuntimeToUserData}) — so every upgrade killed it.
+ * The dev servers survived; the thing SERVING them did not, which is why the
+ * report and the process measurements disagreed for so long. Measured end to end
+ * against a real caddy.exe in `.ai/_discovery/genie-process-supervisor.md` §3.4.
+ *
+ * `node.exe` was moved out for exactly this reason. This is the SAME treatment,
+ * through the SAME helper and into the SAME versioned per-user dir — the copy is
+ * shared, so pointing Caddy at it costs no extra bytes.
+ *
+ * Never throws and always returns a path: a failed copy DOWNGRADES to the shipped
+ * binary (sites still serve, they just go down on the next update), and a build
+ * with no bundled Caddy at all still names the conventional location so the
+ * failure reads as ENOENT rather than an empty argv[0].
+ *
+ * EXPECT ONE MORE OUTAGE. The Caddy running during the first upgrade after this
+ * ships is still the in-`$INSTDIR` one, so that upgrade still kills it. Then
+ * never again.
+ */
+export function resolveShippedCaddyBin(opts: ShippedCaddyOpts = {}): string {
+    const platform = opts.platform ?? process.platform;
+    const caddyBin = platform === 'win32' ? 'caddy.exe' : 'caddy';
+    const roots = opts.roots ?? shippedRuntimeRoots();
+    // Dev builds run the repo binary in place: there is no install dir to be
+    // swept, and a stale user-data copy would mask a locally rebuilt Caddy. Same
+    // split resolveShippedRuntime makes for node.
+    let packaged = opts.packaged;
+    if (packaged === undefined) {
+        try {
+            packaged = app.isPackaged;
+        } catch {
+            packaged = false;
+        }
+    }
+
+    for (const root of roots) {
+        const shipped = path.join(root, caddyBin);
+        try {
+            if (!fs.existsSync(shipped)) continue;
+        } catch {
+            continue; // probe the next root
+        }
+        if (!packaged) return shipped;
+        const materialized = materializeRuntimeToUserData(root, caddyBin, opts.baseDir);
+        if (!materialized) return shipped;
+        return path.join(materialized, caddyBin);
+    }
+
+    // No caddy bundled at all (the build skips it when Go is absent). Name the
+    // conventional shipped location so the failure reads as "not installed here"
+    // rather than an empty path.
+    return path.join(roots[0] ?? '', caddyBin);
+}
+
 /**
  * The versioned directory key for a materialized runtime copy: the shipped
- * `version.txt` (pinned node version + platform-arch) when present, else a
- * size-derived fallback for pre-marker builds. Sanitised to a safe dir name.
- * Pure → unit-testable.
+ * `version.txt` when present, else a size-derived fallback for pre-marker
+ * builds. Sanitised to a safe dir name. Pure → unit-testable.
+ *
+ * The marker names the WHOLE `resources/runtime` unit — pinned node version,
+ * platform-arch, AND the bundled Caddy build (`build-service-runtime.mjs`) —
+ * because both the pty-host and the host Caddy run out of the copy this key
+ * selects. A marker that named only node pinned a superseded Caddy forever
+ * whenever a release bumped Caddy alone.
  */
 export function runtimeKeyFor(versionTxt: string | null, nodeSize: number): string {
     const raw = (versionTxt ?? '').trim() || `sz${nodeSize}`;
@@ -234,6 +323,23 @@ export function runtimeKeyFor(versionTxt: string | null, nodeSize: number): stri
  * `<baseDir>/<key>/` (default `<userData>/runtime/<key>/`) and return that
  * root — or null on any failure, so the caller falls back to the shipped
  * in-place runtime (everything still works, minus update-survival).
+ *
+ * THE REASON THIS EXISTS: Genie ships a `oneClick` per-user NSIS installer, and
+ * its kill step is neither a tree walk nor a name match — it is a PATH predicate
+ * (`allowOnlyOneInstallerInstance.nsh`):
+ *
+ *     Get-CimInstance -ClassName Win32_Process |
+ *       ? { $_.Path -and $_.Path.StartsWith('$INSTDIR','CurrentCultureIgnoreCase') } |
+ *       % { Stop-Process -Id $_.ProcessId -Force }
+ *
+ * Every process whose EXECUTABLE sits under the install dir is killed on every
+ * update, whoever started it. So the fix is never "supervise it better" — it is
+ * to run the binary from somewhere else.
+ *
+ * TWO TENANTS share one copy: the pty-host's `node.exe` (`resolveShippedRuntime`)
+ * and the bundled Caddy that fronts every `.gen` site
+ * ({@link resolveShippedCaddyBin}). `nodeBin` is simply which binary the caller
+ * needs present for the copy to count as usable.
  *
  * Same key ⇒ the existing copy is reused untouched, so across a normal update
  * the running host keeps executing the exact same files and is never disturbed.
