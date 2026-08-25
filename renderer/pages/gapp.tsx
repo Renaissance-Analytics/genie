@@ -125,6 +125,23 @@ export default function GAppWindow() {
                                 i === active
                                     ? '2px solid var(--indigo-400, #818cf8)'
                                     : '2px solid transparent',
+                            // GENIE'S OWN TABS NEVER SHRINK (genie#264). Flows is
+                            // APPENDED last, so without this an app with enough
+                            // tabs — or long enough ones — pushes the surface that
+                            // says what it is allowed to do off the end of the
+                            // window. It does not have to imitate a trusted tab if
+                            // it can shove it out of sight. The manifest caps how
+                            // much an app may declare; this is what makes the
+                            // guarantee hold at any width.
+                            flexShrink: tab.kind === 'app' ? 1 : 0,
+                            ...(tab.kind === 'app'
+                                ? {
+                                      minWidth: 0,
+                                      overflow: 'hidden',
+                                      textOverflow: 'ellipsis',
+                                      whiteSpace: 'nowrap' as const,
+                                  }
+                                : {}),
                         }}
                     >
                         {tab.title}

@@ -393,3 +393,122 @@ describe('the PREVIEW framing', () => {
         expect(readConsent(plan, { cancelled: true, answers: [] }).install).toBe(false);
     });
 });
+
+/**
+ * An app that LENDS CAPABILITY OUTWARD — the consent half of the capability
+ * provider.
+ *
+ * "Agents in any workspace will be able to make this app render video" is spending
+ * the user's CPU, disk and time at somebody else's request. That is a grant, so it
+ * gets a DECISION on this screen rather than a sentence: the user can narrow it
+ * exactly as they can narrow reach.
+ *
+ * And it is a SEPARATE decision from reach, deliberately. `scope` is what the app
+ * may touch; `consumers` is who may spend it. Folding them into one question would
+ * put the two grants behind one answer, and one of them would be wrong.
+ */
+describe('an app that offers its tools to other agents', () => {
+    const provider = (consumers?: unknown) =>
+        manifest({
+            slug: 'remotion',
+            name: 'Remotion',
+            services: [{ name: 'renderer', command: ['node', 'server.js'] }],
+            contributes: {
+                mcpTools: [
+                    { name: 'renderVideo', description: 'Render a composition.', inputSchema: { type: 'object' } },
+                ],
+                servedBy: 'renderer',
+                transport: { kind: 'stdio' },
+            },
+            permissions: {
+                scope: 'self',
+                capabilities: ['hosting'],
+                ...(consumers ? { consumers } : {}),
+            },
+        });
+
+    it('says on the install screen that the app offers tools', () => {
+        const text = buildConsentPlan(provider({ scope: 'workstation' }), noRequirements)
+            .questions[0]?.question ?? '';
+        expect(text).toMatch(/renderVideo|1 tool/i);
+    });
+
+    it('asks WHOSE agents may call them, as its own decision', () => {
+        const p = buildConsentPlan(provider({ scope: 'workstation' }), noRequirements);
+        const tools = p.questions.find((q) => q.header === 'Tools');
+
+        expect(tools, 'a workstation-wide offer must be put to the user').toBeTruthy();
+        expect(tools?.options.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('asks nothing when the app keeps its tools to itself', () => {
+        const p = buildConsentPlan(provider(), noRequirements);
+        expect(p.questions.some((q) => q.header === 'Tools')).toBe(false);
+    });
+
+    it('is a decision SEPARATE from reach — an app can be `self` and still lend out', () => {
+        // The distinction the whole field exists for. Remotion touches nothing but
+        // its own workspace, and is callable from everywhere.
+        const p = buildConsentPlan(provider({ scope: 'workstation' }), noRequirements);
+        expect(p.questions.some((q) => q.header === 'Reach')).toBe(false);
+        expect(p.questions.some((q) => q.header === 'Tools')).toBe(true);
+    });
+
+    it('narrows to the app itself when the offer question went unanswered', () => {
+        const p = buildConsentPlan(provider({ scope: 'workstation' }), noRequirements);
+        const outcome = readConsent(p, {
+            cancelled: false,
+            answers: [answer('Install', ['Install'])],
+        });
+
+        expect(outcome.consumers).toEqual({ scope: 'self' });
+    });
+
+    it('grants the wide offer only when the user picked it', () => {
+        const p = buildConsentPlan(provider({ scope: 'workstation' }), noRequirements);
+        const tools = p.questions.find((q) => q.header === 'Tools');
+        const widest = tools?.options[tools.options.length - 1]?.label ?? '';
+
+        const outcome = readConsent(p, {
+            cancelled: false,
+            answers: [answer('Install', ['Install']), answer('Tools', [widest])],
+        });
+
+        expect(outcome.consumers).toEqual({ scope: 'workstation' });
+    });
+
+    it('stays inside the modal’s four questions with everything asked at once', () => {
+        // Install + Permissions + Reach + Tools is exactly four. This is the test
+        // that fails if a fifth question is ever added without bundling.
+        const p = buildConsentPlan(
+            manifest({
+                slug: 'remotion',
+                name: 'Remotion',
+                services: [{ name: 'renderer', command: ['node', 'server.js'] }],
+                contributes: {
+                    mcpTools: [
+                        { name: 'renderVideo', description: 'd', inputSchema: { type: 'object' } },
+                    ],
+                    servedBy: 'renderer',
+                    transport: { kind: 'stdio' },
+                },
+                permissions: {
+                    scope: 'workstation',
+                    capabilities: ['terminals', 'agents', 'hosting', 'files', 'notify'],
+                    consumers: { scope: 'workstation' },
+                },
+            }),
+            noRequirements,
+        );
+
+        expect(p.questions.map((q) => q.header)).toEqual([
+            'Install',
+            'Permissions',
+            'Reach',
+            'Tools',
+        ]);
+        for (const q of p.questions) {
+            expect(q.options.length, q.header).toBeLessThanOrEqual(4);
+        }
+    });
+});

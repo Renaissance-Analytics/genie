@@ -41,10 +41,22 @@ const authored: GenieAppManifest = {
         { name: 'Strategist', persona: 'strategist.md', description: 'Designs trades.' },
         { name: 'Reviewer', persona: 'reviewer/persona.md' },
     ],
+    contributes: {
+        mcpTools: [
+            {
+                name: 'renderVideo',
+                description: 'Render a composition to an mp4.',
+                inputSchema: { type: 'object', properties: { composition: { type: 'string' } } },
+            },
+        ],
+        servedBy: 'api',
+        transport: { kind: 'stdio' },
+    },
     permissions: {
         scope: 'workspaces',
         workspaces: ['ws-research'],
         capabilities: ['hosting', 'knowledge'],
+        consumers: { scope: 'workstation' },
     },
 };
 
@@ -65,5 +77,10 @@ describe('what the SDK says you may write', () => {
         expect(result.value.agents?.map((a) => a.name)).toEqual(['Strategist', 'Reviewer']);
         expect(result.value.panels.agents).toBe(2);
         expect(result.value.tabs?.[0]?.title).toBe('Board');
+        // The capability provider has to survive the same round trip. This is the
+        // half the finding actually broke on: a manifest whose provider block was
+        // accepted, dropped, and never reached the runtime.
+        expect(result.value.contributes?.mcpTools[0]?.name).toBe('renderVideo');
+        expect(result.value.permissions.consumers).toEqual({ scope: 'workstation' });
     });
 });
