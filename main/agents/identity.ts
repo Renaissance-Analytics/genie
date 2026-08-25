@@ -28,6 +28,7 @@
 
 import type { AgentType } from '../mcp/protocol';
 import { normalizePurpose } from '../agentinbox/types';
+import { isProviderId } from './registry';
 
 /** The AI TUI an agent runs. Mirrors `AgentType` / `AgentInboxAgentType`. */
 export type AgentProvider = AgentType;
@@ -88,11 +89,17 @@ export function agentRef(identity: AgentIdentity): string {
     return chat ? `${key}${SEP}${chat}` : key;
 }
 
-/** The providers a ref may name. Anything else is not one of ours. */
-const PROVIDERS: readonly string[] = ['claude', 'codex', 'custom'];
-
+/**
+ * The providers a ref may name. Anything else is not one of ours.
+ *
+ * DERIVED from `PROVIDER_REGISTRY` (genie#261). This used to be its own
+ * `readonly string[]` — deliberately outside the union, so no compiler checked
+ * it — and a provider missing from it was silently dropped by `savedAgentsOf`:
+ * the agent launched, ran, and never appeared in the roster, with no error
+ * anywhere. Membership is now the registry's answer, by construction.
+ */
 export function isAgentProvider(value: unknown): value is AgentProvider {
-    return typeof value === 'string' && PROVIDERS.includes(value);
+    return isProviderId(value);
 }
 
 /**

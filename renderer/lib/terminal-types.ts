@@ -8,6 +8,7 @@
 import type { ComponentType } from 'react';
 import { IconBox, IconCode, IconTerminal, IconTynn } from '../components/Master/icons';
 import type { AgentType } from './genie';
+import { agentProviders, providerDef } from '../../main/agents/registry';
 
 /** The registry key: `regular` for a plain shell, else the agent kind. */
 export type TerminalTypeId = 'regular' | AgentType;
@@ -24,6 +25,29 @@ export interface TerminalTypeDef {
     hint?: string;
 }
 
+/**
+ * The provider MARK. The only per-provider fact that cannot live in
+ * `PROVIDER_REGISTRY`, because the registry is dependency-free by contract and
+ * these are React components.
+ *
+ * `Record<AgentType, …>` is what keeps it honest: add a provider to the registry
+ * and this stops compiling until it has a mark. Note the current three are
+ * placeholder-grade — `claude` renders the TYNN mark and `codex` a generic box —
+ * and adding a fourth is the moment to fix all of them rather than add a fourth
+ * placeholder.
+ */
+const PROVIDER_ICONS: Record<AgentType, ComponentType<{ size?: number; className?: string }>> = {
+    claude: IconTynn,
+    codex: IconBox,
+    custom: IconCode,
+};
+
+/**
+ * Regular first, then one entry per provider, DERIVED from `PROVIDER_REGISTRY`
+ * (genie#261) — so a provider added to the registry appears in the split button,
+ * its dropdown and the last-used-type persistence with no edit here, carrying the
+ * same label and hint the Settings rows show.
+ */
 export const TERMINAL_TYPES: TerminalTypeDef[] = [
     {
         id: 'regular',
@@ -32,30 +56,17 @@ export const TERMINAL_TYPES: TerminalTypeDef[] = [
         specialized: false,
         hint: 'A plain shell',
     },
-    {
-        id: 'claude',
-        label: 'Claude Code',
-        icon: IconTynn,
-        agent: 'claude',
-        specialized: true,
-        hint: 'Launch the Claude Code TUI',
-    },
-    {
-        id: 'codex',
-        label: 'Codex',
-        icon: IconBox,
-        agent: 'codex',
-        specialized: true,
-        hint: 'Launch the Codex TUI',
-    },
-    {
-        id: 'custom',
-        label: 'Custom agent',
-        icon: IconCode,
-        agent: 'custom',
-        specialized: true,
-        hint: 'Launch your own agent command',
-    },
+    ...agentProviders().map((id): TerminalTypeDef => {
+        const def = providerDef(id);
+        return {
+            id,
+            label: def.label,
+            icon: PROVIDER_ICONS[id],
+            agent: id,
+            specialized: true,
+            hint: def.hint,
+        };
+    }),
 ];
 
 export const DEFAULT_TERMINAL_TYPE: TerminalTypeId = 'regular';

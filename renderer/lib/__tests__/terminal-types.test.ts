@@ -7,6 +7,7 @@ import {
 } from '../terminal-types';
 import { workspaceSlug } from '../genie';
 import { normalizePurpose } from '../../components/Master/AgentTerminalForm';
+import { agentProviders, providerDef } from '../../../main/agents/registry';
 
 /**
  * The split Add-Terminal button + the AgentInbox create form read from these
@@ -23,6 +24,29 @@ describe('terminal-type registry', () => {
         expect(specialized.map((t) => t.agent)).toEqual(['claude', 'codex', 'custom']);
         // Every specialized type carries an agent kind; regular never does.
         for (const t of specialized) expect(t.agent).toBeTruthy();
+    });
+
+    /**
+     * The catalogue is DERIVED from PROVIDER_REGISTRY (genie#261), so a provider
+     * added to the registry appears in the Add-Terminal dropdown without an edit
+     * here — and cannot be forgotten. Label and hint come from the registry too,
+     * so the dropdown and the Settings rows cannot disagree.
+     */
+    it('carries exactly the registry providers, with the registry label and hint', () => {
+        const specialized = TERMINAL_TYPES.filter((t) => t.specialized);
+        expect(specialized.map((t) => t.agent)).toEqual(agentProviders());
+        for (const t of specialized) {
+            const def = providerDef(t.agent!);
+            expect(t.label, `${t.agent} label`).toBe(def.label);
+            expect(t.hint, `${t.agent} hint`).toBe(def.hint);
+        }
+    });
+
+    it('gives every provider an icon', () => {
+        for (const id of agentProviders()) {
+            expect(terminalTypeForAgent(id).icon, `${id} icon`).toBeTruthy();
+            expect(terminalTypeForAgent(id).id, `${id} resolves to itself`).toBe(id);
+        }
     });
 
     it('has unique ids and a regular default', () => {
