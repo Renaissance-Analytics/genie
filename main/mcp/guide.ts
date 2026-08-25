@@ -368,20 +368,36 @@ memory store shared across EVERY workspace on this Genie (one store, not
 per-workspace). Stash durable, reusable context as small markdown "memory" nodes
 and retrieve it on demand — so shared, system-wide knowledge lives here instead
 of bloating every workspace's AGENTS.md/CLAUDE.md. Nodes cross-link with
-\`[[wikilink]]\` references in their body; each link is a graph edge. Actions
-(\`action\`):
-- \`search\` — keyword retrieval (needs \`query\`; optional \`limit\`, and \`tags\` to
-  restrict to nodes carrying ALL those tags). Returns ranked \`{ id, title,
-  snippet, score, tags }\` hits. **Search FIRST** to see what's already known.
+\`[[wikilink]]\` references in their body; each link is a graph edge.
+
+**Every memory is one of FOUR classes** (\`class\`), because they answer four
+different questions — ask with the wrong one and you get the other's answers:
+- \`profile\` — what is TRUE of the user / what they prefer.
+- \`episodic\` — what HAPPENED, and when.
+- \`procedural\` — what was LEARNED from doing this before.
+- \`knowledge\` — where this is in the DOCUMENTS. The **default**, and what every
+  memory written before classes existed is.
+SET \`class\` when you \`add\`, and PASS it when you \`search\`/\`list\` so you get the
+kind you meant. Omitting it on a read covers every class, exactly as before.
+It is still ONE graph — \`[[wikilink]]\`s cross classes freely, so a \`procedural\`
+memory should cite the \`knowledge\` node it was learned from.
+
+Actions (\`action\`):
+- \`search\` — keyword retrieval (needs \`query\`; optional \`limit\`, \`class\` to
+  restrict to ONE class, and \`tags\` to restrict to nodes carrying ALL those
+  tags). Returns ranked hits carrying their own \`class\`. **Search FIRST** to see
+  what's already known.
 - \`get\` — a node by \`id\` (full body + its linked node ids).
 - \`add\` — create a node: \`title\` (required), optional markdown \`body\` (put
-  \`[[wikilink]]\`s to related nodes in it), optional \`tags\`, optional explicit
-  \`links\` (ids/titles/slugs). Returns the new \`id\`.
-- \`list\` — recent nodes (optional \`tag\`, \`limit\`).
+  \`[[wikilink]]\`s to related nodes in it), optional \`class\`, optional \`tags\`,
+  optional explicit \`links\` (ids/titles/slugs). Returns the new \`id\`.
+- \`list\` — recent nodes (optional \`class\`, \`tag\`, \`limit\`). This is how you ask
+  an EPISODIC question — "what happened recently" is ordered by recency and has
+  no query string to search for.
 - \`link\` — add an edge from node \`from\` to \`to\` (an id, title, or slug).
-Keyword search is always available (no API key, no setup). Prefer searching
-before adding a duplicate, and cross-link related memories with \`[[wikilink]]\`s
-so the graph stays connected.
+Keyword search is always available (no API key, no setup, works offline). Prefer
+searching before adding a duplicate, and cross-link related memories with
+\`[[wikilink]]\`s so the graph stays connected.
 
 ### checkIssues
 Get a detailed, grouped list of the open GitHub **Issues, Pull Requests, and
