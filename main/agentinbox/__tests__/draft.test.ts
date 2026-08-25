@@ -135,6 +135,20 @@ describe('noteDraft — confidence is surrendered the moment Genie is guessing',
         s = noteDraft(s, 'fresh');
         expect(s.confident).toBe(true);
     });
+
+    it('Codex enhanced Enter clears an unconfident draft before the idle terminal reply', () => {
+        let s = noteDraft(EMPTY_DRAFT, '\t');
+        s = noteDraft(s, 'the submitted prompt');
+        s = noteDraft(s, '\x1b[13u');
+        s = noteDraft(s, '\x1b[?1;2c');
+
+        expect(planNudge(s)).toEqual({ mode: 'submit' });
+
+        // Positive control for the fail-safe: Shift+Enter inserts a newline in
+        // Codex, so it must not be mistaken for the submitting Enter.
+        const shifted = noteDraft(d({ text: 'still here', confident: false }), '\x1b[13;2u');
+        expect(planNudge(shifted)).toEqual({ mode: 'append' });
+    });
 });
 
 /**

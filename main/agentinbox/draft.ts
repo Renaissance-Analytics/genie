@@ -62,7 +62,6 @@ const IMAGE_TRIGGERS = ['\x16', '\x1bv'];
  */
 export function noteDraft(draft: Draft, data: string): Draft {
     if (!data) return draft;
-    const { literal, escapes } = tokenize(data);
 
     let { text, confident, image } = draft;
 
@@ -79,6 +78,15 @@ export function noteDraft(draft: Draft, data: string): Draft {
         }
         return next;
     }
+
+    // Codex enables the Kitty enhanced-keyboard protocol on terminals that
+    // support it. Plain Enter is then CSI 13 u (optionally spelling out the
+    // default modifier/event fields) instead of CR, but it has the same
+    // semantic guarantee for this model: the prompt was submitted and the box
+    // is empty. Normalize only an unmodified press/repeat. Shift+Enter is a
+    // newline in Codex and must keep the fail-safe closed.
+    data = normalizeSubmittingEnter(data);
+    const { literal, escapes } = tokenize(data);
 
     for (const esc of escapes) {
         if (IMAGE_TRIGGERS.includes(esc)) {
@@ -114,6 +122,10 @@ export function noteDraft(draft: Draft, data: string): Draft {
     }
 
     return { text, confident, image };
+}
+
+function normalizeSubmittingEnter(data: string): string {
+    return data.replace(/\x1b\[13(?::13){0,2}(?:;1(?::[12])?)?u/g, '\r');
 }
 
 /** Split a chunk around bracketed-paste markers, or null when it has none. */
