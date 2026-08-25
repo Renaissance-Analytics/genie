@@ -32,12 +32,17 @@
  * ## What is deliberately NOT here yet
  *
  * LAUNCH behaviour — `LAUNCH_PROFILES`, the resume/continue templates, and argv
- * ordering — stays in `agentinbox/session-capture.ts` and `agents/startup.ts` for
- * now. Genie #259 owns those surfaces and is in flight; folding them in mid-air
- * would collide. They are the natural second pass, and the fields they want
- * (`sessionStrategy`, `flagTemplate`, `resumeTemplate`, `continueTemplate`,
- * `lateBindAllowed`, `launchGrammar`) belong on `ProviderDef` once #259 lands.
- * `withStartupInstructions` remains the single owner of shell quoting regardless.
+ * ordering — stays in `agentinbox/session-capture.ts` and `agents/startup.ts`.
+ * This refactor was written alongside #259, which owned those surfaces; it has
+ * since merged (`099fd30`), so folding them in is now the natural SECOND pass
+ * rather than a collision. The fields it wants — `sessionStrategy`,
+ * `flagTemplate`, `resumeTemplate`, `continueTemplate`, `lateBindAllowed`,
+ * `launchGrammar` — belong on `ProviderDef`.
+ *
+ * That second pass is where a third provider stops being second-class:
+ * `renderAgentResume` / `renderAgentContinue` still hardcode `agent === 'claude'`,
+ * so anything else gets NO graceful restart. `withStartupInstructions` remains
+ * the single owner of shell quoting regardless.
  */
 
 /** The AI TUIs Genie can launch. Adding one starts here and nowhere else. */
