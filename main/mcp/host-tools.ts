@@ -49,7 +49,12 @@ import {
     writeToTerminal,
     readTerminalOutput,
     agentSessionTranscriptExists,
+    isTerminalLive,
 } from '../terminal/ipc';
+import { agentRef, savedAgentKey } from '../agents/identity';
+import { resolveWorkstationProvider } from '../agents/provider';
+import { withStartupInstructions } from '../agents/startup';
+import { decideAgentStart, savedAgentsOf, type SavedAgent } from '../agents/saved';
 import {
     PASTE_SUBMIT_DELAY_MS,
     resolveTerminalInput,
@@ -140,6 +145,7 @@ import type {
     ManagedTerminalInfo,
     RunAgentRequest,
     RunAgentResult,
+    SavedAgentInfo,
     AgentType,
     ManageWorkspacesRequest,
     ManageWorkspacesResult,
@@ -1651,7 +1657,110 @@ export function restartAgentTerminal(id: string): RestartAgentResult {
     return { ok: true, oldId: id, newId: restarted.id, agent, command: restarted.command ?? resume };
 }
 
-/** Back the runAgent MCP tool (launch + drive a coding agent; gated). */
+/**
+ * Bring a SAVED agent back — the half of `runAgent start` that is NOT a spawn
+ * (Tynn #254).
+ *
+ * `warm` is the case the owner's complaint was actually about: the agent is
+ * already running, so the right answer is to hand back the terminal it is
+ * running in and touch NOTHING. No second spec, no second pty, no second
+ * AgentInbox identity, and no launch line typed into a live TUI's prompt.
+ *
+ * `revive` is the saved agent whose pty has since died. Its spec outlived it —
+ * that is what "saved" buys — so the SAME record is respawned:
+ * `createAgentTerminal` reuses the spec for a caller-supplied id, and its revive
+ * path resumes the captured conversation rather than minting a fresh one. The
+ * durable `meta.agent_id` is untouched, which is what keeps the agent's inbox,
+ * channels and DM history attached across the gap.
+ *
+ * No approval modal, deliberately. The gate exists because launching a coding
+ * agent gives it the run of the machine — a decision the user already made when
+ * this agent was created, on a modal that named it. Re-asking on every reattach
+ * would train people to click through the one that matters.
+ */
+async function reattachSavedAgent(
+    ws: { id: string; path: string },
+    agent: SavedAgent,
+    how: 'warm' | 'revive',
+): Promise<RunAgentResult> {
+    const spec = getTerminalSpec(agent.specId);
+    if (!spec) {
+        return { ok: false, error: `The saved agent "${agent.name}" no longer has a terminal.` };
+    }
+    const result = {
+        ok: true as const,
+        id: spec.id,
+        agent: agent.provider,
+        name: agent.name,
+        reattached: true,
+        ref: agentRef({
+            provider: agent.provider,
+            name: agent.name,
+            chatSessionId: agent.chatSessionId,
+        }),
+    };
+    if (how === 'warm') return result;
+
+    // A revive spawns a pty, so it spends a slot and meets the cap like any
+    // other agent start. Checked here rather than inside the create path because
+    // a refusal must leave the saved agent exactly as it was — dormant, not
+    // half-started.
+    const cap = decideAgentTerminalSpawn(ws.id, 'agent');
+    if (!cap.allowed) {
+        return {
+            ok: false,
+            error: cap.reason ?? 'This workspace is at its agent-terminal limit.',
+        };
+    }
+    const revived = createAgentTerminal({
+        id: spec.id,
+        workspaceId: ws.id,
+        cwd: spec.cwd,
+        label: spec.label,
+        // The stored BASE command. `createAgentTerminal`'s revive path decides
+        // what actually gets run from the spec (resume / continue / fresh), so
+        // passing the base here never overrides that decision.
+        agentMeta: { agent: agent.provider, command: spec.meta?.agent_command ?? '' },
+    });
+    return {
+        ...result,
+        ref: agentRef({
+            provider: agent.provider,
+            name: agent.name,
+            chatSessionId: revived.chatSessionId,
+        }),
+    };
+}
+
+/**
+ * The workspace's SAVED AGENTS, read off its terminal specs (Tynn #254).
+ *
+ * There is no agents table: a saved agent IS a terminal spec carrying
+ * `meta.agent`. That is what keeps an agent a terminal in the sidebar and the
+ * Floor UX, and what makes "reopen the agent" the same operation as "revive the
+ * terminal" instead of a second lifecycle to keep in sync.
+ */
+function savedAgentsOfWorkspace(workspaceId: string): SavedAgent[] {
+    return savedAgentsOf(listTerminalSpecs(), workspaceId, (id) => isTerminalLive(id));
+}
+
+/** A saved agent in the shape the tool reports it — logo-and-name for humans,
+ *  the composed ref for machines. */
+function savedAgentInfo(agent: SavedAgent): SavedAgentInfo {
+    return {
+        ref: agentRef({
+            provider: agent.provider,
+            name: agent.name,
+            chatSessionId: agent.chatSessionId,
+        }),
+        provider: agent.provider,
+        name: agent.name,
+        id: agent.specId,
+        live: agent.live,
+    };
+}
+
+/** Back the runAgent MCP tool (start/reattach + drive a coding agent; gated). */
 export async function runAgentForMcp(
     callerTerminalId: string,
     req: RunAgentRequest,
@@ -1669,12 +1778,43 @@ export async function runAgentForMcp(
 
     try {
         switch (req.action) {
+            case 'list': {
+                return {
+                    ok: true,
+                    agents: savedAgentsOfWorkspace(ws.id).map(savedAgentInfo),
+                };
+            }
             case 'start': {
-                const agent: AgentType = req.agent ?? 'claude';
+                // Resolve the SAVED agent FIRST — before a command, a cwd, a cap
+                // check or a modal. Everything below is about bringing a specific
+                // agent up, and which agent that is has to be settled before the
+                // user is asked to approve anything on its behalf.
+                const saved = savedAgentsOfWorkspace(ws.id);
+                const plan = decideAgentStart(saved, {
+                    name: req.name,
+                    provider: req.agent,
+                    create: req.create,
+                    workstationProvider: resolveWorkstationProvider(getAllSettings()),
+                });
+                if (plan.kind === 'refuse') {
+                    // The roster travels with the refusal: every refusal here is
+                    // "you meant one of these", and making the caller spend a
+                    // second round-trip to find out which is how a tool teaches
+                    // nothing.
+                    return { ok: false, error: plan.error, agents: saved.map(savedAgentInfo) };
+                }
+
+                if (plan.kind === 'reattach') {
+                    return await reattachSavedAgent(ws, plan.agent, plan.how);
+                }
+
+                const agent = plan.provider;
                 // Base command + the agent type's always-on flags (session-id
-                // injected later in createAgentTerminal).
-                const command = resolveAgentLaunch(agent, req.command, ws);
-                if (!command) {
+                // injected later in createAgentTerminal), then the agent's
+                // PRE-LOADED INSTRUCTIONS as an opening prompt — the same
+                // mechanism a GApp persona briefing uses (one implementation).
+                const base = resolveAgentLaunch(agent, req.command, ws);
+                if (!base) {
                     return {
                         ok: false,
                         error:
@@ -1683,6 +1823,9 @@ export async function runAgentForMcp(
                                 : `No command configured for agent "${agent}".`,
                     };
                 }
+                const command = req.instructions
+                    ? withStartupInstructions(base, req.instructions)
+                    : base;
                 const cwdR = resolveAgentCwd(ws, { repo: req.repo, cwd: req.cwd });
                 if ('error' in cwdR) return { ok: false, error: cwdR.error };
 
@@ -1697,7 +1840,11 @@ export async function runAgentForMcp(
                 }
                 const approved = await approveTerminalAction(ws, {
                     title: `An agent wants to LAUNCH a ${agent} coding agent (it can read, write, and run code on its own):`,
-                    lines: [`command: ${command}`, `in: ${cwdR.cwd}`],
+                    lines: [
+                        `saved as: ${savedAgentKey(agent, plan.name)}`,
+                        `command: ${command}`,
+                        `in: ${cwdR.cwd}`,
+                    ],
                 });
                 if (!approved) {
                     return { ok: false, error: 'Denied by user — no agent was launched.' };
@@ -1705,13 +1852,30 @@ export async function runAgentForMcp(
                 // Spawns the pty AND launches the agent CLI into it, host-side —
                 // the agent is running the moment this returns, whether or not
                 // anyone ever opens the panel (genie #63 Phase 0).
-                const { id } = createAgentTerminal({
+                const { id, chatSessionId } = createAgentTerminal({
                     workspaceId: ws.id,
                     cwd: cwdR.cwd,
-                    label: `${agent} agent`,
+                    // The NAME, not "<provider> agent". The label is what the
+                    // sidebar and the Floor render, and a roster of "claude agent"
+                    // rows is the anonymity this story removes.
+                    label: `${agent} · ${plan.name}`,
                     agentMeta: { agent, command },
+                    createdBy: 'agent',
+                    // The name IS the AgentInbox purpose — one field, so the ref
+                    // and the inbox can never disagree about what it is called.
+                    agentInbox: { purpose: plan.name },
                 });
-                return { ok: true, id, agent, command };
+                return {
+                    ok: true,
+                    id,
+                    agent,
+                    command,
+                    name: plan.name,
+                    reattached: false,
+                    // Null chat-id for Codex is correct, not a failure: it binds
+                    // at SessionStart, onto this record.
+                    ref: agentRef({ provider: agent, name: plan.name, chatSessionId }),
+                };
             }
             case 'send': {
                 if (!ownTerminal(req.id)) {

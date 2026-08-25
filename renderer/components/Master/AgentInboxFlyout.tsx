@@ -44,7 +44,11 @@ import {
     serializeSeenState,
     sortByActivityDesc,
     sortedPairKey,
+    agentDisplayOf,
+    avatarInitials,
+    type AgentProviderId,
 } from '../../lib/agentinbox-view';
+import { terminalTypeForAgent } from '../../lib/terminal-types';
 
 /**
  * AgentInbox human panel. Right-side slide-in (reuses the Docs / Task Manager
@@ -184,13 +188,30 @@ function toneOf(agentId: string, byId: Map<string, AgentInboxAgentInfo>): string
     return 'neutral';
 }
 
-/** Two-letter avatar / pill code — "claude" → "cl", "codex" → "cx". */
+/**
+ * The PROVIDER LOGO to draw for a participant, or null for the human and for an
+ * agent that has left the directory (Tynn #254).
+ */
+function providerOf(
+    agentId: string,
+    byId: Map<string, AgentInboxAgentInfo>,
+): AgentProviderId | null {
+    if (agentId === HUMAN) return null;
+    return agentDisplayOf(byId.get(agentId)).provider;
+}
+
+/** The avatar fallback for a participant with no logo — the human, or a
+ *  departed agent. An agent Genie runs gets its provider's logo instead. */
 function shortCode(agentId: string, byId: Map<string, AgentInboxAgentInfo>): string {
     if (agentId === HUMAN) return 'yo';
     const a = byId.get(agentId);
-    if (a?.agentType === 'codex') return 'cx';
-    const src = a?.label || a?.agentType || agentId;
-    return src.replace(/[^a-z0-9]/gi, '').slice(0, 2).toLowerCase() || '??';
+    return avatarInitials(a?.purpose || a?.label || agentId);
+}
+
+/** An agent's NAME as a person reads it — never `claude · tynn`, never a ref. */
+function nameOf(agentId: string, byId: Map<string, AgentInboxAgentInfo>, fallback: string): string {
+    if (agentId === HUMAN) return 'You';
+    return agentDisplayOf(byId.get(agentId), fallback).name;
 }
 
 /** The `·workspace` suffix beside an agent name, when the directory knows it. */
@@ -249,9 +270,30 @@ function eventMatches(
     );
 }
 
-/** A small rounded-square agent avatar. */
-function Avatar({ code, tone }: { code: string; tone: string }) {
-    return <span className={`agentinbox-av agentinbox-tone-${tone}`}>{code}</span>;
+/**
+ * A small rounded-square agent avatar: the PROVIDER'S LOGO when the participant
+ * is an agent Genie runs, and initials otherwise (Tynn #254).
+ *
+ * The logo is what makes two agents of the same name distinguishable — `cl` and
+ * `cx` beside two identical `tynn`s is not something anyone reads at a glance,
+ * and it was worse than that: only codex had a code of its own, so a claude
+ * agent got the first two letters of its own name and matched nothing.
+ */
+function Avatar({
+    code,
+    tone,
+    provider,
+}: {
+    code: string;
+    tone: string;
+    provider?: AgentProviderId | null;
+}) {
+    const Logo = provider ? terminalTypeForAgent(provider).icon : null;
+    return (
+        <span className={`agentinbox-av agentinbox-tone-${tone}`}>
+            {Logo ? <Logo size={14} /> : code}
+        </span>
+    );
 }
 
 /** The overlapping pair of avatars a DM row / thread header leads with. */
@@ -266,8 +308,8 @@ function PairAvatar({
 }) {
     return (
         <span className="agentinbox-av-pair">
-            <Avatar code={shortCode(a, byId)} tone={toneOf(a, byId)} />
-            <Avatar code={shortCode(b, byId)} tone={toneOf(b, byId)} />
+            <Avatar code={shortCode(a, byId)} tone={toneOf(a, byId)} provider={providerOf(a, byId)} />
+            <Avatar code={shortCode(b, byId)} tone={toneOf(b, byId)} provider={providerOf(b, byId)} />
         </span>
     );
 }
@@ -884,23 +926,28 @@ export default function AgentInboxFlyout({
                                                         setTab('dms');
                                                         setRosterOpen(false);
                                                     }}
-                                                    title={`DM ${a.label} · ${STATUS_LABEL[a.status]}`}
+                                                    title={`DM ${nameOf(a.agentId, byId, a.label)} · ${STATUS_LABEL[a.status]}`}
                                                 >
                                                     <span className="agentinbox-row-av">
                                                         <Avatar
                                                             code={shortCode(a.agentId, byId)}
                                                             tone={toneOf(a.agentId, byId)}
+                                                            provider={providerOf(a.agentId, byId)}
                                                         />
                                                         <span
                                                             className={`agentinbox-dot agentinbox-${a.status}`}
                                                         />
                                                     </span>
                                                     <span className="agentinbox-roster-main">
+                                                        {/* The NAME alone — the provider is the
+                                                            logo beside it, and the chat-id is
+                                                            addressing that belongs nowhere a
+                                                            person reads (Tynn #254). */}
                                                         <span className="agentinbox-row-name">
-                                                            {a.label}
+                                                            {nameOf(a.agentId, byId, a.label)}
                                                         </span>
                                                         <span className="agentinbox-row-preview">
-                                                            {a.workspaceName} · {a.agentType} ·{' '}
+                                                            {a.workspaceName} ·{' '}
                                                             {STATUS_LABEL[a.status]}
                                                         </span>
                                                     </span>
@@ -1400,6 +1447,7 @@ export default function AgentInboxFlyout({
                                                             <Avatar
                                                                 code={shortCode(p, byId)}
                                                                 tone={toneOf(p, byId)}
+                                                                provider={providerOf(p, byId)}
                                                             />
                                                             {w.length > 0
                                                                 ? `${w.length} unread${oldest ? ` · ${relTime(oldest)}` : ''}`
@@ -1434,11 +1482,12 @@ export default function AgentInboxFlyout({
                                                             <Avatar
                                                                 code={shortCode(m.from, byId)}
                                                                 tone={tone}
+                                                                provider={providerOf(m.from, byId)}
                                                             />
                                                             <span
                                                                 className={`agentinbox-msg-from agentinbox-name-${tone}`}
                                                             >
-                                                                {m.fromLabel}
+                                                                {nameOf(m.from, byId, m.fromLabel)}
                                                             </span>
                                                             {ws && (
                                                                 <span className="agentinbox-msg-ws">

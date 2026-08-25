@@ -96,6 +96,17 @@ export interface AgentInboxAgentInfo {
     status: AgentInboxStatus;
     /** The captured AI chat-session uuid, or null when unknown/uncaptured. */
     chatSessionId: string | null;
+    /**
+     * The CANONICAL machine-facing identity — `{provider}:{name}:{chat-id}`, or
+     * `{provider}:{name}` while the chat-id is not bound yet (Tynn #254).
+     *
+     * This is what an agent reads to know WHO a peer is. `agentId` remains the
+     * ADDRESS the broker routes on (a uuid, stable across a rename); the ref is
+     * the identity a person or an agent can actually say out loud. Human-facing
+     * surfaces render `agentType` as a LOGO plus `purpose` and never this — the
+     * chat-id belongs in the wire format and nowhere a person reads.
+     */
+    ref: string;
 }
 
 /**

@@ -619,12 +619,15 @@ describe('handleMcpMessage', () => {
         expect(res?.error?.code).toBe(-32602);
     });
 
-    it('runAgent routes to the dep and summarizes a start', async () => {
+    it('runAgent routes a CREATE to the dep and says it created a saved agent', async () => {
         const runAgent = vi.fn().mockResolvedValue({
             ok: true,
             id: 'a-1',
             agent: 'claude',
             command: 'claude',
+            name: 'tynn',
+            ref: 'claude:tynn:sess-1',
+            reattached: false,
         });
         const res = await handleMcpMessage(
             {
@@ -633,14 +636,27 @@ describe('handleMcpMessage', () => {
                 method: 'tools/call',
                 params: {
                     name: 'runAgent',
-                    arguments: { action: 'start', agent: 'claude', terminalId: 'term-Z' },
+                    arguments: {
+                        action: 'start',
+                        agent: 'claude',
+                        name: 'tynn',
+                        create: true,
+                        instructions: 'Read AGENTS.md first.',
+                        terminalId: 'term-Z',
+                    },
                 },
             },
             ctx({ terminalId: 'term-Z', runAgent }),
         );
+        // The saved-agent arguments must REACH the dep — a schema that advertises
+        // `name` / `create` / `instructions` and a router that drops them is the
+        // shape of bug where an agent's careful call silently becomes a bare one.
         expect(runAgent).toHaveBeenCalledWith('term-Z', {
             action: 'start',
             workspaceId: undefined,
+            name: 'tynn',
+            create: true,
+            instructions: 'Read AGENTS.md first.',
             agent: 'claude',
             command: undefined,
             repo: undefined,
@@ -654,8 +670,59 @@ describe('handleMcpMessage', () => {
             strip: undefined,
         });
         const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
-        expect(text).toContain('Launched claude');
+        expect(text).toContain('Created saved agent claude:tynn:sess-1');
         expect(text).toContain('a-1');
+    });
+
+    it('runAgent says REATTACHED when a start resolved a saved agent (Tynn #254)', async () => {
+        // Created-vs-reattached is the distinction the whole story turns on, so
+        // the summary states it rather than leaving the caller to infer it from a
+        // terminal id it may never have seen.
+        const runAgent = vi.fn().mockResolvedValue({
+            ok: true,
+            id: 'a-1',
+            agent: 'codex',
+            name: 'tynn-slave',
+            ref: 'codex:tynn-slave',
+            reattached: true,
+        });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 44,
+                method: 'tools/call',
+                params: {
+                    name: 'runAgent',
+                    arguments: { action: 'start', name: 'tynn-slave', terminalId: 'term-Z' },
+                },
+            },
+            ctx({ terminalId: 'term-Z', runAgent }),
+        );
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toContain('Reattached to saved agent codex:tynn-slave');
+        expect(text).not.toContain('Created');
+    });
+
+    it('runAgent routes a list and counts the saved agents', async () => {
+        const runAgent = vi.fn().mockResolvedValue({
+            ok: true,
+            agents: [
+                { ref: 'claude:tynn', provider: 'claude', name: 'tynn', id: 'a-1', live: true },
+                { ref: 'codex:tynn', provider: 'codex', name: 'tynn', id: 'a-2', live: false },
+            ],
+        });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 45,
+                method: 'tools/call',
+                params: { name: 'runAgent', arguments: { action: 'list', terminalId: 'term-Z' } },
+            },
+            ctx({ terminalId: 'term-Z', runAgent }),
+        );
+        expect(runAgent).toHaveBeenCalledWith('term-Z', expect.objectContaining({ action: 'list' }));
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toContain('2 saved agent(s)');
     });
 
     it('runAgent routes a restart to the dep (wish #88) and reports the new terminal', async () => {

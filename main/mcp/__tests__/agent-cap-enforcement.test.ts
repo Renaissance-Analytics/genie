@@ -170,7 +170,18 @@ function worldState(): { specs: number; ptys: number; live: number } {
     };
 }
 
-/** `runAgent start` through the real MCP handler. */
+/**
+ * A distinct saved-agent name per spawn.
+ *
+ * An agent is saved workspace configuration now (Tynn #254), so `runAgent start`
+ * under a name the workspace already has REATTACHES rather than spawning — which
+ * would make "fill the workspace to N agents" fill it to one. Every spawn here
+ * is therefore a genuinely NEW agent, which is also what the cap is about: N
+ * distinct model sessions competing for the owner's attention.
+ */
+let nextAgentName = 0;
+
+/** `runAgent start --create` through the real MCP handler. */
 async function startAgent(): Promise<{
     ok: boolean;
     id?: string;
@@ -183,6 +194,8 @@ async function startAgent(): Promise<{
     const res = await runAgentForMcp(CALLER_ID, {
         action: 'start',
         agent: 'claude',
+        create: true,
+        name: `agent-${++nextAgentName}`,
         command: 'echo agent',
     });
     return {

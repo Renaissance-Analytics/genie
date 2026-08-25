@@ -235,3 +235,59 @@ export function forgetSeen(
     next.delete(rowKey);
     return next;
 }
+
+// --- agent identity, as a PERSON reads it (Tynn #254) ------------------------
+
+/** The AI TUI an agent runs, as the directory reports it. */
+export type AgentProviderId = 'claude' | 'codex' | 'custom';
+
+/** The two pieces a human-facing agent row renders. */
+export interface AgentDisplay {
+    /** Which provider LOGO to draw, or null for the human / a departed agent. */
+    provider: AgentProviderId | null;
+    /** The agent's NAME. Never a ref, never a chat-id. */
+    name: string;
+}
+
+/** The directory fields this module needs. Loose, so it stays framework-free. */
+interface AgentLike {
+    agentType?: string;
+    label?: string;
+    purpose?: string;
+}
+
+function knownProvider(value: unknown): value is AgentProviderId {
+    return value === 'claude' || value === 'codex' || value === 'custom';
+}
+
+/**
+ * How an agent is shown to a PERSON: the provider's logo, plus the name.
+ *
+ * Three rules, and each one removes something that was on screen before:
+ *
+ *  - the NAME is `purpose` (`tynn`), not `label` (`claude · tynn`). The provider
+ *    is the logo now, so repeating it in the text is the same fact twice — and
+ *    it is the half that made every row start with the same word.
+ *  - the PROVIDER is returned as an id, not a two-letter code. Initials made
+ *    `claude:tynn` and `codex:tynn` read as `cl` and `cx` beside identical
+ *    names; a logo is what actually tells them apart at a glance.
+ *  - the chat-id has NO field here at all. It is addressing, not identity, and
+ *    a shape that cannot carry it cannot leak it.
+ *
+ * A departed agent (present in a thread, gone from the directory) keeps its
+ * logged label rather than rendering blank — a DM with somebody has to say who.
+ */
+export function agentDisplayOf(agent: AgentLike | undefined, fallback = ''): AgentDisplay {
+    const provider = knownProvider(agent?.agentType) ? agent.agentType : null;
+    const name = agent?.purpose?.trim() || agent?.label?.trim() || fallback;
+    return { provider, name };
+}
+
+/**
+ * The two-letter code for a participant with NO provider logo — the human, and
+ * an agent that has left the directory. Kept because those rows still need
+ * something in the avatar circle.
+ */
+export function avatarInitials(source: string): string {
+    return source.replace(/[^a-z0-9]/gi, '').slice(0, 2).toLowerCase() || '??';
+}

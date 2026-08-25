@@ -16,6 +16,7 @@ import {
     type AgentInboxNotifyTarget,
     type WorkspaceAccessPolicy,
 } from './types';
+import { agentRef } from '../agents/identity';
 import { noopAgentInboxStore, type AgentInboxStore, type StoredAttachment } from './store';
 import { shouldWakeAgent, wakeNudgeText } from './wake';
 import { containsHumanInput, inboxNoticeText } from './notify';
@@ -74,8 +75,12 @@ interface Waiter {
 }
 
 // `reachable` is a per-CALLER verdict computed at read time, never agent state —
-// so the stored record deliberately omits it.
-interface AgentInboxAgent extends Omit<AgentInboxAgentInfo, 'reachable'> {
+// so the stored record deliberately omits it. `ref` is omitted for the same
+// reason from the other direction: it is DERIVED from agentType + purpose +
+// chatSessionId, all of which change in place (a rename, and Codex's late
+// session bind), so a stored copy would be a second truth that goes stale the
+// moment either one moves.
+interface AgentInboxAgent extends Omit<AgentInboxAgentInfo, 'reachable' | 'ref'> {
     /** Queued messages awaiting `receive` (capped). */
     inbox: AgentInboxMessage[];
     /** The single live long-poll resolver, or null. */
@@ -613,6 +618,15 @@ export class AgentInboxBroker {
             reachable,
             status: a.status,
             chatSessionId: a.chatSessionId,
+            // The CANONICAL machine-facing identity (Tynn #254). Composed here,
+            // once, from the pieces the record already holds — the alternative is
+            // every consumer assembling its own and one of them getting the order
+            // or the separator wrong.
+            ref: agentRef({
+                provider: a.agentType,
+                name: a.purpose,
+                chatSessionId: a.chatSessionId,
+            }),
         };
     }
 

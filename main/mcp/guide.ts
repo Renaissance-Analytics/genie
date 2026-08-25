@@ -240,13 +240,34 @@ approves; when the user turned approval OFF they run immediately. \`read\` /
 \`list\` never prompt.
 
 ### runAgent
-**Launch and control a coding agent** (claude / codex / a custom CLI) inside a
-terminal — your own workspace or one you govern. A thin layer over
-manageTerminals; it SPAWNS AN AUTONOMOUS AGENT. Actions (\`action\`):
-- \`start\` — open a terminal + launch the agent. \`agent\` is \`claude\` | \`codex\`
-  | \`custom\` (default \`claude\`); the real CLI is configurable in Genie Settings,
-  or pass an explicit \`command\` (required for \`custom\` unless one is configured).
-  Optional \`repo\`/\`cwd\`. Returns the agent terminal's \`id\` + the launched command.
+**Start and control a coding agent** (claude / codex / a custom CLI) — your own
+workspace or one you govern.
+
+An agent is **SAVED WORKSPACE CONFIGURATION**, like a site or a service: defined
+once, it persists, and it is **reopened rather than recreated**. It is still a
+terminal — it lives in the workspace sidebar and the Floor UX like any other.
+
+**Identity** is \`{provider}:{name}:{chat-id}\` — e.g. \`claude:tynn\`,
+\`codex:tynn-slave\`. The \`{provider}:{name}\` half is the saved config and is
+what you address it by; the chat-id is addressing only and is bound during
+startup (Codex cannot know its session id until its harness is running). Show
+people the provider's LOGO and the NAME, never the chat-id.
+
+Actions (\`action\`):
+- \`list\` — read-only: this workspace's saved agents, each with its \`ref\`,
+  \`name\`, terminal \`id\`, and whether it is live. Start here.
+- \`start\` — bring the saved agent \`name\` up. It **REATTACHES** to that agent —
+  running or dormant — and does NOT create a second one. \`name\` defaults to
+  \`general\` (the workspace's unnamed agent). \`agent\` only disambiguates one
+  name saved under two providers; the record decides otherwise. Optional
+  \`instructions\` are PRE-LOADED as the agent's opening prompt. Optional
+  \`repo\`/\`cwd\`. Returns \`id\`, \`ref\`, and \`reattached\`.
+- \`start\` with \`create: true\` — **DEFINE A NEW saved agent** under \`name\`.
+  This is the deliberate act of creating one; it is refused if the name is taken,
+  and a start with no matching saved agent is refused without it. \`agent\` picks
+  the provider (default: the workstation's). The real CLI is configurable in
+  Genie Settings, or pass an explicit \`command\` (required for \`custom\` unless
+  one is configured). It SPAWNS AN AUTONOMOUS AGENT.
 - \`send\` — deliver a \`prompt\` to the running agent \`id\`. SUBMITTED by default,
   even multi-line: the prompt is wrapped in bracketed paste and the Enter is
   delivered separately (outside the paste) so the agent's TUI submits it instead
@@ -256,13 +277,15 @@ manageTerminals; it SPAWNS AN AUTONOMOUS AGENT. Actions (\`action\`):
   multi-line buffer.
 - \`read\` — its output (\`cursor\` for new, or \`bytes\` for the last N; add
   \`strip: true\` for plain text with escape codes removed).
-- \`stop\` — terminate the agent \`id\`.
+- \`stop\` — terminate the agent \`id\`. The SAVED agent survives; \`start\` brings
+  it back, resuming its conversation.
 - \`restart\` — GRACEFULLY relaunch the agent \`id\`: it resumes the SAME
   conversation (via \`--resume\`) in a fresh terminal, so its TUI reconnects to the
   current MCP rig / \`.mcp.json\` after a genie update WITHOUT losing context.
   claude-only, needs a captured session. Returns the NEW terminal \`id\`.
-**Approval:** \`start\`, \`send\`, and \`restart\` are GATED the same way (OFF runs
-immediately); \`read\` never prompts.
+**Approval:** creating an agent, \`send\`, and \`restart\` are GATED the same way
+(OFF runs immediately). \`list\`, \`read\`, and reattaching to an already-approved
+saved agent never prompt.
 
 ### manageWorkspaces
 **Manage the Genie workspaces you can act on** — your own + (for an Ops agent)
@@ -574,7 +597,7 @@ export const GENIE_AGENTS_BRIEF = `You are running inside **Genie** — a deskto
   - **NAME THE ACTOR in every option.** The modal is read by the USER, so bare "I"/"you" invert and confuse. Convention: the agent = "Agent:"/"the agent", the user = "You:"/"you" — lead each option label with the actor (e.g. \`Agent: I create the repo and push\` vs \`You: you create the repo\`).
 - **Need to HOST a repo as a real site at \`<name>.gen\`, or give it a database/cache? → \`manageSite\` / \`manageService\` (the Hosting Manager).** \`manageSite\` runs the repo's dev server on the host against the live source and fronts it at \`https://<name>.gen\` over https (or serves a built directory / PHP app itself via \`hostServe\`). To host an app, use this — not a hand-rolled \`manageProcess\` process. \`manageService\` backs it with shared Postgres/Redis/… engines and injects the connection env (Docker/Podman needed for services).
 - **Need a supervised background COMMAND (dev server, worker, SSR) or a cron job? → \`manageProcess\`.** Don't \`&\`-background it in a terminal — Genie's Processes feature owns these so they survive and stay controllable. HOW: \`list\` / \`create\` (label + command, optional repo + autostart; add a 5-field \`schedule\` to make it a cron task) / \`start\` / \`stop\` / \`restart\` / \`enable\` / \`disable\` / \`delete\` / \`run-now\`. To actually HOST an app, reach for \`manageSite\`, not this.
-- **Need to run commands, read terminal output, or launch/drive another coding agent? → \`manageTerminals\` / \`runAgent\`.** \`manageTerminals\` spawns + drives real terminals (\`create\` / \`write\` / \`read\` / \`list\` / \`kill\`); \`runAgent\` launches + steers a coding agent (claude / codex / custom) — here or in a workspace this Ops project governs. These are **HIGH-POWER** (arbitrary code + autonomous agents): \`create\` / \`write\` / agent \`start\` / \`send\` are approval-gated by default. Use \`manageWorkspaces\` to list / open / activate / remove the workspaces you can act on.
+- **Need to run commands, read terminal output, or start/drive another coding agent? → \`manageTerminals\` / \`runAgent\`.** \`manageTerminals\` spawns + drives real terminals (\`create\` / \`write\` / \`read\` / \`list\` / \`kill\`); \`runAgent\` starts + steers a coding agent (claude / codex / custom) — here or in a workspace this Ops project governs. An agent is **SAVED workspace configuration**, addressed as \`{provider}:{name}\` (\`claude:tynn\`): \`runAgent list\` shows them, and \`start\` **REATTACHES** to one rather than spawning another — creating a new agent needs \`create: true\`. These are **HIGH-POWER** (arbitrary code + autonomous agents): \`create\` / \`write\` / creating an agent / \`send\` are approval-gated by default. Use \`manageWorkspaces\` to list / open / activate / remove the workspaces you can act on.
 
 **Harness-specific setup lives in \`genieGuide\`, not here.** Wiring your on-finish hook so \`imDone\` fires automatically, and anything else that differs between Claude Code and Codex, is in the guide — call it once and follow the snippet for YOUR harness. Genie won't configure it for you.
 
