@@ -25,11 +25,13 @@ import {
     IconTerminal,
     IconTrash,
     IconTynn,
+    IconWand,
 } from './icons';
 import { showPrompt } from './Prompt';
 import TerminalTypeSplitButton from './TerminalTypeSplitButton';
 import { terminalTypeForAgent, type TerminalTypeId } from '../../lib/terminal-types';
 import { workspaceNeedsAttention } from '../../lib/attention';
+import { gappLaunchLabel, gappLaunchTarget } from '../../lib/gapp-launch';
 import {
     resolveWorkspaceKind,
     workspaceKindClass,
@@ -130,6 +132,13 @@ interface Props {
      *  a remote window, where the containers would be the CLIENT's, not the
      *  host's. */
     onShowSiteManager?: (workspaceId: string) => void;
+    /** LAUNCH the Genie App a GApp Development Workspace builds (genie#245) —
+     *  the row's GApp control. Absent in a remote window, where the preview
+     *  window would open on the CLIENT rather than where the source is. */
+    onLaunchGapp?: (workspaceId: string) => void;
+    /** Which workspace's launch is in flight, so the control can say so rather
+     *  than look inert for the seconds a preview takes to come up. */
+    launchingGappWsId?: string | null;
     /** Split Add-Terminal button: last-used type + its persistence. */
     lastTerminalType: TerminalTypeId;
     onLastTerminalType: (id: TerminalTypeId) => void;
@@ -172,6 +181,8 @@ export default function Chooser({
     onShowIssueWatch,
     devSites = {},
     onShowSiteManager,
+    onLaunchGapp,
+    launchingGappWsId = null,
     lastTerminalType,
     onLastTerminalType,
     onAgentCreated,
@@ -1232,6 +1243,38 @@ export default function Chooser({
                                     >
                                         <IconCpu size={13} />
                                     </span>
+                                    {/* LAUNCH THE APP THIS WORKSPACE BUILDS
+                                        (genie#245). Only a GDW has it, which is
+                                        also the row's strongest at-a-glance
+                                        mark: no other workspace carries a
+                                        fourth control. Same grammar as the
+                                        Processes and Sites indicators beside it
+                                        — the glyph IS the way in — because the
+                                        alternative was Workspace Settings, two
+                                        clicks deep, in a section that appears
+                                        for some workspaces and not others. */}
+                                    {onLaunchGapp &&
+                                        gappLaunchTarget(ws) !== null && (
+                                            <span
+                                                className={`gapp-ind${
+                                                    launchingGappWsId === ws.id ? ' is-busy' : ''
+                                                }`}
+                                                role="button"
+                                                tabIndex={-1}
+                                                title={
+                                                    launchingGappWsId === ws.id
+                                                        ? 'Opening the app…'
+                                                        : `${gappLaunchLabel(ws)} — opens a preview window on this workspace's live source`
+                                                }
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    if (launchingGappWsId === ws.id) return;
+                                                    onLaunchGapp(ws.id);
+                                                }}
+                                            >
+                                                <IconWand size={13} />
+                                            </span>
+                                        )}
                                     {/* Genie HOSTS sites for this workspace. Always
                                         shown (greyed when nothing is hosted, like
                                         the Processes icon) so the entry point to the

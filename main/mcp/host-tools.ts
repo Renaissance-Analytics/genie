@@ -86,34 +86,13 @@ import { openWorkspace } from '../workspace/open';
 import { resolveWorkspaceRepos, getWorkspaceFeed, getOpenCounts, getWorkspaceStatus } from '../issue-watch';
 import { forceQuestion } from '../ask/force-question';
 import { resolveTargetWorkspace, type TargetDecision } from './target-workspace';
-import { resolveCaller, type Caller } from './caller-identity';
-import { appGrantFor } from '../apps/grant-lookup';
 import { decideAppTarget } from '../apps/scope';
 
-/**
- * WHO is calling, using the live stores (Tynn #250).
- *
- * The decision itself is pure (`caller-identity.ts`); this is the thin wrapper
- * that hands it the two lookups. Every tool that used to read
- * `getTerminalSpec(id)?.workspace_id` goes through here instead, so an installed
- * GApp resolves to ITS workspace on exactly the same path a terminal does — one
- * implementation of caller authority, not two.
- */
-function resolveCallerFor(callerId: string): Caller {
-    return resolveCaller(callerId, {
-        terminalWorkspaceId: (id) => getTerminalSpec(id)?.workspace_id ?? null,
-        // Installed OR being PREVIEWED. A preview's grant is never written to
-        // the app registry, so a lookup that only read the table would let its
-        // `me()` answer while every `call()` it made resolved to no workspace at
-        // all — an app that looks alive and can do nothing.
-        appGrant: (appId) => appGrantFor(appId),
-    });
-}
-
-/** The workspace a caller (terminal or GApp) acts from, or null for none. */
-export function callerWorkspaceIdFor(callerId: string): string | null {
-    return callerId ? resolveCallerFor(callerId).workspaceId : null;
-}
+// WHO is calling (Tynn #250) now lives in `caller-workspace.ts`, so the GApp
+// development tools can share it without importing this module back.
+export { callerWorkspaceIdFor, resolveCallerFor } from './caller-workspace';
+import { callerWorkspaceIdFor, resolveCallerFor } from './caller-workspace';
+import { gappDevStatusFor } from './gapp-dev-tools';
 import { readTynnLink } from '../tynn/provision';
 import {
     readTynnMcpUrl,
@@ -317,6 +296,11 @@ export async function describeWorkspaceForMcp(
                     : null,
             installedSkills,
         },
+        // WHAT KIND of workspace this is (genie#245). Orientation is the first
+        // thing a fresh agent reads, and a GDW changes what it is here to DO —
+        // an agent that learns the repos but not this orients itself as if this
+        // were an ordinary project, which is exactly what happened.
+        gappDev: gappDevStatusFor(terminalId),
         docHealth: (() => {
             const dh = workspaceDocHealth(root);
             return {

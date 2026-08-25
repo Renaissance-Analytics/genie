@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
     COMMAND_PREFIXES,
     filterCommandItems,
+    groupCommandItems,
     parseCommandQuery,
     type CommandItem,
 } from '../command-window';
@@ -65,6 +66,64 @@ describe('parsing a typed query', () => {
         for (const category of categories) {
             expect(Object.values(COMMAND_PREFIXES)).toContain(category);
         }
+    });
+});
+
+/**
+ * ACTIONS — the palette's answer to "how do I launch a GApp from its GDW?"
+ * (genie#245 follow-on).
+ *
+ * The honest answer used to be "two clicks, if you know where to look": open
+ * Workspace Settings, scroll to a section that only exists on a GDW, press
+ * Preview. Nothing in the rail, nothing in the palette. A verb reachable only by
+ * knowing where it is hiding is not reachable.
+ *
+ * `action` is a general category, not a GApp one — the palette is where Genie's
+ * verbs go, and this is the first of them.
+ */
+describe('actions are offered like anything else', () => {
+    const WITH_ACTION: CommandItem[] = [
+        ...ITEMS,
+        {
+            id: 'gapp-preview:ws-1',
+            category: 'action',
+            label: 'Launch Weather (Genie App)',
+            hint: 'Tynn.ai',
+        },
+    ];
+
+    it('has a type-ahead prefix, like every other category', () => {
+        expect(Object.values(COMMAND_PREFIXES)).toContain('action');
+    });
+
+    it('narrows to actions on that prefix', () => {
+        const shown = filterCommandItems(WITH_ACTION, parseCommandQuery('a>'));
+        expect(shown.map((i) => i.id)).toEqual(['gapp-preview:ws-1']);
+    });
+
+    it('is findable by typing what it does, with no prefix at all', () => {
+        // The whole point: someone who does not know the category exists still
+        // finds the verb by typing the word for it.
+        const shown = filterCommandItems(WITH_ACTION, parseCommandQuery('launch'));
+        expect(shown.map((i) => i.id)).toEqual(['gapp-preview:ws-1']);
+    });
+
+    it('has a heading, so it reads as a section rather than loose rows', () => {
+        const groups = groupCommandItems(WITH_ACTION);
+        const actions = groups.find((g) => g.category === 'action');
+
+        expect(actions?.heading).toBeTruthy();
+        expect(actions?.items.map((i) => i.id)).toEqual(['gapp-preview:ws-1']);
+    });
+
+    it('does not appear when there are none — POSITIVE CONTROL', () => {
+        // A permanently empty "Actions" heading would be worse than no category.
+        const groups = groupCommandItems(ITEMS);
+
+        expect(groups.find((g) => g.category === 'action')).toBeUndefined();
+        // …and the same call still grouped everything else, so the absence above
+        // is a real filter and not an empty render.
+        expect(groups.map((g) => g.category)).toContain('workspace');
     });
 });
 

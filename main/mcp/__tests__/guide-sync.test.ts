@@ -244,6 +244,55 @@ describe('the guide documents manageProcess scheduled tasks (cron)', () => {
 });
 
 /**
+ * GApp Development Workspaces (genie#245) have to reach the guide too, and for a
+ * sharper reason than most: a GDW is invisible from inside.
+ *
+ * The folder looks like any other project. The chrome that says otherwise is on
+ * the USER's screen. So an agent that is not TOLD the concept exists has no way
+ * to discover it — which is exactly what happened: an agent in a real GDW read
+ * this guide end to end and found nothing, while every test passed.
+ */
+async function gappDevActionEnum(): Promise<string[]> {
+    const res = await handleMcpMessage({ jsonrpc: '2.0', id: 13, method: 'tools/list' }, makeCtx());
+    const tools = (res?.result as { tools: Array<{ name: string; inputSchema?: unknown }> }).tools;
+    const tool = tools.find((t) => t.name === 'manageGappDev');
+    if (!tool) throw new Error('manageGappDev tool not advertised');
+    const props = (tool.inputSchema as { properties?: Record<string, { enum?: string[] }> })
+        .properties;
+    return props?.action?.enum ?? [];
+}
+
+describe('the guide teaches what a GApp Development Workspace IS', () => {
+    it('defines the term, so an agent meets it before it needs it', () => {
+        expect(GENIE_MCP_GUIDE).toMatch(/GApp Development Workspace/);
+        expect(GENIE_MCP_GUIDE).toContain('is_gapp');
+    });
+
+    it('says the flag is set in TYNN, not in Genie', () => {
+        // Without this an agent goes hunting for a Genie setting to flip. There
+        // isn't one, and the search ends in a wrong answer to the user.
+        expect(GENIE_MCP_GUIDE).toMatch(/Tynn/);
+        expect(GENIE_MCP_GUIDE).toMatch(/no Genie-side setting|converges on/i);
+    });
+
+    it('tells the agent it must ASK, because a GDW is invisible from the folder', () => {
+        expect(GENIE_MCP_GUIDE).toMatch(/cannot tell you are in one|cannot tell it is in one/i);
+    });
+
+    it('documents every action the tool accepts', async () => {
+        const actions = await gappDevActionEnum();
+
+        expect(actions.length).toBeGreaterThan(0);
+        for (const action of actions) {
+            expect(
+                GENIE_MCP_GUIDE,
+                `the guide never mentions the \`${action}\` action — an agent cannot use what it is not told about`,
+            ).toContain(`\`${action}\``);
+        }
+    });
+});
+
+/**
  * The `knowledge` tool's four MEMORY CLASSES (Tynn #250) have to reach the guide
  * too. The store learned them, the tool now advertises them — but agents plan
  * from the guide's prose, and a class nobody is told about is one nobody files

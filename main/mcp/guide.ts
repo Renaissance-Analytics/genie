@@ -195,6 +195,41 @@ in-container through the injected \`envKeys\` (\`DATABASE_URL\`, …), which are
 present in a site's BUILD steps, so a \`manageSite\` app needs no \`.env\` edit.
 Requires Docker or Podman. Pass \`terminalId\`.
 
+### manageGappDev
+**Build the Genie App this workspace is the home of** — the GApp Development
+Workspace (GDW) tools.
+
+A **GApp Development Workspace** is a workspace whose linked Tynn project is
+marked \`is_gapp\`: the place a Genie App is **BUILT**, as opposed to the
+workspaces where an installed app **RUNS**. The flag has exactly ONE home — a
+human sets \`is_gapp\` on the Tynn project and Genie converges on that answer, so
+there is no Genie-side setting to flip and nothing for you to toggle.
+
+**You cannot tell you are in one by looking at the folder.** A GDW is an ordinary
+project directory; what makes it a GDW lives in Tynn and on Genie's workspace
+row. The user can see it — the workspace wears its own chrome — but you cannot,
+so **ask**: \`manageGappDev\` with \`action:'status'\`. Every other action reports
+the status too, so a single call always answers "where am I". Actions
+(\`action\`):
+- \`status\` — am I in a GDW; the source folder; the app the folder declares
+  (name, slug, version) or that it has no \`genie-app.json\` yet; any preview
+  open right now.
+- \`check\` — run the **full check suite** over this folder: manifest, files,
+  agent roster, services, front end. Deliberately STRICTER than the installer —
+  an app that installs cleanly and then opens on an empty window is the failure
+  it exists to catch, and the install gate has nothing to say about that. Every
+  finding names where, what is wrong, and what to do.
+- \`preview\` — open the app in a **real GApp window on the LIVE source**, under
+  its own \`<slug>.preview\` identity and address, so it cannot collide with an
+  installed copy. The user answers the app's permission modal the first time its
+  asks change; that consent is theirs and you cannot supply it.
+- \`close-preview\` — tear one down (optional \`appId\`; defaults to this
+  workspace's own). Closing the window does the same thing.
+
+No folder argument anywhere: in a GDW, Genie already knows which app you mean.
+Called from a workspace that is NOT a GDW, it says so and names who sets the
+flag rather than failing obscurely. Pass \`terminalId\`.
+
 ### provisionWorkspaces
 **Only for an Ops project's workspace.** An Ops project governs other (child)
 projects, each with its own \`*.agi\` envelope repo. This tool stands up a local
@@ -613,6 +648,7 @@ export const GENIE_AGENTS_BRIEF = `You are running inside **Genie** — a deskto
   - **NAME THE ACTOR in every option.** The modal is read by the USER, so bare "I"/"you" invert and confuse. Convention: the agent = "Agent:"/"the agent", the user = "You:"/"you" — lead each option label with the actor (e.g. \`Agent: I create the repo and push\` vs \`You: you create the repo\`).
 - **Need to HOST a repo as a real site at \`<name>.gen\`, or give it a database/cache? → \`manageSite\` / \`manageService\` (the Hosting Manager).** \`manageSite\` runs the repo's dev server on the host against the live source and fronts it at \`https://<name>.gen\` over https (or serves a built directory / PHP app itself via \`hostServe\`). To host an app, use this — not a hand-rolled \`manageProcess\` process. \`manageService\` backs it with shared Postgres/Redis/… engines and injects the connection env (Docker/Podman needed for services).
 - **Need a supervised background COMMAND (dev server, worker, SSR) or a cron job? → \`manageProcess\`.** Don't \`&\`-background it in a terminal — Genie's Processes feature owns these so they survive and stay controllable. HOW: \`list\` / \`create\` (label + command, optional repo + autostart; add a 5-field \`schedule\` to make it a cron task) / \`start\` / \`stop\` / \`restart\` / \`enable\` / \`disable\` / \`delete\` / \`run-now\`. To actually HOST an app, reach for \`manageSite\`, not this.
+- **Building a Genie App? → \`manageGappDev\`, and ASK it first.** A **GApp Development Workspace (GDW)** is a workspace whose linked Tynn project is marked \`is_gapp\` — where an app is BUILT, as opposed to where an installed one RUNS. **You cannot tell from the folder**, which looks like any other project; the user sees it in the workspace chrome and you do not. So call \`manageGappDev\` with \`action:'status'\` — it answers whether you are in one, names the source folder and the app's manifest, and every other action reports it too. Then \`check\` (the full suite over this folder — stricter than the installer, because an app that installs cleanly and opens on an empty window is what it exists to catch) and \`preview\` (a real GApp window on the LIVE source at \`<slug>.preview\`, so it cannot collide with an installed copy). The \`is_gapp\` flag is set by a human in Tynn; there is nothing to toggle in Genie.
 - **Need to run commands, read terminal output, or start/drive another coding agent? → \`manageTerminals\` / \`runAgent\`.** \`manageTerminals\` spawns + drives real terminals (\`create\` / \`write\` / \`read\` / \`list\` / \`kill\`); \`runAgent\` starts + steers a coding agent (claude / codex / custom) — here or in a workspace this Ops project governs. An agent is **SAVED workspace configuration**, addressed as \`{provider}:{name}\` (\`claude:tynn\`): \`runAgent list\` shows them, and \`start\` **REATTACHES** to one rather than spawning another — creating a new agent needs \`create: true\`. These are **HIGH-POWER** (arbitrary code + autonomous agents): \`create\` / \`write\` / creating an agent / \`send\` are approval-gated by default. Use \`manageWorkspaces\` to list / open / activate / remove the workspaces you can act on.
 
 **Harness-specific setup lives in \`genieGuide\`, not here.** Wiring your on-finish hook so \`imDone\` fires automatically, and anything else that differs between Claude Code and Codex, is in the guide — call it once and follow the snippet for YOUR harness. Genie won't configure it for you.

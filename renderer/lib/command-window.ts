@@ -11,7 +11,12 @@
  * decision inside a component is a decision nobody checks.
  */
 
-export type CommandCategory = 'workspace' | 'terminal' | 'prompt' | 'panel';
+/**
+ * `action` is a VERB the palette can run, as opposed to a thing it navigates to.
+ * It exists because a verb reachable only from a settings panel is not reachable
+ * — see the GApp launch entry in master.tsx.
+ */
+export type CommandCategory = 'workspace' | 'terminal' | 'prompt' | 'panel' | 'action';
 
 export interface CommandItem {
     id: string;
@@ -41,6 +46,7 @@ export const COMMAND_PREFIXES: Record<string, CommandCategory> = {
     t: 'terminal',
     p: 'prompt',
     s: 'panel',
+    a: 'action',
 };
 
 /**
@@ -85,13 +91,17 @@ export const CATEGORY_HEADINGS: Record<CommandCategory, string> = {
     terminal: 'Terminals',
     prompt: 'Prompts',
     panel: 'Panels',
+    action: 'Actions',
 };
 
 /** The items grouped for rendering, empty groups dropped. */
 export function groupCommandItems(
     items: readonly CommandItem[],
 ): Array<{ category: CommandCategory; heading: string; items: CommandItem[] }> {
-    const order: CommandCategory[] = ['prompt', 'workspace', 'terminal', 'panel'];
+    // Actions sit second: they are the things you came to DO, but a saved prompt
+    // is the thing people reach for most, and reordering that would move rows
+    // under a cursor driven by Enter.
+    const order: CommandCategory[] = ['prompt', 'action', 'workspace', 'terminal', 'panel'];
     return order
         .map((category) => ({
             category,

@@ -92,6 +92,7 @@ describe('tools/list plugin generalization', () => {
             'manageProcess',
             'provisionWorkspaces',
             'manageSite',
+            'manageGappDev',
             'manageTerminals',
             'runAgent',
             'manageWorkspaces',

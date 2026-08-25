@@ -37,6 +37,7 @@ import GithubCapabilitiesFlyout from '../components/Master/GithubCapabilitiesFly
 import TynnHealthIndicator from '../components/Master/TynnHealthIndicator';
 import { useGithubCapabilities } from '../lib/githubCapabilities';
 import { issueWatchBadge } from '../lib/issuewatch';
+import { gappLaunchLabel, gappLaunchTargets } from '../lib/gapp-launch';
 import { terminalTypeById, type TerminalTypeId } from '../lib/terminal-types';
 import SignInPrompt from '../components/SignInPrompt';
 import type {
@@ -751,6 +752,42 @@ function MasterInner() {
         if (systemWorkspace) m.set(systemWorkspace.id, systemWorkspace);
         return m;
     }, [workspaces, systemWorkspace]);
+
+    /**
+     * LAUNCH THE APP A GApp DEVELOPMENT WORKSPACE BUILDS (genie#245).
+     *
+     * ONE handler behind BOTH new affordances — the workspace row's GApp control
+     * and the Command Window's action — because two entry points that each did
+     * their own thing would be two chances to disagree about which workspace's
+     * folder gets opened. It is the same `apps.previewFolder` the Settings
+     * button calls, aimed at the workspace path rather than a folder picker.
+     *
+     * The outcome is ALWAYS said out loud. Launching an app is a slow, invisible
+     * act — the window takes seconds to appear and may not appear at all — and a
+     * control that silently does nothing on failure is the shape of bug this
+     * whole piece of work is a reaction to.
+     */
+    const [launchingGappWsId, setLaunchingGappWsId] = useState<string | null>(null);
+    const launchGapp = useCallback(
+        (workspaceId: string) => {
+            const ws = workspacesById.get(workspaceId);
+            const target = ws ? gappLaunchTargets([ws])[0] : undefined;
+            if (!target) return;
+            setLaunchingGappWsId(workspaceId);
+            void api()
+                .apps.previewFolder(target.path)
+                .then((r) => {
+                    setToast(
+                        r.ok
+                            ? `${target.name} is open at ${r.homeUrl ?? 'its preview address'}.`
+                            : r.errors?.join(' ') || `${target.name} did not open.`,
+                    );
+                })
+                .catch(() => setToast(`${target.name} did not open.`))
+                .finally(() => setLaunchingGappWsId(null));
+        },
+        [workspacesById],
+    );
 
     // Auto-provision the Tynn agent token + Agent MCP config when a workspace
     // becomes active. Silent + best-effort + once per workspace per session:
@@ -1939,6 +1976,8 @@ function MasterInner() {
                         // drives the HOST's containers over the bridge, so the
                         // entry point is offered on a host Floor too.
                         onShowSiteManager={setSiteManagerWsId}
+                        onLaunchGapp={launchGapp}
+                        launchingGappWsId={launchingGappWsId}
                         activeWorkspaceId={activeWorkspaceId}
                         pinned={chooserPinned}
                         onTogglePin={() => setChooserPinned((p) => !p)}
@@ -2229,6 +2268,16 @@ function MasterInner() {
                     ...(sp.cwd ? { hint: sp.cwd } : {}),
                 }))}
                 prompts={prompts}
+                // Genie's VERBS in the palette. Today: launch the app a GDW
+                // builds — previously reachable only two clicks into Workspace
+                // Settings, in a section that appears for some workspaces and
+                // not others.
+                actions={gappLaunchTargets(workspaces).map((t) => ({
+                    id: `gapp-launch:${t.id}`,
+                    label: gappLaunchLabel({ project_name: t.name }),
+                    hint: t.path,
+                    run: () => launchGapp(t.id),
+                }))}
                 onActivateWorkspace={activateWorkspace}
                 onFocusTerminal={toggleSpec}
                 onSendPrompt={(terminalId, text) => {

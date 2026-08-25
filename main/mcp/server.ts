@@ -26,6 +26,8 @@ import {
     type ManageSiteResult,
     type ManageServiceRequest,
     type ManageServiceResult,
+    type ManageGappDevRequest,
+    type ManageGappDevResult,
     type ManageTerminalsRequest,
     type ManageTerminalsResult,
     type RunAgentRequest,
@@ -123,6 +125,12 @@ export interface ServerDeps {
     ) => Promise<ManageServiceResult>;
     /** Is a container runtime usable here? Gates manageSite/manageService out of tools/list. */
     devServerAvailable?: (terminalId: string) => Promise<boolean>;
+    /** Tell an agent it is in a GApp Development Workspace, and run the app tools
+     *  over it (manageGappDev). Optional: absent ⇒ the tool says so on call. */
+    manageGappDev?: (
+        terminalId: string,
+        req: ManageGappDevRequest,
+    ) => Promise<ManageGappDevResult>;
     /** Spawn/drive terminals in the caller's or a governed workspace (manageTerminals tool). */
     manageTerminals: (
         terminalId: string,
@@ -654,6 +662,7 @@ async function handle(
         manageProcess: deps.manageProcess,
         manageSite: deps.manageSite,
         manageService: deps.manageService,
+        manageGappDev: deps.manageGappDev,
         devServerAvailable: deps.devServerAvailable,
         provisionWorkspaces: deps.provisionWorkspaces,
         manageTerminals: deps.manageTerminals,

@@ -35,6 +35,9 @@ import type {
 // A VALUE, not a type: the advertised `class` enum is generated from it, so a
 // class added to the store cannot ship without the tool offering it.
 import { MEMORY_CLASSES } from '../knowledge/types';
+import { formatGappDevStatus, gappDevBrief } from '../workspace/gapp-dev-status';
+import type { GappDevStatus } from '../workspace/gapp-dev-status';
+import type { AppCheckReport } from '../apps/checkup';
 
 export type { SetEnvRequest, SetEnvResult, CheckEnvRequest, CheckEnvResult };
 export type { AgentInboxScope, AgentInboxAgentInfo, AgentInboxChannelInfo, AgentInboxMessage };
@@ -166,6 +169,65 @@ export interface WorkspaceMap {
         claudeDivergent: boolean;
         healthy: boolean;
     };
+    /**
+     * Is this a GApp Development Workspace, and what is in it (genie#245)?
+     *
+     * OPTIONAL, and absence is not "no": an older host, or a workspace whose Tynn
+     * link could not be resolved, simply has no answer — and orientation says
+     * nothing rather than inventing one. Present-and-false IS an answer, and the
+     * map stays silent about it too: a line on every ordinary workspace
+     * announcing an absence is noise on the one surface a fresh agent reads
+     * before it knows anything.
+     */
+    gappDev?: GappDevStatus;
+}
+
+/**
+ * The four things an agent can do with the GApp its workspace BUILDS (genie#245).
+ *
+ * Deliberately the same two verbs a human gets in Workspace Settings, plus the
+ * `status` an agent needs and a human does not (a human can see the ring; an
+ * agent has to ask), plus the teardown a human gets by closing the window.
+ * Anything wider — installing, publishing — is not here, because it is not
+ * offered to the human either and a tool for it would be a promise the product
+ * does not keep.
+ */
+export type ManageGappDevAction = 'status' | 'check' | 'preview' | 'close-preview';
+
+export interface ManageGappDevRequest {
+    action: ManageGappDevAction;
+    /**
+     * `close-preview`: which preview. Optional — a GDW's own preview is the
+     * obvious default, and an agent that just opened one should not have to
+     * remember an id to close it.
+     */
+    appId?: string;
+}
+
+export interface ManageGappDevResult {
+    ok: boolean;
+    action: ManageGappDevAction;
+    /**
+     * WHERE the agent is, on EVERY action.
+     *
+     * Not just on `status`: an agent that ran `check` and got findings back still
+     * does not know it is in a GDW, and "the agent could not tell" is the exact
+     * defect this surface exists to fix. Cheap to carry, and it means any single
+     * call answers the question.
+     */
+    status: GappDevStatus;
+    /** `check`: the full suite's report over the workspace folder. */
+    check?: AppCheckReport;
+    /** `preview` / `close-preview`: what happened to the window. */
+    preview?: {
+        appId?: string;
+        /** `https://<slug>.preview.gen/` — where it is serving. */
+        homeUrl?: string;
+        /** It opened, but something did not come up. Distinct from a failure. */
+        warnings?: string[];
+    };
+    /** Why it did not happen. Present exactly when `ok` is false. */
+    error?: string;
 }
 
 /**
@@ -291,6 +353,19 @@ export interface McpContext {
      * terminal can't be resolved to a workspace.
      */
     describeWorkspace: (terminalId: string) => Promise<WorkspaceMap | null>;
+    /**
+     * Tell the agent whether it is in a GApp Development Workspace, and run the
+     * app tools over it (manageGappDev). Does the db + filesystem I/O and, for a
+     * preview, reaches the desktop window seam.
+     *
+     * Optional so a host that has not wired it advertises the tool and says so
+     * on call, rather than pretending the workspace is not a GDW — the two are
+     * different answers and only one of them is ever true.
+     */
+    manageGappDev?: (
+        terminalId: string,
+        req: ManageGappDevRequest,
+    ) => Promise<ManageGappDevResult>;
     /**
      * Manage the caller's workspace background processes (the Genie Processes
      * feature) for the manageProcess tool: list / create / start / stop /
@@ -2348,6 +2423,18 @@ export function formatWorkspaceMap(map: WorkspaceMap): string {
     }
     lines.push('');
 
+    // WHAT KIND of workspace this is, before the plan for learning it. A GDW is
+    // not a fact about the repos — it changes what the agent is here to DO, and
+    // an agent that reads the plan without it will orient itself as if this were
+    // an ordinary project. `gappDevBrief` returns null for every other case, so
+    // an ordinary workspace and an unanswered one both stay silent.
+    const gdwLine = map.gappDev ? gappDevBrief(map.gappDev) : null;
+    if (gdwLine) {
+        lines.push('## This is a GApp Development Workspace');
+        lines.push(gdwLine);
+        lines.push('');
+    }
+
     lines.push('## How to learn this workspace');
     let n = 1;
     if (map.envelopeAgents || map.envelopeClaude) {
@@ -2441,6 +2528,51 @@ export function formatWorkspaceMap(map: WorkspaceMap): string {
     lines.push('```json');
     lines.push(JSON.stringify(map, null, 2));
     lines.push('```');
+    return lines.join('\n');
+}
+
+/**
+ * The `manageGappDev` answer, as the agent reads it.
+ *
+ * Leads with the OUTCOME of the action, then always re-states where the agent is
+ * — the status is the point of the tool, and burying it under a findings list
+ * would recreate the "I could not tell" failure one level down.
+ *
+ * A clean check reports what it COVERED. "No problems" from a suite that quietly
+ * skipped everything is the false reassurance the suite exists to remove — the
+ * same reason Workspace Settings prints the count there.
+ */
+export function formatGappDevResult(result: ManageGappDevResult): string {
+    const lines: string[] = [];
+
+    if (!result.ok) {
+        lines.push(result.error ?? `manageGappDev ${result.action} failed.`);
+    } else if (result.check) {
+        const errors = result.check.findings.filter((f) => f.severity === 'error');
+        const advice = result.check.findings.filter((f) => f.severity === 'advice');
+        lines.push(
+            result.check.ok
+                ? `This app is ready to install. ${result.check.ran.length} checks ran.`
+                : `This app will NOT work yet — ${errors.length} error${errors.length === 1 ? '' : 's'} from ${result.check.ran.length} checks.`,
+        );
+        for (const f of [...errors, ...advice]) {
+            lines.push(`- [${f.severity}] ${f.where}: ${f.problem} → ${f.fix}`);
+        }
+    } else if (result.preview) {
+        lines.push(
+            result.action === 'close-preview'
+                ? result.preview.appId
+                    ? `Preview \`${result.preview.appId}\` closed.`
+                    : 'Preview closed.'
+                : `Preview open${result.preview.homeUrl ? ` at ${result.preview.homeUrl}` : ''}${
+                      result.preview.appId ? ` (\`${result.preview.appId}\`)` : ''
+                  }.`,
+        );
+        for (const w of result.preview.warnings ?? []) lines.push(`- warning: ${w}`);
+    }
+
+    if (lines.length) lines.push('');
+    lines.push(formatGappDevStatus(result.status));
     return lines.join('\n');
 }
 
@@ -2775,6 +2907,31 @@ export function workspacePromptMessages(map: WorkspaceMap | null): PromptMessage
     ];
 }
 
+const MANAGE_GAPP_DEV_TOOL = {
+    name: 'manageGappDev',
+    description:
+        'Build the Genie App this workspace is the home of. A GApp Development Workspace (GDW) is a workspace whose linked Tynn project is marked `is_gapp` — the place an app is BUILT, as opposed to a workspace where an installed app RUNS. `status` answers whether you are in one (you cannot tell from the filesystem, and the chrome that says so is only visible to the user); `check` runs the full check suite over this folder — manifest, files, agents, services, front end — and is deliberately stricter than the installer, because an app that installs cleanly and then opens on an empty window is the failure it exists to catch; `preview` opens the app in a REAL GApp window on the live source under its own `<slug>.preview` identity and address, so it cannot collide with an installed copy; `close-preview` tears one down. Every action also reports the GDW status, so a single call tells you where you are. No folder argument: in a GDW, Genie already knows which app you mean.',
+    inputSchema: {
+        type: 'object',
+        properties: {
+            ...TERMINAL_ID_PROP,
+            action: {
+                type: 'string',
+                enum: ['status', 'check', 'preview', 'close-preview'],
+                description:
+                    'status: am I in a GDW, and what is in it. check: run the suite over this folder. preview: open the app in a real window on live source. close-preview: shut one down.',
+            },
+            appId: {
+                type: 'string',
+                description:
+                    'close-preview (optional): which preview to close. Defaults to this workspace’s own.',
+            },
+        },
+        required: ['action'],
+        additionalProperties: false,
+    },
+};
+
 const FORCE_QUESTION_TOOL = {
     name: 'ForceTheQuestion',
     description:
@@ -2884,6 +3041,7 @@ const CORE_TOOLS = [
     PROVISION_WORKSPACES_TOOL,
     MANAGE_SITE_TOOL,
     MANAGE_SERVICE_TOOL,
+    MANAGE_GAPP_DEV_TOOL,
     MANAGE_TERMINALS_TOOL,
     RUN_AGENT_TOOL,
     MANAGE_WORKSPACES_TOOL,
@@ -3171,6 +3329,44 @@ export async function handleMcpMessage(
                             text: `${manageSiteSummary(result)}\n\n${JSON.stringify(result, null, 2)}`,
                         },
                     ],
+                });
+            }
+            if (params.name === 'manageGappDev') {
+                const a = (params.arguments ?? {}) as Partial<ManageGappDevRequest>;
+                const ACTIONS: ReadonlyArray<ManageGappDevAction> = [
+                    'status',
+                    'check',
+                    'preview',
+                    'close-preview',
+                ];
+                if (!a.action || !ACTIONS.includes(a.action)) {
+                    return err(
+                        msg.id,
+                        -32602,
+                        `manageGappDev requires \`action\`: ${ACTIONS.join(' | ')}.`,
+                    );
+                }
+                // Advertised unconditionally, so a host that has not wired it says
+                // so. Reporting "not a GDW" instead would answer a question nobody
+                // asked with a fact nobody established.
+                if (!ctx.manageGappDev) {
+                    return ok(msg.id, {
+                        isError: true,
+                        content: [
+                            {
+                                type: 'text',
+                                text: 'Genie App development is not available on this host, so `manageGappDev` cannot answer. This is NOT the same as "this workspace is not a GApp Development Workspace" — that question has not been asked.',
+                            },
+                        ],
+                    });
+                }
+                const result = await ctx.manageGappDev(ctx.terminalId, {
+                    action: a.action,
+                    appId: a.appId,
+                });
+                return ok(msg.id, {
+                    ...(result.ok ? {} : { isError: true }),
+                    content: [{ type: 'text', text: formatGappDevResult(result) }],
                 });
             }
             if (params.name === 'manageService') {
