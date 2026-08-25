@@ -14,15 +14,16 @@ import type { AgentInboxAgentType } from './types';
  *                append the flag (unless the user's command already set one), so
  *                the id is known immediately. Claude Code supports
  *                `--session-id <uuid>` (confirmed at build time: `claude --help`).
+ *   - `hook`   — the harness reports its generated id through a startup hook.
  *   - `detect` — no launch flag; after launch we briefly watch the transcript dir
  *                for the newest new `*.jsonl` (its filename stem IS the session id).
- *   - `none`   — no capture (e.g. codex in v1).
+ *   - `none`   — no capture.
  *
  * The pure pieces (profile lookup, flag render, dir encoding, filename parse,
  * newest-pick) are unit-tested; only the watcher touches fs.
  */
 
-export type SessionStrategy = 'flag' | 'detect' | 'none';
+export type SessionStrategy = 'flag' | 'hook' | 'detect' | 'none';
 
 interface LaunchProfile {
     strategy: SessionStrategy;
@@ -30,18 +31,22 @@ interface LaunchProfile {
     flagTemplate?: string;
 }
 
-/** Per-agent launch profiles. `claude` uses the confirmed `--session-id` flag;
- *  `custom` best-effort DETECTs from the Claude transcript dir (a custom command
- *  is often a claude wrapper); `codex` has no capture in v1. */
+/** Per-agent launch profiles. Codex binds through the managed SessionStart hook. */
 export const LAUNCH_PROFILES: Record<AgentInboxAgentType, LaunchProfile> = {
     claude: { strategy: 'flag', flagTemplate: '--session-id {id}' },
-    codex: { strategy: 'none' },
+    codex: { strategy: 'hook' },
     custom: { strategy: 'detect' },
 };
 
 /** A launch already carries a session id / is resuming — don't inject a flag. */
 const SESSION_FLAG_RE = /(^|\s)--session-id(=|\s)/;
-const RESUME_FLAG_RE = /(^|\s)(--resume|--continue|-r|-c)(=|\s|$)/;
+const CLAUDE_RESUME_FLAG_RE = /(^|\s)(--resume|--continue|-r|-c)(=|\s|$)/;
+const CODEX_RESUME_SUBCOMMAND_RE = /^\s*codex(?:\.exe)?\s+resume(?:\s|$)/i;
+
+/** Session ids later become one unquoted CLI argument, so keep them shell-inert. */
+export function isSafeSessionId(value: string): boolean {
+    return /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(String(value ?? ''));
+}
 
 /** Extract the uuid from an existing `--session-id <uuid>`/`=uuid`, or null. */
 export function extractSessionId(command: string): string | null {
@@ -74,7 +79,13 @@ export function renderAgentLaunch(
     const cmd = String(command ?? '');
 
     // Already resuming or already pinned — never double-inject.
-    if (RESUME_FLAG_RE.test(cmd)) {
+    const resuming =
+        agent === 'claude'
+            ? CLAUDE_RESUME_FLAG_RE.test(cmd)
+            : agent === 'codex'
+              ? CODEX_RESUME_SUBCOMMAND_RE.test(cmd)
+              : false;
+    if (resuming) {
         return { command: cmd, chatSessionId: extractSessionId(cmd), strategy: profile.strategy };
     }
     const existing = extractSessionId(cmd);
@@ -107,7 +118,7 @@ function stripSessionFlags(command: string): string {
  * first so we never double-flag.
  *
  * Returns null when there's no captured id, or the agent can't be safely resumed
- * (codex has no capture in v1; a `custom` wrapper's resume syntax is unknown) — so
+ * (a `custom` wrapper's resume syntax is unknown) — so
  * the caller REFUSES rather than silently launching a fresh, context-less session.
  */
 export function renderAgentResume(
@@ -115,9 +126,14 @@ export function renderAgentResume(
     baseCommand: string,
     sessionId: string | null,
 ): string | null {
-    if (!sessionId) return null;
-    // Only claude has a confirmed resume flag; codex/custom can't be resumed
-    // generically without risking a broken re-launch.
+    if (!sessionId || !isSafeSessionId(sessionId)) return null;
+    if (agent === 'codex') {
+        const raw = String(baseCommand ?? '').trim() || 'codex';
+        const match = raw.match(/^(codex(?:\.exe)?)(?:\s+resume)?(?:\s+(.*))?$/i);
+        if (!match) return null;
+        const options = (match[2] ?? '').trim();
+        return `${match[1]} resume${options ? ` ${options}` : ''} ${sessionId}`;
+    }
     if (agent !== 'claude') return null;
     const base = stripSessionFlags(baseCommand) || 'claude';
     return `${base} --resume ${sessionId}`;
@@ -158,8 +174,7 @@ interface AgentSpecLike {
  *   - present → RESUME the same conversation (`claude --resume <id>`) — a restart
  *               continues where it left off (the graceful resume the MCP
  *               `runAgent restart` uses).
- *   - absent  → a fresh launch (mints a new session id) — a first spawn, or an agent
- *               whose session was never captured (e.g. codex has no resume in v1).
+ *   - absent  → a fresh launch (mints a new session id when supported).
  * Returns the command to submit (+ any minted session id to persist), or null when
  * there's nothing to (re)launch: a WARM reattach (`existing` — the agent is still
  * running) or a non-agent terminal. Pure — the caller does the pty/db side-effects.
@@ -184,7 +199,9 @@ export function agentRelaunchDecision(
     // robust to that drift. `sessionExists` is injected (the fs check lives in the
     // caller); omitted → trust the id (preserves the pre-verification behaviour).
     if (sid) {
-        const verified = sessionExists ? sessionExists(sid) : true;
+        // Only Claude's ids map to the transcript directory checked by the
+        // caller. Codex's id comes from SessionStart and is resumed directly.
+        const verified = agent === 'claude' && sessionExists ? sessionExists(sid) : true;
         if (verified) {
             const resume = renderAgentResume(agent, baseCmd, sid);
             if (resume) return { command: resume };
@@ -209,8 +226,8 @@ export function agentRelaunchDecision(
  * `--continue` (resume the most-recent chat in the cwd) instead of the phantom
  * `--resume <id>` that dead-ends with "No conversation found" — which reads to the
  * user as lost work. REFUSES (returns an `error`, no command) when the terminal
- * has no resumable conversation — a non-agent, a non-claude agent, or a claude
- * with no captured session — so a restart can never silently drop the agent into
+ * has no resumable conversation — a non-agent, an unsupported custom wrapper,
+ * or a supported agent with no captured session — so a restart can never silently drop the agent into
  * a fresh, context-less session.
  *
  * Pure: the on-disk check is injected and the caller does the pty side-effects.
@@ -226,13 +243,13 @@ export function resolveRestartCommand(
 
     const base = spec.meta?.agent_command ?? '';
     const sid = spec.meta?.chat_session_id ?? null;
-    // Resumable ⇔ claude WITH a captured session (the render* helpers are
-    // claude-only and null otherwise). Same refuse guard as before.
+    // Resumable when the provider has confirmed exact-resume grammar and a
+    // captured session id (Claude flag or Codex subcommand).
     if (!renderAgentResume(agent, base, sid)) {
         return {
             error:
                 `Cannot gracefully restart "${agent}": no captured session to resume, so a restart ` +
-                'would lose the conversation. Only a claude agent with a captured session can be resumed.',
+                'would lose the conversation. A captured session id is required.',
         };
     }
     // Verified id → --resume; drifted id → --continue. Never a fresh mint here

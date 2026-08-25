@@ -103,8 +103,10 @@ import {
     listTerminalSpecs,
     setSettings,
     setWorkspaceAgentCap,
+    updateTerminalSpec,
 } from '../../db';
 import { runAgentForMcp } from '../host-tools';
+import { registerAgentInboxSession } from '../../agentinbox/session-registration';
 import { terminalManager } from '@particle-academy/fancy-term-host';
 import type { RunAgentRequest, RunAgentResult } from '../protocol';
 
@@ -231,6 +233,28 @@ describe('creating a saved agent', () => {
 });
 
 describe('runAgent start on a SAVED agent', () => {
+    it('binds a Codex SessionStart id onto the just-created saved agent without duplicating it', async () => {
+        const created = await start({ name: 'tynn', agent: 'codex', create: true });
+        expect(created.ok).toBe(true);
+        expect(created.ref).toBe('codex:tynn');
+        expect(created.sessionBinding).toBe('pending');
+
+        const registered = registerAgentInboxSession(created.id!, 'codex-session-1', {
+            getTerminalSpec,
+            updateTerminalSpec,
+            setChatSession: () => {},
+        });
+        expect(registered.ok).toBe(true);
+
+        const attached = await start({ name: 'tynn', agent: 'codex' });
+        expect(attached.ok).toBe(true);
+        expect(attached.id).toBe(created.id);
+        expect(attached.ref).toBe('codex:tynn:codex-session-1');
+        expect(attached.sessionBinding).toBe('bound');
+        expect(agentSpecs()).toHaveLength(1);
+        expect(agentIds()).toHaveLength(1);
+    });
+
     it('REATTACHES to the live agent instead of creating a second one', async () => {
         const created = await start({ name: 'tynn', agent: 'claude', create: true });
         expect(created.ok).toBe(true);

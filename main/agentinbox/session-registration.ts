@@ -1,3 +1,5 @@
+import { isSafeSessionId } from './session-capture';
+
 /**
  * Late-bind a harness-generated chat session to an EXISTING AgentInbox agent.
  *
@@ -23,6 +25,9 @@ export function registerAgentInboxSession(
 ): { ok: true; agentId: string } | { ok: false; error: string } {
     const normalized = sessionId.trim();
     if (!normalized) return { ok: false, error: 'A non-empty session id is required.' };
+    if (!isSafeSessionId(normalized)) {
+        return { ok: false, error: 'The session id has an invalid format.' };
+    }
 
     const spec = deps.getTerminalSpec(terminalId);
     if (!spec) return { ok: false, error: 'Terminal not found.' };

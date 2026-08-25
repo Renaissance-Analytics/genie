@@ -51,4 +51,22 @@ describe('registerAgentInboxSession', () => {
         expect(updateTerminalSpec).not.toHaveBeenCalled();
         expect(setChatSession).not.toHaveBeenCalled();
     });
+
+    it('rejects a session id that could become shell syntax on a later resume', () => {
+        const updateTerminalSpec = vi.fn();
+        const setChatSession = vi.fn();
+
+        expect(
+            registerAgentInboxSession('term-1', 'safe-id; Remove-Item secrets', {
+                getTerminalSpec: vi.fn(() => ({
+                    id: 'term-1',
+                    meta: { agent: 'codex', agent_id: 'agent-1' },
+                })),
+                updateTerminalSpec,
+                setChatSession,
+            }),
+        ).toEqual({ ok: false, error: 'The session id has an invalid format.' });
+        expect(updateTerminalSpec).not.toHaveBeenCalled();
+        expect(setChatSession).not.toHaveBeenCalled();
+    });
 });

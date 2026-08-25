@@ -38,6 +38,7 @@ import {
     agentRelaunchDecision,
     transcriptDirFor,
 } from '../agentinbox/session-capture';
+import { withProviderStartupInstructions } from '../agents/startup';
 import { buildSubmitBytes } from './keystrokes';
 import {
     normalizePurpose,
@@ -415,7 +416,12 @@ export function createAgentTerminal(opts: {
     cols?: number;
     rows?: number;
     /** Marks this terminal as running an agent (surfaced in the list). */
-    agentMeta?: { agent: 'claude' | 'codex' | 'custom'; command: string };
+    agentMeta?: {
+        agent: 'claude' | 'codex' | 'custom';
+        command: string;
+        /** Positional opening prompt, rendered only after all provider options. */
+        instructions?: string;
+    };
     /**
      * Who asked for this terminal (Tynn #117). Recorded because it cannot be
      * inferred afterwards: a plain shell an agent opened through
@@ -554,6 +560,13 @@ export function createAgentTerminal(opts: {
             opts.agentMeta.agent,
             launchCommand,
         );
+        if (opts.agentMeta.instructions) {
+            launchCommand = withProviderStartupInstructions(
+                opts.agentMeta.agent,
+                launchCommand,
+                opts.agentMeta.instructions,
+            );
+        }
     }
 
     const createOpts: CreateTerminalOpts = {

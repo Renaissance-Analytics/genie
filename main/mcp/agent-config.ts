@@ -871,6 +871,8 @@ export function codexSessionRegistrationHook(): string {
     return `'use strict';
 
 let input = '';
+const attempts = 3;
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => {
     input += chunk;
@@ -881,21 +883,37 @@ process.stdin.on('end', async () => {
         const sessionId = typeof payload.session_id === 'string' ? payload.session_id.trim() : '';
         const endpoint = process.env.GENIE_MCP_URL;
         if (!sessionId || !endpoint) return;
-        const response = await fetch(endpoint, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-                jsonrpc: '2.0',
-                id: 'codex-session-start',
-                method: 'tools/call',
-                params: {
-                    name: 'agentinbox',
-                    arguments: { action: 'registerSession', sessionId },
-                },
-            }),
-            signal: AbortSignal.timeout(8000),
+        const body = JSON.stringify({
+            jsonrpc: '2.0',
+            id: 'codex-session-start',
+            method: 'tools/call',
+            params: {
+                name: 'agentinbox',
+                arguments: { action: 'registerSession', sessionId },
+            },
         });
-        if (!response.ok) throw new Error('Genie session registration request failed');
+        let response;
+        let lastError;
+        for (let attempt = 1; attempt <= attempts; attempt += 1) {
+            try {
+                response = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body,
+                    signal: AbortSignal.timeout(8000),
+                });
+                if (response.ok || response.status < 500) break;
+                lastError = new Error(
+                    'Genie session registration request failed (' + response.status + ')',
+                );
+            } catch (error) {
+                lastError = error;
+            }
+            if (attempt < attempts) await delay(150 * attempt);
+        }
+        if (!response?.ok) {
+            throw lastError ?? new Error('Genie session registration request failed');
+        }
         const result = await response.json();
         if (result.error || result.result?.isError) {
             throw new Error('Genie rejected Codex session registration');

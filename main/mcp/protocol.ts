@@ -1172,6 +1172,8 @@ export interface RunAgentResult {
     /** start: TRUE when this reattached to a saved agent, FALSE when it created
      *  one. The distinction the whole story turns on — never inferred. */
     reattached?: boolean;
+    /** start: whether the harness chat id is already attached to the durable saved agent. */
+    sessionBinding?: 'bound' | 'pending';
     /** list (and any start refusal that needs to show the alternatives): the
      *  workspace's saved agents. */
     agents?: SavedAgentInfo[];

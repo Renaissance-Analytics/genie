@@ -50,8 +50,19 @@ describe('renderAgentResume — graceful restart command (wish #88)', () => {
         expect(renderAgentResume('claude', 'claude', '')).toBeNull();
     });
 
-    it('refuses (null) for non-claude agents (codex/custom resume unknown)', () => {
-        expect(renderAgentResume('codex', 'codex', SID)).toBeNull();
+    it('uses the codex resume subcommand and keeps config options before the session id', () => {
+        expect(renderAgentResume('codex', 'codex', SID)).toBe(`codex resume ${SID}`);
+        expect(renderAgentResume('codex', 'codex --yolo -c mcp_servers.genie.enabled=true', SID)).toBe(
+            `codex resume --yolo -c mcp_servers.genie.enabled=true ${SID}`,
+        );
+    });
+
+    it('refuses a session id containing shell syntax', () => {
+        expect(renderAgentResume('codex', 'codex', 'safe; Remove-Item secrets')).toBeNull();
+        expect(renderAgentResume('claude', 'claude', 'safe && whoami')).toBeNull();
+    });
+
+    it('refuses (null) only when the custom wrapper resume grammar is unknown', () => {
         expect(renderAgentResume('custom', 'my-wrapper.sh', SID)).toBeNull();
     });
 });
@@ -88,11 +99,18 @@ describe('renderAgentLaunch — flag strategy (claude)', () => {
     });
 });
 
-describe('renderAgentLaunch — non-flag agents', () => {
-    it('codex captures nothing (strategy none)', () => {
-        const r = renderAgentLaunch('codex', 'codex');
-        expect(r.strategy).toBe('none');
-        expect(r.command).toBe('codex');
+describe('renderAgentLaunch — post-launch agents', () => {
+    it('codex binds through its SessionStart hook', () => {
+        const r = renderAgentLaunch('codex', 'codex -c model_reasoning_effort="high"');
+        expect(r.strategy).toBe('hook');
+        expect(r.command).toBe('codex -c model_reasoning_effort="high"');
+        expect(r.chatSessionId).toBeNull();
+    });
+
+    it('does not mistake codex -c config for a resume flag', () => {
+        const r = renderAgentLaunch('codex', 'codex -c mcp_servers.genie.enabled=true');
+        expect(r.strategy).toBe('hook');
+        expect(r.command).toBe('codex -c mcp_servers.genie.enabled=true');
         expect(r.chatSessionId).toBeNull();
     });
 
@@ -215,13 +233,23 @@ describe('agentRelaunchDecision — fresh vs continue on agent-terminal reattach
         expect(d?.command).toBe(`claude --session-id ${d?.newSessionId}`);
     });
 
-    it('codex falls back to a fresh, session-less launch (no resume flag in v1)', () => {
+    it('codex resumes the captured conversation through its resume subcommand', () => {
         expect(
             agentRelaunchDecision(
                 { meta: { agent: 'codex', agent_command: 'codex', chat_session_id: 'x' } },
                 false,
             ),
-        ).toEqual({ command: 'codex' });
+        ).toEqual({ command: 'codex resume x' });
+    });
+
+    it('does not apply Claude transcript verification to a Codex hook session id', () => {
+        expect(
+            agentRelaunchDecision(
+                { meta: { agent: 'codex', agent_command: 'codex', chat_session_id: 'x' } },
+                false,
+                () => false,
+            ),
+        ).toEqual({ command: 'codex resume x' });
     });
 });
 
@@ -252,12 +280,12 @@ describe('resolveRestartCommand — graceful restart, never a phantom --resume',
         expect('error' in r).toBe(true);
     });
 
-    it('REFUSES codex — no resume in v1, so a restart would drop context', () => {
+    it('resumes codex exactly when its hook captured a session id', () => {
         const r = resolveRestartCommand(
             { meta: { agent: 'codex', agent_command: 'codex', chat_session_id: 'x' } },
             exists,
         );
-        expect('error' in r).toBe(true);
+        expect(r).toEqual({ command: 'codex resume x' });
     });
 
     it('REFUSES a non-agent terminal', () => {
@@ -277,7 +305,7 @@ describe('renderAgentContinue — most-recent fallback', () => {
         ).toBe('claude --model opus --continue');
     });
 
-    it('refuses (null) for non-claude agents', () => {
+    it('refuses (null) when a provider has no most-recent fallback grammar', () => {
         expect(renderAgentContinue('codex', 'codex')).toBeNull();
         expect(renderAgentContinue('custom', 'my-wrapper.sh')).toBeNull();
     });
@@ -302,14 +330,20 @@ describe('agentRelaunchDecision — verify the captured id before --resume', () 
         ).toEqual({ command: 'claude --continue' });
     });
 
-    it('a non-claude agent with a missing id falls through to a fresh launch (no -c)', () => {
+    it('a custom agent with a missing id falls through to a fresh launch (no -c)', () => {
         expect(
             agentRelaunchDecision(
-                { meta: { agent: 'codex', agent_command: 'codex', chat_session_id: 'phantom' } },
+                {
+                    meta: {
+                        agent: 'custom',
+                        agent_command: 'my-wrapper',
+                        chat_session_id: 'phantom',
+                    },
+                },
                 false,
                 () => false,
             ),
-        ).toEqual({ command: 'codex' });
+        ).toEqual({ command: 'my-wrapper' });
     });
 
     it('trusts the id when no verifier is passed (pre-verification behaviour preserved)', () => {

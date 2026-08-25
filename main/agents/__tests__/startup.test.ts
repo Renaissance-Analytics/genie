@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { chatIdBinding, quotable, withPersonaBriefing, withStartupInstructions } from '../startup';
+import {
+    chatIdBinding,
+    quotable,
+    withPersonaBriefing,
+    withStartupInstructions,
+    withProviderStartupInstructions,
+} from '../startup';
 import { LAUNCH_PROFILES } from '../../agentinbox/session-capture';
 
 /**
@@ -42,6 +48,18 @@ describe('when a harness binds its chat-id', () => {
 });
 
 describe('pre-loaded instructions', () => {
+    it('puts a codex prompt after every option and an explicit end-of-options separator', () => {
+        expect(
+            withProviderStartupInstructions(
+                'codex',
+                'codex --yolo -c mcp_servers.genie.url="https://genie.test/mcp"',
+                'Read AGENTS.md first.',
+            ),
+        ).toBe(
+            'codex --yolo -c mcp_servers.genie.url="https://genie.test/mcp" -- "Read AGENTS.md first."',
+        );
+    });
+
     it('become one positional prompt after the command', () => {
         expect(withStartupInstructions('claude --foo', 'Read AGENTS.md first.')).toBe(
             'claude --foo "Read AGENTS.md first."',

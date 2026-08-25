@@ -120,9 +120,8 @@ function notOptionShaped(text: string): string {
  * is why {@link quotable} strips rather than escapes. The result is additionally
  * kept from looking like an option (see {@link notOptionShaped}).
  *
- * Applied BEFORE `renderAgentLaunch` adds its session flag, giving
- * `<command> <flags> "<instructions>" --session-id <uuid>` — the order every
- * TUI here expects, and the order the GApp path already produced.
+ * This low-level helper only sanitizes and quotes. Provider launch code uses
+ * {@link withProviderStartupInstructions} after composing every option.
  *
  * Empty/whitespace instructions are a no-op, so a caller can pass through an
  * optional field without branching. Instructions that were NOTHING but dashes
@@ -133,6 +132,17 @@ export function withStartupInstructions(command: string, instructions: string): 
     const text = notOptionShaped(quotable(instructions));
     if (!text) return String(command ?? '').trim();
     return `${String(command ?? '').trim()} "${text}"`.trim();
+}
+
+/** Apply the harness's argv grammar after every launch option has been composed. */
+export function withProviderStartupInstructions(
+    provider: AgentProvider,
+    command: string,
+    instructions: string,
+): string {
+    const rendered = withStartupInstructions('', instructions);
+    if (!rendered) return String(command ?? '').trim();
+    return `${String(command ?? '').trim()}${provider === 'codex' ? ' --' : ''} ${rendered}`.trim();
 }
 
 /**
