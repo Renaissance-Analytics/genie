@@ -95,7 +95,11 @@ export function formatGappDevStatus(status: GappDevStatus): string {
         `This **IS a GApp Development Workspace** — the place the Genie App in this folder is BUILT (as opposed to a workspace where an installed app RUNS).`,
     );
     lines.push('');
-    if (status.root) lines.push(`- Source folder: \`${status.root}\` — every app tool here is already aimed at it, so no folder argument is needed.`);
+    if (status.root) {
+        lines.push(
+            `- Source folder: \`${status.root}\` — every app tool here is already aimed at it, so no folder argument is needed.`,
+        );
+    }
     if (status.tynnProjectId) {
         lines.push(
             `- Declared by Tynn project \`${status.tynnProjectId}\` (\`is_gapp\`). Genie mirrors that flag; it is not set here.`,
@@ -118,7 +122,11 @@ export function formatGappDevStatus(status: GappDevStatus): string {
     }
 
     lines.push('');
-    lines.push('**What you can do here, without asking a human to click anything:**');
+    // "…without hunting for a human" rather than "without a human": `preview`
+    // still raises the app's own permission modal, and the line below says so.
+    // Overstating it here would teach an agent that consent is not in the loop,
+    // which is the one thing this tool must not do.
+    lines.push('**What you can do here, without a human clicking through Settings:**');
     lines.push(
         `- \`manageGappDev\` ${CHECK} — run the full check suite over this folder (manifest, files, agents, services, front end). Stricter than the installer on purpose: it catches the app that installs cleanly and then opens on an empty window.`,
     );
