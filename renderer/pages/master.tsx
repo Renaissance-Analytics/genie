@@ -108,6 +108,7 @@ import {
     type ConnectableWorkstation,
     type PluginPanelView,
 } from '../lib/genie';
+import { nudgeGappDevSync } from '../lib/gapp-dev';
 
 /**
  * Master workspace — cross-project terminal organiser. Hosts the
@@ -982,14 +983,9 @@ function MasterInner() {
     // it is a nudge, and it costs one request only when the window is focused.
     useEffect(() => {
         if (!hasGenieBridge()) return;
-        const nudge = () => {
-            void api()
-                .tynn.projects()
-                .catch(() => {});
-        };
-        nudge();
-        window.addEventListener('focus', nudge);
-        return () => window.removeEventListener('focus', nudge);
+        nudgeGappDevSync();
+        window.addEventListener('focus', nudgeGappDevSync);
+        return () => window.removeEventListener('focus', nudgeGappDevSync);
     }, []);
 
     // Load the max_views setting and keep it fresh — the Settings screen is
@@ -2146,6 +2142,12 @@ function MasterInner() {
                                 : [...prev, row];
                         });
                         setAddingWorkspace(false);
+                        // A brand-new row has never been reconciled: the modal
+                        // fetched its project list on MOUNT, before this workspace
+                        // existed. Without this, a workspace created against a
+                        // Genie App project would not look like one until the
+                        // window next regained focus (genie#245).
+                        nudgeGappDevSync();
                     }}
                 />
             )}
