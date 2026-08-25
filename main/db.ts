@@ -1,4 +1,6 @@
 import Database from 'better-sqlite3';
+import { providerSettingDefaults } from './agents/registry';
+import type { ProviderSettingKeys } from './agents/registry';
 import path from 'path';
 import fs from 'fs';
 import {
@@ -1374,7 +1376,7 @@ function terminalSpecColumns(d: Database.Database): Set<string> {
 
 // Settings helpers ------------------------------------------------------
 
-export interface Settings {
+export interface Settings extends ProviderSettingKeys {
     primary_workspace?: string;
     /** Last-activated workspace id in the master view; seeds the active workspace on launch. */
     active_workspace?: string;
@@ -1541,27 +1543,17 @@ export interface Settings {
      *  folder — never to "off" — so an unreadable value cannot silently stop the
      *  backups. Tynn #250, step 4. */
     gapp_backup?: string;
-    /** The CLI invocation the runAgent MCP tool launches for a `claude` agent.
-     *  Default 'claude'. The user can set the real command (e.g. a wrapper or a
-     *  full path with flags). */
-    agent_command_claude?: string;
-    /** The CLI invocation the runAgent MCP tool launches for a `codex` agent.
-     *  Default 'codex'. */
-    agent_command_codex?: string;
-    /** The CLI invocation the runAgent MCP tool launches for a `custom` agent.
-     *  No default — the agent must pass an explicit `command`, or this is used
-     *  when set. Empty means "no preset; require an explicit command". */
-    agent_command_custom?: string;
-    /** ALWAYS-ON launch flags appended to a `claude` agent's command when a
-     *  specialized terminal (or runAgent) opens it — e.g.
-     *  `--dangerously-skip-permissions`. Appended AFTER the resolved command and
-     *  BEFORE the session-id flag: `<command> <flags> --session-id <uuid>`.
-     *  Default '' (no extra flags). */
-    agent_flags_claude?: string;
-    /** Always-on launch flags appended to a `codex` agent's command. Default ''. */
-    agent_flags_codex?: string;
-    /** Always-on launch flags appended to a `custom` agent's command. Default ''. */
-    agent_flags_custom?: string;
+    // `agent_command_<id>` and `agent_flags_<id>` for every provider come from
+    // ProviderSettingKeys (genie#261), so adding a provider adds its two keys
+    // with no edit here.
+    //
+    //   agent_command_<id>  the CLI invocation runAgent launches — a wrapper or a
+    //                       full path. Defaults to the registry's defaultCommand;
+    //                       `custom` has none, so it means "require an explicit
+    //                       command".
+    //   agent_flags_<id>    ALWAYS-ON launch flags appended AFTER the resolved
+    //                       command and BEFORE the session-id flag:
+    //                       `<command> <flags> --session-id <uuid>`. Default ''.
     /** GApp AI Provider (genie#245): which AI TUI a Genie App's DECLARED agents
      *  launch under — `claude` | `codex` | `custom`. The user's choice, once per
      *  WORKSTATION, never the app's: a GApp says it needs an agent and the
@@ -1682,12 +1674,14 @@ export function getAllSettings(): Settings {
             (out['terminal_copy_paste'] as 'contextmenu' | 'linux' | 'winmac') ?? 'contextmenu',
         ai_system: out['ai_system'] ?? '',
         collapsed_workspaces: out['collapsed_workspaces'] ?? '[]',
-        agent_command_claude: out['agent_command_claude'] ?? 'claude',
-        agent_command_codex: out['agent_command_codex'] ?? 'codex',
-        agent_command_custom: out['agent_command_custom'] ?? '',
-        agent_flags_claude: out['agent_flags_claude'] ?? '',
-        agent_flags_codex: out['agent_flags_codex'] ?? '',
-        agent_flags_custom: out['agent_flags_custom'] ?? '',
+        // Every provider's command + flags, defaulted from PROVIDER_REGISTRY
+        // (genie#261) with the stored value winning where one exists.
+        ...Object.fromEntries(
+            Object.entries(providerSettingDefaults()).map(([k, fallback]) => [
+                k,
+                out[k] ?? fallback,
+            ]),
+        ),
         // '' is a real answer meaning "no workstation opinion yet", which
         // `resolveGappProvider` resolves to the user's setup-wizard default. It is
         // deliberately NOT defaulted to 'claude' here: that would make the

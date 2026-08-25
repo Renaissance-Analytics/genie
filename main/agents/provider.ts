@@ -20,9 +20,10 @@
 
 import type { AgentProvider } from './identity';
 import { isAgentProvider } from './identity';
+import { agentProviders } from './registry';
 
-/** The AI TUIs Genie can launch. */
-export const AGENT_PROVIDERS: readonly AgentProvider[] = ['claude', 'codex', 'custom'];
+/** The AI TUIs Genie can launch. DERIVED from `PROVIDER_REGISTRY` (genie#261). */
+export const AGENT_PROVIDERS: readonly AgentProvider[] = agentProviders();
 
 /**
  * The workstation's default provider.

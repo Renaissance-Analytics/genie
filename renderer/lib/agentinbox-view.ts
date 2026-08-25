@@ -14,6 +14,7 @@
  * `currentConnKey()` — the same per-window/per-workstation bucket
  * `renderer/lib/view-state.ts` uses — and the host never sees it.
  */
+import type { AgentType } from './genie';
 
 /** The human panel's sender identity token (mirrors the broker's `AGENTINBOX_HUMAN`). */
 export const HUMAN_ID = 'human';
@@ -239,7 +240,7 @@ export function forgetSeen(
 // --- agent identity, as a PERSON reads it (Tynn #254) ------------------------
 
 /** The AI TUI an agent runs, as the directory reports it. */
-export type AgentProviderId = 'claude' | 'codex' | 'custom';
+export type AgentProviderId = AgentType;
 
 /** The two pieces a human-facing agent row renders. */
 export interface AgentDisplay {

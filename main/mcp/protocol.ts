@@ -10,6 +10,8 @@
  */
 
 import { GENIE_MCP_GUIDE } from './guide';
+import { agentProviders } from '../agents/registry';
+import type { AgentProviderId } from '../agents/registry';
 import type { QuestionPriority } from '../ask/question-priority';
 import type { TerminalReadState } from '../terminal/read-buffer';
 import type {
@@ -1068,7 +1070,7 @@ export interface ManageTerminalsResult {
 
 // --- runAgent ----------------------------------------------------------------
 
-export type AgentType = 'claude' | 'codex' | 'custom';
+export type AgentType = AgentProviderId;
 
 /** One saved agent as the runAgent tool reports it (Tynn #254). */
 export interface SavedAgentInfo {
@@ -2046,7 +2048,9 @@ const RUN_AGENT_TOOL = {
             },
             agent: {
                 type: 'string',
-                enum: ['claude', 'codex', 'custom'],
+                // DERIVED from PROVIDER_REGISTRY (genie#261) — a provider absent
+                // from this enum cannot be NAMED over MCP, whatever the types say.
+                enum: agentProviders(),
                 description:
                     "start: which agent CLI. On a REATTACH the saved record decides — this only disambiguates one name saved under two providers. On a create, omitting it takes the workstation's default agent.",
             },

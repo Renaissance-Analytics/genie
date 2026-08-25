@@ -1,4 +1,8 @@
 import fs from 'fs';
+import {
+    resolveAgentCommand as resolveProviderCommand,
+    resolveAgentFlags as resolveProviderFlags,
+} from '../agents/command';
 import path from 'path';
 import crypto from 'crypto';
 import os from 'os';
@@ -1419,14 +1423,9 @@ export async function manageTerminalsForMcp(
  * (here or in Settings). Returns null when nothing resolves.
  */
 export function resolveAgentCommand(agent: AgentType, override?: string): string | null {
-    const o = override?.trim();
-    if (o) return o;
-    const s = getAllSettings();
-    if (agent === 'claude') return (s.agent_command_claude || 'claude').trim() || 'claude';
-    if (agent === 'codex') return (s.agent_command_codex || 'codex').trim() || 'codex';
-    // custom: only the configured custom command (no built-in default).
-    const c = (s.agent_command_custom || '').trim();
-    return c || null;
+    // The DECISION lives in `agents/command.ts`, driven by PROVIDER_REGISTRY
+    // (genie#261). This is only the settings read.
+    return resolveProviderCommand(agent, override, getAllSettings());
 }
 
 /**
@@ -1449,13 +1448,7 @@ export function resolveAgentLaunch(
     const base = resolveAgentCommand(agent, override);
     if (!base) return null;
     const s = getAllSettings();
-    const flags =
-        agent === 'claude'
-            ? s.agent_flags_claude
-            : agent === 'codex'
-              ? s.agent_flags_codex
-              : s.agent_flags_custom;
-    const withFlags = appendLaunchFlags(base, flags);
+    const withFlags = appendLaunchFlags(base, resolveProviderFlags(agent, s));
     // Without a workspace there are no URLs to resolve; the gate (Codex + sync-on)
     // itself lives in withCodexMcpLaunch so it's unit-tested off host-tools.
     if (!workspace) {
