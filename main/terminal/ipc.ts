@@ -233,7 +233,13 @@ export interface TerminalReadResult extends ReadResult {
 
 export type { TerminalReadState };
 
-/** Whether the active backend still owns a pty for `id`. Never throws. */
+/**
+ * Whether the active backend still owns a pty for `id`. Never throws.
+ *
+ * Exported as {@link isTerminalLive} because a SAVED agent's dormant-vs-running
+ * state is exactly this question (Tynn #254), and a second `try { isLive }`
+ * elsewhere would be one more place for the never-throws part to be forgotten.
+ */
 function ptyIsLive(id: string): boolean {
     try {
         return terminalManager().isLive(id);
@@ -241,6 +247,8 @@ function ptyIsLive(id: string): boolean {
         return false;
     }
 }
+
+export { ptyIsLive as isTerminalLive };
 
 /**
  * Read recent output for a terminal (agent-control MCP).
@@ -440,6 +448,19 @@ export function createAgentTerminal(opts: {
     const id = opts.id ?? crypto.randomUUID();
     const resolved = resolveDefaultShell(dbSettingsProvider());
 
+    // REVIVING a SAVED agent (Tynn #254): the caller named a spec that already
+    // exists AND already runs an agent, so this is not a first launch — it is
+    // that agent being brought back. Two things must not happen: a fresh
+    // `--session-id` must not be minted (it would strand the conversation the
+    // spec is still pointing at), and `meta.agent_id` must not be replaced (the
+    // AgentInbox cursors, queued mail, channel membership and DM history all
+    // hang off it, so a new one is a NEW AGENT wearing the old one's name).
+    // Neither is a hypothetical: rendering a fresh launch here is exactly what
+    // this function did for every re-create, and it is why reattaching had to be
+    // built rather than just called.
+    const priorSpec = getTerminalSpec(id);
+    const reviving = !!(opts.agentMeta && priorSpec?.meta?.agent);
+
     // Agent terminals capture their chat-session id at launch + get an AgentInbox
     // identity so they can coordinate. Render the (possibly session-augmented)
     // launch command from the agent's capture profile; a plain terminal has no
@@ -449,7 +470,7 @@ export function createAgentTerminal(opts: {
     let strategy: ReturnType<typeof renderAgentLaunch>['strategy'] | null = null;
     let agentId: string | undefined;
     let meta: TerminalSpecMeta = {};
-    if (opts.agentMeta) {
+    if (opts.agentMeta && !reviving) {
         const rendered = renderAgentLaunch(opts.agentMeta.agent, opts.agentMeta.command);
         launchCommand = rendered.command;
         chatSessionId = rendered.chatSessionId;
@@ -487,7 +508,7 @@ export function createAgentTerminal(opts: {
     // (appears in lists, can be reattached by a window, killed by the user). A
     // caller-supplied id may ALREADY have a spec (a remote re-open, or a respawn
     // after the host restarted and the pty died) — reuse it rather than duplicate.
-    if (!getTerminalSpec(id)) {
+    if (!priorSpec) {
         createTerminalSpec({
             id,
             workspace_id: opts.workspaceId,
@@ -565,15 +586,27 @@ export function createAgentTerminal(opts: {
     // Only on a FRESH pty: a re-create that reattached to a LIVE pty (existing)
     // already has its agent running, and submitting the command again would type
     // it straight into the running TUI's prompt.
-    if (launchCommand && !result.existing) deliverAgentLaunch(id, launchCommand);
+    // A REVIVE takes the relaunch path instead, which is the one that RESUMES the
+    // saved conversation (`--resume <captured id>`, falling back to `--continue`
+    // when that id has drifted) rather than starting a context-less new one. It
+    // is also a no-op on a warm reattach, so a saved agent that is still running
+    // is left strictly alone — the launch line is never typed into a live TUI's
+    // prompt, which is what that bug looks like from the user's side.
+    if (reviving) maybeRelaunchAgent(id, result.existing);
+    else if (launchCommand && !result.existing) deliverAgentLaunch(id, launchCommand);
 
     // Tell every window the spec set changed so the new terminal appears live.
     broadcastTerminalSpecsChanged();
 
     // AgentInbox: register the fresh agent so peers can discover/DM it. When the
     // session id wasn't captured by a launch flag (detect / a custom wrapper),
-    // briefly watch the transcript dir and backfill it.
-    if (agentId) {
+    // briefly watch the transcript dir and backfill it. A revive re-registers the
+    // SAME identity off the retained spec — the broker drops an agent when its
+    // terminal dies, so without this a revived agent is unreachable to its peers.
+    if (reviving) {
+        const input = joinInputFromSpec(getTerminalSpec(id));
+        if (input) agentInboxBroker.join(input);
+    } else if (agentId) {
         const input = joinInputFromSpec(getTerminalSpec(id));
         if (input) agentInboxBroker.join(input);
         if (strategy === 'detect' && !chatSessionId) {
@@ -591,7 +624,17 @@ export function createAgentTerminal(opts: {
                 });
         }
     }
-    return { id, scrollback: result.scrollback, existing: result.existing, command: launchCommand, chatSessionId };
+    return {
+        id,
+        scrollback: result.scrollback,
+        existing: result.existing,
+        command: launchCommand,
+        // A revive did not capture an id — it INHERITED one, and reporting null
+        // there would tell the caller the conversation was lost.
+        chatSessionId: reviving
+            ? (getTerminalSpec(id)?.meta?.chat_session_id ?? null)
+            : chatSessionId,
+    };
 }
 
 /**

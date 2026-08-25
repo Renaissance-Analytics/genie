@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
     HUMAN_ID,
     SEEN_CAP,
+    agentDisplayOf,
+    avatarInitials,
     forgetSeen,
     headcountOf,
     makeCoalescer,
@@ -269,5 +271,49 @@ describe('client-side read state (persisted per workstation)', () => {
         // The 10 lowest seqs (oldest activity) were dropped, the newest kept.
         expect(restored.has('d:agent-0')).toBe(false);
         expect(restored.has(`d:agent-${SEEN_CAP + 9}`)).toBe(true);
+    });
+});
+
+describe('how an agent is shown to a PERSON (Tynn #254)', () => {
+    it('is the provider logo plus the NAME — the provider is not also spelled out', () => {
+        expect(
+            agentDisplayOf({ agentType: 'claude', label: 'claude · tynn', purpose: 'tynn' }),
+        ).toEqual({ provider: 'claude', name: 'tynn' });
+    });
+
+    it('tells two same-named agents apart by PROVIDER, since the names match', () => {
+        const a = agentDisplayOf({ agentType: 'claude', label: 'claude · tynn', purpose: 'tynn' });
+        const b = agentDisplayOf({ agentType: 'codex', label: 'codex · tynn', purpose: 'tynn' });
+        expect(a.name).toBe(b.name);
+        expect(a.provider).not.toBe(b.provider);
+    });
+
+    it('has nowhere to put a chat-id', () => {
+        // Structural, not a filter someone can forget: the returned shape has no
+        // field for it, so a chat-id cannot reach a surface a person reads.
+        const shown = agentDisplayOf({
+            agentType: 'codex',
+            label: 'codex · tynn-slave',
+            purpose: 'tynn-slave',
+        } as never);
+        expect(Object.keys(shown).sort()).toEqual(['name', 'provider']);
+    });
+
+    it('keeps a DEPARTED agent named, and draws no logo for it', () => {
+        // A DM row for somebody who has left still has to say who it is with.
+        expect(agentDisplayOf(undefined, 'strategist')).toEqual({
+            provider: null,
+            name: 'strategist',
+        });
+        expect(agentDisplayOf({ agentType: 'gemini', label: 'gemini · x' })).toEqual({
+            provider: null,
+            name: 'gemini · x',
+        });
+    });
+
+    it('falls back to initials only where there is no logo to draw', () => {
+        expect(avatarInitials('You')).toBe('yo');
+        expect(avatarInitials('strategist')).toBe('st');
+        expect(avatarInitials('!!!')).toBe('??');
     });
 });

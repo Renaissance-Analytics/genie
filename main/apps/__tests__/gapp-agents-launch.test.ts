@@ -79,6 +79,8 @@ import {
 } from '../../db';
 import { ensureAppAgentPanels } from '../ipc';
 import { createAgentTerminal } from '../../terminal/ipc';
+import { savedAgentsOf } from '../../agents/saved';
+import { savedAgentKey } from '../../agents/identity';
 import { terminalManager } from '@particle-academy/fancy-term-host';
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'genie-gapp-agents-'));
@@ -283,6 +285,34 @@ describe('a GApp that declares an agent', () => {
         ensureAppAgentPanels(appId, { agents: 2 }, [STRATEGIST, REVIEWER]);
 
         expect(panelSpecs(workspaceId).map((s) => s.id)).toEqual(ids);
+    });
+
+    it('is the SAME roster ordinary saved agents use — one model, not two (Tynn #254)', () => {
+        // The story's "not just GApps, and one implementation" clause, asserted
+        // where it can actually be violated. A GApp agent is a terminal spec with
+        // `meta.agent` + a name, which is exactly what a saved agent IS — so the
+        // general reader finds the app's declared roster with no GApp knowledge
+        // at all. If the GApp path ever grew its own record type, this is what
+        // would catch it: `savedAgentsOf` would come back empty while the panels
+        // still looked right.
+        const { appId, workspaceId } = installApp();
+        ensureAppAgentPanels(appId, { agents: 2 }, [STRATEGIST, REVIEWER]);
+
+        const saved = savedAgentsOf(listTerminalSpecs(), workspaceId, (id) =>
+            terminalManager().isLive(id),
+        );
+
+        expect(
+            saved.map((a) => savedAgentKey(a.provider, a.name)).sort(),
+        ).toEqual(['claude:reviewer', 'claude:strategist']);
+        // POSITIVE CONTROL — these are live agents with durable identities, not
+        // rows that merely parse. "Two names came back" would also be true of two
+        // empty shells, which is the bug this whole area keeps producing.
+        expect(saved.every((a) => a.agentId && a.live)).toBe(true);
+        // …and they are addressable BEFORE any chat-id exists, which is what a
+        // Codex agent depends on.
+        expect(saved.map((a) => savedAgentKey(a.provider, a.name)).every((k) => !k.includes('::')))
+            .toBe(true);
     });
 
     it('leaves an app with no declared agents with plain panels', () => {

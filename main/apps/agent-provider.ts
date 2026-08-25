@@ -19,14 +19,16 @@
 
 import path from 'path';
 import { APP_AGENTS_DIR } from './manifest';
+import { isAgentProvider, type AgentProvider } from '../agents/identity';
+import { AGENT_PROVIDERS, resolveWorkstationProvider } from '../agents/provider';
 
 /** The AI TUIs Genie can launch. Mirrors the agent types the rest of Genie knows. */
-export const GAPP_PROVIDERS = ['claude', 'codex', 'custom'] as const;
+export const GAPP_PROVIDERS = AGENT_PROVIDERS;
 
-export type GappProvider = (typeof GAPP_PROVIDERS)[number];
+export type GappProvider = AgentProvider;
 
 function known(value: unknown): value is GappProvider {
-    return typeof value === 'string' && (GAPP_PROVIDERS as readonly string[]).includes(value);
+    return isAgentProvider(value);
 }
 
 /**
@@ -35,11 +37,13 @@ function known(value: unknown): value is GappProvider {
  * Three levels, and the order is the point:
  *
  *  1. `gapp_ai_provider` — the workstation's explicit answer to THIS question.
- *  2. `agent_default` — the agent the user already picked in Workstation Setup.
+ *  2. the WORKSTATION default (`agent_default`, then `claude`) — resolved by
+ *     `agents/provider.ts`, shared with every other agent Genie starts.
  *     Inherited rather than asked again: making somebody configure the same thing
  *     twice is how the second copy ends up stale and wrong.
- *  3. `claude` — a real answer, never `null`. An unresolvable provider means a
- *     declared agent silently does not launch, which is the bug being fixed.
+ *
+ * So this is the general resolver with ONE GApp-specific level in front of it,
+ * not a second ladder — the two cannot drift apart (Tynn #254).
  *
  * Values arrive from a k/v text table, so an unrecognised one falls THROUGH to
  * the next level rather than being handed to a shell.
@@ -49,8 +53,7 @@ export function resolveGappProvider(settings: {
     agent_default?: string;
 }): GappProvider {
     if (known(settings.gapp_ai_provider)) return settings.gapp_ai_provider;
-    if (known(settings.agent_default)) return settings.agent_default;
-    return 'claude';
+    return resolveWorkstationProvider(settings);
 }
 
 /**
@@ -66,58 +69,9 @@ export function gappPersonaPath(workspaceRoot: string, persona: string): string 
 }
 
 /**
- * Everything a double-quoted shell argument cannot survive.
- *
- * The briefing is assembled from a manifest-declared NAME and a path on the
- * user's disk, so neither is trusted, and this line is TYPED INTO A LIVE SHELL —
- * whichever one the user has set, on whichever OS. So the strip covers what is
- * special inside double quotes across all of them, not just the one this machine
- * happens to run:
- *
- *  - `"` closes the argument and turns the rest of the briefing into shell words.
- *  - `` ` `` and `$` substitute in bash/zsh AND PowerShell.
- *  - `!` history-expands in an INTERACTIVE bash — and a failed expansion rejects
- *    the whole line, so an agent named "Fix It!" would simply never launch.
- *  - `%` expands `%VAR%` in cmd.
- *  - Newlines would submit half a command.
- *
- * Backslashes become forward slashes rather than being stripped: a trailing one
- * escapes the closing quote, Windows paths are full of them, and every TUI opens
- * the file perfectly well either way.
- *
- * Mangling prose is the right trade. The briefing is instructions, not data, and
- * the alternative — a launch line that a shell parses differently than Genie
- * meant — is the failure this whole change exists to remove, wearing a shell's
- * clothes.
+ * A GApp agent's persona briefing is PRE-LOADED INSTRUCTIONS (Tynn #254) with the
+ * text supplied by the app, so it lives with the general mechanism in
+ * `agents/startup.ts` rather than being a second copy of the shell-quoting here.
+ * Re-exported so the GApp call sites keep reading in GApp terms.
  */
-function quotable(value: string): string {
-    return value
-        .replace(/\\/g, '/')
-        .replace(/["`$!%\r\n]/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-}
-
-/**
- * Point a launching TUI at the persona it is supposed to BE.
- *
- * A first prompt rather than a provider-specific system-prompt flag: every TUI
- * Genie launches takes an opening prompt positionally, and the workstation — not
- * Genie — chooses which TUI that is, so anything claude-shaped would break the
- * moment somebody set the provider to codex. The persona is named by PATH rather
- * than inlined, so the agent reads the file the app actually ships (personas are
- * often more than one file, and the folder travels whole).
- *
- * Appended before `renderAgentLaunch` adds its session flag, giving
- * `<command> <flags> "<briefing>" --session-id <uuid>`.
- */
-export function withPersonaBriefing(command: string, personaPath: string, name: string): string {
-    // No inner quoting of ANY kind — not even around the agent's name. The whole
-    // briefing is one double-quoted argument, so a `"` inside it closes that
-    // argument and hands the remainder to the shell as words.
-    const briefing =
-        `You are ${quotable(name)}, an agent this Genie App ships. ` +
-        `Read ${quotable(personaPath)} — it is your persona — and work as it describes ` +
-        'for this whole session.';
-    return `${command.trim()} "${briefing}"`.trim();
-}
+export { withPersonaBriefing } from '../agents/startup';

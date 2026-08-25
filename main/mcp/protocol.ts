@@ -1070,11 +1070,57 @@ export interface ManageTerminalsResult {
 
 export type AgentType = 'claude' | 'codex' | 'custom';
 
+/** One saved agent as the runAgent tool reports it (Tynn #254). */
+export interface SavedAgentInfo {
+    /** The canonical machine-facing id — `{provider}:{name}:{chat-id}`, or
+     *  `{provider}:{name}` while the chat-id is not bound yet (Codex, pre-hook). */
+    ref: string;
+    provider: AgentType;
+    /** The name this agent is reopened by. Human-facing surfaces show the
+     *  provider's LOGO and this — never the chat-id. */
+    name: string;
+    /** Its terminal id — a saved agent IS a terminal in the sidebar and Floor. */
+    id: string;
+    /** Is its TUI running right now? Not-live is dormant, not gone. */
+    live: boolean;
+}
+
 export interface RunAgentRequest {
-    action: 'start' | 'send' | 'read' | 'stop' | 'restart';
+    /**
+     * - `start`: bring a SAVED agent up — REATTACHING to it when it already
+     *   exists, rather than minting a second one. With `create: true` it defines
+     *   a new saved agent instead.
+     * - `list`: read-only — the workspace's saved agents.
+     * - the rest act on a running agent terminal by `id`.
+     */
+    action: 'start' | 'send' | 'read' | 'stop' | 'restart' | 'list';
     /** Target workspace (own, or a governed child). Same rules as manageTerminals. */
     workspaceId?: string;
-    /** start: which agent CLI to launch. Default 'claude'. */
+    /**
+     * start: the SAVED AGENT'S NAME — the half of its identity you reopen it by
+     * (`tynn` in `claude:tynn`). Together with the provider it is the saved
+     * config's key; deliberately chat-id-free, because Codex cannot know its
+     * session id until its harness is running. Default `general` — the
+     * workspace's unnamed agent, which is what every agent started before this
+     * existed is called.
+     */
+    name?: string;
+    /**
+     * start: define a NEW saved agent under `name`. Required when no saved agent
+     * matches, so creating one is a deliberate act rather than the side effect of
+     * a typo. Refused when `name` is already taken (start it without `create` to
+     * reattach).
+     */
+    create?: boolean;
+    /**
+     * start: PRE-LOADED INSTRUCTIONS — a prompt delivered as part of startup
+     * rather than typed afterwards. Applied on the launch line, so the agent has
+     * it before its first turn.
+     */
+    instructions?: string;
+    /** start: which agent CLI to launch. On a REATTACH it is the record that
+     *  decides — this only disambiguates one name saved under two providers. On a
+     *  create, omitting it takes the WORKSTATION default. */
     agent?: AgentType;
     /** start (custom, or to override): the exact command line to run. Required
      *  for `custom` unless a custom command is configured in Settings. */
@@ -1112,12 +1158,23 @@ export interface RunAgentResult {
     ok: boolean;
     /** Set when ok is false (denied, no command configured, unknown id, …). */
     error?: string;
-    /** start: the new agent terminal's id. */
+    /** start: the agent terminal's id — the SAME one on every reattach. */
     id?: string;
     /** start: the agent type launched. */
     agent?: AgentType;
     /** start: the resolved command line that was launched. */
     command?: string;
+    /** start: the canonical ref — `{provider}:{name}:{chat-id}`, or
+     *  `{provider}:{name}` until the harness binds its chat-id. */
+    ref?: string;
+    /** start: the saved agent's name. */
+    name?: string;
+    /** start: TRUE when this reattached to a saved agent, FALSE when it created
+     *  one. The distinction the whole story turns on — never inferred. */
+    reattached?: boolean;
+    /** list (and any start refusal that needs to show the alternatives): the
+     *  workspace's saved agents. */
+    agents?: SavedAgentInfo[];
     /** read: the output bytes for this read. */
     data?: string;
     /** read: the cursor to continue from. */
@@ -1959,7 +2016,7 @@ const MANAGE_TERMINALS_TOOL = {
 const RUN_AGENT_TOOL = {
     name: 'runAgent',
     description:
-        "Launch and control a CODING AGENT (claude / codex / a custom CLI) inside a terminal — in your own workspace or one you govern. This SPAWNS AN AUTONOMOUS AGENT that can itself read, write, and run code, so it is high-power. A thin layer over manageTerminals. Actions: `start` (open a terminal and launch the agent — `agent` is 'claude' | 'codex' | 'custom', default 'claude'; the actual CLI command is configurable in Genie Settings, or pass an explicit `command` (required for 'custom' unless a custom command is configured); optional `repo`/`cwd`; returns the agent terminal's `id` + the launched command); `send` (deliver a `prompt` to the running agent `id` — SUBMITTED by default, even multi-line: the prompt is wrapped in bracketed paste with the Enter delivered separately so the agent's TUI submits it instead of leaving it parked as a pasted buffer; pass `submit:false` to load without sending, or `key` (`enter`/`escape`/`ctrl-c`) to deliver a bare keypress — e.g. a lone `enter` to submit or clear a stuck multi-line buffer); `read` (its output — `cursor` for new output, or `bytes` for the last N; add `strip:true` for plain text with escape codes removed); `stop` (terminate the agent `id`); `restart` (GRACEFULLY relaunch the agent `id` — resumes the SAME conversation via `--resume` in a fresh terminal, so its TUI reconnects to the current MCP rig / `.mcp.json` after a genie update WITHOUT losing context; claude-only, needs a captured session; returns the NEW terminal `id`). SAFETY: `start`, `send`, and `restart` are APPROVAL-GATED — when the target workspace requires approval (the default) each blocks on an OS modal showing exactly what will launch/run until the user approves; OFF runs immediately. `read` never prompts.",
+        "Start and control a CODING AGENT (claude / codex / a custom CLI) in this workspace — or one you govern. An agent is SAVED WORKSPACE CONFIGURATION, like a site or a service: it is defined once, it persists, and it is REOPENED rather than recreated. It is still a terminal — it appears in the workspace sidebar and the Floor UX like any other. Its canonical id is `{provider}:{name}:{chat-id}` (e.g. `claude:tynn`, `codex:tynn-slave`); the chat-id is addressing only — show people the provider's logo and the NAME. Actions: `list` (read-only — this workspace's saved agents, each with its `ref`, `name`, terminal `id` and whether it is live); `start` (bring the saved agent `name` up — it REATTACHES to that agent if it exists, running or dormant, and does NOT create a second one; `agent` only disambiguates one name saved under two providers; optional `instructions` are PRE-LOADED as the agent's opening prompt; optional `repo`/`cwd`; returns `id`, `ref`, and `reattached`); `start` with `create: true` (DEFINE A NEW saved agent under `name` — this is the deliberate act of creating one, and it is refused if that name is taken; `agent` picks the provider, defaulting to the workstation's; SPAWNS AN AUTONOMOUS AGENT that can read, write and run code on its own, so it is high-power); `send` (deliver a `prompt` to the running agent `id` — SUBMITTED by default, even multi-line: the prompt is wrapped in bracketed paste with the Enter delivered separately so the agent's TUI submits it instead of leaving it parked as a pasted buffer; pass `submit:false` to load without sending, or `key` (`enter`/`escape`/`ctrl-c`) to deliver a bare keypress — e.g. a lone `enter` to submit or clear a stuck multi-line buffer); `read` (its output — `cursor` for new output, or `bytes` for the last N; add `strip:true` for plain text with escape codes removed); `stop` (terminate the agent `id` — the SAVED agent survives, `start` brings it back); `restart` (GRACEFULLY relaunch the agent `id` — resumes the SAME conversation via `--resume` in a fresh terminal, so its TUI reconnects to the current MCP rig / `.mcp.json` after a genie update WITHOUT losing context; claude-only, needs a captured session; returns the NEW terminal `id`). SAFETY: creating an agent, `send`, and `restart` are APPROVAL-GATED — when the target workspace requires approval (the default) each blocks on an OS modal showing exactly what will launch/run until the user approves; OFF runs immediately. `list`, `read` and reattaching to an already-approved saved agent never prompt.",
     inputSchema: {
         type: 'object',
         properties: {
@@ -1967,18 +2024,34 @@ const RUN_AGENT_TOOL = {
             ...TARGET_WORKSPACE_PROP,
             action: {
                 type: 'string',
-                enum: ['start', 'send', 'read', 'stop', 'restart'],
+                enum: ['start', 'send', 'read', 'stop', 'restart', 'list'],
                 description: 'What to do.',
+            },
+            name: {
+                type: 'string',
+                description:
+                    "start: the SAVED AGENT'S NAME — what you reopen it by (`tynn` in `claude:tynn`). Starting a name that already exists REATTACHES to that agent instead of creating another. Default 'general' (the workspace's unnamed agent).",
+            },
+            create: {
+                type: 'boolean',
+                description:
+                    'start: DEFINE A NEW saved agent under `name`. Required when no saved agent matches — creating one is deliberate, never a side effect. Refused when the name is already taken (start it without `create` to reattach).',
+            },
+            instructions: {
+                type: 'string',
+                description:
+                    "start (optional): PRE-LOADED INSTRUCTIONS — a prompt delivered as part of the agent's startup, so it has them before its first turn, rather than sent afterwards.",
             },
             agent: {
                 type: 'string',
                 enum: ['claude', 'codex', 'custom'],
-                description: "start: which agent CLI to launch. Default 'claude'.",
+                description:
+                    "start: which agent CLI. On a REATTACH the saved record decides — this only disambiguates one name saved under two providers. On a create, omitting it takes the workstation's default agent.",
             },
             command: {
                 type: 'string',
                 description:
-                    "start: the exact command line to launch. Required for 'custom' unless a custom command is configured in Settings; overrides the configured command for claude/codex.",
+                    "start + create: the exact command line to launch. Required for 'custom' unless a custom command is configured in Settings; overrides the configured command for claude/codex.",
             },
             repo: {
                 type: 'string',
@@ -3232,17 +3305,21 @@ export async function handleMcpMessage(
                     action !== 'send' &&
                     action !== 'read' &&
                     action !== 'stop' &&
-                    action !== 'restart'
+                    action !== 'restart' &&
+                    action !== 'list'
                 ) {
                     return err(
                         msg.id,
                         -32602,
-                        'runAgent requires `action`: start | send | read | stop | restart.',
+                        'runAgent requires `action`: start | send | read | stop | restart | list.',
                     );
                 }
                 const result = await ctx.runAgent(ctx.terminalId, {
                     action,
                     workspaceId: a.workspaceId,
+                    name: a.name,
+                    create: a.create,
+                    instructions: a.instructions,
                     agent: a.agent,
                     command: a.command,
                     repo: a.repo,
@@ -3259,7 +3336,14 @@ export async function handleMcpMessage(
                 if (!result.ok) {
                     summary = `runAgent failed: ${result.error ?? 'unknown error'}`;
                 } else if (action === 'start') {
-                    summary = `Launched ${result.agent ?? 'agent'} (${result.command ?? ''}) as terminal ${result.id ?? '?'}.`;
+                    // REATTACHED vs CREATED is the distinction this tool exists to
+                    // make, so it leads the sentence rather than being left for the
+                    // caller to infer from a terminal id it may not have seen before.
+                    summary = result.reattached
+                        ? `Reattached to saved agent ${result.ref ?? ''} (terminal ${result.id ?? '?'}).`
+                        : `Created saved agent ${result.ref ?? ''} and launched it as terminal ${result.id ?? '?'}.`;
+                } else if (action === 'list') {
+                    summary = `${result.agents?.length ?? 0} saved agent(s) in this workspace.`;
                 } else if (action === 'read') {
                     summary = `Read ${result.data?.length ?? 0} byte(s)${result.dropped ? ' (some earlier output was dropped)' : ''}.${readStateNote(result.state)}`;
                 } else {
