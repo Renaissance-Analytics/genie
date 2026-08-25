@@ -91,22 +91,46 @@ export function quotable(value: string): string {
 }
 
 /**
+ * A prompt may not LOOK LIKE AN OPTION.
+ *
+ * The instructions become one argv element handed to the harness's option
+ * parser, and an element beginning with `-` is ambiguous to every one of them:
+ * at best the CLI rejects an unknown flag and the agent never starts, at worst
+ * it consumes the prompt as one. Genie's launch line does not yet carry an
+ * explicit end-of-options `--` separator — that is provider-aware launch grammar
+ * being built alongside the Codex harness-startup work — so until it does, the
+ * prompt itself must not be option-shaped.
+ *
+ * Stripping rather than escaping, for the same reason as {@link quotable}: prose
+ * never legitimately begins with a dash, and "read the file" surviving as
+ * instructions beats a launch line the parser reads differently than Genie
+ * meant. It also stays correct once `--` arrives — a separator in front of a
+ * prompt that is not option-shaped is belt and braces, not a conflict.
+ */
+function notOptionShaped(text: string): string {
+    return text.replace(/^-+\s*/, '').trim();
+}
+
+/**
  * Append PRE-LOADED INSTRUCTIONS to a launch command — the agent starts with
  * this prompt already delivered.
  *
  * One double-quoted argument, with no inner quoting of any kind: a `"` inside it
  * would close the argument and hand the remainder to the shell as words, which
- * is why {@link quotable} strips rather than escapes.
+ * is why {@link quotable} strips rather than escapes. The result is additionally
+ * kept from looking like an option (see {@link notOptionShaped}).
  *
  * Applied BEFORE `renderAgentLaunch` adds its session flag, giving
  * `<command> <flags> "<instructions>" --session-id <uuid>` — the order every
  * TUI here expects, and the order the GApp path already produced.
  *
  * Empty/whitespace instructions are a no-op, so a caller can pass through an
- * optional field without branching.
+ * optional field without branching. Instructions that were NOTHING but dashes
+ * are the same no-op rather than an empty `""` argument, which some parsers
+ * accept as a real (blank) prompt.
  */
 export function withStartupInstructions(command: string, instructions: string): string {
-    const text = quotable(instructions);
+    const text = notOptionShaped(quotable(instructions));
     if (!text) return String(command ?? '').trim();
     return `${String(command ?? '').trim()} "${text}"`.trim();
 }
