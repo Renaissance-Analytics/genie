@@ -92,6 +92,7 @@ import {
     writeToTerminal,
     readTerminalOutput,
     broadcastTerminalAttention,
+    broadcastTerminalReveal,
     broadcastInboxIncoming,
     beginInputHold,
     releaseInputHold,
@@ -224,8 +225,11 @@ import {
 } from './terminal/quit-confirm';
 import {
     workspaceIdOfTerminal,
+    workspaceIdOfSpec,
     SYSTEM_WORKSPACE_ID,
 } from './terminal/workspace-of-terminal';
+import { agentDisplay } from './agents/identity';
+import { planImDoneNotice, type ImDoneNoticeFacts } from './attention/imdone-notice';
 import { registerOpenFile } from './editor/open-file';
 import {
     registerHostTools,
@@ -301,6 +305,37 @@ const isDev = !isProd;
  * Both default off and are independent of the always-on attention glow.
  */
 
+/**
+ * Gather what the imDone notice needs to name: the terminal, the workspace it
+ * belongs to, and the agent running in it. Everything is looked up defensively —
+ * a spec can be deleted between the tool call and the toast, and a plain shell
+ * running a finish-hook has no agent at all. Missing facts are simply absent;
+ * the notice degrades rather than failing.
+ */
+function imDoneNoticeFacts(terminalId: string): ImDoneNoticeFacts {
+    try {
+        const spec = getTerminalSpec(terminalId);
+        if (!spec) return {};
+        const wsId = workspaceIdOfSpec(spec);
+        const workspace =
+            wsId === SYSTEM_WORKSPACE_ID
+                ? 'System Workspace'
+                : wsId
+                  ? getWorkspace(wsId)?.project_name ?? null
+                  : null;
+        // The identity convention (#258): provider + NAME, never the chat id.
+        // `whisper_purpose` IS the agent's name — see agents/identity.ts, which
+        // deliberately makes them the same field so the two can't drift.
+        const provider = spec.meta?.agent;
+        const agent = provider
+            ? agentDisplay({ provider, name: spec.meta?.whisper_purpose ?? '' })
+            : null;
+        return { workspace, agent, terminal: spec.label };
+    } catch {
+        return {};
+    }
+}
+
 function notifyImDone(terminalId: string): void {
     let settings;
     try {
@@ -324,10 +359,10 @@ function notifyImDone(terminalId: string): void {
         deliverAlertSound(masterWindow, { kind: 'imDone', sound });
     }
     if (settings.notify_toast === 'on' && Notification.isSupported()) {
-        const label = getTerminalSpec(terminalId)?.label ?? 'A terminal';
+        const notice = planImDoneNotice(imDoneNoticeFacts(terminalId));
         const n = new Notification({
-            title: 'Genie — agent finished',
-            body: `${label} is done and waiting for you.`,
+            title: notice.title,
+            body: notice.body,
             // Silence the OS chime only when OUR chime actually plays, so we
             // don't double up — but if the alert sound is off, let the OS sound.
             silent: !!sound,
@@ -337,6 +372,10 @@ function notifyImDone(terminalId: string): void {
             // `mainWindow` reference is never assigned, so this used to focus an
             // arbitrary window and did nothing when tray-resident.
             showMasterWindow();
+            // …then go to the terminal that actually finished. Surfacing the
+            // window alone left the user on whatever workspace happened to be
+            // active, which is the hunt this toast exists to end.
+            broadcastTerminalReveal(terminalId, workspaceIdOfTerminal(terminalId));
         });
         n.show();
     }

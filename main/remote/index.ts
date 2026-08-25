@@ -7,6 +7,8 @@ import { demandWindowAttention } from '../attention-flash';
 import { encryptSecret, decryptSecret } from '../secrets/store';
 import { getAllSettings } from '../db';
 import { resolveAlertSound } from '../notify-sound';
+import { planImDoneNotice } from '../attention/imdone-notice';
+import type { AgentProvider } from '../agents/identity';
 import { shouldForwardToDriver } from './forward-decision';
 import { isUsableGrid } from '../terminal/size-tracker';
 import { MOUSE_REPORTING_OFF } from '../terminal/replay';
@@ -577,6 +579,18 @@ export function forwardedAnswerFailureMessage(err: unknown): string {
     return `The host did not accept the answer (${msg}). It is still waiting — the question will reappear.`;
 }
 
+/**
+ * The host→driver `notify:imdone` payload. `label` is all an OLDER host sends;
+ * the rest is what lets the driver's toast name the workspace and the agent
+ * instead of only the hostname. Every field optional — the wire is versionless,
+ * so absence is the compatibility mechanism.
+ */
+interface ImDoneWirePayload {
+    label?: string;
+    workspace?: string | null;
+    agent?: { provider: AgentProvider; name: string } | null;
+}
+
 function notifyForwardedAnswerFailed(conn: RemoteConnection, err: unknown): void {
     if (!Notification.isSupported()) return;
     try {
@@ -705,7 +719,7 @@ function refreshConnQuestions(conn: RemoteConnection): void {
 /** Surface a host's imDone chime + toast on THIS driver (the glow + window-flash
  *  arrive separately via terminal:attention). Honours the DRIVER's own
  *  notify_sound / notify_toast settings. */
-function forwardImDoneToDriver(conn: RemoteConnection, payload: { label?: string } | null): void {
+function forwardImDoneToDriver(conn: RemoteConnection, payload: ImDoneWirePayload | null): void {
     let settings;
     try {
         settings = getAllSettings();
@@ -718,10 +732,19 @@ function forwardImDoneToDriver(conn: RemoteConnection, payload: { label?: string
         if (sound) emitToConn(conn, 'notify:sound', { kind: 'imDone', sound });
     }
     if (settings.notify_toast === 'on' && Notification.isSupported()) {
-        const label = payload?.label ?? 'A terminal';
+        // The SAME text the local toast uses, plus the host — one place decides
+        // what an imDone notice says, so the remote surface cannot drift back
+        // into naming nothing. A host on an older build sends only `label`, and
+        // the notice degrades to it rather than inventing facts.
+        const notice = planImDoneNotice({
+            workspace: payload?.workspace ?? null,
+            agent: payload?.agent ?? null,
+            terminal: payload?.label ?? null,
+            host: conn.host.hostname,
+        });
         const n = new Notification({
-            title: 'Genie — agent finished (remote)',
-            body: `${label} is done on ${conn.host.hostname}.`,
+            title: notice.title,
+            body: notice.body,
             silent: settings.notify_sound === 'on',
         });
         n.on('click', () => {
@@ -1231,7 +1254,7 @@ function handleBridgeMessage(conn: RemoteConnection, raw: string): void {
         } else if (msg.type === 'question:changed') {
             refreshConnQuestions(conn);
         } else if (msg.type === 'notify:imdone') {
-            forwardImDoneToDriver(conn, msg.payload as { label?: string } | null);
+            forwardImDoneToDriver(conn, msg.payload as ImDoneWirePayload | null);
         }
 
     } catch {

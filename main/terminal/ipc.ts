@@ -1476,6 +1476,25 @@ export function broadcastTerminalAttention(id: string, on: boolean): void {
 }
 
 /**
+ * TAKE THE USER TO A TERMINAL — activate its workspace and surface its panel.
+ *
+ * Fired when the `imDone` toast is CLICKED. The toast's whole purpose is to pull
+ * the user to the one terminal that finished, and it used to land them on the
+ * master window with no idea which of several workspaces had fired it: the
+ * notice named neither the workspace nor the agent, and the click went nowhere
+ * in particular. Naming it in the text is half the fix; going there is the other.
+ *
+ * `workspaceId` is the synthetic System Workspace id for a System-Workspace
+ * terminal, and null for an unattached one (the panel is still surfaced).
+ */
+export function broadcastTerminalReveal(id: string, workspaceId: string | null): void {
+    // LOCAL-only, for the same reason as the attention glow: a host terminal's
+    // reveal arrives over its host's /ws/events, and a local id must not steer a
+    // remote-bound window to a panel it doesn't have.
+    broadcastLocal('terminal:reveal', { id, workspaceId });
+}
+
+/**
  * Pulse a workspace ROW in the chooser (agent-integration MCP). Fired alongside
  * the per-terminal attention glow when an agent calls imDone, so the user gets a
  * sidebar-level "something finished in workspace X" cue even when the terminal

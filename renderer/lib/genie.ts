@@ -3904,6 +3904,15 @@ export interface GenieApi {
         terminalAttention: (
             cb: (payload: { id: string; on: boolean }) => void,
         ) => () => void;
+        /** The imDone toast was clicked: go to the terminal that finished —
+         *  activate its workspace and surface its panel. `workspaceId` is the
+         *  synthetic System Workspace id for a System-Workspace terminal, and
+         *  null for an unattached one. Optional — the broadcast is LOCAL-only, so
+         *  the remote bridge does not carry it (a host's own toast reveals on the
+         *  host). */
+        terminalReveal?: (
+            cb: (payload: { id: string; workspaceId: string | null }) => void,
+        ) => () => void;
         /** Agent-integration MCP: pulse a workspace row — a terminal in it called
          *  imDone (workspaceId is the synthetic System Workspace id for a
          *  System-Workspace terminal). A transient sidebar-level cue. */
