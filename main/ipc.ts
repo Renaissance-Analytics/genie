@@ -59,6 +59,7 @@ import {
     repairWorkspaceDocs,
 } from './workspace/create-agi';
 import { analyseFolder } from './workspace/analyse';
+import { syncGappDevWorkspaces } from './workspace/gapp-dev-sync';
 import { validateSimpleWorkspace } from './workspace/create-simple';
 import { openWorkspace } from './workspace/open';
 import { cloneRepo } from './workspace/clone';
@@ -1524,7 +1525,25 @@ export function registerIpcHandlers(): void {
     });
 
     // --- Backend projects (fans out across signed-in backends) ----------
-    ipcMain.handle('tynn:projects', async () => listAllProjects());
+    /**
+     * The project list, and the one place Genie learns that a project became (or
+     * stopped being) a Genie App.
+     *
+     * `is_gapp` rides the project row and nothing else carries it — not the
+     * agent-token mint, not a push channel — so this fetch IS the sync (genie#245).
+     * Reconciling here rather than on a timer of its own means every surface that
+     * already asks for projects converges the workspaces for free, and a flag
+     * flipped in Tynn lands the next time the shell asks — which the master window
+     * does on focus, i.e. when the user comes back from the browser they flipped it in.
+     */
+    ipcMain.handle('tynn:projects', async () => {
+        const projects = await listAllProjects();
+        // Only when something actually moved: this handler runs on every modal
+        // open, and a broadcast that changes nothing still costs every window a
+        // workspace re-fetch.
+        if (syncGappDevWorkspaces(projects) > 0) broadcastWorkspacesChanged();
+        return projects;
+    });
     // Project CREATION is Tynn-specific (the Aionima backend has no create
     // API), so these route straight to the Tynn backend rather than fanning
     // out. Used by the Add-workspace "Create new project" form.

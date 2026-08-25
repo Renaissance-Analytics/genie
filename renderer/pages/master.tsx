@@ -969,6 +969,29 @@ function MasterInner() {
         return off;
     }, []);
 
+    // Ask Tynn for the project list on mount and whenever this window regains
+    // focus. Same reason the max_views read below does it: the thing that
+    // changed lives in ANOTHER window — here, another APPLICATION. Marking a
+    // project as a Genie App happens in Tynn in a browser, and coming back to
+    // Genie is exactly the moment the user expects it to have noticed (genie#245).
+    //
+    // The fetch is the sync: main reconciles `is_gapp` onto the workspace rows
+    // inside the `tynn:projects` handler and broadcasts `workspaces:changed` when
+    // something moved, which the effect above turns into a rail re-render. So
+    // this deliberately discards the result — it is not a poll for project data,
+    // it is a nudge, and it costs one request only when the window is focused.
+    useEffect(() => {
+        if (!hasGenieBridge()) return;
+        const nudge = () => {
+            void api()
+                .tynn.projects()
+                .catch(() => {});
+        };
+        nudge();
+        window.addEventListener('focus', nudge);
+        return () => window.removeEventListener('focus', nudge);
+    }, []);
+
     // Load the max_views setting and keep it fresh — the Settings screen is
     // a separate window, so re-read whenever this window regains focus.
     useEffect(() => {

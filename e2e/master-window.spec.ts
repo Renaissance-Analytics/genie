@@ -111,6 +111,54 @@ test('the rail lists the seeded workspaces, with the launch target active', asyn
     ).toHaveCount(1);
 });
 
+/**
+ * A GApp Development Workspace looks different, and an ordinary one does not
+ * (genie#245).
+ *
+ * The precedence and the manifest boundary are settled in unit tests
+ * (renderer/lib/__tests__/workspace-kind.test.ts). What only the real window can
+ * show is that the resolved class actually REACHES the DOM and that a stylesheet
+ * answers it — a frozen lookup table returning 'ws-gapp-dev' is worth nothing if
+ * nobody applies it or no rule matches.
+ *
+ * The ordinary workspace in the same rail is the control, and it is what makes
+ * this test non-vacuous: every assertion here would also pass against a build
+ * that dropped the feature entirely if it only ever asked about one row.
+ */
+test('a GApp Development Workspace wears its own chrome; an ordinary one does not', async () => {
+    const gdwRow = page.locator('.tproj').filter({ hasText: seed.peerName });
+    const plainRow = page.locator('.tproj').filter({ hasText: seed.workspaceName });
+
+    await expect(gdwRow).toHaveClass(/\bws-gapp-dev\b/);
+    await expect(plainRow).not.toHaveClass(/\bws-gapp-dev\b/);
+
+    // …and the same mark on the 56px rail, which identifies workspaces on its own.
+    await expect(page.locator(`.crail-btn[title*="${seed.peerName}"]`)).toHaveClass(
+        /\bws-gapp-dev\b/,
+    );
+    await expect(page.locator(`.crail-btn[title*="${seed.workspaceName}"]`)).not.toHaveClass(
+        /\bws-gapp-dev\b/,
+    );
+
+    // The class is only half of it. A rule has to MATCH, so compare what the two
+    // rows actually paint: the GDW's header carries a ring the ordinary one does
+    // not. Reading computed style rather than a screenshot keeps this honest about
+    // WHY they differ and survives theme changes.
+    const ringOf = (row: typeof gdwRow) =>
+        row.locator('.tproj-head').first().evaluate((el) => getComputedStyle(el).boxShadow);
+    const gdwRing = await ringOf(gdwRow);
+    const plainRing = await ringOf(plainRow);
+    expect(gdwRing).not.toBe(plainRing);
+    expect(gdwRing).not.toBe('none');
+
+    // The tooltip is where the ring says what it MEANS — a colour nobody can name
+    // is decoration, not information.
+    await expect(gdwRow.locator('.tproj-head').first()).toHaveAttribute(
+        'title',
+        /GApp Development Workspace/,
+    );
+});
+
 test('the floor lays out the seeded terminal, and the status bar counts it', async () => {
     await expect(panel(seed.terminalLabel)).toBeVisible();
     // Only the ACTIVE workspace's selected specs are laid out; the peer's terminal

@@ -1510,3 +1510,56 @@ describe('v44 — where a GApp’s backups go (Tynn #250, step 4)', () => {
         expect(cols(db, 'app_grants').has('backup_json')).toBe(true);
     });
 });
+
+/**
+ * v49 — GApp Development Workspaces (genie#245 / tynn.ai#204).
+ *
+ * A SEPARATE column from `app_kind` on purpose. `app_kind` is INSTALL identity —
+ * Genie created or adopted this workspace to run a GApp, and `manage.ts` clears
+ * it to NULL on uninstall. GDW-ness is DEVELOPMENT identity, mirrored from a flag
+ * a human set on the linked Tynn project. Folding the two into one column would
+ * mean an uninstall silently un-marking somebody's development workspace, and
+ * "last writer wins" standing in for a precedence rule nobody wrote down.
+ */
+describe('v49 — GApp Development Workspaces', () => {
+    it('adds gapp_dev, and every EXISTING workspace stays an ordinary one', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        db.prepare(
+            `INSERT INTO workspaces
+                (id, project_id, project_name, tynn_project_id, tynn_project_name, shape, path, sort_order)
+             VALUES ('ws-1', 'p1', 'A Project', 'p1', 'A Project', 'simple', '/tmp/a', 0)`,
+        ).run();
+
+        expect(cols(db, 'workspaces').has('gapp_dev')).toBe(true);
+        const row = db
+            .prepare<[], { gapp_dev: number | null }>('SELECT gapp_dev FROM workspaces')
+            .get();
+        expect(row?.gapp_dev ?? null).toBeNull();
+    });
+
+    it('leaves app_kind untouched — install identity and dev identity are independent', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        db.prepare(
+            `INSERT INTO workspaces
+                (id, project_id, project_name, tynn_project_id, tynn_project_name, shape, path,
+                 sort_order, app_kind, gapp_dev)
+             VALUES ('ws-2', 'p2', 'B', 'p2', 'B', 'simple', '/tmp/b', 0, 'app-dev', 1)`,
+        ).run();
+        const row = db
+            .prepare<[string], { app_kind: string | null; gapp_dev: number | null }>(
+                'SELECT app_kind, gapp_dev FROM workspaces WHERE id = ?',
+            )
+            .get('ws-2');
+        expect(row?.app_kind).toBe('app-dev');
+        expect(row?.gapp_dev).toBe(1);
+    });
+
+    it('is idempotent — re-running converges without throwing', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(() => runMigrations(db)).not.toThrow();
+        expect(cols(db, 'workspaces').has('gapp_dev')).toBe(true);
+    });
+});

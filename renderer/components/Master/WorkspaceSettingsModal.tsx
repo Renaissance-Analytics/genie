@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { Action, Heading, Icon, Input, Modal, Select, Text } from '@particle-academy/react-fancy';
 import TynnProvisionPanel from '../TynnProvisionPanel';
 import type {
+    AppCheckReport,
     WorkspaceRow,
     WorkspaceDocHealth,
     EnvelopeRepoView,
@@ -13,6 +14,7 @@ import type {
 } from '../../lib/genie';
 import { api } from '../../lib/genie';
 import { scopeValue, setScopeEntry } from '../../lib/ftq-availability';
+import { resolveWorkspaceKind } from '../../lib/workspace-kind';
 import {
     agentCapField,
     describeInheritedAgentCap,
@@ -356,6 +358,8 @@ export default function WorkspaceSettingsModal({
                 {workspace.path && <KnowledgeFoldersPanel workspacePath={workspace.path} />}
 
                 <WorkspaceDocsPanel workspaceId={workspace.id} />
+
+                <GappDevPanel workspace={workspace} />
 
                 {workspace.path && <OpsReposPanel workspacePath={workspace.path} />}
 
@@ -1233,6 +1237,133 @@ function KnowledgeFoldersPanel({ workspacePath }: { workspacePath: string }) {
 }
 
 type OpsPlan = Awaited<ReturnType<ReturnType<typeof api>['tynn']['opsPlan']>>;
+
+/**
+ * What a GApp Development Workspace GETS, beyond looking different (genie#245).
+ *
+ * The check suite and the previewer already existed, but only in Settings and the
+ * App Store — global surfaces that open a folder PICKER, because they have no
+ * idea which app you mean. In a GDW, Genie does: it is this workspace's folder.
+ * So the same first-party tools are re-offered here already aimed, which is the
+ * whole ergonomic difference between "a tool exists" and "a tool is to hand".
+ *
+ * Deliberately NOT a second implementation — both buttons call the exact IPC the
+ * global surfaces call, passing a path instead of letting it prompt. And
+ * deliberately no publishing: there is no publishing flow in this release, and a
+ * button for one would be a promise the product does not keep.
+ *
+ * Renders nothing unless this workspace is a GDW, the same way the Ops panels
+ * below render nothing for a non-Ops project.
+ */
+function GappDevPanel({ workspace }: { workspace: WorkspaceRow }) {
+    const [report, setReport] = useState<AppCheckReport | null>(null);
+    const [busy, setBusy] = useState<'check' | 'preview' | null>(null);
+    const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+
+    // After the hooks, never before them.
+    if (resolveWorkspaceKind(workspace) !== 'gapp-dev-workspace' || !workspace.path) return null;
+
+    const check = async () => {
+        setBusy('check');
+        setMsg(null);
+        try {
+            setReport(await api().apps.checkFolder(workspace.path));
+        } catch {
+            setReport(null);
+            setMsg({ kind: 'err', text: 'The check could not run.' });
+        } finally {
+            setBusy(null);
+        }
+    };
+
+    const preview = async () => {
+        setBusy('preview');
+        setMsg(null);
+        try {
+            const r = await api().apps.previewFolder(workspace.path);
+            setMsg(
+                r.ok
+                    ? { kind: 'ok', text: `Preview open at ${r.homeUrl ?? 'its own address'}.` }
+                    : {
+                          kind: 'err',
+                          text: r.errors?.join(' ') ?? 'The preview did not open.',
+                      },
+            );
+        } catch {
+            setMsg({ kind: 'err', text: 'The preview did not open.' });
+        } finally {
+            setBusy(null);
+        }
+    };
+
+    const errors = report?.findings.filter((f) => f.severity === 'error') ?? [];
+    const advice = report?.findings.filter((f) => f.severity === 'advice') ?? [];
+
+    return (
+        <Section
+            title="Genie App development"
+            sub="This workspace's Tynn project is marked as a Genie App, so the app tools point at this folder — no folder to pick."
+        >
+            <Row
+                label="Check this app"
+                sub="Runs the full check suite over this folder: manifest, files, agents, services and the front end."
+            >
+                <Action
+                    size="sm"
+                    color="blue"
+                    icon="check"
+                    disabled={busy !== null}
+                    onClick={check}
+                >
+                    {busy === 'check' ? 'Checking…' : 'Check'}
+                </Action>
+            </Row>
+            {report && (
+                <div className={`set-note${report.ok ? '' : ' warn'}`}>
+                    <strong>
+                        {report.app ? `${report.app.name} v${report.app.version}` : 'This folder'}
+                        {report.ok ? ' is ready to install.' : ' will not work yet.'}
+                    </strong>
+                    {/* A clean report has to say what it COVERED — "no problems"
+                        from a check that quietly skipped everything is the false
+                        reassurance the suite exists to remove. */}
+                    {report.ok && advice.length === 0 && (
+                        <div style={{ marginTop: 4, opacity: 0.75 }}>
+                            {report.ran.length} checks ran.
+                        </div>
+                    )}
+                    {[...errors, ...advice].length > 0 && (
+                        <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                            {[...errors, ...advice].map((f) => (
+                                <li key={f.check + f.where}>
+                                    {f.problem} <span style={{ opacity: 0.75 }}>{f.fix}</span>
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                </div>
+            )}
+            <Row
+                label="Preview it"
+                sub="Opens the app in a throwaway window on the live source — its own identity and address, so it cannot collide with an installed copy."
+            >
+                <Action size="sm" icon="eye" disabled={busy !== null} onClick={preview}>
+                    {busy === 'preview' ? 'Opening…' : 'Preview'}
+                </Action>
+            </Row>
+            {msg && (
+                <Text
+                    size="xs"
+                    style={{
+                        color: msg.kind === 'ok' ? 'var(--emerald-600)' : 'var(--rose-500)',
+                    }}
+                >
+                    {msg.text}
+                </Text>
+            )}
+        </Section>
+    );
+}
 
 /**
  * Ops-project repo auto-management. For a workspace linked to an Ops project,

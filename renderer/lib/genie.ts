@@ -156,6 +156,16 @@ export interface WorkspaceRow {
      *  `update` patch deliberately drops this column, which is what stops an agent
      *  raising its own cap. */
     max_agent_terminals?: number | null;
+    /** Which kind of GApp workspace Genie INSTALLED here — 'app' (an installed
+     *  GApp), 'app-dev' (the developer's own folder, adopted) or 'app-preview' (a
+     *  throwaway preview). NULL for an ordinary workspace. Never read raw: pass
+     *  the row to `resolveWorkspaceKind` in lib/workspace-kind.ts, which narrows it
+     *  and settles its precedence against `gapp_dev`. */
+    app_kind?: string | null;
+    /** 1 = a GApp Development Workspace: the linked Tynn project is marked
+     *  `is_gapp`, so a GApp is BUILT here (genie#245). Mirrored from Tynn by main;
+     *  there is no local toggle. Read it through `resolveWorkspaceKind` too. */
+    gapp_dev?: number | null;
     /** Workspace ids admitted when `agent_access: 'specific'`, JSON-encoded.
      *  Resolve via `workspaces.getAgentAccess` rather than parsing here. */
     agent_access_workspaces?: string | null;

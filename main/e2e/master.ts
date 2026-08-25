@@ -9,6 +9,7 @@ import {
     getWorkspace,
     removeWorkspace,
     setSettings,
+    setWorkspaceGappDev,
 } from '../db';
 import { getTerminalSize } from '../terminal/size-tracker';
 import { killTerminalById } from '../terminal/ipc';
@@ -54,6 +55,8 @@ const TERMINAL_ID = 'e2e-master-terminal';
 const TERMINAL_LABEL = 'master-floor';
 const PEER_TERMINAL_ID = 'e2e-master-peer-terminal';
 const PEER_TERMINAL_LABEL = 'peer-floor';
+/** The Tynn project the GDW fixture is linked to — see the note in `seedMasterE2E`. */
+const PEER_TYNN_PROJECT_ID = 'e2e-master-peer-tynn-project';
 
 export interface MasterSeed {
     workspaceId: string;
@@ -156,6 +159,26 @@ export function seedMasterE2E(): MasterSeed {
 
     const dir = seedWorkspace(WORKSPACE_ID, WORKSPACE_NAME, 0);
     const peerDir = seedWorkspace(PEER_ID, PEER_NAME, 1);
+
+    // The PEER is the GApp Development Workspace fixture (genie#245); the first
+    // workspace stays ordinary, so the spec has a control to compare against in
+    // the same rail — "the GDW has the class" proves nothing on its own if every
+    // row has it.
+    //
+    // The project.json link is not decoration. `pickTynnLink` resolves a link from
+    // the workspace ROW only when its backend is 'tynn', and this fixture is
+    // 'aionima' so nothing here reaches out to a backend. A `tynn` block on disk
+    // resolves regardless of backend, which gives the row a link WITHOUT a
+    // network. That matters because the master window now nudges the project list
+    // on focus: with no link at all, the sync would read "unlinked" and clear the
+    // flag mid-spec. With one, the project is merely ABSENT from the (empty) E2E
+    // project list, which `planGappDevSync` deliberately leaves alone.
+    fs.writeFileSync(
+        path.join(peerDir, 'project.json'),
+        JSON.stringify({ name: PEER_NAME, tynn: { projectId: PEER_TYNN_PROJECT_ID } }, null, 2),
+    );
+    setWorkspaceGappDev(PEER_ID, true);
+    setWorkspaceGappDev(WORKSPACE_ID, false);
 
     createTerminalSpec({
         id: TERMINAL_ID,
