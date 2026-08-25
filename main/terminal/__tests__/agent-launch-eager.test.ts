@@ -137,6 +137,25 @@ describe('createAgentTerminal — the Host launches the agent (genie #63 Phase 0
         expect(delivered().endsWith('\r')).toBe(true);
     });
 
+    it('renders Codex instructions after all options and the end-of-options separator', () => {
+        const r = createAgentTerminal({
+            workspaceId: 'ws-1',
+            cwd: process.cwd(),
+            label: 'codex agent',
+            agentMeta: {
+                agent: 'codex',
+                command: 'codex --yolo -c model_reasoning_effort="high"',
+                instructions: '--read AGENTS.md first',
+            },
+        });
+
+        vi.runAllTimers();
+        expect(r.command).toBe(
+            'codex --yolo -c model_reasoning_effort="high" -- "read AGENTS.md first"',
+        );
+        expect(delivered()).toContain(r.command);
+    });
+
     it('does not re-submit the boot command when the pty is already running', () => {
         const first = createAgentTerminal({
             workspaceId: 'ws-1',

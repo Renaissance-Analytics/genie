@@ -73,6 +73,8 @@ describe('writeWorkspaceAgentMcp — per-target sync gating', () => {
         expect(files.get(codexSessionHook)).toContain('payload.session_id');
         expect(files.get(codexSessionHook)).toContain("action: 'registerSession'");
         expect(files.get(codexSessionHook)).toContain('process.env.GENIE_MCP_URL');
+        expect(files.get(codexSessionHook)).toContain('const attempts = 3');
+        expect(files.get(codexSessionHook)).toContain('await delay(150 * attempt)');
         for (const name of coreSkillNames) {
             const file = path.join(WS, '.agents', 'skills', name, 'SKILL.md');
             expect(files.get(file)).toMatch(new RegExp(`^---\\nname: ${name}\\n`));

@@ -53,8 +53,8 @@ import {
 } from '../terminal/ipc';
 import { agentRef, savedAgentKey } from '../agents/identity';
 import { resolveWorkstationProvider } from '../agents/provider';
-import { withStartupInstructions } from '../agents/startup';
 import { decideAgentStart, savedAgentsOf, type SavedAgent } from '../agents/saved';
+import { withProviderStartupInstructions } from '../agents/startup';
 import {
     PASTE_SUBMIT_DELAY_MS,
     resolveTerminalInput,
@@ -1609,7 +1609,7 @@ export type RestartAgentResult =
  * Claude persists its session to disk continuously, so the resumed CLI continues
  * where it left off while re-reading the current `.mcp.json` + getting a fresh
  * agent MCP endpoint. REFUSES (no teardown) when the terminal isn't a resumable
- * agent — no captured session id, or a non-claude agent — so a restart can never
+ * agent — no captured session id, or an unsupported custom agent — so a restart can never
  * silently drop the conversation into a fresh, context-less session.
  */
 export function restartAgentTerminal(id: string): RestartAgentResult {
@@ -1693,6 +1693,7 @@ async function reattachSavedAgent(
         agent: agent.provider,
         name: agent.name,
         reattached: true,
+        sessionBinding: agent.chatSessionId ? ('bound' as const) : ('pending' as const),
         ref: agentRef({
             provider: agent.provider,
             name: agent.name,
@@ -1823,8 +1824,9 @@ export async function runAgentForMcp(
                                 : `No command configured for agent "${agent}".`,
                     };
                 }
-                const command = req.instructions
-                    ? withStartupInstructions(base, req.instructions)
+                const command = base;
+                const approvalCommand = req.instructions
+                    ? withProviderStartupInstructions(agent, base, req.instructions)
                     : base;
                 const cwdR = resolveAgentCwd(ws, { repo: req.repo, cwd: req.cwd });
                 if ('error' in cwdR) return { ok: false, error: cwdR.error };
@@ -1842,7 +1844,7 @@ export async function runAgentForMcp(
                     title: `An agent wants to LAUNCH a ${agent} coding agent (it can read, write, and run code on its own):`,
                     lines: [
                         `saved as: ${savedAgentKey(agent, plan.name)}`,
-                        `command: ${command}`,
+                        `command: ${approvalCommand}`,
                         `in: ${cwdR.cwd}`,
                     ],
                 });
@@ -1852,14 +1854,14 @@ export async function runAgentForMcp(
                 // Spawns the pty AND launches the agent CLI into it, host-side —
                 // the agent is running the moment this returns, whether or not
                 // anyone ever opens the panel (genie #63 Phase 0).
-                const { id, chatSessionId } = createAgentTerminal({
+                const { id, chatSessionId, command: launchedCommand } = createAgentTerminal({
                     workspaceId: ws.id,
                     cwd: cwdR.cwd,
                     // The NAME, not "<provider> agent". The label is what the
                     // sidebar and the Floor render, and a roster of "claude agent"
                     // rows is the anonymity this story removes.
                     label: `${agent} · ${plan.name}`,
-                    agentMeta: { agent, command },
+                    agentMeta: { agent, command, instructions: req.instructions },
                     createdBy: 'agent',
                     // The name IS the AgentInbox purpose — one field, so the ref
                     // and the inbox can never disagree about what it is called.
@@ -1869,9 +1871,10 @@ export async function runAgentForMcp(
                     ok: true,
                     id,
                     agent,
-                    command,
+                    command: launchedCommand ?? command,
                     name: plan.name,
                     reattached: false,
+                    sessionBinding: chatSessionId ? 'bound' : 'pending',
                     // Null chat-id for Codex is correct, not a failure: it binds
                     // at SessionStart, onto this record.
                     ref: agentRef({ provider: agent, name: plan.name, chatSessionId }),
