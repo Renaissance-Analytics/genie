@@ -25,6 +25,7 @@ import {
     workspaceRootForTerminal,
 } from '../mcp/host-tools';
 import { devServerAvailableForMcp, manageSiteForMcp } from '../mcp/dev-site-tools';
+import { manageGappDevForMcp } from '../mcp/gapp-dev-tools';
 import { manageServiceForMcp } from '../mcp/dev-service-tools';
 import { openFileForUserForMcp } from '../editor/open-file';
 import { applySetEnv, applyCheckEnv } from '../env-store';
@@ -141,6 +142,13 @@ export function buildHostServerDeps(
         // desktop, and nothing here is GUI-shaped.
         manageService: (terminalId, req) => manageServiceForMcp(terminalId, req),
         devServerAvailable: () => devServerAvailableForMcp(),
+        // GApp Development Workspaces (genie#245). BOTH shells get it: `status`
+        // and `check` are pure db+filesystem reads, and a headless host is a
+        // perfectly good place to check an app. Only `preview` needs a window,
+        // and that half is an injected port the desktop shell registers —
+        // absent, the tool SAYS a preview cannot open here rather than doing
+        // nothing, which is the failure this whole surface is a reaction to.
+        manageGappDev: (terminalId, req) => manageGappDevForMcp(terminalId, req),
         provisionWorkspaces: (terminalId, req) => provisionWorkspacesForMcp(terminalId, req),
         manageTerminals: (terminalId, req) => manageTerminalsForMcp(terminalId, req),
         runAgent: (terminalId, req) => runAgentForMcp(terminalId, req),

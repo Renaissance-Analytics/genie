@@ -48,6 +48,7 @@ import { installAppFromFolder, type AppInstallIO, type AppInstallResult } from '
 import { manageProcessForMcp, resolveAgentLaunch } from '../mcp/host-tools';
 import { manageSiteForMcp } from '../mcp/dev-site-tools';
 import { callerIdForApp } from '../mcp/caller-identity';
+import { setGappPreviewPort } from '../mcp/gapp-dev-tools';
 import { appCopyPlan } from './install-plan';
 import {
     APP_AGENTS_DIR,
@@ -860,6 +861,30 @@ export function sweepPreviewsAtBoot(): void {
 }
 
 export function registerAppsIpc(): void {
+    // The desktop half of `manageGappDev` (genie#245). An agent in a GApp
+    // Development Workspace can open and close the SAME preview a human opens
+    // from Workspace Settings — the identical `openPreview`/`closePreview` over
+    // the identical `previewIO`, so the OS permission modal it raises is the one
+    // the user already answers. What this removes is the CLICK, which an agent
+    // cannot perform and a user cannot be asked for in a terminal they are not
+    // watching. A headless host never registers it and the tool says why.
+    setGappPreviewPort({
+        open: async (folder) => {
+            const r = await openPreview(folder, previewIO());
+            return {
+                ok: r.ok,
+                appId: r.appId,
+                homeUrl: r.homeUrl,
+                errors: r.errors,
+                warnings: r.warnings,
+            };
+        },
+        close: async (appId) => {
+            closeAppWindows(appId);
+            await closePreview(appId, previewIO());
+        },
+    });
+
     ipcMain.handle('apps:list', () => appsList());
 
     /**

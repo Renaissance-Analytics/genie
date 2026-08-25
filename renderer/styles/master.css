@@ -134,22 +134,45 @@
         color-mix(in srgb, var(--agi-gold) 9%, transparent)
     );
 
-    /* GApp Development Workspace mark (genie#245). Amber, because amber is
-       ALREADY how a GApp says "in development" everywhere else in Genie — the
-       App Tray's dev pill and the App Store's "development" badge — so the tray,
-       the store and the workspace ring tell one story rather than three.
-       Deliberately NOT indigo: indigo is the selection colour, and a marker that
-       vanishes the moment you select the row is not a marker.
-       It sits next to --agi-gold in hue (a GDW is still an envelope), so the two
-       are told apart by WEIGHT as well: 2px here against the envelope's 1px
-       hairline. See renderer/lib/workspace-kind.ts — nothing a GApp's manifest
-       declares can reach these tokens. */
-    --gapp-dev: #f59e0b;
+    /* GApp Development Workspace mark (genie#245).
+
+       THIS WAS AMBER AND THAT WAS THE BUG. The reasoning was sound in isolation
+       — amber is how a GApp says "in development" in the App Tray pill and the
+       Store badge — but it ignored what the workspace row already wears: EVERY
+       .agi envelope carries a gold hairline ring, and amber-500 is eight degrees
+       of hue from that gold. Two rings, one colour, on every row: "this is not
+       very distinctive and it has the same selected bg gradient". Telling them
+       apart by WEIGHT (2px against 1px) is not a distinction anyone makes at a
+       glance, and it survives no theme change.
+
+       Pink is chosen for DISTANCE, and the distances are pinned by
+       renderer/lib/__tests__/gapp-dev-mark.test.ts, which reads these tokens:
+         · ~75° from --agi-gold, so a GDW is not a shade of "envelope";
+         · ~96° from --agent, because indigo is the selection colour and a mark
+           that vanishes the moment you select the row is not a mark;
+         · out of the status band entirely — green/amber/red mean running, warn
+           and broken all over this UI, and a workspace KIND is not a status.
+
+       The tray pill and store badge keep their amber: they say "this APP build
+       is a dev build", which is a fact about an app. This says "an app is BUILT
+       here", which is a fact about a workspace. Two colours because they are two
+       statements about two objects — the old single-story argument was joining
+       things that only sounded alike.
+
+       See renderer/lib/workspace-kind.ts: nothing a GApp's manifest declares can
+       reach these tokens, and the class that applies them comes from a frozen
+       first-party table. */
+    --gapp-dev: #ec4899;
     --gapp-dev-border: color-mix(in srgb, var(--gapp-dev) 62%, transparent);
+    /* 90deg, ANCHORED LEFT — deliberately not the 135° diagonal every other
+       selected row uses. Colour alone was not enough last time: two diagonal
+       washes at near-identical alphas read as one treatment even in different
+       hues. This one pours out of the accent bar at the row's left edge, so the
+       selected GDW has a different SHAPE as well as a different colour. */
     --gapp-dev-grad: linear-gradient(
-        135deg,
-        color-mix(in srgb, var(--gapp-dev) 24%, transparent),
-        color-mix(in srgb, var(--gapp-dev) 8%, transparent)
+        90deg,
+        color-mix(in srgb, var(--gapp-dev) 26%, transparent),
+        color-mix(in srgb, var(--gapp-dev) 4%, transparent)
     );
 
     --agent: #818cf8;
@@ -3239,17 +3262,32 @@ body.gutter-dragging .grid-gutter {
 
 /* ===== GApp Development Workspace (genie#245) ========================== */
 /* A workspace whose linked Tynn project is marked `is_gapp` — where a Genie App
-   is BUILT. Same grammar as the .agi treatment above (a ring on the row, a
-   gradient wash when selected) because it is the same KIND of statement about
-   the same object; only the colour and the weight differ. Deliberately no text
-   badge: the .agi one was removed as redundant and re-adding a sibling would
-   walk that back.
+   is BUILT.
+
+   The first version borrowed the .agi grammar wholesale: same ring, same
+   diagonal wash, a neighbouring hue, told apart only by being 2px instead of
+   1px. On screen that is one treatment. A GDW is not a heavier envelope — it is
+   a different KIND of workspace — so it now differs in every axis the eye reads
+   before it reads a tooltip:
+
+     COLOUR   pink, ~75° from the envelope gold (see the token comment).
+     PERSISTENCE  an accent bar AT REST, not only when selected. This is the
+              structural half, and it is what fixes "not very distinctive": an
+              unselected GDW sitting in a list of envelopes used to differ by a
+              hairline. Now it carries a bar none of its neighbours has.
+     SHAPE    the selected wash pours from that bar (90°), where every other
+              selected row washes diagonally (135°).
 
    Placed AFTER the .agi rules so a GDW — which is normally an .agi envelope too,
-   carrying both classes — wears the amber mark rather than the gold one. That
+   carrying both classes — wears the pink mark rather than the gold one. That
    ordering IS the precedence rule: the more specific fact about a workspace wins,
    exactly as resolveWorkspaceKind ranks `gapp-dev-workspace` above the envelope
    it happens to live in.
+
+   Still no text badge — the .agi one was removed as redundant and re-adding a
+   sibling would walk that back. The row's GApp control (below) is an
+   AFFORDANCE, not a label: it says what a GDW is by being the thing you launch
+   the app with.
 
    Every class here is first-party and comes from the frozen table in
    renderer/lib/workspace-kind.ts. A GApp styles its own window and pill; the
@@ -3258,6 +3296,21 @@ body.gutter-dragging .grid-gutter {
 .tproj.agi.ws-gapp-dev > .tproj-head {
     box-shadow: inset 0 0 0 2px var(--gapp-dev-border);
 }
+/* The RESTING bar. `.agi` draws its bar only when active, so this is the mark
+   that makes an unselected GDW identifiable in a column of envelopes. Dimmer and
+   narrower than the active one below, so "GDW" and "GDW, selected" stay two
+   distinguishable states rather than one. */
+.tproj.ws-gapp-dev > .tproj-head::before,
+.tproj.agi.ws-gapp-dev > .tproj-head::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 6px;
+    bottom: 6px;
+    width: 2px;
+    border-radius: 2px;
+    background: color-mix(in srgb, var(--gapp-dev) 55%, transparent);
+}
 .tproj.ws-gapp-dev.is-active > .tproj-head,
 .tproj.agi.ws-gapp-dev.is-active > .tproj-head {
     background: var(--gapp-dev-grad);
@@ -3265,6 +3318,7 @@ body.gutter-dragging .grid-gutter {
 }
 .tproj.ws-gapp-dev.is-active > .tproj-head::before,
 .tproj.agi.ws-gapp-dev.is-active > .tproj-head::before {
+    width: 3px;
     background: var(--gapp-dev);
 }
 .tproj.ws-gapp-dev.is-active > .tproj-head .pname,
@@ -3272,8 +3326,10 @@ body.gutter-dragging .grid-gutter {
     color: var(--fg-1);
 }
 /* The 56px rail identifies workspaces by glyph, so the GDW mark there is the
-   same ring rather than a new glyph — a fifth icon in a column of four would
-   read as another workspace TYPE rather than a state of one. */
+   ring rather than a new glyph — a fifth icon in a column of four would read as
+   another workspace TYPE rather than a state of one. The ring is left ON when
+   active (the gradient alone would swallow it), which is what keeps the rail and
+   the row telling the same story. */
 .crail-btn.ws-gapp-dev {
     box-shadow: inset 0 0 0 2px var(--gapp-dev-border);
 }
@@ -3282,6 +3338,35 @@ body.gutter-dragging .grid-gutter {
     color: var(--gapp-dev);
     border-color: var(--gapp-dev);
     box-shadow: inset 0 0 0 2px var(--gapp-dev-border);
+}
+
+/* The row's GApp control — LAUNCH THE APP FROM ITS OWN WORKSPACE (genie#245).
+
+   Same grammar as the Processes and Sites indicators beside it (a small glyph
+   that is both a state light and the way in), because it is the same kind of
+   thing: this workspace has an app, here is how you run it. It appears on GDWs
+   and nowhere else, which is also the strongest at-a-glance signal in the row —
+   no other workspace has a fourth control.
+
+   Pink so it belongs to the GDW mark rather than reading as another status
+   light. Deliberately NOT a state light: nothing pushes "a preview is open" to
+   the renderer, and a lamp kept lit by polling would be a lamp that lies
+   whenever the poll is stale. It dims while a launch is in flight and that is
+   all it claims. */
+.tproj-head .gapp-ind {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: color-mix(in srgb, var(--gapp-dev) 70%, var(--fg-4));
+    flex: 0 0 auto;
+    cursor: pointer;
+}
+.tproj-head .gapp-ind:hover {
+    color: var(--gapp-dev);
+}
+.tproj-head .gapp-ind.is-busy {
+    opacity: 0.55;
+    cursor: default;
 }
 .tproj-adds {
     display: flex;

@@ -31,6 +31,21 @@ export interface SavedPrompt {
     text: string;
 }
 
+/**
+ * A VERB the palette can run — as opposed to a place it navigates to.
+ *
+ * The first of them is launching a Genie App from the workspace it is built in,
+ * which was previously reachable only by opening Workspace Settings and knowing
+ * that a section appears there for some workspaces and not others.
+ */
+export interface CommandAction {
+    id: string;
+    label: string;
+    /** Where it will happen — a workspace name. Shown, never matched. */
+    hint?: string;
+    run: () => void;
+}
+
 export interface GenieCommandWindowProps {
     open: boolean;
     onClose: () => void;
@@ -39,6 +54,8 @@ export interface GenieCommandWindowProps {
     workspaces: Array<{ id: string; name: string }>;
     terminals: Array<{ id: string; label: string; hint?: string }>;
     prompts: SavedPrompt[];
+    /** Verbs on offer right now. Empty is normal — the group simply disappears. */
+    actions?: CommandAction[];
     onActivateWorkspace: (workspaceId: string) => void;
     onFocusTerminal: (terminalId: string) => void;
     onSendPrompt: (terminalId: string, text: string) => void;
@@ -51,6 +68,7 @@ export default function GenieCommandWindow({
     workspaces,
     terminals,
     prompts,
+    actions = [],
     onActivateWorkspace,
     onFocusTerminal,
     onSendPrompt,
@@ -58,6 +76,12 @@ export default function GenieCommandWindow({
     const items = useMemo<CommandItem[]>(
         () => [
             ...prompts.map((p) => ({ id: p.id, category: 'prompt' as const, label: p.label })),
+            ...actions.map((a) => ({
+                id: a.id,
+                category: 'action' as const,
+                label: a.label,
+                ...(a.hint ? { hint: a.hint } : {}),
+            })),
             ...workspaces.map((w) => ({ id: w.id, category: 'workspace' as const, label: w.name })),
             ...terminals.map((t) => ({
                 id: t.id,
@@ -66,17 +90,18 @@ export default function GenieCommandWindow({
                 ...(t.hint ? { hint: t.hint } : {}),
             })),
         ],
-        [prompts, workspaces, terminals],
+        [prompts, actions, workspaces, terminals],
     );
 
     if (!open) return null;
 
     return (
         <Command open={open} onClose={onClose} className="genie-cmdk">
-            <Command.Input placeholder="Search prompts, workspaces, terminals…  (p&gt; w&gt; t&gt;)" />
+            <Command.Input placeholder="Search prompts, actions, workspaces, terminals…  (p&gt; a&gt; w&gt; t&gt;)" />
             <CommandBody
                 items={items}
                 prompts={prompts}
+                actions={actions}
                 terminalId={terminalId}
                 onClose={onClose}
                 onActivateWorkspace={onActivateWorkspace}
@@ -94,6 +119,7 @@ export default function GenieCommandWindow({
 function CommandBody({
     items,
     prompts,
+    actions,
     terminalId,
     onClose,
     onActivateWorkspace,
@@ -102,6 +128,7 @@ function CommandBody({
 }: {
     items: CommandItem[];
     prompts: SavedPrompt[];
+    actions: CommandAction[];
     terminalId: string | null;
     onClose: () => void;
     onActivateWorkspace: (id: string) => void;
@@ -124,6 +151,8 @@ function CommandBody({
             onActivateWorkspace(item.id);
         } else if (item.category === 'terminal') {
             onFocusTerminal(item.id);
+        } else if (item.category === 'action') {
+            actions.find((a) => a.id === item.id)?.run();
         }
         onClose();
     };
