@@ -138,6 +138,15 @@ export interface KnowledgeListOptions {
     /** Restrict to nodes carrying this tag. */
     tag?: string;
     limit?: number;
+    /**
+     * Restrict to ONE memory class. Absent lists every class, so existing
+     * callers keep seeing exactly what they saw before.
+     *
+     * Recency-ordered listing is how EPISODIC memory is actually read — "what
+     * happened recently?" has no query string to search for — so this is the
+     * class filter that makes that question answerable at all.
+     */
+    class?: MemoryClass;
 }
 
 /** The store's outbound "something changed" event (wired to a renderer broadcast

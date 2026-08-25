@@ -242,3 +242,41 @@ describe('the guide documents manageProcess scheduled tasks (cron)', () => {
         expect(GENIE_MCP_GUIDE).toMatch(/schedule|cron/i);
     });
 });
+
+/**
+ * The `knowledge` tool's four MEMORY CLASSES (Tynn #250) have to reach the guide
+ * too. The store learned them, the tool now advertises them — but agents plan
+ * from the guide's prose, and a class nobody is told about is one nobody files
+ * a memory under, which leaves every agent-written memory in the `knowledge`
+ * default and the other three classes permanently empty.
+ */
+async function knowledgeClassEnum(): Promise<string[]> {
+    const res = await handleMcpMessage({ jsonrpc: '2.0', id: 12, method: 'tools/list' }, makeCtx());
+    const tools = (res?.result as { tools: Array<{ name: string; inputSchema?: unknown }> }).tools;
+    const tool = tools.find((t) => t.name === 'knowledge');
+    if (!tool) throw new Error('knowledge tool not advertised');
+    const props = (tool.inputSchema as { properties?: Record<string, { enum?: string[] }> })
+        .properties;
+    return props?.class?.enum ?? [];
+}
+
+describe('the agent guide stays in sync with the knowledge memory classes', () => {
+    it('documents every memory class the tool accepts', async () => {
+        const classes = await knowledgeClassEnum();
+
+        expect(classes.length).toBeGreaterThan(0);
+        for (const cls of classes) {
+            expect(
+                GENIE_MCP_GUIDE,
+                `the guide never mentions the \`${cls}\` memory class — an agent cannot file under a class it is not told about`,
+            ).toContain(`\`${cls}\``);
+        }
+    });
+
+    it('no longer describes search hits as classless', () => {
+        // The guide spelled the hit shape out literally. Once a hit carries its
+        // class, that list is not vague — it is wrong, and it teaches agents to
+        // ignore the one field that says which question they just answered.
+        expect(GENIE_MCP_GUIDE).not.toMatch(/\{ id, title,\s*\n?\s*snippet, score, tags \}/);
+    });
+});

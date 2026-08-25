@@ -28,11 +28,15 @@ import type {
 import type {
     KnowledgeNode,
     KnowledgeSearchResult,
+    MemoryClass,
 } from '../knowledge/types';
+// A VALUE, not a type: the advertised `class` enum is generated from it, so a
+// class added to the store cannot ship without the tool offering it.
+import { MEMORY_CLASSES } from '../knowledge/types';
 
 export type { SetEnvRequest, SetEnvResult, CheckEnvRequest, CheckEnvResult };
 export type { AgentInboxScope, AgentInboxAgentInfo, AgentInboxChannelInfo, AgentInboxMessage };
-export type { KnowledgeNode, KnowledgeSearchResult };
+export type { KnowledgeNode, KnowledgeSearchResult, MemoryClass };
 
 export const MCP_PROTOCOL_VERSION = '2024-11-05';
 
@@ -1335,6 +1339,15 @@ export interface KnowledgeToolRequest {
     limit?: number;
     /** search (optional): restrict hits to nodes carrying ALL of these tags. */
     tags?: string[];
+    /**
+     * WHICH memory (Tynn #250) — `profile` | `episodic` | `procedural` |
+     * `knowledge`.
+     *
+     * On `add`, the class the node is filed under (defaults to `knowledge`). On
+     * `search` / `list`, restrict to that one class; absent covers every class,
+     * so an existing caller finds exactly what it found before.
+     */
+    class?: MemoryClass;
     /** list (optional): restrict to nodes carrying this tag. */
     tag?: string;
     /** get: the node id. */
@@ -2234,7 +2247,7 @@ const AGENTINBOX_TOOL = {
 const KNOWLEDGE_TOOL = {
     name: 'knowledge',
     description:
-        "Read + write Genie's workstation KNOWLEDGE GRAPH — a workstation-wide, LOCAL knowledge/memory store shared across EVERY workspace on this Genie instance (one store, not per-workspace). Use it to STASH durable, reusable context as small markdown \"memory\" nodes and RETRIEVE it on demand — so shared, system-wide knowledge lives here instead of bloating every workspace's AGENTS.md/CLAUDE.md. Nodes link to each other with `[[wikilink]]` references in their body (each becomes a graph edge). Actions (`action`): `search` (keyword retrieval — needs `query`; optional `limit`, `tags` to restrict to nodes carrying ALL those tags — returns ranked `{ id, title, snippet, score, tags }` hits; USE THIS FIRST to check what's already known); `get` (`id` → the full node incl. its linked node ids); `add` (create a node — needs `title`, optional markdown `body` (put `[[wikilink]]`s to related nodes in it), optional `tags`, optional explicit `links` (ids/titles/slugs) → returns the new `id`); `list` (recent nodes — optional `tag`, `limit`); `link` (add an edge from node `from` to `to` (an id, title, or slug)). Search is keyword-based and always available (no setup). Prefer searching before adding a duplicate, and cross-link related memories with `[[wikilink]]`s so the graph stays connected.",
+        "Read + write Genie's workstation KNOWLEDGE GRAPH — a workstation-wide, LOCAL knowledge/memory store shared across EVERY workspace on this Genie instance (one store, not per-workspace). Use it to STASH durable, reusable context as small markdown \"memory\" nodes and RETRIEVE it on demand — so shared, system-wide knowledge lives here instead of bloating every workspace's AGENTS.md/CLAUDE.md. Nodes link to each other with `[[wikilink]]` references in their body (each becomes a graph edge). MEMORY CLASSES (`class`) — every memory is one of FOUR kinds, because they answer four different questions: `profile` (what is true of the user / what they prefer), `episodic` (what happened, and when), `procedural` (what was learned from doing this before), `knowledge` (where this is in the documents — the DEFAULT). SET `class` when you add, and PASS it when you search/list so you get the kind you meant: \"what does the user prefer?\" and \"find the section about X\" are different questions, and asking one without a class gets you the other's answers. Actions (`action`): `search` (keyword retrieval — needs `query`; optional `limit`, `class` to restrict to ONE memory class, `tags` to restrict to nodes carrying ALL those tags — returns ranked `{ id, title, snippet, score, tags, class }` hits; USE THIS FIRST to check what's already known); `get` (`id` → the full node incl. its linked node ids); `add` (create a node — needs `title`, optional markdown `body` (put `[[wikilink]]`s to related nodes in it), optional `class`, optional `tags`, optional explicit `links` (ids/titles/slugs) → returns the new `id`); `list` (recent nodes — optional `class`, `tag`, `limit`; this is how you ask an EPISODIC question like \"what happened recently\", which has no query string to search for); `link` (add an edge from node `from` to `to` (an id, title, or slug)). Search is keyword-based and always available (no API key, no setup, works offline). Wikilinks cross classes freely — it is still ONE graph, so a `procedural` memory should cite the `knowledge` node it was learned from. Prefer searching before adding a duplicate, and cross-link related memories with `[[wikilink]]`s so the graph stays connected.",
     inputSchema: {
         type: 'object',
         properties: {
@@ -2257,6 +2270,14 @@ const KNOWLEDGE_TOOL = {
             tag: {
                 type: 'string',
                 description: 'list (optional): restrict to nodes carrying this tag.',
+            },
+            class: {
+                type: 'string',
+                // Generated from MEMORY_CLASSES so the tool cannot advertise a
+                // different set than the store accepts.
+                enum: [...MEMORY_CLASSES],
+                description:
+                    'WHICH memory. add: file the node under this class (default `knowledge`). search / list: restrict to this ONE class — omit to cover every class. `profile` = what is true of the user / what they prefer; `episodic` = what happened and when; `procedural` = what was learned from doing this before; `knowledge` = where this is in the documents.',
             },
             id: { type: 'string', description: 'get: the node id to fetch.' },
             title: { type: 'string', description: 'add: the node title (required).' },
@@ -3511,6 +3532,10 @@ export async function handleMcpMessage(
                     limit: a.limit,
                     tags: a.tags,
                     tag: a.tag,
+                    // Passed through UNVALIDATED and possibly undefined: the store
+                    // is the one authority on what a class may be, and it REFUSES
+                    // an unknown one rather than filing the memory under a guess.
+                    class: a.class,
                     id: a.id,
                     title: a.title,
                     body: a.body,

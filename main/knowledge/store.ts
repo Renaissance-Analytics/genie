@@ -70,29 +70,42 @@ export class KnowledgeStore {
 
     /**
      * List nodes newest-first (by `updatedAt`). `tag` restricts to nodes carrying
-     * that tag (case-insensitive); `limit` caps the count (default 200).
+     * that tag (case-insensitive); `class` restricts to ONE memory class (absent
+     * lists every class); `limit` caps the count (default 200).
+     *
+     * This is EPISODIC memory's read path. "What happened recently?" is ordered
+     * by recency and has no query string to search for, so a class filter here is
+     * what makes that question askable — `search` cannot answer it.
      */
     list(opts: KnowledgeListOptions = {}): KnowledgeNode[] {
         const limit = opts.limit && opts.limit > 0 ? opts.limit : 200;
         const tag = opts.tag?.trim();
+        const filterClass = isMemoryClass(opts.class) ? opts.class : undefined;
+
+        const where: string[] = [];
+        const params: Array<string | number> = [];
+        if (filterClass) {
+            where.push('class = ?');
+            params.push(filterClass);
+        }
+        if (tag) {
+            where.push(`EXISTS (
+                SELECT 1 FROM json_each(knowledge_nodes.tags) je
+                WHERE lower(je.value) = lower(?)
+            )`);
+            params.push(tag);
+        }
+        params.push(limit);
+
         // `rowid DESC` is a stable tiebreaker (insertion order) so "newest-first"
         // stays deterministic even for nodes written in the same millisecond.
-        const rows = tag
-            ? this.db
-                  .prepare<[string, number], NodeRow>(
-                      `SELECT * FROM knowledge_nodes
-                       WHERE EXISTS (
-                           SELECT 1 FROM json_each(knowledge_nodes.tags) je
-                           WHERE lower(je.value) = lower(?)
-                       )
-                       ORDER BY updated_at DESC, rowid DESC LIMIT ?`,
-                  )
-                  .all(tag, limit)
-            : this.db
-                  .prepare<[number], NodeRow>(
-                      'SELECT * FROM knowledge_nodes ORDER BY updated_at DESC, rowid DESC LIMIT ?',
-                  )
-                  .all(limit);
+        const rows = this.db
+            .prepare<Array<string | number>, NodeRow>(
+                `SELECT * FROM knowledge_nodes
+                 ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+                 ORDER BY updated_at DESC, rowid DESC LIMIT ?`,
+            )
+            .all(...params);
         return this.nodesFrom(rows);
     }
 

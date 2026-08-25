@@ -2239,11 +2239,17 @@ export async function agentInboxForMcp(
  * store across every workspace), so any agent in any workspace reads/writes it
  * and the caller's terminal is not resolved to a workspace here. Dispatches
  * against the shared {@link getKnowledgeStore}:
- *   - `search {query, limit?, tags?}` — keyword (FTS) retrieval.
+ *   - `search {query, limit?, tags?, class?}` — keyword (FTS) retrieval.
  *   - `get {id}` — one node + its resolved links.
- *   - `add {title, body?, tags?, links?}` — create a node (source `agent`).
- *   - `list {tag?, limit?}` — recent nodes.
+ *   - `add {title, body?, tags?, links?, class?}` — create a node (source `agent`).
+ *   - `list {tag?, limit?, class?}` — recent nodes.
  *   - `link {from, to}` — add an edge.
+ *
+ * `class` (Tynn #250) is the agent saying WHICH memory it means — profile,
+ * episodic, procedural or knowledge. It is forwarded as given: the store owns
+ * both the default (`knowledge`) and the refusal of an unknown class, so an
+ * agent that invents one gets an error back rather than a memory silently filed
+ * under the wrong kind, where it would answer a question nobody asked.
  */
 export async function knowledgeForMcp(
     _callerTerminalId: string,
@@ -2259,6 +2265,7 @@ export async function knowledgeForMcp(
                     query,
                     limit: req.limit,
                     tags: req.tags,
+                    class: req.class,
                 });
                 return { ok: true, results };
             }
@@ -2275,12 +2282,17 @@ export async function knowledgeForMcp(
                     body: req.body,
                     tags: req.tags,
                     links: req.links,
+                    class: req.class,
                     source: 'agent',
                 });
                 return { ok: true, id: node.id };
             }
             case 'list': {
-                const nodes = store.list({ tag: req.tag, limit: req.limit });
+                const nodes = store.list({
+                    tag: req.tag,
+                    limit: req.limit,
+                    class: req.class,
+                });
                 return { ok: true, nodes };
             }
             case 'link': {

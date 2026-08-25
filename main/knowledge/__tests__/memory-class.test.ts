@@ -99,12 +99,64 @@ describe('search knows which question it is answering', () => {
         // memory rather than a wrong scope.
         for (const cls of MEMORY_CLASSES) {
             const hits = seeded().search({ query: 'shell', class: cls });
+
+            // The positive control. `every` is vacuously true on an empty array,
+            // so "nothing leaked" would also pass against a search that returned
+            // nothing at all — a corpse. Each class has exactly one match here.
+            expect(hits, `${cls} found nothing`).toHaveLength(1);
             expect(hits.every((h) => h.class === cls), `${cls} leaked`).toBe(true);
         }
     });
 
     it('finds nothing rather than everything when a class has no match', () => {
         expect(seeded().search({ query: 'nonexistent', class: 'profile' })).toEqual([]);
+    });
+});
+
+describe('list knows which question it is answering', () => {
+    /** Four memories that share no searchable word, one per class. */
+    const seeded = () => {
+        const s = store();
+        s.add({ source: 'agent', title: 'Prefers Bash', body: 'a preference', class: 'profile' });
+        s.add({ source: 'agent', title: 'Shipped beta.264', body: 'a release', class: 'episodic' });
+        s.add({ source: 'agent', title: 'Fixing a hang', body: 'a recipe', class: 'procedural' });
+        s.add({ source: 'agent', title: 'Caddy guide', body: 'a document', class: 'knowledge' });
+        return s;
+    };
+
+    it('lists every class when none is asked for — nothing regresses', () => {
+        expect(seeded().list()).toHaveLength(4);
+    });
+
+    it('narrows to ONE class when asked', () => {
+        // "What happened recently?" is episodic memory's natural question, and it
+        // is a LIST ordered by recency — not a keyword search, which would need a
+        // query string the caller does not have.
+        const nodes = seeded().list({ class: 'episodic' });
+
+        expect(nodes).toHaveLength(1);
+        expect(nodes[0]?.title).toBe('Shipped beta.264');
+    });
+
+    it('does not leak another class into a scoped list', () => {
+        for (const cls of MEMORY_CLASSES) {
+            const nodes = seeded().list({ class: cls });
+
+            // Positive control — see the scoped-search test above.
+            expect(nodes, `${cls} found nothing`).toHaveLength(1);
+            expect(nodes.every((n) => n.class === cls), `${cls} leaked`).toBe(true);
+        }
+    });
+
+    it('narrows by class AND tag together', () => {
+        const s = store();
+        s.add({ source: 'agent', title: 'Old release', body: 'x', tags: ['genie'], class: 'episodic' });
+        s.add({ source: 'agent', title: 'Old doc', body: 'x', tags: ['genie'], class: 'knowledge' });
+        s.add({ source: 'agent', title: 'Untagged release', body: 'x', class: 'episodic' });
+
+        const nodes = s.list({ class: 'episodic', tag: 'genie' });
+
+        expect(nodes.map((n) => n.title)).toEqual(['Old release']);
     });
 });
 
