@@ -5,7 +5,11 @@ import {
     broadcastWorkspacePulse,
 } from '../terminal/ipc';
 import { mobileEmit } from '../mobile/server';
-import { workspaceIdOfTerminal } from '../terminal/workspace-of-terminal';
+import {
+    workspaceIdOfTerminal,
+    workspaceIdOfSpec,
+    SYSTEM_WORKSPACE_ID,
+} from '../terminal/workspace-of-terminal';
 import { forceQuestion } from '../ask/force-question';
 import {
     describeWorkspaceForMcp,
@@ -82,8 +86,26 @@ export function buildHostServerDeps(
             // log/forward headless) — the injected Notifier port.
             ports.notifier.imDone(terminalId);
             // Forward the chime/toast to a connected remote driver (no-op when
-            // nothing is on /ws/events).
-            mobileEmit('notify:imdone', { label: getTerminalSpec(terminalId)?.label });
+            // nothing is on /ws/events). The WORKSPACE and AGENT ride along: a
+            // driver naming only the host says "a terminal, somewhere over
+            // there", which is the same anonymity the local toast had. An older
+            // driver ignores the extra fields; an older HOST sends only `label`
+            // and the driver degrades to it.
+            const spec = terminalId ? getTerminalSpec(terminalId) : null;
+            const wsForNotice = spec ? workspaceIdOfSpec(spec) : null;
+            mobileEmit('notify:imdone', {
+                label: spec?.label,
+                workspace:
+                    wsForNotice && wsForNotice !== SYSTEM_WORKSPACE_ID
+                        ? getWorkspace(wsForNotice)?.project_name ?? null
+                        : wsForNotice
+                          ? 'System Workspace'
+                          : null,
+                // provider + NAME only — the chat id is addressing, never display.
+                agent: spec?.meta?.agent
+                    ? { provider: spec.meta.agent, name: spec.meta.whisper_purpose ?? '' }
+                    : null,
+            });
         },
         checkIssues: (terminalId) => checkIssuesForMcp(terminalId),
         agentInboxMailLine: (terminalId) =>

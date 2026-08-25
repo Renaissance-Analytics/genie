@@ -1480,6 +1480,18 @@ const api = {
             ipcRenderer.on('terminal:attention', handler);
             return () => ipcRenderer.off('terminal:attention', handler);
         },
+        /** The imDone toast was clicked: go to the terminal that finished —
+         *  activate its workspace and surface its panel. */
+        terminalReveal: (
+            cb: (payload: { id: string; workspaceId: string | null }) => void,
+        ) => {
+            const handler = (
+                _e: unknown,
+                payload: { id: string; workspaceId: string | null },
+            ) => cb(payload);
+            ipcRenderer.on('terminal:reveal', handler);
+            return () => ipcRenderer.off('terminal:reveal', handler);
+        },
         /** Agent-integration MCP: pulse a workspace ROW (a terminal in it called
          *  imDone) — a sidebar-level "something finished here" cue, fired
          *  alongside the per-terminal attention glow. */

@@ -1659,6 +1659,27 @@ function MasterInner() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    // The imDone toast was CLICKED: take the user to the terminal that finished.
+    // Activate its workspace, then surface the panel — the same three effects
+    // `openFileForUser` uses above, because "bring this panel into view" is the
+    // same operation. Without it the click landed on whatever the master window
+    // happened to be showing, which is what made a finished agent a hunt across
+    // every open workspace instead of one click.
+    useEffect(() => {
+        return api().on.terminalReveal?.(({ id, workspaceId }) => {
+            if (workspaceId) {
+                // A System-Workspace panel is hidden until the section is revealed,
+                // so activating alone would land on a workspace with nothing shown.
+                if (workspaceId === SYSTEM_WORKSPACE_ID) setSystemRevealed(true);
+                activateWorkspaceRef.current(workspaceId);
+            }
+            setSelected((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
+            setFocusId(id);
+            setMaximizedId((cur) => surfaceMaximized(cur, id));
+        });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
     /** Close every view in the ACTIVE workspace (deselect; PTYs detach on unmount). */
     const clearSelection = useCallback(() => {
         setSelected((prev) => {

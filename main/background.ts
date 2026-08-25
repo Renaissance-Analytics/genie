@@ -92,6 +92,7 @@ import {
     writeToTerminal,
     readTerminalOutput,
     broadcastTerminalAttention,
+    broadcastTerminalReveal,
     broadcastInboxIncoming,
     beginInputHold,
     releaseInputHold,
@@ -213,6 +214,7 @@ import {
     detachedHostPinsBinary,
     wireHostLossRecovery,
     recoverFromHostLoss,
+    resolveShippedCaddyBin,
 } from './terminal/host-service';
 import { runBackendSelection as runBackendSelectionCore } from './host-core/backend-selection';
 import {
@@ -223,8 +225,11 @@ import {
 } from './terminal/quit-confirm';
 import {
     workspaceIdOfTerminal,
+    workspaceIdOfSpec,
     SYSTEM_WORKSPACE_ID,
 } from './terminal/workspace-of-terminal';
+import { agentDisplay } from './agents/identity';
+import { planImDoneNotice, type ImDoneNoticeFacts } from './attention/imdone-notice';
 import { registerOpenFile } from './editor/open-file';
 import {
     registerHostTools,
@@ -300,6 +305,37 @@ const isDev = !isProd;
  * Both default off and are independent of the always-on attention glow.
  */
 
+/**
+ * Gather what the imDone notice needs to name: the terminal, the workspace it
+ * belongs to, and the agent running in it. Everything is looked up defensively —
+ * a spec can be deleted between the tool call and the toast, and a plain shell
+ * running a finish-hook has no agent at all. Missing facts are simply absent;
+ * the notice degrades rather than failing.
+ */
+function imDoneNoticeFacts(terminalId: string): ImDoneNoticeFacts {
+    try {
+        const spec = getTerminalSpec(terminalId);
+        if (!spec) return {};
+        const wsId = workspaceIdOfSpec(spec);
+        const workspace =
+            wsId === SYSTEM_WORKSPACE_ID
+                ? 'System Workspace'
+                : wsId
+                  ? getWorkspace(wsId)?.project_name ?? null
+                  : null;
+        // The identity convention (#258): provider + NAME, never the chat id.
+        // `whisper_purpose` IS the agent's name — see agents/identity.ts, which
+        // deliberately makes them the same field so the two can't drift.
+        const provider = spec.meta?.agent;
+        const agent = provider
+            ? agentDisplay({ provider, name: spec.meta?.whisper_purpose ?? '' })
+            : null;
+        return { workspace, agent, terminal: spec.label };
+    } catch {
+        return {};
+    }
+}
+
 function notifyImDone(terminalId: string): void {
     let settings;
     try {
@@ -323,10 +359,10 @@ function notifyImDone(terminalId: string): void {
         deliverAlertSound(masterWindow, { kind: 'imDone', sound });
     }
     if (settings.notify_toast === 'on' && Notification.isSupported()) {
-        const label = getTerminalSpec(terminalId)?.label ?? 'A terminal';
+        const notice = planImDoneNotice(imDoneNoticeFacts(terminalId));
         const n = new Notification({
-            title: 'Genie — agent finished',
-            body: `${label} is done and waiting for you.`,
+            title: notice.title,
+            body: notice.body,
             // Silence the OS chime only when OUR chime actually plays, so we
             // don't double up — but if the alert sound is off, let the OS sound.
             silent: !!sound,
@@ -336,6 +372,10 @@ function notifyImDone(terminalId: string): void {
             // `mainWindow` reference is never assigned, so this used to focus an
             // arbitrary window and did nothing when tray-resident.
             showMasterWindow();
+            // …then go to the terminal that actually finished. Surfacing the
+            // window alone left the user on whatever workspace happened to be
+            // active, which is the hunt this toast exists to end.
+            broadcastTerminalReveal(terminalId, workspaceIdOfTerminal(terminalId));
         });
         n.show();
     }
@@ -1134,9 +1174,18 @@ app.whenReady().then(async () => {
         return file;
     }
 
+    // The ONE bundled-Caddy resolution, shared by the `.gen` front door and the
+    // `hostServe` (static / php) site server — the two roles Genie's Caddy plays.
+    // It resolves to the per-user COPY, outside the install dir: run from
+    // `<INSTDIR>\resources\runtime\caddy.exe` it sat inside the NSIS installer's
+    // path sweep, so every update killed the front door and every static/php
+    // site's server with it (genie#265; measured in
+    // `.ai/_discovery/genie-process-supervisor.md` §3.4). Resolved once so the
+    // two callers can never end up on different binaries.
+    const hostCaddyBin = resolveShippedCaddyBin();
     hostBrowserReconciler = createDesktopHostBrowserReconciler({
         userDataDir: app.getPath('userData'),
-        resourcesPath: process.resourcesPath,
+        caddyBin: hostCaddyBin,
         platform: process.platform,
         routes: () => devServerHostBrowserRoutes(),
         log: (m) => console.warn('[host-browser]', m),
@@ -1183,12 +1232,10 @@ app.whenReady().then(async () => {
         // Genie's bundled Caddy + where its generated per-site configs are written,
         // so a `hostServe` (static / php) site is served by Genie's own web server —
         // the agent declares a mode, Genie writes the config (moic/blockchain: no
-        // hand-rolled nginx). Same bundled binary the host `.gen` proxy uses.
-        caddyBin: path.join(
-            process.resourcesPath,
-            'runtime',
-            process.platform === 'win32' ? 'caddy.exe' : 'caddy',
-        ),
+        // hand-rolled nginx). The SAME resolved binary the host `.gen` proxy uses,
+        // which for these sites matters twice over: this Caddy IS the site's server
+        // process, so an update that killed it took the site down, not just its route.
+        caddyBin: hostCaddyBin,
         writeServeConfig: (siteId, content) => writeHostServeConfig(siteId, content),
         // Which php/node version this machine defaults to (Settings → Toolchain).
         // A Genie-served site follows it unless it pins one, and the spawn resolves

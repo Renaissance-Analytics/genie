@@ -5,32 +5,42 @@ import { hostBrowserPaths, hostCaddySpawnOptions } from '../host-browser-desktop
 /**
  * Where the host-browser reconcile reads/writes on the real machine (story #238
  * P3). Only the PATH resolution is unit-tested — the fs/child_process leaves are
- * exercised by CI/real-machine. Two things vary by OS and both have bitten similar
- * code: the caddy binary's name (`.exe` on Windows) and the OS hosts file, which
- * lives under System32 on Windows and at `/etc/hosts` everywhere else.
+ * exercised by CI/real-machine. The OS hosts file is what varies here and has
+ * bitten similar code: System32 on Windows, `/etc/hosts` everywhere else.
  */
 describe('hostBrowserPaths', () => {
-    it('resolves the Windows hosts file + caddy.exe, under the given roots', () => {
+    it('resolves the Windows hosts file, and the data-dir cert/config paths', () => {
         const p = hostBrowserPaths({
             userDataDir: '/u',
-            resourcesPath: '/r',
+            caddyBin: 'C:\\Users\\u\\AppData\\Roaming\\Genie\\runtime\\k\\caddy.exe',
             platform: 'win32',
             systemRoot: 'C:\\Windows',
         });
-        expect(path.basename(p.caddyBin)).toBe('caddy.exe');
-        expect(p.caddyBin.replace(/\\/g, '/')).toMatch(/\/r\/runtime\/caddy\.exe$/);
         expect(p.hostsFilePath.replace(/\\/g, '/')).toMatch(/System32\/drivers\/etc\/hosts$/i);
         // CA + leaf + Caddyfile live in the Genie data dir, never a system path.
         expect(p.caCertPath.startsWith(path.join('/u', 'host-gen'))).toBe(true);
         expect(p.caddyfilePath.startsWith(path.join('/u', 'host-gen'))).toBe(true);
     });
 
-    it('resolves /etc/hosts + a bare caddy on unix', () => {
+    it('resolves /etc/hosts on unix', () => {
         for (const platform of ['linux', 'darwin'] as const) {
-            const p = hostBrowserPaths({ userDataDir: '/u', resourcesPath: '/r', platform });
+            const p = hostBrowserPaths({ userDataDir: '/u', caddyBin: '/u/runtime/k/caddy', platform });
             expect(p.hostsFilePath).toBe('/etc/hosts');
-            expect(path.basename(p.caddyBin)).toBe('caddy');
         }
+    });
+
+    /**
+     * The caddy the reconcile spawns is HANDED to it, never re-derived from
+     * `process.resourcesPath`. That derivation is what put the `.gen` front door
+     * inside the NSIS installer's path sweep, so every update killed it
+     * (genie#265 — `resolveShippedCaddyBin`, and the sweep test beside it). A
+     * second derivation here would silently reintroduce the bug for the front
+     * door while the site server stayed fixed.
+     */
+    it('spawns the caddy it was GIVEN — it never re-derives one from the install dir', () => {
+        const given = path.join('/userData', 'runtime', 'node20-caddy2.9.1', 'caddy.exe');
+        const p = hostBrowserPaths({ userDataDir: '/u', caddyBin: given, platform: 'win32' });
+        expect(p.caddyBin).toBe(given);
     });
 });
 

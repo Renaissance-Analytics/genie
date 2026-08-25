@@ -18,7 +18,11 @@ The two you'll notice most:
 
 - **`imDone` — the sidebar glow.** When an agent finishes (or is blocked and
   waiting), it calls `imDone` and Genie **glows that terminal** across the whole
-  UI until you look at it. No more hunting for which terminal needs you.
+  UI until you look at it. No more hunting for which terminal needs you. If
+  you've turned the toast on (**Settings → Customization**), it names the
+  workspace and the agent — *"tynn.ai — Claude Code · reviewer finished"* — and
+  **clicking it takes you to that terminal**, activating its workspace on the
+  way.
 - **`ForceTheQuestion` — a real prompt.** When an agent needs a decision, it
   raises an **OS-level, always-on-top modal** (above every app) with a few
   options and a free-text box, and waits for your answer. You can't miss it, and
