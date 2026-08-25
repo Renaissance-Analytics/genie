@@ -108,7 +108,7 @@ import {
     type ConnectableWorkstation,
     type PluginPanelView,
 } from '../lib/genie';
-import { nudgeGappDevSync } from '../lib/gapp-dev';
+import { nudgeGappDevSync, nudgeGappDevSyncOnFocus } from '../lib/gapp-dev';
 
 /**
  * Master workspace — cross-project terminal organiser. Hosts the
@@ -983,9 +983,9 @@ function MasterInner() {
     // it is a nudge, and it costs one request only when the window is focused.
     useEffect(() => {
         if (!hasGenieBridge()) return;
-        nudgeGappDevSync();
-        window.addEventListener('focus', nudgeGappDevSync);
-        return () => window.removeEventListener('focus', nudgeGappDevSync);
+        nudgeGappDevSyncOnFocus();
+        window.addEventListener('focus', nudgeGappDevSyncOnFocus);
+        return () => window.removeEventListener('focus', nudgeGappDevSyncOnFocus);
     }, []);
 
     // Load the max_views setting and keep it fresh — the Settings screen is
