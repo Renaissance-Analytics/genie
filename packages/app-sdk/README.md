@@ -71,7 +71,8 @@ At the root of your app's folder.
 |---|---|
 | `id` | Reverse-DNS, globally unique. Identity everywhere. |
 | `slug` | A DNS label — it becomes **`<slug>.gen`**, so `my_app` and `Trader` are refused. |
-| `name` | Shown everywhere. **May not claim to be Genie**, Tynn or Aionima, in any casing. |
+| `name` | Shown everywhere. **May not claim to be Genie**, Tynn or Aionima, in any casing — nor `Agent` or `Flows`, which are the tabs Genie draws for itself in your window's strip. Max 64 characters: with no `tabs` declared, your name IS your tab's label. |
+| `tabs[].title` | What the strip says. Same reserved words as `name`, and max 32 characters. The strip is Genie's chrome — an app labels its own surfaces in it, not Genie's. Up to 8 tabs. |
 | `frontend.serve` | `static` (a built directory Genie serves) or `proxy` (a dev server you already run — Genie fronts the port). |
 | `frontend.browserExposed` | Reachable from the user's real browser, not only the Genie window. Costs a one-time admin prompt; ask for it only if you need it. |
 | `services[].command` | **A literal argv array**, never a shell string. `["uvicorn", "app:api"]`, not `"uvicorn app:api"`. |
@@ -81,6 +82,71 @@ At the root of your app's folder.
 A missing runtime does **not** block installation. Your app lands; whatever needs
 the missing tool will not start until the user provides it. Write your app so that
 reads as a clear state, not a crash.
+
+**A field Genie does not recognise is refused, not ignored.** The manifest is
+rebuilt from the fields above, so a misspelt or invented one would install cleanly
+and then not exist — no error, ever, and a feature that silently was not there.
+The install error is the point. (`$schema` is the one exception: editors write it
+and Genie does not read it.)
+
+### Offering tools to other agents — `contributes`
+
+Most apps have none of this. Declare it when your app exists to be **called**: a
+renderer, a converter, anything whose value is a job somebody else's agent hands
+it. Your tools appear in that agent's tool list as `<slug>.<name>`, beside every
+other tool, and are called the same way.
+
+```json
+{
+  "services": [
+    { "name": "renderer", "command": ["node", "tools/server.js"] }
+  ],
+
+  "contributes": {
+    "mcpTools": [
+      {
+        "name": "renderVideo",
+        "description": "Render a composition to an mp4.",
+        "inputSchema": { "type": "object", "properties": { "composition": { "type": "string" } } }
+      }
+    ],
+    "servedBy": "renderer",
+    "transport": { "kind": "stdio" }
+  },
+
+  "permissions": {
+    "scope": "self",
+    "capabilities": [],
+    "consumers": { "scope": "workstation" }
+  }
+}
+```
+
+| Field | Notes |
+|---|---|
+| `contributes.mcpTools[].name` | Starts with a letter, `[A-Za-z0-9_]`. Agents see `<slug>.<name>` — the slug is already your address, so there is no second namespace to keep unique. Up to 24 tools. |
+| `contributes.mcpTools[].description` | Not decoration. It is the whole of what a calling agent has to go on when deciding whether yours is the tool it wants. |
+| `contributes.servedBy` | Names an entry in `services`. Your tools run in a process **you** own, not in a Genie sandbox — that is what buys them minutes of runtime, subprocesses, and any language you like. It has to exist. |
+| `contributes.transport` | `{ "kind": "stdio" }` or `{ "kind": "http", "port": 8797 }`. Said explicitly because a stdio server is not a port-based daemon and `services[]` assumes one. |
+| `permissions.consumers` | Whose agents may call them. Absent means `self`. |
+
+#### `consumers` is not `scope`, and cannot be folded into it
+
+They look alike and answer opposite questions.
+
+- **`scope`** — whose workspace may this app *touch*? A grant the user makes **to**
+  your app.
+- **`consumers`** — whose agents may *spend this app's compute*? A grant the user
+  makes **about** it.
+
+A renderer is routinely `scope: "self"` — it touches nothing but its own workspace
+— while being callable from everywhere, which is the entire point of shipping it.
+One field cannot carry both without one of them being wrong.
+
+The user sees this as its own decision at install: *"Remotion offers 1 tool to
+agents. Whose agents may call it?"* — because a call runs on their machine, at
+someone else's request, at their expense. They can narrow whatever you ask for, and
+your own agents can always call your own tools regardless.
 
 ### The agents your app ships — `.agents/`
 
@@ -222,7 +288,9 @@ all:
 - **No drawing Genie's consent UI.** Every permission prompt is an OS-level modal
   drawn by Genie *outside* your window. You cannot render, fake or intercept one.
 - **No impersonating Genie.** Reserved names are refused at install, whatever the
-  casing or spacing.
+  casing or spacing — and that covers **tab titles** as well as `name`. You cannot
+  put a second "Flows" tab beside Genie's own, and you cannot crowd Genie's tabs
+  off the strip: they never shrink, and yours are capped.
 - **No speaking as the user.** `submitFeedback` posts to their Tynn project in
   their name; it is unavailable to every app, at every permission level.
 - **No navigating out of your own origin.** Same-origin in-window; an external

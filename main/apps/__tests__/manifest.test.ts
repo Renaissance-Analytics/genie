@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { validateAppManifest, RESERVED_APP_NAMES } from '../manifest';
+import { validateAppManifest, appToolName, RESERVED_APP_NAMES } from '../manifest';
 
 /**
  * The GApp manifest — what a Genie App is, and what it may ask for (Tynn #250).
@@ -349,6 +349,83 @@ describe('the window a GApp gets — panels and tabs', () => {
 });
 
 /**
+ * The tab strip is Genie's, so what an app may WRITE INTO IT is a security gate
+ * (genie#264).
+ *
+ * The strip is `[Agent (Genie's)] [app tabs…] [Flows (Genie's)]`, every button
+ * styled identically — the only thing that varies is which one is active. So a
+ * declared tab titled "Flows" lands immediately left of the real Flows tab
+ * wearing the same treatment, and a human has nothing to tell them apart.
+ *
+ * `gapp.tsx` says why Flows is Genie's: "an app must not be able to paint the
+ * screen that says what it is allowed to do." An app cannot paint the REAL one.
+ * Until this gate existed it could put a convincing twin beside it.
+ *
+ * The same reasoning covers SIZE. An over-long title, or a hundred of them,
+ * pushes Genie's own Flows tab out of the window — the app does not have to
+ * imitate the trusted surface if it can shove it off-screen instead.
+ */
+describe('what an app may write into Genie’s tab strip', () => {
+    it('REFUSES a tab titled like one of Genie’s own strip tabs — and keeps an honest one', () => {
+        // The positive control matters as much as the rejection: a gate that
+        // refuses everything would pass the negative half of this test while
+        // making the tab strip useless.
+        for (const title of ['Agent', 'Flows', '  flows  ', 'AGENT']) {
+            const result = validateAppManifest({ ...valid(), tabs: [{ title, path: '/' }] });
+            expect(result.ok, `"${title}" must be refused`).toBe(false);
+            if (result.ok) continue;
+            expect(result.errors.join(' ')).toMatch(/reserved|impersonat|Genie/i);
+        }
+
+        const honest = validateAppManifest({
+            ...valid(),
+            tabs: [{ title: 'Render Queue', path: '/queue' }],
+        });
+        expect(honest.ok, 'a legitimate tab title must still pass').toBe(true);
+    });
+
+    it('REFUSES a tab that claims a reserved product name', () => {
+        // `name` has been gated against these since the manifest existed; the tab
+        // strip is the same screen, reached by an easier route.
+        for (const name of RESERVED_APP_NAMES) {
+            const result = validateAppManifest({ ...valid(), tabs: [{ title: name, path: '/' }] });
+            expect(result.ok, `tab "${name}" must be refused`).toBe(false);
+        }
+    });
+
+    it('REFUSES an app NAMED like a Genie strip tab, because the name IS a tab', () => {
+        // `appWindowTabs` labels the single app tab with `manifest.name` when no
+        // tabs are declared. Gating only `tabs[].title` would leave the same
+        // twin-tab attack open through the simpler manifest — declare nothing.
+        for (const name of ['Flows', 'agent']) {
+            const result = validateAppManifest({ ...valid(), name });
+            expect(result.ok, `an app named "${name}" must be refused`).toBe(false);
+        }
+
+        expect(validateAppManifest({ ...valid(), name: 'Flow State' }).ok).toBe(true);
+    });
+
+    it('caps how LONG a tab title may be', () => {
+        // Genie's own Flows tab is appended LAST in a flex strip with no overflow
+        // handling, so a title long enough to fill the window pushes the trusted
+        // tab out of sight without imitating anything.
+        const result = validateAppManifest({
+            ...valid(),
+            tabs: [{ title: 'x'.repeat(200), path: '/' }],
+        });
+        expect(result.ok).toBe(false);
+        if (result.ok) return;
+        expect(result.errors.join(' ')).toMatch(/tabs\[0\]\.title/);
+    });
+
+    it('caps how MANY tabs an app may declare', () => {
+        // Same failure, reached by repetition rather than length.
+        const many = Array.from({ length: 40 }, (_, i) => ({ title: `Tab ${i}`, path: `/${i}` }));
+        expect(validateAppManifest({ ...valid(), tabs: many }).ok).toBe(false);
+    });
+});
+
+/**
  * The agents a GApp ships (Tynn #250, owner-directed 2026-08-22).
  *
  * A `.gapp` envelope holds a `.agents/` folder — the persona and config for each
@@ -466,5 +543,248 @@ describe('the agents a GApp ships', () => {
 
     it('refuses `agents` that is not an array', () => {
         expect(validateAppManifest({ ...valid(), agents: { name: 'x' } }).ok).toBe(false);
+    });
+});
+
+/**
+ * A GApp that OFFERS TOOLS to agents in other workspaces — the capability
+ * provider (finding, 2026-08-24, recorded while building Remotion, the first
+ * third-party GApp).
+ *
+ * `gapp-agents-runtime.md` already says a GApp may be one: "Some GApps don't even
+ * have agents but provide tools to agents like Remotion. This is a tool that any
+ * workspace or GApp can use as well." Until this block the manifest had no way to
+ * say it — and worse than no way. `validateAppManifest` rebuilds a fresh object
+ * from an allow-list of known keys, so a provider manifest VALIDATED, installed,
+ * reported success, and its tools silently did not exist.
+ *
+ * That is exactly the failure the GApp agent runtime was built to stop one layer
+ * up: "a developer following the SDK README ships a persona, installs, and gets N
+ * empty terminals with no error. That reads as a broken product, not an unbuilt
+ * feature."
+ *
+ * The vocabulary is deliberately the one `genie-plugin.json` already uses —
+ * `contributes.mcpTools`, namespaced — because the right question was never
+ * "should this be a plugin?" but "why can a plugin do what a GApp cannot?". What a
+ * renderer needs is on the GApp side already: `services[]` with literal argv in
+ * any language and real OS authority, and `requires[]` for the toolchain. The
+ * plugin sandbox is deliberately incapable (30s call timeout, no `child_process`,
+ * no subprocess) and should stay that way. So the missing piece was never
+ * authority — it was the BRIDGE from a GApp's own service into the agent-facing
+ * tool list.
+ */
+describe('a GApp that offers tools to other agents', () => {
+    const provider = (over: Record<string, unknown> = {}) => ({
+        ...valid(),
+        slug: 'remotion',
+        services: [{ name: 'renderer', command: ['node', 'tools/server.js'] }],
+        contributes: {
+            mcpTools: [
+                {
+                    name: 'renderVideo',
+                    description: 'Render a Remotion composition to an mp4.',
+                    inputSchema: { type: 'object', properties: { composition: { type: 'string' } } },
+                },
+            ],
+            servedBy: 'renderer',
+            transport: { kind: 'stdio' },
+        },
+        ...over,
+    });
+
+    it('declares the tools it offers, and keeps them', () => {
+        const result = validateAppManifest(provider());
+
+        expect(result.ok, result.ok ? '' : result.errors.join('; ')).toBe(true);
+        if (!result.ok) return;
+        expect(result.value.contributes?.mcpTools.map((t) => t.name)).toEqual(['renderVideo']);
+        expect(result.value.contributes?.servedBy).toBe('renderer');
+        expect(result.value.contributes?.transport).toEqual({ kind: 'stdio' });
+    });
+
+    it('namespaces an offered tool by the app’s OWN slug', () => {
+        // One identity, not a second name to keep unique. The slug is already the
+        // app's address (`remotion.gen`) and already has to be a unique DNS label,
+        // so `remotion.renderVideo` is the tool name a caller can predict from the
+        // app they installed.
+        expect(appToolName('remotion', 'renderVideo')).toBe('remotion.renderVideo');
+    });
+
+    it('refuses tools served by a service that does not exist', () => {
+        // The cross-field check catches the real mistake. A `servedBy` naming
+        // nothing is a manifest whose tools can never start, and finding that out
+        // at install beats finding it out on the first call.
+        const result = validateAppManifest(
+            provider({
+                contributes: {
+                    mcpTools: [{ name: 'x', description: 'd', inputSchema: { type: 'object' } }],
+                    servedBy: 'nonexistent',
+                    transport: { kind: 'stdio' },
+                },
+            }),
+        );
+
+        expect(result.ok).toBe(false);
+        if (result.ok) return;
+        expect(result.errors.join(' ')).toContain('nonexistent');
+    });
+
+    it('refuses a tool with no argument schema, or a duplicate name', () => {
+        for (const mcpTools of [
+            [{ name: 'x', description: 'd' }],
+            [{ name: 'x', description: 'd', inputSchema: { type: 'string' } }],
+            [
+                { name: 'x', description: 'd', inputSchema: { type: 'object' } },
+                { name: 'x', description: 'e', inputSchema: { type: 'object' } },
+            ],
+        ]) {
+            const result = validateAppManifest(
+                provider({
+                    contributes: { mcpTools, servedBy: 'renderer', transport: { kind: 'stdio' } },
+                }),
+            );
+            expect(result.ok, JSON.stringify(mcpTools)).toBe(false);
+        }
+    });
+
+    it('accepts an HTTP transport with a port, and refuses one without', () => {
+        // A stdio MCP server does not fit `services[]`, which assumes a port-based
+        // daemon, so the transport has to be said explicitly rather than inferred.
+        const tool = { name: 'x', description: 'd', inputSchema: { type: 'object' } };
+        expect(
+            validateAppManifest(
+                provider({
+                    contributes: {
+                        mcpTools: [tool],
+                        servedBy: 'renderer',
+                        transport: { kind: 'http', port: 8797 },
+                    },
+                }),
+            ).ok,
+        ).toBe(true);
+
+        expect(
+            validateAppManifest(
+                provider({
+                    contributes: {
+                        mcpTools: [tool],
+                        servedBy: 'renderer',
+                        transport: { kind: 'http' },
+                    },
+                }),
+            ).ok,
+        ).toBe(false);
+    });
+});
+
+/**
+ * `consumers` — whose agents may SPEND this app's compute.
+ *
+ * The inverse of `scope`, and it must not be folded into it. `scope` answers
+ * "whose workspace may this app touch?" and is a grant the user makes TO the app.
+ * `consumers` answers "whose agents may spend this app's compute?" and is a grant
+ * made ABOUT it. An app can legitimately be `scope: self` — Remotion touches
+ * nothing but its own workspace — while being callable from everywhere. One field
+ * cannot carry both without one of them being wrong.
+ */
+describe('who may call an app’s offered tools', () => {
+    const withTools = (consumers?: unknown) => ({
+        ...valid(),
+        slug: 'remotion',
+        services: [{ name: 'renderer', command: ['node', 'server.js'] }],
+        contributes: {
+            mcpTools: [{ name: 'renderVideo', description: 'd', inputSchema: { type: 'object' } }],
+            servedBy: 'renderer',
+            transport: { kind: 'stdio' as const },
+        },
+        permissions: { scope: 'self', capabilities: [], ...(consumers ? { consumers } : {}) },
+    });
+
+    it('carries a workstation-wide offer through', () => {
+        const result = validateAppManifest(withTools({ scope: 'workstation' }));
+
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.value.permissions.consumers).toEqual({ scope: 'workstation' });
+        // `scope: self` and `consumers: workstation` together are not a
+        // contradiction — they are the whole point. Remotion touches nothing but
+        // its own workspace and is callable from everywhere.
+        expect(result.value.permissions.scope).toBe('self');
+    });
+
+    it('defaults an app that offers tools to its OWN agents only', () => {
+        // Fail closed, like every other permission here: absent must never read as
+        // "anyone on this machine may spend your CPU".
+        const result = validateAppManifest(withTools());
+
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.value.permissions.consumers).toEqual({ scope: 'self' });
+    });
+
+    it('names the workspaces when the offer is limited to some', () => {
+        const result = validateAppManifest(
+            withTools({ scope: 'workspaces', workspaces: ['tynn.ai'] }),
+        );
+
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.value.permissions.consumers).toEqual({
+            scope: 'workspaces',
+            workspaces: ['tynn.ai'],
+        });
+    });
+
+    it('refuses a limited offer that names no workspace — an empty list is not "all"', () => {
+        expect(validateAppManifest(withTools({ scope: 'workspaces', workspaces: [] })).ok).toBe(
+            false,
+        );
+    });
+
+    it('refuses `consumers` on an app that offers no tools', () => {
+        // A grant about nothing. Silently keeping it would put a sentence on the
+        // consent screen describing an offer the app cannot make.
+        const result = validateAppManifest({
+            ...valid(),
+            permissions: { scope: 'self', capabilities: [], consumers: { scope: 'workstation' } },
+        });
+
+        expect(result.ok).toBe(false);
+        if (result.ok) return;
+        expect(result.errors.join(' ')).toMatch(/consumers/);
+    });
+});
+
+/**
+ * The SILENT DROP — the sharp edge the provider finding actually cut itself on.
+ *
+ * `validateAppManifest` rebuilds a fresh object from an allow-list of known keys,
+ * so anything it does not recognise never reaches the runtime AND never raises an
+ * error. A developer writes a manifest, installs it, Genie reports success, and
+ * the thing they declared simply does not exist. No error, at any point.
+ *
+ * The file already argues this case one level down, about capabilities: "silently
+ * ignoring `root` would let a manifest read as though it asked for something while
+ * the runtime quietly granted nothing, and the developer would find out from a
+ * mystery denial months later." The same is true of the object as a whole, so the
+ * same answer applies to it.
+ */
+describe('a manifest that declares something Genie does not know', () => {
+    it('is REFUSED, rather than quietly accepted with the field dropped', () => {
+        // The plugin vocabulary verbatim — the exact manifest that was accepted,
+        // installed, and silently had its tools removed.
+        const result = validateAppManifest({ ...valid(), mcpTools: [{ name: 'renderVideo' }] });
+
+        expect(result.ok).toBe(false);
+        if (result.ok) return;
+        expect(result.errors.join(' ')).toContain('mcpTools');
+    });
+
+    it('still allows `$schema`, which editors add and Genie does not read', () => {
+        const result = validateAppManifest({
+            ...valid(),
+            $schema: 'https://genie.tynn.ai/schemas/genie-app.json',
+        });
+        expect(result.ok).toBe(true);
     });
 });

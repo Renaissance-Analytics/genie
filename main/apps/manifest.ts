@@ -52,6 +52,25 @@ export const RESERVED_APP_NAMES: readonly string[] = [
     'aionima',
 ];
 
+/**
+ * Labels Genie draws for ITSELF in a GApp window's tab strip (genie#264).
+ *
+ * The second half of the gate above, and it exists for the same reason. The strip
+ * is `[Agent (Genie's)] [app tabs…] [Flows (Genie's)]`, and every button in it is
+ * styled identically — the only thing that varies is which one is active.
+ * `gapp.tsx` states why Flows is Genie's outright: *"an app must not be able to
+ * paint the screen that says what it is allowed to do."*
+ *
+ * An app cannot paint the real one. Before this list it could put a convincing
+ * TWIN immediately beside it — same treatment, same strip, its own content — and
+ * a human had nothing to tell them apart. `window-title.ts` already filters a
+ * RUNTIME title on the reasoning that "a page can set its title to anything"; the
+ * declared path is the easier one and was unguarded.
+ *
+ * Lower-case, because comparison is normalised the same way names are.
+ */
+export const RESERVED_TAB_TITLES: readonly string[] = ['agent', 'flows'];
+
 /** How a GApp's front end is served. Both shapes are in live use today. */
 export type AppServe =
     /** A built directory served by Genie (ORR: `dist`). */
@@ -81,6 +100,23 @@ export interface AppService {
 /** Which workspaces a GApp's agent surface may act on. */
 export type AppScope = 'self' | 'workspaces' | 'workstation';
 
+/**
+ * Whose agents may CALL this app's offered tools.
+ *
+ * The same three reaches as {@link AppScope}, answering the opposite question —
+ * see {@link AppPermissions.consumers} for why that is a separate field and not a
+ * second meaning bolted onto `scope`. A distinct alias because the two are read at
+ * a glance in the same file and confusing them inverts a permission.
+ */
+export type AppConsumerScope = 'self' | 'workspaces' | 'workstation';
+
+/** Who may spend this app's compute. See {@link AppPermissions.consumers}. */
+export interface AppConsumers {
+    scope: AppConsumerScope;
+    /** Required when scope is `workspaces` — the explicit allow-list. */
+    workspaces?: string[];
+}
+
 export interface AppPermissions {
     scope: AppScope;
     /** Required when scope is `workspaces` — the explicit allow-list. */
@@ -92,6 +128,83 @@ export interface AppPermissions {
      * at install, and the bridge enforces the granted subset, not this one.
      */
     capabilities: string[];
+    /**
+     * Whose agents may call the tools in {@link AppManifest.contributes}.
+     *
+     * The INVERSE of `scope`, and deliberately not folded into it. `scope` answers
+     * "whose workspace may this app touch?" — a grant the user makes TO the app.
+     * `consumers` answers "whose agents may spend this app's compute?" — a grant
+     * made ABOUT it. An app can legitimately be `scope: self` while being callable
+     * from everywhere: a renderer touches nothing but its own workspace, and the
+     * whole reason it exists is for other workspaces' agents to call it. One field
+     * cannot carry both without one of them being wrong.
+     *
+     * Absent on an app that offers tools means `self` — the narrowest answer, like
+     * every other permission here. Absent on an app that offers none stays absent.
+     */
+    consumers?: AppConsumers;
+}
+
+/** One MCP tool a GApp offers to agents. Same descriptor shape plugins use. */
+export interface AppMcpTool {
+    /** Bare slug; namespaced at runtime → `${slug}.${name}`. */
+    name: string;
+    /** What a CALLING agent reads to decide whether to reach for it. */
+    description: string;
+    /** JSON Schema for the arguments (an object schema). */
+    inputSchema: Record<string, unknown>;
+}
+
+/**
+ * How Genie reaches the service that implements the tools.
+ *
+ * Said explicitly rather than inferred, because a stdio MCP server does not fit
+ * `services[]` — that shape assumes a port-based daemon, and a renderer's tool
+ * server usually is not one.
+ */
+export type AppToolTransport = { kind: 'stdio' } | { kind: 'http'; port: number };
+
+/**
+ * What a GApp offers OUTWARD — the capability-provider block.
+ *
+ * `gapp-agents-runtime.md` already describes this kind of app: "Some GApps don't
+ * even have agents but provide tools to agents like Remotion." The manifest had no
+ * way to say it, and unrecognised keys were silently reconstructed away, so such a
+ * manifest installed cleanly and its tools did not exist.
+ *
+ * The vocabulary is `genie-plugin.json`'s on purpose. The right question was never
+ * "should this be a plugin?" — the plugin worker is deliberately incapable (a 30s
+ * call timeout, no `child_process`, no subprocess) and should stay that way, so a
+ * renderer cannot live there. It is "why can a plugin do what a GApp cannot?", and
+ * the answer was only ever a missing bridge: everything a renderer needs is
+ * already on this side — `services[]` with literal argv in any language and real
+ * OS authority, `requires[]` for the toolchain.
+ */
+export interface AppContributes {
+    /** The tools, in the order the app listed them. */
+    mcpTools: AppMcpTool[];
+    /**
+     * WHICH declared service implements them — a name in `services`.
+     *
+     * The tools are served by a process the APP owns rather than by a Genie
+     * worker, and that is exactly what buys them minutes of runtime and subprocess
+     * authority. So the service has to exist, and this says which one it is.
+     */
+    servedBy: string;
+    transport: AppToolTransport;
+}
+
+/**
+ * The agent-facing name of a tool a GApp offers: `<slug>.<tool>`.
+ *
+ * Namespaced by the app's own SLUG rather than by a second `namespace` field the
+ * way plugins do it. The slug is already the app's identity and already has to be
+ * a unique DNS label — it is the address the user visits — so `remotion.renderVideo`
+ * is a name a caller can predict from the app they installed, and there is no
+ * second name to keep unique.
+ */
+export function appToolName(slug: string, tool: string): string {
+    return `${slug}.${tool}`;
 }
 
 /**
@@ -195,8 +308,49 @@ export interface AppManifest {
     tabs?: AppTab[];
     /** The agents this app ships, each with a persona under `.agents/`. */
     agents?: AppAgentDecl[];
+    /** The tools this app offers to OTHER agents. Absent for most apps. */
+    contributes?: AppContributes;
     permissions: AppPermissions;
 }
+
+/**
+ * Every key `genie-app.json` has a meaning for — and the reason an unknown one is
+ * an ERROR.
+ *
+ * `validateAppManifest` rebuilds a fresh object from the fields below, so anything
+ * it does not recognise never reaches the runtime. Dropping it silently is the
+ * worst of both: the manifest reads as though it declared something, the install
+ * reports success, and the thing simply does not exist — with no error at any
+ * point. That is the failure the capability-provider finding actually hit, and it
+ * is the same argument `validateCapabilities` already makes one level down about
+ * an unknown capability name.
+ *
+ * `$schema` is allowed because editors write it and Genie does not read it.
+ */
+const KNOWN_MANIFEST_KEYS: readonly string[] = [
+    '$schema',
+    'id',
+    'slug',
+    'name',
+    'version',
+    'description',
+    'frontend',
+    'services',
+    'requires',
+    'panels',
+    'tabs',
+    'agents',
+    'contributes',
+    'permissions',
+];
+const KNOWN_PERMISSION_KEYS: readonly string[] = [
+    'scope',
+    'workspaces',
+    'capabilities',
+    'consumers',
+];
+const KNOWN_CONSUMER_KEYS: readonly string[] = ['scope', 'workspaces'];
+const KNOWN_CONTRIBUTES_KEYS: readonly string[] = ['mcpTools', 'servedBy', 'transport'];
 
 export type ValidationResult<T> = { ok: true; value: T } | { ok: false; errors: string[] };
 
@@ -214,15 +368,46 @@ const MAX_AGENT_PANELS = 8;
  * panel cap, applied to the other half of the pair.
  */
 const MAX_DECLARED_AGENTS = 16;
+/**
+ * How long a tab label may be, and how many there may be.
+ *
+ * Not tidiness — the same gate as the reserved titles, reached by size instead of
+ * by wording. The strip is flex, and Genie's own Flows tab is APPENDED LAST, so an
+ * app does not have to imitate the surface that says what it may do if it can push
+ * it off the end of the window instead. Thirty-two characters is longer than any
+ * real label (Genie's own are five) and eight tabs is more than a strip anyone
+ * reads — the same "a window is a layout, not an appetite" reasoning as the panel
+ * and agent caps above.
+ *
+ * A bound on what may be DECLARED is all a manifest can offer; the guarantee that
+ * Genie's own tabs stay reachable at any width belongs to the renderer, which
+ * keeps them from shrinking (`gapp.tsx`).
+ */
+const MAX_TAB_TITLE = 32;
+const MAX_APP_TABS = 8;
+/**
+ * The name is a tab label too. `appWindowTabs` falls back to `manifest.name` when
+ * an app declares no tabs, so an unbounded name is the same overflow through a
+ * simpler manifest. Roomier than a tab title because a name is also the window's
+ * grouping prefix, and still bounded for the same reason.
+ */
+const MAX_APP_NAME = 64;
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
     typeof v === 'object' && v !== null && !Array.isArray(v);
 const nonEmpty = (v: unknown): v is string => typeof v === 'string' && v.trim().length > 0;
 
+/** One normalisation for every label comparison — casing and padding immune. */
+const normalizeLabel = (value: string): string => value.trim().toLowerCase().replace(/\s+/g, ' ');
+
 /** Reserved-name comparison, immune to casing and padding. */
-function claimsReservedName(name: string): boolean {
-    const normalized = name.trim().toLowerCase().replace(/\s+/g, ' ');
-    return RESERVED_APP_NAMES.includes(normalized);
+export function claimsReservedName(name: string): boolean {
+    return RESERVED_APP_NAMES.includes(normalizeLabel(name));
+}
+
+/** Does this label claim one of GENIE'S OWN tabs? Same normalisation. */
+export function claimsGenieTabTitle(title: string): boolean {
+    return RESERVED_TAB_TITLES.includes(normalizeLabel(title));
 }
 
 function validateFrontend(raw: unknown, errors: string[]): AppFrontend | null {
@@ -349,10 +534,39 @@ function validateTabs(raw: unknown, errors: string[]): AppTab[] | undefined {
         errors.push('`tabs` must be an array when present');
         return undefined;
     }
+    if (raw.length > MAX_APP_TABS) {
+        errors.push(
+            `\`tabs\` declares ${raw.length} tabs; at most ${MAX_APP_TABS} fit beside Genie's own ` +
+                'Agent and Flows tabs, and a strip that overflows pushes those out of the window.',
+        );
+        return undefined;
+    }
     const out: AppTab[] = [];
     raw.forEach((entry, i) => {
         if (!isRecord(entry) || !nonEmpty(entry.title)) {
             errors.push(`\`tabs[${i}].title\` is required — the tab strip has to say something`);
+            return;
+        }
+        // TRIMMED, like `name` is: the title is compared normalised, so padding
+        // must not survive into the strip and render as the label it was compared
+        // against.
+        const title = entry.title.trim();
+        // The strip is GENIE'S. An app labels its own surfaces in it; it does not
+        // get to label them as Genie, as Genie's products, or as one of the tabs
+        // Genie draws for itself immediately beside them.
+        if (claimsReservedName(title) || claimsGenieTabTitle(title)) {
+            errors.push(
+                `\`tabs[${i}].title\` "${title}" is reserved — the tab strip is Genie's, and an ` +
+                    'app may not label a tab as Genie, its first-party products, or one of ' +
+                    "Genie's own tabs (Agent, Flows)",
+            );
+            return;
+        }
+        if (title.length > MAX_TAB_TITLE) {
+            errors.push(
+                `\`tabs[${i}].title\` is ${title.length} characters; at most ${MAX_TAB_TITLE}. ` +
+                    "A label wide enough to fill the strip pushes Genie's own tabs out of the window.",
+            );
             return;
         }
         if (!nonEmpty(entry.path) || !APP_TAB_PATH.test(entry.path)) {
@@ -363,7 +577,7 @@ function validateTabs(raw: unknown, errors: string[]): AppTab[] | undefined {
             );
             return;
         }
-        out.push({ title: entry.title, path: entry.path });
+        out.push({ title, path: entry.path });
     });
     return out;
 }
@@ -475,24 +689,253 @@ function validateServices(raw: unknown, errors: string[]): AppService[] | undefi
 }
 
 /**
+ * A tool slug, before it is namespaced. Mirrors the plugin rule so a developer who
+ * has written one manifest does not have to learn a second spelling.
+ */
+const APP_TOOL_SLUG = /^[A-Za-z][A-Za-z0-9_]*$/;
+/**
+ * A tool roster is something the user has to READ at install and an agent has to
+ * read on EVERY call — each one is a line on the consent screen and a descriptor
+ * in `tools/list`. Same reasoning as the panel and agent caps.
+ */
+const MAX_APP_TOOLS = 24;
+
+/**
+ * Anything Genie does not recognise is refused, not dropped. See
+ * {@link KNOWN_MANIFEST_KEYS} for why.
+ */
+function rejectUnknownKeys(
+    raw: Record<string, unknown>,
+    known: readonly string[],
+    where: string,
+    errors: string[],
+): void {
+    const unknown = Object.keys(raw).filter((key) => !known.includes(key));
+    if (unknown.length === 0) return;
+    errors.push(
+        `${where} declares ${unknown.map((k) => `\`${k}\``).join(', ')}, which Genie does not ` +
+            'know. A manifest is rebuilt from the fields Genie understands, so an unrecognised ' +
+            'one would install cleanly and then not exist — this error is the point. Known ' +
+            `fields: ${known.join(', ')}.`,
+    );
+}
+
+function validateAppTools(raw: unknown, errors: string[]): AppMcpTool[] {
+    if (!Array.isArray(raw) || raw.length === 0) {
+        errors.push(
+            '`contributes.mcpTools` must be a non-empty array — `contributes` with no tools ' +
+                'offers nothing',
+        );
+        return [];
+    }
+    if (raw.length > MAX_APP_TOOLS) {
+        errors.push(
+            `\`contributes.mcpTools\` offers ${raw.length} tools; at most ${MAX_APP_TOOLS}. Every ` +
+                "one is a line on the consent screen and a descriptor in every caller's tool list.",
+        );
+        return [];
+    }
+
+    const out: AppMcpTool[] = [];
+    const seen = new Set<string>();
+    raw.forEach((entry, i) => {
+        const at = `\`contributes.mcpTools[${i}]\``;
+        if (!isRecord(entry)) {
+            errors.push(`${at} must be an object`);
+            return;
+        }
+        if (!nonEmpty(entry.name)) {
+            errors.push(`${at}.name is required`);
+            return;
+        }
+        if (!APP_TOOL_SLUG.test(entry.name)) {
+            errors.push(
+                `${at}.name must start with a letter and use [A-Za-z0-9_] — it is namespaced as ` +
+                    '`<slug>.<name>`, so a dot in it would be a second namespace',
+            );
+            return;
+        }
+        if (seen.has(entry.name)) {
+            errors.push(`${at}.name "${entry.name}" is declared twice`);
+            return;
+        }
+        seen.add(entry.name);
+        if (!nonEmpty(entry.description)) {
+            // Not decoration. It is the whole of what a calling agent has to go on
+            // when deciding whether this tool is the one it wants.
+            errors.push(`${at}.description is required — it is what a calling agent reads`);
+            return;
+        }
+        if (!isRecord(entry.inputSchema) || entry.inputSchema.type !== 'object') {
+            errors.push(`${at}.inputSchema is required and must be a JSON Schema with type:"object"`);
+            return;
+        }
+        out.push({
+            name: entry.name,
+            description: entry.description,
+            inputSchema: entry.inputSchema,
+        });
+    });
+    return out;
+}
+
+function validateToolTransport(raw: unknown, errors: string[]): AppToolTransport | undefined {
+    if (!isRecord(raw)) {
+        errors.push(
+            '`contributes.transport` is required — how Genie reaches the service: ' +
+                '{ "kind": "stdio" } or { "kind": "http", "port": 8797 }',
+        );
+        return undefined;
+    }
+    if (raw.kind === 'stdio') return { kind: 'stdio' };
+    if (raw.kind === 'http') {
+        const port = raw.port;
+        if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535) {
+            errors.push('`contributes.transport.port` must be a port number for an http transport');
+            return undefined;
+        }
+        return { kind: 'http', port };
+    }
+    errors.push('`contributes.transport.kind` must be "stdio" or "http"');
+    return undefined;
+}
+
+/**
+ * The tools this app offers outward, and the service that runs them.
+ *
+ * Cross-checked against `services` on purpose: a `servedBy` naming nothing is a
+ * manifest whose tools can never start, and finding that out at install beats
+ * finding it out on a caller's first call — which is the exact failure mode this
+ * whole block exists to end.
+ */
+function validateContributes(
+    raw: unknown,
+    services: AppService[] | undefined,
+    errors: string[],
+): AppContributes | undefined {
+    if (raw === undefined) return undefined;
+    if (!isRecord(raw)) {
+        errors.push('`contributes` must be an object when present');
+        return undefined;
+    }
+    rejectUnknownKeys(raw, KNOWN_CONTRIBUTES_KEYS, '`contributes`', errors);
+
+    const mcpTools = validateAppTools(raw.mcpTools, errors);
+
+    let servedBy: string | undefined;
+    if (!nonEmpty(raw.servedBy)) {
+        errors.push(
+            '`contributes.servedBy` is required — name the entry in `services` that implements ' +
+                'these tools',
+        );
+    } else if (!(services ?? []).some((s) => s.name === raw.servedBy)) {
+        errors.push(
+            `\`contributes.servedBy\` names "${raw.servedBy}", which is not a declared service. ` +
+                'The tools are served by a process the APP owns — that is what buys them minutes ' +
+                'of runtime and real OS authority — so it has to exist in `services`.',
+        );
+    } else {
+        servedBy = raw.servedBy;
+    }
+
+    const transport = validateToolTransport(raw.transport, errors);
+
+    if (mcpTools.length === 0 || !servedBy || !transport) return undefined;
+    return { mcpTools, servedBy, transport };
+}
+
+/**
+ * Who may call this app's tools — fail-closed, exactly like `scope`.
+ *
+ * `offersTools` is read from the RAW manifest rather than from the validated
+ * `contributes`, so a `contributes` block that failed for its own reasons does not
+ * also produce a misleading "you offer no tools" error beside the real one.
+ */
+function validateConsumers(
+    raw: unknown,
+    offersTools: boolean,
+    errors: string[],
+): AppConsumers | undefined {
+    if (raw === undefined) {
+        // An app that offers tools always HAS an answer to "who may call them",
+        // and the absent answer is the narrowest one. An app that offers none has
+        // no such question, so the field stays absent rather than becoming noise.
+        return offersTools ? { scope: 'self' } : undefined;
+    }
+    if (!offersTools) {
+        errors.push(
+            '`permissions.consumers` says who may call this app’s tools, but the app offers ' +
+                'none. Declare `contributes.mcpTools`, or drop `consumers` — a grant about ' +
+                'nothing would put a sentence on the consent screen describing an offer the app ' +
+                'cannot make.',
+        );
+        return undefined;
+    }
+    if (!isRecord(raw)) {
+        errors.push('`permissions.consumers` must be an object when present');
+        return { scope: 'self' };
+    }
+    rejectUnknownKeys(raw, KNOWN_CONSUMER_KEYS, '`permissions.consumers`', errors);
+
+    const scope = raw.scope ?? 'self';
+    if (scope !== 'self' && scope !== 'workspaces' && scope !== 'workstation') {
+        errors.push(
+            '`permissions.consumers.scope` must be "self", "workspaces" or "workstation"',
+        );
+        return { scope: 'self' };
+    }
+    if (scope === 'workspaces') {
+        const list = raw.workspaces;
+        // An empty allow-list must not read as "all" — the same rule as `scope`,
+        // pointing the other way.
+        if (!Array.isArray(list) || list.length === 0 || !list.every((w) => nonEmpty(w))) {
+            errors.push(
+                '`permissions.consumers.workspaces` must name at least one workspace when ' +
+                    'consumers scope is "workspaces"',
+            );
+            return { scope: 'self' };
+        }
+        return { scope, workspaces: list as string[] };
+    }
+    return { scope };
+}
+
+/**
  * Permissions, defaulting to the NARROWEST scope.
  *
  * Absent must never read as "workstation": a GApp gets the least authority that
  * lets it exist until its manifest asks for more and the user agrees to it.
  */
-function validatePermissions(raw: unknown, errors: string[]): AppPermissions {
-    if (raw === undefined) return { scope: 'self', capabilities: [] };
+function validatePermissions(
+    raw: unknown,
+    offersTools: boolean,
+    errors: string[],
+): AppPermissions {
+    const withConsumers = (base: AppPermissions, consumers: AppConsumers | undefined) =>
+        consumers ? { ...base, consumers } : base;
+
+    if (raw === undefined) {
+        return withConsumers(
+            { scope: 'self', capabilities: [] },
+            validateConsumers(undefined, offersTools, errors),
+        );
+    }
     if (!isRecord(raw)) {
         errors.push('`permissions` must be an object when present');
-        return { scope: 'self', capabilities: [] };
+        return withConsumers(
+            { scope: 'self', capabilities: [] },
+            validateConsumers(undefined, offersTools, errors),
+        );
     }
+    rejectUnknownKeys(raw, KNOWN_PERMISSION_KEYS, '`permissions`', errors);
 
     const capabilities = validateCapabilities(raw.capabilities, errors);
+    const consumers = validateConsumers(raw.consumers, offersTools, errors);
 
     const scope = raw.scope ?? 'self';
     if (scope !== 'self' && scope !== 'workspaces' && scope !== 'workstation') {
         errors.push('`permissions.scope` must be "self", "workspaces" or "workstation"');
-        return { scope: 'self', capabilities };
+        return withConsumers({ scope: 'self', capabilities }, consumers);
     }
 
     if (scope === 'workspaces') {
@@ -502,12 +945,12 @@ function validatePermissions(raw: unknown, errors: string[]): AppPermissions {
             errors.push(
                 '`permissions.workspaces` must name at least one workspace when scope is "workspaces"',
             );
-            return { scope: 'self', capabilities };
+            return withConsumers({ scope: 'self', capabilities }, consumers);
         }
-        return { scope, workspaces: list as string[], capabilities };
+        return withConsumers({ scope, workspaces: list as string[], capabilities }, consumers);
     }
 
-    return { scope, capabilities };
+    return withConsumers({ scope, capabilities }, consumers);
 }
 
 /**
@@ -579,6 +1022,8 @@ export function validateAppManifest(raw: unknown): ValidationResult<AppManifest>
 
     const errors: string[] = [];
 
+    rejectUnknownKeys(raw, KNOWN_MANIFEST_KEYS, 'The manifest', errors);
+
     if (!nonEmpty(raw.id)) errors.push('`id` is required (a non-empty string)');
     else if (!REVERSE_DNS.test(raw.id)) errors.push('`id` must be reverse-DNS (e.g. com.example.app)');
 
@@ -594,6 +1039,21 @@ export function validateAppManifest(raw: unknown): ValidationResult<AppManifest>
         errors.push(
             `\`name\` "${raw.name.trim()}" is reserved — a GApp may not impersonate Genie or its first-party products`,
         );
+    } else if (claimsGenieTabTitle(raw.name)) {
+        // The name IS a tab label. `appWindowTabs` labels the single app tab with
+        // `manifest.name` when no tabs are declared, so gating only `tabs[].title`
+        // would leave the twin-tab attack open through the SIMPLER manifest —
+        // declare nothing and be called "Flows".
+        errors.push(
+            `\`name\` "${raw.name.trim()}" is one of Genie's own tab labels — an app that ` +
+                'declares no tabs is labelled by its name in that same strip, so it would ' +
+                'render beside the real one',
+        );
+    } else if (raw.name.trim().length > MAX_APP_NAME) {
+        errors.push(
+            `\`name\` is ${raw.name.trim().length} characters; at most ${MAX_APP_NAME}. It is ` +
+                "the window's grouping prefix and, for an app with no declared tabs, its tab label.",
+        );
     }
 
     if (!nonEmpty(raw.version)) errors.push('`version` is required');
@@ -605,7 +1065,14 @@ export function validateAppManifest(raw: unknown): ValidationResult<AppManifest>
     const agents = validateAgents(raw.agents, errors);
     const frontend = validateFrontend(raw.frontend, errors);
     const services = validateServices(raw.services, errors);
-    const permissions = validatePermissions(raw.permissions, errors);
+    const contributes = validateContributes(raw.contributes, services, errors);
+    // Read from the RAW block, so a `contributes` that failed its own validation
+    // does not also make `consumers` look like a grant about nothing.
+    const offersTools =
+        isRecord(raw.contributes) &&
+        Array.isArray(raw.contributes.mcpTools) &&
+        raw.contributes.mcpTools.length > 0;
+    const permissions = validatePermissions(raw.permissions, offersTools, errors);
 
     if (errors.length > 0) return { ok: false, errors };
 
@@ -623,6 +1090,7 @@ export function validateAppManifest(raw: unknown): ValidationResult<AppManifest>
             panels,
             ...(tabs && tabs.length > 0 ? { tabs } : {}),
             ...(agents && agents.length > 0 ? { agents } : {}),
+            ...(contributes ? { contributes } : {}),
             permissions,
         },
     };

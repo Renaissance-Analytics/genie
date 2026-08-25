@@ -100,12 +100,55 @@ export interface GenieAppManifest {
         /** One line: what it is for. Shown to the user at install. */
         description?: string;
     }>;
+    /**
+     * Tools YOUR app offers to agents — the capability-provider shape.
+     *
+     * Most apps have none. Declare this when the app exists to be CALLED: a
+     * renderer, a converter, anything whose value is a job other people's agents
+     * hand it. The tools appear in those agents' tool lists as
+     * `<slug>.<name>` and are called like any other tool.
+     *
+     * They run in a service YOU declare, not in a Genie sandbox — which is what
+     * buys them minutes of runtime, subprocesses, and any language you like.
+     */
+    contributes?: {
+        mcpTools: Array<{
+            /** Bare name; agents see `<slug>.<name>`. */
+            name: string;
+            /** What a calling agent reads to decide whether to use it. */
+            description: string;
+            /** JSON Schema for the arguments — an object schema. */
+            inputSchema: Record<string, unknown>;
+        }>;
+        /** Which entry in `services` implements them. It has to exist. */
+        servedBy: string;
+        /** How Genie reaches that service. */
+        transport: { kind: 'stdio' } | { kind: 'http'; port: number };
+    };
     permissions: {
         scope: GenieAppScope;
         /** Required when scope is `workspaces`. */
         workspaces?: string[];
         /** Ask for the least that lets the app work. */
         capabilities: GenieAppCapability[];
+        /**
+         * Whose agents may CALL the tools in `contributes` — the inverse of
+         * `scope`, and not the same question.
+         *
+         * `scope` is whose workspace your app may touch: a grant made TO it.
+         * `consumers` is whose agents may spend your app's compute: a grant made
+         * ABOUT it. An app is routinely `scope: 'self'` — it touches nothing but
+         * its own workspace — while being callable from everywhere, which is the
+         * whole point of shipping a provider.
+         *
+         * Absent means `self`: your own agents only. The user narrows whatever you
+         * ask for at install.
+         */
+        consumers?: {
+            scope: GenieAppScope;
+            /** Required when consumers scope is `workspaces`. */
+            workspaces?: string[];
+        };
     };
 }
 

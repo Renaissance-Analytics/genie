@@ -18,7 +18,7 @@
 
 import { APP_CAPABILITIES, findCapability } from './capabilities';
 import { gappHostname } from './hostname';
-import type { AppManifest, AppScope } from './manifest';
+import type { AppConsumers, AppManifest, AppScope } from './manifest';
 import type { AppRequirementPlan } from './requirements';
 import type { ForceAnswer, ForceQuestion } from '../mcp/protocol';
 
@@ -40,6 +40,16 @@ export interface ConsentPlan {
     optionGrants: Record<string, string[]>;
     /** Option label → the reach choosing it grants. */
     scopeChoices: Record<string, { scope: AppScope; workspaces?: string[] }>;
+    /** Option label → whose agents choosing it lets call the app's tools. */
+    consumerChoices: Record<string, AppConsumers>;
+    /**
+     * The offer grant when the Tools question was never asked or never answered.
+     *
+     * `{ scope: 'self' }` for any app that offers tools — the narrowest answer —
+     * and ABSENT for an app that offers none, so an app with nothing to lend never
+     * grows a grant it has no use for.
+     */
+    consumersDefault?: AppConsumers;
     installLabel: string;
 }
 
@@ -48,6 +58,8 @@ export interface ConsentOutcome {
     capabilities: string[];
     scope: AppScope;
     workspaces?: string[];
+    /** Only for an app that offers tools. Absent means it offers none. */
+    consumers?: AppConsumers;
 }
 
 const DECLINE_LABEL = "Don't install";
@@ -64,9 +76,19 @@ const PREVIEW_DECLINE_LABEL = "Don't preview";
  * and not get read at all.
  */
 function whatPreviewSetsUp(manifest: AppManifest): string {
+    const tools = manifest.contributes?.mcpTools ?? [];
     return [
         `- A temporary site at **${gappHostname(manifest.slug)}**, separate from any installed copy`,
         '- A throwaway workspace on the folder you are building in',
+        // A preview's grant is a REAL grant, so an offer made in one is a real
+        // offer while the window is open — and the developer needs to see the
+        // sentence their users will get.
+        ...(tools.length > 0
+            ? [
+                  `- **${tools.length} tool${tools.length === 1 ? '' : 's'} agents can call**: ` +
+                      tools.map((t) => `\`${manifest.slug}.${t.name}\``).join(', '),
+              ]
+            : []),
         '- **Nothing is installed.** No entry in your apps, no tray pill, nothing to ' +
             'uninstall — closing the window removes all of it',
     ].join('\n');
@@ -82,6 +104,16 @@ function whatItSetsUp(manifest: AppManifest): string {
         lines.push(`- A background service, **${service.name}**`);
     }
     lines.push('- Its own workspace, which you can delete to remove it');
+    const tools = manifest.contributes?.mcpTools ?? [];
+    if (tools.length > 0) {
+        // Named, not counted. "1 tool" tells the user nothing about what they are
+        // being asked to lend out; `remotion.renderVideo` tells them it renders
+        // video, which is the fact the decision below turns on.
+        lines.push(
+            `- **${tools.length} tool${tools.length === 1 ? '' : 's'} agents can call**: ` +
+                tools.map((t) => `\`${manifest.slug}.${t.name}\``).join(', '),
+        );
+    }
     return lines.join('\n');
 }
 
@@ -334,7 +366,75 @@ export function buildConsentPlan(
         });
     }
 
-    return { questions, acceptHeader, optionGrants, scopeChoices, installLabel };
+    /**
+     * Whose agents may spend this app's compute — the capability-provider grant.
+     *
+     * A DECISION rather than a disclosure, because it is a grant: "agents in any
+     * workspace will be able to make this app render video" is spending the user's
+     * CPU, disk and time at somebody else's request, and they can narrow it
+     * exactly as they can narrow reach.
+     *
+     * SEPARATE from the reach question, deliberately. `scope` is what the app may
+     * touch; `consumers` is who may spend it. An app is routinely `scope: self`
+     * and callable from everywhere, so folding them into one answer would put two
+     * grants behind one choice and one of them would be wrong.
+     *
+     * Install + Permissions + Reach + Tools is EXACTLY the modal's four-question
+     * limit. A fifth surface asking for its own question has to bundle.
+     */
+    const offered = manifest.contributes?.mcpTools ?? [];
+    const consumers = manifest.permissions.consumers;
+    const consumerChoices: Record<string, AppConsumers> = {};
+    if (offered.length > 0 && consumers && consumers.scope !== 'self') {
+        const own = 'Only this app’s own agents';
+        consumerChoices[own] = { scope: 'self' };
+        const options: ForceQuestion['options'] = [
+            {
+                label: own,
+                description: 'The narrowest choice. The app can still use its own tools itself.',
+            },
+        ];
+
+        if (consumers.scope === 'workspaces') {
+            const named = consumers.workspaces ?? [];
+            const label = `Agents in: ${named.join(', ')}`;
+            consumerChoices[label] = { scope: 'workspaces', workspaces: named };
+            options.push({
+                label,
+                description: `The app asked for these ${named.length} workspaces by name.`,
+            });
+        } else {
+            const label = 'Any agent on this machine';
+            consumerChoices[label] = { scope: 'workstation' };
+            options.push({
+                label,
+                description:
+                    'Any agent, in any workspace, could put this app to work — spending this ' +
+                    'machine’s CPU, disk and time at its own request.',
+            });
+        }
+
+        questions.push({
+            header: 'Tools',
+            question:
+                `**${manifest.name}** offers ${
+                    offered.length === 1 ? 'a tool' : `${offered.length} tools`
+                } to agents. Whose agents may call ${offered.length === 1 ? 'it' : 'them'}?\n\n` +
+                'This is not what the app may DO — it is who may put it to WORK. A call runs on ' +
+                'this machine, at the caller’s request, at your expense.',
+            options,
+        });
+    }
+
+    return {
+        questions,
+        acceptHeader,
+        optionGrants,
+        scopeChoices,
+        consumerChoices,
+        ...(offered.length > 0 ? { consumersDefault: { scope: 'self' as const } } : {}),
+        installLabel,
+    };
 }
 
 export function readConsent(
@@ -364,10 +464,17 @@ export function readConsent(
     const reach = answerFor('Reach')?.selected[0];
     const chosen = (reach && plan.scopeChoices[reach]) || { scope: 'self' as AppScope };
 
+    // Same fail-closed read as reach, pointing the other way: an unanswered — or
+    // replayed, or edited — offer question falls back to the plan's own default,
+    // which is the narrowest grant the app can have.
+    const offer = answerFor('Tools')?.selected[0];
+    const consumers = (offer && plan.consumerChoices[offer]) || plan.consumersDefault;
+
     return {
         install: true,
         capabilities,
         scope: chosen.scope,
         ...(chosen.workspaces ? { workspaces: chosen.workspaces } : {}),
+        ...(consumers ? { consumers } : {}),
     };
 }

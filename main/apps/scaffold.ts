@@ -16,7 +16,7 @@
  * gate it is scaffolding for is worse than no scaffold at all.
  */
 
-import { RESERVED_APP_NAMES } from './manifest';
+import { claimsGenieTabTitle, claimsReservedName } from './manifest';
 
 export interface ScaffoldOptions {
     /** The human name. Becomes the slug, and the address. */
@@ -52,7 +52,11 @@ export function scaffoldApp(options: ScaffoldOptions): ScaffoldFile[] {
     const name = options.name.trim();
     // Refuse here rather than writing files for an app that install would reject —
     // the developer would find out one step later, with a folder to clean up.
-    if (RESERVED_APP_NAMES.includes(name.toLowerCase().replace(/\s+/g, ' '))) {
+    //
+    // Calls the VALIDATOR'S OWN predicates rather than re-normalising the list
+    // here. The whole of genie#264 was one copy of this gate covering a field the
+    // other did not; two spellings of the check is how that starts.
+    if (claimsReservedName(name) || claimsGenieTabTitle(name)) {
         throw new Error(
             `“${name}” is a reserved name — a Genie App may not be called that. Pick another.`,
         );
