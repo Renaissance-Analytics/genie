@@ -856,7 +856,7 @@ export async function repairToolchainPath(
  * Best-effort per file: one unwritable install must not abort the repair for the
  * rest, and a failure here leaves the machine exactly as it was.
  */
-async function refreshManagedInis(): Promise<string[]> {
+export async function refreshManagedInis(): Promise<string[]> {
     const written: string[] = [];
     try {
         const installs = await machineInstalls({});
