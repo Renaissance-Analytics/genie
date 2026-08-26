@@ -329,3 +329,41 @@ describe('the agent guide stays in sync with the knowledge memory classes', () =
         expect(GENIE_MCP_GUIDE).not.toMatch(/\{ id, title,\s*\n?\s*snippet, score, tags \}/);
     });
 });
+
+/**
+ * THE RESULT CONTRACT — how a refusal reaches a caller.
+ *
+ * A peer agent's client read `isError` on the MCP envelope and nothing else. Its
+ * channel broadcast came back with the envelope's `isError` unset and a payload
+ * saying, in capitals, that NO agent had received the message and not to treat
+ * it as reported. The client printed "Sent".
+ *
+ * The server was not at fault — `agentinbox` returned exactly the right refusal,
+ * and genie#65 exists to make that refusal loud. The convention is simply not
+ * written down anywhere: of ~28 tool return sites, exactly ONE (`manageGappDev`)
+ * maps a refused result to `isError`. Everywhere else a refusal rides INSIDE the
+ * payload as `ok: false`, and the call itself succeeded.
+ *
+ * No tool declares an `outputSchema`, so no tool returns `structuredContent`
+ * either — which is spec-compliant, and precisely why a client that reads
+ * `structuredContent`, gets null, falls back to `isError`, and finds it unset
+ * will conclude a refusal was a success. Two people will write that client.
+ *
+ * The guide is what agents actually read, so the convention belongs there.
+ */
+describe('the guide states how a refusal is signalled', () => {
+    it('says results are text with a trailing JSON block, not structuredContent', () => {
+        expect(GENIE_MCP_GUIDE).toContain('structuredContent');
+    });
+
+    it('says the payload carries its own ok, and isError is not the signal', () => {
+        expect(GENIE_MCP_GUIDE).toMatch(/`ok`/);
+        expect(GENIE_MCP_GUIDE).toContain('isError');
+    });
+
+    it('names the failure it prevents, so the rule is not read as trivia', () => {
+        // A convention stated without its consequence gets skimmed. The one that
+        // matters is a channel send reaching nobody being read as delivered.
+        expect(GENIE_MCP_GUIDE.toLowerCase()).toContain('refus');
+    });
+});
