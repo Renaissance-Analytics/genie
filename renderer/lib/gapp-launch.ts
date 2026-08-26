@@ -3,11 +3,11 @@
  * offer is called (genie#245 follow-on).
  *
  * The launch itself lives in exactly one place before this file and one after:
- * `apps.previewFolder` in main, and the two affordances that call it — the
- * workspace row's GApp control and the Command Window's action. Both ask this
- * module the same question so they can never disagree about which workspaces
- * have an app to launch, which is the failure mode of two affordances that each
- * decide for themselves.
+ * `apps.previewFolder` in main, and the three affordances that call it — the
+ * workspace row's GApp control, the Command Window's action, and the GApp
+ * Store's dev-launcher entry. All three ask this module the same question so
+ * they can never disagree about which workspaces have an app to launch, which is
+ * the failure mode of affordances that each decide for themselves.
  *
  * Kept out of the components because the renderer's test environment has no DOM.
  */

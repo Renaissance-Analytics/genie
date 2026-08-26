@@ -10,6 +10,8 @@ import {
     type InstalledAppView,
 } from '../../lib/genie';
 import { appSummaryLine, permissionSummary, provenanceLine, updateNote } from '../../lib/apps-view';
+import type { GappLaunchRow } from '../../lib/gapp-launch';
+import { gappStoreEntries } from '../../lib/gapp-store';
 
 /**
  * The GApp Store (Tynn #250, App Tray pivot).
@@ -24,13 +26,32 @@ import { appSummaryLine, permissionSummary, provenanceLine, updateNote } from '.
  * deliberate acts, none of which an agent can click through. The review leads with
  * the COMMANDS the app will run, because an argv is code execution on this machine
  * and no permission in the model covers it.
+ *
+ * DEV LAUNCHERS SIT IN THE SAME LIST as installed apps, ribboned. A developer is
+ * also a user who installs the released build, so both exist at once and the store
+ * is where a person already looks for "my apps" — a second list somewhere else
+ * would make finding your own app the one thing that works differently. Which
+ * entries there are, and which of them wear the ribbon, is decided in
+ * `lib/gapp-store.ts` and asserted there; this renders it.
  */
 export default function AppStoreFlyout({
     open,
     onClose,
+    workspaces = [],
+    onLaunchGapp,
+    launchingGappWsId = null,
 }: {
     open: boolean;
     onClose: () => void;
+    /** Every workspace, so the ones BUILDING an app can offer a launcher. */
+    workspaces?: readonly GappLaunchRow[];
+    /**
+     * The SAME launch the workspace row and the Command Window call. Passed in
+     * rather than reimplemented here: three affordances that each opened a preview
+     * their own way would be three chances to disagree about which folder opens.
+     */
+    onLaunchGapp?: (workspaceId: string) => void;
+    launchingGappWsId?: string | null;
 }) {
     const [apps, setApps] = useState<InstalledAppView[]>([]);
     const [previews, setPreviews] = useState<AppPreviewView[]>([]);
@@ -173,6 +194,12 @@ export default function AppStoreFlyout({
         }
     };
 
+    // Installed apps and the launchers for the apps being built here, in ONE
+    // ordered list. Composed BEFORE the early return so the ordering rule has a
+    // single home, and computed rather than stored so a workspace that becomes a
+    // GDW while the drawer is open shows up without a refresh path of its own.
+    const entries = gappStoreEntries(apps, workspaces);
+
     if (!open) return null;
 
     return (
@@ -189,6 +216,7 @@ export default function AppStoreFlyout({
         >
             <aside
                 onClick={(e) => e.stopPropagation()}
+                data-testid="gapp-store"
                 style={{
                     width: 'min(620px, 96vw)',
                     height: '100%',
@@ -388,20 +416,73 @@ export default function AppStoreFlyout({
                         </section>
                     )}
 
-                    <section style={{ display: 'grid', gap: 8 }}>
+                    <section style={{ display: 'grid', gap: 8 }} data-testid="gapp-store-list">
                         <Text size="sm">
-                            <strong>Installed</strong>
+                            <strong>Your apps</strong>
                         </Text>
-                        {apps.length === 0 ? (
+                        {entries.length === 0 ? (
                             <Text size="xs" className="text-zinc-500">
                                 No apps yet. A Genie App brings its own front end, its own services and its
                                 own workspace.
                             </Text>
                         ) : (
-                            apps.map((app) => {
+                            entries.map((entry) => {
+                                // The RIBBON. Its class and its wording come out of
+                                // the frozen first-party table in `lib/gapp-store.ts`
+                                // — never from the app — so a developer cannot style
+                                // away the one thing separating their working source
+                                // from the copy a user installed.
+                                const ribbon = entry.ribbon;
+                                const card = `plugin-card${ribbon ? ` ${ribbon.className}` : ''}`;
+
+                                if (entry.kind === 'dev-launcher') {
+                                    const launching = launchingGappWsId === entry.target.id;
+                                    return (
+                                        <div
+                                            key={entry.key}
+                                            className={card}
+                                            style={{ padding: '10px 12px' }}
+                                            data-testid="gapp-store-dev-entry"
+                                        >
+                                            <div className="plugin-card-head">
+                                                <span className="set-row-main">
+                                                    <span className="set-row-label">
+                                                        {entry.name}{' '}
+                                                        {ribbon && (
+                                                            <Badge color="pink" size="sm">
+                                                                {ribbon.label}
+                                                            </Badge>
+                                                        )}
+                                                    </span>
+                                                    {/* The folder is what settles it when an
+                                                        install and a launcher carry the same
+                                                        name: one is a copy on the machine, this
+                                                        one is the source being edited. */}
+                                                    <span className="set-row-desc">{entry.target.path}</span>
+                                                    <span className="set-row-desc">
+                                                        Runs this workspace’s live source in a preview
+                                                        window. Nothing is installed.
+                                                    </span>
+                                                </span>
+                                                <div className="set-actions">
+                                                    <Action
+                                                        variant="ghost"
+                                                        icon="wand"
+                                                        disabled={!onLaunchGapp || launching}
+                                                        onClick={() => onLaunchGapp?.(entry.target.id)}
+                                                    >
+                                                        {launching ? 'Opening…' : 'Launch'}
+                                                    </Action>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    );
+                                }
+
+                                const app = entry.app;
                                 const note = updateNote(updates[app.id] ?? 'not-tracked', app);
                                 return (
-                                    <div key={app.id} className="plugin-card" style={{ padding: '10px 12px' }}>
+                                    <div key={entry.key} className={card} style={{ padding: '10px 12px' }}>
                                         <div className="plugin-card-head">
                                             <span className="set-row-main">
                                                 <span className="set-row-label">
