@@ -160,6 +160,7 @@ import { TynnBackend } from './backend/tynn';
 import { buildWorkstationInventory, startLocalWorkstation } from './tynn/local-workstation';
 import { startManagedCredentials } from './tynn/managed-credentials-service';
 import { startUserChannelIssueWatch } from './tynn/user-channel-issuewatch';
+import { setIssueWatchRefreshTransport } from './issue-watch/force-refresh';
 import { readTynnLink, ensureMcpGitignored } from './tynn/provision';
 import {
     bindWindowToConnection,
@@ -1714,6 +1715,14 @@ app.whenReady().then(async () => {
                 // below, after this one, so read the handle at push time.
                 onProviderCredentialChange: (event) =>
                     void managedCredentialsHandle?.onCredentialChange(event),
+            });
+            // The same session-bound fetch backs the MANUAL refresh
+            // (`checkIssues(refresh: true)` and the UI button). Registered here
+            // because `session.defaultSession.fetch` only exists once the app is
+            // ready, and unregistered correctly answers "not signed in".
+            setIssueWatchRefreshTransport({
+                fetchImpl: sessionFetch,
+                apiBaseUrl: () => new TynnBackend().host(),
             });
             userChannelHandle?.stop();
             userChannelHandle = await startUserChannelIssueWatch({
