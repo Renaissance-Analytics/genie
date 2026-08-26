@@ -45,6 +45,23 @@ export interface CaddySite {
 /** A hostname Caddy (and a `.gen` vhost) may safely carry — labels + dots only. */
 const HOST_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*$/;
 
+/**
+ * A validated vhost as a Caddy header-replacement REGEX — i.e. with the dots
+ * escaped.
+ *
+ * `header_down <field> <find> <replace>` treats `find` as a regular expression, so
+ * an unescaped `api.acme.gen` also matches `apiXacmeXgen` — a DIFFERENT origin,
+ * whose URLs we would then rewrite. The host has already been through
+ * {@link HOST_RE}, so `.` is the only metacharacter it can contain.
+ *
+ * Exported and imported by host-caddyfile.ts on purpose: the host front door needs
+ * exactly this pattern, and a second copy of an escaping rule is how one copy stops
+ * being maintained and quietly becomes an over-match.
+ */
+export function caddyHostPattern(host: string): string {
+    return host.replace(/\./g, '\\.');
+}
+
 function assertSite(s: CaddySite): void {
     if (typeof s.host !== 'string' || !HOST_RE.test(s.host)) {
         throw new Error(`caddyfile: refusing invalid host ${JSON.stringify(s.host)}`);
@@ -119,6 +136,16 @@ export function buildCaddyfile(sites: CaddySite[]): string {
             // `http://`) matches only the leading scheme — leaving `https:` and
             // relative Locations untouched.
             '\t\theader_down Location "^http:" "https:"',
+            // FORCE https on the app's own PRELOADS. Laravel's Vite integration
+            // advertises every asset in ONE `Link` header, built with `url()`, so an
+            // app that does not know it is behind TLS emits `http://<name>.gen/…`
+            // there — and a header is invisible to the body `replace` above. On
+            // biz.gen that blocked 36 font/style/script preloads as mixed content
+            // while the (rewritten) markup looked perfect. Unlike `Location`, which
+            // holds ONE url and so matches at `^http:`, this header holds MANY: match
+            // the host anywhere and replace ALL of them, scoped to THIS site so a
+            // third-party CDN preload stays exactly as the app wrote it.
+            `\t\theader_down Link "http://${caddyHostPattern(s.host)}" "https://${s.host}"`,
             '\t}',
             '}',
             '',

@@ -148,3 +148,52 @@ describe('createGenHttpsBodyRewriter — boundary-safe streaming replace', () =>
         );
     });
 });
+
+/**
+ * The carrier is the in-process twin of the host Caddy, so it inherits the same
+ * beta.236 gap: the body and `Location` were covered, `Link` was not.
+ *
+ * MEASURED on biz.gen — a Laravel app advertises its Vite preloads in ONE `Link`
+ * header holding every asset, built with `url()`, so a site that does not know it
+ * is behind TLS emits `http://<name>.gen/...` there and the Testing Browser blocks
+ * all of them. Unlike `Location` (one url, matched at `^http:`) this header holds
+ * MANY, so every occurrence of THIS site's host has to be upgraded — and no other
+ * host's, so a third-party CDN preload is left exactly as the app wrote it.
+ */
+describe('local carrier — the Link preload header is upgraded too', () => {
+    it('upgrades EVERY http://<host> url in a multi-url Link header', async () => {
+        const port = await upstream({
+            headers: {
+                link: '<http://tynn.gen/a.woff2>; rel="preload"; as="font", <http://tynn.gen/b.css>; rel="preload"; as="style"',
+            },
+        });
+        const r = await forward(target(port));
+        expect(r.headers.link).toBe(
+            '<https://tynn.gen/a.woff2>; rel="preload"; as="font", <https://tynn.gen/b.css>; rel="preload"; as="style"',
+        );
+    });
+
+    it('leaves a third-party preload alone', async () => {
+        const port = await upstream({
+            headers: {
+                link: '<http://tynn.gen/own.js>; rel="modulepreload", <http://cdn.example.com/x.js>; rel="modulepreload"',
+            },
+        });
+        const r = await forward(target(port));
+        expect(r.headers.link).toBe(
+            '<https://tynn.gen/own.js>; rel="modulepreload", <http://cdn.example.com/x.js>; rel="modulepreload"',
+        );
+    });
+
+    it('is site-agnostic — upgrades whichever gen host the target is', async () => {
+        const port = await upstream({ headers: { link: '<http://moic.gen/a.css>; rel="preload"' } });
+        const r = await forward(target(port, 'moic.gen'));
+        expect(r.headers.link).toBe('<https://moic.gen/a.css>; rel="preload"');
+    });
+
+    it('leaves a response with no Link header untouched', async () => {
+        const port = await upstream({ body: 'ok' });
+        const r = await forward(target(port));
+        expect(r.headers.link).toBeUndefined();
+    });
+});

@@ -77,6 +77,53 @@ describe('serveCaddyfile — php', () => {
         // a bare file server would answer paths index.php is meant to own.
         expect(cf.indexOf('php_fastcgi')).toBeLessThan(cf.indexOf('file_server'));
     });
+
+    /**
+     * WHY a plain-http listener has to LIE to PHP about its own scheme.
+     *
+     * A `.gen` is https at the front door, but this per-site Caddy is deliberately
+     * plain http on loopback — so Caddy sets the FastCGI `HTTPS` param from ITS OWN
+     * connection and leaves it unset. Every PHP framework decides `isSecure()` from
+     * exactly that (`Symfony\Component\HttpFoundation\Request::isSecure()` reads
+     * `$_SERVER['HTTPS']`), so the app concludes it is on http and generates
+     * `http://<name>.gen` for every asset, route and redirect it emits.
+     *
+     * MEASURED behind the shipped config — `php-cgi` reported:
+     *   HTTPS=(unset)  SERVER_PORT=80  HTTP_X_FORWARDED_PROTO=http
+     *
+     * The last one is the sharp edge: this Caddy is a second proxy hop, so it
+     * OVERWRITES the front door's `X-Forwarded-Proto: https` with its own scheme.
+     * An app that dutifully trusts the proxy is therefore told `http` — the standard
+     * remedy is not merely absent, it is actively defeated. That is the whole
+     * Node-vs-PHP asymmetry: a Node dev server sits ONE hop from the https front
+     * door and sees `X-Forwarded-Proto: https`; only the PHP path has this hop.
+     *
+     * Genie hosts third-party PHP apps and cannot edit their source, so it tells
+     * the runtime the truth from OUTSIDE instead: `HTTPS=on` makes `isSecure()` true
+     * with no framework config at all, and the app then emits https natively — in
+     * the body, in `Location`, in the `Link` preload header, and in JSON-escaped
+     * `http:\/\/` strings no response rewriter can ever reach.
+     */
+    it('tells PHP it is behind https, so the app generates https URLs at the source', () => {
+        const cf = serveCaddyfile({
+            sitePort: 5321,
+            serve: { kind: 'php', root: '/repos/moic/public', fcgiPort: 5322 },
+        });
+        // What every PHP framework actually reads.
+        expect(cf).toContain('env HTTPS on');
+        // Otherwise the app builds `https://<name>.gen:5321` from the listener port.
+        expect(cf).toContain('env SERVER_PORT 443');
+        // Repair the header this hop would otherwise downgrade to `http`.
+        expect(cf).toContain('header_up X-Forwarded-Proto https');
+    });
+
+    it('does NOT claim https for a static site — it executes nothing that could ask', () => {
+        const cf = serveCaddyfile({
+            sitePort: 5321,
+            serve: { kind: 'static', root: '/repos/orr/dist', spa: true },
+        });
+        expect(cf).not.toContain('env HTTPS on');
+    });
 });
 
 describe('phpFastcgiWorkerCommand', () => {

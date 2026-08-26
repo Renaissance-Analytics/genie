@@ -17,6 +17,8 @@
  * testable and a reload with an unchanged site set is a true no-op.
  */
 
+import { caddyHostPattern } from './caddyfile';
+
 /** The single https port the HOST Caddy listens on. */
 export const HOST_CADDY_HTTPS_PORT = 443;
 
@@ -141,6 +143,16 @@ export function buildHostCaddyfile(sites: HostCaddySite[], tls: HostCaddyTls): s
         // FORCE https on the app's own redirects (beta.236): rewrite a leading
         // `http:` Location back to `https:` at the front door.
         '\t\theader_down Location "^http:" "https:"',
+        // FORCE https on the app's own PRELOADS — the gap beta.236 left, measured on
+        // biz.gen. Laravel's Vite integration advertises every asset in ONE `Link`
+        // header built with `url()`, so an app that does not know it is behind TLS
+        // emits `http://<name>.gen/…` there; a header never passes through the body
+        // `replace`, so the browser blocked 36 font/style/script preloads as mixed
+        // content while the markup looked perfect. It reads as PHP-only because a
+        // Node dev server emits no preload `Link` header at all. `Location` holds ONE
+        // url and matches at `^http:`; this holds MANY, so match the (escaped) host
+        // anywhere and replace ALL of them — third-party preloads untouched.
+        `\t\theader_down Link "http://${caddyHostPattern(s.host)}" "https://${s.host}"`,
         // A container upstream (its sandbox Caddy) serves a self-signed leaf and
         // expects SNI = the gen name; dial https, skip verification, set the SNI.
         ...(s.upstreamScheme === 'https-insecure'
