@@ -406,6 +406,8 @@ export interface MasterSeed {
     terminalLabel: string;
     peerId: string;
     peerName: string;
+    /** The GDW's folder — the GApp Store's dev-launcher entry names it. */
+    peerPath: string;
     peerTerminalId: string;
     peerTerminalLabel: string;
 }

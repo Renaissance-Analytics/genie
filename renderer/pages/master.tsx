@@ -756,11 +756,12 @@ function MasterInner() {
     /**
      * LAUNCH THE APP A GApp DEVELOPMENT WORKSPACE BUILDS (genie#245).
      *
-     * ONE handler behind BOTH new affordances — the workspace row's GApp control
-     * and the Command Window's action — because two entry points that each did
-     * their own thing would be two chances to disagree about which workspace's
-     * folder gets opened. It is the same `apps.previewFolder` the Settings
-     * button calls, aimed at the workspace path rather than a folder picker.
+     * ONE handler behind EVERY affordance — the workspace row's GApp control,
+     * the Command Window's action, and the GApp Store's dev-launcher entry —
+     * because entry points that each did their own thing would be that many
+     * chances to disagree about which workspace's folder gets opened. It is the
+     * same `apps.previewFolder` the Settings button calls, aimed at the workspace
+     * path rather than a folder picker.
      *
      * The outcome is ALWAYS said out loud. Launching an app is a slow, invisible
      * act — the window takes seconds to appear and may not appear at all — and a
@@ -2149,7 +2150,18 @@ function MasterInner() {
                 open={agentInboxOpen}
                 onClose={() => setAgentInboxOpen(false)}
             />
-            <AppStoreFlyout open={appStoreOpen} onClose={() => setAppStoreOpen(false)} />
+            {/* The store lists installed apps AND a ribboned launcher for every
+                workspace that BUILDS one, so a developer finds their own app
+                where they already look for everyone else's. It is handed the
+                SAME `launchGapp` the workspace row and the Command Window use —
+                one launch, one busy state, one toast. */}
+            <AppStoreFlyout
+                open={appStoreOpen}
+                onClose={() => setAppStoreOpen(false)}
+                workspaces={workspaces}
+                onLaunchGapp={launchGapp}
+                launchingGappWsId={launchingGappWsId}
+            />
             <QuestionInboxFlyout
                 open={questionsOpen}
                 onClose={() => setQuestionsOpen(false)}

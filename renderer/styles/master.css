@@ -3383,6 +3383,52 @@ body.gutter-dragging .grid-gutter {
     opacity: 0.55;
     cursor: default;
 }
+
+/* THE DEV-LAUNCHER RIBBON — a store entry that runs your working source.
+
+   Installed apps and the launchers for apps being built here share one list, on
+   purpose: a developer is also a user who installs the released build, and both
+   are meant to exist at once. That leaves two rows a glance apart, so the ribbon
+   is the only thing keeping them straight and it has to be the loudest thing on
+   the card.
+
+   PINK, from the same `--gapp-dev` family as the GDW row and its launch control.
+   That is a claim, not a palette choice: pink means "this is the source you are
+   building", wherever it appears. Amber was the other candidate and would have
+   been wrong — it already means "this app BUILD is a dev build" two rows up in
+   this very list, on an installed app in dev mode, and one colour saying two
+   things is the confusion the ribbon exists to end.
+
+   The class comes out of the frozen table in `lib/gapp-store.ts`, so nothing a
+   manifest carries can reach this rule — the same guarantee `ws-gapp-dev` has.
+
+   Drawn the way a GDW marks itself in the rail — a bar down the leading edge,
+   a pink border, and the same left-anchored gradient pouring out of the bar. A
+   card in a drawer and a row in a sidebar then say the same thing the same way,
+   so it is one mark to learn rather than two. */
+.plugin-card.store-gapp-dev {
+    position: relative;
+    border-color: var(--gapp-dev-border);
+    /* LAYERED over the card's own surface, not instead of it. The gradient is
+       26%→4% alpha by design, so setting it alone would let the drawer's darker
+       ground show through and leave the ribboned card reading as a dimmer card
+       rather than a marked one. */
+    background: var(--gapp-dev-grad), var(--bg-2);
+}
+/* The bar the gradient pours out of — inset and rounded, exactly as the GDW's
+   rail row draws it, rather than a full-bleed edge needing `overflow: hidden`
+   to respect the corner radius. Matching the rail is the point (one mark to
+   learn, not two), and it leaves the card free to let a child overflow. */
+.plugin-card.store-gapp-dev::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 6px;
+    bottom: 6px;
+    width: 3px;
+    border-radius: 2px;
+    background: var(--gapp-dev);
+}
 .tproj-adds {
     display: flex;
     flex-direction: column;

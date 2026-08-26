@@ -65,6 +65,13 @@ export interface MasterSeed {
     terminalLabel: string;
     peerId: string;
     peerName: string;
+    /**
+     * The GDW's folder on disk. Published because the GApp Store's dev-launcher
+     * entry NAMES it — that line is what settles which row is which when an
+     * install and a launcher carry the same app name — and it is a temp path the
+     * spec cannot know ahead of time.
+     */
+    peerPath: string;
     peerTerminalId: string;
     peerTerminalLabel: string;
 }
@@ -212,6 +219,7 @@ export function seedMasterE2E(): MasterSeed {
         terminalLabel: TERMINAL_LABEL,
         peerId: PEER_ID,
         peerName: PEER_NAME,
+        peerPath: peerDir,
         peerTerminalId: PEER_TERMINAL_ID,
         peerTerminalLabel: PEER_TERMINAL_LABEL,
     };
