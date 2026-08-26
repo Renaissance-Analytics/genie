@@ -329,3 +329,81 @@ test('on a GDW the row switches and the GApp control launches — never each oth
     await switchToWorkspace(seed.workspaceName);
     await expect(plainRow).toHaveClass(/\bis-active\b/);
 });
+
+/**
+ * THE GAPP STORE LISTS THE APP THIS WORKSPACE BUILDS, RIBBONED.
+ *
+ * A developer building a GApp is also a user who installs the released one, and
+ * both are meant to exist at once — so the store shows both, in one list, and
+ * the ribbon is the only thing keeping two nearly-identical rows apart. Which
+ * entries exist and which wear a ribbon is settled in unit tests
+ * (renderer/lib/__tests__/gapp-store.test.ts), including the manifest boundary.
+ * What ONLY the real window can show is that the frozen table's class reaches
+ * the DOM and that a stylesheet answers it — a lookup returning
+ * 'store-gapp-dev' is worth nothing if nobody applies it or no rule matches.
+ *
+ * The ordinary workspace is the control, and it is what stops this passing
+ * against a build that lists nothing: the same list is asked about both rows.
+ *
+ * PLACED LAST for the same reason the test above is — this file shares one
+ * window, and the test above leaves a toast and an active workspace behind. This
+ * one waits that toast out rather than reading it, which is what makes the toast
+ * it asserts a report of ITS OWN click.
+ */
+test('the GApp Store lists a ribboned dev launcher, and launching it previews', async () => {
+    // Any toast the launcher test left is still on screen for up to 4s and says
+    // exactly what this test is about to assert. Waiting it out is the difference
+    // between proving this button fired and re-reading the last one's receipt.
+    const refusal = page.locator('.g-toast').filter({ hasText: 'genie-app.json' });
+    await expect(refusal).toHaveCount(0, { timeout: 10_000 });
+
+    await page.getByRole('button', { name: 'Genie Apps' }).click();
+    const list = page.getByTestId('gapp-store-list');
+    await expect(list).toBeVisible();
+
+    // THE ENTRY. It is in the store's ONE list — not a section of its own — which
+    // is the whole point: a developer finds their own app where they already look
+    // for everyone else's.
+    const devEntry = list.locator('.plugin-card').filter({ hasText: seed.peerName });
+    await expect(devEntry).toHaveCount(1);
+    await expect(devEntry).toHaveClass(/\bstore-gapp-dev\b/);
+    // The ribbon SAYS what the colour means. A hue nobody can name is decoration.
+    await expect(devEntry).toContainText('dev launcher');
+    // …and it names the folder, which is what settles it when an installed app
+    // and a launcher carry the same name.
+    await expect(devEntry).toContainText(seed.peerPath);
+
+    // THE CONTROL. The ordinary workspace builds nothing, so it gets no entry —
+    // and because the GDW above DOES have one in this same list, "no entry" is a
+    // filter doing its job rather than an empty drawer.
+    await expect(list.locator('.plugin-card').filter({ hasText: seed.workspaceName })).toHaveCount(
+        0,
+    );
+
+    // THE RULE MATCHED, not just the class landed. An unribboned `.plugin-card`
+    // paints a flat colour, so `background-image` is 'none'; the ribboned one
+    // pours the GDW gradient out of its leading edge, and the edge itself is a
+    // real painted bar in the GDW pink. Reading computed style rather than a
+    // screenshot keeps this honest about WHY it differs and survives a retheme.
+    const paint = await devEntry.evaluate((el) => ({
+        card: getComputedStyle(el).backgroundImage,
+        bar: getComputedStyle(el, '::before').backgroundColor,
+    }));
+    expect(paint.card).not.toBe('none');
+    expect(paint.bar).toBe('rgb(236, 72, 153)');
+
+    // LAUNCHING FROM HERE IS THE SAME LAUNCH. The fixture folder has a
+    // `project.json` and no `genie-app.json`, so the preview refuses with a
+    // message instead of opening a real window in CI — which makes the toast a
+    // positive control (the button really fired) AND the evidence that the store
+    // goes through the same `openPreview` the workspace row does, since it comes
+    // back with the row's own refusal rather than one of its own.
+    await devEntry.getByRole('button', { name: /Launch/ }).click();
+    await expect(refusal).toBeVisible();
+
+    // Leave the window as the rest of the file expects it: no drawer open. Scoped
+    // to the drawer — 'Close' is a common label and a bare lookup would be a
+    // strict-mode violation the day another surface is up alongside it.
+    await page.getByTestId('gapp-store').getByRole('button', { name: 'Close' }).click();
+    await expect(list).toHaveCount(0);
+});
