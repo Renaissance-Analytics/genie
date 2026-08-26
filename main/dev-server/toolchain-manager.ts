@@ -3,6 +3,7 @@ import { basename, dirname, join } from 'node:path';
 import { cp, mkdir, mkdtemp, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { defaultCommandRunner, fileExistsSeam, hostToolCommandRunner } from './seams';
+import { INSTALL_BUDGET_MS, INSTALL_RUN_OPTIONS } from './run-budget';
 import { addToolsPathEntry, createToolchainPrimitives, download } from './toolchain-primitives';
 import { createToolchainPerformDeps } from './toolchain-effects';
 import { createPerformInstall } from './toolchain-perform';
@@ -462,7 +463,10 @@ export async function removeToolchainVersion(
 
 // --- the impure effects the executor runs through ---------------------------
 
-const INSTALL_TIMEOUT_MS = 15 * 60_000;
+// One definition of "how long an install may take", shared with the wizard's
+// paths — see `run-budget.ts`. A per-module copy is what let one call site drift
+// onto the 120-second probe default.
+const INSTALL_TIMEOUT_MS = INSTALL_BUDGET_MS;
 
 function versionInstallEffects(tool: LanguageTool, deps: ToolchainManagerDeps): VersionInstallEffects {
     return {
@@ -506,9 +510,10 @@ function versionInstallEffects(tool: LanguageTool, deps: ToolchainManagerDeps): 
         },
 
         async runInstaller(installer, args) {
-            const res = await defaultCommandRunner.run(installer, args, {
-                timeoutMs: INSTALL_TIMEOUT_MS,
-            });
+            // A vendor installer, so it gets the install budget AND the note:
+            // stopping the process Genie spawned does not stop what that
+            // installer already handed to the OS.
+            const res = await defaultCommandRunner.run(installer, args, INSTALL_RUN_OPTIONS);
             return res.code === 0
                 ? { ok: true }
                 : { ok: false, error: (res.stderr || res.stdout || `exited ${res.code}`).slice(-400) };
@@ -631,6 +636,10 @@ async function extractArchive(
                 }
               : { command: 'unzip', args: ['-q', '-o', archive, '-d', dest] };
 
+    // A plain wall, deliberately: this is Genie's OWN extract, spawned without a
+    // shell, so killing it really does stop it — and it unpacks into a staging
+    // directory the caller removes, so there is no half-state to warn about.
+    // Borrowing the installer note here would tell the user something untrue.
     const res = await defaultCommandRunner.run(cmd.command, cmd.args, {
         timeoutMs: INSTALL_TIMEOUT_MS,
     });

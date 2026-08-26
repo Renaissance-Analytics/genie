@@ -6,6 +6,7 @@ import { basename, dirname, join } from 'node:path';
 import { URL } from 'node:url';
 import type { CommandResult } from './container-runtime';
 import { defaultCommandRunner, hostToolCommandRunner } from './seams';
+import { INSTALL_BUDGET_MS, INSTALL_RUN_OPTIONS } from './run-budget';
 import { elevationLauncherArgv, isProcessElevated } from './elevate';
 import { resolveDownloadUrl } from './toolchain-resolve';
 import { artifactInstallPlan } from './toolchain-artifact';
@@ -24,8 +25,11 @@ import type { ToolchainEffectPrimitives } from './toolchain-effects';
  */
 
 /** A hung installer must not wedge the wizard forever; generous because an MSI
- *  or a Docker Desktop install legitimately takes minutes. */
-const INSTALL_TIMEOUT_MS = 15 * 60_000;
+ *  or a Docker Desktop install legitimately takes minutes. Imported rather than
+ *  redeclared — a private copy per module is how the unelevated install path
+ *  ended up on the 120-second probe default while this one had fifteen minutes
+ *  (see `run-budget.ts`). */
+const INSTALL_TIMEOUT_MS = INSTALL_BUDGET_MS;
 const FETCH_TIMEOUT_MS = 30_000;
 
 /** Run a command with OS elevation. Already-privileged (root/CI) spawns direct;
@@ -36,10 +40,10 @@ const FETCH_TIMEOUT_MS = 30_000;
 async function runElevated(command: string, args: string[]): Promise<CommandResult> {
     const platform = process.platform;
     if (isProcessElevated(platform)) {
-        return defaultCommandRunner.run(command, args, { timeoutMs: INSTALL_TIMEOUT_MS });
+        return defaultCommandRunner.run(command, args, INSTALL_RUN_OPTIONS);
     }
     const launcher = elevationLauncherArgv(command, args, platform);
-    return defaultCommandRunner.run(launcher[0], launcher.slice(1), { timeoutMs: INSTALL_TIMEOUT_MS });
+    return defaultCommandRunner.run(launcher[0], launcher.slice(1), INSTALL_RUN_OPTIONS);
 }
 
 /** GET a URL, following redirects, returning the parsed body. GitHub's API
@@ -216,9 +220,7 @@ export function createToolchainPrimitives(
                 case 'run':
                     return command.requiresElevation
                         ? runElevated(plan.command, plan.args)
-                        : defaultCommandRunner.run(plan.command, plan.args, {
-                              timeoutMs: INSTALL_TIMEOUT_MS,
-                          });
+                        : defaultCommandRunner.run(plan.command, plan.args, INSTALL_RUN_OPTIONS);
                 case 'phar': {
                     // composer is a phar — not executable by itself, so it is placed
                     // beside a launcher that feeds it to php.

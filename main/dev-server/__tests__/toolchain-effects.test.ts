@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { CommandResult, CommandRunner, StreamHandle } from '../container-runtime';
+import { INSTALL_RUN_OPTIONS } from '../run-budget';
 import { createToolchainPerformDeps } from '../toolchain-effects';
 import type { ToolchainEffectPrimitives } from '../toolchain-effects';
 
@@ -47,7 +48,7 @@ describe('createToolchainPerformDeps — run routing', () => {
         const prim = primitives({ runner: fakeRunner(() => OK('done')) });
         const deps = createToolchainPerformDeps(prim, noop);
         const res = await deps.run('winget', ['install'], { elevated: false });
-        expect(prim.runner.run).toHaveBeenCalledWith('winget', ['install']);
+        expect(prim.runner.run).toHaveBeenCalledWith('winget', ['install'], INSTALL_RUN_OPTIONS);
         expect(prim.runElevated).not.toHaveBeenCalled();
         expect(res.code).toBe(0);
     });
@@ -58,6 +59,44 @@ describe('createToolchainPerformDeps — run routing', () => {
         await deps.run('apt-get', ['install', '-y', 'git'], { elevated: true });
         expect(prim.runElevated).toHaveBeenCalledWith('apt-get', ['install', '-y', 'git']);
         expect(prim.runner.run).not.toHaveBeenCalled();
+    });
+});
+
+/**
+ * THE REPORTED BUG (`winget install --id Git.Git … timed out after 120000ms`).
+ *
+ * `run` called `prim.runner.run(command, args)` with no third argument, so an
+ * install fell through to `seams.ts`'s `DEFAULT_TIMEOUT_MS` — a budget chosen
+ * for `docker ps`. Nothing anywhere INTENDED that: the elevated path and both
+ * artifact installers already passed 15 minutes, and only this one call site
+ * went unelevated. The verify re-probe below is a separate wire, so the budget
+ * has to be asserted on the call itself.
+ */
+describe('createToolchainPerformDeps — how long an install may take', () => {
+    it('never leaves an install on the probe-sized default', async () => {
+        const prim = primitives({ runner: fakeRunner(() => OK('')) });
+        const deps = createToolchainPerformDeps(prim, noop);
+        await deps.run('winget', ['install', '--id', 'Git.Git'], { elevated: false });
+        const opts = vi.mocked(prim.runner.run).mock.calls[0]?.[2];
+        // Reading the default when none was passed is the bug, stated as an
+        // assertion: the fallback is what Git actually got.
+        expect(opts?.timeoutMs ?? 120_000).toBeGreaterThan(120_000);
+    });
+
+    it('lets a still-running install earn more time instead of dying on the clock', async () => {
+        const prim = primitives({ runner: fakeRunner(() => OK('')) });
+        const deps = createToolchainPerformDeps(prim, noop);
+        await deps.run('winget', ['install'], { elevated: false });
+        const opts = vi.mocked(prim.runner.run).mock.calls[0]?.[2];
+        expect(opts?.idleGraceMs).toBeGreaterThan(0);
+        expect(opts?.ceilingMs).toBeGreaterThan(opts?.timeoutMs ?? 0);
+    });
+
+    it('carries a note, so a timed-out row says more than "timed out"', async () => {
+        const prim = primitives({ runner: fakeRunner(() => OK('')) });
+        const deps = createToolchainPerformDeps(prim, noop);
+        await deps.run('winget', ['install'], { elevated: false });
+        expect(vi.mocked(prim.runner.run).mock.calls[0]?.[2]?.timeoutNote).toBeTruthy();
     });
 });
 
