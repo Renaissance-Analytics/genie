@@ -17,6 +17,8 @@
  * host-native path. PURE builders here: deterministically testable, no fs/spawn.
  */
 
+import { HOST_CADDY_HTTPS_PORT } from './host-caddyfile';
+
 /** What a generated-config site serves. Reverse-proxy sites are NOT here — they
  *  need no config. */
 export type SiteServe =
@@ -82,7 +84,48 @@ export function serveCaddyfile(opts: { sitePort: number; serve: SiteServe }): st
         // a JS MIME type for <script type="module">, so every Vite/Inertia site
         // served this way rendered blank while its markup and Inertia props looked
         // perfect — which reads as an app bug until you check response headers.
-        body.push(`\tphp_fastcgi 127.0.0.1:${opts.serve.fcgiPort}`);
+        // TELL PHP IT IS BEHIND https — the root cause of the mixed-content reports.
+        //
+        // A `.gen` is https at the front door, but this listener is deliberately
+        // plain http on loopback, so Caddy derives the FastCGI `HTTPS` param from ITS
+        // OWN connection and leaves it unset. Every PHP framework decides the
+        // question from exactly that (Symfony's `Request::isSecure()` reads
+        // `$_SERVER['HTTPS']`), so the app concludes it is on http and generates
+        // `http://<name>.gen` for every asset, route and redirect.
+        //
+        // MEASURED behind the config this used to emit, `php-cgi` reported:
+        //   HTTPS=(unset)  SERVER_PORT=80  HTTP_X_FORWARDED_PROTO=http
+        //
+        // That last value is the sharp edge, and it is why "just set
+        // X-Forwarded-Proto" was never going to be enough: this Caddy is a SECOND
+        // proxy hop, so it overwrites the front door's `X-Forwarded-Proto: https`
+        // with its own scheme. An app that dutifully trusts the proxy is told
+        // `http` — the standard remedy is not absent here, it is defeated. It is
+        // also the whole Node-vs-PHP asymmetry: a Node dev server sits ONE hop from
+        // the https front door and is told `https`; only PHP has this second hop.
+        //
+        // Genie hosts third-party PHP apps and cannot edit their source, so it states
+        // the truth from OUTSIDE. `HTTPS=on` alone makes `isSecure()` true with no
+        // framework config, and the app then emits https NATIVELY — including the
+        // places no response rewriter can reach: JSON-escaped `http:\/\/…` (PHP's
+        // `json_encode` escapes slashes by default, so the body rewriter's needle
+        // never matches) and any URL its JavaScript builds at runtime.
+        //
+        // The rewrites downstream stay as the backstop for the OTHER php shapes —
+        // `php artisan serve`, FrankenPHP — which Genie does not configure.
+        const httpsTruth = [
+            // What every PHP framework reads to answer "am I on https?".
+            '\t\tenv HTTPS on',
+            // Without this the app builds `https://<name>.gen:<sitePort>` from the
+            // listener port; the front door is the port the browser actually used.
+            `\t\tenv SERVER_PORT ${HOST_CADDY_HTTPS_PORT}`,
+            // The nginx-convention twin of HTTPS, read by some apps instead.
+            '\t\tenv REQUEST_SCHEME https',
+            // Repair the header this hop would otherwise downgrade to `http`, so a
+            // proxy-TRUSTING app is not actively lied to.
+            '\t\theader_up X-Forwarded-Proto https',
+        ];
+        body.push(`\tphp_fastcgi 127.0.0.1:${opts.serve.fcgiPort} {`, ...httpsTruth, '\t}');
         // AFTER php_fastcgi, so the front controller gets first refusal and
         // anything it does not claim is served from disk with a real Content-Type.
         body.push(`\tfile_server`);

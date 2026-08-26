@@ -45,6 +45,31 @@ export interface CaddySite {
 /** A hostname Caddy (and a `.gen` vhost) may safely carry — labels + dots only. */
 const HOST_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*$/;
 
+/**
+ * A vhost as a Caddy header-replacement REGEX — every metacharacter escaped.
+ *
+ * `header_down <field> <find> <replace>` treats `find` as a regular expression, so
+ * an unescaped `api.acme.gen` also matches `apiXacmeXgen` — a DIFFERENT origin,
+ * whose URLs we would then rewrite.
+ *
+ * It escapes the WHOLE metacharacter set, not just the `.` that callers can
+ * actually produce today. Every caller currently passes a host already through
+ * {@link HOST_RE}, where `.` is the only metacharacter possible — but this is
+ * exported and used from host-caddyfile.ts as well, so the guarantee would live at
+ * the call sites rather than here, and an escaper is only worth having if it holds
+ * on its own. Escaping one character and passing the rest through is the
+ * `js/incomplete-sanitization` shape: correct until the first caller that forgets
+ * to validate, and then silently an injection. Backslash is in the class and the
+ * single pass handles it, so there is no escape-the-escape ordering bug.
+ *
+ * Shared rather than copied for the same reason `quoteWinToken` is: two copies of
+ * an escaping rule drift, and the drift shows up as a hole in whichever copy
+ * stopped being maintained.
+ */
+export function caddyHostPattern(host: string): string {
+    return host.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function assertSite(s: CaddySite): void {
     if (typeof s.host !== 'string' || !HOST_RE.test(s.host)) {
         throw new Error(`caddyfile: refusing invalid host ${JSON.stringify(s.host)}`);
@@ -119,6 +144,16 @@ export function buildCaddyfile(sites: CaddySite[]): string {
             // `http://`) matches only the leading scheme — leaving `https:` and
             // relative Locations untouched.
             '\t\theader_down Location "^http:" "https:"',
+            // FORCE https on the app's own PRELOADS. Laravel's Vite integration
+            // advertises every asset in ONE `Link` header, built with `url()`, so an
+            // app that does not know it is behind TLS emits `http://<name>.gen/…`
+            // there — and a header is invisible to the body `replace` above. On
+            // biz.gen that blocked 36 font/style/script preloads as mixed content
+            // while the (rewritten) markup looked perfect. Unlike `Location`, which
+            // holds ONE url and so matches at `^http:`, this header holds MANY: match
+            // the host anywhere and replace ALL of them, scoped to THIS site so a
+            // third-party CDN preload stays exactly as the app wrote it.
+            `\t\theader_down Link "http://${caddyHostPattern(s.host)}" "https://${s.host}"`,
             '\t}',
             '}',
             '',

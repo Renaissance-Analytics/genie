@@ -209,4 +209,67 @@ describe('REAL php serve mode — the bundled Caddy + php-cgi actually EXECUTE P
         // case would leave the page unstyled instead of blank.
         expect(css.headers.get('content-type') ?? '').toMatch(/text[/]css/i);
     });
+
+    /**
+     * THE mixed-content bug, asserted where it actually lives: inside the PHP
+     * process, on the variables a framework reads.
+     *
+     * The owner reported https/http mixed content on PHP sites while Node sites were
+     * fine. The cause is this hop: a `.gen` is https at the front door, but this
+     * per-site Caddy is plain http on loopback, so it derives the FastCGI `HTTPS`
+     * param from its OWN connection (unset) and OVERWRITES the front door's
+     * `X-Forwarded-Proto: https` with `http`. The app therefore concludes it is on
+     * http and emits `http://<name>.gen` everywhere — including the two places no
+     * response rewriter can reach: JSON-escaped `http:\/\/…` (PHP escapes slashes by
+     * default) and anything its JavaScript builds at runtime. Node never hits this
+     * because a Node dev server is ONE hop from the https front door.
+     *
+     * Asserting on the generated Caddyfile string is not enough — `env` and
+     * `header_up` inside a `php_fastcgi` block either reach the FastCGI params or
+     * they do not, and only the real binaries answer that. So this runs php-cgi and
+     * reads back what PHP itself saw.
+     */
+    it.skipIf(!phpCgiExe)('tells PHP it is on https, so the app generates https URLs itself', async () => {
+        const dir = mkdtempSync(path.join(tmpdir(), 'genie-real-php-https-'));
+        dirs.push(dir);
+        const root = path.join(dir, 'public');
+        mkdirSync(root);
+        // Exactly what Symfony\Component\HttpFoundation\Request::isSecure() reads —
+        // the check every Laravel/Symfony URL, asset and redirect is built on.
+        writeFileSync(
+            path.join(root, 'index.php'),
+            `<?php
+$isSecure = !empty($_SERVER['HTTPS']) && strtolower($_SERVER['HTTPS']) !== 'off';
+echo json_encode([
+  'HTTPS' => $_SERVER['HTTPS'] ?? '(unset)',
+  'SERVER_PORT' => $_SERVER['SERVER_PORT'] ?? '(unset)',
+  'XFP' => $_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '(unset)',
+  'isSecure' => $isSecure,
+]);`,
+        );
+
+        const sitePort = await allocateFreePort();
+        const fcgiPort = await allocateFreePort(new Set([sitePort]));
+        const [wbin, ...wargs] = phpFastcgiWorkerCommand(phpCgiExe, fcgiPort);
+        procs.push(spawn(wbin!, wargs, { stdio: 'ignore' }));
+
+        const configPath = path.join(dir, 'Caddyfile');
+        writeFileSync(configPath, serveCaddyfile({ sitePort, serve: { kind: 'php', root, fcgiPort } }));
+        const [bin, ...args] = caddyServeArgv(caddyBin, configPath);
+        procs.push(spawn(bin!, args, { stdio: 'ignore' }));
+
+        expect(await waitForHttp(sitePort, 15_000), 'Caddy + php-cgi must answer').toBe(true);
+        const res = await fetch(`http://127.0.0.1:${sitePort}/`, { headers: { host: 'moic.gen' } });
+        expect(res.status).toBe(200);
+        const seen = JSON.parse(await res.text()) as Record<string, unknown>;
+
+        // The one that decides every generated URL. Unfixed this is `(unset)`.
+        expect(seen.HTTPS).toBe('on');
+        expect(seen.isSecure, 'PHP must believe it is on https, or it emits http:// URLs').toBe(true);
+        // Or the app builds `https://<name>.gen:<sitePort>` from the listener port.
+        expect(String(seen.SERVER_PORT)).toBe('443');
+        // The header this hop downgrades to `http` unless repaired — a proxy-TRUSTING
+        // app reads this one instead, so it must not be left lying.
+        expect(seen.XFP).toBe('https');
+    });
 });

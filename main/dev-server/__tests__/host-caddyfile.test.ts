@@ -120,3 +120,44 @@ describe('buildHostCaddyfile', () => {
         ).toThrow();
     });
 });
+
+/**
+ * The gap beta.236 left, MEASURED on the owner's own `.gen` sites (biz.gen):
+ * https forcing covered the response BODY (`replace`) and the `Location` header,
+ * but NOTHING covered `Link`.
+ *
+ * Laravel's Vite integration advertises its preloads as an HTTP `Link` header, one
+ * header carrying every asset — and it builds those URLs with `url()`/`asset()`, so
+ * an app that does not know it is behind TLS emits `http://<name>.gen/...` there.
+ * That header never passes through the body rewriter, so on biz.gen the browser
+ * blocked 36 font/style/script preloads as mixed content while the (rewritten)
+ * markup looked perfect. It is PHP-shaped in practice: a Node dev server emits no
+ * preload `Link` header at all, which is why only PHP sites reported it.
+ *
+ * `Location` matches `^http:` because it holds ONE url; `Link` holds MANY, so this
+ * is a scoped replace-all of the site's own host — third-party preloads untouched.
+ */
+describe('buildHostCaddyfile — https forcing reaches the Link preload header', () => {
+    it('rewrites every http://<host> in the Link header, not just the first', () => {
+        const cf = buildHostCaddyfile([{ host: 'biz.gen', port: 57661 }], TLS);
+        expect(cf).toContain('header_down Link "http://biz\\.gen" "https://biz.gen"');
+    });
+
+    it('escapes the host so the pattern cannot match a look-alike name', () => {
+        // Unescaped, `http://biz.gen` is a regex whose `.` matches ANY character —
+        // so it would also rewrite `http://bizXgen`, a different origin entirely.
+        const cf = buildHostCaddyfile([{ host: 'karma.imp.gen', port: 62396 }], TLS);
+        expect(cf).toContain('header_down Link "http://karma\\.imp\\.gen" "https://karma.imp.gen"');
+        // Scoped to the Link line: the BODY `replace` above legitimately carries the
+        // unescaped host, because that one is a literal string match, not a regex.
+        expect(cf).not.toContain('header_down Link "http://karma.imp.gen"');
+    });
+
+    it('applies to a CONTAINER site too — the preload header is stack-agnostic', () => {
+        const cf = buildHostCaddyfile(
+            [{ host: 'wallet.imp.gen', port: 51160, upstreamScheme: 'https-insecure' }],
+            TLS,
+        );
+        expect(cf).toContain('header_down Link "http://wallet\\.imp\\.gen" "https://wallet.imp.gen"');
+    });
+});

@@ -150,6 +150,22 @@ export function upgradeGenLocation(location: string, host: string): string {
     return location;
 }
 
+/**
+ * Upgrade EVERY `http://<thisGenHost>` url inside a `Link` header — the twin of the
+ * host Caddy's `header_down Link` (host-caddyfile.ts).
+ *
+ * Laravel's Vite integration advertises its preloads as one `Link` header carrying
+ * every asset, built with `url()`, so a site that does not know it is behind TLS
+ * emits `http://<name>.gen/…` for all of them and the Testing Browser blocks the
+ * lot as mixed content — the markup meanwhile looks perfect, because the body
+ * rewriter cannot see a header. Unlike `Location` (one url, so a prefix test is
+ * enough) this holds MANY, hence replace-all; and it stays scoped to this site's
+ * own host so a third-party CDN preload survives exactly as written.
+ */
+export function upgradeGenLinkHeader(link: string, host: string): string {
+    return link.split(`http://${host}`).join(`https://${host}`);
+}
+
 /** Build the loopback dial options for a target + upstream path/headers. */
 function dialOptions(
     target: LocalTarget,
@@ -216,6 +232,14 @@ export function createLocalSiteCarrier(
                     const headers: http.IncomingHttpHeaders = { ...upRes.headers };
                     if (typeof headers.location === 'string') {
                         headers.location = upgradeGenLocation(headers.location, host);
+                    }
+                    // `Link` carries the app's preloads. Node gives it as a string,
+                    // or as an ARRAY when the app sent the field more than once —
+                    // handle both, or a multi-header response keeps the bug.
+                    if (typeof headers.link === 'string') {
+                        headers.link = upgradeGenLinkHeader(headers.link, host);
+                    } else if (Array.isArray(headers.link)) {
+                        headers.link = headers.link.map((v) => upgradeGenLinkHeader(v, host));
                     }
                     let body: Readable = upRes;
                     if (isRewritableTextType(headers['content-type']) && !headers['content-encoding']) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildCaddyfile, CADDY_HTTPS_PORT } from '../caddyfile';
+import { buildCaddyfile, caddyHostPattern, CADDY_HTTPS_PORT } from '../caddyfile';
 
 /**
  * The per-workspace Caddy proxy config. Caddy runs INSIDE the workspace sandbox,
@@ -29,12 +29,23 @@ describe('buildCaddyfile', () => {
         const cf = buildCaddyfile([{ host: 'x.acme.gen', port: 3000 }]);
         // No bare http listener.
         expect(cf).not.toMatch(/:80\b/);
-        // The config now legitimately CONTAINS `http://<host>` — but only as the
-        // left side of the body-rewrite pair, mapped to the https:// of the same
-        // host. It exists solely to be rewritten away, never served as an origin.
+        // The config legitimately CONTAINS `http://<host>` — but ONLY as the left
+        // side of a rewrite pair mapped to the https:// of the SAME host. There are
+        // two such pairs now: the body `replace` (a literal match) and the `Link`
+        // header rewrite (a regex, so the host's dots arrive escaped). Both exist
+        // solely to be rewritten away; neither is ever served as an origin.
         expect(cf).toContain('"http://x.acme.gen" "https://x.acme.gen"');
-        const httpUrls = [...cf.matchAll(/http:\/\/[a-z0-9.-]+/g)].map((m) => m[0]);
-        expect(httpUrls).toEqual(['http://x.acme.gen']);
+        expect(cf).toContain('"http://x\\.acme\\.gen" "https://x.acme.gen"');
+        // Every http:// in the file, with any regex escaping normalised away, must
+        // be this site's own host AND be immediately mapped to its https twin — so a
+        // future directive cannot smuggle in a plain-http origin unnoticed.
+        const pairs = [...cf.matchAll(/"(http:\/\/[a-z0-9.\\-]+)" "(https:\/\/[a-z0-9.-]+)"/g)];
+        expect(pairs.map((m) => m[1]!.replace(/\\/g, ''))).toEqual([
+            'http://x.acme.gen',
+            'http://x.acme.gen',
+        ]);
+        expect(pairs.map((m) => m[2])).toEqual(['https://x.acme.gen', 'https://x.acme.gen']);
+        expect([...cf.matchAll(/http:\/\//g)]).toHaveLength(pairs.length);
     });
 
     it('rewrites the app\'s own in-body http://<host> up to https via a streamed `replace`', () => {
@@ -115,5 +126,61 @@ describe('buildCaddyfile', () => {
         expect(() => buildCaddyfile([{ host: 'ok.gen', port: 70000 }])).toThrow();
         expect(() => buildCaddyfile([{ host: 'bad host {', port: 3000 }])).toThrow();
         expect(() => buildCaddyfile([{ host: '', port: 3000 }])).toThrow();
+    });
+});
+
+/**
+ * The same `Link`-header gap the HOST front door had (see host-caddyfile.test.ts).
+ * A container site is reached through THIS Caddy, so a Laravel/FrankenPHP app in
+ * the sandbox emits its Vite preloads as `http://<name>.gen` in one `Link` header
+ * and the browser blocks every one of them as mixed content. The body `replace`
+ * cannot see a header, so the rewrite has to be stated here too — otherwise the
+ * container path keeps the bug the host path just lost.
+ */
+/**
+ * The escaper is EXPORTED and used from host-caddyfile.ts too, so its safety
+ * cannot rest on every caller having validated the host first — which is exactly
+ * what CodeQL's `js/incomplete-sanitization` flagged when it escaped only `.`.
+ * An escaper that handles one metacharacter and passes the rest through is a
+ * latent injection hole waiting for the first caller that forgets, so it escapes
+ * the WHOLE regex metacharacter set — backslash included, and first.
+ */
+describe('caddyHostPattern — a complete regex escape', () => {
+    it('escapes the dot, so a pattern cannot match a look-alike origin', () => {
+        // Unescaped, `.` matches ANY character: `api.acme.gen` would also match
+        // `apiXacmeXgen`, a different origin whose URLs we would then rewrite.
+        expect(caddyHostPattern('api.acme.gen')).toBe('api\\.acme\\.gen');
+    });
+
+    it('escapes a BACKSLASH — the character an escape-only-the-dot version leaks', () => {
+        expect(caddyHostPattern('a\\b')).toBe('a\\\\b');
+    });
+
+    it('escapes every other metacharacter rather than passing it through', () => {
+        expect(caddyHostPattern('a+b*c?')).toBe('a\\+b\\*c\\?');
+        expect(caddyHostPattern('a(b)c[d]')).toBe('a\\(b\\)c\\[d\\]');
+        expect(caddyHostPattern('^a|b$')).toBe('\\^a\\|b\\$');
+        expect(caddyHostPattern('a{2}')).toBe('a\\{2\\}');
+    });
+
+    it('leaves an ordinary label untouched', () => {
+        expect(caddyHostPattern('biz-commander')).toBe('biz-commander');
+    });
+});
+
+describe('buildCaddyfile — https forcing reaches the Link preload header', () => {
+    it('rewrites every http://<host> in the Link header', () => {
+        const cf = buildCaddyfile([{ host: 'moic-suite.acme.gen', port: 5173 }]);
+        expect(cf).toContain(
+            'header_down Link "http://moic-suite\\.acme\\.gen" "https://moic-suite.acme.gen"',
+        );
+    });
+
+    it('escapes the host so the pattern cannot match a look-alike origin', () => {
+        const cf = buildCaddyfile([{ host: 'api.acme.gen', port: 8000 }]);
+        // Scoped to the Link line — the BODY `replace` is a literal match and keeps
+        // the unescaped host, so an unscoped assertion here would fail on that.
+        expect(cf).toContain('header_down Link "http://api\\.acme\\.gen" "https://api.acme.gen"');
+        expect(cf).not.toContain('header_down Link "http://api.acme.gen"');
     });
 });
