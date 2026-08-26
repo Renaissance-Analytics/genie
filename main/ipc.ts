@@ -262,6 +262,7 @@ import {
     repairToolchainPath,
     applyToolchainPrecedence,
     currentManagedDirs,
+    refreshManagedInis,
     type ToolchainManagerDeps,
     type ToolchainSiteUsage,
 } from './dev-server/toolchain-manager';
@@ -347,6 +348,22 @@ export async function applyStartupToolchainPrecedence(): Promise<void> {
         applyToolchainPrecedence(await currentManagedDirs(toolchainManagerDeps()));
     } catch {
         /* precedence is an improvement, never a prerequisite for booting */
+    }
+    try {
+        // …and the CONFIG of the toolchain precedence just selected. These belong
+        // together: beta.270 shipped the PATH half automatically and left this
+        // half behind a button, so every machine was switched onto Genie's PHP
+        // while that PHP kept an ini written by an older release. On the
+        // reporting machine that meant no `sodium` (breaking `composer require
+        // laravel/passport`, via lcobucci/jwt) and a `bcmath` line warning on
+        // stderr of every PHP process. Switching the interpreter and then
+        // declining to configure it until asked is worse than doing neither.
+        //
+        // Idempotent: an ini already current is not rewritten, so this cannot
+        // churn a file on every launch.
+        await refreshManagedInis();
+    } catch {
+        /* same rule: config repair is an improvement, never a boot prerequisite */
     }
 }
 
