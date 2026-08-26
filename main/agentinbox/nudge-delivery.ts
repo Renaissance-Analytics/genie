@@ -63,8 +63,16 @@ export async function deliverNudge(
         // now is NOT what was planned, and saying otherwise is the bug above.
         landed = false;
     } finally {
-        const replay = io.releaseHold(terminalId);
-        if (replay) io.write(terminalId, replay);
+        // Guarded, because this is a `finally`: a throw here would escape the
+        // function, skipping the toast below AND rejecting a promise the caller
+        // discards with `void`. Losing the notice entirely is strictly worse than
+        // the failure that caused it, and the hold must come off regardless.
+        try {
+            const replay = io.releaseHold(terminalId);
+            if (replay) io.write(terminalId, replay);
+        } catch {
+            /* the keystrokes are lost with the pty that was to receive them */
+        }
     }
     if (plan.mode === 'append') {
         // Genie would not touch their draft, so the notice is sitting BEHIND it,

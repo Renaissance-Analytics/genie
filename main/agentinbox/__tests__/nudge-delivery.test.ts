@@ -138,6 +138,30 @@ describe('deliverNudge', () => {
         expect(h.released).toContain('term-7');
     });
 
+    /**
+     * The replay write is the LAST thing that happens, and it sits in a `finally`.
+     * A throw there escapes the function — taking the toast with it and rejecting
+     * a promise the caller discards with `void`. That is strictly worse than the
+     * bug this module exists to fix: the message arrived, nothing was typed, and
+     * nobody is told anything at all.
+     */
+    it('still announces when giving the keyboard back throws', async () => {
+        let n = 0;
+        const h = io({
+            // First write (the notice) lands; the replay write blows up.
+            write: () => {
+                if (++n > 1) throw new Error('backend gone');
+                return true;
+            },
+            releaseHold: () => 'typed while held',
+        });
+
+        await expect(
+            deliverNudge(h.io, 'term-7', NOTICE, { mode: 'append' }),
+        ).resolves.toBe(true);
+        expect(h.announced).toEqual([{ id: 'term-7', landed: true }]);
+    });
+
     it('does NOT announce for a plan that submits — there is nothing sitting unsent', async () => {
         const h = io();
 
