@@ -1,3 +1,4 @@
+import { requestIssueWatchRefresh } from '../issue-watch/force-refresh';
 import fs from 'fs';
 import {
     resolveAgentCommand as resolveProviderCommand,
@@ -323,7 +324,10 @@ export async function describeWorkspaceForMcp(
  * maps to no workspace — so the formatter can explain an empty result honestly
  * instead of implying "nothing open".
  */
-export async function checkIssuesForMcp(terminalId: string): Promise<IssueWatchSnapshot> {
+export async function checkIssuesForMcp(
+    terminalId: string,
+    opts: { refresh: boolean } = { refresh: false },
+): Promise<IssueWatchSnapshot> {
     // Every bucket the wire defines. Spelled out rather than spread from a
     // partial, so adding a bucket to IssueWatchCounts is a compile error here
     // instead of a zero that silently never arrives.
@@ -343,6 +347,11 @@ export async function checkIssuesForMcp(terminalId: string): Promise<IssueWatchS
             items: [],
         };
     }
+    // Refresh BEFORE reading the feed, so the caller gets the REFRESHED snapshot
+    // in the same round trip. Reading first and refreshing after would hand back
+    // the stale feed with a line claiming it was just refreshed.
+    const refresh = opts.refresh ? await requestIssueWatchRefresh(wsId) : undefined;
+
     const feed = await getWorkspaceFeed(wsId).catch(() => []);
     const allCounts = await getOpenCounts().catch(
         () => ({}) as Awaited<ReturnType<typeof getOpenCounts>>,
@@ -362,6 +371,7 @@ export async function checkIssuesForMcp(terminalId: string): Promise<IssueWatchS
         connected: true,
         workspaceResolved: true,
         knownToServer: status.knownToServer,
+        ...(refresh ? { refresh } : {}),
         counts,
         items,
         // The user's PER-BUCKET remediation preference rides along so the imDone

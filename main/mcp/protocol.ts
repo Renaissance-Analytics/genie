@@ -280,6 +280,15 @@ export interface IssueWatchCounts {
  */
 export interface IssueWatchSnapshot {
     connected: boolean;
+    /** Present only when a refresh was REQUESTED. Tynn owns the rate limit — one
+     *  window per WORKSPACE shared by every agent and the human — so the cooldown
+     *  is passed through untouched rather than recomputed here. */
+    refresh?: {
+        refreshed: boolean;
+        reason: 'refreshed' | 'cooldown' | 'failed' | 'unavailable';
+        error?: string;
+        cooldown: { seconds: number; nextAllowedAt: string | null; label: string };
+    };
     workspaceResolved: boolean;
     serviceState?: 'connecting' | 'connected' | 'signed-out' | 'disabled' | 'disconnected';
     /** False until Tynn has delivered this workspace at least once. */
@@ -330,7 +339,7 @@ export interface McpContext {
      * tool AND the counts appended to the `imDone` response. Does the terminal→
      * workspace + db/cache I/O (kept out of this pure module).
      */
-    checkIssues: (terminalId: string) => Promise<IssueWatchSnapshot>;
+    checkIssues: (terminalId: string, opts: { refresh: boolean }) => Promise<IssueWatchSnapshot>;
     /** True when the caller's workspace is an Ops project. NO LONGER gates
      *  `provisionWorkspaces` out of tools/list — that tool is always advertised
      *  and its handler enforces Ops membership (genie #85); this capability is
@@ -1501,10 +1510,17 @@ const IMDONE_TOOL = {
 const CHECK_ISSUES_TOOL = {
     name: 'checkIssues',
     description:
-        "Get a detailed list of the open GitHub Issues, Pull Requests, and SECURITY ALERTS (Dependabot, Code-scanning, Secret-scanning) that Genie's IssueWatch is tracking for THIS terminal's workspace — across every repo in the workspace, plus a count of the workspace's unresolved project FEEDBACK in Tynn. Use it to see what needs attention before you finish, or whenever you want the current open items with their numbers, titles, severities, and URLs. Read-only. (The same per-bucket counts are also appended to every `imDone` response.) Feedback is NOT a GitHub item and NOT a failure — it is people's input waiting on triage; read the entries with the Tynn `feedback` tool, and leave the judgement of what is worth acting on to a human. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; required when the workspace has more than one terminal.",
+        "Get a detailed list of the open GitHub Issues, Pull Requests, and SECURITY ALERTS (Dependabot, Code-scanning, Secret-scanning) that Genie's IssueWatch is tracking for THIS terminal's workspace — across every repo in the workspace, plus a count of the workspace's unresolved project FEEDBACK in Tynn. Use it to see what needs attention before you finish, or whenever you want the current open items with their numbers, titles, severities, and URLs. Read-only by default. Pass `refresh: true` to force IssueWatch to re-read GitHub NOW rather than waiting for the next server poll — the refreshed feed comes back in the SAME answer, together with when the next manual refresh is allowed. That window belongs to the WORKSPACE and is shared by every agent and the human, so a refresh can be REFUSED: that is a normal answer carrying the time remaining, not a failure, and the snapshot below it is still real. A refresh that FAILED costs nothing and may be retried at once. (The same per-bucket counts are also appended to every `imDone` response.) Feedback is NOT a GitHub item and NOT a failure — it is people's input waiting on triage; read the entries with the Tynn `feedback` tool, and leave the judgement of what is worth acting on to a human. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; required when the workspace has more than one terminal.",
     inputSchema: {
         type: 'object',
-        properties: { ...TERMINAL_ID_PROP },
+        properties: {
+            ...TERMINAL_ID_PROP,
+            refresh: {
+                type: 'boolean',
+                description:
+                    'Force IssueWatch to re-read GitHub NOW instead of waiting for the next server poll. The window is per WORKSPACE and shared with every other agent and the human, so a refusal is normal and is NOT an error — the answer always says how long is left. A failed attempt costs nothing and may be retried immediately.',
+            },
+        },
         additionalProperties: false,
     },
 };
@@ -2825,7 +2841,39 @@ const ISSUE_KIND_ORDER: IssueWatchItem['kind'][] = [
  * and URL. Explains clearly when GitHub isn't connected, the terminal maps to
  * no workspace, or there's simply nothing open.
  */
+/**
+ * The one line that says whether a REQUESTED refresh happened, and when the next
+ * one is allowed.
+ *
+ * Always both facts together. The owner's requirement is that no agent can
+ * obtain fresh counts without also learning the cooldown — otherwise the next
+ * agent asks again immediately, is refused, and reads the refusal as a bug.
+ *
+ * The window belongs to the WORKSPACE and is shared with every other agent and
+ * the human, which is said out loud: "why was I refused when I never refreshed"
+ * is exactly the confusion a per-agent reading of the limit produces.
+ */
+function refreshLine(r: NonNullable<IssueWatchSnapshot['refresh']>): string {
+    if (r.reason === 'failed' || r.reason === 'unavailable') {
+        // Never a wait invented on Tynn's behalf: it did not serve the request,
+        // so it did not charge the window either.
+        const why = r.error ? ` — ${r.error}` : '';
+        return `IssueWatch refresh FAILED${why}. The feed below is the one Genie already had, not a fresh read. Nothing was spent, so you can try again now.`;
+    }
+    if (!r.refreshed) {
+        return `IssueWatch NOT REFRESHED — this workspace's refresh window is still cooling down; ${r.cooldown.label} left (the window is shared with every agent and the human in this workspace). The feed below is the current one.`;
+    }
+    return `Refreshed. The next manual refresh for this workspace is allowed in ${r.cooldown.label} (that window is shared with every agent and the human here).`;
+}
+
 export function formatIssueWatchFeed(snap: IssueWatchSnapshot): string {
+    const head = snap.refresh ? `${refreshLine(snap.refresh)}
+
+` : '';
+    return head + issueWatchFeedBody(snap);
+}
+
+function issueWatchFeedBody(snap: IssueWatchSnapshot): string {
     if (!snap.workspaceResolved) {
         return "IssueWatch — couldn't resolve this terminal to a Genie workspace. Pass your GENIE_TERMINAL_ID as `terminalId`, or run this from a terminal inside a workspace.";
     }
@@ -3163,7 +3211,9 @@ export async function handleMcpMessage(
                 let countsLine: string | null = null;
                 try {
                     countsLine = formatIssueCountsLine(
-                        await ctx.checkIssues(ctx.terminalId),
+                        // imDone reports; it never SPENDS the workspace's shared
+                        // refresh window on the agent's behalf.
+                        await ctx.checkIssues(ctx.terminalId, { refresh: false }),
                     );
                 } catch {
                     /* best-effort — the glow is the point, counts are a bonus */
@@ -3199,7 +3249,8 @@ export async function handleMcpMessage(
                 });
             }
             if (params.name === 'checkIssues') {
-                const snap = await ctx.checkIssues(ctx.terminalId);
+                const refresh = (params.arguments as { refresh?: unknown } | undefined)?.refresh === true;
+                const snap = await ctx.checkIssues(ctx.terminalId, { refresh });
                 return ok(msg.id, {
                     content: [{ type: 'text', text: formatIssueWatchFeed(snap) }],
                 });

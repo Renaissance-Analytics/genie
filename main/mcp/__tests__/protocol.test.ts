@@ -1222,7 +1222,10 @@ describe('handleMcpMessage', () => {
             { jsonrpc: '2.0', id: 50, method: 'tools/call', params: { name: 'imDone', arguments: {} } },
             ctx({ terminalId: 'term-IW', checkIssues }),
         );
-        expect(checkIssues).toHaveBeenCalledWith('term-IW');
+        // `refresh: false` is the POINT, not noise: imDone reports the feed and
+        // must never spend the workspace's shared refresh window on the agent's
+        // behalf — that window belongs to every agent and the human here.
+        expect(checkIssues).toHaveBeenCalledWith('term-IW', { refresh: false });
         const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
         expect(text).toContain('glowing'); // the base ack
         expect(text).toContain('IssueWatch — issues:3, PR:1, sec:2');
@@ -1445,7 +1448,8 @@ describe('handleMcpMessage', () => {
             { jsonrpc: '2.0', id: 53, method: 'tools/call', params: { name: 'checkIssues', arguments: { terminalId: 'term-IW' } } },
             ctx({ terminalId: 'term-IW', checkIssues }),
         );
-        expect(checkIssues).toHaveBeenCalledWith('term-IW');
+        // Read-only by default: a plain checkIssues asks for no refresh.
+        expect(checkIssues).toHaveBeenCalledWith('term-IW', { refresh: false });
         const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
         // Grouped section headers + per-item detail (number, title, severity, url, unread).
         expect(text).toContain('## Issues (1)');
