@@ -804,7 +804,10 @@
     text-align: center;
 }
 .iw-btn-badge.unknown {
-    background: var(--zinc-600, #52525b);
+    /* A fixed neutral, stated as one. It was written `var(--zinc-600, #52525b)`,
+       which reads as themed but is not — Genie defines no `--zinc-*` scale, so
+       the fallback was always what painted. Same colour, no longer disguised. */
+    background: #52525b;
 }
 .iw-rail-dot {
     position: absolute;
@@ -5702,7 +5705,9 @@ body.gutter-dragging .grid-gutter {
     padding: 2px 9px;
     border-radius: 999px;
     font-size: 12px;
-    border: 1px solid var(--zinc-700, #3f3f46);
+    /* Theme tokens, not `var(--zinc-700, …)`: Genie defines no zinc scale, so
+       that fallback painted a near-black hairline on the light theme too. */
+    border: 1px solid var(--border-2);
     color: var(--fg-2);
 }
 .tcw-chip.on {
@@ -5715,7 +5720,7 @@ body.gutter-dragging .grid-gutter {
     padding: 0;
     display: flex;
     flex-direction: column;
-    border: 1px solid var(--zinc-800, #27272a);
+    border: 1px solid var(--border-1);
     border-radius: var(--radius-lg, 10px);
     overflow: hidden;
 }
@@ -5736,7 +5741,7 @@ body.gutter-dragging .grid-gutter {
     line-height: 1.45;
 }
 .tcw-plan-row + .tcw-plan-row {
-    border-top: 1px solid var(--zinc-800, #27272a);
+    border-top: 1px solid var(--border-1);
 }
 .tcw-plan-tool {
     font-weight: 600;

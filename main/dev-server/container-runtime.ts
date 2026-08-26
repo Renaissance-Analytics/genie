@@ -439,8 +439,28 @@ export interface CommandResult {
 export interface RunOptions {
     cwd?: string;
     env?: Record<string, string>;
-    /** Kill the child after this long. A hung `docker` must not hang Genie. */
+    /**
+     * Stop waiting after this long. A hung `docker` must not hang Genie.
+     *
+     * With {@link idleGraceMs} set this is a FLOOR rather than a wall — see
+     * `run-budget.ts`, which explains why a package install cannot be given an
+     * honest fixed number.
+     */
     timeoutMs?: number;
+    /**
+     * Extend {@link timeoutMs} by this much whenever the child produces output.
+     *
+     * For long, legitimately slow work (a package install, an archive extract)
+     * where elapsed time says nothing about whether anything is happening.
+     * Omitted → the timeout is a plain wall, which is right for a probe.
+     */
+    idleGraceMs?: number;
+    /** The wall {@link idleGraceMs} can never push past, measured from the
+     *  spawn. Ignored without `idleGraceMs`. */
+    ceilingMs?: number;
+    /** Appended to the timeout message. The place to say what the user should do
+     *  about it — a bare "timed out" is a dead end. */
+    timeoutNote?: string;
 }
 
 export interface StreamOptions {

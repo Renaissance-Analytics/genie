@@ -1,4 +1,5 @@
 import type { CommandResult, CommandRunner } from './container-runtime';
+import { INSTALL_RUN_OPTIONS } from './run-budget';
 import { probeRuntime } from './runtime-detect';
 import { detectToolchain, probeHostTool, TOOL_SPECS } from './toolchain-detect';
 import type { FileExists, HostToolName } from './toolchain-detect';
@@ -78,9 +79,15 @@ export function createToolchainPerformDeps(
         }
     };
     return {
+        // INSTALL_RUN_OPTIONS is not optional decoration. Without a third
+        // argument this call inherited `seams.ts`'s probe-sized default and
+        // gave `winget install --id Git.Git` two minutes — while the elevated
+        // branch beside it had fifteen. See `run-budget.ts`.
         run: (command, args, opts) =>
             mutating(() =>
-                opts.elevated ? prim.runElevated(command, args) : prim.runner.run(command, args),
+                opts.elevated
+                    ? prim.runElevated(command, args)
+                    : prim.runner.run(command, args, INSTALL_RUN_OPTIONS),
             ),
         resolveDownloadUrl: prim.resolveDownloadUrl,
         download: prim.download,

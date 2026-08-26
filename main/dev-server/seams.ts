@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { stat } from 'node:fs/promises';
 import { quoteWinToken } from './host-site-process';
+import { extendedDeadline, formatRunTimeout } from './run-budget';
 import type {
     CommandResult,
     CommandRunner,
@@ -32,8 +33,14 @@ import type {
 /** Cap what we keep from a chatty command — this output exists to explain. */
 const OUTPUT_TAIL_LIMIT = 8_000;
 
-/** A container CLI call that has not answered by now is wedged, not slow.
- *  Generous, because a first `run` may be extracting a large image layer. */
+/**
+ * A container CLI call that has not answered by now is wedged, not slow.
+ * Generous, because a first `run` may be extracting a large image layer.
+ *
+ * It is a PROBE budget, and callers doing something slower than a probe have to
+ * say so — a package install that silently inherited this number is the bug
+ * `run-budget.ts` exists for.
+ */
 const DEFAULT_TIMEOUT_MS = 120_000;
 
 /**
@@ -62,6 +69,7 @@ function runCaptured(
             let stdout = '';
             let stderr = '';
             let settled = false;
+            let timer: ReturnType<typeof setTimeout>;
             const finish = (result: CommandResult) => {
                 if (settled) return;
                 settled = true;
@@ -69,7 +77,18 @@ function runCaptured(
                 resolve(result);
             };
 
-            const timer = setTimeout(() => {
+            // The deadline MOVES: with `idleGraceMs`, output pushes it out (see
+            // `run-budget.ts` — a slow install is not a hung one). So the timer
+            // is re-armed for the remainder rather than reset on every chunk,
+            // which would mean a `clearTimeout`/`setTimeout` pair per line of a
+            // chatty build.
+            const startedAt = Date.now();
+            const budgetMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+            let deadline = startedAt + budgetMs;
+
+            const onDeadline = () => {
+                const remaining = deadline - Date.now();
+                if (remaining > 0) return arm(remaining);
                 try {
                     child.kill();
                 } catch {
@@ -78,19 +97,41 @@ function runCaptured(
                 finish({
                     code: null,
                     stdout,
-                    stderr: `${stderr}\n${command} timed out after ${
-                        opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
-                    }ms`.trim(),
+                    stderr: `${stderr}\n${formatRunTimeout(
+                        command,
+                        Date.now() - startedAt,
+                        opts.timeoutNote,
+                    )}`.trim(),
                 });
-            }, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-            // Do not hold the event loop open on the timer alone.
-            timer.unref?.();
+            };
+            const arm = (ms: number) => {
+                timer = setTimeout(onDeadline, ms);
+                // Do not hold the event loop open on the timer alone.
+                timer.unref?.();
+            };
+            arm(deadline - startedAt);
+
+            /** Output means the child is alive; give it more time to finish. */
+            const sawOutput = () => {
+                if (!opts.idleGraceMs) return;
+                deadline = extendedDeadline({
+                    startedAt,
+                    now: Date.now(),
+                    deadline,
+                    idleGraceMs: opts.idleGraceMs,
+                    // No ceiling given → one grace period past the budget, so
+                    // `idleGraceMs` alone is still a bounded, sensible request.
+                    ceilingMs: opts.ceilingMs ?? budgetMs + opts.idleGraceMs,
+                });
+            };
 
             child.stdout?.on('data', (chunk) => {
                 stdout = (stdout + String(chunk)).slice(-OUTPUT_TAIL_LIMIT);
+                sawOutput();
             });
             child.stderr?.on('data', (chunk) => {
                 stderr = (stderr + String(chunk)).slice(-OUTPUT_TAIL_LIMIT);
+                sawOutput();
             });
             child.on('error', (e) => finish({ code: null, stdout, stderr: String(e) }));
             child.on('close', (code) => finish({ code, stdout, stderr }));
