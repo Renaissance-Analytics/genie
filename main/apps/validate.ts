@@ -36,6 +36,11 @@
 
 import path from 'path';
 import { findCapability } from './capabilities';
+import {
+    componentSourceDir,
+    componentSourceSpelling,
+    gappSourceLayout,
+} from './install-plan';
 import { findingLine, type AppFinding } from './findings';
 import {
     APP_AGENTS_DIR,
@@ -67,11 +72,6 @@ export interface AppFolderReport {
     advice: string[];
     /** What the app is, when the manifest parsed — so a UI can show it. */
     app?: Pick<AppManifest, 'id' | 'slug' | 'name' | 'version' | 'description'>;
-}
-
-/** `repos/<name>` inside the SOURCE folder, or the folder itself. */
-function componentDir(folder: string, repo: string | undefined): string {
-    return repo ? path.join(folder, repo) : folder;
 }
 
 /** The report shape, built once from the findings so the two views cannot drift. */
@@ -144,28 +144,37 @@ export function validateAppFolder(folder: string, probe: FolderProbe): AppFolder
     // enumerates, which is what makes this the right place to catch them: without
     // it, `copyAppSource` throws PARTWAY THROUGH an install, after the workspace
     // has already been created.
-    const frontendRepoMissing =
-        manifest.frontend.repo !== undefined &&
-        !probe.exists(path.join(folder, manifest.frontend.repo));
+    //
+    // WHERE they are depends on the folder's layout, which is why it is settled
+    // once, up front, rather than guessed per component. A scaffolded staging
+    // folder keeps them flat; a converted `.agi` envelope — a GDW — already keeps
+    // them at `repos/<name>`. `install-plan` owns that rule and says why there.
+    const layout = gappSourceLayout(folder, probe.exists);
+    const frontendRepo = manifest.frontend.repo;
+    const frontendDir = componentSourceDir(folder, layout, frontendRepo);
 
-    if (frontendRepoMissing) {
+    if (frontendRepo !== undefined && !probe.exists(frontendDir)) {
         // "Build it first" is the wrong instruction when the component folder
         // itself is absent: no build produces a folder nobody created.
         findings.push({
             check: 'frontend.repo-missing',
             severity: 'error',
-            where: path.join(folder, manifest.frontend.repo!),
-            problem: `The front end lives in "${manifest.frontend.repo}", but there is no such folder in this app.`,
-            fix: 'Create it, or correct `frontend.repo` — it names a folder beside the manifest, which lands at `repos/<name>` when the app installs.',
+            where: frontendDir,
+            problem: `The front end lives in "${frontendRepo}", but there is no such folder in this app.`,
+            // Named in the terms of the layout the developer is STANDING IN. Told
+            // the wrong one, they go looking for a duplicate of a folder already
+            // in front of them — and correctly refuse to make it.
+            fix:
+                layout === 'envelope'
+                    ? `Create it at \`${componentSourceSpelling(layout, frontendRepo)}\`, or correct \`frontend.repo\` — ` +
+                      'this folder is an envelope, so its components live under `repos/`.'
+                    : 'Create it, or correct `frontend.repo` — it names a folder beside the manifest, which lands at `repos/<name>` when the app installs.',
         });
     } else if (manifest.frontend.serve.mode === 'static') {
         // A proxy front end has no built output — it is a dev server the developer
         // runs — so this check applies only to `static`. Demanding a directory
         // would fail every app of the Ripple shape.
-        const root = path.join(
-            componentDir(folder, manifest.frontend.repo),
-            manifest.frontend.serve.root,
-        );
+        const root = path.join(frontendDir, manifest.frontend.serve.root);
         if (!probe.exists(root)) {
             findings.push({
                 check: 'frontend.root-missing',
@@ -178,14 +187,16 @@ export function validateAppFolder(folder: string, probe: FolderProbe): AppFolder
     }
 
     manifest.services?.forEach((service, i) => {
-        const dir = componentDir(folder, service.repo);
+        const dir = componentSourceDir(folder, layout, service.repo);
         if (!probe.exists(dir)) {
             findings.push({
                 check: 'service.repo-missing',
                 severity: 'error',
                 where: dir,
                 problem: `The service "${service.name}" runs in "${service.repo ?? '.'}", but ${dir} does not exist.`,
-                fix: `Create that folder, or correct \`services[${i}].repo\`.`,
+                fix: service.repo
+                    ? `Create \`${componentSourceSpelling(layout, service.repo)}\`, or correct \`services[${i}].repo\`.`
+                    : `Create that folder, or correct \`services[${i}].repo\`.`,
             });
         }
     });

@@ -33,6 +33,7 @@
 import { narrowGrant } from './manage-core';
 import { gappHostname } from './hostname';
 import { devSiteIdFor, slugLabel, type DevSiteConfig } from '../dev-server/sites-config';
+import type { GappSourceLayout } from './install-plan';
 import type { AppGrant } from './bridge-decision';
 import type { AppManifest, AppScope } from './manifest';
 
@@ -216,20 +217,30 @@ export function orphanedPreviewWorkspaces(rows: readonly PreviewWorkspaceRow[]):
  *
  * An install COPIES each declared component to `repos/<name>` and
  * `appInstallPlan` writes a site config that says so. A preview copies nothing —
- * the developer's folder IS the workspace — and there the component sits at
- * `web/`, not `repos/web/`. So the component folder is folded into the serve root
- * and the site is pointed at the workspace root instead.
+ * the developer's folder IS the workspace — so the component sits wherever THAT
+ * folder keeps it, and the component path is folded into the serve root with the
+ * site pointed at the workspace root instead.
  *
- * The two layouts are a real difference between installing and previewing, not an
+ * Which is why the layout has to be passed in. A scaffolded staging folder keeps
+ * the component at `web/`; a converted `.agi` envelope keeps it at `repos/web/`,
+ * and previewing one used to point the docroot at a directory that was never
+ * there — the same 404 this function exists to prevent, from the other side.
+ *
+ * The difference between the source and installed layouts is real, not an
  * accident, which is why this is a stated function rather than a `repos/` string
  * quietly dropped at the call site.
  */
-function sourceServeRoot(repo: string | undefined, root: string): string {
+function sourceServeRoot(
+    repo: string | undefined,
+    root: string,
+    layout: GappSourceLayout,
+): string {
     const rel = root.replace(/^\.\//, '').replace(/\/+$/, '');
     if (!repo) return rel || '.';
+    const component = layout === 'envelope' ? `repos/${repo}` : repo;
     // `root: '.'` is what the scaffold writes, and `web/.` is a docroot nobody
     // should have to reason about.
-    return rel && rel !== '.' ? `${repo}/${rel}` : repo;
+    return rel && rel !== '.' ? `${component}/${rel}` : component;
 }
 
 export interface PreviewSitePlan {
@@ -258,6 +269,12 @@ export interface PreviewSitePlan {
 export function previewSitePlan(
     workspaceId: string,
     manifest: AppManifest,
+    /**
+     * How the developer's folder is laid out. Required rather than defaulted:
+     * a default here would silently pick one of two real layouts and serve the
+     * other one a docroot that does not exist.
+     */
+    layout: GappSourceLayout,
 ): PreviewSitePlan {
     const { slug, frontend } = manifest;
     // The ADDRESS keeps the dotted, collision-proof name. The site's NAME cannot:
@@ -279,7 +296,7 @@ export function previewSitePlan(
             ? {
                   hostServe: {
                       mode: 'static' as const,
-                      root: sourceServeRoot(frontend.repo, frontend.serve.root),
+                      root: sourceServeRoot(frontend.repo, frontend.serve.root, layout),
                       ...(frontend.serve.spa ? { spa: true } : {}),
                   },
               }

@@ -140,6 +140,202 @@ describe('the manifest itself', () => {
     });
 });
 
+/**
+ * A converted `.agi` envelope — a GApp Development Workspace (genie#268).
+ *
+ * The other fixtures in this file are SCAFFOLDED staging folders, which are flat
+ * by construction, so none of them can reach the envelope branch. That is exactly
+ * why the layout bug survived: the only way to hit it is a folder that was already
+ * an envelope before it was a GApp, and converting a real workspace is what a GDW
+ * IS. A flat fixture would pass here forever with the bug live.
+ *
+ * Modelled on the reproduction (`the-ripple-effect.agi`): manifest at the envelope
+ * root, `frontend.repo` naming a component that sits at `repos/<name>`, and
+ * NOTHING flat beside the manifest.
+ */
+const ENVELOPE = 'C:/src/the-ripple-effect.agi';
+
+const envelopeManifest = (over: Record<string, unknown> = {}) =>
+    JSON.stringify({
+        id: 'com.civicognita.ripple',
+        slug: 'ripple',
+        name: 'The Ripple Effect',
+        version: '0.1.0',
+        frontend: { repo: 'the-ripple-effect', serve: { mode: 'proxy', hostPort: 5273 } },
+        permissions: { scope: 'self', capabilities: [] },
+        ...over,
+    });
+
+/**
+ * The envelope's filesystem, as an explicit set.
+ *
+ * A set rather than a `endsWith` negation, because the assertion that matters is
+ * that nothing sits FLAT — and a predicate that answers "true unless it ends in
+ * X" quietly invents a flat component alongside the real one.
+ */
+const envelopeFs = (...extra: string[]) =>
+    new Set([
+        path.join(ENVELOPE, 'project.json'),
+        path.join(ENVELOPE, '.gitmodules'),
+        path.join(ENVELOPE, 'repos'),
+        path.join(ENVELOPE, 'repos', 'the-ripple-effect'),
+        ...extra,
+    ]);
+
+describe('a converted .agi envelope, where the components already live at repos/', () => {
+    it('finds the component where an envelope actually keeps it', () => {
+        const present = envelopeFs();
+        const report = validateAppFolder(
+            ENVELOPE,
+            probe({
+                readManifest: () => envelopeManifest(),
+                exists: (p) => present.has(p),
+            }),
+        );
+
+        expect(report.errors).toEqual([]);
+        expect(report.ok).toBe(true);
+
+        // POSITIVE CONTROL. The assertion above is an ABSENCE, and an absence also
+        // holds when the check never ran at all — so prove the same fixture still
+        // catches the real thing. Delete the component from `repos/` and the
+        // envelope must fail; if this half passes too, the check is alive and the
+        // half above means what it says.
+        const gone = envelopeFs();
+        gone.delete(path.join(ENVELOPE, 'repos', 'the-ripple-effect'));
+        const missing = validateAppFolder(
+            ENVELOPE,
+            probe({ readManifest: () => envelopeManifest(), exists: (p) => gone.has(p) }),
+        );
+
+        expect(missing.ok).toBe(false);
+        expect(missing.errors.join(' ')).toContain('the-ripple-effect');
+    });
+
+    it('tells a developer the place their own layout keeps it', () => {
+        // The fix text is the whole value of the check. Told "it names a folder
+        // beside the manifest", a developer standing in an envelope goes looking
+        // for a duplicate of a folder they are already looking at.
+        const gone = envelopeFs();
+        gone.delete(path.join(ENVELOPE, 'repos', 'the-ripple-effect'));
+        const report = validateAppFolder(
+            ENVELOPE,
+            probe({ readManifest: () => envelopeManifest(), exists: (p) => gone.has(p) }),
+        );
+
+        const fix = report.findings.map((f) => f.fix).join(' ');
+        expect(fix).toContain('repos/the-ripple-effect');
+        expect(fix).not.toContain('beside the manifest');
+    });
+
+    it('resolves a service the same way, not just the front end', () => {
+        const present = envelopeFs(path.join(ENVELOPE, 'repos', 'api'));
+        const report = validateAppFolder(
+            ENVELOPE,
+            probe({
+                readManifest: () =>
+                    envelopeManifest({
+                        services: [{ name: 'api', repo: 'api', command: ['node', 'server.mjs'] }],
+                    }),
+                exists: (p) => present.has(p),
+            }),
+        );
+
+        expect(report.errors).toEqual([]);
+
+        // POSITIVE CONTROL: the service check still bites in this layout.
+        const gone = envelopeFs();
+        const missing = validateAppFolder(
+            ENVELOPE,
+            probe({
+                readManifest: () =>
+                    envelopeManifest({
+                        services: [{ name: 'api', repo: 'api', command: ['node', 'server.mjs'] }],
+                    }),
+                exists: (p) => gone.has(p),
+            }),
+        );
+        expect(missing.ok).toBe(false);
+        expect(missing.errors.join(' ')).toContain('api');
+    });
+
+    it('looks for a static front end under the component, not beside the manifest', () => {
+        const present = envelopeFs(
+            path.join(ENVELOPE, 'repos', 'the-ripple-effect', 'dist'),
+        );
+        const report = validateAppFolder(
+            ENVELOPE,
+            probe({
+                readManifest: () =>
+                    envelopeManifest({
+                        frontend: {
+                            repo: 'the-ripple-effect',
+                            serve: { mode: 'static', root: 'dist' },
+                        },
+                    }),
+                exists: (p) => present.has(p),
+            }),
+        );
+
+        expect(report.errors).toEqual([]);
+
+        // POSITIVE CONTROL: an unbuilt front end is still caught here.
+        const unbuilt = envelopeFs();
+        const missing = validateAppFolder(
+            ENVELOPE,
+            probe({
+                readManifest: () =>
+                    envelopeManifest({
+                        frontend: {
+                            repo: 'the-ripple-effect',
+                            serve: { mode: 'static', root: 'dist' },
+                        },
+                    }),
+                exists: (p) => unbuilt.has(p),
+            }),
+        );
+        expect(missing.ok).toBe(false);
+        expect(missing.errors.join(' ')).toContain('dist');
+    });
+});
+
+describe('a scaffolded staging folder still resolves flat', () => {
+    // The other layout, asserted explicitly so fixing the envelope one cannot
+    // quietly move every app to `repos/` and break the folder `scaffoldApp` writes.
+    const STAGING = 'C:/src/trader';
+    const stagingFs = (...extra: string[]) =>
+        new Set([path.join(STAGING, 'web'), path.join(STAGING, 'web', 'dist'), ...extra]);
+
+    it('finds a flat component beside the manifest, with no project.json in sight', () => {
+        const present = stagingFs();
+        const report = validateAppFolder(
+            STAGING,
+            probe({ exists: (p) => present.has(p) }),
+        );
+
+        expect(report.errors).toEqual([]);
+        expect(report.ok).toBe(true);
+
+        // POSITIVE CONTROL: the flat check still bites.
+        const gone = stagingFs();
+        gone.delete(path.join(STAGING, 'web'));
+        gone.delete(path.join(STAGING, 'web', 'dist'));
+        const missing = validateAppFolder(STAGING, probe({ exists: (p) => gone.has(p) }));
+
+        expect(missing.ok).toBe(false);
+        expect(missing.errors.join(' ')).toContain('web');
+    });
+
+    it('still tells a staging developer the folder goes beside the manifest', () => {
+        const gone = stagingFs();
+        gone.delete(path.join(STAGING, 'web'));
+        gone.delete(path.join(STAGING, 'web', 'dist'));
+        const report = validateAppFolder(STAGING, probe({ exists: (p) => gone.has(p) }));
+
+        expect(report.findings.map((f) => f.fix).join(' ')).toContain('beside the manifest');
+    });
+});
+
 describe('advice — it will run, but think about it', () => {
     it('flags asking for the whole workstation', () => {
         const report = validateAppFolder(

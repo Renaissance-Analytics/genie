@@ -492,3 +492,111 @@ describe('what every finding owes the developer', () => {
         expect(severities.lastIndexOf('error')).toBeLessThan(severities.indexOf('advice'));
     });
 });
+
+/**
+ * A converted `.agi` envelope — a GApp Development Workspace (genie#268).
+ *
+ * Every tree above is a SCAFFOLDED staging folder, flat by construction, so none
+ * of them can reach the envelope branch. The failure here is quieter than the
+ * install gate's and worse for it: with the document root resolved flat, the root
+ * simply "does not exist", so the front-end checks SKIP — and a suite that skipped
+ * everything reports exactly what a clean one does. `ran` is what tells them apart.
+ */
+const ENVELOPE_TREE: Record<string, string> = {
+    'genie-app.json': '',
+    'project.json': '{"name":"trader","repos":[{"name":"web"}]}',
+    'repos/web/dist/index.html':
+        '<!doctype html><html><body><script src="app.js"></script></body></html>',
+    'repos/web/dist/app.js': 'const genie = window.genieApp;\n',
+};
+
+describe('a converted .agi envelope, whose components already live at repos/', () => {
+    it('actually looks at the front end instead of silently skipping it', () => {
+        const report = check(app(), ENVELOPE_TREE);
+
+        expect(report.findings, JSON.stringify(report.findings, null, 2)).toEqual([]);
+        expect(report.ok).toBe(true);
+        // POSITIVE CONTROL. "No findings" is also what a suite that ran NOTHING
+        // reports — which is precisely the bug in this layout. Naming the checks
+        // that ran is the only thing that separates the two.
+        expect(report.ran).toContain('frontend.no-index');
+        expect(report.ran).toContain('frontend.window-genie');
+    });
+
+    it('still catches a document root with no index.html in it', () => {
+        const { 'repos/web/dist/index.html': _removed, ...unbuilt } = ENVELOPE_TREE;
+        const report = check(app(), unbuilt);
+
+        const finding = expectFinding(report.findings, 'frontend.no-index');
+        // And it names the place the developer is actually standing in.
+        expect(norm(finding.where)).toContain('repos/web/dist');
+    });
+});
+
+describe('a service inside a converted envelope', () => {
+    const withService = () =>
+        app({
+            services: [{ name: 'api', repo: 'api', command: ['node', 'server.mjs'], port: 8791 }],
+            requires: [{ tool: 'node', reason: 'runs the API' }],
+        });
+
+    const SERVICE_TREE: Record<string, string> = {
+        ...ENVELOPE_TREE,
+        'repos/api/server.mjs': 'export default 1;\n',
+    };
+
+    it('finds the entry file under repos/, where the envelope keeps it', () => {
+        const report = check(withService(), SERVICE_TREE);
+
+        expect(report.findings, JSON.stringify(report.findings, null, 2)).toEqual([]);
+
+        // POSITIVE CONTROL. `ran` is pushed whenever the app HAS services, so it
+        // cannot tell "looked and found it" from "looked in the wrong place and
+        // found nothing" — which is the exact failure here. Take the entry file
+        // away from the same fixture: if the check is really running against
+        // `repos/api`, it has to bite.
+        const { 'repos/api/server.mjs': _removed, ...noEntry } = SERVICE_TREE;
+        const control = check(withService(), { ...noEntry, 'repos/api/README.md': '' });
+        expect(find(control.findings, 'service.entry-missing')).toBeDefined();
+    });
+
+    it('still catches a command whose entry file is not there', () => {
+        const { 'repos/api/server.mjs': _removed, ...noEntry } = SERVICE_TREE;
+        const report = check(withService(), { ...noEntry, 'repos/api/README.md': '' });
+
+        const finding = expectFinding(report.findings, 'service.entry-missing');
+        expect(norm(finding.where)).toContain('repos/api/server.mjs');
+    });
+});
+
+describe('a PROXY front end inside a converted envelope', () => {
+    // A proxy app ships source, not built output, so there is no serve root to fall
+    // back from — the source scan is the only thing standing between a developer and
+    // the `window.genie` mistake genie#245 was about. Resolved flat, the directory
+    // "did not exist" in an envelope and the whole scan was skipped in silence.
+    const proxy = () =>
+        app({ frontend: { repo: 'web', serve: { mode: 'proxy', hostPort: 5273 } } });
+
+    it('scans the component source where the envelope keeps it', () => {
+        const report = check(proxy(), {
+            'genie-app.json': '',
+            'project.json': '{"name":"trader"}',
+            'repos/web/src/main.js': 'const g = window.genieApp;\n',
+        });
+
+        expect(report.findings, JSON.stringify(report.findings, null, 2)).toEqual([]);
+        // POSITIVE CONTROL: the scan was actually reached. Without this, the clean
+        // report above is indistinguishable from having looked at nothing.
+        expect(report.ran).toContain('frontend.window-genie');
+    });
+
+    it('still catches window.genie in that layout', () => {
+        const report = check(proxy(), {
+            'genie-app.json': '',
+            'project.json': '{"name":"trader"}',
+            'repos/web/src/main.js': 'const g = window.genie;\n',
+        });
+
+        expect(expectFinding(report.findings, 'frontend.window-genie').where).toContain('main.js');
+    });
+});

@@ -59,7 +59,7 @@ describe('every place a GApp address is built agrees', () => {
     it('a preview’s site config', () => {
         const preview = previewManifest(manifest());
 
-        expect(previewSitePlan('ws', preview).site.genName).toBe(gappHostname('trader.preview'));
+        expect(previewSitePlan('ws', preview, 'staging').site.genName).toBe(gappHostname('trader.preview'));
     });
 
     it('and the preview’s address is still one the installed app cannot hold', () => {

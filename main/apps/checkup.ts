@@ -38,7 +38,12 @@
 import path from 'path';
 import { LANGUAGE_TOOLS, isLanguageTool } from '../dev-server/toolchain-versions';
 import type { AppFinding } from './findings';
-import { appInstallPlan } from './install-plan';
+import {
+    appInstallPlan,
+    componentSourceDir,
+    gappSourceLayout,
+    type GappSourceLayout,
+} from './install-plan';
 import {
     APP_AGENTS_DIR,
     APP_MANIFEST_FILENAME,
@@ -262,11 +267,16 @@ export function checkApp(folder: string, probe: CheckProbe): AppCheckReport {
         return report(findings, [...ran, 'install.plan-failed'], gate.app);
     }
 
-    checkFrontend(folder, probe, manifest, plan, findings, ran);
+    // Settled once, for the whole checkup: one folder has one layout, and a suite
+    // that answered this question separately per check could contradict itself
+    // about where the same component lives. `install-plan` owns the rule.
+    const layout = gappSourceLayout(folder, probe.exists);
+
+    checkFrontend(folder, layout, probe, manifest, plan, findings, ran);
     checkAgents(folder, probe, manifest, findings, ran);
-    checkServices(folder, probe, manifest, plan, findings, ran);
+    checkServices(folder, layout, probe, manifest, plan, findings, ran);
     checkRequirements(manifest, findings, ran);
-    checkTabs(folder, probe, manifest, plan, findings, ran);
+    checkTabs(folder, layout, probe, manifest, plan, findings, ran);
 
     return report(findings, ran, gate.app);
 }
@@ -293,24 +303,33 @@ function report(
  *
  * Read off the INSTALL PLAN rather than recomputed from the manifest: the plan is
  * what the Site Manager is configured with, so a change to how a GApp is served
- * moves this check with it. The one translation is `repos/<name>` ↔ `<name>` —
- * components live flat in the source folder and land under `repos/` when installed.
+ * moves this check with it. The one translation is from the plan's bare component
+ * name to wherever that component sits in THIS source folder — flat in a
+ * scaffolded staging folder, `repos/<name>` in a converted envelope. Resolving it
+ * flat regardless was quietly worse here than at the install gate: the root simply
+ * "did not exist", so every front-end check below SKIPPED, and a suite that ran
+ * nothing reports exactly what a clean one does.
  */
-function documentRoot(folder: string, plan: ReturnType<typeof appInstallPlan>): string | null {
+function documentRoot(
+    folder: string,
+    layout: GappSourceLayout,
+    plan: ReturnType<typeof appInstallPlan>,
+): string | null {
     const serve = plan.site.hostServe;
     if (!serve || serve.mode !== 'static' || !serve.root) return null;
-    return path.join(folder, plan.site.repo ?? '', serve.root);
+    return path.join(componentSourceDir(folder, layout, plan.site.repo || undefined), serve.root);
 }
 
 function checkFrontend(
     folder: string,
+    layout: GappSourceLayout,
     probe: CheckProbe,
     manifest: AppManifest,
     plan: ReturnType<typeof appInstallPlan>,
     findings: AppFinding[],
     ran: string[],
 ): void {
-    const root = documentRoot(folder, plan);
+    const root = documentRoot(folder, layout, plan);
 
     if (root && probe.exists(root)) {
         ran.push('frontend.no-index');
@@ -338,7 +357,9 @@ function checkFrontend(
     // the built output Genie serves, a proxy app ships the source its own dev
     // server runs. Both are the code that ends up in the window.
     const sourceDir =
-        root && probe.exists(root) ? root : path.join(folder, manifest.frontend.repo ?? '');
+        root && probe.exists(root)
+            ? root
+            : componentSourceDir(folder, layout, manifest.frontend.repo);
     if (probe.exists(sourceDir)) {
         for (const rule of SOURCE_RULES) ran.push(rule.check);
         findings.push(...scanSources(sourceDir, probe));
@@ -437,6 +458,7 @@ function checkAgents(
 
 function checkServices(
     folder: string,
+    layout: GappSourceLayout,
     probe: CheckProbe,
     manifest: AppManifest,
     plan: ReturnType<typeof appInstallPlan>,
@@ -458,9 +480,12 @@ function checkServices(
     plan.processes.forEach((process, i) => {
         const service = services[i];
         if (!service) return;
-        // `repos/<name>` in the installed workspace is `<name>` in the source folder
-        // — the copier's mapping, run backwards.
-        const dir = path.join(folder, process.cwd.replace(/^repos\//, ''));
+        // `process.cwd` is the INSTALLED location (`repos/<name>`). Where that
+        // component sits in the SOURCE folder is the layout's business, so it is
+        // resolved from the manifest's own name through the shared resolver rather
+        // than by running a string mapping backwards — which only ever produced the
+        // flat answer, and so skipped this check entirely in an envelope.
+        const dir = componentSourceDir(folder, layout, service.repo);
         // A missing directory is the gate's finding, and reporting the file inside
         // it as well would be two findings for one cause.
         if (probe.exists(dir)) {
@@ -568,6 +593,7 @@ function checkRequirements(manifest: AppManifest, findings: AppFinding[], ran: s
 
 function checkTabs(
     folder: string,
+    layout: GappSourceLayout,
     probe: CheckProbe,
     manifest: AppManifest,
     plan: ReturnType<typeof appInstallPlan>,
@@ -601,7 +627,7 @@ function checkTabs(
     // Genie has no idea what a path means and neither does this check.
     const serve = plan.site.hostServe;
     if (!serve || serve.mode !== 'static' || serve.spa) return;
-    const root = documentRoot(folder, plan);
+    const root = documentRoot(folder, layout, plan);
     if (!root || !probe.exists(root)) return;
 
     for (const tab of tabs) {
