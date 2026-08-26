@@ -22,7 +22,7 @@ import {
     type ManagedCredentialClient,
 } from '../../host-core/crypto/managed-credentials';
 import { resetClaudeRotation } from '../../host-core/crypto/claude-rotation';
-import { buildTerminalEnv } from '../terminal-env';
+import { buildTerminalEnv, withToolchainPath } from '../terminal-env';
 
 /**
  * SYNTHETIC KEYS + FAKE VALUES ONLY — the "credentials" here are literals this
@@ -217,5 +217,104 @@ describe('buildTerminalEnv (wired to the real managed state)', () => {
 
     it('injects nothing when no managed credential has been opened', () => {
         expect(buildTerminalEnv(makeTmpDir('term-env-empty'), null)).toEqual({});
+    });
+});
+
+/**
+ * TOOLCHAIN PRECEDENCE reaches every terminal, and therefore every agent.
+ *
+ * The owner's report: "I uninstalled Herd but apparently php is still running
+ * with Herd's config … make sure that Genie and the services and agents that
+ * spawn from Genie are using the deps we install."
+ *
+ * Repairing the main process's PATH is not enough on its own. The detached
+ * pty-host is connect-OR-spawn: a host started by an earlier Genie run survives
+ * an upgrade — that is the whole point of the sidecar — and keeps the
+ * environment it was spawned with. A terminal created against that host would
+ * still resolve `php` to Herd however healthy Genie's own PATH had become.
+ *
+ * Per-terminal env is layered ON TOP of the host's, so setting PATH here is what
+ * makes the guarantee hold regardless of which host answers.
+ */
+describe('toolchain precedence in a terminal environment', () => {
+    const SEP = ';';
+
+    it('puts Genie’s managed dirs ahead of a foreign install', () => {
+        const env = withToolchainPath(
+            {},
+            {
+                dirs: ['C:/genie/toolchain/php/8.4.24'],
+                basePath: ['C:/Users/x/.config/herd/bin', 'C:/Windows/system32'].join(SEP),
+                sep: SEP,
+            },
+        );
+
+        expect(env.PATH!.split(SEP)[0]).toBe('C:/genie/toolchain/php/8.4.24');
+        // Positive control: the rest of PATH still reaches the terminal. A
+        // terminal that can run php but not git is not a working terminal.
+        expect(env.PATH!.split(SEP)).toContain('C:/Windows/system32');
+    });
+
+    it('leaves PATH alone when Genie manages nothing yet', () => {
+        // A machine with no Genie-installed engine must not get an empty or
+        // truncated PATH — that would break every terminal to fix nothing.
+        const env = withToolchainPath({}, { dirs: [], basePath: 'C:/Windows/system32', sep: SEP });
+
+        expect(env.PATH).toBeUndefined();
+    });
+
+    it('does not clobber an explicit PATH the caller already set', () => {
+        // `opts.env` is documented as the final word at the spawn site; a
+        // deliberate per-spawn PATH must stay deliberate.
+        const env = withToolchainPath(
+            { PATH: 'C:/only/this' },
+            { dirs: ['C:/genie/toolchain/php/8.4.24'], basePath: 'C:/Windows/system32', sep: SEP },
+        );
+
+        expect(env.PATH).toBe('C:/only/this');
+    });
+
+    it('keeps the rest of the environment untouched', () => {
+        const env = withToolchainPath(
+            { TYNN_AGENT_TOKEN: 'tok', ANTHROPIC_API_KEY: 'key' },
+            { dirs: ['C:/genie/toolchain/php/8.4.24'], basePath: 'C:/Windows/system32', sep: SEP },
+        );
+
+        expect(env.TYNN_AGENT_TOKEN).toBe('tok');
+        expect(env.ANTHROPIC_API_KEY).toBe('key');
+    });
+});
+
+/**
+ * WIRING. `withToolchainPath` existing is worth nothing if the assembler does not
+ * call it — that is the failure mode this codebase has shipped repeatedly, and
+ * `terminal-env.ts` exists specifically so an env concern cannot be added to one
+ * spawn path and forgotten on the other.
+ */
+describe('buildTerminalEnv applies toolchain precedence', () => {
+    it('hands the terminal a PATH with Genie’s managed dirs first', () => {
+        const env = buildTerminalEnv(undefined, null, {
+            managedEnv: () => ({}),
+            toolchainDirs: () => ['C:/genie/toolchain/php/8.4.24'],
+            basePath: () => ['C:/herd/bin/php84', 'C:/Windows/system32'].join(';'),
+            pathSep: () => ';',
+        });
+
+        expect(env.PATH?.split(';')[0]).toBe('C:/genie/toolchain/php/8.4.24');
+        expect(env.PATH?.split(';')).toContain('C:/Windows/system32');
+    });
+
+    it('lets a workspace .env PATH win over the injection', () => {
+        // Positive control for the case above AND the documented precedence: a
+        // value a human deliberately put in this workspace is a local override.
+        const env = buildTerminalEnv('C:/ws', null, {
+            managedEnv: () => ({}),
+            workspaceEnv: () => ({ PATH: 'C:/deliberate' }),
+            toolchainDirs: () => ['C:/genie/toolchain/php/8.4.24'],
+            basePath: () => 'C:/Windows/system32',
+            pathSep: () => ';',
+        });
+
+        expect(env.PATH).toBe('C:/deliberate');
     });
 });

@@ -12,7 +12,7 @@ import path from 'path';
 import { createTray, rebuildMenu } from './tray';
 import { registerShortcuts, unregisterShortcuts } from './shortcuts';
 import { launchedFromAutostart } from './autostart';
-import { registerIpcHandlers } from './ipc';
+import { registerIpcHandlers, applyStartupToolchainPrecedence } from './ipc';
 import { writeClipboardImagePng } from './clipboard-image';
 import crypto from 'node:crypto';
 import os from 'node:os';
@@ -1238,6 +1238,12 @@ app.whenReady().then(async () => {
         notifier: { imDone: (terminalId) => notifyImDone(terminalId) },
         lifecycle: { keepAlive: () => {} },
     };
+    // Genie's own toolchain FIRST on PATH, before anything that spawns a child
+    // exists — terminals, sites, services, agents. Awaited: a terminal created
+    // in the same tick as the scan would otherwise race it and inherit the
+    // machine's ordering, which is the exact fault being fixed (genie: Herd
+    // uninstalled, its binaries and PATH entry left behind, `php` still Herd's).
+    await applyStartupToolchainPrecedence();
     registerIpcHandlers();
     // Wire the terminal core to its Electron/SQLite adapters (snapshot store +
     // settings provider + host spawner) and subscribe the cwd→db / host-status→

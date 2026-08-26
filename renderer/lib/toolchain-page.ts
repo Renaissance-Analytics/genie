@@ -4,6 +4,7 @@ import type {
     HostToolName,
     LanguageTool,
     ToolUpdate,
+    ToolchainPathReport,
     ToolchainSiteUsage,
 } from './genie';
 
@@ -263,4 +264,73 @@ export function removeConfirmation(
         return `${head} It is the current default, so ${label} ${outcome.nextDefault} takes over and sites following the default change on their next start.`;
     }
     return head;
+}
+
+/**
+ * What the repair found and what it changed.
+ *
+ * Never a bare "repaired". The owner's machine had Herd uninstalled with its
+ * binaries and PATH entry left behind, so `php` answered from a directory the
+ * uninstaller had walked away from — and, because Windows PHP reads `php.ini`
+ * from the binary's own directory, so did its config. The only checkable report
+ * names the TOOLS: "php was answering from somewhere else, now it isn't" is
+ * something the user can verify in a second, and "PATH was wrong" is not.
+ *
+ * Three cases it must not conflate:
+ *   - nothing was wrong → say so, and do not claim a fix;
+ *   - fixed → name what had been shadowed, and admit which processes keep the
+ *     old environment, or the next question is "why is it still broken";
+ *   - reordered but STILL shadowed → say still. This is the honest answer when
+ *     Genie manages no version of that tool at all, and calling it a repair is
+ *     how a green button stops meaning anything.
+ */
+export function repairNotice(result: {
+    before: ToolchainPathReport;
+    after: ToolchainPathReport;
+    changed: boolean;
+    /** Genie-owned `php.ini` files rewritten because they no longer matched what
+     *  Genie writes today — a stale one printed a startup warning into every
+     *  composer run and every site log. */
+    inis?: string[];
+}): string {
+    const iniNote =
+        result.inis && result.inis.length > 0
+            ? ` Genie also brought ${result.inis.length} of its own php.ini file${
+                  result.inis.length === 1 ? '' : 's'
+              } up to date.`
+            : '';
+
+    const staleNote =
+        result.after.stale.length > 0
+            ? ` PATH still lists ${listNames(result.after.stale)}, which no longer exist${
+                  result.after.stale.length === 1 ? 's' : ''
+              } — left behind by an uninstall. Harmless now that Genie's own tools come first, and Genie does not edit entries it did not create.`
+            : '';
+
+    const fixed = result.before.shadowed.filter((t) => !result.after.shadowed.includes(t));
+
+    if (result.after.shadowed.length > 0) {
+        const still = listNames(result.after.shadowed);
+        const head =
+            fixed.length > 0
+                ? `Genie's toolchain now comes first on PATH, and ${listNames(fixed)} resolve${
+                      fixed.length === 1 ? 's' : ''
+                  } to it.`
+                : `Genie's toolchain now comes first on PATH.`;
+        return `${head} ${still} still resolve${
+            result.after.shadowed.length === 1 ? 's' : ''
+        } to an install Genie does not manage — Genie has no version of ${
+            result.after.shadowed.length === 1 ? 'it' : 'them'
+        } to offer, so add one under Languages.${staleNote}`;
+    }
+
+    if (!result.changed && result.before.toolsFirst) {
+        return `Nothing needed changing — Genie's own toolchain was already first on PATH.${iniNote}${staleNote}`;
+    }
+
+    const named =
+        fixed.length > 0
+            ? ` ${listNames(fixed)} now resolve${fixed.length === 1 ? 's' : ''} to the version Genie manages.`
+            : '';
+    return `Genie's toolchain now comes first on PATH.${named}${iniNote} Terminals, sites and agents already running keep the environment they started with — restart them to pick this up.${staleNote}`;
 }

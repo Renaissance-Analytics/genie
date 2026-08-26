@@ -834,6 +834,30 @@ export interface ToolchainSiteUsage {
     version?: string;
 }
 
+/** What a PATH diagnosis found. `toolsFirst` false means something ahead of
+ *  Genie on PATH is answering for the tools Genie installed. */
+export interface ToolchainPathReport {
+    /** Genie’s own tools directory is the FIRST entry on PATH. */
+    toolsFirst: boolean;
+    /** Tools that resolved to a binary outside Genie’s toolchain. */
+    shadowed: string[];
+    /** PATH entries pointing at directories that no longer exist — the
+     *  signature of an uninstalled toolchain (Herd) that left its entry. */
+    stale: string[];
+}
+
+/** The result of a PATH repair: the diagnosis before and after, and whether
+ *  anything actually moved. */
+export interface ToolchainRepairResult {
+    before: ToolchainPathReport;
+    after: ToolchainPathReport;
+    changed: boolean;
+    /** Genie-owned `php.ini` files rewritten because they no longer matched what
+     *  Genie writes today. A stale one printed a startup warning into every
+     *  composer run, every artisan command and every site log. */
+    inis: string[];
+}
+
 /** The whole Toolchain page read (`devServer.toolchainInstalls`). */
 export interface ToolchainInstallsInfo {
     installs: EngineInstall[];
@@ -2681,6 +2705,12 @@ export interface GenieApi {
          *  sites that consume each language. A pure read — it lists directories
          *  and never downloads. */
         toolchainInstalls: (force?: boolean) => Promise<ToolchainInstallsInfo>;
+        /** Repair PATH precedence so Genie’s own toolchain answers first, and
+         *  report what was shadowed or stale before and after. Fixes the case
+         *  where an uninstalled toolchain (Herd) leaves its binaries AND its
+         *  PATH entry behind, so every terminal, agent and site Genie spawns
+         *  inherits the wrong `php`. Never deletes another tool’s entry. */
+        toolchainRepair: () => Promise<ToolchainRepairResult>;
         /** Make a GENIE-managed version the machine default. Sites that pinned
          *  nothing follow it, and change on their next start. */
         toolchainSetDefault: (

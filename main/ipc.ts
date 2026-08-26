@@ -259,6 +259,9 @@ import {
     removeToolchainVersion,
     setToolchainDefault,
     toolchainInstallsInfo,
+    repairToolchainPath,
+    applyToolchainPrecedence,
+    currentManagedDirs,
     type ToolchainManagerDeps,
     type ToolchainSiteUsage,
 } from './dev-server/toolchain-manager';
@@ -327,6 +330,26 @@ import {
  * pins the call to one backend for surfaces (capture, sign-out) where
  * the target is explicit.
  */
+/**
+ * Make Genie's own toolchain win on PATH for everything Genie spawns.
+ *
+ * Runs once at startup, BEFORE terminals, sites, services and agents exist, and
+ * again whenever a version is installed or a default changes. It has to run every
+ * launch: the repair is in-process only — it does not rewrite the owner's
+ * persisted PATH, which is their shell environment and not Genie's to edit — so a
+ * fresh process re-inherits the machine's ordering and has to re-apply.
+ *
+ * Never throws. A scan failure must not stop Genie from starting; the worst case
+ * is the machine behaves exactly as it did before this existed.
+ */
+export async function applyStartupToolchainPrecedence(): Promise<void> {
+    try {
+        applyToolchainPrecedence(await currentManagedDirs(toolchainManagerDeps()));
+    } catch {
+        /* precedence is an improvement, never a prerequisite for booting */
+    }
+}
+
 export function registerIpcHandlers(): void {
     // --- Auth -----------------------------------------------------------
     ipcMain.handle('auth:start-sign-in', async (_e, kind?: BackendKind) => {
@@ -811,6 +834,14 @@ export function registerIpcHandlers(): void {
     // `devServerChanged` fires on every site start and stop. Not a poll — an open
     // (or an explicit Check again, which passes `force`) decides whether THIS
     // moment does the work. Every write drops the cache.
+    // REPAIR (owner report): Herd was uninstalled and left its binaries AND its
+    // PATH entry behind, so `php` resolved to a shim for an install that no
+    // longer existed while Genie's own toolchain sat unused — and every terminal,
+    // agent and dev server Genie spawned inherited it. Reorders Genie's own entry
+    // to the FRONT and reports what it found. It never deletes another tool's
+    // entry: those belong to software Genie did not install.
+    ipcMain.handle('toolchain:repair', async () => repairToolchainPath(toolchainManagerDeps()));
+
     ipcMain.handle('toolchain:installs', (_e, force?: boolean) =>
         toolchainInstallsInfo(toolchainManagerDeps(), force ? { force: true } : {}),
     );
@@ -823,6 +854,10 @@ export function registerIpcHandlers(): void {
     ipcMain.handle('toolchain:set-default', async (_e, tool: string, version: string) => {
         if (!isLanguageTool(tool)) return { ok: false, error: `Unknown language ${tool}.` };
         const res = await setToolchainDefault(toolchainManagerDeps(), tool, String(version));
+        // The managed dirs just changed, so PATH and the cache both point at a
+        // version that may no longer be the default. Re-apply before anything
+        // else spawns.
+        if (res.ok) await applyStartupToolchainPrecedence();
         if (res.ok) broadcastDevServerChanged();
         return res;
     });
@@ -833,6 +868,10 @@ export function registerIpcHandlers(): void {
     ipcMain.handle('toolchain:add-version', async (_e, tool: string, version: string) => {
         if (!isLanguageTool(tool)) return { ok: false, error: `Unknown language ${tool}.` };
         const res = await addToolchainVersion(toolchainManagerDeps(), tool, String(version));
+        // The managed dirs just changed, so PATH and the cache both point at a
+        // version that may no longer be the default. Re-apply before anything
+        // else spawns.
+        if (res.ok) await applyStartupToolchainPrecedence();
         if (res.ok) broadcastDevServerChanged();
         return res;
     });
@@ -842,6 +881,10 @@ export function registerIpcHandlers(): void {
     ipcMain.handle('toolchain:remove-version', async (_e, tool: string, version: string) => {
         if (!isLanguageTool(tool)) return { ok: false, error: `Unknown language ${tool}.` };
         const res = await removeToolchainVersion(toolchainManagerDeps(), tool, String(version));
+        // The managed dirs just changed, so PATH and the cache both point at a
+        // version that may no longer be the default. Re-apply before anything
+        // else spawns.
+        if (res.ok) await applyStartupToolchainPrecedence();
         if (res.ok) broadcastDevServerChanged();
         return res;
     });
