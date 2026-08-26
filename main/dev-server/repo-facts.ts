@@ -156,6 +156,39 @@ export function detectStaticServe(
     return null;
 }
 
+/**
+ * A PHP app, SERVED rather than run — `public/` over FastCGI, which is what every
+ * real host does and what `serve-config.ts` already renders with Genie's bundled
+ * Caddy.
+ *
+ * PHP is the one stack here that is NOT its own web server. `npm run dev` IS Vite
+ * and must keep running because HMR is a live socket; `php artisan serve` is a
+ * development convenience wrapping PHP's built-in server, and it bought nothing a
+ * FastCGI worker does not. It cost plenty: each one holds an `artisan serve`
+ * parent AND the `php -S` child it spawns, so a workspace of PHP sites was two
+ * long-lived processes per site with nothing to supervise and everything to leak.
+ *
+ * Served this way a PHP site has NO process of its own, so there is nothing to
+ * restart, nothing to reap and nothing to orphan.
+ *
+ * Requires BOTH markers. `composer.json` alone is any PHP project including a
+ * library; `public/index.php` is what makes it a web app with a document root,
+ * and serving a repo that has no front controller would 404 everything.
+ */
+export function detectPhpServe(repoDir: string): { mode: 'php'; root: string } | null {
+    try {
+        if (
+            fs.existsSync(path.join(repoDir, 'composer.json')) &&
+            fs.existsSync(path.join(repoDir, 'public', 'index.php'))
+        ) {
+            return { mode: 'php', root: 'public' };
+        }
+    } catch {
+        /* an unreadable repo dir must not fail detection */
+    }
+    return null;
+}
+
 /** Every way a repo on disk could be built and served in production, best-offer
  *  first, plus the one to take. The single call the MCP tool and the UX make. */
 export function describeRepoRun(

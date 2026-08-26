@@ -55,6 +55,9 @@ vi.mock('../../workspace/detect', () => ({ detectFolder: () => ({ repos: ['app']
 vi.mock('../../dev-server/repo-facts', () => ({
     describeRepoRun: () => repoRun.value,
     detectStaticServe: () => null,
+    // Off by default so the existing cases still exercise the dev-server path;
+    // the PHP-is-served behaviour has its own tests against the real detector.
+    detectPhpServe: () => null,
 }));
 vi.mock('../host-tools', () => ({ resolveAgentTarget: async () => ({ decision: { allowed: false } }) }));
 
