@@ -1,3 +1,4 @@
+import { resolveAgentAddress } from '../agentinbox/address';
 import { requestIssueWatchRefresh } from '../issue-watch/force-refresh';
 import fs from 'fs';
 import {
@@ -2078,9 +2079,24 @@ export async function agentInboxForMcp(
                         };
                     }
                 }
+                // `to` may be a TAG rather than a uuid — `{provider}:{name}`, or
+                // `{workspace}:{provider}:{name}` for another workspace. `list`
+                // already prints that ref for every peer, so this closes the gap
+                // where the one field an agent could read was the one field it
+                // could not use. A uuid still passes through untouched.
+                let toAgentId = req.to;
+                if (req.to) {
+                    const addressed = resolveAgentAddress(
+                        req.to,
+                        agentInboxBroker.discoverableFor(agentId),
+                        ws.id,
+                    );
+                    if (!addressed.ok) return { ok: false, error: addressed.error };
+                    toAgentId = addressed.agentId;
+                }
                 const r = agentInboxBroker.send({
                     fromAgentId: agentId,
-                    toAgentId: req.to,
+                    toAgentId,
                     channelArg: req.channel,
                     text: req.text,
                     interrupt: req.interrupt,

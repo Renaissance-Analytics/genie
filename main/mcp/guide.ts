@@ -365,7 +365,11 @@ For Codex, Genie automatically installs a SessionStart hook that sends Codex's g
   silently not existing. Two tiers decide this and you must clear BOTH: the
   WORKSPACE's access setting (who may reach into it at all — its channels and its
   agents) and that agent's own \`scope\`.
-- \`send\` — DM a peer with \`to\` = their \`agentId\`, OR broadcast with \`channel\` =
+- \`send\` — DM a peer with \`to\` = their TAG (\`{provider}:{name}\`, e.g. \`claude:tynn\`;
+  or \`{workspace}:{provider}:{name}\` for another workspace). That is the \`ref\`
+  \`list\` prints for every peer. A raw \`agentId\` still works, but prefer the tag:
+  an id lives on the TERMINAL spec, so it dies with a replaced terminal while a
+  name does not. OR broadcast with \`channel\` =
   a purpose (\`frontend\` → your workspace's room) or \`slug:purpose\` (another
   workspace's). Needs \`text\`. Optional \`interrupt: true\` also glows a DM target's
   terminal so they notice (never injected into their pty). Optional
