@@ -78,6 +78,8 @@ import {
 } from '../mcp/server';
 import { mobileEmit, mobileTermFanout, mobileTermClose } from '../mobile/server';
 import { broadcastLocal } from '../remote';
+import { terminalNoticeFacts } from '../attention/terminal-facts';
+import { planInboxIncomingNotice } from '../attention/inbox-incoming-notice';
 import { getSnapshotStore, dbSettingsProvider } from './genie-adapter';
 import { listAllProcesses } from './process-list';
 import { logPtyOsc } from './osc-debug';
@@ -1451,13 +1453,48 @@ export function releaseInputHold(id: string): string {
 }
 
 /**
+ * What the renderer is told when a message lands in an agent terminal whose
+ * input box Genie would not touch.
+ *
+ * The identifying fields are the whole point. This used to be `{ id }` alone and
+ * the renderer discarded even that, drawing one fixed sentence — "A message just
+ * came in for THIS agent" — whichever terminal it was really about. That toast
+ * was scoped to whatever had focus while the delivery was scoped to the
+ * ADDRESSEE, so it routinely pointed at the wrong prompt.
+ */
+export interface AgentInboxIncomingPayload {
+    /** The terminal the notice was delivered to — the one a click must reveal. */
+    id: string;
+    /** Its workspace, so the reveal can activate the right one first. */
+    workspaceId: string | null;
+    title: string;
+    body: string;
+    /** Whether the notice really is in that prompt. False = it is in the inbox
+     *  and nowhere else, and the toast must not say "press Enter". */
+    landed: boolean;
+}
+
+/**
  * Tell the renderer a message has landed in an agent terminal whose input box
  * Genie would not touch — the notice was APPENDED there without being submitted,
  * so the person needs to know it is sitting behind their draft. Surfaced as a
- * top-centre toast.
+ * top-centre toast that names the agent and opens its terminal when clicked.
+ *
+ * `landed` is the caller's REPORT of whether the pty writes actually succeeded,
+ * not an assumption: a retained spec whose pty has exited still has a registered
+ * AgentInbox agent, so a nudge to it writes nothing at all.
  */
-export function broadcastInboxIncoming(id: string): void {
-    broadcastLocal('agentinbox:incoming', { id });
+export function announceInboxIncoming(id: string, landed: boolean): void {
+    const facts = terminalNoticeFacts(id);
+    const notice = planInboxIncomingNotice({ ...facts, landed });
+    const payload: AgentInboxIncomingPayload = {
+        id,
+        workspaceId: facts.workspaceId,
+        title: notice.title,
+        body: notice.body,
+        landed,
+    };
+    broadcastLocal('agentinbox:incoming', payload);
 }
 
 /**

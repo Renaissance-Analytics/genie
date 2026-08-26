@@ -93,6 +93,7 @@ import {
     makeSystemWorkspace,
     SYSTEM_WORKSPACE_ID,
     ulid,
+    type AgentInboxIncomingNotice,
     type Changelog,
     type WatchTypeCounts,
     type GenSitesAll,
@@ -551,9 +552,15 @@ function MasterInner() {
     // A message came in HOT for an agent whose input box Genie would not touch:
     // Genie could not be certain what was in there (history recall, an image, an
     // exotic edit), so the notice was appended WITHOUT being submitted rather
-    // than cutting text it could not restore. Top-centre, because it is about
-    // the prompt the person is looking at, not about the app.
-    const [incoming, setIncoming] = useState<string | null>(null);
+    // than cutting text it could not restore.
+    //
+    // The whole PAYLOAD is kept, not a fixed sentence. This toast used to read "A
+    // message just came in for THIS agent … press Enter to deliver it", with the
+    // `{ id }` argument discarded right here — so it named no terminal, and "this
+    // agent" could only be read as the one with focus. The notice had gone to the
+    // ADDRESSEE, which is usually a different terminal and often a different
+    // workspace, and pressing Enter went into a box that was genuinely empty.
+    const [incoming, setIncoming] = useState<AgentInboxIncomingNotice | null>(null);
     useEffect(() => {
         if (!incoming) return;
         const t = setTimeout(() => setIncoming(null), 8000);
@@ -561,13 +568,7 @@ function MasterInner() {
     }, [incoming]);
     useEffect(() => {
         // Optional: the remote bridge does not carry it (a local-prompt concern).
-        return api().on.agentInboxIncoming?.(() =>
-            setIncoming(
-                'A message just came in for this agent. Genie left the notice in the ' +
-                    'prompt without sending it, so your draft is untouched — press Enter ' +
-                    'to deliver it, or delete the line to dismiss.',
-            ),
-        );
+        return api().on.agentInboxIncoming?.((payload) => setIncoming(payload));
     }, []);
 
     // Host-loss recovery (genie#203). When the shared pty-host dies mid-session,
@@ -1697,24 +1698,35 @@ function MasterInner() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // The imDone toast was CLICKED: take the user to the terminal that finished.
-    // Activate its workspace, then surface the panel — the same three effects
-    // `openFileForUser` uses above, because "bring this panel into view" is the
-    // same operation. Without it the click landed on whatever the master window
-    // happened to be showing, which is what made a finished agent a hunt across
-    // every open workspace instead of one click.
+    // TAKE THE USER TO A TERMINAL: activate its workspace, then surface the
+    // panel — the same three effects `openFileForUser` uses above, because "bring
+    // this panel into view" is the same operation. Without it a toast click
+    // landed on whatever the master window happened to be showing, which is what
+    // made a finished agent a hunt across every open workspace instead of one
+    // click.
+    //
+    // Shared by every notice that names a terminal: the `imDone` toast (via
+    // main's `terminal:reveal`) and the AgentInbox incoming toast, which is a
+    // renderer-side click and needs no round trip. A notice that names a terminal
+    // and cannot open it is half a fix.
+    const revealTerminal = useCallback((id: string, workspaceId: string | null) => {
+        if (workspaceId) {
+            // A System-Workspace panel is hidden until the section is revealed,
+            // so activating alone would land on a workspace with nothing shown.
+            if (workspaceId === SYSTEM_WORKSPACE_ID) setSystemRevealed(true);
+            activateWorkspaceRef.current(workspaceId);
+        }
+        setSelected((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
+        setFocusId(id);
+        setMaximizedId((cur) => surfaceMaximized(cur, id));
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // The imDone toast was CLICKED (main tells us which terminal finished).
     useEffect(() => {
-        return api().on.terminalReveal?.(({ id, workspaceId }) => {
-            if (workspaceId) {
-                // A System-Workspace panel is hidden until the section is revealed,
-                // so activating alone would land on a workspace with nothing shown.
-                if (workspaceId === SYSTEM_WORKSPACE_ID) setSystemRevealed(true);
-                activateWorkspaceRef.current(workspaceId);
-            }
-            setSelected((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
-            setFocusId(id);
-            setMaximizedId((cur) => surfaceMaximized(cur, id));
-        });
+        return api().on.terminalReveal?.(({ id, workspaceId }) =>
+            revealTerminal(id, workspaceId),
+        );
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
@@ -2195,9 +2207,19 @@ function MasterInner() {
                     className="g-toast g-toast--top"
                     role="status"
                     data-testid="agentinbox-incoming"
-                    onClick={() => setIncoming(null)}
+                    data-terminal-id={incoming.id}
+                    data-landed={incoming.landed ? '1' : '0'}
+                    // Clicking OPENS the terminal it is about — the toast names a
+                    // terminal, so it has to be able to go there. Dismissing on
+                    // its own would leave the user hunting for the prompt it just
+                    // named, which is the hunt the naming exists to end.
+                    onClick={() => {
+                        revealTerminal(incoming.id, incoming.workspaceId);
+                        setIncoming(null);
+                    }}
                 >
-                    {incoming}
+                    <strong className="g-toast__title">{incoming.title}</strong>
+                    <span className="g-toast__body">{incoming.body}</span>
                 </div>
             )}
 

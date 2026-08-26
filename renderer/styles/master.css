@@ -2388,6 +2388,19 @@ button.iw-feedback-note.as-link:hover {
     }
 }
 
+/* A two-line toast: WHO it is about, then what to do. The title carries the
+   workspace + agent — the facts this toast used to omit entirely, which is what
+   let "this agent" be read as whichever terminal had focus. */
+.g-toast__title {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 2px;
+}
+.g-toast__body {
+    display: block;
+    color: var(--fg-2, #d4d4d8);
+}
+
 /* status dots */
 .sdot.run {
     background: #10b981;
