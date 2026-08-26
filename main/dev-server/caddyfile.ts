@@ -46,20 +46,28 @@ export interface CaddySite {
 const HOST_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*$/;
 
 /**
- * A validated vhost as a Caddy header-replacement REGEX — i.e. with the dots
- * escaped.
+ * A vhost as a Caddy header-replacement REGEX — every metacharacter escaped.
  *
  * `header_down <field> <find> <replace>` treats `find` as a regular expression, so
  * an unescaped `api.acme.gen` also matches `apiXacmeXgen` — a DIFFERENT origin,
- * whose URLs we would then rewrite. The host has already been through
- * {@link HOST_RE}, so `.` is the only metacharacter it can contain.
+ * whose URLs we would then rewrite.
  *
- * Exported and imported by host-caddyfile.ts on purpose: the host front door needs
- * exactly this pattern, and a second copy of an escaping rule is how one copy stops
- * being maintained and quietly becomes an over-match.
+ * It escapes the WHOLE metacharacter set, not just the `.` that callers can
+ * actually produce today. Every caller currently passes a host already through
+ * {@link HOST_RE}, where `.` is the only metacharacter possible — but this is
+ * exported and used from host-caddyfile.ts as well, so the guarantee would live at
+ * the call sites rather than here, and an escaper is only worth having if it holds
+ * on its own. Escaping one character and passing the rest through is the
+ * `js/incomplete-sanitization` shape: correct until the first caller that forgets
+ * to validate, and then silently an injection. Backslash is in the class and the
+ * single pass handles it, so there is no escape-the-escape ordering bug.
+ *
+ * Shared rather than copied for the same reason `quoteWinToken` is: two copies of
+ * an escaping rule drift, and the drift shows up as a hole in whichever copy
+ * stopped being maintained.
  */
 export function caddyHostPattern(host: string): string {
-    return host.replace(/\./g, '\\.');
+    return host.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function assertSite(s: CaddySite): void {

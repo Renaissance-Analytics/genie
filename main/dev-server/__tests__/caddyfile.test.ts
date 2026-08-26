@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildCaddyfile, CADDY_HTTPS_PORT } from '../caddyfile';
+import { buildCaddyfile, caddyHostPattern, CADDY_HTTPS_PORT } from '../caddyfile';
 
 /**
  * The per-workspace Caddy proxy config. Caddy runs INSIDE the workspace sandbox,
@@ -137,6 +137,37 @@ describe('buildCaddyfile', () => {
  * cannot see a header, so the rewrite has to be stated here too — otherwise the
  * container path keeps the bug the host path just lost.
  */
+/**
+ * The escaper is EXPORTED and used from host-caddyfile.ts too, so its safety
+ * cannot rest on every caller having validated the host first — which is exactly
+ * what CodeQL's `js/incomplete-sanitization` flagged when it escaped only `.`.
+ * An escaper that handles one metacharacter and passes the rest through is a
+ * latent injection hole waiting for the first caller that forgets, so it escapes
+ * the WHOLE regex metacharacter set — backslash included, and first.
+ */
+describe('caddyHostPattern — a complete regex escape', () => {
+    it('escapes the dot, so a pattern cannot match a look-alike origin', () => {
+        // Unescaped, `.` matches ANY character: `api.acme.gen` would also match
+        // `apiXacmeXgen`, a different origin whose URLs we would then rewrite.
+        expect(caddyHostPattern('api.acme.gen')).toBe('api\\.acme\\.gen');
+    });
+
+    it('escapes a BACKSLASH — the character an escape-only-the-dot version leaks', () => {
+        expect(caddyHostPattern('a\\b')).toBe('a\\\\b');
+    });
+
+    it('escapes every other metacharacter rather than passing it through', () => {
+        expect(caddyHostPattern('a+b*c?')).toBe('a\\+b\\*c\\?');
+        expect(caddyHostPattern('a(b)c[d]')).toBe('a\\(b\\)c\\[d\\]');
+        expect(caddyHostPattern('^a|b$')).toBe('\\^a\\|b\\$');
+        expect(caddyHostPattern('a{2}')).toBe('a\\{2\\}');
+    });
+
+    it('leaves an ordinary label untouched', () => {
+        expect(caddyHostPattern('biz-commander')).toBe('biz-commander');
+    });
+});
+
 describe('buildCaddyfile — https forcing reaches the Link preload header', () => {
     it('rewrites every http://<host> in the Link header', () => {
         const cf = buildCaddyfile([{ host: 'moic-suite.acme.gen', port: 5173 }]);
