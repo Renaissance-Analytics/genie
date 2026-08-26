@@ -243,6 +243,12 @@ export function devCommandForRecipe(option: Pick<HostingOption, 'stack' | 'frame
     const fw = option.framework;
     const stack = option.stack;
 
+    // PHP is a FALLBACK here, no longer the default. `detectPhpServe` runs first
+    // and serves `public/` over FastCGI — no process at all — so this is reached
+    // only by a PHP repo with no front controller to serve. It stays because
+    // failing outright would be worse than a dev server, but note the cost of the
+    // one it starts: `artisan serve` holds a `php -S` CHILD, so every site taking
+    // this path is two long-lived processes with nothing to supervise.
     if (fw === 'laravel' || stack === 'php') {
         const port = option.port ?? 8000;
         return { command: ['php', 'artisan', 'serve', '--host=127.0.0.1', `--port=${port}`], port, framework: 'laravel', stack: 'php' };

@@ -10,7 +10,7 @@ import {
     devSiteReconfigureNeedsRestart,
     slugLabel,
 } from '../dev-server/sites-config';
-import { describeRepoRun, detectStaticServe } from '../dev-server/repo-facts';
+import { describeRepoRun, detectPhpServe, detectStaticServe } from '../dev-server/repo-facts';
 import { applySetEnv } from '../env-store';
 import { devSiteManager } from '../dev-server/site-manager';
 import { resolveContainerRuntime } from '../dev-server';
@@ -469,10 +469,17 @@ export async function runManageSite(
                 // OR — when nothing else is specified — a DETECTED built static site
                 // (dist/build/out + index.html, no dev server). Genie owns the web
                 // server AND the port, so there is nothing to detect or require below.
-                const detectedServe =
-                    !command && !serve && !req.image && !hostPort && !req.hostServe
-                        ? detectStaticServe(repo.dir)
-                        : null;
+                const nothingElseSpecified =
+                    !command && !serve && !req.image && !hostPort && !req.hostServe;
+                // A PHP app is SERVED, never run: `public/` over FastCGI, the shape
+                // every host uses. Checked before the static case because a Laravel
+                // repo can also carry a built `public/build`, and `artisan serve`
+                // must not be the answer for either — it is a development
+                // convenience that leaves two long-lived processes per site with
+                // nothing to do but leak.
+                const detectedServe = nothingElseSpecified
+                    ? (detectPhpServe(repo.dir) ?? detectStaticServe(repo.dir))
+                    : null;
                 const hostServe = req.hostServe ?? detectedServe ?? undefined;
                 if (hostServe) runMode = 'host';
                 // Narrow the loose request shape to the stored discriminated union;
