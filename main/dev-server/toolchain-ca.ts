@@ -61,9 +61,30 @@ export function planCaExport(platform: string, destPath: string): CaExportPlan |
     const dest = "'" + destPath.replace(/'/g, "''") + "'";
     const script = [
         '$ErrorActionPreference = "Stop"',
+        '$all = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2Collection',
+        // Windows Update FIRST, and it is the load-bearing source. The local
+        // store is lazily populated — 81 roots here against 554 from WU — and a
+        // static PEM cannot fetch a missing one the way CryptoAPI does.
+        // Guarded: offline, or WU blocked by policy, must still produce the
+        // bundle the local store can supply.
+        'try {',
+        '  $sst = Join-Path $env:TEMP ("genie-roots-" + [Guid]::NewGuid().ToString("N") + ".sst")',
+        '  $null = & certutil -generateSSTFromWU $sst 2>&1',
+        '  if (Test-Path $sst) { $all.Import($sst); Remove-Item $sst -Force -ErrorAction SilentlyContinue }',
+        '} catch { }',
+        // …then the machine's own store, NOT instead of it: a TLS-inspecting
+        // corporate proxy's root exists only here (7 such roots on this machine).
+        // Unguarded — a failure here means there is genuinely nothing to write.
+        'foreach ($c in Get-ChildItem Cert:\\LocalMachine\\Root) { $null = $all.Add($c) }',
+        '$seen = @{}',
         '$sb = New-Object System.Text.StringBuilder',
         '$n = 0',
-        'foreach ($c in Get-ChildItem Cert:\\LocalMachine\\Root) {',
+        // Deduped by thumbprint: the two sources overlap almost entirely, and a
+        // bundle listing most roots twice cannot be read to answer "what do I
+        // trust".
+        'foreach ($c in $all) {',
+        '  if ($seen.ContainsKey($c.Thumbprint)) { continue }',
+        '  $seen[$c.Thumbprint] = $true',
         '  [void]$sb.AppendLine("# " + $c.Subject)',
         '  [void]$sb.AppendLine("-----BEGIN CERTIFICATE-----")',
         '  [void]$sb.AppendLine([Convert]::ToBase64String($c.RawData, [Base64FormattingOptions]::InsertLineBreaks))',

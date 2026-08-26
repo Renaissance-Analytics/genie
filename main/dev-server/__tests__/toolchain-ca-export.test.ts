@@ -23,10 +23,20 @@ describe('exporting the machine root store', () => {
         expect(plan).not.toBeNull();
         const script = plan!.args.join(' ');
         expect(script).toContain('Root');
-        // Never a write to the store. Importing or removing a certificate would
+        // Never a write to the STORE. Importing or removing a certificate would
         // be Genie changing the machine's trust, which is not something a dev
         // tool may do — least of all as a side effect of installing PHP.
-        expect(script).not.toMatch(/Import-Certificate|Remove-Item|Set-Item/);
+        expect(script).not.toMatch(/Import-Certificate|Set-Item/);
+        // Tightened rather than relaxed when the Windows Update fetch was added:
+        // that step deletes its own temp `.sst`, so a blanket ban on
+        // `Remove-Item` stopped meaning anything. What must never happen is a
+        // cmdlet writing to a `Cert:` path — which is the actual rule, and a
+        // stricter one than the string ban it replaces.
+        expect(script).not.toMatch(/(Remove-Item|Set-Item|Import-Certificate)[^;]*Cert:/i);
+        // …and the only thing it does remove is that temp file.
+        const removals = script.match(/Remove-Item[^;)]*/g) ?? [];
+        expect(removals).toHaveLength(1);
+        expect(removals[0]).toContain('$sst');
         // -NonInteractive so it can never sit waiting on a prompt during install.
         expect(plan!.args).toContain('-NonInteractive');
     });
@@ -137,5 +147,61 @@ describe('the bundle is verified after it is written', () => {
                 remove: async () => {},
             }),
         ).resolves.toBeNull();
+    });
+});
+
+/**
+ * COMPLETENESS: the local root store is not the whole trust list.
+ *
+ * Found by questioning the export after it had already merged. The Windows root
+ * store is LAZILY POPULATED — the OS ships a subset and fetches a missing root
+ * on demand through CryptoAPI. Measured on the reporting machine:
+ *
+ *     Cert:\\LocalMachine\\Root   ->  81 roots
+ *     certutil -generateSSTFromWU  -> 554 roots
+ *     union, deduped by thumbprint -> 561 roots
+ *
+ * A static `cacert.pem` cannot fetch anything on demand. Exporting only the
+ * local store therefore ships whatever this machine HAPPENS to have cached, and
+ * a site whose issuer chains to any of the other ~473 roots fails errno 60 —
+ * the exact bug the bundle exists to fix, reintroduced in a form that works on
+ * the developer's machine and fails on a fresh one.
+ *
+ * So: BOTH. Windows Update supplies the complete current list; the local store
+ * supplies the private and corporate anchors WU has never heard of (7 of them
+ * here). Neither source alone is correct.
+ */
+describe('the bundle covers roots this machine has not cached yet', () => {
+    const DEST = 'C:\\genie\\toolchain\\php\\8.4.24\\cacert.pem';
+
+    it('pulls the full list from Windows Update AND the local store', () => {
+        const script = planCaExport('win32', DEST)!.args.join(' ');
+
+        expect(script).toContain('generateSSTFromWU');
+        // The local store is not replaced by it: a TLS-inspecting corporate
+        // proxy's root exists ONLY there, and dropping it would break every
+        // host on exactly the machines least able to diagnose it.
+        expect(script).toContain('LocalMachine');
+    });
+
+    it('dedupes by thumbprint, since the two sources overlap almost entirely', () => {
+        // 554 + 81 with no dedupe is a bundle listing most roots twice. Valid,
+        // but it makes "which roots do I trust" unanswerable by reading it.
+        expect(planCaExport('win32', DEST)!.args.join(' ')).toContain('Thumbprint');
+    });
+
+    it('still writes a bundle when Windows Update cannot be reached', () => {
+        // Offline, or WU blocked by policy. The local store alone is what
+        // shipped before and is strictly better than no bundle, so the WU fetch
+        // is wrapped and the local enumeration is NOT — a failure there means
+        // there is genuinely nothing to write.
+        const script = planCaExport('win32', DEST)!.args.join(' ');
+        const wuAt = script.indexOf('generateSSTFromWU');
+        const catchAt = script.indexOf('catch');
+
+        expect(wuAt).toBeGreaterThan(-1);
+        expect(catchAt).toBeGreaterThan(wuAt);
+        // The local store is enumerated AFTER the guarded WU block, outside it.
+        expect(script.indexOf('LocalMachine')).toBeGreaterThan(catchAt);
     });
 });
