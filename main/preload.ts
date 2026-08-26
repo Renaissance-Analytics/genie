@@ -813,6 +813,12 @@ const api = {
          *  the system left, the latter for AWARENESS only. A pure read: it lists
          *  directories and never downloads. */
         toolchainInstalls: (force?: boolean) => ipcRenderer.invoke('toolchain:installs', force),
+        /** Repair PATH precedence so Genie’s own toolchain wins (owner report:
+         *  Herd was uninstalled and left both its binaries and its PATH entry
+         *  behind, so  resolved to a shim for an install that no longer
+         *  existed). Moves Genie’s entry to the FRONT and reports what it found
+         *  before and after. It never deletes another tool’s entry. */
+        toolchainRepair: () => ipcRenderer.invoke('toolchain:repair'),
         /** Make a Genie-managed version the MACHINE default. Unpinned sites
          *  follow it, so main names which ones before this is called. */
         toolchainSetDefault: (tool: string, version: string) =>

@@ -4,7 +4,16 @@ import { cp, mkdir, mkdtemp, readdir, rename, rm, stat, writeFile } from 'node:f
 import { tmpdir } from 'node:os';
 import { defaultCommandRunner, fileExistsSeam, hostToolCommandRunner } from './seams';
 import { INSTALL_BUDGET_MS, INSTALL_RUN_OPTIONS } from './run-budget';
-import { addToolsPathEntry, createToolchainPrimitives, download } from './toolchain-primitives';
+import fsSync from 'node:fs';
+import {
+    addToolsPathEntry,
+    createToolchainPrimitives,
+    diagnoseToolchainPath,
+    download,
+    genieToolsDir,
+    pathWithToolsFirst,
+    type ToolchainPathReport,
+} from './toolchain-primitives';
 import { createToolchainPerformDeps } from './toolchain-effects';
 import { createPerformInstall } from './toolchain-perform';
 import { runInstallPlan, type PerformInstall } from './toolchain-install';
@@ -19,7 +28,9 @@ import {
     defaultVersionFor,
     engineVersionArgv,
     genieToolchainRoot,
+    joinFor,
     parseToolchainDefaults,
+    phpIniContents,
     serializeToolchainDefaults,
     type EngineInstall,
     type LanguageTool,
@@ -646,4 +657,271 @@ async function extractArchive(
     return res.code === 0
         ? { ok: true }
         : { ok: false, error: (res.stderr || res.stdout || `exited ${res.code}`).slice(-400) };
+}
+
+/**
+ * PURE. The `php.ini` files Genie wrote that no longer say what Genie would
+ * write today.
+ *
+ * A version's ini is written ONCE, at install. Its own header promises it is
+ * "rewritten when Genie reinstalls this version" — which for a version already
+ * on disk means never. So a fix to {@link PHP_INI_EXTENSIONS} reaches new
+ * installs and leaves every existing one stale.
+ *
+ * That is not cosmetic. The reporting machine's ini still carried
+ * `extension=bcmath`, an extension compiled INTO the Windows build, so every php
+ * invocation printed "Unable to load dynamic library 'bcmath'" to stderr — into
+ * every composer run, every artisan command and every site log. It surfaced only
+ * once the PATH fix made Genie's own PHP the one actually being used.
+ *
+ * GENIE-OWNED installs only. Herd's ini is Herd's to rewrite; Genie editing
+ * another app's config underneath it is the same fault this feature is about.
+ */
+export function staleManagedInis(input: {
+    installs: EngineInstall[];
+    platform: string;
+    read: (path: string) => string;
+}): Array<{ path: string; contents: string }> {
+    const out: Array<{ path: string; contents: string }> = [];
+    for (const install of input.installs) {
+        if (install.source !== 'genie' || install.tool !== 'php') continue;
+        const path = joinFor(input.platform, install.dir, 'php.ini');
+        const wanted = phpIniContents(install.dir, input.platform);
+        let current: string | null = null;
+        try {
+            current = input.read(path);
+        } catch {
+            // Unreadable or absent is the strongest case for writing one.
+        }
+        if (current !== wanted) out.push({ path, contents: wanted });
+    }
+    return out;
+}
+
+/** A literal backslash, named so codegen and heredocs cannot mangle it. */
+const BACKSLASH = String.fromCharCode(92);
+
+/**
+ * PURE. Every directory Genie manages that belongs at the FRONT of PATH.
+ *
+ * One per language at its machine-default version, plus the host-tools dir when
+ * it exists. Derived from the SAME inputs `resolveEngineExe` uses — installs and
+ * defaults — so what a terminal finds on PATH is the binary a site would spawn.
+ * Deriving them separately is how those two drift apart, and genie#212 is what
+ * that drift looks like from the outside.
+ *
+ * Foreign installs are never included, at any version, even when one is the only
+ * install for a tool: a runtime another app can upgrade, reconfigure or uninstall
+ * underneath a running site is not one Genie hands to the processes it spawns.
+ * That is the same rule `engine-resolve.ts` already enforces for sites.
+ */
+export function managedPathDirs(input: {
+    installs: EngineInstall[];
+    defaults: ToolchainDefaults;
+    platform: string;
+    /** Genie's host-tools dir. Included only when it exists — on the reporting
+     *  machine it did not, and prepending a directory that is not there is how a
+     *  repair reports success against an unchanged PATH. */
+    toolsDir: string;
+    exists: (dir: string) => boolean;
+}): string[] {
+    const dirs: string[] = [];
+
+    for (const tool of LANGUAGE_TOOLS) {
+        const res = resolveEngineExe({
+            tool,
+            installs: input.installs,
+            defaults: input.defaults,
+            platform: input.platform,
+        });
+        if (!res.ok) continue;
+        // The exe's OWN directory, not `install.dir`: a posix tarball puts the
+        // executables in `bin/`, and prepending the version directory there puts
+        // a directory containing no executables at the front of PATH.
+        const cut = Math.max(res.exe.lastIndexOf(BACKSLASH), res.exe.lastIndexOf('/'));
+        const dir = cut > 0 ? res.exe.slice(0, cut) : res.install.dir;
+        if (!dirs.includes(dir)) dirs.push(dir);
+    }
+
+    if (input.toolsDir && input.exists(input.toolsDir)) dirs.push(input.toolsDir);
+    return dirs;
+}
+
+/**
+ * REPAIR: what is wrong with this machine's toolchain wiring, and put it right.
+ *
+ * The reported failure: the owner uninstalled Herd. Herd left its binaries AND
+ * its PATH entry behind, so `php` kept resolving to `.config/herd/bin/php84` —
+ * an install that had been removed from the machine's own point of view — while
+ * Genie's `toolchain/php/8.4.24` sat unused. Every terminal, agent, service and
+ * dev server Genie spawned inherited that resolution.
+ *
+ * The owner reported it as two faults ("php is still running with Herd's
+ * config"). It is ONE. On Windows PHP reads `php.ini` from the directory of the
+ * binary, so whichever `php.exe` wins also decides the config; fixing which
+ * binary answers fixes which ini loads. There is no separate config to repair.
+ *
+ * The load-bearing cause was that {@link addToolsPathEntry} APPENDED, so a
+ * runtime Genie had just installed could never win against anything already on
+ * PATH. The machine did not need to be broken for this to bite — it only needed
+ * another PHP.
+ *
+ * SCOPE — deliberately narrow, in three ways:
+ *   - it reorders `process.env.PATH`, the environment Genie's own children
+ *     inherit. It does not rewrite the persisted user PATH: that is the owner's
+ *     shell environment, not Genie's, and a tool that silently edits it is worse
+ *     than the problem it fixes. Genie re-applies precedence at every startup
+ *     instead — see {@link applyToolchainPrecedence}.
+ *   - it never DELETES another tool's entry, for the same reason. Herd's entries
+ *     stay; they simply stop winning.
+ *   - it reports `before` and `after` so the user can see what was wrong, rather
+ *     than being told "repaired" with nothing to check.
+ */
+export async function repairToolchainPath(
+    deps: ToolchainManagerDeps,
+    opts: {
+        tools?: string[];
+        exists?: (dir: string) => boolean;
+        dirs?: string[];
+    } = {},
+): Promise<{
+    before: ToolchainPathReport;
+    after: ToolchainPathReport;
+    changed: boolean;
+    /** Genie-owned `php.ini` files rewritten because they no longer matched what
+     *  Genie writes today. */
+    inis: string[];
+}> {
+    const sep = process.platform === 'win32' ? ';' : ':';
+    const tools = opts.tools ?? ['php', 'node', 'npm', 'composer', 'python', 'git'];
+    const exists =
+        opts.exists ??
+        ((d: string) => {
+            try {
+                return fsSync.existsSync(d);
+            } catch {
+                return false;
+            }
+        });
+
+    const dirs = opts.dirs ?? (await currentManagedDirs(deps, exists));
+
+    const resolveAll = async (): Promise<Record<string, string>> => {
+        const out: Record<string, string> = {};
+        for (const t of tools) {
+            const exe = await resolveOnPath(t);
+            if (exe) out[t] = exe;
+        }
+        return out;
+    };
+
+    const diagnose = async (): Promise<ToolchainPathReport> =>
+        diagnoseToolchainPath({
+            path: process.env.PATH ?? '',
+            toolsDirs: dirs,
+            sep,
+            resolved: await resolveAll(),
+            exists,
+        });
+
+    const before = await diagnose();
+    applyToolchainPrecedence(dirs);
+    const inis = await refreshManagedInis();
+    const after = await diagnose();
+
+    // "Changed" means the machine's ANSWERS changed, not that the string moved.
+    // A PATH that was reordered while every tool still resolves to Herd is not a
+    // repair, and reporting it as one is how a green button teaches people to
+    // stop trusting it.
+    const changed =
+        before.toolsFirst !== after.toolsFirst ||
+        before.shadowed.join(',') !== after.shadowed.join(',');
+
+    return { before, after, changed: changed || inis.length > 0, inis };
+}
+
+/**
+ * Rewrite the `php.ini` files Genie owns that have gone stale, and return the
+ * paths actually written.
+ *
+ * Best-effort per file: one unwritable install must not abort the repair for the
+ * rest, and a failure here leaves the machine exactly as it was.
+ */
+async function refreshManagedInis(): Promise<string[]> {
+    const written: string[] = [];
+    try {
+        const stale = staleManagedInis({
+            installs: await machineInstalls({}),
+            platform: process.platform,
+            read: (p) => fsSync.readFileSync(p, 'utf8'),
+        });
+        for (const file of stale) {
+            try {
+                await writeFile(file.path, file.contents, 'utf8');
+                written.push(file.path);
+            } catch {
+                /* one unwritable install must not abort the repair for the rest */
+            }
+        }
+    } catch {
+        /* a scan failure leaves every ini exactly as it was */
+    }
+    return written;
+}
+
+/**
+ * Put Genie's managed directories at the front of THIS process's PATH.
+ *
+ * Called at startup and by the repair action. Idempotent: running it on an
+ * already-correct PATH produces the same string. In-process only — nothing
+ * outside Genie is modified, and nothing persists past this run, which is why it
+ * must run every launch rather than once.
+ */
+export function applyToolchainPrecedence(dirs: string[]): void {
+    if (dirs.length === 0) return;
+    lastManagedDirs = dirs;
+    const sep = process.platform === 'win32' ? ';' : ':';
+    process.env.PATH = pathWithToolsFirst(process.env.PATH ?? '', dirs, sep);
+}
+
+/**
+ * The managed dirs as of the last time precedence was applied.
+ *
+ * Terminal spawn reads this rather than re-deriving: `currentManagedDirs` scans
+ * the machine, and doing that on every terminal create would put a `where`/probe
+ * sweep in front of opening a shell. Startup, an install, and a default change
+ * all refresh it, which is every event that can change the answer.
+ */
+export function knownManagedDirs(): string[] {
+    return lastManagedDirs;
+}
+
+let lastManagedDirs: string[] = [];
+
+/** The managed dirs for the machine as it is right now. Scans installs and reads
+ *  the stored defaults, so it reflects a version installed since startup. */
+export async function currentManagedDirs(
+    deps: ToolchainManagerDeps,
+    exists: (dir: string) => boolean = (d) => {
+        try {
+            return fsSync.existsSync(d);
+        } catch {
+            return false;
+        }
+    },
+): Promise<string[]> {
+    const installs = await machineInstalls({});
+    const stored = parseToolchainDefaults(deps.readDefaults());
+    const defaults: ToolchainDefaults = {};
+    for (const tool of LANGUAGE_TOOLS) {
+        const resolved = defaultVersionFor(tool, installs, stored);
+        if (resolved) defaults[tool] = resolved;
+    }
+    return managedPathDirs({
+        installs,
+        defaults,
+        platform: process.platform,
+        toolsDir: genieToolsDir(),
+        exists,
+    });
 }

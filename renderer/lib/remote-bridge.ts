@@ -262,6 +262,13 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
             sites: [],
             root: '',
         }),
+        // Repair edits THIS PROCESS's PATH. In a window driving another host it
+        // would repair the CLIENT while reporting success for the host, so it
+        // answers inert rather than answering about the wrong machine.
+        toolchainRepair: async () => {
+            const inert = { toolsFirst: true, shadowed: [], stale: [] };
+            return { before: inert, after: inert, changed: false, inis: [] };
+        },
         toolchainSetDefault: async () => ({
             ok: false,
             error: 'The toolchain is managed on the machine itself.',

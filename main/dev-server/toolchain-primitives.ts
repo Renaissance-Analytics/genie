@@ -143,6 +143,115 @@ function genieToolsContext(): ArtifactContext {
     return { toolsDir, binDir: join(toolsDir, 'bin'), os: process.platform };
 }
 
+/** Compare two PATH entries the way the OS does: trailing separators and, on
+ *  Windows, case are not meaningful. */
+function samePathEntry(a: string, b: string): boolean {
+    const norm = (p: string) => p.replace(/[\\/]+$/, '').toLowerCase();
+    return norm(a) === norm(b);
+}
+
+/**
+ * The directory Genie installs its own HOST TOOLS into. Language ENGINES live
+ * elsewhere, under `toolchainRoot()/<tool>/<version>` — see
+ * {@link managedPathDirs}, which is what a repair must actually reorder.
+ *
+ * Exported so callers ASK for it rather than recomputing it: a second derivation
+ * is how a repair ends up reordering a directory the installer never writes to,
+ * reporting success against an unchanged machine.
+ */
+export function genieToolsDir(): string {
+    return genieToolsContext().toolsDir;
+}
+
+/**
+ * PURE. PATH with every Genie-managed directory FIRST, in the given order.
+ *
+ * Precedence is the whole point. The previous operator APPENDED, which meant a
+ * runtime Genie had just installed lost to whatever happened to be earlier — and
+ * on the reporting machine that was Herd, which had been UNINSTALLED but left its
+ * binaries and its PATH entry behind. `php` resolved to Herd's, and so did its
+ * `php.ini`: on Windows PHP reads its config from the directory of the binary, so
+ * "running with Herd's config" and "resolving to Herd's binary" are ONE fault
+ * with one fix, not two.
+ *
+ * Every terminal, agent and dev server Genie spawns inherits this environment.
+ *
+ * An existing entry is MOVED rather than duplicated: a PATH that lists the same
+ * directory twice is one someone will later "clean up" by deleting the wrong one.
+ * Entries Genie does not manage keep their order — this reorders Genie's own
+ * entries to the front and touches nothing else, because the rest of PATH belongs
+ * to software Genie did not install.
+ */
+export function pathWithToolsFirst(current: string, dirs: string | string[], sep: string): string {
+    const wanted = (Array.isArray(dirs) ? dirs : [dirs]).filter((d) => d.length > 0);
+    const kept = current
+        .split(sep)
+        .filter((p) => p.length > 0 && !wanted.some((d) => samePathEntry(p, d)));
+    // Dedupe the survivors too: the reporting machine's PATH carried 92 entries
+    // of which only 57 were distinct. Keeping the FIRST occurrence of each cannot
+    // change what any command resolves to.
+    const seen: string[] = [];
+    for (const entry of kept) {
+        if (!seen.some((e) => samePathEntry(e, entry))) seen.push(entry);
+    }
+    return [...wanted, ...seen].join(sep);
+}
+
+/** What a toolchain diagnosis found. Empty arrays and `toolsFirst: true` mean
+ *  nothing needs repairing. */
+export interface ToolchainPathReport {
+    /** True when a Genie-managed directory is the first entry on PATH. */
+    toolsFirst: boolean;
+    /** Tools resolving to something OUTSIDE Genie's managed directories — a
+     *  foreign install winning over the one Genie manages. */
+    shadowed: string[];
+    /** PATH entries whose directory no longer exists — an uninstalled tool that
+     *  left its entry behind. */
+    stale: string[];
+}
+
+/**
+ * PURE. Diagnose why Genie's tools are not the ones being used.
+ *
+ * Three findings, deliberately separate because they have different fixes:
+ *   - `toolsFirst: false` — reordering PATH fixes it;
+ *   - `shadowed` — a foreign install is winning, and the user should be told
+ *     WHICH tool, because "php is wrong" is actionable and "PATH is wrong" is not;
+ *   - `stale` — a directory that no longer exists, left by an uninstall. Harmless
+ *     to resolution but it is the fingerprint of the failure, so it is worth
+ *     naming rather than silently dropping.
+ *
+ * `resolved` is what each tool ACTUALLY resolves to right now — supplied by the
+ * caller rather than probed here, so this stays pure and testable.
+ */
+export function diagnoseToolchainPath(input: {
+    path: string;
+    /** Every directory Genie manages: the host-tools dir plus one per installed
+     *  engine version. A tool resolving into ANY of them is not shadowed. */
+    toolsDirs: string[];
+    sep: string;
+    resolved: Record<string, string>;
+    exists?: (dir: string) => boolean;
+}): ToolchainPathReport {
+    const entries = input.path.split(input.sep).filter((p) => p.length > 0);
+    const managed = input.toolsDirs.filter((d) => d.length > 0);
+    const toolsFirst =
+        managed.length > 0 && entries.length > 0 && managed.some((d) => samePathEntry(entries[0]!, d));
+
+    const under = (exe: string) =>
+        managed.some((d) => exe.toLowerCase().startsWith(d.replace(/[\/]+$/, '').toLowerCase()));
+
+    const shadowed = Object.entries(input.resolved)
+        .filter(([, exe]) => !under(exe))
+        .map(([tool]) => tool)
+        .sort();
+
+    const exists = input.exists;
+    const stale = exists ? entries.filter((e) => !exists(e)) : [];
+
+    return { toolsFirst, shadowed, stale };
+}
+
 /**
  * Put a Genie-installed tool's directory on PATH.
  *
@@ -166,7 +275,11 @@ export async function addToolsPathEntry(dir: string): Promise<CommandResult> {
             (p) =>
                 p.replace(/[\\/]+$/, '').toLowerCase() === dir.replace(/[\\/]+$/, '').toLowerCase(),
         );
-    if (!already) process.env.PATH = current ? `${current}${sep}${dir}` : dir;
+    // PREPEND, always — and re-prepend even when the entry is already present but
+    // not first, which is exactly the Herd case: the dir was on PATH and losing.
+    if (!already || !current.split(sep)[0] || !samePathEntry(current.split(sep)[0]!, dir)) {
+        process.env.PATH = pathWithToolsFirst(current, dir, sep);
+    }
 
     if (process.platform !== 'win32') return { code: 0, stdout: '', stderr: '' };
     // Read-modify-write the USER Path (never the machine one, which needs

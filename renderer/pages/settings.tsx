@@ -60,6 +60,7 @@ import {
 import {
     agentCliRows,
     defaultChangeNotice,
+    repairNotice,
     devToolRows,
     formatBytes,
     languageSections,
@@ -4726,6 +4727,33 @@ export function ToolchainSection() {
         }
     };
 
+    /**
+     * REPAIR: make Genie's own toolchain answer for `php`, `node`, `composer`…
+     *
+     * The owner's report: Herd was uninstalled, left its binaries AND its PATH
+     * entry behind, and `php` kept resolving to it while Genie's own
+     * `toolchain/php/8.4.24` sat unused — so every terminal, agent, service and
+     * dev server Genie spawned inherited the wrong one. On Windows PHP reads
+     * `php.ini` from the binary's directory, so "still running with Herd's
+     * config" is the same fault, not a second one.
+     *
+     * Genie re-applies this at every startup; the button is for fixing a running
+     * Genie without restarting it, and for SEEING what was wrong.
+     */
+    const repairPath = async () => {
+        setBusy('path');
+        setError(null);
+        setNotice(null);
+        try {
+            setNotice(repairNotice(await api().devServer.toolchainRepair()));
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+        } finally {
+            setBusy(null);
+            refreshInstalls(true);
+        }
+    };
+
     const addVersionNow = async (tool: LanguageTool, label: string, version: string) => {
         setAsk(null);
         setBusy(`${tool}:${version}`);
@@ -4850,6 +4878,31 @@ export function ToolchainSection() {
                             version nothing else can change underneath it. Versions other
                             installers put on this machine are listed for reference and cannot
                             be used by a site.
+                        </div>
+                        {/* The one thing that can be wrong without any version
+                            being wrong: something ELSE on PATH answering for a
+                            tool Genie installed. It is invisible from a version
+                            list — every row can be correct while every spawn
+                            gets the other binary — so the check lives here, next
+                            to the folder claim it is the evidence for. */}
+                        <div className="set-row">
+                            <div className="set-row-main">
+                                <span className="set-row-label">Tool resolution</span>
+                                <span className="set-row-desc">
+                                    Genie puts its own folder first on PATH for everything it spawns.
+                                    Run this if a terminal or site is using another install — an
+                                    uninstalled one can leave its binaries and its PATH entry behind.
+                                    Genie never deletes an entry it did not create.
+                                </span>
+                            </div>
+                            <Action
+                                icon="wrench"
+                                disabled={busy !== null}
+                                data-testid="toolchain-repair"
+                                onClick={() => void repairPath()}
+                            >
+                                {busy === 'path' ? 'Checking…' : 'Check and repair'}
+                            </Action>
                         </div>
                         <LanguagesTab
                             info={info}

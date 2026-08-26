@@ -11,6 +11,7 @@ import {
     removeConfirmation,
     sitesFollowingDefault,
     type ToolchainSiteUse,
+    repairNotice,
 } from '../toolchain-page';
 import type { EngineInstall, ToolUpdate } from '../genie';
 
@@ -248,5 +249,106 @@ describe('removing a version tells you what it costs', () => {
     it('warns when the last managed version of a language is going', () => {
         const msg = removeConfirmation(gen('8.3.33'), { nextDefault: null });
         expect(msg).toMatch(/no managed PHP/i);
+    });
+});
+
+/**
+ * THE REPAIR SENTENCE.
+ *
+ * The owner's report: Herd was uninstalled, left its binaries and its PATH entry
+ * behind, and `php` kept resolving to it — with Herd's `php.ini`, since on
+ * Windows PHP reads config from the binary's directory — while Genie's own
+ * `toolchain/php/8.4.24` sat unused. Every terminal, agent and site Genie spawned
+ * inherited that.
+ *
+ * A repair button that says "repaired" teaches people to stop trusting it. The
+ * sentence has to name WHICH tools were being answered by something else, because
+ * "php was wrong, now it isn't" is checkable and "PATH was wrong" is not.
+ */
+describe('repairNotice', () => {
+    const clean = { toolsFirst: true, shadowed: [], stale: [] };
+
+    it('names the tools that were being answered by a foreign install', () => {
+        const notice = repairNotice({
+            before: { toolsFirst: false, shadowed: ['composer', 'php'], stale: [] },
+            after: clean,
+            changed: true,
+        });
+
+        expect(notice).toContain('php');
+        expect(notice).toContain('composer');
+    });
+
+    it('says plainly that nothing needed fixing', () => {
+        // Negative control: a repair that reports a fix on a healthy machine is
+        // the same lie as one that reports none on a broken one.
+        const notice = repairNotice({ before: clean, after: clean, changed: false });
+
+        expect(notice).toMatch(/already|nothing/i);
+        expect(notice).not.toMatch(/repaired|fixed/i);
+    });
+
+    it('does not claim success when the tools STILL resolve elsewhere', () => {
+        // PATH was reordered but php still answers from Herd — e.g. Genie manages
+        // no PHP at all. Reporting that as repaired is how a green button stops
+        // meaning anything.
+        const notice = repairNotice({
+            before: { toolsFirst: false, shadowed: ['php'], stale: [] },
+            after: { toolsFirst: true, shadowed: ['php'], stale: [] },
+            changed: true,
+        });
+
+        expect(notice).toContain('php');
+        expect(notice).toMatch(/still/i);
+    });
+
+    it('mentions stale PATH entries as the fingerprint, not as a failure', () => {
+        const notice = repairNotice({
+            before: { toolsFirst: false, shadowed: [], stale: ['C:/herd/bin'] },
+            after: { toolsFirst: true, shadowed: [], stale: ['C:/herd/bin'] },
+            changed: true,
+        });
+
+        expect(notice).toContain('C:/herd/bin');
+    });
+
+    it('tells the user that already-running processes keep the old PATH', () => {
+        // The honest limit: a terminal open before the repair, and a dev server
+        // already spawned, keep the environment they started with. Leaving this
+        // out is what turns "I repaired it" into "why is it still broken".
+        const notice = repairNotice({
+            before: { toolsFirst: false, shadowed: ['php'], stale: [] },
+            after: clean,
+            changed: true,
+        });
+
+        expect(notice).toMatch(/already running|restart/i);
+    });
+});
+
+/**
+ * The repair also refreshes Genie's own `php.ini` files, and must say so — a
+ * rewritten config is exactly the kind of invisible change this page's notices
+ * exist to name.
+ */
+describe('repairNotice reports rewritten config', () => {
+    const clean = { toolsFirst: true, shadowed: [], stale: [] };
+
+    it('names a php.ini it brought up to date', () => {
+        const notice = repairNotice({
+            before: clean,
+            after: clean,
+            changed: true,
+            inis: ['C:/genie/toolchain/php/8.4.24/php.ini'],
+        });
+
+        expect(notice).toContain('php.ini');
+    });
+
+    it('says nothing about config when none was rewritten', () => {
+        // Positive control for the case above.
+        const notice = repairNotice({ before: clean, after: clean, changed: false, inis: [] });
+
+        expect(notice).not.toContain('php.ini');
     });
 });
