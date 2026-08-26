@@ -57,6 +57,24 @@ Genie automatically syncs a small routing skill plus focused skills for
 \`genie-issuewatch\`. Load the focused skill for the capability in use; call
 \`genieGuide\` when the complete protocol is needed.
 
+## Reading a result — \`ok\` is the verdict, not \`isError\`
+
+Every tool answers with **text plus a trailing JSON block**. No tool declares an
+\`outputSchema\`, so none returns \`structuredContent\` — reading it gets you null,
+and that is correct, not a fault.
+
+**A refusal rides INSIDE the payload as \`ok: false\`, while the call itself
+succeeded, so the envelope's \`isError\` stays unset.** Parse the JSON and check
+\`ok\`. Treating "not \`isError\`" as success reports refusals as wins.
+
+This is not hypothetical. A channel \`send\` that reaches nobody comes back
+\`ok:false, delivered:0\` with an error saying NO agent received it — deliberately,
+so a broadcast into an empty room can never be mistaken for a filed report. A
+caller checking only \`isError\` prints "Sent" over exactly that.
+
+When \`ok\` is false, the accompanying \`error\` says what to do next; surface it
+rather than a generic failure.
+
 ## Tools
 
 ### manageProcess
