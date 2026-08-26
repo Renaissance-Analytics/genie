@@ -22,7 +22,6 @@ import {
     listTerminalSpecs,
     getAllSettings,
     setSettings,
-    getTerminalSpec,
     getWorkspace,
     toWorkspaceAppKind,
     createTerminalSpec,
@@ -93,13 +92,13 @@ import {
     readTerminalOutput,
     broadcastTerminalAttention,
     broadcastTerminalReveal,
-    broadcastInboxIncoming,
+    announceInboxIncoming,
     beginInputHold,
     releaseInputHold,
 } from './terminal/ipc';
 import { installAgentInboxPresence } from './agentinbox/presence';
 import { agentInboxBroker } from './agentinbox/broker';
-import { buildNudgeSequence, type NudgePlan } from './agentinbox/draft';
+import { deliverNudge, type NudgeIO } from './agentinbox/nudge-delivery';
 import { dbAgentInboxStore } from './agentinbox/store';
 import { getWorkspaceAgentAccess } from './db';
 import { getTynnBackend } from './backend/registry';
@@ -223,13 +222,9 @@ import {
     confirmQuitTerminals,
     pickDialogWindow,
 } from './terminal/quit-confirm';
-import {
-    workspaceIdOfTerminal,
-    workspaceIdOfSpec,
-    SYSTEM_WORKSPACE_ID,
-} from './terminal/workspace-of-terminal';
-import { agentDisplay } from './agents/identity';
-import { planImDoneNotice, type ImDoneNoticeFacts } from './attention/imdone-notice';
+import { workspaceIdOfTerminal } from './terminal/workspace-of-terminal';
+import { planImDoneNotice } from './attention/imdone-notice';
+import { terminalNoticeFacts } from './attention/terminal-facts';
 import { registerOpenFile } from './editor/open-file';
 import {
     registerHostTools,
@@ -305,37 +300,6 @@ const isDev = !isProd;
  * Both default off and are independent of the always-on attention glow.
  */
 
-/**
- * Gather what the imDone notice needs to name: the terminal, the workspace it
- * belongs to, and the agent running in it. Everything is looked up defensively —
- * a spec can be deleted between the tool call and the toast, and a plain shell
- * running a finish-hook has no agent at all. Missing facts are simply absent;
- * the notice degrades rather than failing.
- */
-function imDoneNoticeFacts(terminalId: string): ImDoneNoticeFacts {
-    try {
-        const spec = getTerminalSpec(terminalId);
-        if (!spec) return {};
-        const wsId = workspaceIdOfSpec(spec);
-        const workspace =
-            wsId === SYSTEM_WORKSPACE_ID
-                ? 'System Workspace'
-                : wsId
-                  ? getWorkspace(wsId)?.project_name ?? null
-                  : null;
-        // The identity convention (#258): provider + NAME, never the chat id.
-        // `whisper_purpose` IS the agent's name — see agents/identity.ts, which
-        // deliberately makes them the same field so the two can't drift.
-        const provider = spec.meta?.agent;
-        const agent = provider
-            ? agentDisplay({ provider, name: spec.meta?.whisper_purpose ?? '' })
-            : null;
-        return { workspace, agent, terminal: spec.label };
-    } catch {
-        return {};
-    }
-}
-
 function notifyImDone(terminalId: string): void {
     let settings;
     try {
@@ -359,7 +323,7 @@ function notifyImDone(terminalId: string): void {
         deliverAlertSound(masterWindow, { kind: 'imDone', sound });
     }
     if (settings.notify_toast === 'on' && Notification.isSupported()) {
-        const notice = planImDoneNotice(imDoneNoticeFacts(terminalId));
+        const notice = planImDoneNotice(terminalNoticeFacts(terminalId));
         const n = new Notification({
             title: notice.title,
             body: notice.body,
@@ -986,39 +950,17 @@ function readPtyHostPid(): number | null {
 }
 
 /**
- * Carry out one nudge against a terminal — the I/O half of preserve-and-restore
- * (owner, JOB 2). The plan comes from the broker; the writes, the keyboard hold
- * and the toast happen here.
- *
- * The keyboard is held for the whole sequence and ALWAYS given back, replaying
- * whatever the person typed meanwhile. Those bytes were taken from them, so they
- * come back even if a write throws — which is why the release sits in `finally`
- * rather than on the happy path. Replaying them last also puts them exactly
- * where they would have landed had no swap happened: after the restored draft.
- *
- * Note the OS clipboard is never touched. Cutting with Ctrl-A/Ctrl-K and pasting
- * back with bracketed paste keeps the whole round-trip inside the terminal, so
- * there is nothing of the user's to save or clobber in the first place.
+ * The desktop's pty/window bindings for {@link deliverNudge} — the injected I/O
+ * that module documents. The sequencing, the always-give-the-keyboard-back rule
+ * and the did-it-actually-land accounting live there, where they are testable;
+ * this is only the wiring.
  */
-async function deliverNudge(terminalId: string, text: string, plan: NudgePlan): Promise<void> {
-    try {
-        for (const w of buildNudgeSequence(plan, text)) {
-            if (w.delayMs > 0) await new Promise((r) => setTimeout(r, w.delayMs));
-            writeToTerminal(terminalId, w.bytes);
-        }
-        if (plan.mode === 'append') {
-            // Genie would not touch their draft, so the notice is sitting BEHIND
-            // it, unsubmitted. Tell the person — otherwise it is just mystery
-            // text in their prompt, and the message looks like it never arrived.
-            broadcastInboxIncoming(terminalId);
-        }
-    } catch {
-        /* best-effort: the message is in the inbox regardless */
-    } finally {
-        const replay = releaseInputHold(terminalId);
-        if (replay) writeToTerminal(terminalId, replay);
-    }
-}
+const nudgeIO: NudgeIO = {
+    write: (terminalId, bytes) => writeToTerminal(terminalId, bytes),
+    releaseHold: (terminalId) => releaseInputHold(terminalId),
+    announce: (terminalId, landed) => announceInboxIncoming(terminalId, landed),
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+};
 
 /**
  * Render a DND-deferred ForceTheQuestion answer as the AgentInbox message the
@@ -1406,7 +1348,7 @@ app.whenReady().then(async () => {
             // One swap per terminal: a second notice must never cut the same box
             // while the first is still putting the draft back.
             if (!beginInputHold(terminalId)) return false;
-            void deliverNudge(terminalId, text, plan);
+            void deliverNudge(nudgeIO, terminalId, text, plan);
             return true;
         });
         // AgentInbox OUTER tier: the broker asks the workspaces table who may reach

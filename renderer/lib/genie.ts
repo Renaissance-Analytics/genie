@@ -262,6 +262,28 @@ export type WatchFetchError =
     | 'unknown';
 
 /**
+ * An AgentInbox message arrived for an agent whose input box Genie would not
+ * touch, so the notice was appended there unsubmitted. Mirrors
+ * `AgentInboxIncomingPayload` in main/terminal/ipc.ts.
+ *
+ * Every field but `id` exists because the toast used to have NONE of them: it
+ * was a fixed app-level sentence about "this agent", which the reader could only
+ * take to mean the terminal they were looking at — while the notice had gone to
+ * the addressee, often on another workspace.
+ */
+export interface AgentInboxIncomingNotice {
+    /** The terminal the notice went to — the one a click must reveal. */
+    id: string;
+    /** Its workspace, so the reveal activates the right one first. */
+    workspaceId: string | null;
+    title: string;
+    body: string;
+    /** Whether the notice really is sitting in that prompt. False = it is in the
+     *  inbox and nowhere else, and the body must not say "press Enter". */
+    landed: boolean;
+}
+
+/**
  * Issue Watch: a classified read failure PLUS the raw HTTP status + GitHub
  * message behind it, so the flyout can show the EXACT cause ("GitHub returned
  * 401: Bad credentials") rather than a vague "unexpected error". Mirrors
@@ -3990,8 +4012,14 @@ export interface GenieApi {
         ) => () => void;
         /** A message landed for an agent whose input box Genie would not touch, so
          *  the notice was APPENDED there unsubmitted. Drives the top-centre toast.
-         *  Optional — absent on the remote bridge (a local-prompt concern). */
-        agentInboxIncoming?: (cb: (payload: { id: string }) => void) => () => void;
+         *  Optional — absent on the remote bridge (a local-prompt concern).
+         *
+         *  The payload NAMES the addressee. It used to be `{ id }` and the toast
+         *  ignored even that, saying "this agent" — which read as whichever
+         *  terminal had focus, and pointed the user at the wrong prompt. */
+        agentInboxIncoming?: (
+            cb: (payload: AgentInboxIncomingNotice) => void,
+        ) => () => void;
         /** Host-loss recovery (genie#203): main asks the renderer to remount these
          *  terminals so their create() rejoins the respawned host + replays
          *  scrollback. Optional — absent on the remote bridge (local-host concern). */

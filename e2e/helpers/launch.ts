@@ -454,6 +454,23 @@ export async function readLiveTerminals(app: ElectronApplication): Promise<strin
 }
 
 /**
+ * Raise the AgentInbox "a message came in" toast for a terminal, through main's
+ * real announce path (fact lookup → notice → local broadcast). `landed` is what
+ * a delivered nudge reports about its pty writes: true when the notice really is
+ * sitting in that prompt, false when nothing was written.
+ */
+export async function announceInboxIncoming(
+    app: ElectronApplication,
+    terminalId: string,
+    landed: boolean,
+): Promise<void> {
+    await app.evaluate((_e, arg) => {
+        const h = (globalThis as Record<string, any>).__GENIE_E2E_MASTER__;
+        h?.announceInboxIncoming?.(arg.terminalId, arg.landed);
+    }, { terminalId, landed });
+}
+
+/**
  * Kill the fixture's ptys. Call this BEFORE `app.close()`: a manual quit with a
  * live terminal and a window open raises the keep-or-shut-down confirmation, and
  * because this harness IS the real master page it really renders that modal —

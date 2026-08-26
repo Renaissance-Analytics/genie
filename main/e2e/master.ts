@@ -12,7 +12,7 @@ import {
     setWorkspaceGappDev,
 } from '../db';
 import { getTerminalSize } from '../terminal/size-tracker';
-import { killTerminalById } from '../terminal/ipc';
+import { killTerminalById, announceInboxIncoming } from '../terminal/ipc';
 import { liveHostTerminals } from '../terminal/quit-confirm';
 
 /**
@@ -250,6 +250,19 @@ export function seedMasterE2E(): MasterSeed {
             killTerminalById(TERMINAL_ID);
             killTerminalById(PEER_TERMINAL_ID);
         },
+        /**
+         * Raise the AgentInbox "a message came in" toast for a terminal, through
+         * the REAL announce path — same fact lookup, same notice, same broadcast
+         * a delivered nudge uses. Only the pty write that precedes it is skipped,
+         * because the thing under test is what the renderer does with the payload.
+         *
+         * That payload is exactly what the bug was: it used to be `{ id }` and the
+         * page discarded it, drawing a fixed sentence about "this agent" — which
+         * a reader can only take to mean the terminal in front of them, while the
+         * notice had gone to the addressee in another workspace.
+         */
+        announceInboxIncoming: (id: string, landed: boolean) =>
+            announceInboxIncoming(id, landed),
     };
     return seed;
 }

@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { TailscaleStatus } from './tailscale';
 import type { AgentInboxScope } from './agentinbox/types';
+import type { AgentInboxIncomingPayload } from './terminal/ipc';
 // The IssueWatch bucket tallies, from the module that OWNS them. This boundary
 // used to restate the shape by hand in two places, and they had already drifted
 // apart — the `issue-watch:update` payload still declared a `dependabot` key
@@ -1741,9 +1742,14 @@ const api = {
         /** A message landed for an agent whose input box Genie would not touch, so
          *  the notice was APPENDED there without being submitted. The renderer
          *  raises a top-centre toast — otherwise it is just mystery text in
-         *  someone's prompt and the message looks like it never arrived. */
-        agentInboxIncoming: (cb: (payload: { id: string }) => void) => {
-            const handler = (_e: unknown, payload: { id: string }) => cb(payload);
+         *  someone's prompt and the message looks like it never arrived.
+         *
+         *  The payload NAMES the terminal it is about (see
+         *  `AgentInboxIncomingPayload`): this used to carry `{ id }` alone and the
+         *  toast said "this agent", which meant whichever one had focus — usually
+         *  not the addressee. */
+        agentInboxIncoming: (cb: (payload: AgentInboxIncomingPayload) => void) => {
+            const handler = (_e: unknown, payload: AgentInboxIncomingPayload) => cb(payload);
             ipcRenderer.on('agentinbox:incoming', handler);
             return () => ipcRenderer.off('agentinbox:incoming', handler);
         },

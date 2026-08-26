@@ -39,7 +39,7 @@ export interface ImDoneNotice {
 }
 
 /** Trim to a non-empty string, or null. */
-function clean(v: string | null | undefined): string | null {
+export function clean(v: string | null | undefined): string | null {
     const s = String(v ?? '').trim();
     return s || null;
 }
@@ -56,34 +56,63 @@ const PROVIDER_LABEL: Record<AgentProvider, string> = {
     custom: 'Custom agent',
 };
 
-export function planImDoneNotice(facts: ImDoneNoticeFacts): ImDoneNotice {
+/**
+ * The facts every attention notice is named from, cleaned. Shared so two
+ * surfaces can never end up calling the same terminal by two different names —
+ * the AgentInbox toast reuses this rather than inventing a second vocabulary.
+ */
+export interface NoticeSubject {
+    workspace: string | null;
+    terminal: string | null;
+    agent: { provider: AgentProvider; name: string } | null;
+    /** WHO the notice is about: an agent is provider + name; anything else is
+     *  named by its own label, and only a terminal with neither is anonymous. */
+    who: string;
+    /** The terminal as a TIEBREAKER — ` in “build”`, or '' when the label adds
+     *  nothing. An agent panel's label usually already contains the agent's name
+     *  (`claude · reviewer`), and repeating it spends one of the toast's two
+     *  short lines on nothing. */
+    where: string;
+}
+
+export function noticeSubject(facts: {
+    workspace?: string | null;
+    terminal?: string | null;
+    agent?: { provider: AgentProvider; name: string } | null;
+}): NoticeSubject {
     const workspace = clean(facts.workspace);
     const terminal = clean(facts.terminal);
     const name = clean(facts.agent?.name);
     const agent = facts.agent && name ? { provider: facts.agent.provider, name } : null;
 
-    // WHO finished. An agent is provider + name; anything else is named by its
-    // own label, and only a terminal with neither is anonymous.
     const who = agent
         ? `${PROVIDER_LABEL[agent.provider] ?? 'Agent'} · ${agent.name}`
         : (terminal ?? 'A terminal');
-
-    // WHERE — the missing fact. The workspace leads, because that is what the
-    // user is choosing between when several are open and one of them just
-    // finished something.
-    const title = workspace ? `${workspace} — ${who} finished` : `${who} finished`;
-
-    // The terminal is a TIEBREAKER, not a third name to read: an agent panel's
-    // label usually already contains the agent's name (`claude · reviewer`), and
-    // repeating it spends one of the toast's two short lines on nothing.
     const showTerminal =
         !!agent && !!terminal && !terminal.toLowerCase().includes(agent.name.toLowerCase());
-    const where = showTerminal ? ` in “${terminal}”` : '';
+
+    return { workspace, terminal, agent, who, where: showTerminal ? ` in “${terminal}”` : '' };
+}
+
+/**
+ * The title line: WHERE, then WHO, then what happened. The workspace LEADS,
+ * because that is what the user is choosing between when several are open and
+ * one of them just did something.
+ */
+export function noticeTitle(subject: NoticeSubject, happened: string): string {
+    return subject.workspace
+        ? `${subject.workspace} — ${subject.who} ${happened}`
+        : `${subject.who} ${happened}`;
+}
+
+export function planImDoneNotice(facts: ImDoneNoticeFacts): ImDoneNotice {
+    const subject = noticeSubject(facts);
+    const title = noticeTitle(subject, 'finished');
     // One more coordinate on a remote finish, never a replacement for the others:
     // naming only the host is what made the remote toast say "a terminal,
     // somewhere over there".
     const host = clean(facts.host);
     const on = host ? ` on ${host}` : '';
 
-    return { title, body: `Waiting for you${where}${on}. Click to open it.` };
+    return { title, body: `Waiting for you${subject.where}${on}. Click to open it.` };
 }

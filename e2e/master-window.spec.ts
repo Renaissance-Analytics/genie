@@ -1,5 +1,6 @@
 import { test, expect, type ElectronApplication, type Page } from '@playwright/test';
 import {
+    announceInboxIncoming,
     killMasterTerminals,
     launchGenieE2E,
     readLiveTerminals,
@@ -406,4 +407,90 @@ test('the GApp Store lists a ribboned dev launcher, and launching it previews', 
     // strict-mode violation the day another surface is up alongside it.
     await page.getByTestId('gapp-store').getByRole('button', { name: 'Close' }).click();
     await expect(list).toHaveCount(0);
+});
+
+/**
+ * THE INCOMING-MESSAGE TOAST MUST NAME ITS TERMINAL, AND OPEN IT.
+ *
+ * Owner, verbatim: *"I just got the notice that a message was incoming but it
+ * never ever came and I hit enter like it said but nothing happened. my cursor
+ * was in the input, but nothing was typed. I think it confused focus with
+ * content"*.
+ *
+ * It did. `broadcastInboxIncoming` sent `{ id }`, master.tsx discarded it, and
+ * the toast was one fixed sentence — "A message just came in for THIS agent …
+ * press Enter to deliver it". The notice itself had been appended to the
+ * ADDRESSEE's prompt, which is routinely a terminal in another workspace, so
+ * "this agent" pointed at whatever had focus and Enter went into an empty box.
+ *
+ * The unit tests settle what the notice SAYS (attention/inbox-incoming-notice)
+ * and what goes on the wire (terminal/inbox-incoming-broadcast). Only the real
+ * window can show the payload SURVIVING to the DOM and the click going
+ * somewhere — a frozen `planInboxIncomingNotice` is worth nothing if the page
+ * throws its result away again, which is precisely what it used to do.
+ *
+ * The toast is raised for the PEER workspace's terminal while the window sits on
+ * the ordinary one: same-workspace would prove nothing, because a toast that
+ * named the wrong terminal would still look right.
+ *
+ * PLACED LAST for this file's standing reason — the reveal ACTIVATES a
+ * workspace, and a visited workspace's panel stays mounted-hidden forever, so
+ * anywhere above "the floor lays out the seeded terminal" this breaks that
+ * test's panel count.
+ *
+ * It also runs after two tests that leave a `.g-toast` refusal on screen, which
+ * is why every assertion here goes through the `agentinbox-incoming` TEST ID
+ * rather than `.g-toast`. This window has several toast surfaces; a bare class
+ * selector would read the previous test's receipt, and would be a strict-mode
+ * violation besides.
+ */
+test('the incoming-message toast names the addressee, and opens it (genie inbox notice)', async () => {
+    const plainRow = page.locator('.tproj').filter({ hasText: seed.workspaceName });
+    const gdwRow = page.locator('.tproj').filter({ hasText: seed.peerName });
+    const toast = page.getByTestId('agentinbox-incoming');
+
+    // Start on the ordinary workspace: the toast is about the OTHER one.
+    await switchToWorkspace(seed.workspaceName);
+    await expect(plainRow).toHaveClass(/\bis-active\b/);
+
+    await announceInboxIncoming(app, seed.peerTerminalId, true);
+    await expect(toast).toBeVisible();
+
+    // POSITIVE CONTROL FIRST. Every "must not say" below would also pass against
+    // a toast that rendered nothing, so prove there is text before trusting them.
+    await expect(toast).not.toBeEmpty();
+    // The two facts the old toast could not carry: WHICH workspace, WHICH
+    // terminal. Both come from the payload — there is no other source for them.
+    await expect(toast).toContainText(seed.peerName);
+    await expect(toast).toContainText(seed.peerTerminalLabel);
+    // And the phrase that made it unaddressed is gone.
+    await expect(toast).not.toContainText(/this agent/i);
+    // It says Enter because this delivery LANDED — see the not-landed leg below.
+    await expect(toast).toContainText(/enter/i);
+    // The payload reached the DOM whole, not just as prose.
+    await expect(toast).toHaveAttribute('data-terminal-id', seed.peerTerminalId);
+
+    // CLICKING GOES THERE. A notice that names a terminal and cannot open it is
+    // half a fix — the user is told where the message is and left to hunt for it.
+    await toast.click();
+    await expect(gdwRow).toHaveClass(/\bis-active\b/);
+    await expect(plainRow).not.toHaveClass(/\bis-active\b/);
+    await expect(panel(seed.peerTerminalLabel)).toBeVisible();
+    await expect(toast).toHaveCount(0);
+
+    // NOTHING WAS TYPED — the other half of the report. A nudge whose pty writes
+    // all failed (a retained spec whose pty has exited still has a registered
+    // AgentInbox agent) must not tell anyone to press Enter over an empty box.
+    await announceInboxIncoming(app, seed.peerTerminalId, false);
+    await expect(toast).toBeVisible();
+    await expect(toast).not.toBeEmpty();
+    await expect(toast).toContainText(seed.peerName);
+    await expect(toast).not.toContainText(/enter/i);
+    // …and it says where the message actually is instead.
+    await expect(toast).toContainText('AgentInbox');
+
+    // Leave the window on the ordinary workspace, as this file's other tests do.
+    await toast.click();
+    await switchToWorkspace(seed.workspaceName);
+    await expect(plainRow).toHaveClass(/\bis-active\b/);
 });
