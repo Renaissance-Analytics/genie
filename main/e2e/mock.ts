@@ -48,6 +48,7 @@ import {
     answerPendingQuestion,
 } from '../ask/force-question';
 import type { MobileDataDeps } from '../mobile/api';
+import { listWorkspaces } from '../db';
 import { isE2EHosting, registerHostingE2EMocks } from './hosting';
 
 /** True only in E2E test mode. Everything in this module no-ops otherwise. */
@@ -168,7 +169,21 @@ export interface E2EState {
         };
         repos: WatchRepoView[];
         feed: WatchFeedItem[];
+        /**
+         * Per-workspace bucket counts returned by `issue-watch:counts`. The
+         * flyout's feedback notice is driven from `feedback` here, NOT from the
+         * feed — feedback carries no feed items, so a test that only scripts
+         * `feed` can never make the notice appear.
+         */
+        counts: Record<string, { issue: number; pr: number; security: number; feedback: number }>;
     };
+    /**
+     * Workspace rows returned by `workspaces:list`. The flyout resolves the
+     * feedback notice's Tynn link from the ROW (its `tynn_project_id`), so the
+     * harness has to own one — the E2E profile's real database has no row for
+     * the pinned `e2e-workspace` id.
+     */
+    workspaces: { id: string; tynn_project_id: string; backend: 'tynn' | 'aionima' }[];
     /** Call counters — let a test assert e.g. "status was polled ≥ N times". */
     calls: { githubStatus: number; deviceStart: number; recheck: number };
     /** External URLs the flyout tried to open (kept inert; recorded for asserts). */
@@ -219,7 +234,11 @@ export function defaultE2EState(): E2EState {
                 },
             ],
             feed: [],
+            // No feedback by default — the notice is absent until a test scripts
+            // it, so its presence in a spec is always something that spec caused.
+            counts: {},
         },
+        workspaces: [],
         calls: { githubStatus: 0, deviceStart: 0, recheck: 0 },
         openedUrls: [],
     };
@@ -361,8 +380,20 @@ export function registerE2EMocks(): void {
     override('issue-watch:repos', async () => e2eState.issueWatch.repos);
     override('issue-watch:feed', async () => e2eState.issueWatch.feed);
     override('issue-watch:mark-seen', async () => ({ ok: true }));
-    override('issue-watch:counts', async () => ({}));
+    override('issue-watch:counts', async () => e2eState.issueWatch.counts);
     override('issue-watch:set', async () => ({ ok: true }));
+
+    // The flyout reads the workspace ROW to resolve its Tynn project id (the
+    // feedback notice's link target), and the harness pins a workspace id the
+    // real database has no row for.
+    //
+    // DELEGATES when unscripted, and that is not a nicety: `override` REMOVES
+    // the real handler, and the master/agent-access/repo-panel specs all read
+    // the genuinely seeded workspace list through this channel. Returning a
+    // fake list unconditionally silently emptied it for every one of them.
+    override('workspaces:list', async () =>
+        e2eState.workspaces.length > 0 ? e2eState.workspaces : listWorkspaces(),
+    );
 
     // --- Inert externals -------------------------------------------------
     // The flyout opens the verification URL in the OS browser on reconnect.

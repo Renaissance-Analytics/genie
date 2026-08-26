@@ -4,6 +4,7 @@ import type {
     WatchFeedItem,
     WatchFetchError,
     WatchRepoView,
+    WorkspaceRow,
     WorkspaceWatchStatus,
 } from './genie';
 import type { WatchTypeCounts } from './genie';
@@ -199,4 +200,39 @@ export function feedItemByline(
     const when = age ? `${opened ? 'opened' : 'updated'} ${age}` : '';
 
     return [item.author, when].filter(Boolean).join(' · ');
+}
+
+/**
+ * Where the flyout's feedback notice sends the user — Tynn's id-addressed
+ * feedback entry point for this workspace's project, or null when there is no
+ * project to open.
+ *
+ * Tynn builds a project's canonical URL from an owner slug plus a project slug
+ * (`/u/<owner>/<project>/feedback`) and Genie stores NEITHER, so the desktop
+ * addresses the page by the one identifier a workspace does carry — its Tynn
+ * project id — and lets the server redirect to the canonical path.
+ *
+ * `tynn_project_id` wins over `id` because the two coincide only by
+ * construction: a workspace created FROM a Tynn project takes `id :=
+ * project.id`, but a locally scaffolded `.agi` envelope mints its own id and
+ * records the Tynn link separately (the same divergence that made pushed deltas
+ * land under an unread key in tynn.ai#134). Older rows leave `tynn_project_id`
+ * empty and ARE keyed by the project id, which is what the fallback covers.
+ *
+ * The `backend` check is what makes the `id` fallback safe. Falling back is
+ * necessary — older rows leave `tynn_project_id` empty and ARE keyed by the
+ * project id — but on its own it cannot tell those rows apart from an Aionima
+ * workspace, whose `id` is a local identifier Tynn has never issued. Without the
+ * check every such workspace would offer a link that resolves to nothing.
+ *
+ * Null — rather than a half-built path — is what keeps such a workspace's notice
+ * inert instead of opening a URL that cannot resolve.
+ */
+export function feedbackPathForWorkspace(
+    ws: Pick<WorkspaceRow, 'id' | 'tynn_project_id' | 'backend'> | undefined,
+): string | null {
+    if (ws?.backend !== 'tynn') return null;
+    const projectId = (ws.tynn_project_id || ws.id || '').trim();
+
+    return projectId ? `/p/${encodeURIComponent(projectId)}/feedback` : null;
 }
