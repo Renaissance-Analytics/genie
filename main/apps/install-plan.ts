@@ -1,3 +1,4 @@
+import path from 'path';
 import { devSiteIdFor, type DevSiteConfig } from '../dev-server/sites-config';
 import { gappHostname } from './hostname';
 import { APP_AGENTS_DIR, APP_MANIFEST_FILENAME, type AppManifest } from './manifest';
@@ -39,6 +40,80 @@ export interface AppInstallPlan {
 /** `repos/<name>`, or '' for the workspace root — the envelope's own spelling. */
 function repoPath(repo: string | undefined): string {
     return repo ? `repos/${repo}` : '';
+}
+
+/**
+ * The two shapes a GApp SOURCE folder legitimately has (genie#268).
+ *
+ * `staging` is what `scaffoldApp` writes, and what a developer assembling an app
+ * by hand produces: the components sit FLAT beside the manifest, and the copier
+ * moves each one to `repos/<name>` on its way into the workspace.
+ *
+ * `envelope` is a converted `.agi` workspace — a GApp Development Workspace. It is
+ * not a folder that will BECOME an envelope on install; it already is one, so its
+ * components are at `repos/<name>` before anything is installed. That is not a
+ * quirk of one developer's setup: it is what an envelope IS, and converting a real
+ * workspace is what a GDW is for.
+ *
+ * Both are real, and both have to validate.
+ */
+export type GappSourceLayout = 'staging' | 'envelope';
+
+/**
+ * The file that makes a folder an envelope — the Aionima envelope config and repo
+ * registry. Genie writes one into every workspace it creates and `scaffoldApp`
+ * writes none, so its presence is the folder STATING which layout it has.
+ *
+ * `.gitmodules` would be the wrong marker: a component need not be a submodule.
+ * The scaffolded ones are plain folders, and an envelope may hold plain
+ * directories too, so keying on it would miss envelopes and mislabel them staging.
+ */
+export const ENVELOPE_MARKER = 'project.json';
+
+/**
+ * Which layout a source folder has — decided ONCE, from the folder itself.
+ *
+ * Deliberately NOT "try `repos/<name>`, fall back to flat". A checker's whole job
+ * is to say what is wrong, and a resolver that accepts either path cannot name
+ * the place a MISSING component should have been — it only ever learns that it
+ * was in neither. That is exactly how the old advice came to be wrong: it asserted
+ * a layout it had never determined, and told developers standing in an envelope to
+ * create a duplicate of the folder they were looking at. Deciding first is what
+ * makes the message right in both directions.
+ *
+ * It also keeps the CHECK and the COPY on one rule. The copier runs on a plain
+ * path with no database in reach, so the answer has to be readable from the folder
+ * alone — which is why this keys off a file and not off stored `gapp_dev` state.
+ *
+ * Takes an `exists` predicate rather than touching `fs`, so the rule stays pure
+ * and the callers keep the probes they already inject.
+ */
+export function gappSourceLayout(
+    folder: string,
+    exists: (absolutePath: string) => boolean,
+): GappSourceLayout {
+    return exists(path.join(folder, ENVELOPE_MARKER)) ? 'envelope' : 'staging';
+}
+
+/**
+ * Where component `<name>` actually sits inside a SOURCE folder of this layout.
+ *
+ * The single resolver every caller uses — the install gate, the testing suite and
+ * the copier — because a component found in one place and copied from another is
+ * an install that fails partway through, after the workspace already exists.
+ */
+export function componentSourceDir(
+    folder: string,
+    layout: GappSourceLayout,
+    repo: string | undefined,
+): string {
+    if (!repo) return folder;
+    return layout === 'envelope' ? path.join(folder, 'repos', repo) : path.join(folder, repo);
+}
+
+/** How to SPELL that location to a developer, in the terms their own layout uses. */
+export function componentSourceSpelling(layout: GappSourceLayout, repo: string): string {
+    return layout === 'envelope' ? `repos/${repo}` : repo;
 }
 
 /** What of the source folder becomes the installed app. */

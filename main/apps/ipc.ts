@@ -49,7 +49,7 @@ import { manageProcessForMcp, resolveAgentLaunch } from '../mcp/host-tools';
 import { manageSiteForMcp } from '../mcp/dev-site-tools';
 import { callerIdForApp } from '../mcp/caller-identity';
 import { setGappPreviewPort } from '../mcp/gapp-dev-tools';
-import { appCopyPlan } from './install-plan';
+import { copyAppSource, type CopyFs } from './copy-source';
 import {
     APP_AGENTS_DIR,
     APP_MANIFEST_FILENAME,
@@ -109,48 +109,16 @@ import { scaffoldApp, slugify } from './scaffold';
 import { listAppGrants } from '../db';
 
 /**
- * Copy the app's source into its workspace.
+ * The real filesystem, for the copier.
  *
- * A GApp is an envelope, so each declared component lands under `repos/<name>` —
- * the same layout a hand-built envelope has, which is what lets the site config
- * and the process `cwd` from `appInstallPlan` point at real directories.
+ * The copy itself lives in `copy-source.ts` — this module imports `electron`, so
+ * nothing in it can be unit-tested, and where a component is read FROM is a rule
+ * the install gate has to agree with. Here there is only `fs`.
  */
-function copyAppSource(sourceFolder: string, workspacePath: string, manifest: AppManifest): void {
-    const plan = appCopyPlan(manifest);
-
-    // An app with no named components is a single-folder app: the whole thing is
-    // the workspace root, envelope paths included.
-    if (plan.wholeFolder) {
-        fs.cpSync(sourceFolder, workspacePath, { recursive: true, force: true });
-        return;
-    }
-
-    for (const component of plan.components) {
-        const from = path.join(sourceFolder, component);
-        if (!fs.existsSync(from)) {
-            throw new Error(
-                `The manifest names "${component}", but there is no such folder in ${sourceFolder}.`,
-            );
-        }
-        fs.cpSync(from, path.join(workspacePath, 'repos', component), {
-            recursive: true,
-            force: true,
-        });
-    }
-
-    // Envelope-level paths belong to no component, so nothing above carries them —
-    // the manifest itself, and `.agents/` when the app declared agents. Which ones
-    // is decided in `appCopyPlan` and asserted there; this only moves them.
-    for (const relative of plan.envelopePaths) {
-        const from = path.join(sourceFolder, relative);
-        if (!fs.existsSync(from)) {
-            throw new Error(
-                `The app declares "${relative}", but there is no such path in ${sourceFolder}.`,
-            );
-        }
-        fs.cpSync(from, path.join(workspacePath, relative), { recursive: true, force: true });
-    }
-}
+const realCopyFs: CopyFs = {
+    exists: (p) => fs.existsSync(p),
+    copyDir: (from, to) => fs.cpSync(from, to, { recursive: true, force: true }),
+};
 
 
 /**
@@ -268,7 +236,8 @@ export function installIO(): AppInstallIO {
         clearAppStorage,
         retainedData: (appId) => retainedAppData(appId),
         forgetRetainedData: (appId) => forgetRetainedAppData(appId),
-        copyAppSource,
+        copyAppSource: (sourceFolder, workspacePath, manifest) =>
+            copyAppSource(sourceFolder, workspacePath, manifest, realCopyFs),
         persistSites: (workspaceId, sites) => setWorkspaceDevSites(workspaceId, sites),
         recordGrant: (grant) => upsertAppGrant(grant),
         removeWorkspace: (workspaceId) => removeWorkspaceRow(workspaceId),

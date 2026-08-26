@@ -27,6 +27,7 @@ import { gappHomeUrl } from './hostname';
 import { buildConsentPlan, readConsent } from './consent-plan';
 import { resolveAppRequirements, type RequirementMachine } from './requirements';
 import { validateAppFolder } from './validate';
+import { gappSourceLayout } from './install-plan';
 import { APP_MANIFEST_FILENAME, validateAppManifest, type AppManifest } from './manifest';
 import {
     mayTearDownPreviewWorkspace,
@@ -259,7 +260,10 @@ export async function openPreview(folder: string, io: PreviewIO): Promise<Previe
     if (seeded.refused) warnings.push(seeded.refused);
 
     // --- Serve ---------------------------------------------------------------
-    const site = previewSitePlan(workspaceId, preview);
+    // The developer's folder IS the workspace here, so where its components sit is
+    // the folder's own business — flat in a scaffolded staging folder, `repos/<name>`
+    // in a converted `.agi` envelope. Same rule the install gate above just used.
+    const site = previewSitePlan(workspaceId, preview, gappSourceLayout(folder, io.exists));
     io.persistSites(workspaceId, { [site.siteId]: site.site });
     // A site that will not come up is a WARNING, never a failure. The Agent tab is
     // Genie's own and needs no hosting at all, so a machine with no dev-server

@@ -176,18 +176,50 @@ describe('tearing a preview down', () => {
 });
 
 describe('previewSitePlan', () => {
-    it('serves the SOURCE layout, not the installed one', () => {
-        // An install COPIES each declared component to `repos/<name>`, and
-        // `appInstallPlan` writes a site config that says so. A preview copies
-        // nothing — the developer's folder IS the workspace, and there the
-        // component sits at `web/`, not `repos/web/`. A preview that reused the
-        // installed plan would serve a directory that does not exist and show a
-        // 404 the developer would reasonably read as a bug in their app.
+    it('serves a converted envelope from repos/, where its component really is', () => {
+        // The mirror of the test below, and the reason the layout is a parameter
+        // rather than an assumption. A GApp Development Workspace is an envelope
+        // that was ALREADY an envelope: its component sits at `repos/web` before
+        // anything is previewed. Folding in the flat name would point the docroot
+        // at a directory that has never existed — the same 404 this pair guards
+        // against, arrived at from the other side.
         const plan = previewSitePlan(
             'preview-ws',
             previewManifest(
                 manifest({ frontend: { repo: 'web', serve: { mode: 'static', root: 'dist' } } }),
             ),
+            'envelope',
+        );
+
+        expect(plan.site.repo).toBe('');
+        expect(plan.site.hostServe).toEqual({ mode: 'static', root: 'repos/web/dist' });
+    });
+
+    it('collapses an envelope serve root that is just the component itself', () => {
+        const plan = previewSitePlan(
+            'preview-ws',
+            previewManifest(
+                manifest({ frontend: { repo: 'web', serve: { mode: 'static', root: '.' } } }),
+            ),
+            'envelope',
+        );
+
+        expect(plan.site.hostServe).toEqual({ mode: 'static', root: 'repos/web' });
+    });
+
+    it('serves the SOURCE layout, not the installed one', () => {
+        // An install COPIES each declared component to `repos/<name>`, and
+        // `appInstallPlan` writes a site config that says so. A preview copies
+        // nothing — the developer's folder IS the workspace, and in a SCAFFOLDED
+        // one the component sits at `web/`, not `repos/web/`. A preview that
+        // reused the installed plan would serve a directory that does not exist
+        // and show a 404 the developer would reasonably read as a bug in their app.
+        const plan = previewSitePlan(
+            'preview-ws',
+            previewManifest(
+                manifest({ frontend: { repo: 'web', serve: { mode: 'static', root: 'dist' } } }),
+            ),
+            'staging',
         );
 
         expect(plan.site.repo).toBe('');
@@ -195,7 +227,7 @@ describe('previewSitePlan', () => {
     });
 
     it('serves the preview address, so an installed copy keeps its own', () => {
-        const plan = previewSitePlan('preview-ws', previewManifest(manifest()));
+        const plan = previewSitePlan('preview-ws', previewManifest(manifest()), 'staging');
 
         // The ADDRESS is the dotted, collision-proof one. The site's NAME is not:
         // a dev site's name must be a single DNS label (`sanitizeDevSitePatch`
@@ -216,6 +248,7 @@ describe('previewSitePlan', () => {
             previewManifest(
                 manifest({ frontend: { repo: 'web', serve: { mode: 'static', root: '.' } } }),
             ),
+            'staging',
         );
 
         expect(plan.site.hostServe).toEqual({ mode: 'static', root: 'web' });
@@ -225,6 +258,7 @@ describe('previewSitePlan', () => {
         const plan = previewSitePlan(
             'preview-ws',
             previewManifest(manifest({ frontend: { serve: { mode: 'static', root: 'public' } } })),
+            'staging',
         );
 
         expect(plan.site.repo).toBe('');
@@ -239,6 +273,7 @@ describe('previewSitePlan', () => {
                     frontend: { repo: 'web', serve: { mode: 'static', root: 'dist', spa: true } },
                 }),
             ),
+            'staging',
         );
 
         expect(plan.site.hostServe).toEqual({ mode: 'static', root: 'web/dist', spa: true });
@@ -254,6 +289,7 @@ describe('previewSitePlan', () => {
             previewManifest(
                 manifest({ frontend: { repo: 'web', serve: { mode: 'proxy', hostPort: 5173 } } }),
             ),
+            'staging',
         );
 
         expect(plan.site.hostServe).toBeUndefined();
@@ -269,6 +305,7 @@ describe('previewSitePlan', () => {
         const plan = previewSitePlan(
             'preview-ws',
             previewManifest(manifest({ frontend: { repo: 'web', serve: { mode: 'static', root: 'dist' }, browserExposed: true } })),
+            'staging',
         );
 
         expect(plan.site.browserExposed).toBeUndefined();

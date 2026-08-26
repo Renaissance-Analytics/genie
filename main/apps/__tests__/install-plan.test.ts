@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { appCopyPlan, appInstallPlan } from '../install-plan';
+import path from 'path';
+import {
+    ENVELOPE_MARKER,
+    appCopyPlan,
+    appInstallPlan,
+    componentSourceDir,
+    gappSourceLayout,
+} from '../install-plan';
 import { validateAppManifest, type AppManifest } from '../manifest';
 import { parseDevSitesValue } from '../../dev-server/sites-config';
 
@@ -226,5 +233,52 @@ describe('what gets copied into the workspace', () => {
         // the copier: files would land on the machine that no consent screen ever
         // described.
         expect(appCopyPlan(manifest()).envelopePaths).not.toContain('.agents');
+    });
+});
+
+describe('where a component sits in the SOURCE folder', () => {
+    const FOLDER = 'C:/src/app';
+    const has = (...present: string[]) => {
+        const set = new Set(present.map((p) => path.normalize(p)));
+        return (p: string) => set.has(path.normalize(p));
+    };
+
+    it('reads a folder with a project.json as the envelope it is', () => {
+        // Not a folder that will BECOME an envelope on install — one that already
+        // is one, which is what a GApp Development Workspace is.
+        const layout = gappSourceLayout(FOLDER, has(path.join(FOLDER, ENVELOPE_MARKER)));
+
+        expect(layout).toBe('envelope');
+        expect(componentSourceDir(FOLDER, layout, 'web')).toBe(
+            path.join(FOLDER, 'repos', 'web'),
+        );
+    });
+
+    it('reads a folder without one as the staging folder the scaffold writes', () => {
+        const layout = gappSourceLayout(FOLDER, has(path.join(FOLDER, 'web')));
+
+        expect(layout).toBe('staging');
+        expect(componentSourceDir(FOLDER, layout, 'web')).toBe(path.join(FOLDER, 'web'));
+    });
+
+    it('decides from the MARKER, not from wherever the component happens to be', () => {
+        // The rule the whole fix rests on. Resolving by "try both and take what
+        // exists" cannot say where a MISSING component should have been — it only
+        // learns it was in neither — so the advice it produces is guesswork. Here an
+        // envelope whose component sits flat still resolves to `repos/`, and the
+        // developer is told the one place their layout keeps components.
+        const envelopeWithStrayFlatFolder = has(
+            path.join(FOLDER, ENVELOPE_MARKER),
+            path.join(FOLDER, 'web'),
+        );
+
+        expect(
+            componentSourceDir(FOLDER, gappSourceLayout(FOLDER, envelopeWithStrayFlatFolder), 'web'),
+        ).toBe(path.join(FOLDER, 'repos', 'web'));
+    });
+
+    it('leaves a component-less app on the folder itself, in either layout', () => {
+        expect(componentSourceDir(FOLDER, 'envelope', undefined)).toBe(FOLDER);
+        expect(componentSourceDir(FOLDER, 'staging', undefined)).toBe(FOLDER);
     });
 });
