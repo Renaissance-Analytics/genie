@@ -14,6 +14,7 @@ import {
     pathWithToolsFirst,
     type ToolchainPathReport,
 } from './toolchain-primitives';
+import { writeCaBundle } from './toolchain-ca';
 import { createToolchainPerformDeps } from './toolchain-effects';
 import { createPerformInstall } from './toolchain-perform';
 import { runInstallPlan, type PerformInstall } from './toolchain-install';
@@ -681,12 +682,20 @@ export function staleManagedInis(input: {
     installs: EngineInstall[];
     platform: string;
     read: (path: string) => string;
+    /** The CA bundle for this install, or null when none could be produced. The
+     *  ini names `curl.cainfo`/`openssl.cafile` only when there is one — pointing
+     *  at a missing file swaps errno 60 for errno 77 and fixes nothing. */
+    bundleFor?: (versionDir: string) => string | null;
 }): Array<{ path: string; contents: string }> {
     const out: Array<{ path: string; contents: string }> = [];
     for (const install of input.installs) {
         if (install.source !== 'genie' || install.tool !== 'php') continue;
         const path = joinFor(input.platform, install.dir, 'php.ini');
-        const wanted = phpIniContents(install.dir, input.platform);
+        const wanted = phpIniContents(
+            install.dir,
+            input.platform,
+            input.bundleFor?.(install.dir) ?? null,
+        );
         let current: string | null = null;
         try {
             current = input.read(path);
@@ -850,10 +859,20 @@ export async function repairToolchainPath(
 async function refreshManagedInis(): Promise<string[]> {
     const written: string[] = [];
     try {
+        const installs = await machineInstalls({});
+        // The bundle FIRST, so the ini can name a file that is already there.
+        // Genie's PHP shipped with no CA bundle at all, so every hosted PHP site
+        // failed every outbound HTTPS request (errno 60) — see toolchain-ca.ts.
+        const bundles = new Map<string, string | null>();
+        for (const install of installs) {
+            if (install.source !== 'genie' || install.tool !== 'php') continue;
+            bundles.set(install.dir, await writeCaBundle(install.dir, process.platform));
+        }
         const stale = staleManagedInis({
-            installs: await machineInstalls({}),
+            installs,
             platform: process.platform,
             read: (p) => fsSync.readFileSync(p, 'utf8'),
+            bundleFor: (dir) => bundles.get(dir) ?? null,
         });
         for (const file of stale) {
             try {

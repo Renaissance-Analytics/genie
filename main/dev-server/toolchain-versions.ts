@@ -532,6 +532,50 @@ export const PHP_INI_EXTENSIONS: readonly string[] = [
  */
 export const PHP_REQUIRED_MODULES: readonly string[] = PHP_INI_EXTENSIONS;
 
+/** One trust anchor, as read out of the machine's root store. */
+export interface CaRoot {
+    subject: string;
+    /** The certificate's raw DER, base64 — exactly what goes between the PEM
+     *  armour lines. */
+    der: string;
+}
+
+/**
+ * PURE. A `cacert.pem` built from the machine's root store.
+ *
+ * Returns '' for an empty list, and the caller must not write that: an empty
+ * bundle is WORSE than none. curl opens it, finds no issuer, and fails with the
+ * same errno 60 — but the ini now claims a bundle is configured, so the next
+ * person to look stops there.
+ *
+ * Each subject rides along as a comment. "Which roots does this actually trust"
+ * is the first question when a handshake fails behind a TLS-inspecting proxy,
+ * and a file of anonymous base64 cannot answer it.
+ */
+export function caBundleText(roots: CaRoot[]): string {
+    if (roots.length === 0) return '';
+    const lines: string[] = [
+        "# Genie-managed CA bundle - exported from this machine's root store.",
+        '# Rebuilt on install and by Settings -> Toolchain -> Check and repair.',
+        '',
+    ];
+    for (const root of roots) {
+        lines.push(`# ${root.subject}`);
+        lines.push('-----BEGIN CERTIFICATE-----');
+        // 64-char lines: PEM's own wrapping, and what every parser expects.
+        lines.push((root.der.match(/.{1,64}/g) ?? [root.der]).join('\n'));
+        lines.push('-----END CERTIFICATE-----');
+        lines.push('');
+    }
+    return lines.join('\n');
+}
+
+/** Where a version's CA bundle lives: BESIDE its binary, so Remove takes it with
+ *  the install and two PHP versions never share one. */
+export function caBundlePath(versionDir: string, platform: string): string {
+    return joinFor(platform, versionDir, 'cacert.pem');
+}
+
 /**
  * The `php.ini` Genie writes into a version's directory.
  *
@@ -540,7 +584,14 @@ export const PHP_REQUIRED_MODULES: readonly string[] = PHP_INI_EXTENSIONS;
  * also the reason Genie does not borrow Herd's php — Herd's ini is Herd's to
  * rewrite, and a site whose config can change underneath it is not reproducible.
  */
-export function phpIniContents(versionDir: string, platform: string): string {
+export function phpIniContents(
+    versionDir: string,
+    platform: string,
+    /** Path to a CA bundle that EXISTS, or null. Null leaves both cert settings
+     *  unset — which reproduces the old behaviour exactly, and is right: naming a
+     *  file that is not there swaps errno 60 for errno 77 and fixes nothing. */
+    caBundle: string | null = null,
+): string {
     const extDir = joinFor(platform, versionDir, 'ext');
     const lines = [
         '; Genie-managed php.ini — rewritten when Genie reinstalls this version.',
@@ -550,6 +601,30 @@ export function phpIniContents(versionDir: string, platform: string): string {
         '',
         ...PHP_INI_EXTENSIONS.map((e) => `extension=${e}`),
         '',
+        // The Windows PHP zip ships NO CA bundle, and its compiled-in default
+        // points at `C:\Program Files\Common Files\SSL/cert.pem`, which does not
+        // exist. Without these two lines every outbound HTTPS request from a
+        // hosted site fails — errno 60, "unable to get local issuer certificate"
+        // — to EVERY host, not just one provider.
+        //
+        // Both are set, though only `curl.cainfo` is load-bearing on the build
+        // Genie ships: measured with no bundle at all, curl fails errno 60 while
+        // `file_get_contents('https://…')` still reaches the host. `openssl.cafile`
+        // pins every other openssl consumer to the SAME anchors rather than
+        // leaving that to whichever build detail happens to rescue it.
+        //
+        // Absent when Genie could not build a bundle: naming a file that is not
+        // there is errno 77 instead, which fixes nothing and hides the cause.
+        ...(caBundle
+            ? [
+                  "; Trust anchors, exported from THIS machine's root store - so a",
+                  "; corporate proxy's roots are included, which a shipped bundle",
+                  '; would miss. Rebuilt on install and by Check and repair.',
+                  `curl.cainfo = "${caBundle}"`,
+                  `openssl.cafile = "${caBundle}"`,
+                  '',
+              ]
+            : []),
         '; opcache is OFF, and that is a fix rather than an omission.',
         '; `zend_extension=opcache` + `opcache.enable=1` makes php-cgi.exe DIE at',
         '; startup on Windows — "Fatal Error Opcode handlers are unusable due to',
