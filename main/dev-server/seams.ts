@@ -33,6 +33,58 @@ import type {
 /** Cap what we keep from a chatty command — this output exists to explain. */
 const OUTPUT_TAIL_LIMIT = 8_000;
 
+/** What a capture says when it dropped bytes — the stable PREFIX, so a consumer
+ *  can test for it with `includes()` while the marker still carries the byte
+ *  counts after it. Distinctive enough not to be mistaken for a command's own
+ *  output. */
+export const TRUNCATION_MARKER = '[genie: output truncated';
+
+/**
+ * PURE. Append a chunk, keeping the TAIL — and SAY SO when bytes were dropped
+ * (genie#280).
+ *
+ * Keeping the tail is right for what this cap exists for: `seams.ts` describes
+ * output that "exists to explain", and for error text the last lines are the
+ * useful ones. The defect was that nothing distinguished *explain* from
+ * *capture*, so a caller collecting DATA got the same truncation with no signal.
+ *
+ * It bit for real: the CA-bundle export printed ~130KB of PEM to stdout, this
+ * kept its tail, and 4 roots out of 80 survived — exit 0, a syntactically valid
+ * PEM on disk, tests green. A bundle missing 95% of its anchors, presented as a
+ * success.
+ *
+ * Front-truncation is the worst direction for precisely that reason: structured
+ * output carries its header or opening delimiter first, so dropping the front
+ * destroys the part that would have made the corruption detectable. Truncated
+ * JSON fails to parse and gets caught; truncated PEM stays valid and does not.
+ *
+ * A MARKER rather than a bigger buffer. Any buffer is the wrong size eventually,
+ * and raising it turns a reliable failure into a rare one, which is worse.
+ *
+ * The marker sits at the FRONT, where the hole is, and never displaces the
+ * newest bytes — the tail is the whole point of the cap, and a marker that
+ * pushed real output out of the window would trade one silent loss for another.
+ */
+export function appendCapped(current: string, chunk: string, limit: number): string {
+    // Recover the running total from a marker already present, so N chunks
+    // produce ONE marker carrying the CUMULATIVE loss rather than one marker
+    // each and a count that means nothing.
+    const prior = current.match(/^\[genie: output truncated — (\d+) bytes dropped[^\]]*\]\n/);
+    const priorDropped = prior ? Number(prior[1]) : 0;
+    const body = prior ? current.slice(prior[0].length) : current;
+
+    const joined = body + chunk;
+    if (joined.length <= limit) {
+        return priorDropped > 0 ? markerFor(priorDropped) + joined : joined;
+    }
+    const dropped = priorDropped + (joined.length - limit);
+    return markerFor(dropped) + joined.slice(-limit);
+}
+
+function markerFor(dropped: number): string {
+    return `${TRUNCATION_MARKER} — ${dropped} bytes dropped from the START; only the most recent output is kept]\n`;
+}
+
 /**
  * A container CLI call that has not answered by now is wedged, not slow.
  * Generous, because a first `run` may be extracting a large image layer.
@@ -126,11 +178,11 @@ function runCaptured(
             };
 
             child.stdout?.on('data', (chunk) => {
-                stdout = (stdout + String(chunk)).slice(-OUTPUT_TAIL_LIMIT);
+                stdout = appendCapped(stdout, String(chunk), OUTPUT_TAIL_LIMIT);
                 sawOutput();
             });
             child.stderr?.on('data', (chunk) => {
-                stderr = (stderr + String(chunk)).slice(-OUTPUT_TAIL_LIMIT);
+                stderr = appendCapped(stderr, String(chunk), OUTPUT_TAIL_LIMIT);
                 sawOutput();
             });
             child.on('error', (e) => finish({ code: null, stdout, stderr: String(e) }));
