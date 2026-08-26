@@ -1,3 +1,4 @@
+import { writeCaBundle } from './toolchain-ca';
 import {
     LANGUAGE_LABELS,
     SOURCE_LABELS,
@@ -357,7 +358,18 @@ export async function installEngineVersion(
         }
 
         if (plan.configFile) {
-            await fx.writeFile(plan.configFile.path, plan.configFile.body);
+            // The CA bundle BEFORE the ini, so the ini names a file that already
+            // exists. Genie's PHP shipped with no bundle and no cert settings, so
+            // every outbound HTTPS request from a hosted site failed with errno
+            // 60 against every host — see `toolchain-ca.ts`. Null (posix, or an
+            // export that did not work) leaves both settings unset, which is
+            // exactly the old behaviour rather than a worse one.
+            const caBundle =
+                plan.tool === 'php' ? await writeCaBundle(plan.dir, process.platform) : null;
+            const body = caBundle
+                ? phpIniContents(plan.dir, process.platform, caBundle)
+                : plan.configFile.body;
+            await fx.writeFile(plan.configFile.path, body);
         }
 
         // The install is only real once the binary Genie will spawn answers — and
