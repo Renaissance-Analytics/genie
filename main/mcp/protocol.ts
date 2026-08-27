@@ -1,3 +1,4 @@
+import { guideTopics, guideIndex, guideFor } from './guide-topics';
 /**
  * Minimal MCP (Model Context Protocol) JSON-RPC handler — just enough to host
  * Genie's agent-integration tools over HTTP without pulling the full SDK. Kept
@@ -1665,10 +1666,17 @@ const CHECK_ENV_TOOL = {
 const GUIDE_TOOL = {
     name: 'genieGuide',
     description:
-        'Return the running Genie version, then the full usage guide for the Genie MCP server (what each tool does, when to use it, and the zero-setup per-terminal contract). Call this to answer "what Genie version am I on", or when you want details beyond the brief in AGENTS.md.',
+        'Genie’s guide, as a CATALOGUE. With NO arguments it returns the running Genie version and a LIST OF TOPICS — one line each, cheap to read. Pass `topic` to read just that guide. Ask for what you need rather than reading everything: the guide is long and more are being added. Use it to answer "what Genie version am I on", to look up how one tool works, or — if you are an agent that predates it — read `topic: "migrating-to-ams"` for what changed in the Agent Management System.',
     inputSchema: {
         type: 'object',
-        properties: { ...TERMINAL_ID_PROP },
+        properties: {
+            ...TERMINAL_ID_PROP,
+            topic: {
+                type: 'string',
+                description:
+                    'The topic id to read, from the listing this returns with NO arguments (e.g. "imdone", "managesite", "migrating-to-ams"). Omit it to get that listing.',
+            },
+        },
         additionalProperties: false,
     },
 };
@@ -3403,13 +3411,20 @@ export async function handleMcpMessage(
                 // The version otherwise only reaches an agent through `initialize`'s
                 // serverInfo, which most harnesses swallow. Lead with it so asking
                 // the guide also answers "which Genie build am I on".
+                const head = `Genie version: ${ctx.serverVersion}`;
+                const topics = guideTopics(GENIE_MCP_GUIDE);
+                const requested = (params.arguments as { topic?: unknown } | undefined)?.topic;
+                // No topic means the CATALOGUE, not the whole guide: an agent that
+                // wanted one tool used to pay for every tool's documentation to
+                // find it, which made the guide something to avoid.
+                const body =
+                    typeof requested === 'string' && requested.trim()
+                        ? guideFor(topics, requested).text
+                        : guideIndex(topics);
                 return ok(msg.id, {
-                    content: [
-                        {
-                            type: 'text',
-                            text: `Genie version: ${ctx.serverVersion}\n\n${GENIE_MCP_GUIDE}`,
-                        },
-                    ],
+                    content: [{ type: 'text', text: `${head}
+
+${body}` }],
                 });
             }
             if (isConnectToGenieName(params.name)) {

@@ -663,6 +663,46 @@ host check (Django's \`ALLOWED_HOSTS\`, Vite's \`allowedHosts\`) can reject the
 \`upstreamHost:'localhost'\`. Host-native dev needs NO runtime; a sandbox
 (\`explicit\`) site and the services need Docker or Podman.
 
+## Migrating to AMS (the Agent Management System)
+
+**Read this if you are an agent that existed before AMS.** The way agents are
+defined, started and reached has changed, and some of what you were told at boot
+is no longer true.
+
+**What changed**
+
+- Every workspace now has a **Workspace Agent (TWA)** by default. Its terminal is
+  the one that drives most work there, and TWA is the master of the agents it
+  spawns in that workspace.
+- An agent is no longer just a system prompt. It has a **name**, a **stated
+  purpose**, and an optional **avatar** — identity, not prompt text.
+- Specialized agents boot from \`.agents/{agent-slug}/AGENT.md\`, from the
+  workspace root unless configured otherwise (and that folder must be inside the
+  workspace).
+- **All agents resume where they left off.** A restart is not a fresh start.
+- **Workspace channels are GONE.** Messaging is agent-to-agent only. If you were
+  broadcasting to a channel, address the agents directly — group chats return as
+  their own feature, not as channels renamed.
+- Reachability is **per agent**, default on, because some agents are private to a
+  workspace or a GApp. Nudging is always on.
+- Address a peer by TAG, not by uuid: \`claude:tynn\`, or
+  \`{workspace}:{provider}:{name}\` for another workspace. \`list\` prints
+  the tag for every peer.
+
+**What to do**
+
+1. Stop holding a peer's \`agentId\`. Resolve the tag at call time with
+   \`list\` — an id lives on the TERMINAL spec and does not survive that
+   terminal being replaced, silently.
+2. Stop using \`channel\` on \`agentinbox send\`. Name the agents you mean.
+3. If you relied on a fresh context each launch, stop — you will resume.
+4. Read \`AGENTS.md\` in your workspace. It is now the pristine file Genie
+   manages; \`CLAUDE.md\` is an \`@AGENTS.md\` import rather than a second
+   copy, so the two can no longer disagree.
+
+**What has NOT changed:** you are still a terminal-based agent in a terminal
+panel, and \`imDone\` / \`ForceTheQuestion\` work exactly as before.
+
 ## Rule of thumb
 If you would otherwise stop and wait for the user — **finished**, **blocked**, or
 **need a decision** — reach for these tools first. In a multi-terminal,

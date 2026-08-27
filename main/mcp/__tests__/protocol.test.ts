@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { GENIE_MCP_GUIDE } from '../guide';
 import {
     MCP_PROTOCOL_VERSION,
     handleMcpMessage,
@@ -1211,24 +1212,43 @@ describe('handleMcpMessage', () => {
         );
         const text = (call?.result as { content: Array<{ text: string }> }).content[0]
             .text;
+
+        // `genieGuide` with no arguments is now the CATALOGUE (owner, 2026-08-26):
+        // topic ids and titles, no bodies. It still NAMES every tool — that is what
+        // makes the listing usable — so the "is this documented" guarantees below
+        // hold, and are asserted against the listing.
         expect(text).toContain('imDone');
         expect(text).toContain('ForceTheQuestion');
-        expect(text).not.toContain('tynn-cli');
-        expect(text).not.toContain('resetme');
-        // The full guide tells the agent how to self-configure an on-finish hook.
-        expect(text).toContain('Automate imDone');
-        expect(text).toContain('Stop');
-        expect(text).toContain('$GENIE_MCP_URL');
-        // Documents the process tool + frames connectToGenie as a user-run prompt.
         expect(text).toContain('manageProcess');
-        expect(text).toMatch(/connectToGenie[\s\S]*prompt/);
-        // Documents the agent-control tools.
         expect(text).toContain('manageTerminals');
         expect(text).toContain('runAgent');
         expect(text).toContain('manageWorkspaces');
-        // Documents the IssueWatch tool + that imDone reports counts.
         expect(text).toContain('checkIssues');
-        expect(text).toMatch(/imDone[\s\S]*IssueWatch/);
+        expect(text).not.toContain('tynn-cli');
+        expect(text).not.toContain('resetme');
+
+        // The CONTENT guarantees move to a TOPIC fetch. They used to live on
+        // `initialize`, which carried the whole guide -- it now carries the 3KB
+        // protocol brief instead, so the full text lives behind `genieGuide`
+        // and that is where these are checked. Nothing that was checked before
+        // has stopped being checked; it is checked where the text now is.
+        const hooks = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 91,
+                method: 'tools/call',
+                params: { name: 'genieGuide', arguments: { topic: 'automate-imdone' } },
+            },
+            ctx(),
+        );
+        const full = (hooks?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(full).toContain('Automate imDone');
+        expect(full).toContain('Stop');
+        expect(full).toContain('$GENIE_MCP_URL');
+        // These two live in OTHER topics, so they are checked against the whole
+        // guide the catalogue is built from rather than this one topic's body.
+        expect(GENIE_MCP_GUIDE).toMatch(/connectToGenie[\s\S]*prompt/);
+        expect(GENIE_MCP_GUIDE).toMatch(/imDone[\s\S]*IssueWatch/);
     });
 
     it('invokes onImDone with the bound terminal id on tools/call', async () => {

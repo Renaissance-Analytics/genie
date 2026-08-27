@@ -874,7 +874,7 @@ const CLAUDE_SECTION = '## Claude Code';
  * to own outright. Any managed protocol block found in it is REMOVED — that is
  * the migration, and leaving it would leave exactly the staleness being fixed.
  */
-export function claudeMdPointer(existing: string): string {
+export function claudeMdPointer(existing: string, agentsBody?: string): string {
     // Strip a previously-managed protocol block wherever it sits.
     let body = existing;
     const begin = body.indexOf(AGENTS_BEGIN);
@@ -887,6 +887,32 @@ export function claudeMdPointer(existing: string): string {
         .split('\n')
         .filter((line) => line.trim() !== CLAUDE_MD_IMPORT)
         .join('\n');
+
+    // DROP what AGENTS.md already says. The previous design kept the two files
+    // BYTE-IDENTICAL, so on a workspace Genie was already managing, "the rest" is
+    // not a human's Claude-specific content — it is a copy of AGENTS.md. Keeping
+    // it made Claude Code load the same words twice, which is what shipped in
+    // beta.271 (measured here: 168 lines, 98.8% identical).
+    //
+    // Line-wise rather than whole-file, so a human's ONE Claude-specific note
+    // survives inside an otherwise-mirrored file. Without an AGENTS.md to compare
+    // against, nothing is provably duplicated and everything is kept — dropping
+    // would be guessing with someone's file.
+    if (agentsBody) {
+        const theirs = new Set(
+            agentsBody
+                .split('\n')
+                .map((l) => l.trim())
+                .filter((l) => l.length > 0),
+        );
+        body = body
+            .split('\n')
+            .filter((l) => {
+                const t = l.trim();
+                return t.length === 0 || !theirs.has(t);
+            })
+            .join('\n');
+    }
 
     const kept = body.trim();
     return kept
@@ -1093,7 +1119,7 @@ function syncAgentsMd(workspacePath: string, enabled: boolean): void {
         // that is no longer there.
         const next =
             t.harness === 'claude' && enabled
-                ? claudeMdPointer(t.existing)
+                ? claudeMdPointer(t.existing, read.find((r) => r.harness === 'codex')?.existing)
                 : applyAgentsSection(t.existing, enabled, aiSystem, t.harness);
         if (next === t.existing) continue;
         try {
