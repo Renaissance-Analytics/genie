@@ -261,8 +261,8 @@ export function seedMasterE2E(): MasterSeed {
          * a reader can only take to mean the terminal in front of them, while the
          * notice had gone to the addressee in another workspace.
          */
-        announceInboxIncoming: (id: string, landed: boolean) =>
-            announceInboxIncoming(id, landed),
+        announceInboxIncoming: (id: string, landed: boolean, pending?: boolean) =>
+            announceInboxIncoming(id, landed, pending),
     };
     return seed;
 }

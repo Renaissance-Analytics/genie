@@ -463,11 +463,12 @@ export async function announceInboxIncoming(
     app: ElectronApplication,
     terminalId: string,
     landed: boolean,
+    pending = true,
 ): Promise<void> {
     await app.evaluate((_e, arg) => {
         const h = (globalThis as Record<string, any>).__GENIE_E2E_MASTER__;
-        h?.announceInboxIncoming?.(arg.terminalId, arg.landed);
-    }, { terminalId, landed });
+        h?.announceInboxIncoming?.(arg.terminalId, arg.landed, arg.pending);
+    }, { terminalId, landed, pending });
 }
 
 /**
