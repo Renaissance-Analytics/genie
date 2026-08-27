@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { pickPath } from '../FilePickerModal';
 import { Input, Select } from '@particle-academy/react-fancy';
@@ -75,6 +75,7 @@ interface Props {
     activeIds: Set<string>;
     /** Agent-integration MCP: terminals pulsing for attention (imDone). */
     attentionIds: Set<string>;
+    pendingNudgeWorkspaceIds?: Set<string>;
     activeWorkspaceId: string | null;
     pinned: boolean;
     onTogglePin: () => void;
@@ -160,6 +161,7 @@ export default function Chooser({
     selected,
     activeIds,
     attentionIds,
+    pendingNudgeWorkspaceIds = new Set(),
     activeWorkspaceId,
     pinned,
     onTogglePin,
@@ -1140,10 +1142,14 @@ export default function Chooser({
                                         COLLAPSED workspaces only; an expanded one
                                         shows its terminals' own per-row lights. */}
                                     {collapsed && (
-                                        <AgentPulseSparkline
-                                            ring={pulseRings.current.get(ws.id)}
-                                            active={activeWs.has(ws.id)}
-                                        />
+                                        pendingNudgeWorkspaceIds.has(ws.id) ? (
+                                            <AgentNudgeQuestions />
+                                        ) : (
+                                            <AgentPulseSparkline
+                                                ring={pulseRings.current.get(ws.id)}
+                                                active={activeWs.has(ws.id)}
+                                            />
+                                        )
                                     )}
                                     <span
                                         className="chev"
@@ -2311,5 +2317,15 @@ function AgentPulseSparkline({ ring, active }: { ring?: number[]; active: boolea
             <polygon className="aps-fill" points={area} />
             <polyline className="aps-line" points={line} />
         </svg>
+    );
+}
+
+function AgentNudgeQuestions() {
+    return (
+        <span className="agent-nudge-questions" aria-hidden="true">
+            {['?', '?', '?', '?', '?', '?'].map((mark, i) => (
+                <i key={i} style={{ '--nq': i } as CSSProperties}>{mark}</i>
+            ))}
+        </span>
     );
 }

@@ -5,7 +5,6 @@ import {
     previewText,
     AGENTINBOX_HUMAN,
     type AgentInboxAgentInfo,
-    type AgentInboxAgentType,
     type AgentInboxAttachment,
     type AgentInboxBrokerEvent,
     type AgentInboxChannelInfo,
@@ -112,13 +111,17 @@ interface AgentInboxAgent extends Omit<AgentInboxAgentInfo, 'reachable' | 'ref'>
  */
 export interface NudgeDelivery {
     terminalId: string;
-    /** The target TUI decides which byte sequence means a submitting Enter. */
-    agentType: AgentInboxAgentType;
+    /** Exact bytes this terminal last emitted for a real submitting Enter. */
+    submitBytes: string;
     /** The notice itself. */
     text: string;
-    /** How it may be delivered — see {@link planNudge}. `append` means it must
-     *  NOT be submitted, and the person gets a toast instead. */
+    /** How it may be delivered — see {@link planNudge}. */
     plan: NudgePlan;
+}
+
+export interface PendingNudgeChange {
+    terminalId: string;
+    pending: boolean;
 }
 
 /** Normalise a DM pair into a stable, order-independent log key. */
@@ -204,11 +207,37 @@ export class AgentInboxBroker {
      *  Returns false when the host could NOT deliver — most often because a swap
      *  is already in flight on that terminal — so the caller can fall back. */
     private wakeSink: ((d: NudgeDelivery) => boolean | void) | null = null;
+    private pendingNudges = new Map<string, { text: string }>();
+    private pendingNudgeSink: ((d: PendingNudgeChange) => void) | null = null;
     /** Clock — injectable so wake-on-DM idle timing is deterministically testable. */
     private now: () => number = () => Date.now();
 
     setWakeSink(fn: (d: NudgeDelivery) => boolean | void): void {
         this.wakeSink = fn;
+    }
+
+    setPendingNudgeSink(fn: (d: PendingNudgeChange) => void): void {
+        this.pendingNudgeSink = fn;
+    }
+
+    sendPendingNudge(terminalId: string): { ok: boolean; reason?: 'none' | 'input-not-empty' | 'delivery-failed' } {
+        const pending = this.pendingNudges.get(terminalId);
+        const target = this.agentForTerminal(terminalId);
+        if (!pending || !target || !this.wakeSink) return { ok: false, reason: 'none' };
+        if (planNudge(target.draft).mode !== 'submit') {
+            return { ok: false, reason: 'input-not-empty' };
+        }
+        try {
+            if (this.wakeSink({ terminalId, submitBytes: target.draft.submitBytes, text: pending.text, plan: { mode: 'submit' } }) === false) {
+                return { ok: false, reason: 'delivery-failed' };
+            }
+        } catch {
+            return { ok: false, reason: 'delivery-failed' };
+        }
+        this.pendingNudges.delete(terminalId);
+        target.lastWokenAt = this.now();
+        this.pendingNudgeSink?.({ terminalId, pending: false });
+        return { ok: true };
     }
 
     /**
@@ -328,25 +357,25 @@ export class AgentInboxBroker {
             priority: msg.interrupt ? 'high' : 'normal',
         });
         const plan = planNudge(target.draft);
+        if (plan.mode === 'defer') {
+            this.pendingNudges.set(target.terminalId, {
+                text,
+            });
+            this.pendingNudgeSink?.({ terminalId: target.terminalId, pending: true });
+            return true;
+        }
         try {
             // The host refuses when a swap is already in flight on this terminal —
             // two notices must never both cut the same box.
             if (
                 this.wakeSink({
                     terminalId: target.terminalId,
-                    agentType: target.agentType,
+                    submitBytes: target.draft.submitBytes,
                     text,
                     plan,
                 }) === false
             ) {
                 return false;
-            }
-            if (plan.mode === 'append') {
-                // Appended, not submitted: the notice is now sitting in the box
-                // behind their draft, so Genie no longer knows what is in there —
-                // and no turn was started, so this is NOT a wake.
-                target.draft = { ...target.draft, confident: false };
-                return true;
             }
             // Submitting text to an idle TUI IS what starts a turn, so a delivered
             // notice is also the wake — the caller skips maybeWake and the agent
@@ -395,7 +424,7 @@ export class AgentInboxBroker {
             // Provably idle, so the box is empty: submit it and start the turn.
             this.wakeSink({
                 terminalId: target.terminalId,
-                agentType: target.agentType,
+                submitBytes: target.draft.submitBytes,
                 text: wakeNudgeText(unread),
                 plan: planNudge(target.draft),
             });
@@ -428,11 +457,12 @@ export class AgentInboxBroker {
             now: this.now(),
         });
         if (!wake) return false;
+        if (planNudge(a.draft).mode !== 'submit') return false;
         a.lastWokenAt = this.now();
         try {
             this.wakeSink({
                 terminalId,
-                agentType: a.agentType,
+                submitBytes: a.draft.submitBytes,
                 text,
                 plan: planNudge(a.draft),
             });
@@ -758,6 +788,9 @@ export class AgentInboxBroker {
         this.settleWaiter(a);
         this.agents.delete(agentId);
         this.byTerminal.delete(a.terminalId);
+        if (this.pendingNudges.delete(a.terminalId)) {
+            this.pendingNudgeSink?.({ terminalId: a.terminalId, pending: false });
+        }
         this.emit({ type: 'offline', agentId });
         // A departed agent's backlog is no longer chaseable — drop it from the lag.
         this.emitLagIfChanged();

@@ -1974,6 +1974,34 @@ button.iw-feedback-note.as-link:hover {
     stroke-linejoin: round;
     stroke-linecap: round;
 }
+.agent-nudge-questions {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    overflow: hidden;
+    pointer-events: none;
+    color: color-mix(in srgb, var(--agent) 72%, transparent);
+}
+.agent-nudge-questions i {
+    --nq: 0;
+    position: absolute;
+    left: calc(9% + var(--nq) * 16%);
+    top: 22%;
+    font: 700 14px / 1 ui-monospace, monospace;
+    font-style: normal;
+    opacity: 0;
+    animation: agent-nudge-question 2.2s ease-in-out infinite;
+    animation-delay: calc(var(--nq) * -310ms);
+}
+.agent-nudge-questions i:nth-child(2) { top: 52%; font-size: 20px; }
+.agent-nudge-questions i:nth-child(3) { top: 12%; font-size: 11px; }
+.agent-nudge-questions i:nth-child(4) { top: 46%; font-size: 17px; }
+.agent-nudge-questions i:nth-child(5) { top: 28%; font-size: 23px; }
+.agent-nudge-questions i:nth-child(6) { top: 58%; font-size: 12px; }
+@keyframes agent-nudge-question {
+    0%, 100% { opacity: 0; transform: scale(0.65) translateY(4px); }
+    45% { opacity: 0.9; transform: scale(1.15) translateY(-2px); }
+}
 /* Keep the row's own content above the sparkline background. */
 .tproj > .tproj-head,
 .tproj > .tproj-body {
@@ -2878,6 +2906,35 @@ body.gutter-dragging .grid-gutter {
        FitAddon picks up the .tpanel size and the canvas renders flush
        to the panel chrome. */
     display: flex;
+}
+.terminal-nudge-notice {
+    position: absolute;
+    z-index: 8;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(520px, calc(100% - 24px));
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 10px 12px;
+    border: 1px solid color-mix(in srgb, var(--agent) 55%, transparent);
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--panel) 94%, transparent);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.42);
+    backdrop-filter: blur(14px);
+}
+.terminal-nudge-notice span { display: grid; gap: 2px; min-width: 0; }
+.terminal-nudge-notice small { color: var(--muted); }
+.terminal-nudge-notice button {
+    margin-left: auto;
+    flex: 0 0 auto;
+    border: 1px solid color-mix(in srgb, var(--agent) 58%, transparent);
+    border-radius: var(--radius-sm);
+    padding: 6px 10px;
+    background: var(--agent-soft);
+    color: var(--text);
+    cursor: pointer;
 }
 .tpanel .term-host > div {
     flex: 1;

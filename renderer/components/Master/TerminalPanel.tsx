@@ -8,6 +8,7 @@ import {
     type ShellDetection,
     type TerminalSpec,
     type WorkspaceRow,
+    type AgentInboxIncomingNotice,
 } from '../../lib/genie';
 import type { PanelDragHandlers } from '../../lib/panel-reorder';
 
@@ -26,6 +27,8 @@ interface Props {
     focused?: boolean;
     /** Agent-integration MCP: pulse the panel border (imDone) until focused. */
     attention?: boolean;
+    pendingNudge?: AgentInboxIncomingNotice;
+    onSendPendingNudge?: (id: string) => void;
     /** Clear the attention glow when the user focuses this panel's xterm. */
     onAttentionClear?: () => void;
     maximized?: boolean;
@@ -69,6 +72,8 @@ export default function TerminalPanel({
     onDisable,
     focused,
     attention,
+    pendingNudge,
+    onSendPendingNudge,
     onAttentionClear,
     maximized,
     style,
@@ -216,6 +221,17 @@ export default function TerminalPanel({
                 </span>
             </div>
             <div className="term-host">
+                {pendingNudge && (
+                    <div className="terminal-nudge-notice" role="status" data-testid="agentinbox-incoming">
+                        <span>
+                            <strong>Nudge waiting</strong>
+                            <small>Your input is untouched. Clear or send it first.</small>
+                        </span>
+                        <button type="button" onClick={() => onSendPendingNudge?.(spec.id)}>
+                            Send nudge
+                        </button>
+                    </div>
+                )}
                 {shellOptions !== null && (
                     <Terminal
                         key={`${spec.id}:${shell.command ?? 'default'}`}

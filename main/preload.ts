@@ -1140,6 +1140,8 @@ const api = {
             text: string;
             attachments?: Array<{ filename: string; base64: string }>;
         }) => ipcRenderer.invoke('agentinbox:post', input),
+        sendPendingNudge: (terminalId: string) =>
+            ipcRenderer.invoke('agentinbox:send-pending-nudge', terminalId),
         /** An attachment's bytes, for the panel to save client-side. Reads Genie's
          *  own blob store — no filesystem egress. */
         attachmentBytes: (attachmentId: string) =>

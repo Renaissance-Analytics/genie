@@ -1543,6 +1543,9 @@ export function registerIpcHandlers(): void {
             },
         ) => postAsHuman(input),
     );
+    ipcMain.handle('agentinbox:send-pending-nudge', (_e, terminalId: string) =>
+        agentInboxBroker.sendPendingNudge(String(terminalId)),
+    );
     // Hand an attachment's BYTES back to the panel so the human can download it.
     // Genie reads its OWN blob store here — no filesystem egress — and the client
     // saves the file, so a human on a remote window gets it on THEIR machine.

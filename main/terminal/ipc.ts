@@ -1472,6 +1472,8 @@ export interface AgentInboxIncomingPayload {
     /** Whether the notice really is in that prompt. False = it is in the inbox
      *  and nowhere else, and the toast must not say "press Enter". */
     landed: boolean;
+    /** True while the nudge is queued behind user content; false closes it. */
+    pending: boolean;
 }
 
 /**
@@ -1484,7 +1486,7 @@ export interface AgentInboxIncomingPayload {
  * not an assumption: a retained spec whose pty has exited still has a registered
  * AgentInbox agent, so a nudge to it writes nothing at all.
  */
-export function announceInboxIncoming(id: string, landed: boolean): void {
+export function announceInboxIncoming(id: string, landed: boolean, pending = true): void {
     const facts = terminalNoticeFacts(id);
     const notice = planInboxIncomingNotice({ ...facts, landed });
     const payload: AgentInboxIncomingPayload = {
@@ -1493,6 +1495,7 @@ export function announceInboxIncoming(id: string, landed: boolean): void {
         title: notice.title,
         body: notice.body,
         landed,
+        pending,
     };
     broadcastLocal('agentinbox:incoming', payload);
 }

@@ -959,7 +959,6 @@ function readPtyHostPid(): number | null {
 const nudgeIO: NudgeIO = {
     write: (terminalId, bytes) => writeToTerminal(terminalId, bytes),
     releaseHold: (terminalId) => releaseInputHold(terminalId),
-    announce: (terminalId, landed) => announceInboxIncoming(terminalId, landed),
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
 };
 
@@ -1357,12 +1356,15 @@ app.whenReady().then(async () => {
         // The broker decides WHAT to say and HOW it may land (see agentinbox/
         // draft.ts); this sink performs it. Returns false when it cannot start,
         // so the broker can fall back to the idle-only wake.
-        agentInboxBroker.setWakeSink(({ terminalId, agentType, text, plan }) => {
+        agentInboxBroker.setWakeSink(({ terminalId, submitBytes, text, plan }) => {
             // One swap per terminal: a second notice must never cut the same box
             // while the first is still putting the draft back.
             if (!beginInputHold(terminalId)) return false;
-            void deliverNudge(nudgeIO, terminalId, text, plan, agentType);
+            void deliverNudge(nudgeIO, terminalId, text, plan, submitBytes);
             return true;
+        });
+        agentInboxBroker.setPendingNudgeSink(({ terminalId, pending }) => {
+            announceInboxIncoming(terminalId, false, pending);
         });
         // AgentInbox OUTER tier: the broker asks the workspaces table who may reach
         // into a given workspace. Kept a seam so the broker stays db-free (and

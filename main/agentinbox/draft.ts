@@ -26,9 +26,8 @@
  *
  * Pure so every branch is unit-tested.
  */
-import { CR, PASTE_END, PASTE_START, PASTE_SUBMIT_DELAY_MS } from '../terminal/keystrokes';
+import { CR, PASTE_SUBMIT_DELAY_MS } from '../terminal/keystrokes';
 import { isHumanKey, tokenize } from './notify';
-import type { AgentInboxAgentType } from './types';
 
 export interface Draft {
     /** Genie's reconstruction of the box's contents. Meaningless unless
@@ -40,10 +39,13 @@ export interface Draft {
     /** An image chip is in the box. It cannot survive a text restore, so this
      *  rules out the swap even when the text is known. */
     image: boolean;
+    /** The exact bytes xterm most recently emitted for a submitting Enter in
+     *  this live terminal. Keyboard-protocol modes decide this, not provider. */
+    submitBytes: string;
 }
 
 /** A box known to be empty — the only state Genie is certain of for free. */
-export const EMPTY_DRAFT: Draft = { text: '', confident: true, image: false };
+export const EMPTY_DRAFT: Draft = { text: '', confident: true, image: false, submitBytes: CR };
 
 /** Bytes that submit or abandon the line, emptying the box: Enter (CR/LF),
  *  Ctrl-C (abort), Ctrl-U (kill line). */
@@ -64,14 +66,14 @@ const IMAGE_TRIGGERS = ['\x16', '\x1bv'];
 export function noteDraft(draft: Draft, data: string): Draft {
     if (!data) return draft;
 
-    let { text, confident, image } = draft;
+    let { text, confident, image, submitBytes } = draft;
 
     // A bracketed paste is literal content, so its body belongs in the text and
     // its markers must not be read as cursor keys. tokenize() hands the markers
     // back as escapes, so reassemble by walking the original chunk instead.
     const parts = splitPaste(data);
     if (parts) {
-        let next: Draft = { text, confident, image };
+        let next: Draft = { text, confident, image, submitBytes };
         for (const p of parts) {
             next = p.pasted
                 ? { ...next, text: next.text + p.body }
@@ -86,7 +88,9 @@ export function noteDraft(draft: Draft, data: string): Draft {
     // semantic guarantee for this model: the prompt was submitted and the box
     // is empty. Normalize only an unmodified press/repeat. Shift+Enter is a
     // newline in Codex and must keep the fail-safe closed.
-    data = normalizeSubmittingEnter(data);
+    const normalized = normalizeSubmittingEnter(data);
+    data = normalized.data;
+    if (normalized.submitBytes) submitBytes = normalized.submitBytes;
     const { literal, escapes } = tokenize(data);
 
     for (const esc of escapes) {
@@ -107,6 +111,11 @@ export function noteDraft(draft: Draft, data: string): Draft {
             text = '';
             confident = true;
             image = false;
+            // A literal CR/LF is itself the observed submit key. Ctrl-C and
+            // Ctrl-U clear the line but do not redefine Enter.
+            if (ch === '\r' || ch === '\n') {
+                submitBytes = normalized.submitBytes ?? CR;
+            }
         } else if (IMAGE_TRIGGERS.includes(ch)) {
             image = true;
             confident = false;
@@ -122,11 +131,19 @@ export function noteDraft(draft: Draft, data: string): Draft {
         }
     }
 
-    return { text, confident, image };
+    return { text, confident, image, submitBytes };
 }
 
-function normalizeSubmittingEnter(data: string): string {
-    return data.replace(/\x1b\[13(?::13){0,2}(?:;1(?::[12])?)?u/g, '\r');
+function normalizeSubmittingEnter(data: string): { data: string; submitBytes: string | null } {
+    let submitBytes: string | null = null;
+    const normalized = data.replace(
+        /\x1b\[13(?::13){0,2}(?:;1(?::[12])?)?u/g,
+        (match) => {
+            submitBytes = match;
+            return '\r';
+        },
+    );
+    return { data: normalized, submitBytes };
 }
 
 /** Split a chunk around bracketed-paste markers, or null when it has none. */
@@ -166,8 +183,7 @@ function splitPaste(data: string): { body: string; pasted: boolean }[] | null {
  */
 export type NudgePlan =
     | { mode: 'submit' }
-    | { mode: 'swap'; restore: string }
-    | { mode: 'append' };
+    | { mode: 'defer' };
 
 /** One pty write, and the pause that must precede it. */
 export interface NudgeWrite {
@@ -179,14 +195,6 @@ export interface NudgeWrite {
 /** Ctrl-A then Ctrl-K: go to the start of the line, kill to the end. Readline's
  *  genuine "select all and cut", and the closest thing to a TUI-agnostic one —
  *  it works in Claude Code, Codex, bash and zsh alike. */
-const CUT_LINE = '\x01\x0b';
-
-/** Wrap text so a TUI takes it as pasted literal content: it lands in the box
- *  and cannot submit itself, whatever it contains. */
-function bracketPaste(text: string): string {
-    return `${PASTE_START}${text}${PASTE_END}`;
-}
-
 /**
  * Turn a plan into the ordered pty writes that carry it out.
  *
@@ -200,29 +208,15 @@ function bracketPaste(text: string): string {
 export function buildNudgeSequence(
     plan: NudgePlan,
     notice: string,
-    agentType: AgentInboxAgentType = 'custom',
+    submitBytes: string = CR,
 ): NudgeWrite[] {
+    if (plan.mode === 'defer') return [];
     const gap = PASTE_SUBMIT_DELAY_MS;
-    if (plan.mode === 'append') {
-        // Appended, never submitted: the person's draft keeps the box, the
-        // notice sits behind it, and a toast tells them it is there.
-        return [{ bytes: bracketPaste(notice), delayMs: 0 }];
-    }
-    const deliver: NudgeWrite[] = [
-        { bytes: notice, delayMs: 0 },
-        // Codex enables Kitty's enhanced-keyboard protocol, where a real Enter
-        // is CSI 13 u. A legacy CR is Shift+Enter/newline there, so the notice
-        // stays parked instead of starting a turn.
-        { bytes: agentType === 'codex' ? '\x1b[13u' : CR, delayMs: gap },
-    ];
-    if (plan.mode === 'submit') return deliver;
     return [
-        { bytes: CUT_LINE, delayMs: 0 },
-        { ...deliver[0]!, delayMs: gap },
-        deliver[1]!,
-        // The draft goes back as a paste so it cannot submit itself on the way
-        // in — it may well contain the newline that started this.
-        { bytes: bracketPaste(plan.restore), delayMs: gap },
+        { bytes: notice, delayMs: 0 },
+        // Replay what xterm emitted for the last real submitting Enter. The
+        // active keyboard-protocol mode owns this encoding, not the provider.
+        { bytes: submitBytes, delayMs: gap },
     ];
 }
 
@@ -232,10 +226,7 @@ export function planNudge(draft: Draft): NudgePlan {
     // confidence may have recalled a whole command into it, and submitting then
     // would fire the person's history off as the notice's turn.
     // An image chip counts as content for the same reason.
-    if (!draft.confident || draft.image) return { mode: 'append' };
+    if (!draft.confident || draft.image) return { mode: 'defer' };
     if (draft.text === '') return { mode: 'submit' };
-    // The cut is Ctrl-A then Ctrl-K — a SINGLE-line operation. On a multi-line
-    // draft it would kill one line and leave the rest, so don't cut at all.
-    if (draft.text.includes('\n')) return { mode: 'append' };
-    return { mode: 'swap', restore: draft.text };
+    return { mode: 'defer' };
 }
