@@ -1141,16 +1141,14 @@ export default function Chooser({
                                         hovering the row no longer paints over it.
                                         COLLAPSED workspaces only; an expanded one
                                         shows its terminals' own per-row lights. */}
-                                    {collapsed && (
-                                        pendingNudgeWorkspaceIds.has(ws.id) ? (
-                                            <AgentNudgeQuestions />
-                                        ) : (
-                                            <AgentPulseSparkline
-                                                ring={pulseRings.current.get(ws.id)}
-                                                active={activeWs.has(ws.id)}
-                                            />
-                                        )
-                                    )}
+                                    {pendingNudgeWorkspaceIds.has(ws.id) ? (
+                                        <AgentNudgeQuestions />
+                                    ) : collapsed ? (
+                                        <AgentPulseSparkline
+                                            ring={pulseRings.current.get(ws.id)}
+                                            active={activeWs.has(ws.id)}
+                                        />
+                                    ) : null}
                                     <span
                                         className="chev"
                                         role="button"
