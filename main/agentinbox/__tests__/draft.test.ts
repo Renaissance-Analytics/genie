@@ -21,7 +21,12 @@ const d = (over: Partial<Draft> = {}): Draft => ({ ...EMPTY_DRAFT, ...over });
 
 describe('noteDraft — modelling plain typing', () => {
     it('starts empty, confident, and imageless', () => {
-        expect(EMPTY_DRAFT).toEqual({ text: '', confident: true, image: false });
+        expect(EMPTY_DRAFT).toEqual({
+            text: '',
+            confident: true,
+            image: false,
+            submitBytes: '\r',
+        });
     });
 
     it('accumulates typed characters', () => {
@@ -147,7 +152,18 @@ describe('noteDraft — confidence is surrendered the moment Genie is guessing',
         // Positive control for the fail-safe: Shift+Enter inserts a newline in
         // Codex, so it must not be mistaken for the submitting Enter.
         const shifted = noteDraft(d({ text: 'still here', confident: false }), '\x1b[13;2u');
-        expect(planNudge(shifted)).toEqual({ mode: 'append' });
+        expect(planNudge(shifted)).toEqual({ mode: 'defer' });
+    });
+
+    it('remembers the exact enhanced Enter bytes emitted by the live terminal', () => {
+        const enter = '\x1b[13;1u';
+        const s = noteDraft(d({ text: 'submit me' }), enter);
+
+        expect(s).toMatchObject({ text: '', confident: true, image: false, submitBytes: enter });
+        // Positive control: Shift+Enter is content, not the submit key to replay.
+        expect(noteDraft(d({ text: 'still here' }), '\x1b[13;2u')).not.toMatchObject({
+            submitBytes: '\x1b[13;2u',
+        });
     });
 });
 
@@ -161,27 +177,22 @@ describe('planNudge', () => {
         expect(planNudge(EMPTY_DRAFT)).toEqual({ mode: 'submit' });
     });
 
-    it('a confident single-line draft is cut, nudged, and restored', () => {
-        expect(planNudge(d({ text: 'deploy the thing' }))).toEqual({
-            mode: 'swap',
-            restore: 'deploy the thing',
-        });
+    it('a confident single-line draft defers without touching the prompt', () => {
+        expect(planNudge(d({ text: 'deploy the thing' }))).toEqual({ mode: 'defer' });
     });
 
     it('an unconfident draft is appended to, never cut', () => {
-        expect(planNudge(d({ text: 'deploy', confident: false }))).toEqual({ mode: 'append' });
+        expect(planNudge(d({ text: 'deploy', confident: false }))).toEqual({ mode: 'defer' });
     });
 
     it('a MULTI-LINE draft is appended to, because the cut only kills one line', () => {
         // Ctrl-A/Ctrl-K is a single-line operation; cutting a multi-line draft
         // would leave part of it behind and lose the rest.
-        expect(planNudge(d({ text: 'first\nsecond' }))).toEqual({ mode: 'append' });
+        expect(planNudge(d({ text: 'first\nsecond' }))).toEqual({ mode: 'defer' });
     });
 
     it('an image in the box is appended to — a text restore cannot bring it back', () => {
-        expect(planNudge(d({ text: '', image: true, confident: false }))).toEqual({
-            mode: 'append',
-        });
+        expect(planNudge(d({ text: '', image: true, confident: false }))).toEqual({ mode: 'defer' });
     });
 
     it('an image with an otherwise-empty box is NOT treated as an empty box', () => {
@@ -212,44 +223,21 @@ describe('buildNudgeSequence', () => {
         expect(w[1]!.delayMs).toBeGreaterThan(0);
     });
 
-    it('submits Codex with its enhanced Enter key instead of inserting a newline', () => {
-        const w = buildNudgeSequence({ mode: 'submit' }, NOTICE, 'codex');
+    it('replays the exact live-terminal submit bytes instead of guessing by provider', () => {
+        const liveEnter = '\x1b[13;1u';
+        const w = buildNudgeSequence({ mode: 'submit' }, NOTICE, liveEnter);
 
-        expect(w.map((x) => x.bytes)).toEqual([NOTICE, '\x1b[13u']);
+        expect(w.map((x) => x.bytes)).toEqual([NOTICE, liveEnter]);
         // Positive control: legacy TUIs still receive carriage return.
-        expect(buildNudgeSequence({ mode: 'submit' }, NOTICE, 'claude')[1]!.bytes).toBe('\r');
+        expect(buildNudgeSequence({ mode: 'submit' }, NOTICE)[1]!.bytes).toBe('\r');
     });
 
-    it('a swap: cut the line, deliver and submit the notice, then paste the draft back', () => {
-        const w = buildNudgeSequence({ mode: 'swap', restore: 'deploy the thing' }, NOTICE);
-        expect(w.map((x) => x.bytes)).toEqual([
-            '\x01\x0b', // Ctrl-A to the start, Ctrl-K kills to the end
-            NOTICE,
-            '\r',
-            '\x1b[200~deploy the thing\x1b[201~',
-        ]);
-    });
-
-    it('the restored draft is bracket-pasted, so it can never submit itself', () => {
-        const w = buildNudgeSequence({ mode: 'swap', restore: 'rm -rf something' }, NOTICE);
-        const restore = w[w.length - 1]!;
-        expect(restore.bytes.startsWith('\x1b[200~')).toBe(true);
-        expect(restore.bytes.endsWith('\x1b[201~')).toBe(true);
-        expect(restore.bytes).not.toContain('\r');
-    });
-
-    it('an append: paste the notice in, and NEVER submit', () => {
-        const w = buildNudgeSequence({ mode: 'append' }, NOTICE);
-        expect(w).toHaveLength(1);
-        expect(w[0]!.bytes).toBe('\x1b[200~' + NOTICE + '\x1b[201~');
-        expect(w.some((x) => x.bytes.includes('\r'))).toBe(false);
+    it('a deferred nudge writes absolutely nothing into the prompt', () => {
+        expect(buildNudgeSequence({ mode: 'defer' }, NOTICE)).toEqual([]);
     });
 
     it('every mode leaves the person a settle gap between writes', () => {
-        for (const plan of [
-            { mode: 'submit' as const },
-            { mode: 'swap' as const, restore: 'x' },
-        ]) {
+        for (const plan of [{ mode: 'submit' as const }]) {
             const w = buildNudgeSequence(plan, NOTICE);
             expect(w.slice(1).every((x) => x.delayMs > 0)).toBe(true);
         }

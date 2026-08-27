@@ -560,16 +560,34 @@ function MasterInner() {
     // agent" could only be read as the one with focus. The notice had gone to the
     // ADDRESSEE, which is usually a different terminal and often a different
     // workspace, and pressing Enter went into a box that was genuinely empty.
-    const [incoming, setIncoming] = useState<AgentInboxIncomingNotice | null>(null);
-    useEffect(() => {
-        if (!incoming) return;
-        const t = setTimeout(() => setIncoming(null), 8000);
-        return () => clearTimeout(t);
-    }, [incoming]);
+    const [incoming, setIncoming] = useState<Record<string, AgentInboxIncomingNotice>>({});
     useEffect(() => {
         // Optional: the remote bridge does not carry it (a local-prompt concern).
-        return api().on.agentInboxIncoming?.((payload) => setIncoming(payload));
+        return api().on.agentInboxIncoming?.((payload) =>
+            setIncoming((current) => {
+                if (!payload.pending) {
+                    const next = { ...current };
+                    delete next[payload.id];
+                    return next;
+                }
+                return { ...current, [payload.id]: payload };
+            }),
+        );
     }, []);
+    const pendingWorkspaceIds = new Set(
+        Object.values(incoming)
+            .map((notice) => notice.workspaceId)
+            .filter((id): id is string => !!id),
+    );
+    const sendPendingNudge = async (terminalId: string) => {
+        const result = await api().agentInbox.sendPendingNudge(terminalId);
+        if (result.ok) return;
+        setToast(
+            result.reason === 'input-not-empty'
+                ? 'Clear or send your terminal input first, then click Send nudge again.'
+                : 'The nudge could not be sent. The notice is still queued.',
+        );
+    };
 
     // Host-loss recovery (genie#203). When the shared pty-host dies mid-session,
     // main respawns a backend and asks us to remount the affected panes (their
@@ -1982,6 +2000,7 @@ function MasterInner() {
                         selected={selected}
                         activeIds={activeIds}
                         attentionIds={attentionIds}
+                        pendingNudgeWorkspaceIds={pendingWorkspaceIds}
                         issueWatchCounts={issueWatchCounts}
                         onShowIssueWatch={openIssueWatch}
                         devSites={devSites}
@@ -2121,6 +2140,8 @@ function MasterInner() {
                         addDisabledReason={maxViewsReason}
                         focusId={focusId}
                         attentionIds={attentionIds}
+                        pendingNudges={incoming}
+                        onSendPendingNudge={(id) => void sendPendingNudge(id)}
                         onAttentionClear={clearAttention}
                         recoverGen={recoverGenById}
                         maximizedId={maximizedId}
@@ -2199,27 +2220,6 @@ function MasterInner() {
             {toast && (
                 <div className="g-toast" role="status" onClick={() => setToast(null)}>
                     {toast}
-                </div>
-            )}
-
-            {incoming && (
-                <div
-                    className="g-toast g-toast--top"
-                    role="status"
-                    data-testid="agentinbox-incoming"
-                    data-terminal-id={incoming.id}
-                    data-landed={incoming.landed ? '1' : '0'}
-                    // Clicking OPENS the terminal it is about — the toast names a
-                    // terminal, so it has to be able to go there. Dismissing on
-                    // its own would leave the user hunting for the prompt it just
-                    // named, which is the hunt the naming exists to end.
-                    onClick={() => {
-                        revealTerminal(incoming.id, incoming.workspaceId);
-                        setIncoming(null);
-                    }}
-                >
-                    <strong className="g-toast__title">{incoming.title}</strong>
-                    <span className="g-toast__body">{incoming.body}</span>
                 </div>
             )}
 

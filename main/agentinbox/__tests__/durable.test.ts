@@ -184,21 +184,19 @@ describe('AgentInbox durable inbox (Track B)', () => {
         }
     });
 
-    it("IMMEDIATE notice: a human draft is PRESERVED, never dropped and never spliced", () => {
+    it("IMMEDIATE notice: user content blocks PTY writes and queues an explicit send", () => {
         // Rewritten for the owner's JOB 2 contract. This used to assert that a
         // draft in the box HELD the notice indefinitely — which is how a
         // half-typed prompt silenced an agent's mail. The draft is still
         // untouchable; the notice is no longer the thing that gives way.
         const b = new AgentInboxBroker();
         b.setStore(store);
-        const sent: Array<{ terminalId: string; mode: string; restore?: string }> = [];
+        const sent: Array<{ terminalId: string; mode: string }> = [];
+        const pending: Array<{ terminalId: string; pending: boolean }> = [];
         b.setWakeSink((d) => {
-            sent.push({
-                terminalId: d.terminalId,
-                mode: d.plan.mode,
-                ...(d.plan.mode === 'swap' ? { restore: d.plan.restore } : {}),
-            });
+            sent.push({ terminalId: d.terminalId, mode: d.plan.mode });
         });
+        b.setPendingNudgeSink((d) => pending.push(d));
 
         join(b, 'a');
         join(b, 'b');
@@ -207,31 +205,24 @@ describe('AgentInbox durable inbox (Track B)', () => {
         b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping1' });
         expect(sent[0]).toEqual({ terminalId: 't-b', mode: 'submit' });
 
-        // The human types a plain prompt. Genie modelled every keystroke, so it
-        // may cut the draft out, deliver, and paste it back verbatim.
+        // User content means NO delivery attempt. The nudge is held behind a
+        // terminal-scoped notice until the human explicitly releases it.
         b.noteUserInput('t-b', 'hold on, I am writing');
         b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping2' });
-        expect(sent[1]).toEqual({
-            terminalId: 't-b',
-            mode: 'swap',
-            restore: 'hold on, I am writing',
-        });
+        expect(sent).toHaveLength(1);
+        expect(pending.at(-1)).toEqual({ terminalId: 't-b', pending: true });
+        expect(b.sendPendingNudge('t-b')).toEqual({ ok: false, reason: 'input-not-empty' });
+        expect(sent).toHaveLength(1);
 
-        // They press the up-arrow: the cursor is now somewhere Genie does not
-        // track, so it stops claiming to know the box. The notice is APPENDED
-        // without being submitted rather than cutting text Genie cannot restore.
-        b.noteUserInput('t-b', '\x1b[A');
-        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping3' });
-        expect(sent[2]).toEqual({ terminalId: 't-b', mode: 'append' });
-
-        // They submit. The box is empty and known again, so the next notice
-        // simply starts a turn.
+        // Once the user clears/submits their own content, the explicit button
+        // releases the queued nudge and closes the notice.
         b.noteUserInput('t-b', '\r');
-        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping4' });
-        expect(sent[3]).toEqual({ terminalId: 't-b', mode: 'submit' });
+        expect(b.sendPendingNudge('t-b')).toEqual({ ok: true });
+        expect(sent.at(-1)).toEqual({ terminalId: 't-b', mode: 'submit' });
+        expect(pending.at(-1)).toEqual({ terminalId: 't-b', pending: false });
     });
 
-    it('IMMEDIATE notice: an APPENDED notice is not counted as a wake', () => {
+    it('IMMEDIATE notice: a DEFERRED notice is not counted as a wake', () => {
         // Nothing was submitted, so no turn started — and the agent must stay
         // eligible for a real wake once its prompt is free again.
         const b = new AgentInboxBroker();
@@ -244,7 +235,7 @@ describe('AgentInbox durable inbox (Track B)', () => {
         b.noteUserInput('t-b', '\x1b[A'); // Genie is no longer certain
         b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping' });
 
-        expect(modes).toEqual(['append']);
+        expect(modes).toEqual([]);
     });
 
     it('an agent explicitly opted OUT is never announced to (owner: default ON, OFF is honoured)', () => {
@@ -268,7 +259,7 @@ describe('AgentInbox durable inbox (Track B)', () => {
         expect(woken).toEqual(['t-normal']);
     });
 
-    it('a human draft no longer costs the agent its notice — it is preserved instead', () => {
+    it('a human draft queues the notice instead of injecting it', () => {
         // Rewritten for the JOB 2 contract. This used to assert that a draft made
         // the immediate notice give way to the idle-only nudge, which is how a
         // busy agent with a half-typed prompt at its terminal heard nothing at
@@ -290,10 +281,7 @@ describe('AgentInbox durable inbox (Track B)', () => {
         clock += WAKE_QUIET_MS + 1;
         b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping' });
 
-        expect(woken).toHaveLength(1);
-        expect(woken[0].mode).toBe('swap');
-        // The notice itself, not the "you have N unread" fallback nudge.
-        expect(woken[0].text).toMatch(/just received a message/i);
+        expect(woken).toHaveLength(0);
     });
 
     it('wake-on-DM remains the FALLBACK when the host cannot deliver a notice', () => {

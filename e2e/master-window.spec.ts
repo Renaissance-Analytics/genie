@@ -444,53 +444,38 @@ test('the GApp Store lists a ribboned dev launcher, and launching it previews', 
  * selector would read the previous test's receipt, and would be a strict-mode
  * violation besides.
  */
-test('the incoming-message toast names the addressee, and opens it (genie inbox notice)', async () => {
+test('a blocked nudge stays on its terminal and replaces that workspace AgentPulse', async () => {
     const plainRow = page.locator('.tproj').filter({ hasText: seed.workspaceName });
     const gdwRow = page.locator('.tproj').filter({ hasText: seed.peerName });
-    const toast = page.getByTestId('agentinbox-incoming');
+    const notice = page.getByTestId('agentinbox-incoming');
 
     // Start on the ordinary workspace: the toast is about the OTHER one.
     await switchToWorkspace(seed.workspaceName);
     await expect(plainRow).toHaveClass(/\bis-active\b/);
 
     await announceInboxIncoming(app, seed.peerTerminalId, true);
-    await expect(toast).toBeVisible();
+    await expect(gdwRow.locator('.agent-nudge-questions')).toBeVisible();
+    await expect(gdwRow.locator('.agent-pulse-spark')).toHaveCount(0);
 
-    // POSITIVE CONTROL FIRST. Every "must not say" below would also pass against
-    // a toast that rendered nothing, so prove there is text before trusting them.
-    await expect(toast).not.toBeEmpty();
-    // The two facts the old toast could not carry: WHICH workspace, WHICH
-    // terminal. Both come from the payload — there is no other source for them.
-    await expect(toast).toContainText(seed.peerName);
-    await expect(toast).toContainText(seed.peerTerminalLabel);
-    // And the phrase that made it unaddressed is gone.
-    await expect(toast).not.toContainText(/this agent/i);
-    // It says Enter because this delivery LANDED — see the not-landed leg below.
-    await expect(toast).toContainText(/enter/i);
-    // The payload reached the DOM whole, not just as prose.
-    await expect(toast).toHaveAttribute('data-terminal-id', seed.peerTerminalId);
-
-    // CLICKING GOES THERE. A notice that names a terminal and cannot open it is
-    // half a fix — the user is told where the message is and left to hunt for it.
-    await toast.click();
+    // The notice is terminal-scoped, so it remains hidden with that terminal
+    // instead of floating globally over whichever workspace happens to be open.
+    await expect(notice).toBeHidden();
+    await switchToWorkspace(seed.peerName);
     await expect(gdwRow).toHaveClass(/\bis-active\b/);
     await expect(plainRow).not.toHaveClass(/\bis-active\b/);
     await expect(panel(seed.peerTerminalLabel)).toBeVisible();
-    await expect(toast).toHaveCount(0);
+    await expect(notice).toBeVisible();
+    await expect(notice).toContainText('Your input is untouched');
+    await expect(notice.getByRole('button', { name: 'Send nudge' })).toBeVisible();
 
-    // NOTHING WAS TYPED — the other half of the report. A nudge whose pty writes
-    // all failed (a retained spec whose pty has exited still has a registered
-    // AgentInbox agent) must not tell anyone to press Enter over an empty box.
-    await announceInboxIncoming(app, seed.peerTerminalId, false);
-    await expect(toast).toBeVisible();
-    await expect(toast).not.toBeEmpty();
-    await expect(toast).toContainText(seed.peerName);
-    await expect(toast).not.toContainText(/enter/i);
-    // …and it says where the message actually is instead.
-    await expect(toast).toContainText('AgentInbox');
+    // The old toast expired after eight seconds. This stays until the pending
+    // nudge is explicitly resolved.
+    await page.waitForTimeout(8_500);
+    await expect(notice).toBeVisible();
+    await announceInboxIncoming(app, seed.peerTerminalId, false, false);
+    await expect(notice).toHaveCount(0);
 
     // Leave the window on the ordinary workspace, as this file's other tests do.
-    await toast.click();
     await switchToWorkspace(seed.workspaceName);
     await expect(plainRow).toHaveClass(/\bis-active\b/);
 });

@@ -282,6 +282,7 @@ export interface AgentInboxIncomingNotice {
     /** Whether the notice really is sitting in that prompt. False = it is in the
      *  inbox and nowhere else, and the body must not say "press Enter". */
     landed: boolean;
+    pending: boolean;
 }
 
 /**
@@ -3625,6 +3626,9 @@ export interface GenieApi {
             text: string;
             attachments?: Array<{ filename: string; base64: string }>;
         }) => Promise<{ ok: boolean; error?: string }>;
+        sendPendingNudge: (
+            terminalId: string,
+        ) => Promise<{ ok: boolean; reason?: 'none' | 'input-not-empty' | 'delivery-failed' }>;
         /** An attachment's BYTES, so the panel can save it client-side (a remote
          *  human gets the file on their machine, not the host's). Reads Genie's own
          *  content-addressed store — no filesystem egress. */

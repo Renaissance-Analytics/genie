@@ -17,6 +17,7 @@ import {
     currentConnKey,
     type TerminalSpec,
     type WorkspaceRow,
+    type AgentInboxIncomingNotice,
 } from '../../lib/genie';
 import {
     buildPanelList,
@@ -52,6 +53,8 @@ interface Props {
     focusId: string | null;
     /** Agent-integration MCP: terminals pulsing for attention (imDone). */
     attentionIds: Set<string>;
+    pendingNudges?: Record<string, AgentInboxIncomingNotice>;
+    onSendPendingNudge?: (id: string) => void;
     /** Clear a terminal's attention glow when its panel gains focus. */
     onAttentionClear?: (id: string) => void;
     /** Per-terminal recovery generation (genie#203). A bump remounts the panel
@@ -119,6 +122,8 @@ export default function TerminalGrid({
     activeWorkspaceId,
     focusId,
     attentionIds,
+    pendingNudges = {},
+    onSendPendingNudge,
     onAttentionClear,
     recoverGen = {},
     maximizedId,
@@ -215,6 +220,8 @@ export default function TerminalGrid({
             activeWorkspaceId={activeWorkspaceId ?? null}
             focusId={focusId}
             attentionIds={attentionIds}
+            pendingNudges={pendingNudges}
+            onSendPendingNudge={onSendPendingNudge}
             onAttentionClear={onAttentionClear}
             recoverGen={recoverGen}
             maximizedId={maximizedId}
@@ -245,6 +252,8 @@ interface ResizableGridProps {
     activeWorkspaceId: string | null;
     focusId: string | null;
     attentionIds: Set<string>;
+    pendingNudges: Record<string, AgentInboxIncomingNotice>;
+    onSendPendingNudge?: (id: string) => void;
     onAttentionClear?: (id: string) => void;
     recoverGen?: Record<string, number>;
     maximizedId: string | null;
@@ -276,6 +285,8 @@ const ResizableGrid = ({
     activeWorkspaceId,
     focusId,
     attentionIds,
+    pendingNudges,
+    onSendPendingNudge,
     onAttentionClear,
     recoverGen = {},
     maximizedId,
@@ -493,6 +504,8 @@ const ResizableGrid = ({
                             workspacesById={workspacesById}
                             focused={p.visible && focusId === p.spec.id}
                             attention={attentionIds.has(p.spec.id)}
+                            pendingNudge={pendingNudges[p.spec.id]}
+                            onSendPendingNudge={onSendPendingNudge}
                             onAttentionClear={
                                 onAttentionClear
                                     ? () => onAttentionClear(p.spec.id)
@@ -682,6 +695,8 @@ interface PanelForProps {
     focused: boolean;
     /** Agent-integration MCP: pulse this panel's border (imDone). */
     attention: boolean;
+    pendingNudge?: AgentInboxIncomingNotice;
+    onSendPendingNudge?: (id: string) => void;
     /** Clear this panel's attention glow when it gains focus. */
     onAttentionClear?: () => void;
     maximized: boolean;
@@ -706,6 +721,8 @@ function PanelFor({
     workspacesById,
     focused,
     attention,
+    pendingNudge,
+    onSendPendingNudge,
     onAttentionClear,
     maximized,
     style,
@@ -777,6 +794,8 @@ function PanelFor({
             spec={spec}
             workspace={workspace}
             attention={attention}
+            pendingNudge={pendingNudge}
+            onSendPendingNudge={onSendPendingNudge}
             onAttentionClear={onAttentionClear}
             focused={focused}
             maximized={maximized}

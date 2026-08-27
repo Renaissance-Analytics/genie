@@ -1,7 +1,7 @@
 import { IconBox, IconLayoutGrid } from './icons';
 import TerminalGrid from './TerminalGrid';
 import type { LayoutMode } from './TerminalGrid';
-import type { TerminalSpec, WorkspaceRow } from '../../lib/genie';
+import type { AgentInboxIncomingNotice, TerminalSpec, WorkspaceRow } from '../../lib/genie';
 
 /**
  * The Floor — Genie's panel management, as one component (Tynn #250).
@@ -30,6 +30,8 @@ export interface FloorState {
     activeWorkspaceId?: string | null;
     focusId: string | null;
     attentionIds: Set<string>;
+    pendingNudges?: Record<string, AgentInboxIncomingNotice>;
+    onSendPendingNudge?: (id: string) => void;
     onAttentionClear?: (id: string) => void;
     recoverGen?: Record<string, number>;
     maximizedId: string | null;
