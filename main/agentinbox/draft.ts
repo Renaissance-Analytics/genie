@@ -28,6 +28,7 @@
  */
 import { CR, PASTE_END, PASTE_START, PASTE_SUBMIT_DELAY_MS } from '../terminal/keystrokes';
 import { isHumanKey, tokenize } from './notify';
+import type { AgentInboxAgentType } from './types';
 
 export interface Draft {
     /** Genie's reconstruction of the box's contents. Meaningless unless
@@ -196,7 +197,11 @@ function bracketPaste(text: string): string {
  * landed in the prompt and started no turn at all. So the submitting Enter is
  * always its own write.
  */
-export function buildNudgeSequence(plan: NudgePlan, notice: string): NudgeWrite[] {
+export function buildNudgeSequence(
+    plan: NudgePlan,
+    notice: string,
+    agentType: AgentInboxAgentType = 'custom',
+): NudgeWrite[] {
     const gap = PASTE_SUBMIT_DELAY_MS;
     if (plan.mode === 'append') {
         // Appended, never submitted: the person's draft keeps the box, the
@@ -205,7 +210,10 @@ export function buildNudgeSequence(plan: NudgePlan, notice: string): NudgeWrite[
     }
     const deliver: NudgeWrite[] = [
         { bytes: notice, delayMs: 0 },
-        { bytes: CR, delayMs: gap },
+        // Codex enables Kitty's enhanced-keyboard protocol, where a real Enter
+        // is CSI 13 u. A legacy CR is Shift+Enter/newline there, so the notice
+        // stays parked instead of starting a turn.
+        { bytes: agentType === 'codex' ? '\x1b[13u' : CR, delayMs: gap },
     ];
     if (plan.mode === 'submit') return deliver;
     return [

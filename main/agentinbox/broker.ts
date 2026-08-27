@@ -5,6 +5,7 @@ import {
     previewText,
     AGENTINBOX_HUMAN,
     type AgentInboxAgentInfo,
+    type AgentInboxAgentType,
     type AgentInboxAttachment,
     type AgentInboxBrokerEvent,
     type AgentInboxChannelInfo,
@@ -111,6 +112,8 @@ interface AgentInboxAgent extends Omit<AgentInboxAgentInfo, 'reachable' | 'ref'>
  */
 export interface NudgeDelivery {
     terminalId: string;
+    /** The target TUI decides which byte sequence means a submitting Enter. */
+    agentType: AgentInboxAgentType;
     /** The notice itself. */
     text: string;
     /** How it may be delivered — see {@link planNudge}. `append` means it must
@@ -328,7 +331,14 @@ export class AgentInboxBroker {
         try {
             // The host refuses when a swap is already in flight on this terminal —
             // two notices must never both cut the same box.
-            if (this.wakeSink({ terminalId: target.terminalId, text, plan }) === false) {
+            if (
+                this.wakeSink({
+                    terminalId: target.terminalId,
+                    agentType: target.agentType,
+                    text,
+                    plan,
+                }) === false
+            ) {
                 return false;
             }
             if (plan.mode === 'append') {
@@ -385,6 +395,7 @@ export class AgentInboxBroker {
             // Provably idle, so the box is empty: submit it and start the turn.
             this.wakeSink({
                 terminalId: target.terminalId,
+                agentType: target.agentType,
                 text: wakeNudgeText(unread),
                 plan: planNudge(target.draft),
             });
@@ -419,7 +430,12 @@ export class AgentInboxBroker {
         if (!wake) return false;
         a.lastWokenAt = this.now();
         try {
-            this.wakeSink({ terminalId, text, plan: planNudge(a.draft) });
+            this.wakeSink({
+                terminalId,
+                agentType: a.agentType,
+                text,
+                plan: planNudge(a.draft),
+            });
             return true;
         } catch {
             return false;

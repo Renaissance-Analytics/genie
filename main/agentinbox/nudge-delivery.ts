@@ -1,4 +1,5 @@
 import { buildNudgeSequence, type NudgePlan } from './draft';
+import type { AgentInboxAgentType } from './types';
 
 /**
  * Carry out one nudge against a terminal — the I/O half of preserve-and-restore
@@ -51,10 +52,11 @@ export async function deliverNudge(
     terminalId: string,
     text: string,
     plan: NudgePlan,
+    agentType: AgentInboxAgentType = 'custom',
 ): Promise<boolean> {
     let landed = true;
     try {
-        for (const w of buildNudgeSequence(plan, text)) {
+        for (const w of buildNudgeSequence(plan, text, agentType)) {
             if (w.delayMs > 0) await io.sleep(w.delayMs);
             if (!io.write(terminalId, w.bytes)) landed = false;
         }
