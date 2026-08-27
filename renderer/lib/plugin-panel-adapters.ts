@@ -13,16 +13,19 @@
  */
 
 /** Known panel adapter kinds — one per vetted, Genie-registered adapter. */
-export type PanelAdapterKind = 'repo-changes';
+export type PanelAdapterKind = 'repo-changes' | 'artboard';
 
 /**
  * Resolve a declared `fancyComponent.export` to a known adapter kind, or null
- * (fail-closed). Phase 1 registers exactly one: the Repository Changes panel.
+ * (fail-closed). Two are registered: the Repository Changes panel, and ArtBoard
+ * — the review surface an agent posts a mockup or an image to.
  */
 export function panelAdapterKind(fancyExport: string): PanelAdapterKind | null {
     switch (fancyExport) {
         case 'RepoChangesPanel':
             return 'repo-changes';
+        case 'ArtBoardPanel':
+            return 'artboard';
         default:
             return null;
     }

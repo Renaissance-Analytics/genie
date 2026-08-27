@@ -25,6 +25,7 @@
 import fs from 'fs';
 import path from 'path';
 import { app } from 'electron';
+import { ARTBOARD_SOURCE } from './artboard-plugin';
 
 /** A curated Official plugin entry (installed from its signed repo). */
 export interface OfficialPluginEntry {
@@ -591,6 +592,7 @@ export const BUNDLED_PLUGIN_SOURCES: BundledPluginSource[] = [
     SPREADSHEET_SOURCE,
     DOCUMENT_SOURCE,
     REPOSITORY_SOURCE,
+    ARTBOARD_SOURCE,
 ];
 
 /**

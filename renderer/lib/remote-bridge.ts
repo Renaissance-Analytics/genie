@@ -269,6 +269,16 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
             const inert = { toolsFirst: true, shadowed: [], stale: [] };
             return { before: inert, after: inert, changed: false, inis: [] };
         },
+        // ArtBoard reads the workspace's own filesystem, so in a window driving
+        // another host it would be listing the CLIENT's board under a panel that
+        // claims to show the host's. Empty is never a wrong answer; a verdict is
+        // refused outright rather than recorded against the wrong machine.
+        artboardRead: async () => ({ posts: [] }),
+        artboardReview: async () => ({
+            ok: false,
+            delivered: false,
+            error: 'ArtBoard is read on the machine that holds the workspace.',
+        }),
         toolchainSetDefault: async () => ({
             ok: false,
             error: 'The toolchain is managed on the machine itself.',

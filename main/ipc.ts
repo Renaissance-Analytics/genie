@@ -1,3 +1,4 @@
+import { readBoardForPanel, reviewBoardPost, type WireDeps } from './artboard/wire';
 import { app, clipboard, dialog, ipcMain, shell, BrowserWindow } from 'electron';
 import os from 'node:os';
 import path from 'node:path';
@@ -365,6 +366,18 @@ export async function applyStartupToolchainPrecedence(): Promise<void> {
     } catch {
         /* same rule: config repair is an improvement, never a boot prerequisite */
     }
+}
+
+/**
+ * ArtBoard's host wiring. Injected rather than imported inside the module so the
+ * decisions stay testable without a disk or a broker.
+ */
+function artboardDeps(): WireDeps {
+    return {
+        workspaceRoot: (id) => getWorkspace(id)?.path ?? null,
+        deliver: (terminalId, text) =>
+            agentInboxBroker.deliverHumanMessageToTerminal(terminalId, text),
+    };
 }
 
 export function registerIpcHandlers(): void {
@@ -857,6 +870,32 @@ export function registerIpcHandlers(): void {
     // agent and dev server Genie spawned inherited it. Reorders Genie's own entry
     // to the FRONT and reports what it found. It never deletes another tool's
     // entry: those belong to software Genie did not install.
+    // --- ArtBoard ---------------------------------------------------------
+    // The review surface an agent posts a mockup or an image to. Reading resolves
+    // each post's FILE into markup or a data URL host-side, so the renderer never
+    // holds a path; reviewing records the verdict AND hands it to the agent that
+    // is waiting on it.
+    ipcMain.handle('artboard:read', (_e, workspaceId: string) =>
+        readBoardForPanel(String(workspaceId ?? ''), artboardDeps()),
+    );
+    ipcMain.handle(
+        'artboard:review',
+        (_e, workspaceId: string, postId: string, review: { verdict: 'approved' | 'rejected'; comment?: string }) =>
+            reviewBoardPost(
+                String(workspaceId ?? ''),
+                String(postId ?? ''),
+                {
+                    // Anything that is not an explicit approval is a rejection —
+                    // a malformed verdict must never resolve to "approved".
+                    verdict: review?.verdict === 'approved' ? 'approved' : 'rejected',
+                    ...(typeof review?.comment === 'string' && review.comment.trim()
+                        ? { comment: review.comment.trim() }
+                        : {}),
+                },
+                artboardDeps(),
+            ),
+    );
+
     ipcMain.handle('toolchain:repair', async () => repairToolchainPath(toolchainManagerDeps()));
 
     ipcMain.handle('toolchain:installs', (_e, force?: boolean) =>
