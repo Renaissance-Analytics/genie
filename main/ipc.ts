@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import fsSync from 'node:fs';
 import { readBoardForPanel, reviewBoardPost, type WireDeps } from './artboard/wire';
 import { app, clipboard, dialog, ipcMain, shell, BrowserWindow } from 'electron';
 import os from 'node:os';
@@ -378,6 +380,39 @@ function artboardDeps(): WireDeps {
         deliver: (terminalId, text) =>
             agentInboxBroker.deliverHumanMessageToTerminal(terminalId, text),
     };
+}
+
+/**
+ * Register an existing folder as a workspace, deriving the row from the folder.
+ *
+ * The `workspaces:add` IPC takes a fully-built `WorkspaceRow` because the
+ * Add-workspace UI has already collected every field. An OPERATOR AGENT has only
+ * a path, so this is the same registration with the row derived: the shape is
+ * read off disk (`project.json` ⇒ an `.agi` envelope, else a simple folder) and
+ * the name from the folder, which is what the UI defaults to anyway.
+ *
+ * Exported so `manageWorkspaces add` and the UI land in ONE registration path —
+ * two would drift, and the drifting half would be the one nobody clicks.
+ */
+export function addWorkspaceFromFolder(folder: string): { ok: boolean; error?: string } {
+    try {
+        const isEnvelope = fsSync.existsSync(path.join(folder, 'project.json'));
+        if (!isEnvelope) validateSimpleWorkspace({ path: folder });
+        const row = addWorkspace({
+            id: randomUUID(),
+            project_name: path.basename(folder.replace(/[\/]+$/, '')) || folder,
+            path: folder,
+            shape: isEnvelope ? 'agi' : 'simple',
+            backend: 'tynn',
+        } as Parameters<typeof addWorkspace>[0]);
+        // MCP is ON by default for a new workspace, exactly as the IPC does it,
+        // so an agent that lands there discovers the genie server immediately.
+        if (row.mcp_enabled) writeWorkspaceAgentMcp(row.path, true, workspaceEndpointUrl(row.id));
+        rebuildMenu();
+        return { ok: true };
+    } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
 }
 
 export function registerIpcHandlers(): void {
