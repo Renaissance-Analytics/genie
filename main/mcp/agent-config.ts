@@ -676,6 +676,52 @@ const HARNESS_INTRO: Record<AgentDocHarness, string> = {
         '> **Claude Code loads `CLAUDE.md`** as project memory at the start of every session. Harness-specific setup — the `Stop` hook, settings wiring — is NOT in this protocol: call `genieGuide` for it.',
 };
 
+/**
+ * The one line that makes `AGENTS.md` serve Claude Code too.
+ *
+ * Claude Code reads `CLAUDE.md` and never `AGENTS.md`. Its memory docs specify
+ * this import for exactly that case, and recommend it OVER a symlink on Windows,
+ * where creating one needs Administrator or Developer Mode — which is the reason
+ * Genie was maintaining two copies in the first place.
+ */
+export const CLAUDE_MD_IMPORT = '@AGENTS.md';
+
+/** Where a human's own Claude-specific notes live, below the import. */
+const CLAUDE_SECTION = '## Claude Code';
+
+/**
+ * PURE. `CLAUDE.md` as a POINTER at the pristine `AGENTS.md`, never a copy of it.
+ *
+ * The old design wrote the identical protocol body into both files because
+ * Windows has no working symlinks. Its own comment recorded the cost: this
+ * envelope's CLAUDE.md "went stale enough to lose the entire Hosting Manager
+ * section". Two files holding the same words is a drift generator, and the
+ * import removes the second copy rather than trying to keep it in sync.
+ *
+ * A human's Claude-specific content is KEPT: this file is Genie's to point, not
+ * to own outright. Any managed protocol block found in it is REMOVED — that is
+ * the migration, and leaving it would leave exactly the staleness being fixed.
+ */
+export function claudeMdPointer(existing: string): string {
+    // Strip a previously-managed protocol block wherever it sits.
+    let body = existing;
+    const begin = body.indexOf(AGENTS_BEGIN);
+    const end = body.indexOf(AGENTS_END);
+    if (begin !== -1 && end !== -1 && end > begin) {
+        body = body.slice(0, begin) + body.slice(end + AGENTS_END.length);
+    }
+    // …and the import itself, so re-managing cannot stack a second one.
+    body = body
+        .split('\n')
+        .filter((line) => line.trim() !== CLAUDE_MD_IMPORT)
+        .join('\n');
+
+    const kept = body.trim();
+    return kept
+        ? `${CLAUDE_MD_IMPORT}\n\n${kept}\n`
+        : `${CLAUDE_MD_IMPORT}\n\n${CLAUDE_SECTION}\n\n<!-- Claude-specific notes only. The protocol lives in AGENTS.md. -->\n`;
+}
+
 export function applyAgentsSection(
     existing: string,
     enabled: boolean,
@@ -748,7 +794,16 @@ function syncAgentsMd(workspacePath: string, enabled: boolean): void {
     // Disabling only STRIPS the block; it must never create a file to strip from.
     for (const t of read) {
         if (!enabled && !t.present) continue;
-        const next = applyAgentsSection(t.existing, enabled, aiSystem, t.harness);
+        // AGENTS.md is the PRISTINE file Genie manages; CLAUDE.md only POINTS at
+        // it (`@AGENTS.md`). Genie used to write the identical body into both,
+        // because Windows has no working symlinks — and the drift that produced
+        // is what this replaces. Disabling still strips rather than points: a
+        // workspace that has opted out should not be left importing a protocol
+        // that is no longer there.
+        const next =
+            t.harness === 'claude' && enabled
+                ? claudeMdPointer(t.existing)
+                : applyAgentsSection(t.existing, enabled, aiSystem, t.harness);
         if (next === t.existing) continue;
         try {
             fs.writeFileSync(t.file, next);
