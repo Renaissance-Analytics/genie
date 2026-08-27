@@ -212,6 +212,14 @@ describe('buildNudgeSequence', () => {
         expect(w[1]!.delayMs).toBeGreaterThan(0);
     });
 
+    it('submits Codex with its enhanced Enter key instead of inserting a newline', () => {
+        const w = buildNudgeSequence({ mode: 'submit' }, NOTICE, 'codex');
+
+        expect(w.map((x) => x.bytes)).toEqual([NOTICE, '\x1b[13u']);
+        // Positive control: legacy TUIs still receive carriage return.
+        expect(buildNudgeSequence({ mode: 'submit' }, NOTICE, 'claude')[1]!.bytes).toBe('\r');
+    });
+
     it('a swap: cut the line, deliver and submit the notice, then paste the draft back', () => {
         const w = buildNudgeSequence({ mode: 'swap', restore: 'deploy the thing' }, NOTICE);
         expect(w.map((x) => x.bytes)).toEqual([
