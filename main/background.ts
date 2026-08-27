@@ -12,7 +12,7 @@ import path from 'path';
 import { createTray, rebuildMenu } from './tray';
 import { registerShortcuts, unregisterShortcuts } from './shortcuts';
 import { launchedFromAutostart } from './autostart';
-import { registerIpcHandlers, applyStartupToolchainPrecedence } from './ipc';
+import { registerIpcHandlers, applyStartupToolchainPrecedence, addWorkspaceFromFolder } from './ipc';
 import { writeClipboardImagePng } from './clipboard-image';
 import crypto from 'node:crypto';
 import os from 'node:os';
@@ -1229,7 +1229,13 @@ app.whenReady().then(async () => {
     setSecretEncryptor(electronEncryptor());
     // Inject the two desktop-GUI hooks the extracted MCP tools need (tray-menu
     // rebuild + surfacing the master window). Headless leaves these as no-ops.
-    registerHostTools({ rebuildMenu, showMasterWindow });
+    registerHostTools({
+        rebuildMenu,
+        showMasterWindow,
+        // The SAME registration the Add-workspace UI performs, so an operator
+        // agent and a human land in exactly one code path.
+        addWorkspaceFolder: async (path) => addWorkspaceFromFolder(path),
+    });
     // The four host-core ports, Electron-backed. The headless genie-cloud build
     // injects KMS / fail-closed / log impls of the same interfaces. These power
     // the GUI-free server-deps factory (buildHostServerDeps) below.

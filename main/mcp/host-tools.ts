@@ -1,3 +1,4 @@
+import { decideWorkspaceAdd } from './workspace-add';
 import { resolveAgentAddress } from '../agentinbox/address';
 import { requestIssueWatchRefresh } from '../issue-watch/force-refresh';
 import fs from 'fs';
@@ -156,9 +157,25 @@ export interface HostToolsDeps {
     rebuildMenu: () => void;
     /** Surface the master Floor window (no-op headless). */
     showMasterWindow: () => void;
+    /**
+     * REGISTER an existing folder as a workspace — the same act the UI performs
+     * through the `workspaces:add` IPC, injected rather than imported so this
+     * module keeps its "no Electron, no menu, no window" property and headless
+     * gets a refusal instead of a half-registration.
+     */
+    addWorkspaceFolder: (path: string) => Promise<{ ok: boolean; error?: string }>;
 }
 
-let deps: HostToolsDeps = { rebuildMenu: () => {}, showMasterWindow: () => {} };
+let deps: HostToolsDeps = {
+    rebuildMenu: () => {},
+    showMasterWindow: () => {},
+    // Headless default: refuse rather than pretend. A no-op here would report a
+    // registration that never happened.
+    addWorkspaceFolder: async () => ({
+        ok: false,
+        error: 'This Genie cannot register workspaces (no desktop host wired).',
+    }),
+};
 
 /** Inject the GUI side-effect hooks (desktop boot wires the Electron impls). */
 export function registerHostTools(d: HostToolsDeps): void {
@@ -2374,6 +2391,42 @@ export async function manageWorkspacesForMcp(
 
     if (req.action === 'list' || req.action === 'status') {
         return { ok: true, workspaces };
+    }
+
+    // ADD is the one action with no existing workspace to resolve, so it carries
+    // its own gate: WORKSTATION OPERATOR. It is the counterpart to `remove` —
+    // without it an operator could take a workspace off Genie's list and had no
+    // verb to put one back, while the UI could do both through `workspaces:add`.
+    if (req.action === 'add') {
+        const callerWorkspaceId = callerWorkspaceIdFor(callerTerminalId);
+        const decision = decideWorkspaceAdd({
+            path: String(req.path ?? ''),
+            callerIsOperator: callerWorkspaceId
+                ? isWorkstationOperator(callerWorkspaceId)
+                : false,
+            exists: (p: string) => {
+                try {
+                    return fs.existsSync(p);
+                } catch {
+                    return false;
+                }
+            },
+            isDirectory: (p: string) => {
+                try {
+                    return fs.statSync(p).isDirectory();
+                } catch {
+                    return false;
+                }
+            },
+            known: listWorkspaces().map((w) => w.path),
+        });
+        if (!decision.allowed) {
+            return { ok: false, error: decision.reason, workspaces };
+        }
+        const added = await deps.addWorkspaceFolder(String(req.path));
+        return added.ok
+            ? { ok: true, workspaces: await actionableWorkspaces(callerTerminalId) }
+            : { ok: false, error: added.error, workspaces };
     }
 
     // open / activate / remove all target a specific workspace (own or governed).

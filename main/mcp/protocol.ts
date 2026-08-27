@@ -1300,10 +1300,17 @@ export interface ManageWorkspacesRequest {
      * - `open`: open (focus) a workspace window.
      * - `activate`: make a workspace the active one in Genie.
      * - `remove`: UNREGISTER a workspace from Genie (never deletes disk).
+     * - `add`: REGISTER an existing folder as a workspace. Workstation OPERATOR
+     *   only — it introduces a folder Genie did not know about to every surface
+     *   that lists workspaces, which is a workstation-level act rather than one
+     *   an agent's own workspace grants. The counterpart to `remove`: without it
+     *   an operator could take a workspace off the list and never put one back.
      */
-    action: 'list' | 'status' | 'open' | 'activate' | 'remove';
+    action: 'list' | 'status' | 'open' | 'activate' | 'remove' | 'add';
     /** Target workspace for open/activate/remove (own or governed). */
     workspaceId?: string;
+    /** `add`: the ABSOLUTE path of the folder to register. */
+    path?: string;
 }
 
 export interface ManageWorkspacesResult {
@@ -2213,7 +2220,7 @@ const RUN_AGENT_TOOL = {
 const MANAGE_WORKSPACES_TOOL = {
     name: 'manageWorkspaces',
     description:
-        "Manage Genie WORKSPACES you can act on — your own and (for an Ops agent) the ones you govern. Actions: `list` / `status` (read-only — every workspace you may act on, with its id, name, path, and whether it's your own or a governed child); `open` (open/focus a workspace's window); `activate` (make a workspace the active one in Genie); `remove` (UNREGISTER a workspace from Genie — this only removes it from Genie's list, it NEVER deletes anything on disk). Targets are limited to your own workspace or one you govern; any other is rejected. To CREATE/clone missing child workspaces for an Ops project, use `provisionWorkspaces` instead.",
+        "Manage Genie WORKSPACES you can act on — your own and (for an Ops agent) the ones you govern. Actions: `list` / `status` (read-only — every workspace you may act on, with its id, name, path, and whether it's your own or a governed child); `open` (open/focus a workspace's window); `activate` (make a workspace the active one in Genie); `remove` (UNREGISTER a workspace from Genie — this only removes it from Genie's list, it NEVER deletes anything on disk); `add` (REGISTER an existing folder as a workspace — pass `path`, the ABSOLUTE path of the folder. WORKSTATION OPERATOR only: it introduces a folder Genie did not know about to every surface that lists workspaces. This is the counterpart to `remove`. An `.agi` envelope (a folder with `project.json`) registers as one; anything else registers as a simple folder). Targets are limited to your own workspace or one you govern; any other is rejected. To CREATE/clone missing child workspaces for an Ops project, use `provisionWorkspaces` instead.",
     inputSchema: {
         type: 'object',
         properties: {
