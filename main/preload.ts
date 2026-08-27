@@ -813,6 +813,17 @@ const api = {
          *  the system left, the latter for AWARENESS only. A pure read: it lists
          *  directories and never downloads. */
         toolchainInstalls: (force?: boolean) => ipcRenderer.invoke('toolchain:installs', force),
+        /** ArtBoard: the posts an agent has put up for review in this workspace,
+         *  resolved to markup / data URLs host-side (the renderer cannot read the
+         *  filesystem, and so never holds a path). */
+        artboardRead: (workspaceId: string) => ipcRenderer.invoke('artboard:read', workspaceId),
+        /** Record an approve/reject with an optional comment, and hand it to the
+         *  agent that posted. Reports whether that agent was actually told. */
+        artboardReview: (
+            workspaceId: string,
+            postId: string,
+            review: { verdict: 'approved' | 'rejected'; comment?: string },
+        ) => ipcRenderer.invoke('artboard:review', workspaceId, postId, review),
         /** Repair PATH precedence so Genie’s own toolchain wins (owner report:
          *  Herd was uninstalled and left both its binaries and its PATH entry
          *  behind, so  resolved to a shim for an install that no longer

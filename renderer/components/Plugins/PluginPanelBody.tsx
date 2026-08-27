@@ -1,5 +1,6 @@
 import { panelAdapterKind } from '../../lib/plugin-panel-adapters';
 import RepoChangesPanel from './RepoChangesPanel';
+import ArtBoardPanel from './ArtBoardPanel';
 import type { TerminalSpec, WorkspaceRow } from '../../lib/genie';
 
 /**
@@ -22,6 +23,10 @@ export default function PluginPanelBody({ spec, workspace }: Props) {
 
     if (kind === 'repo-changes') {
         return <RepoChangesPanel workspace={workspace} fallbackRoot={workspace?.path ?? spec.cwd} />;
+    }
+
+    if (kind === 'artboard') {
+        return <ArtBoardPanel workspace={workspace} fallbackRoot={workspace?.path ?? spec.cwd} />;
     }
 
     return (

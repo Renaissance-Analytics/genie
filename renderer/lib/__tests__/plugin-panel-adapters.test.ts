@@ -19,3 +19,31 @@ describe('panelAdapterKind', () => {
         expect(panelAdapterKind('DiffViewer')).toBeNull();
     });
 });
+
+/**
+ * ArtBoard registers the SECOND vetted adapter.
+ *
+ * The registry is the whole security boundary for the panel surface: a plugin
+ * declares a `fancyComponent.export` string and Genie resolves it HERE to an
+ * adapter it compiled in. A plugin that names anything else gets an inert
+ * placeholder, which is what stops a third party mounting code in Genie's
+ * renderer.
+ *
+ * So the registration is worth a test of its own: an adapter that exists but is
+ * not registered is a panel nothing can open, and a panel that renders without a
+ * registry entry would mean the boundary had been bypassed.
+ */
+describe('the ArtBoard adapter', () => {
+    it('resolves the declared export', () => {
+        expect(panelAdapterKind('ArtBoardPanel')).toBe('artboard');
+    });
+
+    it('still fails closed for anything unvetted', () => {
+        // Positive control for the case above — without it, "ArtBoard resolves"
+        // would pass just as happily against a registry that resolved EVERY
+        // string to something.
+        expect(panelAdapterKind('ArtBoardPanelEvil')).toBeNull();
+        expect(panelAdapterKind('../ArtBoardPanel')).toBeNull();
+        expect(panelAdapterKind('')).toBeNull();
+    });
+});

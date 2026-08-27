@@ -1,3 +1,4 @@
+import type { BoardRead, ReviewOutcome } from './artboard-model';
 /**
  * Typed handle on the contextBridge surface exposed in main/preload.ts.
  * Always go through this — no direct ipcRenderer use anywhere in the
@@ -2705,6 +2706,18 @@ export interface GenieApi {
          *  sites that consume each language. A pure read — it lists directories
          *  and never downloads. */
         toolchainInstalls: (force?: boolean) => Promise<ToolchainInstallsInfo>;
+        /** ArtBoard: what agents have posted for review in this workspace, with
+         *  each post's content already resolved (the renderer cannot read the
+         *  filesystem, so it receives markup / data URLs, never a path). */
+        artboardRead: (workspaceId: string) => Promise<BoardRead>;
+        /** Record approve/reject with an optional comment and hand it to the
+         *  posting agent. `delivered` says whether that agent was actually told —
+         *  a recorded-but-undelivered verdict is a success with a caveat. */
+        artboardReview: (
+            workspaceId: string,
+            postId: string,
+            review: { verdict: 'approved' | 'rejected'; comment?: string },
+        ) => Promise<ReviewOutcome>;
         /** Repair PATH precedence so Genie’s own toolchain answers first, and
          *  report what was shadowed or stale before and after. Fixes the case
          *  where an uninstalled toolchain (Herd) leaves its binaries AND its
