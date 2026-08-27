@@ -1163,24 +1163,30 @@ describe('handleMcpMessage', () => {
         );
         const text = (call?.result as { content: Array<{ text: string }> }).content[0]
             .text;
+
+        // `genieGuide` with no arguments is now the CATALOGUE (owner, 2026-08-26):
+        // topic ids and titles, no bodies. It still NAMES every tool — that is what
+        // makes the listing usable — so the "is this documented" guarantees below
+        // hold, and are asserted against the listing.
         expect(text).toContain('imDone');
         expect(text).toContain('ForceTheQuestion');
-        expect(text).not.toContain('tynn-cli');
-        expect(text).not.toContain('resetme');
-        // The full guide tells the agent how to self-configure an on-finish hook.
-        expect(text).toContain('Automate imDone');
-        expect(text).toContain('Stop');
-        expect(text).toContain('$GENIE_MCP_URL');
-        // Documents the process tool + frames initializeWorkspace as a user-run prompt.
         expect(text).toContain('manageProcess');
-        expect(text).toMatch(/initializeWorkspace[\s\S]*prompt/);
-        // Documents the agent-control tools.
         expect(text).toContain('manageTerminals');
         expect(text).toContain('runAgent');
         expect(text).toContain('manageWorkspaces');
-        // Documents the IssueWatch tool + that imDone reports counts.
         expect(text).toContain('checkIssues');
-        expect(text).toMatch(/imDone[\s\S]*IssueWatch/);
+        expect(text).not.toContain('tynn-cli');
+        expect(text).not.toContain('resetme');
+
+        // The CONTENT guarantees move to `initialize`, which still carries the
+        // whole guide — nothing that was checked before has stopped being checked,
+        // it is checked where the full text now lives.
+        const full = (init?.result as { instructions: string }).instructions;
+        expect(full).toContain('Automate imDone');
+        expect(full).toContain('Stop');
+        expect(full).toContain('$GENIE_MCP_URL');
+        expect(full).toMatch(/initializeWorkspace[\s\S]*prompt/);
+        expect(full).toMatch(/imDone[\s\S]*IssueWatch/);
     });
 
     it('invokes onImDone with the bound terminal id on tools/call', async () => {

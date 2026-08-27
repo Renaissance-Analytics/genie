@@ -79,3 +79,62 @@ describe('claudeMdPointer', () => {
         expect(out.split(CLAUDE_MD_IMPORT).length - 1).toBe(1);
     });
 });
+
+/**
+ * THE MIRROR CASE — the one the first cut got wrong, shipped in beta.271.
+ *
+ * `claudeMdPointer` strips the managed protocol block and KEEPS the rest, on the
+ * reasoning that the rest is a human's Claude-specific content. That is right for
+ * a CLAUDE.md someone wrote. It is wrong for the file Genie itself had been
+ * maintaining — because the previous design kept the two files BYTE-IDENTICAL, so
+ * "the rest" is a copy of AGENTS.md's own body.
+ *
+ * Measured on this envelope after the upgrade: CLAUDE.md became `@AGENTS.md`
+ * followed by 168 lines that were 98.8% identical to AGENTS.md's body. Claude
+ * Code then loads that content TWICE, and the file still carried the old claim
+ * that the two are byte-identical mirrors — which the import had just made false.
+ *
+ * So the pointer needs to know what AGENTS.md says. Content that is already there
+ * is DROPPED; content that is genuinely only in CLAUDE.md is kept, because a
+ * human's Claude-specific note must still survive being managed.
+ */
+describe('claudeMdPointer against a mirrored CLAUDE.md', () => {
+    const AGENTS = '# Project\n\nSome shared guidance.\n\nMore shared guidance.\n';
+
+    it('drops a body that merely repeats AGENTS.md', () => {
+        const mirrored = `# Project\n\nSome shared guidance.\n\nMore shared guidance.\n`;
+
+        const out = claudeMdPointer(mirrored, AGENTS);
+
+        expect(out).toContain(CLAUDE_MD_IMPORT);
+        expect(out).not.toContain('Some shared guidance.');
+        expect(out).not.toContain('More shared guidance.');
+    });
+
+    it('KEEPS a line that exists only in CLAUDE.md', () => {
+        // Positive control, and the promise that makes this safe: managing the
+        // file must not eat a human's Claude-specific note.
+        const mixed = `# Project\n\nSome shared guidance.\n\nUse plan mode under src/billing/.\n`;
+
+        const out = claudeMdPointer(mixed, AGENTS);
+
+        expect(out).toContain('Use plan mode under src/billing/.');
+        expect(out).not.toContain('Some shared guidance.');
+    });
+
+    it('still keeps everything when AGENTS.md is unknown', () => {
+        // No AGENTS.md to compare against ⇒ nothing is provably duplicated, so
+        // dropping would be guessing with a human's file.
+        const out = claudeMdPointer('# Project\n\nMy own notes.\n');
+
+        expect(out).toContain('My own notes.');
+    });
+
+    it('does not leave an empty shell behind when everything was duplicated', () => {
+        const out = claudeMdPointer(AGENTS, AGENTS);
+
+        // Falls back to the same scaffold an empty file gets, rather than a lone
+        // import with a ragged blank tail.
+        expect(out).toContain('## Claude Code');
+    });
+});

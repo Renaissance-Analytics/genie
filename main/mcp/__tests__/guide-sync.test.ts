@@ -98,7 +98,17 @@ describe('the agent guide stays in sync with the agentinbox schema', () => {
  * answer "what version am I on" as well as "how do I use this".
  */
 describe('genieGuide reports the running Genie version', () => {
-    it('leads the tool-call output with the running version, then the full guide', async () => {
+    /**
+     * CONTRACT CHANGED (owner, 2026-08-26): with no arguments `genieGuide` now
+     * returns the version and a LIST OF TOPICS, not the whole guide. The guide is
+     * ~690 lines, and an agent that wanted one tool paid for every tool's
+     * documentation to find it — which made the guide something to avoid rather
+     * than reach for.
+     *
+     * Rewritten to assert the NEW contract, not loosened: the version still leads,
+     * the listing is present, and the guide body is specifically ABSENT.
+     */
+    it('leads with the version, then the TOPIC LIST — not the whole guide', async () => {
         const ctx = makeCtx();
 
         const res = await handleMcpMessage(
@@ -109,7 +119,51 @@ describe('genieGuide reports the running Genie version', () => {
             .text;
 
         expect(text).toMatch(/^Genie version: 0\.0\.0-test\n/);
-        expect(text).toContain(GENIE_MCP_GUIDE);
+        expect(text).toContain('topic');
+        expect(text).not.toContain(GENIE_MCP_GUIDE);
+        expect(text.split('\n').length).toBeLessThan(80);
+    });
+
+    it('returns ONE topic when asked for one, and only that topic', async () => {
+        const ctx = makeCtx();
+
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 3,
+                method: 'tools/call',
+                params: { name: 'genieGuide', arguments: { topic: 'imdone' } },
+            },
+            ctx,
+        );
+        const text = (res?.result as { content: Array<{ type: string; text: string }> }).content[0]
+            .text;
+
+        expect(text.toLowerCase()).toContain('imdone');
+        // Positive control on the split: another tool's section must not ride along.
+        expect(text).not.toContain('## manageService');
+    });
+
+    it('ships the AMS migration guide as a topic an agent can ask for', async () => {
+        // The owner's reason for the whole change: existing agents must be told
+        // what moved under them, and must be able to read that without pulling in
+        // everything else.
+        const ctx = makeCtx();
+
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 4,
+                method: 'tools/call',
+                params: { name: 'genieGuide', arguments: { topic: 'migrating-to-ams' } },
+            },
+            ctx,
+        );
+        const text = (res?.result as { content: Array<{ type: string; text: string }> }).content[0]
+            .text;
+
+        expect(text).toContain('Workspace Agent');
+        expect(text).toContain('channels are GONE');
     });
 
     it('advertises the version lookup in the tool description', async () => {
