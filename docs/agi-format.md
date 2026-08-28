@@ -40,6 +40,24 @@ clobbers the other's state.
   read and write. Both tools preserve unknown fields when patching, so
   Genie-only and gateway-only keys coexist safely.
 
+## Schema identity and migration
+
+Every schema-aware Genie write stamps `project.json` with a `$schema` URI
+pinned to the exact immutable release in the private
+`Civicognita/shared-schemas` registry. An unstamped legacy file is backed up as
+`project.json.pre-schema-<UTC timestamp>.bak` before its first v1 write. Later
+writes at the same revision are idempotent and do not create more migration
+backups.
+
+Genie refuses to overwrite a file stamped with another schema revision until an
+explicit migrator for that revision exists. This prevents an older client from
+silently downgrading a newer workspace. The canonical cross-product procedure,
+rollback rules, and release order live in that registry's `MIGRATIONS.md`.
+
+The GApp manifest filename is `genie-app.json` (not `gapp.json`). Manifests
+created by Genie's scaffold carry their own pinned `$schema`; validating or
+installing a developer-owned manifest never rewrites it as a side effect.
+
 ## Compatibility with legacy `k/`
 
 Earlier versions of the format used `k/` instead of `.ai/` for the

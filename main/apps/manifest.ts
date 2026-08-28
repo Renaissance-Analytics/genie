@@ -291,6 +291,8 @@ export interface AppAgentDecl {
 }
 
 export interface AppManifest {
+    /** Exact shared schema revision used when Genie last authored this file. */
+    $schema?: string;
     /** Reverse-DNS, globally unique. */
     id: string;
     /** DNS label — it becomes `<slug>.gen`, so it must be servable. */
@@ -1079,6 +1081,7 @@ export function validateAppManifest(raw: unknown): ValidationResult<AppManifest>
     return {
         ok: true,
         value: {
+            ...(nonEmpty(raw.$schema) ? { $schema: raw.$schema } : {}),
             id: raw.id as string,
             slug: raw.slug as string,
             name: (raw.name as string).trim(),

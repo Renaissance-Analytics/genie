@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
+    PROJECT_JSON_SCHEMA,
     blankProjectJson,
     readProjectJson,
     writeProjectJson,
@@ -27,10 +28,58 @@ describe('project-json', () => {
         expect(read?.hosting?.enabled).toBe(false);
         expect(read?.type).toBeNull();
         expect(typeof read?.createdAt).toBe('string');
+        expect(read?.$schema).toBe(PROJECT_JSON_SCHEMA);
         // project.json ships in the monorepo — it must never carry a
         // token/secret. Guard against a tynnToken field creeping back.
         expect(read).not.toHaveProperty('tynnToken');
         expect(blankProjectJson('Foo', 'foo')).not.toHaveProperty('tynnToken');
+    });
+
+    it('backs up an unstamped project before the first schema migration', () => {
+        const dir = makeTmpDir('pj-schema-migration');
+        const original = JSON.stringify({ name: 'Legacy', futureFlag: 'keep-me' }, null, 2) + '\n';
+        fs.writeFileSync(path.join(dir, 'project.json'), original);
+
+        writeProjectJson(dir, { description: 'migrated' });
+
+        const backups = fs.readdirSync(dir).filter((name) => name.startsWith('project.json.pre-schema-'));
+        expect(backups).toHaveLength(1);
+        expect(fs.readFileSync(path.join(dir, backups[0]), 'utf8')).toBe(original);
+        expect(readProjectJson(dir)).toMatchObject({
+            $schema: PROJECT_JSON_SCHEMA,
+            name: 'Legacy',
+            description: 'migrated',
+            futureFlag: 'keep-me',
+        });
+
+        writeProjectJson(dir, { description: 'migrated again' });
+        expect(fs.readdirSync(dir).filter((name) => name.startsWith('project.json.pre-schema-'))).toHaveLength(1);
+    });
+
+    it('refuses to overwrite a project stamped with an unsupported schema', () => {
+        const dir = makeTmpDir('pj-future-schema');
+        const file = path.join(dir, 'project.json');
+        const original = JSON.stringify({
+            $schema: 'https://example.test/shared-schemas/v99/project.schema.json',
+            name: 'Future',
+        }, null, 2) + '\n';
+        fs.writeFileSync(file, original);
+
+        expect(() => writeProjectJson(dir, { description: 'must not write' })).toThrow(
+            /unsupported project\.json schema/i,
+        );
+        expect(fs.readFileSync(file, 'utf8')).toBe(original);
+    });
+
+    it('refuses to migrate an existing project that cannot be parsed', () => {
+        const dir = makeTmpDir('pj-invalid-migration');
+        const file = path.join(dir, 'project.json');
+        fs.writeFileSync(file, '{ broken json');
+
+        expect(() => writeProjectJson(dir, { description: 'must not write' })).toThrow(
+            /cannot migrate invalid project\.json/i,
+        );
+        expect(fs.readFileSync(file, 'utf8')).toBe('{ broken json');
     });
 
     it('preserves unknown top-level fields across patches', () => {

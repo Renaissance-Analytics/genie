@@ -46,6 +46,8 @@ export type GenieAppServe =
     | { mode: 'proxy'; hostPort: number };
 
 export interface GenieAppManifest {
+    /** Exact schema revision used when Genie last authored this manifest. */
+    $schema?: string;
     /** Reverse-DNS and globally unique — `com.yourname.yourapp`. */
     id: string;
     /** A DNS label. It becomes `<slug>.gen`, so it must be servable. */

@@ -29,6 +29,13 @@ describe('what it writes', () => {
         expect(validateAppManifest(manifest).ok).toBe(true);
     });
 
+    it('pins the shared schema revision Genie used to create the manifest', () => {
+        const manifest = JSON.parse(find('My Thing', APP_MANIFEST_FILENAME));
+        expect(manifest.$schema).toBe(
+            'https://raw.githubusercontent.com/Civicognita/shared-schemas/v1.0.0/schemas/workspace/genie-app.schema.json',
+        );
+    });
+
     it('produces a folder the real folder-check passes', () => {
         // The end-to-end guarantee: scaffold, then install, with nothing in between.
         // A small virtual filesystem: the files the scaffold wrote, plus the

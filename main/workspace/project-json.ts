@@ -1,6 +1,9 @@
 import fs from 'fs';
 import path from 'path';
 import type { DevSites } from '../dev-server/sites-config';
+import { PROJECT_JSON_SCHEMA } from '../schemas/shared';
+
+export { PROJECT_JSON_SCHEMA } from '../schemas/shared';
 
 /**
  * Shared config between Genie and the Aionima AGI gateway. Unknown
@@ -54,6 +57,8 @@ export interface ProjectJsonRepo {
 }
 
 export interface ProjectJson {
+    /** Exact shared schema revision used by the last successful Genie write. */
+    $schema?: string;
     name?: string;
     createdAt?: string;
     type?: string | null;
@@ -143,8 +148,18 @@ export function readProjectJson(folder: string): ProjectJson | null {
 
 export function writeProjectJson(folder: string, patch: ProjectJson): void {
     const file = path.join(folder, 'project.json');
-    const existing = readProjectJson(folder) ?? {};
-    const merged: ProjectJson = { ...existing, ...patch };
+    const parsed = readProjectJson(folder);
+    if (fs.existsSync(file) && parsed === null) {
+        throw new Error(`Cannot migrate invalid project.json at ${file}; the original was left unchanged.`);
+    }
+    const existing = parsed ?? {};
+    if (typeof existing.$schema === 'string' && existing.$schema !== PROJECT_JSON_SCHEMA) {
+        throw new Error(
+            `Unsupported project.json schema "${existing.$schema}". ` +
+                'Genie will not overwrite a workspace written by a different schema revision.',
+        );
+    }
+    const merged: ProjectJson = { ...existing, ...patch, $schema: PROJECT_JSON_SCHEMA };
 
     // Merge nested known objects rather than replacing them outright.
     if (patch.hosting || existing.hosting) {
@@ -152,6 +167,13 @@ export function writeProjectJson(folder: string, patch: ProjectJson): void {
     }
     if (patch.tynn || existing.tynn) {
         merged.tynn = { ...(existing.tynn ?? {}), ...(patch.tynn ?? {}) };
+    }
+
+    // The first schema-aware write is a migration boundary. Keep the exact legacy
+    // input once so a failed downstream consumer can be restored without guessing.
+    if (fs.existsSync(file) && existing.$schema !== PROJECT_JSON_SCHEMA) {
+        const safeStamp = new Date().toISOString().replace(/[:.]/g, '-');
+        fs.copyFileSync(file, `${file}.pre-schema-${safeStamp}.bak`);
     }
 
     // Atomic write: temp file → rename.
@@ -162,6 +184,7 @@ export function writeProjectJson(folder: string, patch: ProjectJson): void {
 
 export function blankProjectJson(name: string, slug: string): ProjectJson {
     return {
+        $schema: PROJECT_JSON_SCHEMA,
         name,
         createdAt: new Date().toISOString(),
         type: null,

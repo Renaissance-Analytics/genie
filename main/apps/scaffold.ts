@@ -17,6 +17,7 @@
  */
 
 import { claimsGenieTabTitle, claimsReservedName } from './manifest';
+import { GENIE_APP_SCHEMA } from '../schemas/shared';
 
 export interface ScaffoldOptions {
     /** The human name. Becomes the slug, and the address. */
@@ -65,6 +66,7 @@ export function scaffoldApp(options: ScaffoldOptions): ScaffoldFile[] {
     const slug = slugify(name);
 
     const manifest = {
+        $schema: GENIE_APP_SCHEMA,
         id: options.id,
         slug,
         name,
