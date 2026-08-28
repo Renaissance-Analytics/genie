@@ -1869,6 +1869,12 @@ export async function runAgentForMcp(
                         id: agent.id,
                         ...(agent.terminal_spec_id ? { terminalId: agent.terminal_spec_id } : {}),
                         live: !!agent.terminal_spec_id && isTerminalLive(agent.terminal_spec_id),
+                        ...(agent.transport ? { transport: agent.transport } : {}),
+                        ...(agent.transport_verified_at
+                            ? { transportVerifiedAt: agent.transport_verified_at }
+                            : {}),
+                        ...(agent.transport_error ? { transportError: agent.transport_error } : {}),
+                        ...(agent.ready_at ? { readyAt: agent.ready_at } : {}),
                     })),
                 };
             }

@@ -1185,6 +1185,14 @@ export interface SavedAgentInfo {
     terminalId?: string;
     /** Is its TUI running right now? Not-live is dormant, not gone. */
     live: boolean;
+    /** Harness-native AgentInbox adapter required by this provider. */
+    transport?: 'claude-channel' | 'codex-app-server';
+    /** Timestamp of the current boot's successful transport handshake. */
+    transportVerifiedAt?: number;
+    /** Actionable failure from the current boot's transport handshake. */
+    transportError?: string;
+    /** Set only after transport verification and the agent's thumbs-up. */
+    readyAt?: number;
 }
 
 export interface RunAgentRequest {
