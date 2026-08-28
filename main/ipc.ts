@@ -254,7 +254,7 @@ import { hostToolCommandRunner } from './dev-server/seams';
 import { runInstallPlan } from './dev-server/toolchain-install';
 import { planToolUpdate } from './dev-server/toolchain-plan';
 import { installIntentFor } from './dev-server/toolchain-adapters';
-import { DEFAULT_TOOLCHAIN } from './dev-server/toolchain-detect';
+import { DEFAULT_TOOLCHAIN, validateHostToolSelection } from './dev-server/toolchain-detect';
 import type { HostToolName } from './dev-server/toolchain-detect';
 import {
     addToolchainVersion,
@@ -779,15 +779,16 @@ export function registerIpcHandlers(): void {
     // package managers it could install with, the plan for what's missing, and the
     // consent object to approve. A PURE probe — inspecting never installs. Local
     // (this machine) because zero-setup runs where Genie runs.
-    ipcMain.handle('toolchain:inspect', (_e, pmChoice?: string, wanted?: HostToolName[]) =>
-        inspectToolchain({
+    ipcMain.handle('toolchain:inspect', (_e, pmChoice?: string, wanted?: HostToolName[]) => {
+        const selected = validateHostToolSelection(wanted);
+        return inspectToolchain({
             runner: hostToolCommandRunner,
             os: process.platform,
             arch: process.arch,
             ...(pmChoice ? { pmChoice: pmChoice as never } : {}),
-            ...(Array.isArray(wanted) ? { wanted } : {}),
-        }),
-    );
+            ...(selected ? { wanted: selected } : {}),
+        });
+    });
     // Scan the installed toolchain for available updates (Toolchain Manager,
     // #242). A PURE read — it runs `<pm> outdated` etc. but installs nothing;
     // this machine's tools/engines with their update status.
@@ -829,12 +830,13 @@ export function registerIpcHandlers(): void {
     // choice. Clicking Install in the reviewed wizard IS the consent (approved).
     // Per-tool progress streams back on `toolchain:progress`.
     ipcMain.handle('toolchain:install', async (e, pmChoice?: string, wanted?: HostToolName[]) => {
+        const selected = validateHostToolSelection(wanted);
         const ctx = { os: process.platform, arch: process.arch, genieRoot: toolchainRoot() };
         const insp = await inspectToolchain({
             runner: hostToolCommandRunner,
             ...ctx,
             ...(pmChoice ? { pmChoice: pmChoice as never } : {}),
-            ...(Array.isArray(wanted) ? { wanted } : {}),
+            ...(selected ? { wanted: selected } : {}),
         });
         const perform = createToolchainInstallEffect(ctx, toolchainManagerDeps());
         return runInstallPlan({

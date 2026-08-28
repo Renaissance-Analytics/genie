@@ -108,7 +108,12 @@ import {
     setSettings,
     setWorkspaceAgentCap,
 } from '../../db';
-import { manageTerminalsForMcp, registerAgentForMcp, runAgentForMcp } from '../host-tools';
+import {
+    manageTerminalsForMcp,
+    manageWorkspacesForMcp,
+    registerAgentForMcp,
+    runAgentForMcp,
+} from '../host-tools';
 import { terminalManager } from '@particle-academy/fancy-term-host';
 
 // A real database + a real workspace directory on disk. `initDatabase` takes a
@@ -129,6 +134,7 @@ initDatabase(dataDir);
 
 const WS_ID = 'ws-cap';
 const CALLER_ID = 'term-caller';
+const OS_AGENT_ID = 'genie-os-agent';
 
 addWorkspace({
     id: WS_ID,
@@ -137,6 +143,23 @@ addWorkspace({
     project_name: 'Cap Demo',
     tynn_project_id: WS_ID,
     tynn_project_name: 'Cap Demo',
+    shape: 'simple',
+    path: wsDir,
+    editor: null,
+    editor_cmd: null,
+    start_cmd: null,
+    env_file: null,
+    last_opened_at: null,
+    created_by_genie: 0,
+});
+
+addWorkspace({
+    id: 'ws-other',
+    backend: 'tynn',
+    project_id: 'ws-other',
+    project_name: 'Other Project',
+    tynn_project_id: 'ws-other',
+    tynn_project_name: 'Other Project',
     shape: 'simple',
     path: wsDir,
     editor: null,
@@ -265,6 +288,65 @@ afterAll(() => {
     } catch {
         /* best-effort — a locked sqlite file must not fail the run */
     }
+});
+
+describe('the built-in Genie OS agent capability boundary', () => {
+    it('can discover workspaces but cannot use generic project terminal operations', async () => {
+        deleteTerminalSpec(CALLER_ID);
+        createTerminalSpec({
+            id: OS_AGENT_ID,
+            workspace_id: null,
+            label: 'Genie',
+            cwd: tmpRoot,
+            type: 'terminal',
+            meta: { agent_id: 'genie:workstation', agent: 'genie' },
+        });
+
+        const listed = await manageWorkspacesForMcp(OS_AGENT_ID, { action: 'list' });
+        expect(listed.ok).toBe(true);
+        expect(listed.workspaces).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({ id: WS_ID, relation: 'operator' }),
+                expect.objectContaining({ id: 'ws-other', relation: 'operator' }),
+            ]),
+        );
+
+        const terminalAttempt = await manageTerminalsForMcp(OS_AGENT_ID, {
+            action: 'list',
+            workspaceId: WS_ID,
+        });
+        expect(terminalAttempt.ok).toBe(false);
+        expect(terminalAttempt.error).toMatch(/no authority/i);
+    });
+
+    it('may launch only the saved agent configuration, never project command overrides', async () => {
+        deleteTerminalSpec(CALLER_ID);
+        createTerminalSpec({
+            id: OS_AGENT_ID,
+            workspace_id: null,
+            label: 'Genie',
+            cwd: tmpRoot,
+            type: 'terminal',
+            meta: { agent_id: 'genie:workstation', agent: 'genie' },
+        });
+        const registered = await registerAgentForMcp(OS_AGENT_ID, {
+            workspaceId: WS_ID,
+            name: 'safe-launch',
+            purpose: 'A saved project agent',
+            agent: 'claude',
+        });
+        expect(registered.ok).toBe(true);
+
+        const attempted = await runAgentForMcp(OS_AGENT_ID, {
+            action: 'start',
+            workspaceId: WS_ID,
+            name: 'safe-launch',
+            command: 'echo arbitrary-project-command',
+        });
+        expect(attempted.ok).toBe(false);
+        expect(attempted.error).toMatch(/saved configuration/i);
+        expect(spawnedPtys).toHaveLength(0);
+    });
 });
 
 describe('runAgent start, under the limit', () => {

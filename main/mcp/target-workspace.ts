@@ -39,6 +39,8 @@ export interface TargetDecision {
     via: 'self' | 'governed' | 'operator' | 'granted' | 'workstation' | 'denied';
 }
 
+export type OsAgentCapability = 'agent-register' | 'agent-start';
+
 /**
  * Decide whether `callerWorkspaceId` may act on `requestedWorkspaceId`.
  *
@@ -56,10 +58,15 @@ export function decideTargetWorkspace(
     callerWorkspaceId: string | null,
     requestedWorkspaceId: string | undefined,
     governedIds: ReadonlySet<string>,
-    opts: { callerIsOperator?: boolean; callerIsOsAgent?: boolean } = {},
+    opts: {
+        callerIsOperator?: boolean;
+        /** @deprecated Identity alone never grants project access. */
+        callerIsOsAgent?: boolean;
+        osAgentCapability?: OsAgentCapability;
+    } = {},
 ): TargetDecision {
     if (!callerWorkspaceId) {
-        if (opts.callerIsOsAgent && requestedWorkspaceId?.trim()) {
+        if (opts.osAgentCapability && requestedWorkspaceId?.trim()) {
             return {
                 allowed: true,
                 workspaceId: requestedWorkspaceId.trim(),
@@ -137,8 +144,8 @@ export interface TargetResolverDeps {
     /** WORKSTATION OPERATOR (Tynn #248) — the caller's own workspace holds the
      *  designation, so it may act on every workspace on this machine. */
     callerIsOperator?: boolean;
-    /** Immutable Genie OS identity; unlike an unattached shell it may target an explicit workspace. */
-    callerIsOsAgent?: boolean;
+    /** Narrow operation granted to the immutable Genie OS identity. */
+    osAgentCapability?: OsAgentCapability;
 }
 
 /**
@@ -153,7 +160,7 @@ export async function resolveTargetWorkspace(
     const requested = requestedWorkspaceId?.trim();
     const operator = {
         callerIsOperator: deps.callerIsOperator === true,
-        callerIsOsAgent: deps.callerIsOsAgent === true,
+        ...(deps.osAgentCapability ? { osAgentCapability: deps.osAgentCapability } : {}),
     };
     // Fast path: own workspace (or no/unattached caller) — no governance lookup.
     if (!requested || requested === deps.callerWorkspaceId || !deps.callerWorkspaceId) {

@@ -163,16 +163,23 @@ describe('without the operator designation', () => {
 });
 
 describe('the built-in Genie OS agent', () => {
-    it('may target an explicit workspace but never guesses one', () => {
+    it('is denied generic project access even with an explicit target', () => {
         const explicit = decideTargetWorkspace(null, 'project-1', new Set(), {
             callerIsOsAgent: true,
+        });
+        expect(explicit.allowed).toBe(false);
+    });
+
+    it('may target an explicit workspace only for an AgentBuilder capability', () => {
+        const explicit = decideTargetWorkspace(null, 'project-1', new Set(), {
+            osAgentCapability: 'agent-register',
         });
         expect(explicit.allowed).toBe(true);
         expect(explicit.workspaceId).toBe('project-1');
         expect(explicit.via).toBe('operator');
 
         const missing = decideTargetWorkspace(null, undefined, new Set(), {
-            callerIsOsAgent: true,
+            osAgentCapability: 'agent-register',
         });
         expect(missing.allowed).toBe(false);
     });

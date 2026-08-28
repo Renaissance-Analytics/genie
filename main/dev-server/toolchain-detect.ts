@@ -161,6 +161,23 @@ export const TOOL_SPECS: Record<HostToolName, HostToolSpec> = {
     },
 };
 
+export function validateHostToolSelection(value: unknown): HostToolName[] | undefined {
+    if (value === undefined) return undefined;
+    if (!Array.isArray(value)) throw new Error('Unknown toolchain selection: expected a list.');
+    const selected: HostToolName[] = [];
+    for (const item of value) {
+        if (
+            typeof item !== 'string' ||
+            !Object.prototype.hasOwnProperty.call(TOOL_SPECS, item)
+        ) {
+            throw new Error(`Unknown toolchain selection: ${String(item)}.`);
+        }
+        const tool = item as HostToolName;
+        if (!selected.includes(tool)) selected.push(tool);
+    }
+    return selected;
+}
+
 /** What one tool reported. `running` is Docker-only; `detail` explains a failed
  *  probe for the diagnostics pane. */
 export interface HostToolProbe {

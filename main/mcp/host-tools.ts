@@ -1171,6 +1171,7 @@ export async function isOpsProjectFor(callerWorkspacePath: string): Promise<bool
 export async function resolveAgentTarget(
     callerTerminalId: string,
     requestedWorkspaceId: string | undefined,
+    opts: { osAgentCapability?: import('./target-workspace').OsAgentCapability } = {},
 ): Promise<{ decision: TargetDecision; ws: ReturnType<typeof getWorkspace> | null }> {
     // A caller is a terminal OR an installed GApp (Tynn #250). Both land here, so
     // there is one answer to "may this caller act there?" instead of a second,
@@ -1204,7 +1205,9 @@ export async function resolveAgentTarget(
         // row, never from the request: the authority has to come from what the
         // machine was configured to trust, not from what a caller claims.
         callerIsOperator: callerWorkspaceId ? isWorkstationOperator(callerWorkspaceId) : false,
-        callerIsOsAgent,
+        ...(callerIsOsAgent && opts.osAgentCapability
+            ? { osAgentCapability: opts.osAgentCapability }
+            : {}),
     });
     const ws = decision.allowed ? getWorkspace(decision.workspaceId) ?? null : null;
     return { decision, ws };
@@ -1769,7 +1772,9 @@ export async function registerAgentForMcp(
     callerTerminalId: string,
     req: RegisterAgentRequest,
 ): Promise<RegisterAgentResult> {
-    const { decision, ws } = await resolveAgentTarget(callerTerminalId, req.workspaceId);
+    const { decision, ws } = await resolveAgentTarget(callerTerminalId, req.workspaceId, {
+        osAgentCapability: 'agent-register',
+    });
     if (!decision.allowed || !ws) return { ok: false, error: decision.reason };
 
     const resolved = resolveAgentRegistration(ws.path, req);
@@ -1840,7 +1845,29 @@ export async function runAgentForMcp(
     callerTerminalId: string,
     req: RunAgentRequest,
 ): Promise<RunAgentResult> {
-    const { decision, ws } = await resolveAgentTarget(callerTerminalId, req.workspaceId);
+    const callerIsOsAgent = getTerminalSpec(callerTerminalId)?.meta?.agent_id === 'genie:workstation';
+    if (
+        callerIsOsAgent &&
+        req.action === 'start' &&
+        (req.command !== undefined ||
+            req.instructions !== undefined ||
+            req.repo !== undefined ||
+            req.cwd !== undefined ||
+            req.create === true)
+    ) {
+        return {
+            ok: false,
+            error:
+                'The Genie OS agent may launch only a registered agent’s saved configuration; ' +
+                'project commands, instructions, and working-directory overrides are not allowed.',
+        };
+    }
+    const osAgentCapability = req.action === 'list' || req.action === 'start'
+        ? 'agent-start' as const
+        : undefined;
+    const { decision, ws } = await resolveAgentTarget(callerTerminalId, req.workspaceId, {
+        ...(osAgentCapability ? { osAgentCapability } : {}),
+    });
     if (!decision.allowed || !ws) {
         return { ok: false, error: decision.reason };
     }
@@ -2257,11 +2284,19 @@ export async function agentInboxForMcp(
                 const configured = listWorkspaceAgents(ws.id).find(
                     (candidate) => candidate.terminal_spec_id === spec.id,
                 );
-                // The adapter owns the live harness connection and blocks in
-                // AgentInbox.receive. A durable message settles that waiter;
-                // this binding records that the native adapter is connected.
-                // There is intentionally no terminal-input fallback here.
-                harnessTransportRegistry.bind(agentId, required, () => undefined);
+                // Codex is connected by the app-server adapter in terminal/ipc;
+                // an agent handshake may confirm that binding, never replace it.
+                // Claude Channels use the blocking AgentInbox.receive request as
+                // their live connection and therefore do not occupy this registry.
+                if (
+                    required === 'codex-app-server' &&
+                    !harnessTransportRegistry.confirm(agentId, required)
+                ) {
+                    return {
+                        ok: false,
+                        error: 'The Codex app-server adapter is not connected.',
+                    };
+                }
                 if (configured) {
                     markWorkspaceAgentTransportState(getDb(), configured.id, required, { ok: true });
                 }
@@ -2390,8 +2425,17 @@ async function actionableWorkspaces(
     const callerWorkspaceId = callerTerminalId
         ? getTerminalSpec(callerTerminalId)?.workspace_id ?? null
         : null;
+    const callerIsOsAgent = getTerminalSpec(callerTerminalId)?.meta?.agent_id === 'genie:workstation';
     const callerWs = callerWorkspaceId ? getWorkspace(callerWorkspaceId) : null;
     const out: ManagedWorkspaceInfo[] = [];
+    if (callerIsOsAgent) {
+        return listWorkspaces().map((w) => ({
+            id: w.id,
+            name: w.project_name,
+            path: w.path,
+            relation: 'operator' as const,
+        }));
+    }
     if (callerWs) {
         out.push({
             id: callerWs.id,

@@ -7,8 +7,8 @@ export function requiredHarnessTransport(
 ): WorkspaceAgentTransport | null {
     if (provider === 'claude') return 'claude-channel';
     if (provider === 'codex') return 'codex-app-server';
-    if (provider === 'kiwi') return 'kiwi-native';
-    if (provider === 'genie') return 'genie-mcp';
+    // Reserved provider names are not readiness claims. They become available
+    // only when a real harness-owned adapter is implemented.
     return null;
 }
 
@@ -48,6 +48,11 @@ export class HarnessTransportRegistry {
     isVerified(agentId: string, kind?: WorkspaceAgentTransport): boolean {
         const session = this.sessions.get(agentId);
         return !!session && (kind === undefined || session.kind === kind);
+    }
+
+    /** Confirm an existing harness-owned binding without changing its sender. */
+    confirm(agentId: string, kind: WorkspaceAgentTransport): boolean {
+        return this.isVerified(agentId, kind);
     }
 
     kindFor(agentId: string): WorkspaceAgentTransport | null {

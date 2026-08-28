@@ -1402,7 +1402,7 @@ export interface AgentInboxRequest {
     /** registerSession: the generated Codex session id from SessionStart stdin. */
     sessionId?: string;
     /** registerTransport: Genie-owned harness adapter readiness handshake. */
-    transport?: 'claude-channel' | 'codex-app-server' | 'kiwi-native' | 'genie-mcp';
+    transport?: 'claude-channel' | 'codex-app-server';
     /** receipts (optional): how many recent sent DMs to report (default 20, cap 100). */
     limit?: number;
     /** send (optional): files to attach — paths inside the SENDER's workspace.
@@ -2410,7 +2410,7 @@ const AGENTINBOX_TOOL = {
             },
             transport: {
                 type: 'string',
-                enum: ['claude-channel', 'codex-app-server', 'kiwi-native', 'genie-mcp'],
+                enum: ['claude-channel', 'codex-app-server'],
                 description: 'registerTransport: native harness adapter that completed its connection handshake.',
             },
             text: { type: 'string', description: 'send: the message body.' },

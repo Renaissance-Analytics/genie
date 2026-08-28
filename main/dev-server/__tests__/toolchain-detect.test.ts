@@ -6,7 +6,21 @@ import {
     parseToolVersion,
     probeHostTool,
     TOOL_SPECS,
+    validateHostToolSelection,
 } from '../toolchain-detect';
+
+describe('renderer toolchain selection boundary', () => {
+    it('rejects unknown tool names before they reach the tool specification map', () => {
+        expect(() => validateHostToolSelection(['git', 'definitely-not-a-tool'])).toThrow(
+            'Unknown toolchain selection',
+        );
+    });
+
+    it('accepts known tools, removes duplicates, and preserves omission', () => {
+        expect(validateHostToolSelection(['git', 'node', 'git'])).toEqual(['git', 'node']);
+        expect(validateHostToolSelection(undefined)).toBeUndefined();
+    });
+});
 import type { CommandResult, CommandRunner, StreamHandle } from '../container-runtime';
 
 /**
