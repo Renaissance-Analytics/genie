@@ -1950,6 +1950,64 @@ export function listWorkspaceAgents(workspaceId: string): WorkspaceAgentRow[] {
         .all(workspaceId);
 }
 
+export function getWorkspaceAgent(
+    workspaceId: string,
+    provider: string,
+    name: string,
+): WorkspaceAgentRow | undefined {
+    return getDb()
+        .prepare<[string, string, string], WorkspaceAgentRow>(
+            `SELECT * FROM workspace_agents
+             WHERE workspace_id = ? AND provider = ? AND name = ?`,
+        )
+        .get(workspaceId, provider, name);
+}
+
+export function createWorkspaceAgent(
+    row: Omit<WorkspaceAgentRow, 'created_at' | 'updated_at' | 'ready_at' | 'terminal_spec_id'> & {
+        ready_at?: number | null;
+        terminal_spec_id?: string | null;
+    },
+): WorkspaceAgentRow {
+    const now = Date.now();
+    getDb()
+        .prepare(
+            `INSERT INTO workspace_agents
+                (id, workspace_id, provider, name, purpose, avatar, boot_cwd,
+                 persona_path, role, parent_agent_id, terminal_spec_id,
+                 reachability, wake_on_dm, ready_at, created_at, updated_at)
+             VALUES (@id, @workspace_id, @provider, @name, @purpose, @avatar, @boot_cwd,
+                     @persona_path, @role, @parent_agent_id, @terminal_spec_id,
+                     @reachability, @wake_on_dm, @ready_at, @created_at, @updated_at)`,
+        )
+        .run({
+            ...row,
+            terminal_spec_id: row.terminal_spec_id ?? null,
+            ready_at: row.ready_at ?? null,
+            created_at: now,
+            updated_at: now,
+        });
+    return getDb()
+        .prepare<[string], WorkspaceAgentRow>('SELECT * FROM workspace_agents WHERE id = ?')
+        .get(row.id)!;
+}
+
+export function bindWorkspaceAgentTerminal(agentId: string, terminalSpecId: string | null): void {
+    getDb()
+        .prepare(
+            `UPDATE workspace_agents
+             SET terminal_spec_id = ?, ready_at = NULL, updated_at = ?
+             WHERE id = ?`,
+        )
+        .run(terminalSpecId, Date.now(), agentId);
+}
+
+export function deleteWorkspaceAgent(agentId: string): void {
+    getDb()
+        .prepare(`DELETE FROM workspace_agents WHERE id = ? AND role <> 'workspace'`)
+        .run(agentId);
+}
+
 /**
  * Workspaces this host provisioned from a Tynn assignment (`assignment_managed`
  * = 1). The convergent reconcile diffs THIS list against Tynn's current assigned

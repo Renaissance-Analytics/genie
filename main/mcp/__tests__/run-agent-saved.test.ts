@@ -98,14 +98,16 @@ import {
     addWorkspace,
     createTerminalSpec,
     deleteTerminalSpec,
+    deleteWorkspaceAgent,
     getTerminalSpec,
     initDatabase,
     listTerminalSpecs,
+    listWorkspaceAgents,
     setSettings,
     setWorkspaceAgentCap,
     updateTerminalSpec,
 } from '../../db';
-import { runAgentForMcp } from '../host-tools';
+import { registerAgentForMcp, runAgentForMcp } from '../host-tools';
 import { registerAgentInboxSession } from '../../agentinbox/session-registration';
 import { terminalManager } from '@particle-academy/fancy-term-host';
 import type { RunAgentRequest, RunAgentResult } from '../protocol';
@@ -162,9 +164,24 @@ function start(req: Partial<RunAgentRequest> = {}): Promise<RunAgentResult> {
     } as RunAgentRequest);
 }
 
+async function registerAndStart(req: Partial<RunAgentRequest> = {}): Promise<RunAgentResult> {
+    const name = req.name ?? 'general';
+    const provider = req.agent ?? 'claude';
+    const registered = await registerAgentForMcp(CALLER_ID, {
+        name,
+        purpose: `Test agent ${name}`,
+        agent: provider,
+    });
+    if (!registered.ok) return registered as RunAgentResult;
+    return start({ ...req, create: undefined });
+}
+
 beforeEach(() => {
     terminalManager().killAll();
     for (const s of listTerminalSpecs()) deleteTerminalSpec(s.id);
+    for (const agent of listWorkspaceAgents(WS_ID)) {
+        if (agent.role !== 'workspace') deleteWorkspaceAgent(agent.id);
+    }
     spawnedPtys.length = 0;
     modalsRaised.length = 0;
     setSettings({ max_agent_terminals: '' });
@@ -189,12 +206,12 @@ afterAll(() => {
     }
 });
 
-describe('creating a saved agent', () => {
-    it('needs `create` — a bare start refuses instead of minting a stranger', async () => {
+describe('registering an agent before start', () => {
+    it('needs `registerAgent` — a bare start refuses instead of minting a stranger', async () => {
         const r = await start({ name: 'tynn' });
 
         expect(r.ok).toBe(false);
-        expect(r.error).toMatch(/create/i);
+        expect(r.error).toMatch(/registerAgent/i);
         // Nothing came into being, and the user was never asked to approve
         // something that was already refused.
         expect(agentSpecs()).toHaveLength(0);
@@ -202,8 +219,8 @@ describe('creating a saved agent', () => {
         expect(modalsRaised).toEqual([]);
     });
 
-    it('creates one saved agent, with its provider and name on the record', async () => {
-        const r = await start({ name: 'tynn', agent: 'claude', create: true });
+    it('starts one registered agent, with its provider and name on the terminal', async () => {
+        const r = await registerAndStart({ name: 'tynn', agent: 'claude' });
 
         expect(r.ok).toBe(true);
         expect(r.id).toBeTruthy();
@@ -219,10 +236,10 @@ describe('creating a saved agent', () => {
     });
 
     it('refuses a second agent under a name the workspace already has', async () => {
-        const first = await start({ name: 'tynn', agent: 'claude', create: true });
+        const first = await registerAndStart({ name: 'tynn', agent: 'claude' });
         expect(first.ok).toBe(true);
 
-        const second = await start({ name: 'tynn', agent: 'claude', create: true });
+        const second = await registerAndStart({ name: 'tynn', agent: 'claude' });
 
         expect(second.ok).toBe(false);
         expect(second.error).toContain('claude:tynn');
@@ -234,7 +251,7 @@ describe('creating a saved agent', () => {
 
 describe('runAgent start on a SAVED agent', () => {
     it('binds a Codex SessionStart id onto the just-created saved agent without duplicating it', async () => {
-        const created = await start({ name: 'tynn', agent: 'codex', create: true });
+        const created = await registerAndStart({ name: 'tynn', agent: 'codex' });
         expect(created.ok).toBe(true);
         expect(created.ref).toBe('codex:tynn');
         expect(created.sessionBinding).toBe('pending');
@@ -256,7 +273,7 @@ describe('runAgent start on a SAVED agent', () => {
     });
 
     it('REATTACHES to the live agent instead of creating a second one', async () => {
-        const created = await start({ name: 'tynn', agent: 'claude', create: true });
+        const created = await registerAndStart({ name: 'tynn', agent: 'claude' });
         expect(created.ok).toBe(true);
         const ptysAfterCreate = spawnedPtys.length;
 
@@ -279,7 +296,7 @@ describe('runAgent start on a SAVED agent', () => {
         // observable once the timers run.
         vi.useFakeTimers();
         try {
-            const created = await start({ name: 'tynn', agent: 'claude', create: true });
+            const created = await registerAndStart({ name: 'tynn', agent: 'claude' });
             vi.runAllTimers();
             const pty = spawnedPtys[spawnedPtys.length - 1]!;
             const writesAfterLaunch = pty.written.length;
@@ -304,7 +321,7 @@ describe('runAgent start on a SAVED agent', () => {
     });
 
     it('REVIVES a saved agent whose pty exited — same record, no second agent', async () => {
-        const created = await start({ name: 'tynn', agent: 'claude', create: true });
+        const created = await registerAndStart({ name: 'tynn', agent: 'claude' });
         const agentIdBefore = getTerminalSpec(created.id!)?.meta?.agent_id;
         expect(agentIdBefore).toBeTruthy();
 
@@ -326,8 +343,8 @@ describe('runAgent start on a SAVED agent', () => {
     });
 
     it('keeps two providers under the same name distinct', async () => {
-        const claude = await start({ name: 'tynn', agent: 'claude', create: true });
-        const codex = await start({ name: 'tynn', agent: 'codex', create: true });
+        const claude = await registerAndStart({ name: 'tynn', agent: 'claude' });
+        const codex = await registerAndStart({ name: 'tynn', agent: 'codex' });
         expect(claude.ok && codex.ok).toBe(true);
         expect(claude.id).not.toBe(codex.id);
 
@@ -347,8 +364,8 @@ describe('runAgent start on a SAVED agent', () => {
 
 describe('listing the workspace roster', () => {
     it('reports every saved agent by its canonical ref, and never invents one', async () => {
-        await start({ name: 'tynn', agent: 'claude', create: true });
-        await start({ name: 'tynn-slave', agent: 'codex', create: true });
+        await registerAndStart({ name: 'tynn', agent: 'claude' });
+        await registerAndStart({ name: 'tynn-slave', agent: 'codex' });
 
         const listed = await runAgentForMcp(CALLER_ID, { action: 'list' });
 

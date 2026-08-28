@@ -32,6 +32,8 @@ import {
     type ManageTerminalsResult,
     type RunAgentRequest,
     type RunAgentResult,
+    type RegisterAgentRequest,
+    type RegisterAgentResult,
     type ManageWorkspacesRequest,
     type ManageWorkspacesResult,
     type AgentInboxRequest,
@@ -136,6 +138,11 @@ export interface ServerDeps {
         terminalId: string,
         req: ManageTerminalsRequest,
     ) => Promise<ManageTerminalsResult>;
+    /** Persist an AMS agent configuration without launching it. */
+    registerAgent?: (
+        terminalId: string,
+        req: RegisterAgentRequest,
+    ) => Promise<RegisterAgentResult>;
     /** Launch + control a coding agent inside a terminal (runAgent tool). */
     runAgent: (
         terminalId: string,
@@ -666,6 +673,7 @@ async function handle(
         devServerAvailable: deps.devServerAvailable,
         provisionWorkspaces: deps.provisionWorkspaces,
         manageTerminals: deps.manageTerminals,
+        registerAgent: deps.registerAgent,
         runAgent: deps.runAgent,
         manageWorkspaces: deps.manageWorkspaces,
         agentInbox: deps.agentInbox,

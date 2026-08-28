@@ -19,6 +19,10 @@ import {
     getAllSettings,
     getTerminalSpec,
     getWorkspace,
+    getWorkspaceAgent,
+    createWorkspaceAgent,
+    listWorkspaceAgents,
+    bindWorkspaceAgentTerminal,
     isWorkstationOperator,
     createTerminalSpec,
     updateTerminalSpec,
@@ -58,9 +62,10 @@ import {
     agentSessionTranscriptExists,
     isTerminalLive,
 } from '../terminal/ipc';
-import { agentRef, savedAgentKey } from '../agents/identity';
+import { agentName, agentRef, savedAgentKey } from '../agents/identity';
 import { resolveWorkstationProvider } from '../agents/provider';
 import { decideAgentStart, savedAgentsOf, type SavedAgent } from '../agents/saved';
+import { resolveAgentRegistration } from '../agents/registration';
 import { withProviderStartupInstructions } from '../agents/startup';
 import {
     PASTE_SUBMIT_DELAY_MS,
@@ -131,6 +136,8 @@ import type {
     ManagedTerminalInfo,
     RunAgentRequest,
     RunAgentResult,
+    RegisterAgentRequest,
+    RegisterAgentResult,
     SavedAgentInfo,
     AgentType,
     ManageWorkspacesRequest,
@@ -1752,6 +1759,62 @@ function savedAgentsOfWorkspace(workspaceId: string): SavedAgent[] {
 
 /** A saved agent in the shape the tool reports it — logo-and-name for humans,
  *  the composed ref for machines. */
+export async function registerAgentForMcp(
+    callerTerminalId: string,
+    req: RegisterAgentRequest,
+): Promise<RegisterAgentResult> {
+    const { decision, ws } = await resolveAgentTarget(callerTerminalId, req.workspaceId);
+    if (!decision.allowed || !ws) return { ok: false, error: decision.reason };
+
+    const resolved = resolveAgentRegistration(ws.path, req);
+    if (!resolved.ok) return resolved;
+    const provider = req.agent ?? resolveWorkstationProvider(getAllSettings());
+    if (getWorkspaceAgent(ws.id, provider, resolved.name)) {
+        return {
+            ok: false,
+            error: `Agent "${savedAgentKey(provider, resolved.name)}" is already registered in this workspace.`,
+        };
+    }
+
+    let avatar: string | null = null;
+    if (req.avatar?.trim()) {
+        const candidate = path.resolve(ws.path, req.avatar.trim());
+        const rel = path.relative(path.resolve(ws.path), candidate);
+        if (rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
+            return { ok: false, error: 'The agent avatar must stay inside the workspace.' };
+        }
+        avatar = candidate;
+    }
+
+    const row = createWorkspaceAgent({
+        id: crypto.randomUUID(),
+        workspace_id: ws.id,
+        provider,
+        name: resolved.name,
+        purpose: resolved.purpose,
+        avatar,
+        boot_cwd: resolved.bootCwd,
+        persona_path: resolved.personaPath,
+        role: 'specialized',
+        parent_agent_id: `workspace:${ws.id}`,
+        reachability: 'workspace',
+        wake_on_dm: 1,
+    });
+    broadcastWorkspacesChanged();
+    return {
+        ok: true,
+        agent: {
+            id: row.id,
+            workspaceId: row.workspace_id,
+            provider,
+            name: row.name,
+            purpose: row.purpose,
+            ...(row.avatar ? { avatar: row.avatar } : {}),
+            ...(row.boot_cwd ? { bootFolder: path.relative(ws.path, row.boot_cwd) || '.' } : {}),
+        },
+    };
+}
+
 function savedAgentInfo(agent: SavedAgent): SavedAgentInfo {
     return {
         ref: agentRef({
@@ -1785,36 +1848,42 @@ export async function runAgentForMcp(
     try {
         switch (req.action) {
             case 'list': {
+                const configs = listWorkspaceAgents(ws.id).filter((agent) => !!agent.provider);
                 return {
                     ok: true,
-                    agents: savedAgentsOfWorkspace(ws.id).map(savedAgentInfo),
+                    agents: configs.map((agent) => ({
+                        ref: savedAgentKey(agent.provider as AgentType, agent.name),
+                        provider: agent.provider as AgentType,
+                        name: agent.name,
+                        id: agent.id,
+                        ...(agent.terminal_spec_id ? { terminalId: agent.terminal_spec_id } : {}),
+                        live: !!agent.terminal_spec_id && isTerminalLive(agent.terminal_spec_id),
+                    })),
                 };
             }
             case 'start': {
-                // Resolve the SAVED agent FIRST — before a command, a cwd, a cap
-                // check or a modal. Everything below is about bringing a specific
-                // agent up, and which agent that is has to be settled before the
-                // user is asked to approve anything on its behalf.
-                const saved = savedAgentsOfWorkspace(ws.id);
-                const plan = decideAgentStart(saved, {
-                    name: req.name,
-                    provider: req.agent,
-                    create: req.create,
-                    workstationProvider: resolveWorkstationProvider(getAllSettings()),
-                });
-                if (plan.kind === 'refuse') {
-                    // The roster travels with the refusal: every refusal here is
-                    // "you meant one of these", and making the caller spend a
-                    // second round-trip to find out which is how a tool teaches
-                    // nothing.
-                    return { ok: false, error: plan.error, agents: saved.map(savedAgentInfo) };
+                const requestedName = agentName(req.name ?? 'workspace');
+                const candidates = listWorkspaceAgents(ws.id).filter(
+                    (item) =>
+                        item.provider &&
+                        item.name === requestedName &&
+                        (!req.agent || item.provider === req.agent),
+                );
+                if (candidates.length !== 1) {
+                    const reason = candidates.length > 1
+                        ? `More than one registered agent is named "${requestedName}" (${candidates.map((item) => savedAgentKey(item.provider as AgentType, item.name)).join(', ')}); pass \`agent\` to choose its provider.`
+                        : `No registered agent "${requestedName}" in this workspace. Use registerAgent first.`;
+                    return { ok: false, error: reason };
                 }
-
-                if (plan.kind === 'reattach') {
-                    return await reattachSavedAgent(ws, plan.agent, plan.how);
+                const config = candidates[0]!;
+                const agent = config.provider as AgentType;
+                if (config.terminal_spec_id) {
+                    const saved = savedAgentsOfWorkspace(ws.id).find(
+                        (item) => item.specId === config.terminal_spec_id,
+                    );
+                    if (saved) return await reattachSavedAgent(ws, saved, saved.live ? 'warm' : 'revive');
+                    bindWorkspaceAgentTerminal(config.id, null);
                 }
-
-                const agent = plan.provider;
                 // Base command + the agent type's always-on flags (session-id
                 // injected later in createAgentTerminal), then the agent's
                 // PRE-LOADED INSTRUCTIONS as an opening prompt — the same
@@ -1830,10 +1899,19 @@ export async function runAgentForMcp(
                     };
                 }
                 const command = base;
-                const approvalCommand = req.instructions
-                    ? withProviderStartupInstructions(agent, base, req.instructions)
+                const bootInstructions = [
+                    'Before doing work, read and follow the workspace AGENTS.md/CLAUDE.md router and the applicable `.agents/_genie/genie-{tui}.md` provider instructions.',
+                    config.persona_path && fs.existsSync(config.persona_path)
+                        ? `Then read and adopt your specialized persona from ${config.persona_path}.`
+                        : '',
+                    req.instructions?.trim() ?? '',
+                ].filter(Boolean).join('\n\n');
+                const approvalCommand = bootInstructions
+                    ? withProviderStartupInstructions(agent, base, bootInstructions)
                     : base;
-                const cwdR = resolveAgentCwd(ws, { repo: req.repo, cwd: req.cwd });
+                const cwdR = req.repo || req.cwd
+                    ? resolveAgentCwd(ws, { repo: req.repo, cwd: req.cwd })
+                    : { cwd: config.boot_cwd || ws.path };
                 if ('error' in cwdR) return { ok: false, error: cwdR.error };
 
                 // The agent-terminal cap (Tynn #117), before the modal — see the
@@ -1848,7 +1926,7 @@ export async function runAgentForMcp(
                 const approved = await approveTerminalAction(ws, {
                     title: `An agent wants to LAUNCH a ${agent} coding agent (it can read, write, and run code on its own):`,
                     lines: [
-                        `saved as: ${savedAgentKey(agent, plan.name)}`,
+                        `saved as: ${savedAgentKey(agent, config.name)}`,
                         `command: ${approvalCommand}`,
                         `in: ${cwdR.cwd}`,
                     ],
@@ -1865,24 +1943,25 @@ export async function runAgentForMcp(
                     // The NAME, not "<provider> agent". The label is what the
                     // sidebar and the Floor render, and a roster of "claude agent"
                     // rows is the anonymity this story removes.
-                    label: `${agent} · ${plan.name}`,
-                    agentMeta: { agent, command, instructions: req.instructions },
+                    label: `${agent} · ${config.name}`,
+                    agentMeta: { agent, command, instructions: bootInstructions },
                     createdBy: 'agent',
                     // The name IS the AgentInbox purpose — one field, so the ref
                     // and the inbox can never disagree about what it is called.
-                    agentInbox: { purpose: plan.name },
+                    agentInbox: { purpose: config.name },
                 });
+                bindWorkspaceAgentTerminal(config.id, id);
                 return {
                     ok: true,
                     id,
                     agent,
                     command: launchedCommand ?? command,
-                    name: plan.name,
+                    name: config.name,
                     reattached: false,
                     sessionBinding: chatSessionId ? 'bound' : 'pending',
                     // Null chat-id for Codex is correct, not a failure: it binds
                     // at SessionStart, onto this record.
-                    ref: agentRef({ provider: agent, name: plan.name, chatSessionId }),
+                    ref: agentRef({ provider: agent, name: config.name, chatSessionId }),
                 };
             }
             case 'send': {

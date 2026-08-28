@@ -27,6 +27,7 @@ function ctx(overrides: Partial<McpContext> = {}): McpContext {
         manageTerminals: vi
             .fn()
             .mockResolvedValue({ ok: true, terminals: [] }),
+        registerAgent: vi.fn().mockResolvedValue({ ok: true }),
         runAgent: vi.fn().mockResolvedValue({ ok: true }),
         manageWorkspaces: vi
             .fn()
@@ -82,6 +83,7 @@ describe('handleMcpMessage', () => {
             'manageSite',
             'manageGappDev',
             'manageTerminals',
+            'registerAgent',
             'runAgent',
             'manageWorkspaces',
             'agentinbox',
@@ -116,6 +118,7 @@ describe('handleMcpMessage', () => {
             'manageSite',
             'manageGappDev',
             'manageTerminals',
+            'registerAgent',
             'runAgent',
             'manageWorkspaces',
             'agentinbox',
@@ -621,7 +624,47 @@ describe('handleMcpMessage', () => {
         expect(res?.error?.code).toBe(-32602);
     });
 
-    it('runAgent routes a CREATE to the dep and says it created a saved agent', async () => {
+    it('registerAgent routes identity and boot configuration without starting a TUI', async () => {
+        const registerAgent = vi.fn().mockResolvedValue({
+            ok: true,
+            agent: {
+                id: 'cfg-1',
+                workspaceId: 'ws-1',
+                provider: 'codex',
+                name: 'reviewer',
+                purpose: 'Review releases',
+            },
+        });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 42,
+                method: 'tools/call',
+                params: {
+                    name: 'registerAgent',
+                    arguments: {
+                        name: 'reviewer',
+                        purpose: 'Review releases',
+                        agent: 'codex',
+                        bootFolder: 'repos/app',
+                    },
+                },
+            },
+            ctx({ registerAgent }),
+        );
+        expect(registerAgent).toHaveBeenCalledWith('term-1', {
+            workspaceId: undefined,
+            name: 'reviewer',
+            purpose: 'Review releases',
+            agent: 'codex',
+            avatar: undefined,
+            bootFolder: 'repos/app',
+        });
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toContain('Registered codex:reviewer');
+    });
+
+    it('runAgent routes a first START to the dep and says it started the registered agent', async () => {
         const runAgent = vi.fn().mockResolvedValue({
             ok: true,
             id: 'a-1',
@@ -642,7 +685,6 @@ describe('handleMcpMessage', () => {
                         action: 'start',
                         agent: 'claude',
                         name: 'tynn',
-                        create: true,
                         instructions: 'Read AGENTS.md first.',
                         terminalId: 'term-Z',
                     },
@@ -651,13 +693,12 @@ describe('handleMcpMessage', () => {
             ctx({ terminalId: 'term-Z', runAgent }),
         );
         // The saved-agent arguments must REACH the dep — a schema that advertises
-        // `name` / `create` / `instructions` and a router that drops them is the
+        // `name` / `instructions` and a router that drops them is the
         // shape of bug where an agent's careful call silently becomes a bare one.
         expect(runAgent).toHaveBeenCalledWith('term-Z', {
             action: 'start',
             workspaceId: undefined,
             name: 'tynn',
-            create: true,
             instructions: 'Read AGENTS.md first.',
             agent: 'claude',
             command: undefined,
@@ -672,7 +713,7 @@ describe('handleMcpMessage', () => {
             strip: undefined,
         });
         const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
-        expect(text).toContain('Created saved agent claude:tynn:sess-1');
+        expect(text).toContain('Started registered agent claude:tynn:sess-1');
         expect(text).toContain('a-1');
     });
 

@@ -440,6 +440,11 @@ export interface McpContext {
         terminalId: string,
         req: ManageTerminalsRequest,
     ) => Promise<ManageTerminalsResult>;
+    /** Persist a first-class AMS configuration without launching its TUI. */
+    registerAgent?: (
+        terminalId: string,
+        req: RegisterAgentRequest,
+    ) => Promise<RegisterAgentResult>;
     /**
      * Launch + control a coding agent inside a terminal (the runAgent tool),
      * layered on manageTerminals: start (spawn a terminal + launch claude/codex/
@@ -1169,8 +1174,10 @@ export interface SavedAgentInfo {
     /** The name this agent is reopened by. Human-facing surfaces show the
      *  provider's LOGO and this — never the chat-id. */
     name: string;
-    /** Its terminal id — a saved agent IS a terminal in the sidebar and Floor. */
+    /** Durable AMS configuration id. */
     id: string;
+    /** Its current terminal binding, absent while dormant. */
+    terminalId?: string;
     /** Is its TUI running right now? Not-live is dormant, not gone. */
     live: boolean;
 }
@@ -1178,8 +1185,8 @@ export interface SavedAgentInfo {
 export interface RunAgentRequest {
     /**
      * - `start`: bring a SAVED agent up — REATTACHING to it when it already
-     *   exists, rather than minting a second one. With `create: true` it defines
-     *   a new saved agent instead.
+     *   exists, rather than minting a second one. New configurations are created
+     *   by `registerAgent`, never as a side effect of starting.
      * - `list`: read-only — the workspace's saved agents.
      * - the rest act on a running agent terminal by `id`.
      */
@@ -1195,12 +1202,7 @@ export interface RunAgentRequest {
      * existed is called.
      */
     name?: string;
-    /**
-     * start: define a NEW saved agent under `name`. Required when no saved agent
-     * matches, so creating one is a deliberate act rather than the side effect of
-     * a typo. Refused when `name` is already taken (start it without `create` to
-     * reattach).
-     */
+    /** @deprecated Registration moved to registerAgent. Ignored by the MCP dispatcher. */
     create?: boolean;
     /**
      * start: PRE-LOADED INSTRUCTIONS — a prompt delivered as part of startup
@@ -1244,6 +1246,30 @@ export interface RunAgentRequest {
     strip?: boolean;
 }
 
+export interface RegisterAgentRequest {
+    workspaceId?: string;
+    name: string;
+    purpose: string;
+    agent?: AgentType;
+    avatar?: string;
+    /** Workspace-relative folder. It must resolve inside the workspace root. */
+    bootFolder?: string;
+}
+
+export interface RegisterAgentResult {
+    ok: boolean;
+    error?: string;
+    agent?: {
+        id: string;
+        workspaceId: string;
+        provider: AgentType;
+        name: string;
+        purpose: string;
+        avatar?: string;
+        bootFolder?: string;
+    };
+}
+
 export interface RunAgentResult {
     ok: boolean;
     /** Set when ok is false (denied, no command configured, unknown id, …). */
@@ -1259,8 +1285,8 @@ export interface RunAgentResult {
     ref?: string;
     /** start: the saved agent's name. */
     name?: string;
-    /** start: TRUE when this reattached to a saved agent, FALSE when it created
-     *  one. The distinction the whole story turns on — never inferred. */
+    /** start: TRUE when this reattached to an existing TUI, FALSE on the
+     *  registered agent's first launch. */
     reattached?: boolean;
     /** start: whether the harness chat id is already attached to the durable saved agent. */
     sessionBinding?: 'bound' | 'pending';
@@ -2128,10 +2154,40 @@ const MANAGE_TERMINALS_TOOL = {
     },
 };
 
+const REGISTER_AGENT_TOOL = {
+    name: 'registerAgent',
+    description:
+        'Create a durable AMS agent configuration without launching it. Registration records identity, purpose, provider, optional avatar, and an optional workspace-contained boot folder. Use runAgent afterwards to start the registered agent. This is short-term agent configuration; Agent Builder remains a plugin.',
+    inputSchema: {
+        type: 'object',
+        properties: {
+            ...TERMINAL_ID_PROP,
+            ...TARGET_WORKSPACE_PROP,
+            name: { type: 'string', description: 'Stable human-facing agent name.' },
+            purpose: { type: 'string', description: 'What this agent is responsible for.' },
+            agent: {
+                type: 'string',
+                enum: agentProviders(),
+                description: 'The TUI provider. Defaults to the workstation provider.',
+            },
+            avatar: {
+                type: 'string',
+                description: 'Optional workspace-relative avatar path.',
+            },
+            bootFolder: {
+                type: 'string',
+                description: 'Optional workspace-relative boot folder. Must resolve inside the workspace.',
+            },
+        },
+        required: ['name', 'purpose'],
+        additionalProperties: false,
+    },
+};
+
 const RUN_AGENT_TOOL = {
     name: 'runAgent',
     description:
-        "Start and control a CODING AGENT (claude / codex / a custom CLI) in this workspace — or one you govern. An agent is SAVED WORKSPACE CONFIGURATION, like a site or a service: it is defined once, it persists, and it is REOPENED rather than recreated. It is still a terminal — it appears in the workspace sidebar and the Floor UX like any other. Its canonical id is `{provider}:{name}:{chat-id}` (e.g. `claude:tynn`, `codex:tynn-slave`); the chat-id is addressing only — show people the provider's logo and the NAME. Actions: `list` (read-only — this workspace's saved agents, each with its `ref`, `name`, terminal `id` and whether it is live); `start` (bring the saved agent `name` up — it REATTACHES to that agent if it exists, running or dormant, and does NOT create a second one; `agent` only disambiguates one name saved under two providers; optional `instructions` are PRE-LOADED as the agent's opening prompt; optional `repo`/`cwd`; returns `id`, `ref`, and `reattached`); `start` with `create: true` (DEFINE A NEW saved agent under `name` — this is the deliberate act of creating one, and it is refused if that name is taken; `agent` picks the provider, defaulting to the workstation's; SPAWNS AN AUTONOMOUS AGENT that can read, write and run code on its own, so it is high-power); `send` (deliver a `prompt` to the running agent `id` — SUBMITTED by default, even multi-line: the prompt is wrapped in bracketed paste with the Enter delivered separately so the agent's TUI submits it instead of leaving it parked as a pasted buffer; pass `submit:false` to load without sending, or `key` (`enter`/`escape`/`ctrl-c`) to deliver a bare keypress — e.g. a lone `enter` to submit or clear a stuck multi-line buffer); `read` (its output — `cursor` for new output, or `bytes` for the last N; add `strip:true` for plain text with escape codes removed); `stop` (terminate the agent `id` — the SAVED agent survives, `start` brings it back); `restart` (GRACEFULLY relaunch the agent `id` — resumes the SAME conversation via `--resume` in a fresh terminal, so its TUI reconnects to the current MCP rig / `.mcp.json` after a genie update WITHOUT losing context; claude-only, needs a captured session; returns the NEW terminal `id`). SAFETY: creating an agent, `send`, and `restart` are APPROVAL-GATED — when the target workspace requires approval (the default) each blocks on an OS modal showing exactly what will launch/run until the user approves; OFF runs immediately. `list`, `read` and reattaching to an already-approved saved agent never prompt.",
+        "Start and control a REGISTERED coding agent (claude / codex / a custom CLI) in this workspace — or one you govern. Registration is a separate `registerAgent` call; `runAgent` never creates configuration. Actions: `list` (registered agents, including dormant ones); `start` (launch or resume the registered `name`; defaults to the Workspace Agent); `send`; `read`; `stop`; `restart`. Every agent remains terminal-based, while its durable AMS identity survives terminal restarts. SAFETY: first launch, `send`, and `restart` are approval-gated when the workspace requires it; listing, reading, and reattaching are read-only/already-approved.",
     inputSchema: {
         type: 'object',
         properties: {
@@ -2147,11 +2203,6 @@ const RUN_AGENT_TOOL = {
                 description:
                     "start: the SAVED AGENT'S NAME — what you reopen it by (`tynn` in `claude:tynn`). Starting a name that already exists REATTACHES to that agent instead of creating another. Default 'general' (the workspace's unnamed agent).",
             },
-            create: {
-                type: 'boolean',
-                description:
-                    'start: DEFINE A NEW saved agent under `name`. Required when no saved agent matches — creating one is deliberate, never a side effect. Refused when the name is already taken (start it without `create` to reattach).',
-            },
             instructions: {
                 type: 'string',
                 description:
@@ -2163,12 +2214,12 @@ const RUN_AGENT_TOOL = {
                 // from this enum cannot be NAMED over MCP, whatever the types say.
                 enum: agentProviders(),
                 description:
-                    "start: which agent CLI. On a REATTACH the saved record decides — this only disambiguates one name saved under two providers. On a create, omitting it takes the workstation's default agent.",
+                    "start: only disambiguates registered agents with the same name under different providers. The registered record decides what launches.",
             },
             command: {
                 type: 'string',
                 description:
-                    "start + create: the exact command line to launch. Required for 'custom' unless a custom command is configured in Settings; overrides the configured command for claude/codex.",
+                    "start: optional exact command override. Required for a custom provider unless its command is configured in Settings.",
             },
             repo: {
                 type: 'string',
@@ -3098,6 +3149,7 @@ const CORE_TOOLS = [
     MANAGE_SERVICE_TOOL,
     MANAGE_GAPP_DEV_TOOL,
     MANAGE_TERMINALS_TOOL,
+    REGISTER_AGENT_TOOL,
     RUN_AGENT_TOOL,
     MANAGE_WORKSPACES_TOOL,
     AGENTINBOX_TOOL,
@@ -3578,6 +3630,29 @@ export async function handleMcpMessage(
                     ],
                 });
             }
+            if (params.name === 'registerAgent') {
+                const a = (params.arguments ?? {}) as Partial<RegisterAgentRequest>;
+                if (!a.name?.trim() || !a.purpose?.trim()) {
+                    return err(msg.id, -32602, 'registerAgent requires non-empty `name` and `purpose`.');
+                }
+                if (!ctx.registerAgent) {
+                    return err(msg.id, -32603, 'registerAgent is unavailable in this Genie runtime.');
+                }
+                const result = await ctx.registerAgent(ctx.terminalId, {
+                    workspaceId: a.workspaceId,
+                    name: a.name,
+                    purpose: a.purpose,
+                    agent: a.agent,
+                    avatar: a.avatar,
+                    bootFolder: a.bootFolder,
+                });
+                const summary = result.ok
+                    ? `Registered ${result.agent?.provider ?? ''}:${result.agent?.name ?? ''}. Use runAgent start to launch it.`
+                    : `registerAgent failed: ${result.error ?? 'unknown error'}`;
+                return ok(msg.id, {
+                    content: [{ type: 'text', text: `${summary}\n\n${JSON.stringify(result, null, 2)}` }],
+                });
+            }
             if (params.name === 'runAgent') {
                 const a = (params.arguments ?? {}) as Partial<RunAgentRequest>;
                 const action = a.action;
@@ -3599,7 +3674,6 @@ export async function handleMcpMessage(
                     action,
                     workspaceId: a.workspaceId,
                     name: a.name,
-                    create: a.create,
                     instructions: a.instructions,
                     agent: a.agent,
                     command: a.command,
@@ -3622,7 +3696,7 @@ export async function handleMcpMessage(
                     // caller to infer from a terminal id it may not have seen before.
                     summary = result.reattached
                         ? `Reattached to saved agent ${result.ref ?? ''} (terminal ${result.id ?? '?'}).`
-                        : `Created saved agent ${result.ref ?? ''} and launched it as terminal ${result.id ?? '?'}.`;
+                        : `Started registered agent ${result.ref ?? ''} as terminal ${result.id ?? '?'}.`;
                 } else if (action === 'list') {
                     summary = `${result.agents?.length ?? 0} saved agent(s) in this workspace.`;
                 } else if (action === 'read') {

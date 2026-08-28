@@ -45,6 +45,19 @@ async function advertisedAgentEnum(): Promise<string[]> {
     return props?.agent?.enum ?? [];
 }
 
+async function advertisedAgentTools(): Promise<Array<{ name: string; inputSchema: { properties?: Record<string, unknown> } }>> {
+    const ctx = {
+        terminalId: 'term-1',
+        serverName: 'genie',
+        serverVersion: '0.0.0-test',
+        registerAgent: vi.fn(),
+        runAgent: vi.fn(),
+        isOpsProject: vi.fn().mockResolvedValue(false),
+    } as unknown as McpContext;
+    const res = await handleMcpMessage({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, ctx);
+    return (res?.result as { tools: Array<{ name: string; inputSchema: { properties?: Record<string, unknown> } }> }).tools;
+}
+
 describe('the registry is the source of truth', () => {
     it('knows the providers Genie ships', () => {
         expect(REGISTRY_IDS).toEqual(['claude', 'codex', 'custom']);
@@ -67,6 +80,18 @@ describe('the registry is the source of truth', () => {
 });
 
 describe('every provider list is DERIVED, not restated', () => {
+    it('advertises registration separately and keeps runAgent start-only for creation', async () => {
+        const tools = await advertisedAgentTools();
+        const register = tools.find((tool) => tool.name === 'registerAgent');
+        const run = tools.find((tool) => tool.name === 'runAgent');
+
+        expect(register).toBeDefined();
+        expect(register?.inputSchema.properties).toHaveProperty('purpose');
+        expect(register?.inputSchema.properties).toHaveProperty('avatar');
+        expect(register?.inputSchema.properties).toHaveProperty('bootFolder');
+        expect(run?.inputSchema.properties).not.toHaveProperty('create');
+    });
+
     /**
      * `main/agents/identity.ts` carried `const PROVIDERS: readonly string[]`,
      * deliberately outside the union so the compiler could not check it. That is

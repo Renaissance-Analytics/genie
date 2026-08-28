@@ -75,6 +75,7 @@ function appMcpContext(deps: ServerDeps, appId: string) {
         devServerAvailable: deps.devServerAvailable,
         provisionWorkspaces: deps.provisionWorkspaces,
         manageTerminals: deps.manageTerminals,
+        registerAgent: deps.registerAgent,
         runAgent: deps.runAgent,
         manageWorkspaces: deps.manageWorkspaces,
         agentInbox: deps.agentInbox,
