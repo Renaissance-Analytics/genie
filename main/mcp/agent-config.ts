@@ -30,6 +30,7 @@ import { pluginAgentSkills, type PluginSkill } from '../plugins/registry';
 
 export const GENIE_SERVER_NAME = 'genie';
 export const TYNN_SERVER_NAME = 'tynn';
+export const AGENTINBOX_CLAUDE_CHANNEL_NAME = 'genie-agentinbox-channel';
 const CODEX_SESSION_HOOK_BEGIN = '# BEGIN GENIE CODEX SESSION HOOK';
 const CODEX_SESSION_HOOK_END = '# END GENIE CODEX SESSION HOOK';
 
@@ -41,6 +42,137 @@ export function claudeEntry(url: string): JsonObj {
 }
 export function cursorEntry(url: string): JsonObj {
     return { url };
+}
+
+function claudeChannelBridgePath(workspacePath: string): string {
+    return path.join(workspacePath, '.agents', '_genie', 'agentinbox-claude-channel.cjs');
+}
+
+export function claudeChannelEntry(workspacePath: string, url: string): JsonObj {
+    return {
+        command: process.execPath,
+        args: [claudeChannelBridgePath(workspacePath)],
+        env: {
+            GENIE_MCP_URL: url,
+            ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
+        },
+    };
+}
+
+const CLAUDE_CHANNEL_OPT_IN =
+    `--dangerously-load-development-channels server:${AGENTINBOX_CLAUDE_CHANNEL_NAME}`;
+
+export function withClaudeAgentInboxChannelLaunch(
+    command: string,
+    input: { agent: string; mcpSyncClaudeOff: boolean },
+): string {
+    if (input.agent !== 'claude' || input.mcpSyncClaudeOff) return command;
+    if (command.includes(CLAUDE_CHANNEL_OPT_IN)) return command;
+    return `${command.trim()} ${CLAUDE_CHANNEL_OPT_IN}`;
+}
+
+/** Genie-owned Claude Code Channel adapter for the harness-neutral AgentInbox. */
+export function claudeChannelBridge(): string {
+    return `'use strict';
+
+const endpoint = process.env.GENIE_MCP_URL;
+let requestId = 1;
+let cursor = 0;
+let stopped = false;
+
+function write(message) {
+    process.stdout.write(JSON.stringify(message) + '\\n');
+}
+
+function decodeRpc(body) {
+    const lines = body.split(/\\r?\\n/).filter((line) => line.startsWith('data:'));
+    const raw = lines.length ? lines.at(-1).slice(5).trim() : body.trim();
+    return JSON.parse(raw);
+}
+
+async function agentInbox(args) {
+    if (!endpoint) throw new Error('GENIE_MCP_URL is required.');
+    const id = requestId++;
+    const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+            'content-type': 'application/json',
+            accept: 'application/json, text/event-stream',
+        },
+        body: JSON.stringify({
+            jsonrpc: '2.0',
+            id,
+            method: 'tools/call',
+            params: { name: 'agentinbox', arguments: args },
+        }),
+    });
+    if (!response.ok) throw new Error('AgentInbox HTTP ' + response.status);
+    const rpc = decodeRpc(await response.text());
+    if (rpc.error) throw new Error(rpc.error.message || 'AgentInbox request failed.');
+    const text = rpc.result?.content?.find((part) => part.type === 'text')?.text || '';
+    const json = text.slice(text.indexOf('{'));
+    return JSON.parse(json);
+}
+
+async function deliver() {
+    await agentInbox({ action: 'registerTransport', transport: 'claude-channel' });
+    while (!stopped) {
+        const result = await agentInbox({ action: 'receive', cursor, wait: true, timeoutMs: 240000 });
+        cursor = Number(result.cursor || cursor);
+        for (const message of result.messages || []) {
+            write({
+                jsonrpc: '2.0',
+                method: 'notifications/claude/channel',
+                params: {
+                    content: message.text,
+                    meta: {
+                        source: 'genie-agentinbox',
+                        messageId: message.id,
+                        from: message.from,
+                        kind: message.kind,
+                    },
+                },
+            });
+        }
+    }
+}
+
+let buffer = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+    buffer += chunk;
+    let newline;
+    while ((newline = buffer.indexOf('\\n')) >= 0) {
+        const line = buffer.slice(0, newline).trim();
+        buffer = buffer.slice(newline + 1);
+        if (!line) continue;
+        let message;
+        try { message = JSON.parse(line); } catch { continue; }
+        if (message.method === 'initialize' && message.id !== undefined) {
+            write({
+                jsonrpc: '2.0',
+                id: message.id,
+                result: {
+                    protocolVersion: message.params?.protocolVersion || '2025-06-18',
+                    capabilities: {},
+                    serverInfo: { name: 'genie-agentinbox-channel', version: '1' },
+                    experimental: { 'claude/channel': {} },
+                },
+            });
+        } else if (message.method === 'notifications/initialized') {
+            deliver().catch((error) => {
+                process.stderr.write('[AgentInbox Channel] ' + error.message + '\\n');
+                process.exitCode = 1;
+            });
+        } else if (message.method === 'ping' && message.id !== undefined) {
+            write({ jsonrpc: '2.0', id: message.id, result: {} });
+        } else if (message.method === 'tools/list' && message.id !== undefined) {
+            write({ jsonrpc: '2.0', id: message.id, result: { tools: [] } });
+        }
+    }
+});
+process.stdin.on('end', () => { stopped = true; });
+`;
 }
 
 /** The workspace `.env` key the Tynn project agent token is ALSO landed under.
@@ -1256,6 +1388,12 @@ export function writeWorkspaceAgentMcp(
     if (enabled && !url) {
         if (sync.claude) {
             upsert(path.join(workspacePath, '.mcp.json'), GENIE_SERVER_NAME, claudeEntry(''), false);
+            upsert(
+                path.join(workspacePath, '.mcp.json'),
+                AGENTINBOX_CLAUDE_CHANNEL_NAME,
+                {},
+                false,
+            );
         }
         if (sync.cursor) {
             upsert(
@@ -1275,6 +1413,15 @@ export function writeWorkspaceAgentMcp(
     }
     if (sync.claude) {
         upsert(path.join(workspacePath, '.mcp.json'), GENIE_SERVER_NAME, claudeEntry(url ?? ''), enabled);
+        upsert(
+            path.join(workspacePath, '.mcp.json'),
+            AGENTINBOX_CLAUDE_CHANNEL_NAME,
+            claudeChannelEntry(workspacePath, url ?? ''),
+            enabled,
+        );
+        if (enabled) {
+            writeIfChanged(claudeChannelBridgePath(workspacePath), claudeChannelBridge());
+        }
         syncAgentSkills(workspacePath, 'claude', enabled);
     }
     if (sync.cursor) {

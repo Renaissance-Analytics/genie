@@ -16,6 +16,7 @@ import {
     readTynnMcpUrl,
     withCodexMcpLaunch,
     withCodexGenieMcpLaunch,
+    withClaudeAgentInboxChannelLaunch,
 } from '../agent-config';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -23,6 +24,33 @@ import path from 'node:path';
 
 const URL = 'http://127.0.0.1:51717/mcp/abc123';
 const entry = claudeEntry(URL);
+
+describe('withClaudeAgentInboxChannelLaunch', () => {
+    it('opts managed Claude launches into the AgentInbox Channel exactly once', () => {
+        const once = withClaudeAgentInboxChannelLaunch('claude --model opus', {
+            agent: 'claude',
+            mcpSyncClaudeOff: false,
+        });
+        expect(once).toBe(
+            'claude --model opus --dangerously-load-development-channels server:genie-agentinbox-channel',
+        );
+        expect(withClaudeAgentInboxChannelLaunch(once, {
+            agent: 'claude',
+            mcpSyncClaudeOff: false,
+        })).toBe(once);
+    });
+
+    it('does not touch non-Claude launches or workspaces with Claude sync disabled', () => {
+        expect(withClaudeAgentInboxChannelLaunch('codex', {
+            agent: 'codex',
+            mcpSyncClaudeOff: false,
+        })).toBe('codex');
+        expect(withClaudeAgentInboxChannelLaunch('claude', {
+            agent: 'claude',
+            mcpSyncClaudeOff: true,
+        })).toBe('claude');
+    });
+});
 
 describe('applyGenieServer', () => {
     it('adds the genie server to an empty/new config', () => {

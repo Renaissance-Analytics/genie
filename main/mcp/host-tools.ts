@@ -34,8 +34,14 @@ import {
     removeWorkspace,
     type TerminalSpecMeta,
     type TerminalSpecRow,
+    getDb,
+    markWorkspaceAgentTransportState,
 } from '../db';
 import { agentInboxBroker } from '../agentinbox/broker';
+import {
+    harnessTransportRegistry,
+    requiredHarnessTransport,
+} from '../agentinbox/harness-transport';
 import { devLifecycle } from '../dev-server/lifecycle';
 import { getKnowledgeStore } from '../knowledge/store';
 import { workspaceSlug } from '../agentinbox/slug';
@@ -104,6 +110,7 @@ import { gappDevStatusFor } from './gapp-dev-tools';
 import { readTynnLink } from '../tynn/provision';
 import {
     readTynnMcpUrl,
+    withClaudeAgentInboxChannelLaunch,
     withCodexMcpLaunch,
 } from './agent-config';
 import { TynnBackend } from '../backend/tynn';
@@ -1479,7 +1486,11 @@ export function resolveAgentLaunch(
     // the server REFUSE every multi-terminal call lacking `terminalId`. The terminal
     // id doesn't exist yet at this point, so the genie `-c` override is woven in
     // later, at terminal-create time, via withCodexGenieMcpLaunch (see terminal/ipc).
-    return withCodexMcpLaunch(withFlags, {
+    const withNativeInbox = withClaudeAgentInboxChannelLaunch(withFlags, {
+        agent,
+        mcpSyncClaudeOff: s.mcp_sync_claude === 'off',
+    });
+    return withCodexMcpLaunch(withNativeInbox, {
         agent,
         mcpSyncCodexOff: s.mcp_sync_codex === 'off',
         tynnUrl: readTynnMcpUrl(workspace.path),
@@ -2262,6 +2273,31 @@ export async function agentInboxForMcp(
                 return {
                     ok: true,
                     self: agentInboxBroker.getInfo(registered.agentId) ?? undefined,
+                };
+            }
+            case 'registerTransport': {
+                const required = requiredHarnessTransport(spec.meta?.agent as string | undefined);
+                if (!required || req.transport !== required) {
+                    return {
+                        ok: false,
+                        error: `This ${String(spec.meta?.agent ?? 'custom')} agent requires ${required ?? 'a supported native transport'}, not ${String(req.transport ?? 'an unspecified transport')}.`,
+                    };
+                }
+                const configured = listWorkspaceAgents(ws.id).find(
+                    (candidate) => candidate.terminal_spec_id === spec.id,
+                );
+                if (!configured) {
+                    return { ok: false, error: 'This terminal is not bound to a registered AMS agent.' };
+                }
+                // The adapter owns the live harness connection and blocks in
+                // AgentInbox.receive. A durable message settles that waiter;
+                // this binding records that the native adapter is connected.
+                // There is intentionally no terminal-input fallback here.
+                harnessTransportRegistry.bind(agentId, required, () => undefined);
+                markWorkspaceAgentTransportState(getDb(), configured.id, required, { ok: true });
+                return {
+                    ok: true,
+                    self: agentInboxBroker.getInfo(agentId) ?? undefined,
                 };
             }
             case 'setAccessibility': {

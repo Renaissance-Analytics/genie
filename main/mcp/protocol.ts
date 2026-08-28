@@ -1365,6 +1365,7 @@ export interface AgentInboxRequest {
         | 'receipts'
         | 'saveAttachment'
         | 'registerSession'
+        | 'registerTransport'
         | 'setAccessibility';
     /** send: DM this agent id. */
     to?: string;
@@ -1389,6 +1390,8 @@ export interface AgentInboxRequest {
     wakeOnDm?: boolean;
     /** registerSession: the generated Codex session id from SessionStart stdin. */
     sessionId?: string;
+    /** registerTransport: Genie-owned harness adapter readiness handshake. */
+    transport?: 'claude-channel' | 'codex-app-server';
     /** receipts (optional): how many recent sent DMs to report (default 20, cap 100). */
     limit?: number;
     /** send (optional): files to attach — paths inside the SENDER's workspace.
@@ -2326,6 +2329,7 @@ const AGENTINBOX_TOOL = {
                     'receipts',
                     'saveAttachment',
                     'registerSession',
+                    'registerTransport',
                     'setAccessibility',
                 ],
                 description: 'What to do.',
@@ -2368,6 +2372,11 @@ const AGENTINBOX_TOOL = {
                 type: 'string',
                 description:
                     'registerSession: the generated Codex session id supplied by its SessionStart hook.',
+            },
+            transport: {
+                type: 'string',
+                enum: ['claude-channel', 'codex-app-server'],
+                description: 'registerTransport: native harness adapter that completed its connection handshake.',
             },
             text: { type: 'string', description: 'send: the message body.' },
             interrupt: {
@@ -3783,12 +3792,13 @@ export async function handleMcpMessage(
                     action !== 'receipts' &&
                     action !== 'saveAttachment' &&
                     action !== 'registerSession' &&
+                    action !== 'registerTransport' &&
                     action !== 'setAccessibility'
                 ) {
                     return err(
                         msg.id,
                         -32602,
-                        'agentinbox requires `action`: list | send | receive | receipts | saveAttachment | registerSession | setAccessibility.',
+                        'agentinbox requires `action`: list | send | receive | receipts | saveAttachment | registerSession | registerTransport | setAccessibility.',
                     );
                 }
                 const result = await ctx.agentInbox(ctx.terminalId, {
@@ -3803,6 +3813,7 @@ export async function handleMcpMessage(
                     workspaces: a.workspaces,
                     purpose: a.purpose,
                     sessionId: a.sessionId,
+                    transport: a.transport,
                     wakeOnDm: a.wakeOnDm,
                     limit: a.limit,
                     attachments: a.attachments,

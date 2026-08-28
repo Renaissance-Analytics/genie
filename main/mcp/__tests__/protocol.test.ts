@@ -1242,6 +1242,32 @@ describe('handleMcpMessage', () => {
         expect((res?.result as { content: unknown[] }).content).toBeInstanceOf(Array);
     });
 
+    it('routes the internal harness transport handshake through AgentInbox', async () => {
+        const agentInbox = vi.fn().mockResolvedValue({ ok: true });
+        await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 703,
+                method: 'tools/call',
+                params: {
+                    name: 'agentinbox',
+                    arguments: {
+                        action: 'registerTransport',
+                        transport: 'claude-channel',
+                    },
+                },
+            },
+            ctx({ terminalId: 'term-claude', agentInbox }),
+        );
+        expect(agentInbox).toHaveBeenCalledWith(
+            'term-claude',
+            expect.objectContaining({
+                action: 'registerTransport',
+                transport: 'claude-channel',
+            }),
+        );
+    });
+
     it('thumbsUp marks the bound agent ready and reports the acknowledgement', async () => {
         const onThumbsUp = vi.fn().mockResolvedValue({ ok: true, agentId: 'cfg-ready' });
         const res = await handleMcpMessage(

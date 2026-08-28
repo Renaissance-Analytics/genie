@@ -2056,10 +2056,20 @@ export function createWorkspaceAgent(
 }
 
 export function bindWorkspaceAgentTerminal(agentId: string, terminalSpecId: string | null): void {
-    getDb()
+    bindWorkspaceAgentTerminalInDb(getDb(), agentId, terminalSpecId);
+}
+
+export function bindWorkspaceAgentTerminalInDb(
+    database: Database.Database,
+    agentId: string,
+    terminalSpecId: string | null,
+): void {
+    database
         .prepare(
             `UPDATE workspace_agents
-             SET terminal_spec_id = ?, ready_at = NULL, updated_at = ?
+             SET terminal_spec_id = ?, ready_at = NULL,
+                 transport_verified_at = NULL, transport_error = NULL,
+                 updated_at = ?
              WHERE id = ?`,
         )
         .run(terminalSpecId, Date.now(), agentId);

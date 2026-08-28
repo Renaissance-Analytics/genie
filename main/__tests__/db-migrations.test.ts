@@ -13,6 +13,7 @@ import {
     resolveUserTodo,
     listWorkspaceTodos,
     markWorkspaceAgentTransportState,
+    bindWorkspaceAgentTerminalInDb,
 } from '../db';
 
 /**
@@ -1868,6 +1869,41 @@ describe('v52 — harness transport verification', () => {
             transport: 'codex-app-server',
             transport_verified_at: null,
             transport_error: 'initialize timed out',
+            ready_at: null,
+        });
+    });
+
+    it('clears stale transport verification whenever an agent terminal is rebound', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        db.prepare(
+            `INSERT INTO workspaces
+                (id, tynn_project_id, tynn_project_name, project_id, project_name,
+                 shape, path, sort_order)
+             VALUES ('ws-rebind', 'p', 'P', 'p', 'P', 'simple', '/tmp/p', 0)`,
+        ).run();
+        ensureWorkspaceAgent(db, 'ws-rebind', 1);
+        db.prepare(
+            `INSERT INTO terminal_specs
+                (id, workspace_id, label, cwd, args_json, env_json, sort_order, created_at)
+             VALUES ('term-new', 'ws-rebind', 'agent', '/tmp/p', '[]', '{}', 0, 'now')`,
+        ).run();
+        markWorkspaceAgentTransportState(db, 'workspace:ws-rebind', 'claude-channel', {
+            ok: true,
+            at: 123,
+        });
+
+        bindWorkspaceAgentTerminalInDb(db, 'workspace:ws-rebind', 'term-new');
+
+        const row = db.prepare<[], {
+            terminal_spec_id: string;
+            transport_verified_at: number | null;
+            ready_at: number | null;
+        }>(`SELECT terminal_spec_id, transport_verified_at, ready_at
+            FROM workspace_agents WHERE id = 'workspace:ws-rebind'`).get();
+        expect(row).toEqual({
+            terminal_spec_id: 'term-new',
+            transport_verified_at: null,
             ready_at: null,
         });
     });

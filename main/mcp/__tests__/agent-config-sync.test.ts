@@ -49,6 +49,12 @@ const codexSessionHook = path.join(
     'scripts',
     'register-session.cjs',
 );
+const claudeChannelBridge = path.join(
+    WS,
+    '.agents',
+    '_genie',
+    'agentinbox-claude-channel.cjs',
+);
 const coreSkillNames = [
     'genie-orientation',
     'genie-attention',
@@ -112,6 +118,24 @@ describe('writeWorkspaceAgentMcp — per-target sync gating', () => {
             files.get(path.join(WS, '.agents', 'skills', 'genie-orientation', 'SKILL.md')),
         ).toContain('initializeWorkspace');
         expect(JSON.parse(files.get(mcpJson)!).mcpServers.genie.url).toBe(URL);
+    });
+
+    it('installs AgentInbox as a Claude Code Channel without terminal-input delivery', () => {
+        settings = { mcp_sync_claude: 'on' };
+
+        writeWorkspaceAgentMcp(WS, true, URL);
+
+        const config = JSON.parse(files.get(mcpJson)!);
+        expect(config.mcpServers['genie-agentinbox-channel']).toEqual({
+            command: process.execPath,
+            args: [claudeChannelBridge],
+            env: { GENIE_MCP_URL: URL },
+        });
+        const bridge = files.get(claudeChannelBridge)!;
+        expect(bridge).toContain("'claude/channel'");
+        expect(bridge).toContain("'notifications/claude/channel'");
+        expect(bridge).toContain("action: 'registerTransport'");
+        expect(bridge).not.toMatch(/node-pty|writeToPty|terminal:write|manageTerminals/);
     });
 
     it('leaves .cursor/mcp.json untouched when mcp_sync_cursor is off', () => {
