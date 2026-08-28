@@ -30,6 +30,7 @@ import {
 import { showPrompt } from './Prompt';
 import { terminalTypeForAgent, type TerminalTypeId } from '../../lib/terminal-types';
 import { amsAgentCard, splitAmsSpecs } from '../../lib/ams-grid';
+import TerminalTypeSplitButton from './TerminalTypeSplitButton';
 import { workspaceNeedsAttention } from '../../lib/attention';
 import { gappLaunchLabel, gappLaunchTarget } from '../../lib/gapp-launch';
 import {
@@ -185,10 +186,10 @@ export default function Chooser({
     onShowSiteManager,
     onLaunchGapp,
     launchingGappWsId = null,
-    lastTerminalType: _lastTerminalType,
-    onLastTerminalType: _onLastTerminalType,
-    onAgentCreated: _onAgentCreated,
-    agentCustomCommand: _agentCustomCommand,
+    lastTerminalType,
+    onLastTerminalType,
+    onAgentCreated,
+    agentCustomCommand,
 }: Props) {
     const [thumbedAgentTerminals, setThumbedAgentTerminals] = useState<Set<string>>(new Set());
     useEffect(() => api().on.agentThumbsUp?.((event) => {
@@ -1359,6 +1360,20 @@ export default function Chooser({
                                         />
                                     ))}
                                     <div className="tproj-adds">
+                                        {!system && (
+                                            <TerminalTypeSplitButton
+                                                variant="row"
+                                                agentOnly
+                                                disabled={false}
+                                                workspaceId={ws.id}
+                                                workspaces={workspaces}
+                                                lastType={lastTerminalType}
+                                                onLastTypeChange={onLastTerminalType}
+                                                onAddView={(type) => onAddSpec(ws.id, type)}
+                                                onAgentCreated={onAgentCreated}
+                                                customCommand={agentCustomCommand}
+                                            />
+                                        )}
                                         <button
                                             type="button"
                                             className="tterm tterm-add"

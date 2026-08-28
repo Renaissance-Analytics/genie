@@ -4,6 +4,7 @@ import {
     DEFAULT_TERMINAL_TYPE,
     terminalTypeById,
     terminalTypeForAgent,
+    agentTerminalTypes,
 } from '../terminal-types';
 import { workspaceSlug } from '../genie';
 import { normalizePurpose } from '../../components/Master/AgentTerminalForm';
@@ -66,6 +67,11 @@ describe('terminal-type registry', () => {
         expect(terminalTypeForAgent('claude').id).toBe('claude');
         expect(terminalTypeForAgent('codex').id).toBe('codex');
         expect(terminalTypeForAgent('custom').id).toBe('custom');
+    });
+
+    it('offers only agent providers in the dedicated New Agent picker', () => {
+        expect(agentTerminalTypes().map((type) => type.id)).toEqual(agentProviders());
+        expect(agentTerminalTypes().every((type) => type.specialized && type.agent)).toBe(true);
     });
 });
 

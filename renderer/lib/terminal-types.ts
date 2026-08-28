@@ -83,3 +83,8 @@ export function terminalTypeById(id: string | null | undefined): TerminalTypeDef
 export function terminalTypeForAgent(agent: AgentType): TerminalTypeDef {
     return TERMINAL_TYPES.find((t) => t.agent === agent) ?? TERMINAL_TYPES[0];
 }
+
+/** Provider choices for the dedicated AMS "New Agent" affordance. */
+export function agentTerminalTypes(): TerminalTypeDef[] {
+    return TERMINAL_TYPES.filter((type) => type.specialized && type.agent);
+}

@@ -13,6 +13,7 @@ import {
 import {
     TERMINAL_TYPES,
     terminalTypeById,
+    agentTerminalTypes,
     type TerminalTypeId,
 } from '../../lib/terminal-types';
 import { anchoredPopoverTop } from '../../lib/anchored-popover';
@@ -41,6 +42,7 @@ export default function TerminalTypeSplitButton({
     customCommand,
     includeFiles,
     variant = 'toolbar',
+    agentOnly = false,
 }: {
     disabled: boolean;
     disabledReason?: string;
@@ -65,6 +67,8 @@ export default function TerminalTypeSplitButton({
     /** Include an "Add Files…" (editor) entry in the dropdown (toolbar only). */
     includeFiles?: boolean;
     variant?: 'toolbar' | 'row';
+    /** Dedicated AMS affordance: one obvious New Agent button, no plain shell. */
+    agentOnly?: boolean;
 }) {
     const [menuOpen, setMenuOpen] = useState(false);
     const [formAgent, setFormAgent] = useState<AgentType | null>(null);
@@ -232,6 +236,7 @@ export default function TerminalTypeSplitButton({
     };
 
     const LastIcon = lastDef.icon;
+    const choices = agentOnly ? agentTerminalTypes() : TERMINAL_TYPES;
 
     return (
         <div
@@ -242,13 +247,14 @@ export default function TerminalTypeSplitButton({
             <button
                 type="button"
                 className="gbtn accent addview-main"
-                onClick={() => pickType(lastDef.id)}
+                onClick={() => agentOnly ? setMenuOpen((open) => !open) : pickType(lastDef.id)}
                 disabled={disabled}
-                title={disabled ? disabledReason : `Add ${lastDef.label}`}
+                title={disabled ? disabledReason : agentOnly ? 'Create a workspace agent' : `Add ${lastDef.label}`}
             >
-                <LastIcon size={14} /> Add {lastDef.label}
+                {agentOnly ? <IconCode size={14} /> : <LastIcon size={14} />}
+                {agentOnly ? 'New Agent…' : `Add ${lastDef.label}`}
             </button>
-            <button
+            {!agentOnly && <button
                 type="button"
                 className="gbtn accent addview-caret"
                 onClick={() => {
@@ -260,7 +266,7 @@ export default function TerminalTypeSplitButton({
                 aria-label="Choose a terminal type"
             >
                 <IconChevronDown size={13} />
-            </button>
+            </button>}
 
             {menuOpen &&
                 coords &&
@@ -271,7 +277,7 @@ export default function TerminalTypeSplitButton({
                         role="menu"
                         style={{ top: coords.top, left: coords.left, right: coords.right }}
                     >
-                        {TERMINAL_TYPES.map((t) => {
+                        {choices.map((t) => {
                             const Ico = t.icon;
                             return (
                                 <button

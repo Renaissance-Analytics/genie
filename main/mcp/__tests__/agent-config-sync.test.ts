@@ -72,14 +72,18 @@ beforeEach(() => {
 });
 
 describe('writeWorkspaceAgentMcp — per-target sync gating', () => {
-    it('migrates instruction files to identical routers without losing human rules', () => {
+    it('migrates instruction files to harness-specific @ routers without losing human rules', () => {
         files.set(agentsMd, '# Project rules\n\nNever force-push.\n');
         files.set(claudeMd, '@AGENTS.md\n\n## Claude Code\n\nUse a narrow context window.\n');
 
         writeWorkspaceAgentMcp(WS, true, URL);
 
-        expect(files.get(agentsMd)).toBe(files.get(claudeMd));
-        expect(files.get(agentsMd)).toContain('.agents/_genie/shared.md');
+        expect(files.get(agentsMd)).toContain('@.agents/_genie/shared.md');
+        expect(files.get(agentsMd)).toContain('@.agents/_genie/genie-codex.md');
+        expect(files.get(agentsMd)).not.toContain('genie-claude.md');
+        expect(files.get(claudeMd)).toContain('@.agents/_genie/shared.md');
+        expect(files.get(claudeMd)).toContain('@.agents/_genie/genie-claude.md');
+        expect(files.get(claudeMd)).not.toContain('genie-codex.md');
         expect(files.get(agentsMd)).not.toContain('@AGENTS.md');
         expect(files.get(agentsBackup)).toContain('Never force-push.');
         expect(files.get(claudeBackup)).toContain('Use a narrow context window.');
