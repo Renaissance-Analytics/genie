@@ -847,11 +847,6 @@ function joinInputFromSpec(spec: TerminalSpecRow | null): AgentInboxJoinInput | 
         // sets the toggle, so `undefined` means "never chose" → announce, and only
         // an explicit `false` silences the agent.
         wakeOnDm: spec.meta?.whisper_wake_on_dm !== false,
-        // Explicitly-joined channels (genie #65) — the broker re-adds these on
-        // (re)join so a restart doesn't silently evict the agent from them.
-        channels: Array.isArray(spec.meta?.whisper_channels)
-            ? (spec.meta.whisper_channels as string[])
-            : [],
     };
 }
 

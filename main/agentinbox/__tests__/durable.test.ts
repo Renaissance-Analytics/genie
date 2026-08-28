@@ -159,24 +159,6 @@ describe('AgentInbox durable inbox (Track B)', () => {
         expect(delivered).toEqual([undefined, true]);
     });
 
-    it('IMMEDIATE notice: a CHANNEL post notifies every member but the sender', () => {
-        const b = new AgentInboxBroker();
-        b.setStore(store);
-        const woken: Array<{ terminalId: string; text: string }> = [];
-        b.setWakeSink((d) => { woken.push({ terminalId: d.terminalId, text: d.text }); });
-
-        join(b, 'a');
-        join(b, 'b');
-        // Both are in the same workspace purpose room by construction.
-        const res = b.send({ fromAgentId: 'a', channelArg: 'general', text: 'standup' });
-
-        if (res.ok) {
-            // Only the OTHER member is told -- never an echo to the sender.
-            expect(woken.every((w) => w.terminalId !== 't-a')).toBe(true);
-            for (const w of woken) expect(w.text).toMatch(/channel/i);
-        }
-    });
-
     it('user input state never participates in agent-to-agent delivery', () => {
         const b = new AgentInboxBroker();
         b.setStore(store);
@@ -407,21 +389,6 @@ describe('AgentInbox durable inbox (Track B)', () => {
         expect(b.unreadForTerminal('t-nope')).toEqual({ count: 0, fromLabels: [] });
     });
 
-    it('rebuilds channel history after a restart', () => {
-        const b1 = new AgentInboxBroker();
-        b1.setStore(store);
-        join(b1, 'a');
-        b1.send({ fromAgentId: 'a', channelArg: 'general', text: 'channel note' });
-
-        const b2 = new AgentInboxBroker();
-        b2.setStore(store);
-        join(b2, 'a');
-        b2.rehydrateMessages();
-
-        const key = 'ws1:general';
-        const history = b2.history({ channelKey: key });
-        expect(history.map((m) => m.text)).toContain('channel note');
-    });
 });
 
 describe('unACKed-urgent escalation (Track C)', () => {

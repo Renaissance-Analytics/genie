@@ -76,25 +76,6 @@ describe('AgentInboxBroker — workspace access (outer tier)', () => {
         expect(b.send({ fromAgentId: 'A', toAgentId: 'S', text: 'x' }).ok).toBe(false);
     });
 
-    it('blocks cross-workspace channel join and broadcast when the door is shut', () => {
-        const b = withAccess({ w2: { access: 'none' } });
-        b.join(input({ agentId: 'A', workspaceId: 'w1', purpose: 'general' }));
-        b.join(input({ agentId: 'V', workspaceId: 'w2', slug: 'ws-two', purpose: 'general' }));
-        // Previously ANY agent could join and broadcast into ANY workspace's room.
-        expect(b.joinChannel('A', 'ws-two:general')).toBe(false);
-        const sent = b.send({ fromAgentId: 'A', channelArg: 'ws-two:general', text: 'intrusion' });
-        expect(sent.ok).toBe(false);
-        // A refused sender must not have been auto-joined as a side effect.
-        expect(b.channelsForAgent('A').map((c) => c.key)).not.toContain('w2:general');
-    });
-
-    it('allows cross-workspace channel join when the door is open', () => {
-        const b = withAccess({ w2: { access: 'all' } });
-        b.join(input({ agentId: 'A', workspaceId: 'w1', purpose: 'general' }));
-        b.join(input({ agentId: 'V', workspaceId: 'w2', slug: 'ws-two', purpose: 'general' }));
-        expect(b.joinChannel('A', 'ws-two:general')).toBe(true);
-        expect(b.send({ fromAgentId: 'A', channelArg: 'ws-two:general', text: 'hello' }).ok).toBe(true);
-    });
 });
 
 describe('AgentInboxBroker — discovery scopes', () => {
@@ -239,49 +220,7 @@ describe('AgentInboxBroker — direct messages', () => {
     });
 });
 
-describe('AgentInboxBroker — channels', () => {
-    it('fans a broadcast out to members with no self-echo', async () => {
-        const b = fresh();
-        // A, B, C all in w1 with purpose general → all in the w1:general room.
-        b.join(input({ agentId: 'A', workspaceId: 'w1', purpose: 'general' }));
-        b.join(input({ agentId: 'B', workspaceId: 'w1', purpose: 'general' }));
-        b.join(input({ agentId: 'C', workspaceId: 'w1', purpose: 'general' }));
-
-        const r = b.send({ fromAgentId: 'A', channelArg: 'general', text: 'hello room' });
-        expect(r.ok).toBe(true);
-        if (r.ok) expect(r.delivered).toBe(2); // B + C, not A
-
-        expect((await b.receive('B', { cursor: 0 })).messages.map((m) => m.text)).toEqual(['hello room']);
-        expect((await b.receive('C', { cursor: 0 })).messages.map((m) => m.text)).toEqual(['hello room']);
-        // The sender doesn't receive its own broadcast.
-        expect((await b.receive('A', { cursor: 0 })).messages).toEqual([]);
-    });
-
-    it('lists a channel by its slug:purpose display with a member count', () => {
-        const b = fresh();
-        b.join(input({ agentId: 'A', workspaceId: 'w1', slug: 'ws-one', purpose: 'frontend' }));
-        b.join(input({ agentId: 'B', workspaceId: 'w1', slug: 'ws-one', purpose: 'frontend' }));
-        const chans = b.channels();
-        const fe = chans.find((c) => c.purpose === 'frontend')!;
-        expect(fe.key).toBe('w1:frontend');
-        expect(fe.slug).toBe('ws-one');
-        expect(fe.memberCount).toBe(2);
-    });
-
-    it('a `none`-scope agent broadcasts on a channel, and is listed as unreachable', async () => {
-        const b = fresh();
-        b.join(input({ agentId: 'A', workspaceId: 'w1', purpose: 'general' }));
-        b.join(input({ agentId: 'L', workspaceId: 'w1', purpose: 'general', scope: 'none' }));
-        // Discoverable but un-DMable — so a peer receiving its broadcast can now
-        // actually find the sender in the directory instead of it appearing from
-        // an agent that exists nowhere.
-        const entry = b.discoverableFor('A').find((a) => a.agentId === 'L');
-        expect(entry?.reachable).toBe(false);
-        // Its broadcast reaches the room (scope governs DMs, not channels).
-        b.send({ fromAgentId: 'L', channelArg: 'general', text: 'lurker speaks' });
-        expect((await b.receive('A', { cursor: 0 })).messages.map((m) => m.text)).toEqual(['lurker speaks']);
-    });
-
+describe('AgentInboxBroker — identity updates', () => {
     it('a `hidden`-scope agent is omitted from discovery entirely', () => {
         const b = fresh();
         b.join(input({ agentId: 'A', workspaceId: 'w1' }));
@@ -290,16 +229,6 @@ describe('AgentInboxBroker — channels', () => {
         expect(b.send({ fromAgentId: 'A', toAgentId: 'H', text: 'x' }).ok).toBe(false);
         // The human panel still sees it.
         expect(b.directory().map((a) => a.agentId)).toContain('H');
-    });
-
-    it('re-keys the channel when an agent changes purpose', () => {
-        const b = fresh();
-        b.join(input({ agentId: 'A', workspaceId: 'w1', purpose: 'general' }));
-        expect(b.channelsForAgent('A').map((c) => c.key)).toEqual(['w1:general']);
-        b.setAccessibility('A', { purpose: 'backend' });
-        expect(b.channelsForAgent('A').map((c) => c.key)).toEqual(['w1:backend']);
-        // The old room is gone (no members left).
-        expect(b.channels().map((c) => c.key)).toEqual(['w1:backend']);
     });
 
     it('updates the display label when the caller supplies a renamed one', () => {
@@ -436,20 +365,6 @@ describe('AgentInboxBroker — server-push notify sink', () => {
         expect(seen[0].text).toBe('ping B');
     });
 
-    it('fires per delivered member on a channel broadcast, never to the sender', () => {
-        const b = fresh();
-        const ids: string[] = [];
-        b.setNotifySink((target) => ids.push(target.agentId));
-        b.join(input({ agentId: 'A', workspaceId: 'w1', purpose: 'general' }));
-        b.join(input({ agentId: 'B', workspaceId: 'w1', purpose: 'general' }));
-        b.join(input({ agentId: 'C', workspaceId: 'w1', purpose: 'general' }));
-
-        b.send({ fromAgentId: 'A', channelArg: 'general', text: 'hello room' });
-
-        // Delivered to B and C; A (the sender) is never notified of its own message.
-        expect(ids.sort()).toEqual(['B', 'C']);
-    });
-
     it('does NOT fire on rehydrate replay — a boot must not re-announce old mail', async () => {
         // A store pre-loaded with an undelivered DM to B (as if from a prior run).
         const stored = {
@@ -492,14 +407,11 @@ describe('AgentInboxBroker — server-push notify sink', () => {
 });
 
 describe('AgentInboxBroker — history', () => {
-    it('returns the channel log and the human↔agent DM thread', () => {
+    it('returns the human↔agent DM thread', () => {
         const b = fresh();
         b.join(input({ agentId: 'A', workspaceId: 'w1', purpose: 'general' }));
-        b.join(input({ agentId: 'B', workspaceId: 'w1', purpose: 'general' }));
-        b.send({ fromAgentId: 'A', channelArg: 'general', text: 'ch1' });
         b.send({ human: true, toAgentId: 'A', text: 'dm to A' });
 
-        expect(b.history({ channelKey: 'w1:general' }).map((m) => m.text)).toEqual(['ch1']);
         expect(b.history({ agentId: 'A' }).map((m) => m.text)).toEqual(['dm to A']);
     });
 

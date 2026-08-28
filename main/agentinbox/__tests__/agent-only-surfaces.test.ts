@@ -35,4 +35,13 @@ describe('AgentInbox agent-only host surfaces', () => {
         expect(source).not.toContain("kind: 'channel'");
         expect(source).not.toContain('clearChannel(');
     });
+
+    it('has no broker operations that can create or broadcast to a channel', () => {
+        const source = read('main/agentinbox/broker.ts');
+
+        expect(source).not.toContain('joinChannel(');
+        expect(source).not.toContain('leaveChannel(');
+        expect(source).not.toContain('channelArg?:');
+        expect(source).not.toContain("kind: 'channel'");
+    });
 });

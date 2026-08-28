@@ -115,23 +115,6 @@ describe('a message carries its attachments end to end', () => {
         expect(messages[0].attachments).toEqual([attachment()]);
     });
 
-    it('a CHANNEL broadcast delivers them to every member', async () => {
-        const b = new AgentInboxBroker();
-        b.join(input({ agentId: 'A' }));
-        b.join(input({ agentId: 'B' }));
-
-        const sent = b.send({
-            fromAgentId: 'A',
-            channelArg: 'general',
-            text: 'shared',
-            attachments: [attachment({ id: 'att-c' })],
-        });
-        expect(sent.ok).toBe(true);
-
-        const { messages } = await b.receive('B');
-        expect(messages[0].attachments?.[0].id).toBe('att-c');
-    });
-
     it('persists them to the durable store and replays them on rehydrate', async () => {
         const store = makeStore();
         const first = new AgentInboxBroker();
@@ -180,11 +163,6 @@ describe('canAccessMessageAttachment', () => {
         from: 'A',
         to: 'B',
     };
-    const channel: Pick<AgentInboxMessage, 'kind' | 'from' | 'to' | 'channel'> = {
-        kind: 'channel',
-        from: 'A',
-        channel: 'w1:general',
-    };
 
     it('lets the DM sender and the DM recipient through', () => {
         expect(canAccessMessageAttachment({ msg: dm, agentId: 'A', channelKeys: [] })).toBe(true);
@@ -195,26 +173,8 @@ describe('canAccessMessageAttachment', () => {
         expect(canAccessMessageAttachment({ msg: dm, agentId: 'C', channelKeys: [] })).toBe(false);
     });
 
-    it('lets a member of the channel through and refuses a non-member', () => {
-        expect(
-            canAccessMessageAttachment({ msg: channel, agentId: 'B', channelKeys: ['w1:general'] }),
-        ).toBe(true);
-        expect(
-            canAccessMessageAttachment({ msg: channel, agentId: 'B', channelKeys: ['w1:other'] }),
-        ).toBe(false);
-    });
-
-    it('lets the channel POSTER through even if it has since left the room', () => {
-        expect(canAccessMessageAttachment({ msg: channel, agentId: 'A', channelKeys: [] })).toBe(
-            true,
-        );
-    });
-
     it('lets the HUMAN panel through — it owns the workstation', () => {
         expect(canAccessMessageAttachment({ msg: dm, agentId: 'human', channelKeys: [] })).toBe(
-            true,
-        );
-        expect(canAccessMessageAttachment({ msg: channel, agentId: 'human', channelKeys: [] })).toBe(
             true,
         );
     });

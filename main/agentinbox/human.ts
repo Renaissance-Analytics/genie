@@ -46,7 +46,6 @@ interface HumanDeps {
  */
 export async function postAsHuman(
     input: {
-        channelKey?: string;
         toAgentId?: string;
         text?: string;
         attachments?: HumanInboxAttachment[];
@@ -55,9 +54,7 @@ export async function postAsHuman(
 ): Promise<{ ok: boolean; error?: string }> {
     const broker = deps.broker ?? agentInboxBroker;
     if (!input?.text?.trim()) return { ok: false, error: 'Message is empty.' };
-    if (!input.channelKey && !input.toAgentId) {
-        return { ok: false, error: 'Pick a channel or an agent to message.' };
-    }
+    if (!input.toAgentId) return { ok: false, error: 'Pick an agent to message.' };
 
     let attachments;
     try {
@@ -75,7 +72,6 @@ export async function postAsHuman(
 
     const r = broker.send({
         human: true,
-        channelArg: input.channelKey,
         toAgentId: input.toAgentId,
         text: input.text,
         attachments,

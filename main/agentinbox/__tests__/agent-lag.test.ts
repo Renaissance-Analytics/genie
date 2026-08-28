@@ -54,13 +54,13 @@ describe('broker.agentLagCount', () => {
         expect(b.agentLagCount()).toBe(0);
     });
 
-    it('sums ACROSS agents — a channel broadcast lags every member that has not drained it', async () => {
+    it('sums ACROSS agents with direct messages each has not drained', async () => {
         const b = new AgentInboxBroker();
         join(b, 'a');
         join(b, 'b');
         join(b, 'c');
-        // One broadcast, two recipients behind (the sender is never its own recipient).
-        b.send({ fromAgentId: 'a', channelArg: 'general', text: 'standup' });
+        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'standup' });
+        b.send({ fromAgentId: 'a', toAgentId: 'c', text: 'standup' });
         expect(b.agentLagCount()).toBe(2);
 
         await b.receive('b', {});
@@ -73,7 +73,7 @@ describe('broker.agentLagCount', () => {
         const b = new AgentInboxBroker();
         join(b, 'a');
         join(b, 'b');
-        b.send({ fromAgentId: 'a', channelArg: 'general', text: 'mine' });
+        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'mine' });
         // Only b is behind; a sent it.
         expect(b.agentLagCount()).toBe(1);
     });

@@ -7,7 +7,6 @@ import {
     type AgentInboxAgentInfo,
     type AgentInboxAttachment,
     type AgentInboxBrokerEvent,
-    type AgentInboxChannelInfo,
     type AgentInboxDmThreadInfo,
     type AgentInboxEscalation,
     type AgentInboxJoinInput,
@@ -129,56 +128,22 @@ function pairKey(a: string, b: string): string {
     return [a, b].sort().join('|');
 }
 
-/**
- * The outcome of {@link AgentInboxBroker.send}. `delivered` / `channel` /
- * `rejoined` ride BOTH arms because a channel broadcast that reached nobody is
- * reported as a failure (genie #65) and the caller still needs the facts: which
- * room it resolved to, that zero agents got it, and whether the sender's own
- * membership had lapsed.
- */
+/** The outcome of {@link AgentInboxBroker.send}. */
 export type AgentInboxSendResult =
     | {
           ok: true;
           delivered: number;
           message: AgentInboxMessage;
-          /** Channel sends: the resolved channel key. */
-          channel?: string;
-          /** Channel sends: the sender was not a member and `send` re-added it. */
-          rejoined?: boolean;
       }
     | {
           ok: false;
           error: string;
           delivered?: number;
-          channel?: string;
-          rejoined?: boolean;
       };
-
-/**
- * Why a channel broadcast reached nobody, in terms an agent can act on. Names
- * the room, distinguishes "your membership had lapsed" from "the room is simply
- * empty" (issue #65 asked for exactly that), and says outright that the message
- * must NOT be treated as reported — while noting it survives in the panel, so a
- * blind retry isn't the only way to keep the text.
- */
-function channelSendMissError(key: string, rejoined: boolean): string {
-    const cause = rejoined
-        ? `you were no longer a member of channel "${key}" (rejoined now), and no other agent is in it`
-        : `no other agent is in channel "${key}"`;
-    return (
-        `Delivered to 0 recipients — ${cause}. The message is in the channel history ` +
-        `for the human, but NO agent received it, so do NOT treat this as reported. ` +
-        `Use \`list\` to see who is in the room, or send with \`to\` to DM an agent directly.`
-    );
-}
 
 export class AgentInboxBroker {
     private agents = new Map<string, AgentInboxAgent>();
     private byTerminal = new Map<string, string>(); // terminalId → agentId
-    private channelMembers = new Map<string, Set<string>>(); // channelKey → agentIds
-    /** workspaceId → { slug, name }, learned from every join (for channel labels). */
-    private wsInfo = new Map<string, { slug: string; name: string }>();
-    private channelLogs = new Map<string, AgentInboxMessage[]>();
     private dmLogs = new Map<string, AgentInboxMessage[]>();
     private seq = 0;
     private emit: (ev: AgentInboxBrokerEvent) => void = () => {};
@@ -362,7 +327,6 @@ export class AgentInboxBroker {
         if (!target.wakeOnDm) return false;
         const text = inboxNoticeText({
             from: msg.fromLabel,
-            ...(msg.channel ? { channel: this.channelDisplayName(msg.channel) } : {}),
             priority: msg.interrupt ? 'high' : 'normal',
         });
         const plan = planNudge(target.draft);
@@ -395,12 +359,6 @@ export class AgentInboxBroker {
             /* a failed notice still leaves the message in the inbox to be pulled */
             return false;
         }
-    }
-
-    /** The bare room name for a channel key (`<workspace>:<purpose>` → purpose). */
-    private channelDisplayName(key: string): string {
-        const idx = key.indexOf(':');
-        return idx < 0 ? key : key.slice(idx + 1);
     }
 
     private agentForTerminal(terminalId: string): AgentInboxAgent | null {
@@ -500,26 +458,20 @@ export class AgentInboxBroker {
     /**
      * Rehydrate the in-memory logs + inboxes from the store at boot — call AFTER
      * {@link rehydrate} (identities) and {@link setStore}. Resumes the global seq
-     * (so cursors stay valid), rebuilds the human-panel channel/DM history, and
+     * (so cursors stay valid), rebuilds the human-panel DM history, and
      * re-queues each known agent's undelivered messages so a message sent while
      * the app was down still lands on the next `receive`.
      */
     rehydrateMessages(limit = 2000): void {
         this.seq = Math.max(this.seq, this.store.maxSeq());
         for (const msg of this.store.loadRecent(limit)) {
-            if (msg.kind === 'channel' && msg.channel) {
-                this.appendLog(this.channelLogs, msg.channel, msg);
-            } else if (msg.kind === 'dm' && msg.to) {
+            if (msg.kind === 'dm' && msg.to) {
                 this.appendLog(this.dmLogs, pairKey(msg.from, msg.to), msg);
             }
         }
         for (const agent of this.agents.values()) {
             agent.cursor = this.store.getCursor(agent.agentId);
-            const channelKeys: string[] = [];
-            for (const [key, members] of this.channelMembers) {
-                if (members.has(agent.agentId)) channelKeys.push(key);
-            }
-            for (const msg of this.store.undeliveredFor(agent.agentId, channelKeys, agent.cursor)) {
+            for (const msg of this.store.undeliveredFor(agent.agentId, [], agent.cursor)) {
                 this.push(agent, msg);
             }
         }
@@ -646,11 +598,6 @@ export class AgentInboxBroker {
         this.escalationMs = ms;
     }
 
-    /** The internal channel key for a workspace + purpose. */
-    private keyFor(workspaceId: string, purpose: string): string {
-        return `${workspaceId}:${normalizePurpose(purpose)}`;
-    }
-
     /**
      * Public view of an agent. `reachable` defaults true — the human panel owns
      * the workstation and an agent always sees itself in full. Agent-facing
@@ -704,10 +651,6 @@ export class AgentInboxBroker {
      * joined, with its next channel send reporting a delivered-to-nobody success.
      */
     join(input: AgentInboxJoinInput): AgentInboxAgentInfo {
-        this.wsInfo.set(input.workspaceId, {
-            slug: input.slug,
-            name: input.workspaceName,
-        });
         const purpose = normalizePurpose(input.purpose);
         const existing = this.agents.get(input.agentId);
         const agent: AgentInboxAgent = {
@@ -742,16 +685,6 @@ export class AgentInboxBroker {
         };
         this.agents.set(agent.agentId, agent);
         this.byTerminal.set(agent.terminalId, agent.agentId);
-        // Own channel — its purpose room (always derived, never persisted).
-        this.addToChannel(agent.agentId, this.keyFor(agent.workspaceId, purpose));
-        // Explicitly-joined rooms restored from spec meta. Re-checked against the
-        // workspace tier: durable membership must not outlive the access that
-        // granted it, so a workspace that has since closed its door evicts here.
-        for (const key of input.channels ?? []) {
-            if (!key || key === this.keyFor(agent.workspaceId, purpose)) continue;
-            if (!this.workspaceAllows(agent.workspaceId, this.workspaceOfKey(key))) continue;
-            this.addToChannel(agent.agentId, key);
-        }
         this.emitPresence(agent);
         return this.toInfo(agent);
     }
@@ -782,8 +715,8 @@ export class AgentInboxBroker {
         this.emitPresence(a);
     }
 
-    /** The terminal was killed / spec removed — hard leave. Drops the agent from
-     *  every channel, resolves its waiter, and emits an offline presence. */
+    /** The terminal was killed / spec removed — hard leave. Resolves its waiter
+     *  and emits an offline presence. */
     leaveByTerminal(terminalId: string): void {
         const agentId = this.byTerminal.get(terminalId);
         if (agentId) this.leave(agentId);
@@ -793,7 +726,6 @@ export class AgentInboxBroker {
     leave(agentId: string): void {
         const a = this.agents.get(agentId);
         if (!a) return;
-        for (const members of this.channelMembers.values()) members.delete(agentId);
         this.settleWaiter(a);
         this.agents.delete(agentId);
         this.byTerminal.delete(a.terminalId);
@@ -813,11 +745,7 @@ export class AgentInboxBroker {
         this.emitPresence(a);
     }
 
-    /**
-     * Change an agent's accessibility. A purpose change RE-KEYS its channel (leave
-     * the old `wsId:oldPurpose`, join `wsId:newPurpose`). Emits presence. Returns
-     * the updated info, or null when the agent is unknown.
-     */
+    /** Change an agent's accessibility and identity metadata. */
     setAccessibility(
         agentId: string,
         patch: {
@@ -830,14 +758,7 @@ export class AgentInboxBroker {
     ): AgentInboxAgentInfo | null {
         const a = this.agents.get(agentId);
         if (!a) return null;
-        if (patch.purpose !== undefined) {
-            const next = normalizePurpose(patch.purpose);
-            if (next !== a.purpose) {
-                this.removeFromChannel(agentId, this.keyFor(a.workspaceId, a.purpose));
-                a.purpose = next;
-                this.addToChannel(agentId, this.keyFor(a.workspaceId, next));
-            }
-        }
+        if (patch.purpose !== undefined) a.purpose = normalizePurpose(patch.purpose);
         if (patch.scope !== undefined) a.scope = patch.scope;
         if (patch.workspaces !== undefined) a.scopeWorkspaces = [...patch.workspaces];
         if (patch.wakeOnDm !== undefined) a.wakeOnDm = patch.wakeOnDm;
@@ -852,136 +773,6 @@ export class AgentInboxBroker {
      *  so it survives a restart (restored via the join input). */
     wakeOnDmFor(agentId: string): boolean {
         return this.agents.get(agentId)?.wakeOnDm ?? false;
-    }
-
-    // --- channels ----------------------------------------------------------
-
-    private addToChannel(agentId: string, key: string): void {
-        let set = this.channelMembers.get(key);
-        if (!set) {
-            set = new Set();
-            this.channelMembers.set(key, set);
-        }
-        set.add(agentId);
-    }
-
-    private removeFromChannel(agentId: string, key: string): void {
-        const set = this.channelMembers.get(key);
-        if (!set) return;
-        set.delete(agentId);
-        if (set.size === 0) this.channelMembers.delete(key);
-    }
-
-    /**
-     * Resolve a channel argument to an internal key for `callerAgentId`. A bare
-     * purpose (`frontend`) targets the caller's OWN workspace room; a qualified
-     * `<slugOrWorkspaceId>:<purpose>` targets another workspace's room. Returns
-     * null when the workspace part can't be resolved.
-     */
-    resolveChannelKey(callerAgentId: string, channelArg: string): string | null {
-        const caller = this.agents.get(callerAgentId);
-        const raw = String(channelArg ?? '').trim();
-        if (!raw) return null;
-        const idx = raw.indexOf(':');
-        if (idx < 0) {
-            if (!caller) return null;
-            return this.keyFor(caller.workspaceId, raw);
-        }
-        const left = raw.slice(0, idx);
-        const purpose = raw.slice(idx + 1);
-        // `left` is a workspace id we already know, or a slug to resolve.
-        if (this.wsInfo.has(left)) return this.keyFor(left, purpose);
-        for (const [wsId, info] of this.wsInfo) {
-            if (info.slug === left) return this.keyFor(wsId, purpose);
-        }
-        return null;
-    }
-
-    /** The workspace that owns a channel key (`<workspaceId>:<purpose>`). */
-    private workspaceOfKey(key: string): string {
-        const idx = key.indexOf(':');
-        return idx >= 0 ? key.slice(0, idx) : key;
-    }
-
-    /**
-     * Opt an agent into an arbitrary channel (beyond its own purpose room).
-     * Gated by the OUTER tier: joining another workspace's room requires that
-     * workspace to admit yours. Before this gate existed any agent could join —
-     * and broadcast into — any workspace's channel.
-     */
-    joinChannel(agentId: string, channelArg: string): boolean {
-        const a = this.agents.get(agentId);
-        if (!a) return false;
-        const key = this.resolveChannelKey(agentId, channelArg);
-        if (!key) return false;
-        if (!this.workspaceAllows(a.workspaceId, this.workspaceOfKey(key))) return false;
-        this.addToChannel(agentId, key);
-        this.emitPresence(a);
-        return true;
-    }
-
-    /** Opt an agent out of a channel. */
-    leaveChannel(agentId: string, channelArg: string): boolean {
-        const a = this.agents.get(agentId);
-        if (!a) return false;
-        const key = this.resolveChannelKey(agentId, channelArg);
-        if (!key) return false;
-        this.removeFromChannel(agentId, key);
-        this.emitPresence(a);
-        return true;
-    }
-
-    private channelInfo(key: string): AgentInboxChannelInfo {
-        const idx = key.indexOf(':');
-        const workspaceId = idx >= 0 ? key.slice(0, idx) : key;
-        const purpose = idx >= 0 ? key.slice(idx + 1) : key;
-        const info = this.wsInfo.get(workspaceId);
-        return {
-            key,
-            slug: info?.slug ?? workspaceId,
-            purpose,
-            workspaceId,
-            workspaceName: info?.name ?? workspaceId,
-            memberCount: this.channelMembers.get(key)?.size ?? 0,
-        };
-    }
-
-    /** Every non-empty channel (the human panel's full list). */
-    channels(): AgentInboxChannelInfo[] {
-        const out: AgentInboxChannelInfo[] = [];
-        for (const [key, members] of this.channelMembers) {
-            if (members.size > 0) out.push(this.channelInfo(key));
-        }
-        return out.sort((a, b) => a.key.localeCompare(b.key));
-    }
-
-    /** The channels an agent is a member of (its agent-facing `list`). */
-    channelsForAgent(agentId: string): AgentInboxChannelInfo[] {
-        const out: AgentInboxChannelInfo[] = [];
-        for (const [key, members] of this.channelMembers) {
-            if (members.has(agentId)) out.push(this.channelInfo(key));
-        }
-        return out.sort((a, b) => a.key.localeCompare(b.key));
-    }
-
-    /**
-     * The channel keys the HOST must persist for an agent (genie #65) — every
-     * room it explicitly joined (or auto-joined by posting), MINUS its own
-     * `<workspaceId>:<purpose>` room.
-     *
-     * The purpose room is deliberately excluded because it is DERIVED: `join`
-     * rebuilds it from `whisper_purpose` every time, so persisting it would let
-     * a purpose rename strand a ghost room that resurrects on the next restart.
-     * What's left is exactly the state that has no other home — and losing it is
-     * what silently evicted agents from shared channels.
-     */
-    persistableChannelKeys(agentId: string): string[] {
-        const a = this.agents.get(agentId);
-        if (!a) return [];
-        const own = this.keyFor(a.workspaceId, a.purpose);
-        return this.channelsForAgent(agentId)
-            .map((c) => c.key)
-            .filter((key) => key !== own);
     }
 
     // --- discovery ---------------------------------------------------------
@@ -1123,7 +914,6 @@ export class AgentInboxBroker {
             type: 'message',
             preview: {
                 kind: msg.kind,
-                channelKey: msg.kind === 'channel' ? msg.channel : undefined,
                 toAgentId: msg.kind === 'dm' ? msg.to : undefined,
                 from: msg.from,
                 fromLabel: msg.fromLabel,
@@ -1154,7 +944,6 @@ export class AgentInboxBroker {
         human?: boolean;
         system?: boolean;
         toAgentId?: string;
-        channelArg?: string;
         text: string;
         interrupt?: boolean;
         /** Files riding the message. The CALLER has already read + stored the
@@ -1180,9 +969,6 @@ export class AgentInboxBroker {
             fromLabel = sender.label || `${sender.slug}:${sender.purpose}`;
         }
 
-        if (input.toAgentId && input.channelArg) {
-            return { ok: false, error: 'Send to a channel OR an agent, not both.' };
-        }
 
         const attachments = input.attachments ?? [];
         const base = {
@@ -1236,91 +1022,7 @@ export class AgentInboxBroker {
             return { ok: true, delivered: 1, message: msg };
         }
 
-        // --- channel ---
-        if (input.channelArg) {
-            let key: string | null;
-            /** The sender's membership had lapsed and `send` restored it. */
-            let rejoined = false;
-            if (input.human) {
-                // The human posts by an explicit channel KEY (from the panel);
-                // resolve a slug-qualified form too, but a bare key is the norm.
-                key = this.channelMembers.has(input.channelArg)
-                    ? input.channelArg
-                    : this.resolveChannelKeyFromAny(input.channelArg);
-            } else {
-                key = this.resolveChannelKey(sender!.agentId, input.channelArg);
-                // OUTER tier: broadcasting into another workspace's room requires
-                // that workspace to admit yours. Checked BEFORE the auto-join so a
-                // refused sender doesn't silently become a member.
-                if (
-                    key &&
-                    !this.workspaceAllows(sender!.workspaceId, this.workspaceOfKey(key))
-                ) {
-                    return {
-                        ok: false,
-                        error: `Channel "${input.channelArg}" belongs to a workspace that does not accept agents from yours.`,
-                    };
-                }
-                // Convenience: a sending agent auto-joins the channel it posts to.
-                // Whether it HAD to is reported back — a sender that believed it
-                // was already in the room learns its membership had lapsed.
-                if (key) {
-                    rejoined = !(this.channelMembers.get(key)?.has(sender!.agentId) ?? false);
-                    this.addToChannel(sender!.agentId, key);
-                }
-            }
-            if (!key) return { ok: false, error: `Unknown channel "${input.channelArg}".` };
-            const msg: AgentInboxMessage = {
-                ...base,
-                seq: ++this.seq,
-                kind: 'channel',
-                channel: key,
-                text,
-            };
-            const members = this.channelMembers.get(key) ?? new Set<string>();
-            let delivered = 0;
-            for (const memberId of members) {
-                if (memberId === from) continue; // no self-echo
-                const member = this.agents.get(memberId);
-                if (!member) continue;
-                this.push(member, msg);
-                this.notifyDelivery(member, msg);
-                this.deliverToHarness(member, msg);
-                delivered++;
-            }
-            this.appendLog(this.channelLogs, key, msg);
-            this.store.append(msg);
-            this.emitMessage(msg);
-            this.emitLagIfChanged();
-            // Reached nobody: tell the AGENT sender plainly, so it can never
-            // mistake a delivered-to-no-one broadcast for a filed report.
-            if (!input.human && delivered === 0) {
-                return {
-                    ok: false,
-                    error: channelSendMissError(key, rejoined),
-                    delivered: 0,
-                    channel: key,
-                    rejoined,
-                };
-            }
-            return { ok: true, delivered, message: msg, channel: key, rejoined };
-        }
-
-        return { ok: false, error: 'Send needs `to` (an agent) or `channel`.' };
-    }
-
-    /** Resolve a channel arg without a caller context (human posts / lookups). */
-    private resolveChannelKeyFromAny(channelArg: string): string | null {
-        const raw = String(channelArg ?? '').trim();
-        const idx = raw.indexOf(':');
-        if (idx < 0) return null;
-        const left = raw.slice(0, idx);
-        const purpose = raw.slice(idx + 1);
-        if (this.wsInfo.has(left)) return this.keyFor(left, purpose);
-        for (const [wsId, info] of this.wsInfo) {
-            if (info.slug === left) return this.keyFor(wsId, purpose);
-        }
-        return null;
+        return { ok: false, error: 'Send needs `to` (an agent).' };
     }
 
     // --- receive (pull + long-poll) ---------------------------------------
@@ -1404,8 +1106,7 @@ export class AgentInboxBroker {
         if (!att) return null;
         const msg = this.store.getMessage(att.messageId);
         if (!msg) return null;
-        const channelKeys = this.channelsForAgent(agentId).map((c) => c.key);
-        return canAccessMessageAttachment({ msg, agentId, channelKeys }) ? att : null;
+        return canAccessMessageAttachment({ msg, agentId, channelKeys: [] }) ? att : null;
     }
 
     /**
@@ -1471,23 +1172,20 @@ export class AgentInboxBroker {
     }
 
     /**
-     * The message log for a channel (`channelKey`), an arbitrary DM pair
-     * (`dmPair: [idA, idB]` — either may be the human; covers agent↔agent), or —
+     * The message log for an arbitrary DM pair (`dmPair: [idA, idB]` — either
+     * may be the human; covers agent↔agent), or —
      * for back-compat — the human↔agent thread (`agentId`). Newest-last, capped
      * by `limit`, optionally paged with `before` (only messages with seq <
      * before).
      */
     history(opts: {
-        channelKey?: string;
         agentId?: string;
         dmPair?: [string, string];
         limit?: number;
         before?: number;
     }): AgentInboxMessage[] {
         let log: AgentInboxMessage[] = [];
-        if (opts.channelKey) {
-            log = this.channelLogs.get(opts.channelKey) ?? [];
-        } else if (opts.dmPair) {
+        if (opts.dmPair) {
             log = this.dmLogs.get(pairKey(opts.dmPair[0], opts.dmPair[1])) ?? [];
         } else if (opts.agentId) {
             log = this.dmLogs.get(pairKey(AGENTINBOX_HUMAN, opts.agentId)) ?? [];
@@ -1501,33 +1199,10 @@ export class AgentInboxBroker {
     // --- delete / clear (human panel, genie #64) ---------------------------
 
     /**
-     * Wipe a CHANNEL's history — the in-memory panel log AND the durable rows,
-     * so a restart can't rehydrate what the human just deleted. The channel
-     * itself survives (membership is separate from history); it simply has no
-     * messages.
-     *
-     * Deliberately does NOT touch agent inboxes or ACK cursors: clearing the
-     * human's VIEW of a conversation must not silently drop mail an agent has
-     * not received yet, nor rewind an agent's ACK position (which would re-fire
-     * escalations and re-deliver on the next rehydrate).
-     */
-    clearChannel(channelKey: string): { ok: boolean; cleared: number } {
-        const key = String(channelKey ?? '').trim();
-        if (!key) return { ok: false, cleared: 0 };
-        const inMemory = this.channelLogs.get(key)?.length ?? 0;
-        this.channelLogs.delete(key);
-        const persisted = this.store.clearChannel(key);
-        const cleared = Math.max(inMemory, persisted);
-        if (cleared > 0) this.emit({ type: 'cleared', scope: 'channel', key });
-        return { ok: true, cleared };
-    }
-
-    /**
      * Delete a whole DM THREAD by its pair key (`<idA>|<idB>`, sorted — the same
      * key {@link dmThreads} reports). Covers human↔agent AND agent↔agent. The
      * thread disappears from the DM list entirely rather than lingering empty.
-     * Same non-interference rule as {@link clearChannel}: inboxes and cursors
-     * are untouched.
+     * Agent inboxes and cursors are untouched.
      */
     deleteThread(pairKeyArg: string): { ok: boolean; cleared: number } {
         const key = String(pairKeyArg ?? '').trim();
@@ -1551,8 +1226,8 @@ export class AgentInboxBroker {
      * over the relay).
      *
      * Deliberately a BATCH OVER the existing ops rather than a second
-     * implementation: every target goes through {@link clearChannel} /
-     * {@link deleteThread}, so the durable semantics and the non-interference
+     * implementation: every target goes through {@link deleteThread}, so the
+     * durable semantics and the non-interference
      * rule (agent inboxes and ACK cursors untouched) hold by construction, and a
      * `cleared` event still fires per target so per-key cache invalidation stays
      * exact for every listening window.
@@ -1560,22 +1235,14 @@ export class AgentInboxBroker {
      * Keys are deduped. A malformed key is skipped without aborting the batch —
      * one bad entry must not cost the user the other twenty deletions.
      */
-    wipeMany(input: { channelKeys?: string[]; pairKeys?: string[] }): {
+    wipeMany(input: { pairKeys?: string[] }): {
         ok: boolean;
         cleared: number;
         channels: number;
         threads: number;
     } {
         let cleared = 0;
-        let channels = 0;
         let threads = 0;
-        for (const key of new Set(input.channelKeys ?? [])) {
-            const r = this.clearChannel(key);
-            if (r.cleared > 0) {
-                cleared += r.cleared;
-                channels++;
-            }
-        }
         for (const key of new Set(input.pairKeys ?? [])) {
             const r = this.deleteThread(key);
             if (r.ok && r.cleared > 0) {
@@ -1583,7 +1250,7 @@ export class AgentInboxBroker {
                 threads++;
             }
         }
-        return { ok: true, cleared, channels, threads };
+        return { ok: true, cleared, channels: 0, threads };
     }
 
     // --- test / diagnostic accessors --------------------------------------
@@ -1592,9 +1259,6 @@ export class AgentInboxBroker {
     _reset(): void {
         this.agents.clear();
         this.byTerminal.clear();
-        this.channelMembers.clear();
-        this.wsInfo.clear();
-        this.channelLogs.clear();
         this.dmLogs.clear();
         this.seq = 0;
         this.lastLagCount = 0;
