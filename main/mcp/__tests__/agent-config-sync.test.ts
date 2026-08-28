@@ -32,6 +32,14 @@ const WS = path.join('/ws', 'demo');
 const mcpJson = path.join(WS, '.mcp.json');
 const cursorJson = path.join(WS, '.cursor', 'mcp.json');
 const codexToml = path.join(WS, '.codex', 'config.toml');
+const agentsMd = path.join(WS, 'AGENTS.md');
+const claudeMd = path.join(WS, 'CLAUDE.md');
+const rulesMd = path.join(WS, 'RULES.md');
+const managedShared = path.join(WS, '.agents', '_genie', 'shared.md');
+const managedCodex = path.join(WS, '.agents', '_genie', 'genie-codex.md');
+const managedClaude = path.join(WS, '.agents', '_genie', 'genie-claude.md');
+const agentsBackup = path.join(WS, '.agents', '_genie', 'backups', 'AGENTS.md.pre-router.bak');
+const claudeBackup = path.join(WS, '.agents', '_genie', 'backups', 'CLAUDE.md.pre-router.bak');
 const codexSkill = path.join(WS, '.agents', 'skills', 'genie', 'SKILL.md');
 const codexSessionHook = path.join(
     WS,
@@ -58,6 +66,24 @@ beforeEach(() => {
 });
 
 describe('writeWorkspaceAgentMcp — per-target sync gating', () => {
+    it('migrates instruction files to identical routers without losing human rules', () => {
+        files.set(agentsMd, '# Project rules\n\nNever force-push.\n');
+        files.set(claudeMd, '@AGENTS.md\n\n## Claude Code\n\nUse a narrow context window.\n');
+
+        writeWorkspaceAgentMcp(WS, true, URL);
+
+        expect(files.get(agentsMd)).toBe(files.get(claudeMd));
+        expect(files.get(agentsMd)).toContain('.agents/_genie/shared.md');
+        expect(files.get(agentsMd)).not.toContain('@AGENTS.md');
+        expect(files.get(agentsBackup)).toContain('Never force-push.');
+        expect(files.get(claudeBackup)).toContain('Use a narrow context window.');
+        expect(files.get(rulesMd)).toContain('Never force-push.');
+        expect(files.get(rulesMd)).toContain('Use a narrow context window.');
+        expect(files.get(managedShared)).toContain('GENIE PROTOCOL');
+        expect(files.get(managedCodex)).toContain('Codex');
+        expect(files.get(managedClaude)).toContain('Claude Code');
+    });
+
     it('writes all targets when every sync flag is on (default)', () => {
         settings = { mcp_sync_claude: 'on', mcp_sync_cursor: 'on', mcp_sync_agents: 'on' };
         writeWorkspaceAgentMcp(WS, true, URL);

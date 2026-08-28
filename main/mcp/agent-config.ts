@@ -668,6 +668,28 @@ export const AGENT_DOC_FILES: Record<AgentDocHarness, string> = {
     claude: 'CLAUDE.md',
 };
 
+/**
+ * The byte-identical, deliberately boring entry point written to both harness
+ * instruction files.  It names files instead of using Claude's `@` import
+ * syntax because Codex does not expand that syntax.  Each harness must perform
+ * the reads itself, which also makes missing optional project files harmless.
+ */
+export function agentDocsRouter(_legacyFilename?: string): string {
+    return [
+        '# Agent instructions',
+        '',
+        'Before doing work, read and follow these instruction sources:',
+        '',
+        '- `.agents/_genie/shared.md` (Genie-managed shared protocol)',
+        '- The file matching your harness: `.agents/_genie/genie-codex.md` or `.agents/_genie/genie-claude.md`',
+        '- `README.md` when present',
+        '- `RULES.md` when present',
+        '',
+        'These are explicit file-reading instructions; do not assume `@` imports are expanded.',
+        '',
+    ].join('\n');
+}
+
 /** The one line that differs: which TUI reads this file, and how it gets it. */
 const HARNESS_INTRO: Record<AgentDocHarness, string> = {
     codex:
@@ -791,6 +813,112 @@ function syncAgentsMd(workspacePath: string, enabled: boolean): void {
         }
     });
     if (!read.some((t) => t.present)) return; // no agent docs here → nothing to do
+
+    if (enabled) {
+        const managedRoot = path.join(workspacePath, '.agents', '_genie');
+        const backupRoot = path.join(managedRoot, 'backups');
+        try {
+            fs.mkdirSync(backupRoot, { recursive: true });
+        } catch {
+            /* individual writes below remain best-effort */
+        }
+
+        // Back up each pre-router document exactly once, before replacing either
+        // entry point. Stable names make recovery discoverable and ensure a later
+        // sync can never overwrite the original snapshot.
+        for (const target of read) {
+            if (!target.present || target.existing === agentDocsRouter()) continue;
+            const backup = path.join(backupRoot, `${AGENT_DOC_FILES[target.harness]}.pre-router.bak`);
+            if (!fs.existsSync(backup)) {
+                try {
+                    fs.writeFileSync(backup, target.existing);
+                } catch {
+                    return; // backup-first is a safety boundary, not best-effort
+                }
+            }
+        }
+
+        const stripManaged = (content: string): string => {
+            if (content === agentDocsRouter()) return '';
+            let body = content;
+            const begin = body.indexOf(AGENTS_BEGIN);
+            const end = body.indexOf(AGENTS_END);
+            if (begin !== -1 && end !== -1 && end > begin) {
+                body = body.slice(0, begin) + body.slice(end + AGENTS_END.length);
+            }
+            return body
+                .split('\n')
+                .filter((line) => line.trim() !== CLAUDE_MD_IMPORT)
+                .join('\n')
+                .replace(/## Claude Code\s*<!-- Claude-specific notes only\.[\s\S]*?-->/g, '')
+                .trim();
+        };
+
+        const migrated = Array.from(
+            new Set(read.map((target) => stripManaged(target.existing)).filter(Boolean)),
+        );
+        if (migrated.length > 0) {
+            const rulesFile = path.join(workspacePath, 'RULES.md');
+            let existingRules = '';
+            try {
+                existingRules = fs.readFileSync(rulesFile, 'utf8');
+            } catch {
+                /* create it below */
+            }
+            const additions = migrated.filter((body) => !existingRules.includes(body));
+            if (additions.length > 0) {
+                const prefix = existingRules.trim()
+                    ? `${existingRules.replace(/\s+$/, '')}\n\n`
+                    : '# Workspace rules\n\n';
+                const section = [
+                    '<!-- BEGIN GENIE INSTRUCTION MIGRATION -->',
+                    '## Migrated agent instructions',
+                    '',
+                    ...additions.flatMap((body, index) => [
+                        `### Source ${index + 1}`,
+                        '',
+                        body,
+                        '',
+                    ]),
+                    '<!-- END GENIE INSTRUCTION MIGRATION -->',
+                    '',
+                ].join('\n');
+                try {
+                    fs.writeFileSync(rulesFile, prefix + section);
+                } catch {
+                    return; // never install routers that would orphan the rules
+                }
+            }
+        }
+
+        const shared = [
+            AGENTS_BEGIN,
+            '## GENIE PROTOCOL',
+            '',
+            GENIE_AGENTS_BRIEF,
+            aiSystem.trim()
+                ? `\n### Ai.System — workspace instructions (set in Genie → Settings → Customization)\n\n${aiSystem.trim()}`
+                : '',
+            AGENTS_END,
+            '',
+        ].join('\n');
+        const providerDocs: Record<AgentDocHarness, string> = {
+            codex: '# Genie for Codex\n\nCodex must call `genieGuide` and follow the Codex-specific setup it returns.\n',
+            claude: '# Genie for Claude Code\n\nClaude Code must call `genieGuide` and follow the Claude-specific setup it returns.\n',
+        };
+        try {
+            fs.writeFileSync(path.join(managedRoot, 'shared.md'), shared);
+            fs.writeFileSync(path.join(managedRoot, 'genie-codex.md'), providerDocs.codex);
+            fs.writeFileSync(path.join(managedRoot, 'genie-claude.md'), providerDocs.claude);
+            const router = agentDocsRouter();
+            fs.writeFileSync(path.join(workspacePath, AGENT_DOC_FILES.codex), router);
+            fs.writeFileSync(path.join(workspacePath, AGENT_DOC_FILES.claude), router);
+        } catch {
+            /* backups and migrated rules remain recoverable */
+        }
+        return;
+    }
+
     // Disabling only STRIPS the block; it must never create a file to strip from.
     for (const t of read) {
         if (!enabled && !t.present) continue;
