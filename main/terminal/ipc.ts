@@ -1,6 +1,7 @@
 import { BrowserWindow, ipcMain, WebContents } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import {
     terminalManager,
     subscribeBackendEvents,
@@ -19,6 +20,9 @@ import {
     createTerminalSpec,
     getWorkspace,
     getWorkspaceAgentCap,
+    listWorkspaceAgents,
+    getDb,
+    markWorkspaceAgentTransportState,
     type TerminalSpecRow,
     type TerminalSpecMeta,
 } from '../db';
@@ -31,6 +35,14 @@ import {
     type SpawnActor,
 } from './agent-cap';
 import { agentInboxBroker } from '../agentinbox/broker';
+import { harnessTransportRegistry } from '../agentinbox/harness-transport';
+import {
+    CODEX_APP_TOKEN_ENV,
+    codexAppServerManager,
+    codexRemoteTuiLaunch,
+    prepareCodexAppServer,
+    type PreparedCodexAppServer,
+} from '../agentinbox/codex-app-server-lifecycle';
 import { workspaceSlug } from '../agentinbox/slug';
 import {
     renderAgentLaunch,
@@ -476,6 +488,7 @@ export function createAgentTerminal(opts: {
     let launchCommand: string | undefined;
     let chatSessionId: string | null = null;
     let strategy: ReturnType<typeof renderAgentLaunch>['strategy'] | null = null;
+    let preparedCodex: PreparedCodexAppServer | null = null;
     let agentId: string | undefined;
     let meta: TerminalSpecMeta = {};
     if (opts.agentMeta && !reviving) {
@@ -551,6 +564,14 @@ export function createAgentTerminal(opts: {
             env = { ...env, GENIE_MCP_URL: mcpUrl, GENIE_TERMINAL_ID: id };
         }
     }
+    if (opts.agentMeta?.agent === 'codex' && launchCommand && !reviving) {
+        preparedCodex = prepareCodexAppServer(
+            id,
+            path.join(os.tmpdir(), 'genie-agentinbox-app-server'),
+        );
+        env = { ...env, [CODEX_APP_TOKEN_ENV]: preparedCodex.token };
+        launchCommand = codexRemoteTuiLaunch(launchCommand, preparedCodex.address);
+    }
     // Codex can't read GENIE_MCP_URL from its MCP config, so weave this terminal's
     // own genie endpoint into its launch `-c` override — the token then identifies
     // the terminal and the agent never has to pass `terminalId` (genie #35). A
@@ -608,7 +629,7 @@ export function createAgentTerminal(opts: {
     // is left strictly alone — the launch line is never typed into a live TUI's
     // prompt, which is what that bug looks like from the user's side.
     if (reviving) maybeRelaunchAgent(id, result.existing);
-    else if (launchCommand && !result.existing) deliverAgentLaunch(id, launchCommand);
+    else if (launchCommand && !result.existing && !preparedCodex) deliverAgentLaunch(id, launchCommand);
 
     // Tell every window the spec set changed so the new terminal appears live.
     broadcastTerminalSpecsChanged();
@@ -638,6 +659,55 @@ export function createAgentTerminal(opts: {
                     /* best-effort — no id is fine */
                 });
         }
+    }
+    if (preparedCodex && launchCommand && agentId && !result.existing) {
+        const command = launchCommand;
+        void codexAppServerManager.start({
+            terminalId: id,
+            cwd: opts.cwd,
+            stateDir: path.dirname(preparedCodex.tokenFile),
+            prepared: preparedCodex,
+            env: { ...process.env, ...env },
+        }).then(async (running) => {
+            const configured = listWorkspaceAgents(opts.workspaceId).find(
+                (candidate) => candidate.terminal_spec_id === id,
+            );
+            harnessTransportRegistry.bind(agentId!, 'codex-app-server', (payload) =>
+                running.session.deliver(payload),
+            );
+            if (configured) {
+                markWorkspaceAgentTransportState(
+                    getDb(),
+                    configured.id,
+                    'codex-app-server',
+                    { ok: true },
+                );
+            }
+            deliverAgentLaunch(id, command);
+            const backlog = await agentInboxBroker.receive(agentId!);
+            for (const message of backlog.messages) {
+                await running.session.deliver({
+                    text: message.text,
+                    messageId: message.id,
+                    from: message.from,
+                    fromLabel: message.fromLabel,
+                    priority: message.interrupt ? 'high' : 'normal',
+                });
+            }
+        }).catch((error: unknown) => {
+            const configured = listWorkspaceAgents(opts.workspaceId).find(
+                (candidate) => candidate.terminal_spec_id === id,
+            );
+            harnessTransportRegistry.unbind(agentId!);
+            if (configured) {
+                markWorkspaceAgentTransportState(
+                    getDb(),
+                    configured.id,
+                    'codex-app-server',
+                    { ok: false, error: error instanceof Error ? error.message : String(error) },
+                );
+            }
+        });
     }
     return {
         id,
@@ -1273,6 +1343,7 @@ export function killTerminalById(id: string): boolean {
     // AgentInbox: a killed terminal is a hard leave — drop the agent from the
     // registry + channels and push an offline presence (no-op for a non-agent).
     agentInboxBroker.leaveByTerminal(id);
+    codexAppServerManager.stop(id);
     // kill() also clears the retained flag in the manager.
     const killed = terminalManager().kill(id);
     // Drop the Tier 1 snapshot too so a killed terminal can't resurrect on the

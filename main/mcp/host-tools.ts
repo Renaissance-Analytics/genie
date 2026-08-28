@@ -2286,15 +2286,14 @@ export async function agentInboxForMcp(
                 const configured = listWorkspaceAgents(ws.id).find(
                     (candidate) => candidate.terminal_spec_id === spec.id,
                 );
-                if (!configured) {
-                    return { ok: false, error: 'This terminal is not bound to a registered AMS agent.' };
-                }
                 // The adapter owns the live harness connection and blocks in
                 // AgentInbox.receive. A durable message settles that waiter;
                 // this binding records that the native adapter is connected.
                 // There is intentionally no terminal-input fallback here.
                 harnessTransportRegistry.bind(agentId, required, () => undefined);
-                markWorkspaceAgentTransportState(getDb(), configured.id, required, { ok: true });
+                if (configured) {
+                    markWorkspaceAgentTransportState(getDb(), configured.id, required, { ok: true });
+                }
                 return {
                     ok: true,
                     self: agentInboxBroker.getInfo(agentId) ?? undefined,

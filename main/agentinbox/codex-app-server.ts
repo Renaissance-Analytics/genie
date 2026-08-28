@@ -30,6 +30,7 @@ export class CodexAgentInboxSession {
     private nextId = 1;
     private pending = new Map<number, PendingRequest>();
     private queue: HarnessTransportPayload[] = [];
+    private deliveredMessageIds = new Set<string>();
     private busy = true;
     private currentThreadId: string | null = null;
 
@@ -62,6 +63,15 @@ export class CodexAgentInboxSession {
 
     async deliver(payload: HarnessTransportPayload): Promise<void> {
         if (!this.currentThreadId) throw new Error('Codex App Server session is not initialized.');
+        const messageId = typeof payload.messageId === 'string' ? payload.messageId : null;
+        if (messageId && this.deliveredMessageIds.has(messageId)) return;
+        if (messageId) {
+            this.deliveredMessageIds.add(messageId);
+            if (this.deliveredMessageIds.size > 1_000) {
+                const oldest = this.deliveredMessageIds.values().next().value as string | undefined;
+                if (oldest) this.deliveredMessageIds.delete(oldest);
+            }
+        }
         if (this.busy) {
             this.queue.push(payload);
             return;

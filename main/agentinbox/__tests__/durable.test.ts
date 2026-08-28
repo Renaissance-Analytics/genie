@@ -121,39 +121,34 @@ describe('AgentInbox durable inbox (Track B)', () => {
         expect(store.rows[0]).toMatchObject({ kind: 'dm', from: 'a', to: 'b', text: 'hi b' });
     });
 
-    it('IMMEDIATE notice: a DM announces itself in the recipient chat even MID-TURN (beta.248)', () => {
-        // THE CHANGE. Wake-on-DM only reached a provably-IDLE agent, so a message
-        // to a working agent sat unseen until its turn ended. A TUI queues text
-        // that arrives mid-turn (it is how a human interjects), so the notice goes
-        // in as soon as the message lands -- no idle wait, no opt-in.
-        let clock = 1_000_000;
+    it('delivers a DM to the harness adapter even mid-turn without touching the PTY', () => {
         const b = new AgentInboxBroker();
         b.setStore(store);
-        b.setClock(() => clock);
-        const woken: Array<{ terminalId: string; text: string }> = [];
-        b.setWakeSink((d) => { woken.push({ terminalId: d.terminalId, text: d.text }); });
+        const delivered: string[] = [];
+        const woken: string[] = [];
+        b.setTransportSink((_target, message) => { delivered.push(message.text); });
+        b.setWakeSink((d) => { woken.push(d.text); });
 
         join(b, 'a');
         join(b, 'b'); // NOT opted in, and never finished a turn -- busy from birth.
 
         b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping1' });
-        expect(woken).toHaveLength(1);
-        expect(woken[0].terminalId).toBe('t-b');
-        expect(woken[0].text).toMatch(/not urgent/i);
-        expect(woken[0].text).toContain('a'); // the sender's label
+        expect(delivered).toEqual(['ping1']);
+        expect(woken).toEqual([]);
 
         // Mid-turn output is no longer a gate: the agent is plainly working and
         // still gets told.
         b.noteOutput('t-b');
         b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping2' });
-        expect(woken).toHaveLength(2);
+        expect(delivered).toEqual(['ping1', 'ping2']);
+        expect(woken).toEqual([]);
     });
 
-    it('IMMEDIATE notice: an interrupt DM says check it NOW, a normal one says when free', () => {
+    it('keeps interrupt priority in the durable message without synthesizing input text', () => {
         const b = new AgentInboxBroker();
         b.setStore(store);
-        const woken: string[] = [];
-        b.setWakeSink((d) => { woken.push(d.text); });
+        const delivered: Array<boolean | undefined> = [];
+        b.setTransportSink((_target, message) => { delivered.push(message.interrupt); });
 
         join(b, 'a');
         join(b, 'b');
@@ -161,9 +156,7 @@ describe('AgentInbox durable inbox (Track B)', () => {
         b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'whenever', interrupt: false });
         b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'NOW', interrupt: true });
 
-        expect(woken[0]).toMatch(/when you are not busy/i);
-        expect(woken[1]).toMatch(/immediately/i);
-        expect(woken[1]).toMatch(/HIGH PRIORITY/i);
+        expect(delivered).toEqual([undefined, true]);
     });
 
     it('IMMEDIATE notice: a CHANNEL post notifies every member but the sender', () => {
@@ -184,42 +177,25 @@ describe('AgentInbox durable inbox (Track B)', () => {
         }
     });
 
-    it("IMMEDIATE notice: user content blocks PTY writes and queues an explicit send", () => {
-        // Rewritten for the owner's JOB 2 contract. This used to assert that a
-        // draft in the box HELD the notice indefinitely — which is how a
-        // half-typed prompt silenced an agent's mail. The draft is still
-        // untouchable; the notice is no longer the thing that gives way.
+    it('user input state never participates in agent-to-agent delivery', () => {
         const b = new AgentInboxBroker();
         b.setStore(store);
-        const sent: Array<{ terminalId: string; mode: string }> = [];
+        const delivered: string[] = [];
+        const sent: string[] = [];
         const pending: Array<{ terminalId: string; pending: boolean }> = [];
-        b.setWakeSink((d) => {
-            sent.push({ terminalId: d.terminalId, mode: d.plan.mode });
-        });
+        b.setTransportSink((_target, message) => { delivered.push(message.text); });
+        b.setWakeSink((d) => { sent.push(d.text); });
         b.setPendingNudgeSink((d) => pending.push(d));
 
         join(b, 'a');
         join(b, 'b');
 
-        // Empty box: the notice is simply submitted, which starts the turn.
         b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping1' });
-        expect(sent[0]).toEqual({ terminalId: 't-b', mode: 'submit' });
-
-        // User content means NO delivery attempt. The nudge is held behind a
-        // terminal-scoped notice until the human explicitly releases it.
         b.noteUserInput('t-b', 'hold on, I am writing');
         b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping2' });
-        expect(sent).toHaveLength(1);
-        expect(pending.at(-1)).toEqual({ terminalId: 't-b', pending: true });
-        expect(b.sendPendingNudge('t-b')).toEqual({ ok: false, reason: 'input-not-empty' });
-        expect(sent).toHaveLength(1);
-
-        // Once the user clears/submits their own content, the explicit button
-        // releases the queued nudge and closes the notice.
-        b.noteUserInput('t-b', '\r');
-        expect(b.sendPendingNudge('t-b')).toEqual({ ok: true });
-        expect(sent.at(-1)).toEqual({ terminalId: 't-b', mode: 'submit' });
-        expect(pending.at(-1)).toEqual({ terminalId: 't-b', pending: false });
+        expect(delivered).toEqual(['ping1', 'ping2']);
+        expect(sent).toEqual([]);
+        expect(pending).toEqual([]);
     });
 
     it('IMMEDIATE notice: a DEFERRED notice is not counted as a wake', () => {
@@ -238,25 +214,19 @@ describe('AgentInbox durable inbox (Track B)', () => {
         expect(modes).toEqual([]);
     });
 
-    it('an agent explicitly opted OUT is never announced to (owner: default ON, OFF is honoured)', () => {
-        // The per-agent toggle now governs the IMMEDIATE notice too, and its
-        // default flipped to ON. Someone who deliberately silenced an agent must
-        // keep that silence -- a setting that stops being honoured is worse than
-        // no setting.
+    it('legacy wake preferences do not disable native AgentInbox transport', () => {
         const b = new AgentInboxBroker();
         b.setStore(store);
-        const woken: string[] = [];
-        b.setWakeSink((d) => { woken.push(d.terminalId); });
+        const delivered: string[] = [];
+        b.setTransportSink((target) => { delivered.push(target.terminalId); });
 
         join(b, 'a');
         join(b, 'quiet', { wakeOnDm: false }); // explicit OFF
         join(b, 'normal'); // never set -> default ON
 
         b.send({ fromAgentId: 'a', toAgentId: 'quiet', text: 'shh' });
-        expect(woken).toHaveLength(0);
-
         b.send({ fromAgentId: 'a', toAgentId: 'normal', text: 'hello' });
-        expect(woken).toEqual(['t-normal']);
+        expect(delivered).toEqual(['t-quiet', 't-normal']);
     });
 
     it('a human draft queues the notice instead of injecting it', () => {
@@ -284,34 +254,21 @@ describe('AgentInbox durable inbox (Track B)', () => {
         expect(woken).toHaveLength(0);
     });
 
-    it('wake-on-DM remains the FALLBACK when the host cannot deliver a notice', () => {
-        // The opt-in idle nudge is not deleted. It covers the case the host
-        // REFUSES — most often a swap already in flight on that terminal — and it
-        // stays idle-gated, so it can never land mid-turn.
-        let clock = 1_000_000;
+    it('a failed native delivery remains durable and never falls back to PTY wake', async () => {
         const b = new AgentInboxBroker();
         b.setStore(store);
-        b.setClock(() => clock);
-        const woken: Array<{ terminalId: string; text: string }> = [];
-        let refuse = true;
-        b.setWakeSink((d) => {
-            if (refuse) {
-                refuse = false; // the fallback nudge itself gets through
-                return false;
-            }
-            woken.push({ terminalId: d.terminalId, text: d.text });
-            return true;
-        });
+        const woken: string[] = [];
+        b.setTransportSink(() => false);
+        b.setWakeSink((d) => { woken.push(d.text); });
 
         join(b, 'a');
         join(b, 'b', { wakeOnDm: true });
 
-        b.markTurnEnd('t-b');
-        clock += WAKE_QUIET_MS + 1;
         b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping' });
-
-        expect(woken).toHaveLength(1);
-        expect(woken[0].text).toContain('unread AgentInbox');
+        expect(woken).toEqual([]);
+        await expect(b.receive('b')).resolves.toMatchObject({
+            messages: [expect.objectContaining({ text: 'ping' })],
+        });
     });
 
     it('wakeTerminalIfIdle (IssueWatch): wakes an IDLE agent regardless of the AgentInbox opt-in, but NEVER mid-turn', () => {

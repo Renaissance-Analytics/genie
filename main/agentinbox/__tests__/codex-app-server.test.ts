@@ -81,4 +81,17 @@ describe('Codex App Server AgentInbox adapter', () => {
             params: { input: [{ text: 'wait for idle' }] },
         });
     });
+
+    it('deduplicates the durable backlog against simultaneous live delivery', async () => {
+        const socket = new FakeSocket();
+        const session = new CodexAgentInboxSession(socket);
+        await session.initialize('C:/workspace');
+
+        await session.deliver({ text: 'once', messageId: 'message-1' });
+        await session.deliver({ text: 'once', messageId: 'message-1' });
+        socket.emit({ jsonrpc: '2.0', method: 'turn/completed', params: { threadId: 'thread-1' } });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+
+        expect(socket.sent.filter((message) => message.method === 'turn/start')).toHaveLength(1);
+    });
 });
