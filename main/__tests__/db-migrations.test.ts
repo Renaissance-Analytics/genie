@@ -9,6 +9,9 @@ import {
     parsePolicyBuckets,
     ensureWorkspaceAgent,
     markWorkspaceAgentReadyByTerminal,
+    createWorkspaceTodo,
+    resolveUserTodo,
+    listWorkspaceTodos,
 } from '../db';
 
 /**
@@ -1601,7 +1604,7 @@ describe('v50 — first-class AMS agents', () => {
 
         // Rewind only the not-yet-shipped migration marker to model an upgrade
         // from v49 with this workspace already present.
-        db.prepare('DELETE FROM schema_version WHERE version = 50').run();
+        db.prepare('DELETE FROM schema_version WHERE version >= 50').run();
         runMigrations(db);
 
         const row = db
@@ -1668,7 +1671,7 @@ describe('v50 — first-class AMS agents', () => {
                      0, '2026-08-01')`,
         ).run();
         db.prepare(`DELETE FROM workspace_agents WHERE workspace_id = 'ws-old-agent'`).run();
-        db.prepare('DELETE FROM schema_version WHERE version = 50').run();
+        db.prepare('DELETE FROM schema_version WHERE version >= 50').run();
 
         runMigrations(db);
 
@@ -1723,5 +1726,58 @@ describe('v50 — first-class AMS agents', () => {
 
         expect(marked?.id).toBe('workspace:ws-ready');
         expect(marked?.ready_at).toBe(1234);
+    });
+});
+
+describe('v51 — bounded short-term AMS todos', () => {
+    function seeded(): Database.Database {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        db.prepare(
+            `INSERT INTO workspaces
+                (id, tynn_project_id, tynn_project_name, project_id, project_name,
+                 shape, path, sort_order)
+             VALUES ('ws-todo', 'p-todo', 'Todo', 'p-todo', 'Todo',
+                     'simple', '/tmp/todo', 0)`,
+        ).run();
+        ensureWorkspaceAgent(db, 'ws-todo', 1);
+        return db;
+    }
+
+    it('creates todo records and their durable resolution history', () => {
+        const db = seeded();
+        const todoColumns = cols(db, 'workspace_todos');
+        for (const column of ['id', 'workspace_id', 'kind', 'text', 'status']) {
+            expect(todoColumns.has(column), column).toBe(true);
+        }
+        expect(cols(db, 'workspace_todo_events').has('comment')).toBe(true);
+    });
+
+    it('caps open UserToDo at 5 and AgentTodo at 10 per workspace list', () => {
+        const db = seeded();
+        for (let i = 0; i < 5; i++) {
+            expect(createWorkspaceTodo(db, { workspaceId: 'ws-todo', kind: 'user', text: `u${i}` }).ok).toBe(true);
+        }
+        expect(createWorkspaceTodo(db, { workspaceId: 'ws-todo', kind: 'user', text: 'overflow' })).toMatchObject({ ok: false, cap: 5 });
+
+        for (let i = 0; i < 10; i++) {
+            expect(createWorkspaceTodo(db, { workspaceId: 'ws-todo', kind: 'agent', text: `a${i}` }).ok).toBe(true);
+        }
+        expect(createWorkspaceTodo(db, { workspaceId: 'ws-todo', kind: 'agent', text: 'overflow' })).toMatchObject({ ok: false, cap: 10 });
+    });
+
+    it('requires a human comment for every UserToDo outcome and frees capacity once resolved', () => {
+        const db = seeded();
+        const made = createWorkspaceTodo(db, { workspaceId: 'ws-todo', kind: 'user', text: 'Approve access' });
+        if (!made.ok) throw new Error(made.error);
+
+        expect(resolveUserTodo(db, made.todo.id, 'refused', '   ').ok).toBe(false);
+        expect(resolveUserTodo(db, made.todo.id, 'refused', 'Use the staging account instead.').ok).toBe(true);
+        expect(listWorkspaceTodos(db, 'ws-todo', 'user')).toEqual([]);
+
+        const event = db.prepare<[], { action: string; comment: string }>(
+            `SELECT action, comment FROM workspace_todo_events WHERE todo_id = '${made.todo.id}'`,
+        ).get();
+        expect(event).toEqual({ action: 'refused', comment: 'Use the staging account instead.' });
     });
 });

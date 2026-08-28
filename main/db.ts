@@ -3,6 +3,7 @@ import { providerSettingDefaults } from './agents/registry';
 import type { ProviderSettingKeys } from './agents/registry';
 import path from 'path';
 import fs from 'fs';
+import { randomUUID } from 'node:crypto';
 import {
     devSiteIdFor,
     parseDevSites,
@@ -1419,6 +1420,41 @@ export function runMigrations(d: Database.Database): void {
                 `);
             },
         },
+        {
+            // v51 — AMS short-term workflow lists. These are intentionally
+            // bounded and separate from roadmap/project management in Tynn.
+            version: 51,
+            runner: (db) => {
+                db.exec(`
+                    CREATE TABLE IF NOT EXISTS workspace_todos (
+                        id           TEXT PRIMARY KEY,
+                        workspace_id TEXT NOT NULL,
+                        agent_id     TEXT,
+                        kind         TEXT NOT NULL CHECK (kind IN ('user','agent')),
+                        text         TEXT NOT NULL,
+                        status       TEXT NOT NULL DEFAULT 'open'
+                                     CHECK (status IN ('open','thrown_back','refused','done')),
+                        created_at   INTEGER NOT NULL,
+                        updated_at   INTEGER NOT NULL,
+                        FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+                        FOREIGN KEY (agent_id) REFERENCES workspace_agents(id) ON DELETE SET NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_workspace_todos_open
+                        ON workspace_todos(workspace_id, kind, status, created_at);
+
+                    CREATE TABLE IF NOT EXISTS workspace_todo_events (
+                        id         TEXT PRIMARY KEY,
+                        todo_id    TEXT NOT NULL,
+                        action     TEXT NOT NULL CHECK (action IN ('thrown_back','refused','done')),
+                        comment    TEXT NOT NULL,
+                        created_at INTEGER NOT NULL,
+                        FOREIGN KEY (todo_id) REFERENCES workspace_todos(id) ON DELETE CASCADE
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_workspace_todo_events_todo
+                        ON workspace_todo_events(todo_id, created_at);
+                `);
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -2024,6 +2060,101 @@ export function deleteWorkspaceAgent(agentId: string): void {
     getDb()
         .prepare(`DELETE FROM workspace_agents WHERE id = ? AND role <> 'workspace'`)
         .run(agentId);
+}
+
+export type WorkspaceTodoKind = 'user' | 'agent';
+export type WorkspaceTodoStatus = 'open' | 'thrown_back' | 'refused' | 'done';
+
+export interface WorkspaceTodoRow {
+    id: string;
+    workspace_id: string;
+    agent_id: string | null;
+    kind: WorkspaceTodoKind;
+    text: string;
+    status: WorkspaceTodoStatus;
+    created_at: number;
+    updated_at: number;
+}
+
+export function listWorkspaceTodos(
+    database: Database.Database,
+    workspaceId: string,
+    kind?: WorkspaceTodoKind,
+): WorkspaceTodoRow[] {
+    return kind
+        ? database.prepare<[string, WorkspaceTodoKind], WorkspaceTodoRow>(
+              `SELECT * FROM workspace_todos
+               WHERE workspace_id = ? AND kind = ? AND status = 'open'
+               ORDER BY created_at ASC`,
+          ).all(workspaceId, kind)
+        : database.prepare<[string], WorkspaceTodoRow>(
+              `SELECT * FROM workspace_todos
+               WHERE workspace_id = ? AND status = 'open'
+               ORDER BY kind ASC, created_at ASC`,
+          ).all(workspaceId);
+}
+
+export function createWorkspaceTodo(
+    database: Database.Database,
+    input: { workspaceId: string; kind: WorkspaceTodoKind; text: string; agentId?: string | null },
+): { ok: true; todo: WorkspaceTodoRow; reminder: string } | { ok: false; error: string; cap?: number } {
+    const text = input.text.trim();
+    if (!text) return { ok: false, error: 'Todo text cannot be empty.' };
+    const cap = input.kind === 'user' ? 5 : 10;
+    return database.transaction(() => {
+        const count = database.prepare<[string, WorkspaceTodoKind], { n: number }>(
+            `SELECT COUNT(*) AS n FROM workspace_todos
+             WHERE workspace_id = ? AND kind = ? AND status = 'open'`,
+        ).get(input.workspaceId, input.kind)?.n ?? 0;
+        if (count >= cap) {
+            return { ok: false as const, cap, error: `${input.kind === 'user' ? 'UserToDo' : 'AgentTodo'} is capped at ${cap} open items.` };
+        }
+        const now = Date.now();
+        const id = randomUUID();
+        database.prepare(
+            `INSERT INTO workspace_todos
+                (id, workspace_id, agent_id, kind, text, status, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, 'open', ?, ?)`,
+        ).run(id, input.workspaceId, input.agentId ?? null, input.kind, text, now, now);
+        const todo = database.prepare<[string], WorkspaceTodoRow>(
+            'SELECT * FROM workspace_todos WHERE id = ?',
+        ).get(id)!;
+        return {
+            ok: true as const,
+            todo,
+            reminder: 'Use Tynn instead if this is roadmap or project-management work.',
+        };
+    })();
+}
+
+export function resolveUserTodo(
+    database: Database.Database,
+    todoId: string,
+    action: Exclude<WorkspaceTodoStatus, 'open'>,
+    comment: string,
+): { ok: true; todo: WorkspaceTodoRow } | { ok: false; error: string } {
+    const note = comment.trim();
+    if (!note) return { ok: false, error: 'A comment is required for every UserToDo outcome.' };
+    return database.transaction(() => {
+        const todo = database.prepare<[string], WorkspaceTodoRow>(
+            `SELECT * FROM workspace_todos WHERE id = ? AND kind = 'user' AND status = 'open'`,
+        ).get(todoId);
+        if (!todo) return { ok: false as const, error: 'No open UserToDo with that id.' };
+        const now = Date.now();
+        database.prepare(
+            `UPDATE workspace_todos SET status = ?, updated_at = ? WHERE id = ?`,
+        ).run(action, now, todoId);
+        database.prepare(
+            `INSERT INTO workspace_todo_events (id, todo_id, action, comment, created_at)
+             VALUES (?, ?, ?, ?, ?)`,
+        ).run(randomUUID(), todoId, action, note, now);
+        return {
+            ok: true as const,
+            todo: database.prepare<[string], WorkspaceTodoRow>(
+                'SELECT * FROM workspace_todos WHERE id = ?',
+            ).get(todoId)!,
+        };
+    })();
 }
 
 /**
