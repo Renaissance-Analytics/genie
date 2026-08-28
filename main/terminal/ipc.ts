@@ -1635,6 +1635,18 @@ export function broadcastWorkspacePulse(workspaceId: string): void {
     mobileEmit('workspace:pulse', { workspaceId });
 }
 
+export interface PluginPanelOpenPayload {
+    workspaceId: string;
+    pluginId: string;
+    panelId: string;
+    activeItemId?: string;
+}
+
+/** Surface a plugin's declared panel in every local renderer window. */
+export function broadcastPluginPanelOpen(payload: PluginPanelOpenPayload): void {
+    broadcastLocal('plugin-panel:open', payload);
+}
+
 export function broadcastAgentThumbsUp(payload: {
     agentId: string;
     terminalId: string;

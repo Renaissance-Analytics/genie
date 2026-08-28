@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Action, Badge, Card, Heading, Text, Textarea } from '@particle-academy/react-fancy';
 import type { ComponentProps } from 'react';
 import { api, type WorkspaceRow } from '../../lib/genie';
-import type { BoardPost } from '../../lib/artboard-model';
+import { resolveActiveBoardPost, type BoardPost } from '../../lib/artboard-model';
 
 /**
  * The first-party ArtBoard PANEL adapter — what the plugin's declared
@@ -22,6 +22,7 @@ import type { BoardPost } from '../../lib/artboard-model';
 interface Props {
     workspace?: WorkspaceRow | null;
     fallbackRoot?: string | null;
+    requestedPostId?: string;
 }
 
 /** What a post is waiting for, said in one word. */
@@ -34,7 +35,7 @@ function statusOf(post: BoardPost): { label: string; color: BadgeColor } {
         : { label: 'Rejected', color: 'rose' };
 }
 
-export default function ArtBoardPanel({ workspace }: Props) {
+export default function ArtBoardPanel({ workspace, requestedPostId }: Props) {
     const [posts, setPosts] = useState<BoardPost[] | null>(null);
     const [error, setError] = useState<string | null>(null);
     /** Per-post comment drafts. Keyed by id so two open cards do not share one. */
@@ -42,6 +43,7 @@ export default function ArtBoardPanel({ workspace }: Props) {
     /** The post with a verdict in flight — one at a time. */
     const [busy, setBusy] = useState<string | null>(null);
     const [notice, setNotice] = useState<string | null>(null);
+    const [selectedPostId, setSelectedPostId] = useState<string | null>(requestedPostId ?? null);
 
     const workspaceId = workspace?.id ?? null;
 
@@ -63,6 +65,9 @@ export default function ArtBoardPanel({ workspace }: Props) {
     }, [workspaceId]);
 
     useEffect(refresh, [refresh]);
+    useEffect(() => {
+        if (requestedPostId) setSelectedPostId(requestedPostId);
+    }, [requestedPostId]);
 
     const decide = async (post: BoardPost, verdict: 'approved' | 'rejected') => {
         if (!workspaceId) return;
@@ -99,6 +104,8 @@ export default function ArtBoardPanel({ workspace }: Props) {
 
     if (posts === null) return <Text as="p" size="xs" color="muted">Loading the board…</Text>;
 
+    const activePost = resolveActiveBoardPost(posts, selectedPostId ?? requestedPostId);
+
     return (
         <div className="artboard">
             {error && (
@@ -119,10 +126,58 @@ export default function ArtBoardPanel({ workspace }: Props) {
                 </Text>
             )}
 
-            {posts.map((post) => {
+            {posts.length > 0 && (
+                <div className="artboard-workbench">
+                    <nav className="artboard-artifacts" aria-label="ArtBoard artifacts">
+                        {posts.map((post) => {
+                            const status = statusOf(post);
+                            return (
+                                <button
+                                    type="button"
+                                    key={post.id}
+                                    className={post.id === activePost?.id ? 'is-active' : ''}
+                                    onClick={() => setSelectedPostId(post.id)}
+                                >
+                                    <span>{post.title}</span>
+                                    <Badge color={status.color} size="sm" variant="soft">
+                                        {status.label}
+                                    </Badge>
+                                </button>
+                            );
+                        })}
+                    </nav>
+                    {activePost && <ArtBoardArtifact
+                        post={activePost}
+                        comment={comments[activePost.id] ?? ''}
+                        busy={busy !== null}
+                        onComment={(value) => setComments((current) => ({
+                            ...current,
+                            [activePost.id]: value,
+                        }))}
+                        onDecide={(verdict) => void decide(activePost, verdict)}
+                    />}
+                </div>
+            )}
+        </div>
+    );
+}
+
+function ArtBoardArtifact({
+    post,
+    comment,
+    busy,
+    onComment,
+    onDecide,
+}: {
+    post: BoardPost;
+    comment: string;
+    busy: boolean;
+    onComment: (value: string) => void;
+    onDecide: (verdict: 'approved' | 'rejected') => void;
+}) {
                 const status = statusOf(post);
                 return (
-                    <Card key={post.id} data-testid="artboard-post">
+                    <Card data-testid="artboard-post">
                         <Heading as="h3" size="sm">
                             {post.title}
                         </Heading>
@@ -164,22 +219,22 @@ export default function ArtBoardPanel({ workspace }: Props) {
                                 <Textarea
                                     aria-label={`Comment on ${post.title}`}
                                     placeholder="Optional comment — what should change, or why this is right."
-                                    value={comments[post.id] ?? ''}
+                                    value={comment}
                                     onChange={(e: { target: { value: string } }) =>
-                                        setComments((c) => ({ ...c, [post.id]: e.target.value }))
+                                        onComment(e.target.value)
                                     }
                                 />
                                 <Action
                                     icon="check"
-                                    disabled={busy !== null}
-                                    onClick={() => void decide(post, 'approved')}
+                                    disabled={busy}
+                                    onClick={() => onDecide('approved')}
                                 >
                                     Approve
                                 </Action>
                                 <Action
                                     icon="x"
-                                    disabled={busy !== null}
-                                    onClick={() => void decide(post, 'rejected')}
+                                    disabled={busy}
+                                    onClick={() => onDecide('rejected')}
                                 >
                                     Reject
                                 </Action>
@@ -187,7 +242,4 @@ export default function ArtBoardPanel({ workspace }: Props) {
                         )}
                     </Card>
                 );
-            })}
-        </div>
-    );
 }

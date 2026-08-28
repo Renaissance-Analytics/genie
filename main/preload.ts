@@ -1513,6 +1513,18 @@ const api = {
             ipcRenderer.on('agent:thumbs-up', handler);
             return () => ipcRenderer.off('agent:thumbs-up', handler);
         },
+        pluginPanelOpen: (
+            cb: (payload: {
+                workspaceId: string;
+                pluginId: string;
+                panelId: string;
+                activeItemId?: string;
+            }) => void,
+        ) => {
+            const handler = (_e: unknown, payload: Parameters<typeof cb>[0]) => cb(payload);
+            ipcRenderer.on('plugin-panel:open', handler);
+            return () => ipcRenderer.off('plugin-panel:open', handler);
+        },
         /** The imDone toast was clicked: go to the terminal that finished —
          *  activate its workspace and surface its panel. */
         terminalReveal: (

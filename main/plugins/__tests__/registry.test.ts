@@ -35,6 +35,7 @@ import {
     dispatchPluginTool,
     ownsPluginTool,
     setPluginToolExecutor,
+    setPluginPanelOpenSink,
     type PluginToolExecutor,
 } from '../registry';
 
@@ -55,7 +56,12 @@ function helloManifest(namespace = 'hello'): string {
                 process: 'worker',
             },
         ],
-        capabilities: { fs: { scope: 'none' }, network: { hosts: [] }, genieApi: [] },
+        panels: [{
+            id: 'board',
+            title: 'Board',
+            fancyComponent: { package: '@particle-academy/react-fancy', version: '>=0.5.0', export: 'ArtBoardPanel' },
+        }],
+        capabilities: { fs: { scope: 'none' }, network: { hosts: [] }, genieApi: ['ui.panel'] },
     });
 }
 
@@ -66,7 +72,7 @@ function row(over: Partial<PluginRowLike> = {}): PluginRowLike {
         name: 'Hello World',
         enabled: true,
         manifest_json: helloManifest(),
-        grants: { fs: {}, network: {}, genieApi: {} },
+        grants: { fs: {}, network: {}, genieApi: { 'ui.panel': true } },
         trust: 'trusted',
         dev_approved: false,
         ...over,
@@ -76,6 +82,7 @@ function row(over: Partial<PluginRowLike> = {}): PluginRowLike {
 afterEach(() => {
     store.rows = [];
     setPluginToolExecutor(null);
+    setPluginPanelOpenSink(null);
 });
 
 describe('pluginToolDescriptors', () => {
@@ -117,6 +124,27 @@ describe('pluginToolDescriptors', () => {
 });
 
 describe('dispatchPluginTool', () => {
+    it('honours a successful plugin request to open and focus its declared panel', async () => {
+        store.rows = [row()];
+        const open = vi.fn();
+        setPluginPanelOpenSink(open);
+        setPluginToolExecutor({
+            call: vi.fn().mockResolvedValue({
+                content: [{ type: 'text', text: 'Posted.' }],
+                _meta: { geniePanel: { panelId: 'board', activeItemId: 'mockup-one' } },
+            }),
+            dispose: vi.fn(),
+        } as unknown as PluginToolExecutor);
+
+        await dispatchPluginTool('hello.greet', {}, 'term-1');
+
+        expect(open).toHaveBeenCalledWith({
+            terminalId: 'term-1',
+            pluginId: 'ai.genie.hello-world',
+            panelId: 'board',
+            activeItemId: 'mockup-one',
+        });
+    });
     it('routes a namespaced call to the executor and returns its result', async () => {
         store.rows = [row()];
         const call = vi.fn().mockResolvedValue({ content: [{ type: 'text', text: 'Hello, world!' }] });

@@ -94,6 +94,7 @@ import {
     readTerminalOutput,
     broadcastTerminalAttention,
     broadcastTerminalReveal,
+    broadcastPluginPanelOpen,
     announceInboxIncoming,
     beginInputHold,
     releaseInputHold,
@@ -103,6 +104,7 @@ import { installAgentInboxPresence } from './agentinbox/presence';
 import { agentInboxBroker } from './agentinbox/broker';
 import { harnessTransportRegistry } from './agentinbox/harness-transport';
 import { agentShutdownReadiness } from './agents/shutdown-readiness';
+import { setPluginPanelOpenSink } from './plugins/registry';
 import { announceAgentUpgrade } from './agents/upgrade-announcement';
 import { getChangelog } from './updater/changelog';
 import { deliverNudge, type NudgeIO } from './agentinbox/nudge-delivery';
@@ -1440,6 +1442,23 @@ app.whenReady().then(async () => {
     } catch {
         /* best-effort — AgentInbox is additive; a failure never blocks startup */
     }
+    setPluginPanelOpenSink(({ terminalId, pluginId, panelId, activeItemId }) => {
+        const workspaceId = getTerminalSpec(terminalId)?.workspace_id;
+        if (!workspaceId) return;
+        const payload = {
+            workspaceId,
+            pluginId,
+            panelId,
+            ...(activeItemId ? { activeItemId } : {}),
+        };
+        showMasterWindow();
+        const win = masterWindow;
+        if (win && !win.isDestroyed() && win.webContents.isLoadingMainFrame()) {
+            win.webContents.once('did-finish-load', () => broadcastPluginPanelOpen(payload));
+        } else {
+            broadcastPluginPanelOpen(payload);
+        }
+    });
     // AgentPulse: wire the terminal-activity tracker's broadcast (rail glow +
     // live sparkline). Additive; a failure never blocks startup.
     try {

@@ -48,6 +48,24 @@ export interface PluginToolDescriptor {
 export interface PluginToolResult {
     content: Array<{ type: 'text'; text: string }>;
     isError?: boolean;
+    /** Trusted host hint produced by the plugin tool and consumed before the
+     * result crosses MCP. It can request one of that plugin's declared panels. */
+    _meta?: { geniePanel?: { panelId?: unknown; activeItemId?: unknown } };
+}
+
+export interface PluginPanelOpenRequest {
+    terminalId: string;
+    pluginId: string;
+    panelId: string;
+    activeItemId?: string;
+}
+
+let panelOpenSink: ((request: PluginPanelOpenRequest) => void) | null = null;
+
+export function setPluginPanelOpenSink(
+    sink: ((request: PluginPanelOpenRequest) => void) | null,
+): void {
+    panelOpenSink = sink;
 }
 
 /** Everything the executor needs to run one call in the plugin's process. */
@@ -226,7 +244,7 @@ export async function dispatchPluginTool(
     }
     const { plugin, manifest, tool } = resolved;
     try {
-        return await getExecutor().call({
+        const result = await getExecutor().call({
             plugin,
             manifest,
             tool,
@@ -234,6 +252,23 @@ export async function dispatchPluginTool(
             args: args ?? {},
             terminalId,
         });
+        const requested = result._meta?.geniePanel;
+        if (!result.isError && requested && panelOpenSink) {
+            const panelId = typeof requested.panelId === 'string' ? requested.panelId.trim() : '';
+            const declared = manifestContributions(manifest).panels.some((panel) => panel.id === panelId);
+            if (panelId && declared) {
+                const activeItemId = typeof requested.activeItemId === 'string'
+                    ? requested.activeItemId.trim().slice(0, 200)
+                    : '';
+                panelOpenSink({
+                    terminalId,
+                    pluginId: plugin.id,
+                    panelId,
+                    ...(activeItemId ? { activeItemId } : {}),
+                });
+            }
+        }
+        return result;
     } catch (e) {
         // Contained: a crashing/hanging worker or a thrown handler surfaces as a
         // tool error, not a transport failure.

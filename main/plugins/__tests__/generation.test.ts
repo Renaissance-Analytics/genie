@@ -142,3 +142,28 @@ describe('Spreadsheet.createWorkbook (holy-sheet → .xlsx)', () => {
         expect(fs.existsSync(path.join(ws, 'workbook.xlsx'))).toBe(true);
     });
 });
+
+describe('ArtBoard.post panel handoff', () => {
+    it('asks Genie to open the board focused on the artifact it wrote', async () => {
+        const tools = loadTools('ai.genie.artboard');
+        const files = new Map<string, string>();
+        const bridge = {
+            fs: {
+                readFile: async (name: string) => {
+                    if (!files.has(name)) throw new Error('missing');
+                    return files.get(name)!;
+                },
+                writeFile: async (name: string, value: string) => void files.set(name, value),
+            },
+        };
+        const result = await tools.post(
+            { id: 'landing-page', title: 'Landing page', html: '<main>Preview</main>' },
+            bridge,
+        ) as { _meta?: { geniePanel?: { panelId?: string; activeItemId?: string } } };
+
+        expect(result._meta?.geniePanel).toEqual({
+            panelId: 'board',
+            activeItemId: 'landing-page',
+        });
+    });
+});

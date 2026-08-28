@@ -3989,6 +3989,14 @@ export interface GenieApi {
                 to?: string;
             }) => void,
         ) => () => void;
+        pluginPanelOpen?: (
+            cb: (payload: {
+                workspaceId: string;
+                pluginId: string;
+                panelId: string;
+                activeItemId?: string;
+            }) => void,
+        ) => () => void;
         /** The imDone toast was clicked: go to the terminal that finished —
          *  activate its workspace and surface its panel. `workspaceId` is the
          *  synthetic System Workspace id for a System-Workspace terminal, and

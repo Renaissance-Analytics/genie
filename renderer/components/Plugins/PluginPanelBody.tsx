@@ -26,7 +26,13 @@ export default function PluginPanelBody({ spec, workspace }: Props) {
     }
 
     if (kind === 'artboard') {
-        return <ArtBoardPanel workspace={workspace} fallbackRoot={workspace?.path ?? spec.cwd} />;
+        return <ArtBoardPanel
+            workspace={workspace}
+            fallbackRoot={workspace?.path ?? spec.cwd}
+            requestedPostId={typeof spec.meta?.active_artboard_post_id === 'string'
+                ? spec.meta.active_artboard_post_id
+                : undefined}
+        />;
     }
 
     return (

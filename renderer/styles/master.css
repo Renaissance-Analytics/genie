@@ -6187,6 +6187,51 @@ body.gutter-dragging .grid-gutter {
     height: 100%;
 }
 
+.artboard-workbench {
+    display: grid;
+    grid-template-columns: minmax(150px, 210px) minmax(0, 1fr);
+    gap: 12px;
+    min-height: 0;
+}
+
+.artboard-artifacts {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    overflow-y: auto;
+}
+
+.artboard-artifacts > button {
+    display: grid;
+    gap: 6px;
+    padding: 10px;
+    border: 1px solid var(--border, #2a2a2a);
+    border-radius: 8px;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.artboard-artifacts > button:hover,
+.artboard-artifacts > button.is-active {
+    border-color: var(--accent, #7c9cff);
+    background: color-mix(in srgb, var(--accent, #7c9cff) 10%, transparent);
+}
+
+.artboard-artifacts > button > span:first-child {
+    overflow: hidden;
+    font-weight: 650;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+    .artboard-workbench { grid-template-columns: 1fr; }
+    .artboard-artifacts { flex-direction: row; }
+    .artboard-artifacts > button { min-width: 160px; }
+}
+
 .artboard-preview {
     display: block;
     width: 100%;

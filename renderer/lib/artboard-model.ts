@@ -44,3 +44,14 @@ export interface ReviewOutcome {
     delivered: boolean;
     error?: string;
 }
+
+export function resolveActiveBoardPost(
+    posts: readonly BoardPost[],
+    requestedId?: string | null,
+): BoardPost | null {
+    if (requestedId) {
+        const requested = posts.find((post) => post.id === requestedId);
+        if (requested) return requested;
+    }
+    return posts[0] ?? null;
+}

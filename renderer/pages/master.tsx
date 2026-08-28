@@ -351,6 +351,8 @@ function MasterInner() {
     // Launchable plugin PANELS (enabled + `ui.panel`-granted plugins). Client-local
     // (like editorFor): the panel renders in whichever window the user sits at.
     const [pluginPanels, setPluginPanels] = useState<PluginPanelView[]>([]);
+    const pluginPanelsRef = useRef(pluginPanels);
+    pluginPanelsRef.current = pluginPanels;
     // The container Dev Server (#234). One map of workspaceId → its dev sites,
     // because the rail's indicator is per-row and a per-workspace fetch on paint
     // would be N calls. HOST-SOURCED in a remote window now: `api().devServer.site`
@@ -1679,6 +1681,82 @@ function MasterInner() {
     workspacesByIdRef.current = workspacesById;
     const activateWorkspaceRef = useRef(activateWorkspace);
     activateWorkspaceRef.current = activateWorkspace;
+    useEffect(() => {
+        return api().on.pluginPanelOpen?.((request) => {
+            void (async () => {
+                const existing = specsRef.current.find((spec) =>
+                    spec.type === 'plugin-panel' &&
+                    spec.workspace_id === request.workspaceId &&
+                    spec.meta?.plugin_id === request.pluginId &&
+                    spec.meta?.panel_id === request.panelId,
+                );
+                const surface = (id: string) => {
+                    activateWorkspaceRef.current(request.workspaceId);
+                    setSelected((current) => current.has(id) ? current : new Set(current).add(id));
+                    setFocusId(id);
+                    setMaximizedId((current) => surfaceMaximized(current, id));
+                };
+
+                if (existing) {
+                    const meta = {
+                        ...existing.meta,
+                        ...(request.activeItemId
+                            ? { active_artboard_post_id: request.activeItemId }
+                            : {}),
+                    };
+                    const updated = await api().terminalSpec.update(existing.id, { meta });
+                    if (updated) {
+                        setSpecs((current) => current.map((spec) =>
+                            spec.id === updated.id ? updated : spec,
+                        ));
+                    }
+                    surface(existing.id);
+                    return;
+                }
+
+                let panels = pluginPanelsRef.current;
+                if (!panels.some((panel) =>
+                    panel.pluginId === request.pluginId && panel.panel.id === request.panelId,
+                )) {
+                    panels = await api().plugins.panels();
+                    pluginPanelsRef.current = panels;
+                    setPluginPanels(panels);
+                }
+                const panel = panels.find((candidate) =>
+                    candidate.pluginId === request.pluginId &&
+                    candidate.panel.id === request.panelId,
+                );
+                const workspace = workspacesByIdRef.current.get(request.workspaceId);
+                if (!panel || !workspace) return;
+                const meta = {
+                    ...pluginPanelSpecMeta({
+                        pluginId: panel.pluginId,
+                        panelId: panel.panel.id,
+                        title: panel.panel.title,
+                        icon: panel.panel.icon,
+                        fancyExport: panel.panel.fancyComponent.export,
+                        fancyPackage: panel.panel.fancyComponent.package,
+                        fancyVersion: panel.panel.fancyComponent.version,
+                    }, false),
+                    ...(request.activeItemId
+                        ? { active_artboard_post_id: request.activeItemId }
+                        : {}),
+                };
+                const created = await api().terminalSpec.create({
+                    id: ulid(),
+                    workspace_id: request.workspaceId,
+                    label: panel.panel.title.toLowerCase().replace(/\s+/g, '-'),
+                    cwd: workspace.path,
+                    type: 'plugin-panel',
+                    meta,
+                });
+                setSpecs((current) => [...current, created]);
+                surface(created.id);
+            })();
+        });
+        // This subscription intentionally reads live state through refs.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
     useEffect(() => {
         return api().on.editorOpenFile?.(({ requestId, ...req }) => {
             // The whole decision (reuse vs new, and the ORDER of the effects)
