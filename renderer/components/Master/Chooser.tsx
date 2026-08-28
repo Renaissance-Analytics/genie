@@ -28,8 +28,8 @@ import {
     IconWand,
 } from './icons';
 import { showPrompt } from './Prompt';
-import TerminalTypeSplitButton from './TerminalTypeSplitButton';
 import { terminalTypeForAgent, type TerminalTypeId } from '../../lib/terminal-types';
+import { amsAgentCard, splitAmsSpecs } from '../../lib/ams-grid';
 import { workspaceNeedsAttention } from '../../lib/attention';
 import { gappLaunchLabel, gappLaunchTarget } from '../../lib/gapp-launch';
 import {
@@ -185,11 +185,22 @@ export default function Chooser({
     onShowSiteManager,
     onLaunchGapp,
     launchingGappWsId = null,
-    lastTerminalType,
-    onLastTerminalType,
-    onAgentCreated,
-    agentCustomCommand,
+    lastTerminalType: _lastTerminalType,
+    onLastTerminalType: _onLastTerminalType,
+    onAgentCreated: _onAgentCreated,
+    agentCustomCommand: _agentCustomCommand,
 }: Props) {
+    const [thumbedAgentTerminals, setThumbedAgentTerminals] = useState<Set<string>>(new Set());
+    useEffect(() => api().on.agentThumbsUp?.((event) => {
+        setThumbedAgentTerminals((current) => new Set(current).add(event.terminalId));
+        window.setTimeout(() => {
+            setThumbedAgentTerminals((current) => {
+                const next = new Set(current);
+                next.delete(event.terminalId);
+                return next;
+            });
+        }, 1800);
+    }), []);
     // Inline Add-Process form: which workspace's form is open, its fields, and
     // the cached repo list (root + repos/<name>) for the cwd picker. When
     // editProcId is set the form edits that process instead of creating one.
@@ -1307,7 +1318,27 @@ export default function Chooser({
                                         })()}
                                 </button>
                                 <div className="tproj-body">
-                                    {wsSpecs.map((s) => (
+                                    {splitAmsSpecs(wsSpecs).agents.length > 0 && (
+                                        <div className="ams-agent-grid" aria-label="Workspace agents">
+                                            {splitAmsSpecs(wsSpecs).agents.map((s) => (
+                                                <AgentSquare
+                                                    key={s.id}
+                                                    spec={s}
+                                                    checked={selected.has(s.id)}
+                                                    running={activeIds.has(s.id)}
+                                                    active={streamingTerms.has(s.id)}
+                                                    attention={attentionIds.has(s.id)}
+                                                    thumbed={thumbedAgentTerminals.has(s.id)}
+                                                    onOpen={() => {
+                                                        onActivateWorkspace(ws.id);
+                                                        if (!selected.has(s.id)) onToggleSpec(s.id);
+                                                    }}
+                                                    onContextMenu={(p) => onOpenContextMenu(s.id, p)}
+                                                />
+                                            ))}
+                                        </div>
+                                    )}
+                                    {splitAmsSpecs(wsSpecs).panels.map((s) => (
                                         <SpecRow
                                             key={s.id}
                                             spec={s}
@@ -1328,17 +1359,15 @@ export default function Chooser({
                                         />
                                     ))}
                                     <div className="tproj-adds">
-                                        <TerminalTypeSplitButton
-                                            variant="row"
-                                            disabled={false}
-                                            workspaceId={ws.id}
-                                            workspaces={workspaces}
-                                            lastType={lastTerminalType}
-                                            onLastTypeChange={onLastTerminalType}
-                                            onAddView={(type) => onAddSpec(ws.id, type)}
-                                            onAgentCreated={onAgentCreated}
-                                            customCommand={agentCustomCommand}
-                                        />
+                                        <button
+                                            type="button"
+                                            className="tterm tterm-add"
+                                            onClick={() => onAddSpec(ws.id, 'terminal')}
+                                        >
+                                            <span className="pick" />
+                                            <IconTerminal size={12} />
+                                            <span className="tname">Add Terminal…</span>
+                                        </button>
                                         {/* "Add Files…" stays a distinct action next to the
                                             terminal-type split button. */}
                                         <button
@@ -2097,6 +2126,49 @@ interface SpecRowProps {
     /** Activate this view's workspace on row-click (jump to it in the master view). */
     onActivate: () => void;
     onContextMenu: (position: { x: number; y: number }) => void;
+}
+
+function AgentSquare({
+    spec,
+    checked,
+    running,
+    active,
+    attention,
+    thumbed,
+    onOpen,
+    onContextMenu,
+}: {
+    spec: TerminalSpec;
+    checked: boolean;
+    running: boolean;
+    active: boolean;
+    attention: boolean;
+    thumbed: boolean;
+    onOpen: () => void;
+    onContextMenu: (position: { x: number; y: number }) => void;
+}) {
+    const card = amsAgentCard(spec, { running, active });
+    const agentDef = terminalTypeForAgent(card.provider);
+    const AgentIcon = agentDef?.icon;
+    return (
+        <button
+            type="button"
+            className={`ams-agent-card${running ? ' is-running' : ''}${active ? ' is-active' : ''}${checked ? ' is-open' : ''}${attention ? ' attention' : ''}`}
+            title={`${card.name} · ${agentDef?.label ?? card.provider} · ${running ? 'running' : 'not running'}${active ? ' · active' : ''}`}
+            onClick={onOpen}
+            onContextMenu={(event) => {
+                event.preventDefault();
+                onContextMenu({ x: event.clientX, y: event.clientY });
+            }}
+        >
+            <span className="ams-agent-avatar" aria-hidden="true">
+                {AgentIcon ? <AgentIcon size={20} /> : card.name.slice(0, 1).toUpperCase()}
+            </span>
+            <span className="ams-agent-name">{card.name}</span>
+            <span className="ams-agent-state" aria-label={running ? 'Running' : 'Not running'} />
+            {thumbed && <span className="ams-agent-thumb" aria-label="Ready">👍</span>}
+        </button>
+    );
 }
 
 /**

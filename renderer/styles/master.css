@@ -3033,6 +3033,93 @@ body.gutter-dragging .grid-gutter {
     color: var(--text);
     cursor: pointer;
 }
+
+.ams-agent-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 7px;
+    padding: 8px 10px 4px 26px;
+}
+
+.ams-agent-card {
+    position: relative;
+    display: grid;
+    min-width: 0;
+    aspect-ratio: 1;
+    place-items: center;
+    align-content: center;
+    gap: 7px;
+    padding: 9px 6px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--surface-2) 88%, transparent);
+    color: var(--muted);
+    cursor: pointer;
+}
+
+.ams-agent-card:hover,
+.ams-agent-card.is-open {
+    border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+    background: color-mix(in srgb, var(--accent) 9%, var(--surface-2));
+    color: var(--text);
+}
+
+.ams-agent-card.is-active {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 65%, transparent),
+        0 0 18px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.ams-agent-avatar {
+    display: grid;
+    width: 32px;
+    height: 32px;
+    place-items: center;
+    border-radius: 9px;
+    background: rgb(255 255 255 / 5%);
+}
+
+.ams-agent-name {
+    width: 100%;
+    overflow: hidden;
+    font-size: 11px;
+    font-weight: 650;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ams-agent-state {
+    position: absolute;
+    top: 7px;
+    right: 7px;
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    background: #59606c;
+}
+
+.ams-agent-card.is-running .ams-agent-state {
+    background: #55d98b;
+    box-shadow: 0 0 8px rgb(85 217 139 / 60%);
+}
+
+.ams-agent-thumb {
+    position: absolute;
+    z-index: 2;
+    font-size: 28px;
+    filter: drop-shadow(0 5px 8px rgb(0 0 0 / 45%));
+    animation: ams-thumb-boing 1.8s cubic-bezier(.2, .85, .25, 1) both;
+    pointer-events: none;
+}
+
+@keyframes ams-thumb-boing {
+    0% { opacity: 0; transform: translateY(18px) scale(.25) rotate(-18deg); }
+    28% { opacity: 1; transform: translateY(-6px) scale(1.25) rotate(8deg); }
+    48% { transform: translateY(0) scale(.92) rotate(-3deg); }
+    68% { transform: scale(1.04); }
+    82% { opacity: 1; transform: scale(1); }
+    100% { opacity: 0; transform: translateY(-8px) scale(.85); }
+}
 .tpanel .term-host > div {
     flex: 1;
     min-width: 0;
