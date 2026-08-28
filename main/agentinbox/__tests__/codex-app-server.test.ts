@@ -15,6 +15,8 @@ class FakeSocket implements CodexAppServerSocket {
             ? { userAgent: 'test' }
             : method === 'thread/start'
               ? { thread: { id: 'thread-1' } }
+              : method === 'thread/resume'
+                ? { thread: { id: 'saved-thread' } }
               : {};
         queueMicrotask(() => this.emit({ jsonrpc: '2.0', id, result }));
     }
@@ -42,6 +44,22 @@ describe('Codex App Server AgentInbox adapter', () => {
         ]);
         expect(session.threadId).toBe('thread-1');
         expect(session.isIdle).toBe(true);
+    });
+
+    it('resumes a saved Codex thread instead of starting a replacement', async () => {
+        const socket = new FakeSocket();
+        const session = new CodexAgentInboxSession(socket);
+
+        await session.initialize('C:/workspace', 'saved-thread');
+
+        expect(socket.sent.map((message) => message.method)).toEqual([
+            'initialize',
+            'notifications/initialized',
+            'thread/resume',
+        ]);
+        expect(socket.sent.at(-1)).toMatchObject({
+            params: { threadId: 'saved-thread', cwd: 'C:/workspace' },
+        });
     });
 
     it('starts an idle turn through App Server and never steers or writes a terminal', async () => {

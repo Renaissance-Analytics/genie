@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
     codexAppServerLaunch,
     codexRemoteTuiLaunch,
+    codexAppServerConfigArgs,
 } from '../codex-app-server-lifecycle';
 
 describe('Codex App Server lifecycle launch contracts', () => {
@@ -36,5 +37,16 @@ describe('Codex App Server lifecycle launch contracts', () => {
     it('does not add a second remote binding', () => {
         const command = 'codex --remote ws://127.0.0.1:1';
         expect(codexRemoteTuiLaunch(command, 'ws://127.0.0.1:2')).toBe(command);
+    });
+
+    it('carries managed Codex config overrides into the App Server process', () => {
+        expect(codexAppServerConfigArgs(
+            `codex --model gpt-5 -c "mcp_servers.genie.url='http://local/token'" -c 'features.foo=true'`,
+        )).toEqual([
+            '-c',
+            "mcp_servers.genie.url='http://local/token'",
+            '-c',
+            'features.foo=true',
+        ]);
     });
 });

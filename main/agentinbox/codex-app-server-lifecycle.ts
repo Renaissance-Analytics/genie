@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import WebSocket from 'ws';
@@ -31,6 +32,20 @@ const REMOTE_FLAG = /(^|\s)--remote(?:=|\s)/;
 export function codexRemoteTuiLaunch(command: string, address: string): string {
     if (REMOTE_FLAG.test(command)) return command;
     return `${command.trim()} --remote ${address} --remote-auth-token-env ${CODEX_APP_TOKEN_ENV}`;
+}
+
+export function codexAppServerConfigArgs(command: string): string[] {
+    const args: string[] = [];
+    const pattern = /(?:^|\s)(-c|--config)\s+("[^"]*"|'[^']*'|\S+)/g;
+    for (const match of command.matchAll(pattern)) {
+        const raw = match[2];
+        const value = (raw.startsWith('"') && raw.endsWith('"')) ||
+            (raw.startsWith("'") && raw.endsWith("'"))
+            ? raw.slice(1, -1)
+            : raw;
+        args.push('-c', value);
+    }
+    return args;
 }
 
 function resolveWindowsCodexShim(
@@ -76,7 +91,6 @@ interface OwnedServer extends RunningCodexAppServer {
 }
 
 export interface PreparedCodexAppServer {
-    address: string;
     token: string;
     tokenFile: string;
 }
@@ -86,12 +100,23 @@ export function prepareCodexAppServer(
     terminalId: string,
     stateDir: string,
 ): PreparedCodexAppServer {
-    const port = 40_000 + crypto.randomInt(20_000);
     const token = crypto.randomBytes(32).toString('base64url');
     fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
     const tokenFile = path.resolve(stateDir, `${terminalId}.token`);
     fs.writeFileSync(tokenFile, `${token}\n`, { encoding: 'utf8', mode: 0o600 });
-    return { address: `ws://127.0.0.1:${port}`, token, tokenFile };
+    return { token, tokenFile };
+}
+
+async function allocateLoopbackPort(): Promise<number> {
+    return await new Promise((resolve, reject) => {
+        const server = net.createServer();
+        server.once('error', reject);
+        server.listen(0, '127.0.0.1', () => {
+            const address = server.address();
+            const port = typeof address === 'object' && address ? address.port : 0;
+            server.close((error) => error ? reject(error) : resolve(port));
+        });
+    });
 }
 
 async function connect(
@@ -146,16 +171,20 @@ export class CodexAppServerManager {
         codexExecutable?: string;
         env?: NodeJS.ProcessEnv;
         prepared?: PreparedCodexAppServer;
+        resumeThreadId?: string | null;
+        configArgs?: string[];
     }): Promise<RunningCodexAppServer> {
         const existing = this.servers.get(input.terminalId);
         if (existing) return existing;
         const prepared = input.prepared ?? prepareCodexAppServer(input.terminalId, input.stateDir);
-        const { address, token, tokenFile } = prepared;
+        const { token, tokenFile } = prepared;
+        const address = `ws://127.0.0.1:${await allocateLoopbackPort()}`;
         const launch = codexAppServerLaunch({
             codexExecutable: input.codexExecutable ?? 'codex',
             address,
             tokenFile,
         });
+        launch.args.splice(1, 0, ...(input.configArgs ?? []));
         const resolved = resolveWindowsCodexShim(launch.command, input.env ?? process.env);
         if (process.platform === 'win32' && !resolved) {
             try { fs.unlinkSync(tokenFile); } catch { /* already gone */ }
@@ -178,7 +207,7 @@ export class CodexAppServerManager {
         try {
             const socket = await connect(address, token, child, () => stderr);
             const session = new CodexAgentInboxSession(new WsSocket(socket));
-            await session.initialize(input.cwd);
+            await session.initialize(input.cwd, input.resumeThreadId);
             const owned: OwnedServer = { address, token, session, child, socket, tokenFile };
             this.servers.set(input.terminalId, owned);
             child.once('exit', () => this.stop(input.terminalId));

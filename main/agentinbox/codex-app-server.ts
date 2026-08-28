@@ -46,13 +46,16 @@ export class CodexAgentInboxSession {
         return !!this.currentThreadId && !this.busy;
     }
 
-    async initialize(cwd: string): Promise<void> {
+    async initialize(cwd: string, resumeThreadId?: string | null): Promise<void> {
         await this.request('initialize', {
             clientInfo: { name: 'genie-agentinbox', version: '1' },
             capabilities: {},
         });
         this.notify('notifications/initialized', {});
-        const result = await this.request('thread/start', { cwd }) as {
+        const result = await this.request(
+            resumeThreadId ? 'thread/resume' : 'thread/start',
+            resumeThreadId ? { threadId: resumeThreadId, cwd } : { cwd },
+        ) as {
             thread?: { id?: string };
         };
         const id = result.thread?.id;

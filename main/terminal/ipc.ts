@@ -38,6 +38,7 @@ import { agentInboxBroker } from '../agentinbox/broker';
 import { harnessTransportRegistry } from '../agentinbox/harness-transport';
 import {
     CODEX_APP_TOKEN_ENV,
+    codexAppServerConfigArgs,
     codexAppServerManager,
     codexRemoteTuiLaunch,
     prepareCodexAppServer,
@@ -491,6 +492,14 @@ export function createAgentTerminal(opts: {
     let preparedCodex: PreparedCodexAppServer | null = null;
     let agentId: string | undefined;
     let meta: TerminalSpecMeta = {};
+    if (reviving && opts.agentMeta?.agent === 'codex') {
+        launchCommand = typeof priorSpec?.meta?.agent_command === 'string'
+            ? priorSpec.meta.agent_command
+            : opts.agentMeta.command;
+        agentId = priorSpec?.meta?.agent_id;
+        chatSessionId = priorSpec?.meta?.chat_session_id ?? null;
+        strategy = 'hook';
+    }
     if (opts.agentMeta && !reviving) {
         const rendered = renderAgentLaunch(opts.agentMeta.agent, opts.agentMeta.command);
         launchCommand = rendered.command;
@@ -564,14 +573,6 @@ export function createAgentTerminal(opts: {
             env = { ...env, GENIE_MCP_URL: mcpUrl, GENIE_TERMINAL_ID: id };
         }
     }
-    if (opts.agentMeta?.agent === 'codex' && launchCommand && !reviving) {
-        preparedCodex = prepareCodexAppServer(
-            id,
-            path.join(os.tmpdir(), 'genie-agentinbox-app-server'),
-        );
-        env = { ...env, [CODEX_APP_TOKEN_ENV]: preparedCodex.token };
-        launchCommand = codexRemoteTuiLaunch(launchCommand, preparedCodex.address);
-    }
     // Codex can't read GENIE_MCP_URL from its MCP config, so weave this terminal's
     // own genie endpoint into its launch `-c` override — the token then identifies
     // the terminal and the agent never has to pass `terminalId` (genie #35). A
@@ -590,6 +591,13 @@ export function createAgentTerminal(opts: {
                 opts.agentMeta.instructions,
             );
         }
+    }
+    if (opts.agentMeta?.agent === 'codex' && launchCommand) {
+        preparedCodex = prepareCodexAppServer(
+            id,
+            path.join(os.tmpdir(), 'genie-agentinbox-app-server'),
+        );
+        env = { ...env, [CODEX_APP_TOKEN_ENV]: preparedCodex.token };
     }
 
     const createOpts: CreateTerminalOpts = {
@@ -628,7 +636,7 @@ export function createAgentTerminal(opts: {
     // is also a no-op on a warm reattach, so a saved agent that is still running
     // is left strictly alone — the launch line is never typed into a live TUI's
     // prompt, which is what that bug looks like from the user's side.
-    if (reviving) maybeRelaunchAgent(id, result.existing);
+    if (reviving && !preparedCodex) maybeRelaunchAgent(id, result.existing);
     else if (launchCommand && !result.existing && !preparedCodex) deliverAgentLaunch(id, launchCommand);
 
     // Tell every window the spec set changed so the new terminal appears live.
@@ -668,6 +676,8 @@ export function createAgentTerminal(opts: {
             stateDir: path.dirname(preparedCodex.tokenFile),
             prepared: preparedCodex,
             env: { ...process.env, ...env },
+            resumeThreadId: reviving ? chatSessionId : null,
+            configArgs: codexAppServerConfigArgs(command),
         }).then(async (running) => {
             const configured = listWorkspaceAgents(opts.workspaceId).find(
                 (candidate) => candidate.terminal_spec_id === id,
@@ -683,7 +693,7 @@ export function createAgentTerminal(opts: {
                     { ok: true },
                 );
             }
-            deliverAgentLaunch(id, command);
+            deliverAgentLaunch(id, codexRemoteTuiLaunch(command, running.address));
             const backlog = await agentInboxBroker.receive(agentId!);
             for (const message of backlog.messages) {
                 await running.session.deliver({
