@@ -27,7 +27,7 @@ const app = (over: Partial<InstalledAppView> = {}): InstalledAppView => ({
     revoked: false,
     devMode: false,
     source: { kind: 'folder', origin: 'C:/src/trader' },
-    homeUrl: 'https://trader.gen/',
+    homeUrl: 'https://trader.gapp/',
     installedAt: '2026-01-01T00:00:00.000Z',
     permissions: [],
     ...over,
@@ -67,10 +67,11 @@ describe('what the tray shows', () => {
 });
 
 describe('what a pill says on hover', () => {
-    it('names the app and where it serves', () => {
+    it('names the app without exposing its hidden hosted URL', () => {
         const title = trayPillTitle(app());
         expect(title).toContain('Example Trader');
-        expect(title).toContain('trader.gen');
+        expect(title).not.toContain('trader.gapp');
+        expect(title).not.toContain('https://');
     });
 
     it('says a turned-off app is turned off, and how to fix it', () => {

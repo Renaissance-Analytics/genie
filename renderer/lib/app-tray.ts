@@ -48,10 +48,9 @@ export function appTrayPills(apps: InstalledAppView[]): AppTrayPill[] {
  * that can explain why BEFORE the click rather than after it.
  */
 export function trayPillTitle(app: InstalledAppView): string {
-    const where = app.homeUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
     if (app.revoked) {
         return `${app.name} is turned off — its permissions were revoked, so it cannot run. Turn it back on in its permissions.`;
     }
     const dev = app.devMode ? ' · in development, running from your own folder' : '';
-    return `${app.name} — ${where}${dev}`;
+    return `${app.name}${dev}`;
 }
