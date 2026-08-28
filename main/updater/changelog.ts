@@ -39,6 +39,59 @@ interface CompareCommit {
     commit: { message: string; committer?: { date?: string }; author?: { date?: string } };
 }
 
+interface GithubRelease {
+    tag_name: string;
+    published_at: string;
+    body?: string | null;
+}
+
+/** GitHub returns releases newest-first. Find the release immediately before latest. */
+export function previousReleaseVersion(latest: string, tags: string[]): string | undefined {
+    const wanted = latest.replace(/^v/i, '');
+    const at = tags.findIndex((tag) => tag.replace(/^v/i, '') === wanted);
+    if (at < 0 || at + 1 >= tags.length) return undefined;
+    return tags[at + 1].replace(/^v/i, '');
+}
+
+/**
+ * Convert deliberately authored GitHub release Markdown into the compact lines
+ * used by the What's New dialog. Build-system placeholders are not content.
+ */
+export function releaseBodyChanges(body?: string | null): string[] {
+    const source = body?.trim() ?? '';
+    if (!source || /^Automated build for v?\S+\.?$/i.test(source)) return [];
+
+    const changes: string[] = [];
+    let section = '';
+    let paragraph: string[] = [];
+    const flushParagraph = () => {
+        const text = paragraph.join(' ').replace(/[*_`]/g, '').trim();
+        paragraph = [];
+        if (!text) return;
+        changes.push(section.toLowerCase().startsWith('migration') ? `Migration: ${text}` : text);
+    };
+
+    for (const raw of source.split(/\r?\n/)) {
+        const line = raw.trim();
+        const heading = /^#{1,6}\s+(.+)$/.exec(line);
+        if (heading) {
+            flushParagraph();
+            section = heading[1].replace(/[*_`]/g, '').trim();
+            continue;
+        }
+        const bullet = /^[-*+]\s+(.+)$/.exec(line);
+        if (bullet) {
+            flushParagraph();
+            paragraph.push(bullet[1]);
+            continue;
+        }
+        if (!line) flushParagraph();
+        else paragraph.push(line);
+    }
+    flushParagraph();
+    return changes.filter(Boolean);
+}
+
 async function ghJson<T>(path: string): Promise<T | null> {
     try {
         const res = await net.fetch(`https://api.github.com${path}`, {
@@ -136,31 +189,30 @@ export function describeCommit(message: string): string {
 let cache: { key: string; value: Changelog } | null = null;
 
 export async function getChangelog(latest: string, fromVersion?: string): Promise<Changelog> {
-    const current = fromVersion?.trim() || app.getVersion();
-    const key = `${current}->${latest}`;
-    if (cache && cache.key === key) return cache.value;
-
+    const requestedKey = `${fromVersion?.trim() || '<previous-release>'}->${latest}`;
+    if (cache && cache.key === requestedKey) return cache.value;
+    const releases =
+        (await ghJson<GithubRelease[]>(`/repos/${REPO}/releases?per_page=30`)) ?? [];
+    const current =
+        fromVersion?.trim() ||
+        previousReleaseVersion(
+            latest,
+            releases.map((release) => release.tag_name),
+        ) ||
+        app.getVersion();
     const result: Changelog = { current, latest, groups: [], partial: false };
 
     if (!latest || latest === current) {
-        cache = { key, value: result };
+        cache = { key: requestedKey, value: result };
         return result;
     }
 
     const compare = await ghJson<{ commits: CompareCommit[] }>(
         `/repos/${REPO}/compare/v${current}...v${latest}`,
     );
-    if (!compare || !Array.isArray(compare.commits)) {
-        result.partial = true;
-        cache = { key, value: result };
-        return result;
-    }
+    if (!compare || !Array.isArray(compare.commits)) result.partial = true;
 
     // Tag → published date, ascending, for versions in (current, latest].
-    const releases =
-        (await ghJson<Array<{ tag_name: string; published_at: string }>>(
-            `/repos/${REPO}/releases?per_page=30`,
-        )) ?? [];
     const boundaries = releases
         .map((r) => ({
             version: r.tag_name.replace(/^v/i, ''),
@@ -173,7 +225,14 @@ export async function getChangelog(latest: string, fromVersion?: string): Promis
     // commit's date (that's the version it shipped in). Commits past the
     // last known release date fall under `latest`.
     const byVersion = new Map<string, string[]>();
-    for (const c of compare.commits) {
+    for (const release of releases) {
+        const version = release.tag_name.replace(/^v/i, '');
+        if (!isNewer(version, current) || isNewer(version, latest)) continue;
+        const notes = releaseBodyChanges(release.body);
+        if (notes.length > 0) byVersion.set(version, notes);
+    }
+
+    for (const c of compare?.commits ?? []) {
         // Resolve a meaningful description (release commits tag the version as
         // the subject and put the note in the body); '' drops version-only/empty.
         const change = describeCommit(c.commit.message);
@@ -187,7 +246,8 @@ export async function getChangelog(latest: string, fromVersion?: string): Promis
             if (hit) version = hit.version;
         }
         if (!byVersion.has(version)) byVersion.set(version, []);
-        byVersion.get(version)!.push(change);
+        const bucket = byVersion.get(version)!;
+        if (!bucket.includes(change)) bucket.push(change);
     }
 
     // Emit groups newest-first. GitHub's compare returns commits oldest →
@@ -200,7 +260,7 @@ export async function getChangelog(latest: string, fromVersion?: string): Promis
         changes: (byVersion.get(version) ?? []).reverse(),
     }));
 
-    cache = { key, value: result };
+    cache = { key: requestedKey, value: result };
     return result;
 }
 

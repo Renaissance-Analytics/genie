@@ -3,7 +3,60 @@ import { describe, expect, it } from 'vitest';
 // changelog.ts imports `app`/`net` from electron at load; the vitest config
 // aliases electron to a stub, so importing the pure parser here is safe.
 import '../../../test/electron-mock';
-import { describeCommit } from '../changelog';
+import { describeCommit, previousReleaseVersion, releaseBodyChanges } from '../changelog';
+
+describe('first tracked release', () => {
+    it('uses the immediately preceding published release as its comparison baseline', () => {
+        expect(
+            previousReleaseVersion('0.7.0-beta.274', [
+                'v0.7.0-beta.275',
+                'v0.7.0-beta.274',
+                'v0.7.0-beta.273',
+                'v0.7.0-beta.272',
+            ]),
+        ).toBe('0.7.0-beta.273');
+    });
+
+    it('does not mistake the current release for its own baseline', () => {
+        expect(previousReleaseVersion('0.7.0-beta.274', ['v0.7.0-beta.274'])).toBeUndefined();
+    });
+});
+
+describe('curated GitHub release notes', () => {
+    it('turns a human release body into changelog lines', () => {
+        expect(
+            releaseBodyChanges(`
+## What’s new
+
+- AgentInbox now uses harness-native transports.
+- GApps have a complete development workflow.
+
+## Migration
+
+Open **Workspace settings → Migrate** and review the backup path.
+`),
+        ).toEqual([
+            'AgentInbox now uses harness-native transports.',
+            'GApps have a complete development workflow.',
+            'Migration: Open Workspace settings → Migrate and review the backup path.',
+        ]);
+    });
+
+    it('rejects the automated-build placeholder as release content', () => {
+        expect(releaseBodyChanges('Automated build for v0.7.0-beta.274')).toEqual([]);
+    });
+
+    it('keeps wrapped bullet lines together instead of inventing extra entries', () => {
+        expect(
+            releaseBodyChanges(
+                '- AgentInbox uses Claude Channels and Codex app-server.\n' +
+                    '  Messages are no longer typed into chat input.',
+            ),
+        ).toEqual([
+            'AgentInbox uses Claude Channels and Codex app-server. Messages are no longer typed into chat input.',
+        ]);
+    });
+});
 
 /**
  * describeCommit turns one commit message into the line the update popover shows.
