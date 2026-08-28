@@ -34,7 +34,12 @@ const CURSOR_FILE = path.join('.cursor', 'mcp.json');
  * missing-servers list, and the consolidate action. Add other plugin-provided
  * server names here as they surface.
  */
-const IGNORED_SERVERS = new Set<string>(['fancy-ui']);
+const IGNORED_SERVERS = new Set<string>([
+    'fancy-ui',
+    // Genie installs this only for Claude Code: it is a Claude Channel, not
+    // envelope-owned MCP configuration and has no Cursor counterpart.
+    'genie-agentinbox-channel',
+]);
 
 function readServers(file: string): McpServers {
     try {

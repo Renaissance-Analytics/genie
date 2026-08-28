@@ -91,6 +91,23 @@ describe('mcp consolidation', () => {
         expect(status.missingAtRoot).toEqual([]);
     });
 
+    it("ignores Genie's Claude-only AgentInbox Channel when diffing harness configs", () => {
+        const env = makeEnvelope();
+        writeJson(path.join(env, '.mcp.json'), {
+            mcpServers: {
+                genie: { url: 'http://127.0.0.1/genie' },
+                'genie-agentinbox-channel': { command: 'genie-channel' },
+            },
+        });
+        writeJson(path.join(env, '.cursor', 'mcp.json'), {
+            mcpServers: { genie: { url: 'http://127.0.0.1/genie' } },
+        });
+
+        const status = mcpStatus(env);
+        expect(status.needsConsolidation).toBe(false);
+        expect(status.rootServers).toEqual(['genie']);
+    });
+
     it('never surfaces or relocates a plugin-provided server (fancy-ui) from a repo', () => {
         const env = makeEnvelope();
         writeJson(path.join(env, 'repos', 'app', '.mcp.json'), {
