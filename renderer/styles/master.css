@@ -606,6 +606,103 @@
     color: var(--fg-3);
 }
 
+.system-menu-wrap {
+    position: relative;
+    -webkit-app-region: no-drag;
+}
+
+.system-menu {
+    position: absolute;
+    z-index: 1200;
+    top: calc(100% + 7px);
+    right: 0;
+    width: 190px;
+    padding: 6px;
+    border: 1px solid var(--line, #30343d);
+    border-radius: 10px;
+    background: #191b21;
+    box-shadow: 0 16px 42px rgb(0 0 0 / 45%);
+}
+
+.system-menu button {
+    width: 100%;
+    padding: 8px 10px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--text, #f5f6f8);
+    text-align: left;
+    cursor: pointer;
+}
+
+.system-menu button:hover {
+    background: rgb(255 255 255 / 8%);
+}
+
+.whats-new-backdrop {
+    position: fixed;
+    z-index: 5000;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: rgb(4 5 8 / 72%);
+    backdrop-filter: blur(4px);
+}
+
+.whats-new-modal {
+    width: min(640px, 100%);
+    max-height: min(720px, calc(100vh - 48px));
+    overflow: hidden;
+    border: 1px solid var(--line, #30343d);
+    border-radius: 16px;
+    background: #17191f;
+    box-shadow: 0 28px 80px rgb(0 0 0 / 55%);
+}
+
+.whats-new-modal > header,
+.whats-new-modal > footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 18px 22px;
+    border-bottom: 1px solid var(--line, #30343d);
+}
+
+.whats-new-modal > footer {
+    justify-content: flex-end;
+    border-top: 1px solid var(--line, #30343d);
+    border-bottom: 0;
+}
+
+.whats-new-kicker {
+    color: #8dd8a7;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+
+.whats-new-modal h2,
+.whats-new-modal h3 {
+    margin: 3px 0 0;
+}
+
+.whats-new-body {
+    max-height: 520px;
+    overflow: auto;
+    padding: 20px 24px;
+}
+
+.whats-new-body section + section {
+    margin-top: 22px;
+}
+
+.whats-new-body li {
+    margin: 8px 0;
+    line-height: 1.45;
+}
+
 /* ===== Toolbar ========================================================== */
 .gtoolbar {
     display: flex;

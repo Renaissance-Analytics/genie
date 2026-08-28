@@ -157,7 +157,8 @@ export function registerUpdaterIpc(): void {
 
     ipcMain.handle(
         'updater:changelog',
-        async (_e, latest: string): Promise<Changelog> => getChangelog(latest),
+        async (_e, latest: string, fromVersion?: string): Promise<Changelog> =>
+            getChangelog(latest, fromVersion),
     );
 
     ipcMain.handle('updater:config:get', (): UpdaterConfig => u.getConfig());

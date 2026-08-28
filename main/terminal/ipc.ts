@@ -670,6 +670,15 @@ export function createAgentTerminal(opts: {
     }
     if (preparedCodex && launchCommand && agentId && !result.existing) {
         const command = launchCommand;
+        const configuredAgent = () => {
+            try {
+                return listWorkspaceAgents(opts.workspaceId).find(
+                    (candidate) => candidate.terminal_spec_id === id,
+                );
+            } catch {
+                return undefined;
+            }
+        };
         void codexAppServerManager.start({
             terminalId: id,
             cwd: opts.cwd,
@@ -679,9 +688,7 @@ export function createAgentTerminal(opts: {
             resumeThreadId: reviving ? chatSessionId : null,
             configArgs: codexAppServerConfigArgs(command),
         }).then(async (running) => {
-            const configured = listWorkspaceAgents(opts.workspaceId).find(
-                (candidate) => candidate.terminal_spec_id === id,
-            );
+            const configured = configuredAgent();
             harnessTransportRegistry.bind(agentId!, 'codex-app-server', (payload) =>
                 running.session.deliver(payload),
             );
@@ -705,9 +712,7 @@ export function createAgentTerminal(opts: {
                 });
             }
         }).catch((error: unknown) => {
-            const configured = listWorkspaceAgents(opts.workspaceId).find(
-                (candidate) => candidate.terminal_spec_id === id,
-            );
+            const configured = configuredAgent();
             harnessTransportRegistry.unbind(agentId!);
             if (configured) {
                 markWorkspaceAgentTransportState(

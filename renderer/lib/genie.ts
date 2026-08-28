@@ -1126,6 +1126,10 @@ export interface Settings {
     detached_terminals?: 'on' | 'off';
     /** Whether Genie launches minimized to the tray (default 'off' = start open). */
     start_minimized?: 'on' | 'off';
+    /** Last Genie version whose What’s New modal was shown to the user. */
+    whats_new_seen_version?: string;
+    /** Last Genie version announced to agents through AgentInbox. */
+    agent_upgrade_announced_version?: string;
     /** Play a chime when an agent calls imDone. Defaults 'off'. */
     notify_sound?: 'on' | 'off';
     /** Show an OS notification (tray popup) when an agent calls imDone.
@@ -3520,7 +3524,7 @@ export interface GenieApi {
         setConfig: (
             patch: Partial<UpdaterConfig>,
         ) => Promise<UpdaterConfig>;
-        changelog: (latest: string) => Promise<Changelog>;
+        changelog: (latest: string, fromVersion?: string) => Promise<Changelog>;
     };
     terminalSpec: {
         list: () => Promise<TerminalSpec[]>;

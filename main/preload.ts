@@ -641,8 +641,8 @@ const api = {
         getConfig: () => ipcRenderer.invoke('updater:config:get'),
         setConfig: (patch: { repo?: string; pollHours?: number }) =>
             ipcRenderer.invoke('updater:config:set', patch),
-        changelog: (latest: string) =>
-            ipcRenderer.invoke('updater:changelog', latest),
+        changelog: (latest: string, fromVersion?: string) =>
+            ipcRenderer.invoke('updater:changelog', latest, fromVersion),
     },
 
     // System clipboard via Electron MAIN (reliable; renderer navigator.clipboard

@@ -87,6 +87,7 @@ describe('tools/list plugin generalization', () => {
         const names = await list(ctx());
         expect(names).toEqual([
             'imDone',
+            'thumbsUp',
             'checkIssues',
             'ForceTheQuestion',
             'manageProcess',
@@ -94,6 +95,7 @@ describe('tools/list plugin generalization', () => {
             'manageSite',
             'manageGappDev',
             'manageTerminals',
+            'registerAgent',
             'runAgent',
             'manageWorkspaces',
             'agentinbox',

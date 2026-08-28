@@ -135,8 +135,8 @@ export function describeCommit(message: string): string {
 
 let cache: { key: string; value: Changelog } | null = null;
 
-export async function getChangelog(latest: string): Promise<Changelog> {
-    const current = app.getVersion();
+export async function getChangelog(latest: string, fromVersion?: string): Promise<Changelog> {
+    const current = fromVersion?.trim() || app.getVersion();
     const key = `${current}->${latest}`;
     if (cache && cache.key === key) return cache.value;
 

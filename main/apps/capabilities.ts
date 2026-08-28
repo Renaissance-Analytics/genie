@@ -141,6 +141,10 @@ export const APP_CAPABILITIES: readonly AppCapability[] = [
  * party gets to borrow.
  */
 export const UNGRANTABLE_TOOLS: Readonly<Record<string, string>> = {
+    thumbsUp:
+        'Acknowledges the readiness of a registered coding agent; an installed app is not that agent and cannot impersonate its lifecycle.',
+    registerAgent:
+        'Creates durable coding-agent identity and boot configuration. Installed apps cannot provision autonomous agents through their capability grants.',
     submitFeedback:
         'Posts to the user’s Tynn project in their name. An app speaking to Tynn as the user is impersonation, whatever it says.',
     genieGuide:

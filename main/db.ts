@@ -1597,6 +1597,10 @@ export interface Settings extends ProviderSettingKeys {
      *  relaunch looks like an autostart launch. '1' = reopen; cleared to '' after
      *  boot reads it. */
     reopen_after_update?: '1' | '';
+    /** Last Genie version whose What’s New modal was shown to the user. */
+    whats_new_seen_version?: string;
+    /** Last Genie version announced to agents through AgentInbox. */
+    agent_upgrade_announced_version?: string;
     /** Play a chime when an agent calls imDone. Defaults 'off'. */
     notify_sound?: 'on' | 'off';
     /** Show an OS notification (tray popup) when an agent calls imDone.

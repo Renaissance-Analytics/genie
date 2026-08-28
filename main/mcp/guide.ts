@@ -297,6 +297,11 @@ approves; when the user turned approval OFF they run immediately. \`read\` /
 persona. Registration creates configuration and identity only; call \`runAgent\`
 with \`action:'start'\` when the agent should consume resources and begin work.
 
+At automatic boot, Genie's harness adapter completes AgentInbox's internal
+\`registerTransport\` handshake: Claude Code reports \`claude-channel\`, Codex
+reports \`codex-app-server\`. Agents do not simulate this handshake and AgentInbox
+messages are never delivered by typing into the terminal&apos;s user-input buffer.
+
 ### runAgent
 **Start and control a coding agent** (claude / codex / a custom CLI) — your own
 workspace or one you govern.

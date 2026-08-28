@@ -54,6 +54,20 @@ vi.mock('node-pty', () => ({
     },
 }));
 
+vi.mock('../../agentinbox/codex-app-server-lifecycle', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../../agentinbox/codex-app-server-lifecycle')>();
+    return {
+        ...actual,
+        codexAppServerManager: {
+            start: vi.fn(async () => ({
+                address: 'ws://127.0.0.1:47891',
+                session: { deliver: vi.fn(async () => undefined) },
+            })),
+            stop: vi.fn(),
+        },
+    };
+});
+
 // In-memory spec store so createAgentTerminal's persist → read-back works.
 const specs = new Map<string, Record<string, unknown>>();
 vi.mock('../../db', () => ({
@@ -69,6 +83,7 @@ vi.mock('../../db', () => ({
         return specs.get(id) ?? null;
     },
     listTerminalSpecs: () => Array.from(specs.values()),
+    listWorkspaceAgents: () => [],
     listWorkspaces: () => [],
     // No workspace row → no workspace .env load and no AgentInbox broker join;
     // this test is about the LAUNCH, not the identity plumbing.
@@ -137,7 +152,7 @@ describe('createAgentTerminal — the Host launches the agent (genie #63 Phase 0
         expect(delivered().endsWith('\r')).toBe(true);
     });
 
-    it('renders Codex instructions after all options and the end-of-options separator', () => {
+    it('renders Codex instructions after all options and launches its remote App Server TUI', async () => {
         const r = createAgentTerminal({
             workspaceId: 'ws-1',
             cwd: process.cwd(),
@@ -149,11 +164,12 @@ describe('createAgentTerminal — the Host launches the agent (genie #63 Phase 0
             },
         });
 
-        vi.runAllTimers();
+        await vi.runAllTimersAsync();
         expect(r.command).toBe(
             'codex --yolo -c model_reasoning_effort="high" -- "read AGENTS.md first"',
         );
-        expect(delivered()).toContain(r.command);
+        expect(delivered()).toContain('--remote ws://127.0.0.1:');
+        expect(delivered()).toContain('--remote-auth-token-env GENIE_CODEX_APP_TOKEN');
     });
 
     it('does not re-submit the boot command when the pty is already running', () => {

@@ -103,6 +103,8 @@ import { installAgentInboxPresence } from './agentinbox/presence';
 import { agentInboxBroker } from './agentinbox/broker';
 import { harnessTransportRegistry } from './agentinbox/harness-transport';
 import { agentShutdownReadiness } from './agents/shutdown-readiness';
+import { announceAgentUpgrade } from './agents/upgrade-announcement';
+import { getChangelog } from './updater/changelog';
 import { deliverNudge, type NudgeIO } from './agentinbox/nudge-delivery';
 import { dbAgentInboxStore } from './agentinbox/store';
 import { getWorkspaceAgentAccess } from './db';
@@ -1418,6 +1420,23 @@ app.whenReady().then(async () => {
         });
         rehydrateAgentInbox();
         agentInboxBroker.rehydrateMessages();
+        const currentVersion = app.getVersion();
+        const previousVersion = getAllSettings().agent_upgrade_announced_version;
+        if (previousVersion !== currentVersion) {
+            void getChangelog(currentVersion, previousVersion).then((changelog) => {
+                announceAgentUpgrade({
+                    currentVersion,
+                    previousVersion,
+                    agentIds: agentInboxBroker.directory()
+                        .filter((agent) => agent.status !== 'offline')
+                        .map((agent) => agent.agentId),
+                    changes: changelog.groups.flatMap((group) => group.changes).slice(0, 8),
+                    send: (agentId, text) =>
+                        agentInboxBroker.send({ system: true, toAgentId: agentId, text }).ok,
+                    persist: (version) => setSettings({ agent_upgrade_announced_version: version }),
+                });
+            });
+        }
     } catch {
         /* best-effort — AgentInbox is additive; a failure never blocks startup */
     }

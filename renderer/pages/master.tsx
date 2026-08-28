@@ -60,6 +60,7 @@ import {
     type WorkspaceViewState,
 } from '../lib/view-state';
 import { planCommitStep, shouldDriveRestart } from '../lib/updater-flow';
+import { shouldShowWhatsNew } from '../lib/whats-new';
 import { emitOpenInPanel, openFileInEditor, surfaceMaximized } from '../lib/editor-open';
 import { pluginPanelSpecMeta } from '../lib/panel-routing';
 import {
@@ -73,13 +74,12 @@ import {
     IconLayoutGrid,
     IconMaximize,
     IconPanelLeft,
-    IconHelp,
     IconEye,
     IconCpu,
     IconMessage,
     IconMailQuestion,
     IconGraph,
-    IconSettings,
+    IconMenu,
     IconAlert,
     IconWand,
     IconX,
@@ -3015,7 +3015,38 @@ function TitleBar({
     cornerInRail?: boolean;
 }) {
     const isMac = isMacPlatform();
+    const [systemMenuOpen, setSystemMenuOpen] = useState(false);
+    const [whatsNewOpen, setWhatsNewOpen] = useState(false);
+    const [whatsNewVersion, setWhatsNewVersion] = useState('');
+    const [whatsNewPrevious, setWhatsNewPrevious] = useState<string | undefined>();
+    const [whatsNewChangelog, setWhatsNewChangelog] = useState<Changelog | null>(null);
+
+    const openWhatsNew = useCallback(async (automatic = false) => {
+        const [status, settings] = await Promise.all([
+            api().updater.status(),
+            api().settings.get(),
+        ]);
+        const current = status.currentVersion;
+        const previous = (settings as Record<string, string | undefined>)
+            .whats_new_seen_version;
+        if (automatic && !shouldShowWhatsNew(previous, current)) return;
+        setWhatsNewVersion(current);
+        setWhatsNewPrevious(previous);
+        setWhatsNewOpen(true);
+        setSystemMenuOpen(false);
+        void api().settings.set({ whats_new_seen_version: current }).catch(() => {});
+        void api().updater
+            .changelog(current, previous)
+            .then(setWhatsNewChangelog)
+            .catch(() => setWhatsNewChangelog(null));
+    }, []);
+
+    useEffect(() => {
+        void openWhatsNew(true).catch(() => {});
+    }, [openWhatsNew]);
+
     return (
+        <>
         <div className="titlebar">
             {/* The native title bar is hidden (titleBarStyle: 'hidden') — this
                 row IS the window chrome: it drags the window and pads right for
@@ -3120,22 +3151,97 @@ function TitleBar({
                     <span className="iw-btn-badge unknown">?</span>
                 )}
             </button>
-            <button
-                type="button"
-                className="gicon"
-                title="Documentation"
-                onClick={() => onShowDocs?.()}
+            <div className="system-menu-wrap">
+                <button
+                    type="button"
+                    className="gicon"
+                    title="Genie menu"
+                    aria-label="Genie menu"
+                    aria-expanded={systemMenuOpen}
+                    onClick={() => setSystemMenuOpen((open) => !open)}
+                >
+                    <IconMenu />
+                </button>
+                {systemMenuOpen && (
+                    <div className="system-menu" role="menu">
+                        <button type="button" role="menuitem" onClick={() => {
+                            setSystemMenuOpen(false);
+                            void api().app.showSettings(isRemoteWindow()).catch(() => {});
+                        }}>Settings</button>
+                        <button type="button" role="menuitem" onClick={() => {
+                            setSystemMenuOpen(false);
+                            onShowDocs?.();
+                        }}>Help &amp; documentation</button>
+                        <button type="button" role="menuitem" onClick={() => void openWhatsNew()}>
+                            What&apos;s new
+                        </button>
+                    </div>
+                )}
+            </div>
+        </div>
+        {whatsNewOpen && (
+            <WhatsNewModal
+                version={whatsNewVersion}
+                previousVersion={whatsNewPrevious}
+                changelog={whatsNewChangelog}
+                onClose={() => setWhatsNewOpen(false)}
+            />
+        )}
+        </>
+    );
+}
+
+function WhatsNewModal({
+    version,
+    previousVersion,
+    changelog,
+    onClose,
+}: {
+    version: string;
+    previousVersion?: string;
+    changelog: Changelog | null;
+    onClose: () => void;
+}) {
+    return (
+        <div className="whats-new-backdrop" role="presentation" onMouseDown={onClose}>
+            <section
+                className="whats-new-modal"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="whats-new-title"
+                onMouseDown={(event) => event.stopPropagation()}
             >
-                <IconHelp />
-            </button>
-            <button
-                type="button"
-                className="gicon"
-                title="Settings"
-                onClick={() => api().app.showSettings(isRemoteWindow()).catch(() => {})}
-            >
-                <IconSettings />
-            </button>
+                <header>
+                    <div>
+                        <span className="whats-new-kicker">Genie updated</span>
+                        <h2 id="whats-new-title">What&apos;s new in v{version}</h2>
+                    </div>
+                    <button type="button" className="gicon" aria-label="Close" onClick={onClose}>
+                        <IconX size={18} />
+                    </button>
+                </header>
+                <div className="whats-new-body">
+                    {!changelog ? (
+                        <p className="up-muted">Loading release notes…</p>
+                    ) : changelog.groups.length > 0 ? (
+                        changelog.groups.map((group) => (
+                            <section key={group.version}>
+                                <h3>v{group.version}</h3>
+                                <ul>{group.changes.map((change, index) => <li key={index}>{change}</li>)}</ul>
+                            </section>
+                        ))
+                    ) : (
+                        <p className="up-muted">
+                            {previousVersion
+                                ? 'No user-facing release notes were published for this update.'
+                                : 'This is the first version tracked by What’s new. Future upgrades will show their release notes here.'}
+                        </p>
+                    )}
+                </div>
+                <footer>
+                    <button type="button" className="btn primary" onClick={onClose}>Got it</button>
+                </footer>
+            </section>
         </div>
     );
 }

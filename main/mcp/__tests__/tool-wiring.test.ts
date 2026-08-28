@@ -41,6 +41,7 @@ const DEPS = fs.readFileSync(
  */
 const DEP_FOR_TOOL: Readonly<Record<string, string | null>> = {
     imDone: 'onImDone',
+    thumbsUp: 'onThumbsUp',
     ForceTheQuestion: 'onForceQuestion',
     agentinbox: 'agentInbox',
     initializeWorkspace: 'describeWorkspace',

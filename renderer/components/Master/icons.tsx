@@ -31,6 +31,17 @@ const wrap = (size: number, children: React.ReactNode, className?: string, style
 
 export const IconChevronDown = ({ size = 15, ...p }: Props) =>
     wrap(size, <polyline points="6 9 12 15 18 9" />, p.className, p.style);
+export const IconMenu = ({ size = 18, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <line x1="4" y1="7" x2="20" y2="7" />
+            <line x1="4" y1="12" x2="20" y2="12" />
+            <line x1="4" y1="17" x2="20" y2="17" />
+        </>,
+        p.className,
+        p.style,
+    );
 export const IconAlert = ({ size = 14, ...p }: Props) =>
     wrap(
         size,
