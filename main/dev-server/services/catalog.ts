@@ -11,8 +11,9 @@ import { workspaceSlugFor } from '../argv';
  * owner's decision in one sentence: *a user with twenty Postgres-16 workspaces
  * runs ONE postgres.* Each workspace then gets its own **database + role +
  * credentials** on that shared engine — logical isolation, exactly how Herd and
- * Valet serve every local site from one engine — with an opt-in **dedicated**
- * container for a workspace that genuinely needs hard isolation.
+ * Valet serve every local site from one engine — with a **dedicated** container
+ * where the engine cannot safely implement a normal framework operation inside
+ * a logical slice. Redis is that exception: `FLUSHDB` cannot be ACL-prefix scoped.
  *
  * Version is part of the key rather than a singleton because `pg15` and `pg16`
  * are not interchangeable and a workspace pinned to one must not be silently
@@ -24,10 +25,10 @@ import { workspaceSlugFor } from '../argv';
  *     multi-tenant. `CREATE DATABASE` + a scoped role, and a role cannot reach
  *     another workspace's database. This is real isolation, enforced by the
  *     server.
- *   - **`redis-acl`** — Redis has no databases in the Postgres sense, and its
- *     numbered logical DBs carry no auth at all. Redis 6's ACLs do: a
- *     per-workspace user, restricted to a key prefix. Weaker than a separate
- *     database, stronger than a shared password, and the owner's call.
+ *   - **`redis-acl`** — a dedicated Redis still gets a non-admin workspace user.
+ *     `FLUSHDB` is permitted because the whole container belongs to that workspace;
+ *     server/admin commands remain denied. Legacy shared provisioning continues to
+ *     deny `FLUSHDB`, because its key-prefix ACL cannot scope a keyless command.
  *   - **`s3-scoped-user`** (MinIO) — an IAM user per workspace, admitted by
  *     policy to the one bucket named after it. MinIO was a `namespace` engine
  *     until Tynn #250 step 4, which is to say every workspace was handed the
@@ -181,12 +182,16 @@ const REDIS: EngineSpec = {
     engine: 'redis',
     label: 'Redis',
     summary:
-        'Redis. Shared instance with a per-workspace ACL user restricted to that workspace’s key prefix.',
+        'Redis. Dedicated per workspace so framework cache clears can use FLUSHDB without touching another workspace.',
     versions: ['7', '6'],
     image: (version) => `redis:${version}-alpine`,
     ports: [{ name: 'redis', container: 6379, kind: 'tcp', primary: true }],
     volumes: [{ suffix: 'data', target: '/data' }],
     provision: 'redis-acl',
+    // Redis ACL key patterns cannot scope FLUSHDB: the command names no key.
+    // Frameworks such as Laravel legitimately use it for cache:clear, so Redis
+    // must have a workspace-owned database/container rather than a shared slice.
+    alwaysDedicated: true,
     adminUser: 'default',
     // The redis image reads no password env — it is a server flag. `appendonly`
     // so a restart does not silently empty every workspace's cache.

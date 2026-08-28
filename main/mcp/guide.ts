@@ -188,10 +188,12 @@ carries the install hint. Pass \`terminalId\` for exact workspace resolution.
 MinIO (S3), Mailpit, Reverb (WebSockets/broadcasting), or any image — and get
 back how to connect. These are the
 same engines a \`manageSite\` site runs against, so a hosted site is backed the
-way production is. THE MODEL: an engine is WORKSTATION-hosted and **shared per
+way production is. THE MODEL: an engine is WORKSTATION-hosted and normally **shared per
 (engine, major version)** across every workspace that asks for it, and each
 workspace gets its OWN database + role + credentials on it — one \`postgres:16\`
-serves ten workspaces, and one workspace's role cannot reach another's data. The
+serves ten workspaces, and one workspace's role cannot reach another's data. Redis
+is dedicated per workspace because framework cache clearing uses the unscopable
+\`FLUSHDB\` command. The
 engine starts when the first workspace acquires it and stops when the last one
 releases it. Actions (\`action\`):
 - \`catalog\` — every engine on offer, its versions, and how strongly each isolates.
@@ -626,8 +628,9 @@ stable \`https://<name>.gen\` whether the viewer is local or connected remotely:
   (\`php\`/\`node\`/\`python\`/\`go\`) must be installed and on Genie's PATH — a spawn
   failure is reported in \`logs\`.
 - **\`manageService\`** gives the site its backing engines (Postgres, MySQL,
-  Redis, Meilisearch, MinIO, Mailpit, …), SHARED per (engine, major version)
+  Redis, Meilisearch, MinIO, Mailpit, …), normally SHARED per (engine, major version)
   across the workstation, auto-injecting the connection env (\`DATABASE_URL\`, …).
+  Redis is dedicated per workspace so cache clearing cannot cross tenants.
 
 **Reachability:** a host-native dev server runs ON THE HOST, so its \`localhost\`
 IS the host — it reaches the workspace's managed DB/cache and any \`manageProcess\`
@@ -673,7 +676,7 @@ export const GENIE_AGENTS_BRIEF = `You are running inside **Genie** — a deskto
 - **Need a decision, or blocked? → \`ForceTheQuestion\` — NEVER ask in plaintext and wait.** A plaintext question is invisible to the user; you'll hang forever. HOW: ONE call with 1–4 questions, each offering 2–4 options plus an always-available free-text note — **batch every open question together.** It pops an OS-level, always-on-top modal (above every app) and blocks until answered. Pass your \`terminalId\`.
   - **WRITE the question as MARKDOWN, structured.** The modal renders markdown: a short lead sentence, then blank-line paragraphs / bullet lists / **bold** for the key facts. Never one run-on paragraph.
   - **NAME THE ACTOR in every option.** The modal is read by the USER, so bare "I"/"you" invert and confuse. Convention: the agent = "Agent:"/"the agent", the user = "You:"/"you" — lead each option label with the actor (e.g. \`Agent: I create the repo and push\` vs \`You: you create the repo\`).
-- **Need to HOST a repo as a real site at \`<name>.gen\`, or give it a database/cache? → \`manageSite\` / \`manageService\` (the Hosting Manager).** \`manageSite\` runs the repo's dev server on the host against the live source and fronts it at \`https://<name>.gen\` over https (or serves a built directory / PHP app itself via \`hostServe\`). To host an app, use this — not a hand-rolled \`manageProcess\` process. \`manageService\` backs it with shared Postgres/Redis/… engines and injects the connection env (Docker/Podman needed for services).
+- **Need to HOST a repo as a real site at \`<name>.gen\`, or give it a database/cache? → \`manageSite\` / \`manageService\` (the Hosting Manager).** \`manageSite\` runs the repo's dev server on the host against the live source and fronts it at \`https://<name>.gen\` over https (or serves a built directory / PHP app itself via \`hostServe\`). To host an app, use this — not a hand-rolled \`manageProcess\` process. \`manageService\` backs it with workstation-managed engines and injects the connection env (Docker/Podman needed for services); Redis is dedicated per workspace, while engines with safe native tenancy remain shared.
 - **Need a supervised background COMMAND (dev server, worker, SSR) or a cron job? → \`manageProcess\`.** Don't \`&\`-background it in a terminal — Genie's Processes feature owns these so they survive and stay controllable. HOW: \`list\` / \`create\` (label + command, optional repo + autostart; add a 5-field \`schedule\` to make it a cron task) / \`start\` / \`stop\` / \`restart\` / \`enable\` / \`disable\` / \`delete\` / \`run-now\`. To actually HOST an app, reach for \`manageSite\`, not this.
 - **Building a Genie App? → \`manageGappDev\`, and ASK it first.** A **GApp Development Workspace (GDW)** is a workspace whose linked Tynn project is marked \`is_gapp\` — where an app is BUILT, as opposed to where an installed one RUNS. **You cannot tell from the folder**, which looks like any other project; the user sees it in the workspace chrome and you do not. So call \`manageGappDev\` with \`action:'status'\` — it answers whether you are in one, names the source folder and the app's manifest, and every other action reports it too. Then \`check\` (the full suite over this folder — stricter than the installer, because an app that installs cleanly and opens on an empty window is what it exists to catch) and \`preview\` (a real GApp window on the LIVE source at \`<slug>.preview\`, so it cannot collide with an installed copy). The \`is_gapp\` flag is set by a human in Tynn; there is nothing to toggle in Genie.
 - **Need to run commands, read terminal output, or start/drive another coding agent? → \`manageTerminals\` / \`runAgent\`.** \`manageTerminals\` spawns + drives real terminals (\`create\` / \`write\` / \`read\` / \`list\` / \`kill\`); \`runAgent\` starts + steers a coding agent (claude / codex / custom) — here or in a workspace this Ops project governs. An agent is **SAVED workspace configuration**, addressed as \`{provider}:{name}\` (\`claude:tynn\`): \`runAgent list\` shows them, and \`start\` **REATTACHES** to one rather than spawning another — creating a new agent needs \`create: true\`. These are **HIGH-POWER** (arbitrary code + autonomous agents): \`create\` / \`write\` / creating an agent / \`send\` are approval-gated by default. Use \`manageWorkspaces\` to list / open / activate / remove the workspaces you can act on.

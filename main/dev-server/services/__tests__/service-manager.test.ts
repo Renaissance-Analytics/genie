@@ -210,6 +210,14 @@ const PG16 = {
     enabled: true,
 };
 
+const REDIS7 = {
+    engine: 'redis' as const,
+    version: '7',
+    dedicated: false,
+    password: 'workspace_pw_redis_0123456789',
+    enabled: true,
+};
+
 function deps(
     runtime: Fake,
     services: Record<string, DevServices>,
@@ -554,6 +562,19 @@ describe('reference counting', () => {
 });
 
 describe('dedicated (the opt-in escape hatch)', () => {
+    it('always gives Redis its own container and permits Laravel-compatible FLUSHDB', async () => {
+        const runtime = fakeRuntime();
+        const manager = createDevServiceManager(deps(runtime, { a: { redis: REDIS7 } }));
+
+        const redis = await manager.acquire('a', 'redis');
+
+        expect(redis.dedicated).toBe(true);
+        expect(runtime.ran[0].workspaceId).toBe('a');
+        const acl = runtime.execs.find((entry) => entry.argv.includes('SETUSER'))?.argv ?? [];
+        expect(acl).not.toContain('-flushdb');
+        expect(acl).toContain('-flushall');
+    });
+
     it('runs a SEPARATE container, on the workspace network, labelled with the workspace', async () => {
         const runtime = fakeRuntime();
         const manager = createDevServiceManager(

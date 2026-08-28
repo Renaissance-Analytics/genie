@@ -3,7 +3,8 @@ import type { ServiceEngine } from './catalog';
 import type { ContainerRuntime } from '../container-runtime';
 
 /**
- * PROVISIONING — how one shared engine is carved into a per-workspace slice.
+ * PROVISIONING — how an engine is carved into a per-workspace slice, or given a
+ * workspace-only credential when the engine itself must be dedicated.
  *
  * This is where the owner's service model stops being a diagram: a shared
  * Postgres becomes twenty isolated workspaces because each one gets its own
@@ -222,7 +223,7 @@ function mysqlSteps(admin: EngineAdmin, slice: WorkspaceSlice): ProvisionStep[] 
  * Deliberately an explicit deny-list rather than `-@dangerous`: that category
  * also removes `KEYS`, `INFO` and `CLIENT`, which developers use constantly in
  * a dev cache. These are the ones that would either reach outside the key
- * prefix (`FLUSHALL`, `FLUSHDB`), end the shared engine for every other
+ * prefix (`FLUSHALL`, and `FLUSHDB` on a legacy shared engine), end the engine for every other
  * workspace (`SHUTDOWN`), or change the rules themselves (`CONFIG`, `ACL`).
  *
  * The key pattern (`~ws_x:*`) is what scopes everything else, and the limit of
@@ -256,7 +257,11 @@ const REDIS_DENIED = [
     '-module',
 ];
 
-function redisSteps(admin: EngineAdmin, slice: WorkspaceSlice): ProvisionStep[] {
+function redisSteps(
+    admin: EngineAdmin,
+    slice: WorkspaceSlice,
+    options: { dedicated?: boolean } = {},
+): ProvisionStep[] {
     const name = assertIdentifier(slice.identifier);
     const password = assertPassword(slice.password, 'workspace');
     assertPassword(admin.password, 'admin');
@@ -285,7 +290,7 @@ function redisSteps(admin: EngineAdmin, slice: WorkspaceSlice): ProvisionStep[] 
                 `~${name}:*`,
                 `&${name}:*`,
                 '+@all',
-                ...REDIS_DENIED,
+                ...REDIS_DENIED.filter((command) => !(options.dedicated && command === '-flushdb')),
             ],
         },
     ];
@@ -388,12 +393,13 @@ export function provisionSteps(
     engine: ServiceEngine,
     admin: EngineAdmin,
     slice: WorkspaceSlice,
+    options: { dedicated?: boolean } = {},
 ): ProvisionStep[] {
     switch (engineSpecFor(engine).provision) {
         case 'sql-database-role':
             return engine === 'mysql' ? mysqlSteps(admin, slice) : postgresSteps(admin, slice);
         case 'redis-acl':
-            return redisSteps(admin, slice);
+            return redisSteps(admin, slice, options);
         case 's3-scoped-user':
             return minioSteps(admin, slice);
         default:

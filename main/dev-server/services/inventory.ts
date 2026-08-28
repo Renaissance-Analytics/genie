@@ -112,7 +112,12 @@ export function buildEngineInventory(input: EngineInventoryInput): EngineInvento
     //    is excluded: it has no image until a workspace names one.
     for (const engine of SERVICE_ENGINES) {
         const spec = engineSpecFor(engine);
-        if (spec.alwaysDedicated) continue;
+        // Keep a catalog row for Redis even though NEW workspace configs are
+        // always dedicated. Older Genie builds created one shared Redis engine;
+        // hiding that container here would strand its data and make cleanup or
+        // migration impossible. `custom` remains excluded because it has no
+        // catalog image until a workspace names one.
+        if (engine === 'custom') continue;
         for (const version of spec.versions) {
             const engineKey = engineKeyFor(engine, version);
             drafts.set(engineKey, {

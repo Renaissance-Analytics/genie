@@ -142,6 +142,7 @@ describe('the catalog', () => {
         // A caller-supplied image has no multi-tenant story, so it cannot be
         // shared between workspaces.
         expect(engineSpecFor('custom').alwaysDedicated).toBe(true);
+        expect(engineSpecFor('redis').alwaysDedicated).toBe(true);
         expect(engineSpecFor('postgres').alwaysDedicated).toBeFalsy();
     });
 

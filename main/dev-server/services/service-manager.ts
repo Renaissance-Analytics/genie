@@ -803,7 +803,7 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
             const provisioned = await runProvisionSteps(
                 runtime,
                 containerId,
-                provisionSteps(config.engine, admin, slice),
+                provisionSteps(config.engine, admin, slice, { dedicated }),
             );
             if (!provisioned.ok) {
                 return failed(

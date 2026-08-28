@@ -100,6 +100,18 @@ describe('redis — an ACL user per workspace', () => {
         }
     });
 
+    it('allows FLUSHDB only when the Redis engine is dedicated to that workspace', () => {
+        const argv = provisionSteps(
+            'redis',
+            { user: 'default', password: 'admin_pw-1' },
+            SLICE,
+            { dedicated: true },
+        )[0].argv;
+
+        expect(argv).not.toContain('-flushdb');
+        expect(argv).toContain('-flushall');
+    });
+
     /**
      * A key pattern scopes commands that address a KEY. It does nothing to
      * commands that address the KEYSPACE or the server, and two of those destroy
