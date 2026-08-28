@@ -672,8 +672,6 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
         ...local.agentInbox,
         directory: async () =>
             (await req('/api/desktop/agentinbox/directory')) as { agents: AgentInboxAgentInfo[] },
-        channels: async () =>
-            (await req('/api/desktop/agentinbox/channels')) as { channels: AgentInboxChannelInfo[] },
         dmThreads: async () =>
             (await req('/api/desktop/agentinbox/dm-threads')) as { threads: AgentInboxDmThreadInfo[] },
         history: async (opts) =>
@@ -713,11 +711,6 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
         // host's genie.db, so clearing the client's own empty broker would silently
         // do nothing while the host kept the history. The `agentinbox:cleared` push
         // rides /ws/events → PASSTHROUGH_EVENTS back to this window.
-        clearChannel: async (channelKey) =>
-            (await req('/api/desktop/agentinbox/clear', {
-                method: 'POST',
-                json: { channelKey },
-            })) as { ok: boolean; cleared: number },
         deleteThread: async (pairKey) =>
             (await req('/api/desktop/agentinbox/delete-thread', {
                 method: 'POST',

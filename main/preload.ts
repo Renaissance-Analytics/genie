@@ -1118,13 +1118,11 @@ const api = {
         /** All agents in this Genie (the human owns the workstation → no scope filter). */
         directory: () => ipcRenderer.invoke('agentinbox:directory'),
         /** Every non-empty channel (`slug:purpose`). */
-        channels: () => ipcRenderer.invoke('agentinbox:channels'),
         /** Every DM thread with messages — human↔agent AND agent↔agent. */
         dmThreads: () => ipcRenderer.invoke('agentinbox:dm-threads'),
         /** A channel log (`channelKey`), an arbitrary DM pair (`dmPair`), or the
          *  human↔agent DM thread (`agentId`). */
         history: (opts: {
-            channelKey?: string;
             agentId?: string;
             dmPair?: [string, string];
             limit?: number;
@@ -1135,7 +1133,6 @@ const api = {
          *  from the browser file input), so a remote window attaches from the
          *  human's OWN machine and the panel needs no filesystem access. */
         post: (input: {
-            channelKey?: string;
             toAgentId?: string;
             text: string;
             attachments?: Array<{ filename: string; base64: string }>;
@@ -1150,13 +1147,11 @@ const api = {
          *  The header badge's seed; `on.agentInboxLag` keeps it live. */
         lag: () => ipcRenderer.invoke('agentinbox:lag'),
         /** Wipe a channel's history (the panel log + the durable rows). */
-        clearChannel: (channelKey: string) =>
-            ipcRenderer.invoke('agentinbox:clear-channel', channelKey),
         /** Delete a whole DM thread by its pair key (`<idA>|<idB>`, sorted). */
         deleteThread: (pairKey: string) =>
             ipcRenderer.invoke('agentinbox:delete-thread', pairKey),
         /** Wipe MANY conversations in one call (multi-select mass delete). */
-        wipeMany: (input: { channelKeys?: string[]; pairKeys?: string[] }) =>
+        wipeMany: (input: { pairKeys?: string[] }) =>
             ipcRenderer.invoke('agentinbox:wipe-many', input),
         /** Edit an agent's purpose/scope (re-keys its channel + re-emits presence). */
         updateChannel: (

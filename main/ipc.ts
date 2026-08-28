@@ -1504,9 +1504,8 @@ export function registerIpcHandlers(): void {
     // engine the `runAgent restart` MCP action uses.
     ipcMain.handle('terminal-spec:restart-agent', (_e, id: string) => restartAgentTerminal(id));
 
-    // The human AgentInbox panel: read the agent directory, channel list, and a
-    // channel / human↔agent DM history; post as the human; and edit an agent's
-    // accessibility (re-keys its channel + re-emits presence). The live push
+    // The human AgentInbox panel: read the agent directory and DM history; post
+    // as the human; and edit an agent's accessibility. The live push
     // (agentInbox:presence / agentInbox:message) rides the broker's presence emitter.
     // AgentPulse — the last-60s per-workspace byte buckets, fetched once when the
     // workspace menu opens to backfill each sparkline; live `agent-pulse` pushes
@@ -1514,7 +1513,6 @@ export function registerIpcHandlers(): void {
     ipcMain.handle('agent-pulse:snapshot', () => ({ pulses: agentPulse.snapshot() }));
 
     ipcMain.handle('agentinbox:directory', () => ({ agents: agentInboxBroker.directory() }));
-    ipcMain.handle('agentinbox:channels', () => ({ channels: agentInboxBroker.channels() }));
     // Every DM thread (human↔agent AND agent↔agent) so the panel can view the
     // agent-to-agent conversations that fire the unread badge but were unviewable.
     ipcMain.handle('agentinbox:dm-threads', () => ({ threads: agentInboxBroker.dmThreads() }));
@@ -1523,7 +1521,6 @@ export function registerIpcHandlers(): void {
         (
             _e,
             opts: {
-                channelKey?: string;
                 agentId?: string;
                 dmPair?: [string, string];
                 limit?: number;
@@ -1536,7 +1533,6 @@ export function registerIpcHandlers(): void {
         async (
             _e,
             input: {
-                channelKey?: string;
                 toAgentId?: string;
                 text: string;
                 attachments?: HumanInboxAttachment[];
@@ -1559,9 +1555,6 @@ export function registerIpcHandlers(): void {
     // genie.db, so the broker clears its in-memory panel log AND the store rows
     // and pushes `agentinbox:cleared` to every open window. Agent inboxes and ACK
     // cursors are deliberately untouched (see the broker's doc comments).
-    ipcMain.handle('agentinbox:clear-channel', (_e, channelKey: string) =>
-        agentInboxBroker.clearChannel(channelKey),
-    );
     ipcMain.handle('agentinbox:delete-thread', (_e, pairKey: string) =>
         agentInboxBroker.deleteThread(pairKey),
     );
@@ -1569,8 +1562,7 @@ export function registerIpcHandlers(): void {
     // doesn't fire N round trips (N relay requests on a remote Host).
     ipcMain.handle(
         'agentinbox:wipe-many',
-        (_e, input: { channelKeys?: string[]; pairKeys?: string[] }) =>
-            agentInboxBroker.wipeMany(input ?? {}),
+        (_e, input: { pairKeys?: string[] }) => agentInboxBroker.wipeMany(input ?? {}),
     );
     ipcMain.handle(
         'agentinbox:update-channel',

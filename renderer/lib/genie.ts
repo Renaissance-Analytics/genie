@@ -3606,26 +3606,22 @@ export interface GenieApi {
     agentInbox: {
         /** Every discoverable agent (the directory pane). */
         directory: () => Promise<{ agents: AgentInboxAgentInfo[] }>;
-        /** Every broadcast channel (`slug:purpose`). */
-        channels: () => Promise<{ channels: AgentInboxChannelInfo[] }>;
         /** Every DM thread with messages — human↔agent AND agent↔agent. */
         dmThreads: () => Promise<{ threads: AgentInboxDmThreadInfo[] }>;
-        /** Message history for a channel, an arbitrary DM `dmPair`, OR the
-         *  human↔agent thread (`agentId`) — paginate via `before`. */
+        /** Message history for an arbitrary DM `dmPair`, or the human↔agent
+         *  thread (`agentId`) — paginate via `before`. */
         history: (opts: {
-            channelKey?: string;
             agentId?: string;
             dmPair?: [string, string];
             limit?: number;
             before?: number;
         }) => Promise<{ messages: AgentInboxMessage[] }>;
-        /** Post as the human — to a channel (`channelKey`) or an agent (`toAgentId`),
-         *  optionally with FILES. Attachment bytes ride the call (base64, straight
+        /** Post as the human to an agent (`toAgentId`), optionally with FILES.
+         *  Attachment bytes ride the call (base64, straight
          *  from the browser file input) rather than as a host path: the panel needs
          *  no filesystem access, and on a remote window the human attaches from
          *  their OWN machine. All-or-nothing — a refused file sends nothing. */
         post: (input: {
-            channelKey?: string;
             toAgentId?: string;
             text: string;
             attachments?: Array<{ filename: string; base64: string }>;
@@ -3649,18 +3645,17 @@ export interface GenieApi {
          *  agents keeping up?", NOT "what haven't I read?" (that is client-side,
          *  see renderer/lib/agentinbox-view.ts). Live via `on.agentInboxLag`. */
         lag: () => Promise<{ count: number }>;
-        /** Wipe a channel's history — the panel log AND the durable rows (genie
-         *  #64). A HOST op: agent inboxes and ACK cursors are left untouched. */
-        clearChannel: (channelKey: string) => Promise<{ ok: boolean; cleared: number }>;
         /** Delete a whole DM thread by its pair key (`<idA>|<idB>`, sorted — the
          *  key `dmThreads()` reports). Covers human↔agent and agent↔agent. */
         deleteThread: (pairKey: string) => Promise<{ ok: boolean; cleared: number }>;
         /** Wipe MANY conversations in one host call (genie #66 mass delete) —
          *  batches the same per-target ops, so one round trip instead of N. */
-        wipeMany: (input: {
-            channelKeys?: string[];
-            pairKeys?: string[];
-        }) => Promise<{ ok: boolean; cleared: number; channels: number; threads: number }>;
+        wipeMany: (input: { pairKeys?: string[] }) => Promise<{
+            ok: boolean;
+            cleared: number;
+            channels: number;
+            threads: number;
+        }>;
         /** Edit an agent's channel identity (purpose / scope) — re-emits presence. */
         updateChannel: (
             specId: string,

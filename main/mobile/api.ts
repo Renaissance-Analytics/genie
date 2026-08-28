@@ -1665,7 +1665,7 @@ export async function handleApi(
 
     // --- host-sourced AgentInbox — for a remote DESKTOP driving this host ------
     // The AgentInboxFlyout on a remote window reads the HOST broker's directory /
-    // channels / DM threads / history and posts as the human to the HOST broker
+    // DM threads / history and posts as the human to the HOST broker
     // (the agents + pty live on the host). Reads are auth-only; posting is a
     // "drive the host" mutation, so it's kill-switch-gated like the other
     // mutations. Live presence/message updates arrive over /ws/events (mobileEmit)
@@ -1675,10 +1675,6 @@ export async function handleApi(
     if (pathname.startsWith('/api/desktop/agentinbox/')) {
         if (pathname === '/api/desktop/agentinbox/directory' && method === 'GET') {
             sendJson(res, 200, { agents: agentInboxBroker.directory() });
-            return true;
-        }
-        if (pathname === '/api/desktop/agentinbox/channels' && method === 'GET') {
-            sendJson(res, 200, { channels: agentInboxBroker.channels() });
             return true;
         }
         if (pathname === '/api/desktop/agentinbox/dm-threads' && method === 'GET') {
@@ -1696,7 +1692,6 @@ export async function handleApi(
             return true;
         }
         let wb: {
-            channelKey?: string;
             agentId?: string;
             dmPair?: [string, string];
             limit?: number;
@@ -1705,7 +1700,6 @@ export async function handleApi(
             text?: string;
             specId?: string;
             pairKey?: string;
-            channelKeys?: string[];
             pairKeys?: string[];
             attachments?: HumanInboxAttachment[];
             attachmentId?: string;
@@ -1727,7 +1721,6 @@ export async function handleApi(
         if (pathname === '/api/desktop/agentinbox/history') {
             sendJson(res, 200, {
                 messages: agentInboxBroker.history({
-                    channelKey: wb.channelKey,
                     agentId: wb.agentId,
                     dmPair: wb.dmPair,
                     limit: wb.limit,
@@ -1745,7 +1738,6 @@ export async function handleApi(
                 res,
                 200,
                 await postAsHuman({
-                    channelKey: wb.channelKey,
                     toAgentId: wb.toAgentId,
                     text: wb.text,
                     attachments: wb.attachments,
@@ -1764,15 +1756,6 @@ export async function handleApi(
         // (the durable log is the host's), so kill-switch gated exactly like post.
         // Same broker ops the local IPC handlers call, so local and remote wipe
         // identically — the one protocol, one implementation.
-        if (pathname === '/api/desktop/agentinbox/clear') {
-            if (guardControl()) return true;
-            if (!wb.channelKey) {
-                sendJson(res, 200, { ok: false, cleared: 0, error: 'No channel given.' });
-                return true;
-            }
-            sendJson(res, 200, agentInboxBroker.clearChannel(wb.channelKey));
-            return true;
-        }
         if (pathname === '/api/desktop/agentinbox/delete-thread') {
             if (guardControl()) return true;
             if (!wb.pairKey) {
@@ -1791,7 +1774,6 @@ export async function handleApi(
                 res,
                 200,
                 agentInboxBroker.wipeMany({
-                    channelKeys: wb.channelKeys ?? [],
                     pairKeys: wb.pairKeys ?? [],
                 }),
             );

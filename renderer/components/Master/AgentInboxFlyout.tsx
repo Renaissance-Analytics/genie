@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Action, Badge, Modal, Popover, Tabs, Text } from '@particle-academy/react-fancy';
+import { Action, Badge, Modal, Popover, Text } from '@particle-academy/react-fancy';
 import {
     IconCheckCheck,
     IconClock,
@@ -20,7 +20,6 @@ import {
     hasGenieBridge,
     type AgentInboxAgentInfo,
     type AgentInboxAttachment,
-    type AgentInboxChannelInfo,
     type AgentInboxDmThreadInfo,
     type AgentInboxEscalationEvent,
     type AgentInboxMessage,
@@ -36,7 +35,6 @@ import {
     makeCoalescer,
     markSeen,
     parseSeenState,
-    partitionWipeTargets,
     rowKeyOfPairKey,
     seenStorageKey,
     toggleSelection,
@@ -53,7 +51,7 @@ import { terminalTypeForAgent } from '../../lib/terminal-types';
 /**
  * AgentInbox human panel. Right-side slide-in (reuses the Docs / Task Manager
  * flyout chrome) laid out as a full-width header over a two-pane body: a LEFT
- * list pane (search + a `Channels | DMs` tab switcher + filter chips + waiting
+ * list pane (search + filter chips + waiting
  * summary) and a RIGHT thread pane (thread header, per-agent inbox status, the
  * message stream, and a fixed footer that is the composer on a writable thread
  * and a read-only bar on an observed agent↔agent thread). Loads on open and
@@ -80,15 +78,11 @@ const STALE_AFTER_MS = 24 * 60 * 60 * 1000;
 const TRUNCATE_AT = 320;
 
 type Selection =
-    | { kind: 'channel'; key: string; title: string }
     | { kind: 'dm'; agentId: string; title: string }
     // An agent↔agent thread — the human watches it read-only.
     | { kind: 'dmPair'; a: string; b: string; title: string };
 
 type Filter = 'all' | 'unread' | 'stale';
-
-/** Which list the left pane is showing (genie #64 — tabbed, not stacked). */
-type Tab = 'channels' | 'dms';
 
 /**
  * A wipe awaiting confirmation. Wiping history is irreversible and reaches the
@@ -96,10 +90,9 @@ type Tab = 'channels' | 'dms';
  * firing straight off a row hover.
  */
 type PendingWipe =
-    | { kind: 'channel'; key: string; label: string }
     | { kind: 'dm'; pairKey: string; label: string }
     // A multi-select mass delete (genie #66) — one host call for the whole set.
-    | { kind: 'batch'; tokens: string[]; channels: number; threads: number };
+    | { kind: 'batch'; tokens: string[]; threads: number };
 
 /** A file staged on the composer, already read to base64 by the file input. */
 interface StagedFile {
@@ -158,7 +151,6 @@ function relTime(ts: number): string {
  * human's DM with them.
  */
 function rowKeyOfSelection(s: Selection): string {
-    if (s.kind === 'channel') return `c:${s.key}`;
     if (s.kind === 'dm') return `d:${s.agentId}`;
     return `p:${[s.a, s.b].sort().join('|')}`;
 }
@@ -256,9 +248,8 @@ function oldestSince(list: AgentInboxEscalationEvent[]): number | undefined {
 /** Does a live message event belong to the currently-open thread? */
 function eventMatches(
     sel: Selection,
-    ev: { kind: 'dm' | 'channel'; channelKey?: string; toAgentId?: string; from: string },
+    ev: { kind: 'dm' | 'channel'; toAgentId?: string; from: string },
 ): boolean {
-    if (sel.kind === 'channel') return ev.kind === 'channel' && ev.channelKey === sel.key;
     if (sel.kind === 'dm') {
         return ev.kind === 'dm' && (ev.from === sel.agentId || ev.toAgentId === sel.agentId);
     }
@@ -348,7 +339,6 @@ export default function AgentInboxFlyout({
     onClose: () => void;
 }) {
     const [agents, setAgents] = useState<AgentInboxAgentInfo[]>([]);
-    const [channels, setChannels] = useState<AgentInboxChannelInfo[]>([]);
     const [threads, setThreads] = useState<AgentInboxDmThreadInfo[]>([]);
     const [sel, setSel] = useState<Selection | null>(null);
     const [messages, setMessages] = useState<AgentInboxMessage[]>([]);
@@ -357,20 +347,14 @@ export default function AgentInboxFlyout({
     const [posting, setPosting] = useState(false);
     const [query, setQuery] = useState('');
     const [filter, setFilter] = useState<Filter>('all');
-    const [tab, setTab] = useState<Tab>('channels');
     const [rosterOpen, setRosterOpen] = useState(false);
-    // genie #66 — multi-select. Tokens are typed (`channel:` / `dm:`) so ONE set
-    // spans both tabs: the owner can tick channels and DMs and wipe them together.
+    // genie #66 — multi-select over DM threads.
     const [selectMode, setSelectMode] = useState(false);
     const [selected, setSelected] = useState<Set<string>>(new Set());
     const [pendingWipe, setPendingWipe] = useState<PendingWipe | null>(null);
     const [wiping, setWiping] = useState(false);
     const [menuOpen, setMenuOpen] = useState(false);
     const [expanded, setExpanded] = useState<Set<string>>(new Set());
-    // Channels carry no timestamp in the directory payload, so their preview and
-    // relative time are built from the live message events the panel observes
-    // (and back-filled from history the first time one is opened).
-    const [chanActivity, setChanActivity] = useState<Map<string, RowActivity>>(new Map());
     // Highest seq the human has actually looked at, per row — drives "unread".
     // CLIENT-SIDE and PERSISTED (genie #64): this is the viewer's own state, not
     // the host's agent ACK cursor, so it lives in localStorage bucketed by
@@ -417,13 +401,11 @@ export default function AgentInboxFlyout({
 
     const loadDirectory = useCallback(async () => {
         if (!hasGenieBridge()) return;
-        const [d, c, t] = await Promise.all([
+        const [d, t] = await Promise.all([
             api().agentInbox.directory().catch(() => ({ agents: [] as AgentInboxAgentInfo[] })),
-            api().agentInbox.channels().catch(() => ({ channels: [] as AgentInboxChannelInfo[] })),
             api().agentInbox.dmThreads().catch(() => ({ threads: [] as AgentInboxDmThreadInfo[] })),
         ]);
         setAgents(d.agents);
-        setChannels(c.channels);
         setThreads(t.threads);
     }, []);
 
@@ -433,31 +415,15 @@ export default function AgentInboxFlyout({
         try {
             const res = await api()
                 .agentInbox.history(
-                    s.kind === 'channel'
-                        ? { channelKey: s.key }
-                        : s.kind === 'dmPair'
-                          ? { dmPair: [s.a, s.b] }
-                          : { agentId: s.agentId },
+                    s.kind === 'dmPair' ? { dmPair: [s.a, s.b] } : { agentId: s.agentId },
                 )
                 .catch(() => ({ messages: [] as AgentInboxMessage[] }));
             setMessages(res.messages);
             const last = res.messages[res.messages.length - 1];
             if (last) {
-                // Reading a thread marks it seen, and gives a channel row the
-                // preview / timestamp the directory payload doesn't carry.
                 // `markSeen` is monotonic, so paging back through old history
                 // can never un-read the row.
                 setSeenSeq((prev) => markSeen(prev, rowKeyOfSelection(s), last.seq));
-                if (s.kind === 'channel') {
-                    setChanActivity((prev) =>
-                        new Map(prev).set(s.key, {
-                            seq: last.seq,
-                            ts: last.ts,
-                            fromLabel: last.fromLabel,
-                            preview: last.text,
-                        }),
-                    );
-                }
             }
         } finally {
             setLoading(false);
@@ -477,7 +443,7 @@ export default function AgentInboxFlyout({
         }
     }, []);
 
-    // Load the directory + channels on open.
+    // Load the agent directory and DM threads on open.
     useEffect(() => {
         if (!open) return;
         void loadDirectory();
@@ -489,17 +455,6 @@ export default function AgentInboxFlyout({
         const offPresence = api().on.agentInboxPresence?.(() => void loadDirectory());
         const offMessage = api().on.agentInboxMessage?.((ev) => {
             void loadDirectory();
-            if (ev.kind === 'channel' && ev.channelKey) {
-                const key = ev.channelKey;
-                setChanActivity((prev) =>
-                    new Map(prev).set(key, {
-                        seq: ev.seq,
-                        ts: ev.ts,
-                        fromLabel: ev.fromLabel,
-                        preview: ev.preview,
-                    }),
-                );
-            }
             setSel((cur) => {
                 if (cur && eventMatches(cur, ev)) void loadHistory(cur);
                 return cur;
@@ -524,22 +479,11 @@ export default function AgentInboxFlyout({
         // REFETCH is coalesced, or an N-target batch would cost 3N round trips.
         const reload = makeCoalescer(() => void loadDirectory());
         const offCleared = api().on.agentInboxCleared?.((ev) => {
-            const rowKey = ev.scope === 'channel' ? `c:${ev.key}` : null;
-            if (ev.scope === 'channel') {
-                setChanActivity((prev) => {
-                    if (!prev.has(ev.key)) return prev;
-                    const next = new Map(prev);
-                    next.delete(ev.key);
-                    return next;
-                });
-            }
-            setSeenSeq((prev) => forgetSeen(prev, rowKey ?? rowKeyOfPairKey(ev.key)));
+            if (ev.scope !== 'dm') return;
+            setSeenSeq((prev) => forgetSeen(prev, rowKeyOfPairKey(ev.key)));
             // A wiped row can't stay ticked — its token would outlive the row.
             setSelected((prev) => {
-                const token = wipeToken(
-                    ev.scope === 'channel' ? 'channel' : 'dm',
-                    ev.key,
-                );
+                const token = wipeToken('dm', ev.key);
                 if (!prev.has(token)) return prev;
                 const next = new Set(prev);
                 next.delete(token);
@@ -548,10 +492,7 @@ export default function AgentInboxFlyout({
             reload.schedule();
             setSel((cur) => {
                 if (!cur) return cur;
-                const hit =
-                    ev.scope === 'channel'
-                        ? cur.kind === 'channel' && cur.key === ev.key
-                        : rowKeyOfSelection(cur) === rowKeyOfPairKey(ev.key);
+                const hit = rowKeyOfSelection(cur) === rowKeyOfPairKey(ev.key);
                 if (!hit) return cur;
                 setMessages([]);
                 return null;
@@ -609,8 +550,7 @@ export default function AgentInboxFlyout({
         setPosting(true);
         try {
             const attachments = staged.map((f) => ({ filename: f.filename, base64: f.base64 }));
-            const target =
-                sel.kind === 'channel' ? { channelKey: sel.key } : { toAgentId: sel.agentId };
+            const target = { toAgentId: sel.agentId };
             const res = await api()
                 .agentInbox.post({ ...target, text, ...(attachments.length ? { attachments } : {}) })
                 .catch(() => ({ ok: false, error: 'Could not reach the host.' }));
@@ -705,15 +645,15 @@ export default function AgentInboxFlyout({
         if (!pendingWipe || wiping) return;
         setWiping(true);
         try {
-            if (pendingWipe.kind === 'channel') {
-                await api().agentInbox.clearChannel(pendingWipe.key);
-            } else if (pendingWipe.kind === 'dm') {
+            if (pendingWipe.kind === 'dm') {
                 await api().agentInbox.deleteThread(pendingWipe.pairKey);
             } else {
                 // ONE host call for the whole selection — the broker batches over
                 // the same per-target ops, so a partial failure can't leave half
                 // the set in a different state than a one-at-a-time loop would.
-                await api().agentInbox.wipeMany(partitionWipeTargets(pendingWipe.tokens));
+                await api().agentInbox.wipeMany({
+                    pairKeys: pendingWipe.tokens.map((token) => token.slice('dm:'.length)),
+                });
                 setSelected(new Set());
                 setSelectMode(false);
             }
@@ -743,14 +683,6 @@ export default function AgentInboxFlyout({
     const matches = (...fields: (string | undefined)[]) =>
         !q || fields.some((f) => (f ?? '').toLowerCase().includes(q));
 
-    const channelRows = channels
-        .filter((c) => matches(c.slug, c.purpose, c.workspaceName))
-        .map((c) => {
-            const rowKey = `c:${c.key}`;
-            const act = chanActivity.get(c.key);
-            return { c, rowKey, act, waiting: [] as AgentInboxEscalationEvent[], unread: isUnread(rowKey, act) };
-        });
-
     const threadRows = threads
         .filter((t) => matches(t.aLabel, t.bLabel, t.lastPreview, t.lastFromLabel))
         .map((t) => {
@@ -771,25 +703,19 @@ export default function AgentInboxFlyout({
         return true;
     };
 
-    // genie #64 — ALWAYS sorted by last activity, newest first, both lists. A
-    // channel with no traffic yet carries no activity and sinks to the bottom.
-    const shownChannels = sortByActivityDesc(channelRows.filter(passesFilter), (r) => r.act);
+    // genie #64 — ALWAYS sorted by last activity, newest first.
     const shownThreads = sortByActivityDesc(threadRows.filter(passesFilter), (r) => r.act);
 
-    const allRows = [...channelRows, ...threadRows];
+    const allRows = threadRows;
     const counts: Record<Filter, number> = {
         all: allRows.length,
         unread: allRows.filter((r) => r.unread).length,
         stale: allRows.filter((r) => isStale(r.act)).length,
     };
 
-    // genie #66 — the tokens for whatever the ACTIVE tab currently shows, which is
-    // what "Select all" operates on (selecting rows a filter is hiding would be a
-    // nasty surprise). The selection itself spans both tabs.
-    const visibleTokens =
-        tab === 'channels'
-            ? shownChannels.map((r) => wipeToken('channel', r.c.key))
-            : shownThreads.map((r) => wipeToken('dm', r.t.key));
+    // genie #66 — tokens for the visible DM rows. Selecting rows a filter hides
+    // would be a nasty surprise.
+    const visibleTokens = shownThreads.map((r) => wipeToken('dm', r.t.key));
     const allVisibleSelected =
         visibleTokens.length > 0 && visibleTokens.every((t) => selected.has(t));
 
@@ -809,12 +735,11 @@ export default function AgentInboxFlyout({
 
     /** Open the confirm for the current multi-selection. */
     const requestBatchWipe = () => {
-        const { channelKeys, pairKeys } = partitionWipeTargets([...selected]);
-        if (channelKeys.length + pairKeys.length === 0) return;
+        const pairKeys = [...selected].map((token) => token.slice('dm:'.length));
+        if (pairKeys.length === 0) return;
         setPendingWipe({
             kind: 'batch',
             tokens: [...selected],
-            channels: channelKeys.length,
             threads: pairKeys.length,
         });
     };
@@ -921,9 +846,6 @@ export default function AgentInboxFlyout({
                                                             agentId: a.agentId,
                                                             title: a.label,
                                                         });
-                                                        // The DM we just opened lives in the DMs
-                                                        // list — land the user where it is.
-                                                        setTab('dms');
                                                         setRosterOpen(false);
                                                     }}
                                                     title={`DM ${nameOf(a.agentId, byId, a.label)} · ${STATUS_LABEL[a.status]}`}
@@ -965,7 +887,7 @@ export default function AgentInboxFlyout({
                         className="gicon"
                         onClick={() => void loadDirectory()}
                         title="Refresh"
-                        aria-label="Refresh agents & channels"
+                        aria-label="Refresh agents and direct messages"
                     >
                         <IconRefresh />
                     </button>
@@ -1010,34 +932,10 @@ export default function AgentInboxFlyout({
                                     className="agentinbox-search-input"
                                     value={query}
                                     onChange={(e) => setQuery(e.target.value)}
-                                    placeholder="Search agents, workspaces, channels…"
+                                    placeholder="Search agents and workspaces…"
                                     aria-label="Search AgentInbox"
                                 />
                             </div>
-
-                            {/* genie #64 — Channels | DMs, tabbed rather than two
-                                stacked sections, so the pane shows ONE list at a time. */}
-                            <Tabs
-                                variant="pills"
-                                activeTab={tab}
-                                onTabChange={(t) => setTab(t as Tab)}
-                                className="agentinbox-tabs"
-                            >
-                                <Tabs.List className="agentinbox-tabs-list">
-                                    <Tabs.Tab value="channels">
-                                        Channels
-                                        <span className="agentinbox-chip-count">
-                                            {shownChannels.length}
-                                        </span>
-                                    </Tabs.Tab>
-                                    <Tabs.Tab value="dms">
-                                        DMs
-                                        <span className="agentinbox-chip-count">
-                                            {shownThreads.length}
-                                        </span>
-                                    </Tabs.Tab>
-                                </Tabs.List>
-                            </Tabs>
 
                             <div className="agentinbox-chips" role="group" aria-label="Filter threads">
                                 {(['all', 'unread', 'stale'] as Filter[]).map((f) => (
@@ -1079,7 +977,7 @@ export default function AgentInboxFlyout({
                                             checked={allVisibleSelected}
                                             onChange={toggleAllVisible}
                                             disabled={visibleTokens.length === 0}
-                                            aria-label={`Select all ${tab === 'channels' ? 'channels' : 'DMs'} shown`}
+                                            aria-label="Select all DMs shown"
                                         />
                                         All shown
                                     </label>
@@ -1109,114 +1007,8 @@ export default function AgentInboxFlyout({
                                 </div>
                             )}
 
-                            {/* Only the ACTIVE tab's list renders — the panes are
-                                alternatives, not two sections of one scroll. */}
                             <div className="agentinbox-scroll">
-                                {tab === 'channels' ? (
-                                    shownChannels.length === 0 ? (
-                                        <div className="agentinbox-empty">No channels yet.</div>
-                                    ) : (
-                                        <ul className="agentinbox-list">
-                                            {shownChannels.map(({ c, act, unread }) => {
-                                                const token = wipeToken('channel', c.key);
-                                                const ticked = selected.has(token);
-                                                return (
-                                                <li
-                                                    key={c.key}
-                                                    className={`agentinbox-li${selectMode ? ' picking' : ''}`}
-                                                >
-                                                    {selectMode && (
-                                                        <input
-                                                            type="checkbox"
-                                                            className="agentinbox-row-check"
-                                                            checked={ticked}
-                                                            onChange={() =>
-                                                                setSelected((p) =>
-                                                                    toggleSelection(p, token),
-                                                                )
-                                                            }
-                                                            aria-label={`Select #${c.purpose} in ${c.workspaceName}`}
-                                                        />
-                                                    )}
-                                                    <button
-                                                        type="button"
-                                                        className={`agentinbox-row${
-                                                            !selectMode &&
-                                                            sel?.kind === 'channel' &&
-                                                            sel.key === c.key
-                                                                ? ' on'
-                                                                : ''
-                                                        }${unread ? ' alert' : ''}${ticked ? ' picked' : ''}`}
-                                                        onClick={() =>
-                                                            // In selection mode the row IS the
-                                                            // checkbox target — a bigger hit area
-                                                            // than the box alone.
-                                                            selectMode
-                                                                ? setSelected((p) =>
-                                                                      toggleSelection(p, token),
-                                                                  )
-                                                                : setSel({
-                                                                      kind: 'channel',
-                                                                      key: c.key,
-                                                                      title: `${c.slug}:${c.purpose}`,
-                                                                  })
-                                                        }
-                                                        title={`${c.slug}:${c.purpose} · ${c.workspaceName}`}
-                                                    >
-                                                        <span className="agentinbox-row-av">
-                                                            <span className="agentinbox-av agentinbox-tone-hash">
-                                                                #
-                                                            </span>
-                                                        </span>
-                                                        <span className="agentinbox-row-main">
-                                                            <span className="agentinbox-row-top">
-                                                                <span className="agentinbox-row-name">
-                                                                    #{c.purpose}
-                                                                </span>
-                                                                <span className="agentinbox-ws">
-                                                                    {c.workspaceName}
-                                                                </span>
-                                                                <span className="agentinbox-row-time">
-                                                                    {act ? relTime(act.ts) : ''}
-                                                                </span>
-                                                            </span>
-                                                            <span className="agentinbox-row-bot">
-                                                                <span className="agentinbox-row-preview">
-                                                                    {act
-                                                                        ? `${act.fromLabel}: ${act.preview}`
-                                                                        : `${c.memberCount} member${c.memberCount === 1 ? '' : 's'}`}
-                                                                </span>
-                                                                <RowStatus waiting={[]} byId={byId} />
-                                                            </span>
-                                                        </span>
-                                                    </button>
-                                                    {/* Sibling, not a child: a button inside a
-                                                        button is invalid and unclickable. The
-                                                        single-row action hides in selection mode —
-                                                        "Delete selected" is the action there. */}
-                                                    {!selectMode && (
-                                                        <button
-                                                            type="button"
-                                                            className="agentinbox-row-action"
-                                                            onClick={() =>
-                                                                setPendingWipe({
-                                                                    kind: 'channel',
-                                                                    key: c.key,
-                                                                    label: `#${c.purpose} · ${c.workspaceName}`,
-                                                                })
-                                                            }
-                                                            title={`Clear #${c.purpose} history`}
-                                                            aria-label={`Clear #${c.purpose} history`}
-                                                        >
-                                                            <IconTrash size={12} />
-                                                        </button>
-                                                    )}
-                                                </li>
-                                                );
-                                            })}
-                                        </ul>
-                                    )
-                                ) : shownThreads.length === 0 ? (
+                                {shownThreads.length === 0 ? (
                                     <div className="agentinbox-empty">No direct messages yet.</div>
                                 ) : (
                                     <ul className="agentinbox-list">
@@ -1328,8 +1120,7 @@ export default function AgentInboxFlyout({
                         <div className="agentinbox-main">
                             {!sel ? (
                                 <div className="agentinbox-empty agentinbox-placeholder">
-                                    Pick an agent, a DM thread, or a channel to see the
-                                    conversation.
+                                    Pick an agent or a DM thread to see the conversation.
                                 </div>
                             ) : (
                                 <>
@@ -1360,9 +1151,7 @@ export default function AgentInboxFlyout({
                                             <span className="agentinbox-thread-sub">
                                                 {sel.kind === 'dmPair'
                                                     ? 'Cross-workspace direct thread · read-only'
-                                                    : sel.kind === 'dm'
-                                                      ? 'Direct thread'
-                                                      : 'Workspace channel'}
+                                                    : 'Direct thread'}
                                                 {loading ? ' · loading…' : ''}
                                             </span>
                                         </span>
@@ -1405,24 +1194,14 @@ export default function AgentInboxFlyout({
                                                         className="agentinbox-menu-danger"
                                                         onClick={() => {
                                                             setMenuOpen(false);
-                                                            setPendingWipe(
-                                                                sel.kind === 'channel'
-                                                                    ? {
-                                                                          kind: 'channel',
-                                                                          key: sel.key,
-                                                                          label: sel.title,
-                                                                      }
-                                                                    : {
-                                                                          kind: 'dm',
-                                                                          pairKey: pairKeyOf(sel),
-                                                                          label: sel.title,
-                                                                      },
-                                                            );
+                                                            setPendingWipe({
+                                                                kind: 'dm',
+                                                                pairKey: pairKeyOf(sel),
+                                                                label: sel.title,
+                                                            });
                                                         }}
                                                     >
-                                                        {sel.kind === 'channel'
-                                                            ? 'Clear history'
-                                                            : 'Delete thread'}
+                                                        Delete thread
                                                     </button>
                                                 </div>
                                             )}
@@ -1687,21 +1466,13 @@ export default function AgentInboxFlyout({
             {pendingWipe && (
                 <Modal open size="sm" onClose={() => !wiping && setPendingWipe(null)}>
                     <Modal.Header>
-                        {pendingWipe.kind === 'channel'
-                            ? 'Clear channel history?'
-                            : pendingWipe.kind === 'dm'
-                              ? 'Delete this DM thread?'
-                              : `Delete ${pendingWipe.channels + pendingWipe.threads} conversations?`}
+                        {pendingWipe.kind === 'dm'
+                            ? 'Delete this DM thread?'
+                            : `Delete ${pendingWipe.threads} conversations?`}
                     </Modal.Header>
                     <Modal.Body>
                         <Text size="sm" style={{ display: 'block' }}>
-                            {pendingWipe.kind === 'channel' ? (
-                                <>
-                                    Every message in <b>{pendingWipe.label}</b> is permanently
-                                    deleted. The channel and its members stay — only the history
-                                    goes.
-                                </>
-                            ) : pendingWipe.kind === 'dm' ? (
+                            {pendingWipe.kind === 'dm' ? (
                                 <>
                                     The whole conversation <b>{pendingWipe.label}</b> is permanently
                                     deleted.
@@ -1709,20 +1480,13 @@ export default function AgentInboxFlyout({
                             ) : (
                                 <>
                                     Permanently deleting{' '}
-                                    {pendingWipe.channels > 0 && (
-                                        <b>
-                                            {pendingWipe.channels} channel
-                                            {pendingWipe.channels === 1 ? '' : 's'}
-                                        </b>
-                                    )}
-                                    {pendingWipe.channels > 0 && pendingWipe.threads > 0 && ' and '}
                                     {pendingWipe.threads > 0 && (
                                         <b>
                                             {pendingWipe.threads} DM thread
                                             {pendingWipe.threads === 1 ? '' : 's'}
                                         </b>
                                     )}
-                                    . Channels keep their members — only the history goes.
+                                    .
                                 </>
                             )}
                         </Text>
@@ -1752,11 +1516,9 @@ export default function AgentInboxFlyout({
                             <Action color="red" onClick={() => void confirmWipe()} disabled={wiping}>
                                 {wiping
                                     ? 'Deleting…'
-                                    : pendingWipe.kind === 'channel'
-                                      ? 'Clear history'
-                                      : pendingWipe.kind === 'dm'
+                                    : pendingWipe.kind === 'dm'
                                         ? 'Delete thread'
-                                        : `Delete ${pendingWipe.channels + pendingWipe.threads}`}
+                                        : `Delete ${pendingWipe.threads}`}
                             </Action>
                         </div>
                     </Modal.Body>
