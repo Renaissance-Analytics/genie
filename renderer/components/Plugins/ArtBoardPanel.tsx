@@ -1,5 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Action, Badge, Card, Heading, Text, Textarea } from '@particle-academy/react-fancy';
+import {
+    ArtBoard as FancyArtBoard,
+    type ArtBoardValue,
+} from '@particle-academy/fancy-artboard';
 import type { ComponentProps } from 'react';
 import { api, type WorkspaceRow } from '../../lib/genie';
 import { resolveActiveBoardPost, type BoardPost } from '../../lib/artboard-model';
@@ -102,9 +106,28 @@ export default function ArtBoardPanel({ workspace, requestedPostId }: Props) {
         }
     };
 
-    if (posts === null) return <Text as="p" size="xs" color="muted">Loading the board…</Text>;
+    const boardPosts = posts ?? [];
+    const activePost = resolveActiveBoardPost(boardPosts, selectedPostId ?? requestedPostId);
+    const boardValue = useMemo<ArtBoardValue>(() => ({
+        sections: [{
+            id: 'review',
+            title: 'Artifacts for review',
+            subtitle: `${boardPosts.length} artifact${boardPosts.length === 1 ? '' : 's'}`,
+            pieces: boardPosts.map((post) => ({
+                id: post.id,
+                label: post.title,
+                width: 720,
+                height: 440,
+                content: post.kind === 'image'
+                    ? { kind: 'image' as const, src: post.src ?? '', alt: post.title }
+                    : { kind: 'html' as const, html: post.html ?? '' },
+                origin: 'agent' as const,
+                pending: post.review?.verdict !== 'approved',
+            })),
+        }],
+    }), [boardPosts]);
 
-    const activePost = resolveActiveBoardPost(posts, selectedPostId ?? requestedPostId);
+    if (posts === null) return <Text as="p" size="xs" color="muted">Loading the board…</Text>;
 
     return (
         <div className="artboard">
@@ -128,24 +151,13 @@ export default function ArtBoardPanel({ workspace, requestedPostId }: Props) {
 
             {posts.length > 0 && (
                 <div className="artboard-workbench">
-                    <nav className="artboard-artifacts" aria-label="ArtBoard artifacts">
-                        {posts.map((post) => {
-                            const status = statusOf(post);
-                            return (
-                                <button
-                                    type="button"
-                                    key={post.id}
-                                    className={post.id === activePost?.id ? 'is-active' : ''}
-                                    onClick={() => setSelectedPostId(post.id)}
-                                >
-                                    <span>{post.title}</span>
-                                    <Badge color={status.color} size="sm" variant="soft">
-                                        {status.label}
-                                    </Badge>
-                                </button>
-                            );
-                        })}
-                    </nav>
+                    <FancyArtBoard
+                        value={boardValue}
+                        focus={activePost?.id ?? null}
+                        onFocusChange={setSelectedPostId}
+                        htmlPolicy={{ pending: 'sandbox', accepted: 'sanitize' }}
+                        style={{ height: 'min(620px, 68vh)', minHeight: 420 }}
+                    />
                     {activePost && <ArtBoardArtifact
                         post={activePost}
                         comment={comments[activePost.id] ?? ''}
@@ -188,25 +200,6 @@ function ArtBoardArtifact({
                             <Text as="p" size="xs" color="muted">
                                 {post.note}
                             </Text>
-                        )}
-
-                        {post.kind === 'image' ? (
-                            <img
-                                className="artboard-preview"
-                                src={post.src}
-                                alt={post.title}
-                                loading="lazy"
-                            />
-                        ) : (
-                            // No allow-scripts and no allow-same-origin: a mockup is
-                            // for looking at, and nothing in it needs to execute to be
-                            // reviewed.
-                            <iframe
-                                className="artboard-preview"
-                                title={post.title}
-                                srcDoc={post.html ?? ''}
-                                sandbox=""
-                            />
                         )}
 
                         {post.review ? (

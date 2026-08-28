@@ -144,6 +144,17 @@ describe('Spreadsheet.createWorkbook (holy-sheet → .xlsx)', () => {
 });
 
 describe('ArtBoard.post panel handoff', () => {
+    it('declares the published Fancy ArtBoard package, not a Genie-made substitute', () => {
+        const source = BUNDLED_PLUGIN_SOURCES.find((item) => item.id === 'ai.genie.artboard');
+        const panel = (source?.manifest as {
+            contributes?: { panels?: Array<{ fancyComponent?: Record<string, string> }> };
+        } | undefined)?.contributes?.panels?.[0];
+        expect(panel?.fancyComponent).toMatchObject({
+            package: '@particle-academy/fancy-artboard',
+            export: 'ArtBoard',
+        });
+    });
+
     it('asks Genie to open the board focused on the artifact it wrote', async () => {
         const tools = loadTools('ai.genie.artboard');
         const files = new Map<string, string>();

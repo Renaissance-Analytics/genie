@@ -24,7 +24,7 @@ export function panelAdapterKind(fancyExport: string): PanelAdapterKind | null {
     switch (fancyExport) {
         case 'RepoChangesPanel':
             return 'repo-changes';
-        case 'ArtBoardPanel':
+        case 'ArtBoard':
             return 'artboard';
         default:
             return null;

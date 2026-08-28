@@ -190,9 +190,9 @@ export const ARTBOARD_SOURCE: BundledPluginSource = {
                     // registry to the first-party ArtBoardPanel, built from
                     // react-fancy primitives Genie already bundles.
                     fancyComponent: {
-                        package: '@particle-academy/react-fancy',
+                        package: '@particle-academy/fancy-artboard',
                         version: '>=0.5.0',
-                        export: 'ArtBoardPanel',
+                        export: 'ArtBoard',
                     },
                 },
             ],

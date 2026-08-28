@@ -35,14 +35,15 @@ describe('panelAdapterKind', () => {
  */
 describe('the ArtBoard adapter', () => {
     it('resolves the declared export', () => {
-        expect(panelAdapterKind('ArtBoardPanel')).toBe('artboard');
+        expect(panelAdapterKind('ArtBoard')).toBe('artboard');
     });
 
     it('still fails closed for anything unvetted', () => {
         // Positive control for the case above — without it, "ArtBoard resolves"
         // would pass just as happily against a registry that resolved EVERY
         // string to something.
-        expect(panelAdapterKind('ArtBoardPanelEvil')).toBeNull();
+        expect(panelAdapterKind('ArtBoardPanel')).toBeNull();
+        expect(panelAdapterKind('ArtBoardEvil')).toBeNull();
         expect(panelAdapterKind('../ArtBoardPanel')).toBeNull();
         expect(panelAdapterKind('')).toBeNull();
     });

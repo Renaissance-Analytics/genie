@@ -99,14 +99,16 @@ import { app } from 'electron';
 import {
     addWorkspace,
     createTerminalSpec,
+    deleteWorkspaceAgent,
     deleteTerminalSpec,
     getTerminalSpec,
     initDatabase,
     listTerminalSpecs,
+    listWorkspaceAgents,
     setSettings,
     setWorkspaceAgentCap,
 } from '../../db';
-import { manageTerminalsForMcp, runAgentForMcp } from '../host-tools';
+import { manageTerminalsForMcp, registerAgentForMcp, runAgentForMcp } from '../host-tools';
 import { terminalManager } from '@particle-academy/fancy-term-host';
 
 // A real database + a real workspace directory on disk. `initDatabase` takes a
@@ -181,7 +183,7 @@ function worldState(): { specs: number; ptys: number; live: number } {
  */
 let nextAgentName = 0;
 
-/** `runAgent start --create` through the real MCP handler. */
+/** Register, then start, a distinct agent through the real MCP handlers. */
 async function startAgent(): Promise<{
     ok: boolean;
     id?: string;
@@ -191,11 +193,17 @@ async function startAgent(): Promise<{
     const before = spawnedPtys.length;
     // An explicit command so the test never depends on a `claude` binary being
     // installed; nothing runs it — it is written into the fake pty.
+    const name = `agent-${++nextAgentName}`;
+    const registered = await registerAgentForMcp(CALLER_ID, {
+        name,
+        purpose: `Agent cap test ${name}`,
+        agent: 'claude',
+    });
+    if (!registered.ok) return registered;
     const res = await runAgentForMcp(CALLER_ID, {
         action: 'start',
         agent: 'claude',
-        create: true,
-        name: `agent-${++nextAgentName}`,
+        name,
         command: 'echo agent',
     });
     return {
@@ -226,6 +234,9 @@ async function fillToLimit(n: number): Promise<string[]> {
 beforeEach(() => {
     terminalManager().killAll();
     for (const s of listTerminalSpecs()) deleteTerminalSpec(s.id);
+    for (const agent of listWorkspaceAgents(WS_ID)) {
+        if (agent.role !== 'workspace') deleteWorkspaceAgent(agent.id);
+    }
     spawnedPtys.length = 0;
     modalsRaised.length = 0;
 
@@ -259,7 +270,6 @@ afterAll(() => {
 describe('runAgent start, under the limit', () => {
     it('spawns a real agent terminal', async () => {
         const r = await startAgent();
-
         expect(r.ok).toBe(true);
         expect(r.id).toBeTruthy();
 
