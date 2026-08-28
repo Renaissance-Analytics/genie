@@ -7,6 +7,7 @@ import {
     parseGranularity,
     DEFAULT_ISSUEWATCH_GRANULARITY,
     parsePolicyBuckets,
+    ensureWorkspaceAgent,
 } from '../db';
 
 /**
@@ -1561,5 +1562,138 @@ describe('v49 — GApp Development Workspaces', () => {
         runMigrations(db);
         expect(() => runMigrations(db)).not.toThrow();
         expect(cols(db, 'workspaces').has('gapp_dev')).toBe(true);
+    });
+});
+
+describe('v50 — first-class AMS agents', () => {
+    it('creates the default agent when a new workspace is registered', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        db.prepare(
+            `INSERT INTO workspaces
+                (id, tynn_project_id, tynn_project_name, project_id, project_name,
+                 shape, path, sort_order)
+             VALUES ('ws-new', 'p-new', 'New Project', 'p-new', 'New Project',
+                     'simple', '/tmp/new', 0)`,
+        ).run();
+
+        ensureWorkspaceAgent(db, 'ws-new');
+
+        const row = db
+            .prepare<[], { role: string; terminal_spec_id: string | null }>(
+                `SELECT role, terminal_spec_id FROM workspace_agents WHERE workspace_id = 'ws-new'`,
+            )
+            .get();
+        expect(row).toEqual({ role: 'workspace', terminal_spec_id: null });
+    });
+
+    it('creates one dormant Workspace Agent for every existing workspace', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        db.prepare(
+            `INSERT INTO workspaces
+                (id, tynn_project_id, tynn_project_name, project_id, project_name,
+                 shape, path, sort_order)
+             VALUES ('ws-ams', 'p-ams', 'AMS Project', 'p-ams', 'AMS Project',
+                     'simple', '/tmp/ams', 0)`,
+        ).run();
+
+        // Rewind only the not-yet-shipped migration marker to model an upgrade
+        // from v49 with this workspace already present.
+        db.prepare('DELETE FROM schema_version WHERE version = 50').run();
+        runMigrations(db);
+
+        const row = db
+            .prepare<[], {
+                workspace_id: string;
+                role: string;
+                name: string;
+                terminal_spec_id: string | null;
+                reachability: string;
+                wake_on_dm: number;
+            }>(`SELECT workspace_id, role, name, terminal_spec_id, reachability, wake_on_dm
+                FROM workspace_agents WHERE workspace_id = 'ws-ams'`)
+            .get();
+        expect(row).toEqual({
+            workspace_id: 'ws-ams',
+            role: 'workspace',
+            name: 'workspace',
+            terminal_spec_id: null,
+            reachability: 'workspace',
+            wake_on_dm: 1,
+        });
+    });
+
+    it('stores identity, authority, boot, readiness, and terminal binding independently', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+
+        const c = cols(db, 'workspace_agents');
+        for (const column of [
+            'provider',
+            'name',
+            'purpose',
+            'avatar',
+            'boot_cwd',
+            'persona_path',
+            'role',
+            'parent_agent_id',
+            'terminal_spec_id',
+            'reachability',
+            'wake_on_dm',
+            'ready_at',
+        ]) {
+            expect(c.has(column), column).toBe(true);
+        }
+    });
+
+    it('adopts existing saved agent terminals as children of the Workspace Agent', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        db.prepare(
+            `INSERT INTO workspaces
+                (id, tynn_project_id, tynn_project_name, project_id, project_name,
+                 shape, path, sort_order)
+             VALUES ('ws-old-agent', 'p-old', 'Old', 'p-old', 'Old',
+                     'simple', '/tmp/old', 0)`,
+        ).run();
+        db.prepare(
+            `INSERT INTO terminal_specs
+                (id, workspace_id, label, cwd, args_json, env_json, type, meta_json,
+                 sort_order, created_at)
+             VALUES ('spec-reviewer', 'ws-old-agent', 'reviewer', '/tmp/old', '[]', '{}',
+                     'terminal',
+                     '{"agent":"codex","whisper_purpose":"reviewer","agent_id":"inbox-reviewer"}',
+                     0, '2026-08-01')`,
+        ).run();
+        db.prepare(`DELETE FROM workspace_agents WHERE workspace_id = 'ws-old-agent'`).run();
+        db.prepare('DELETE FROM schema_version WHERE version = 50').run();
+
+        runMigrations(db);
+
+        const rows = db
+            .prepare<[], {
+                role: string;
+                provider: string | null;
+                name: string;
+                terminal_spec_id: string | null;
+                parent_agent_id: string | null;
+            }>(`SELECT role, provider, name, terminal_spec_id, parent_agent_id
+                FROM workspace_agents WHERE workspace_id = 'ws-old-agent' ORDER BY role`)
+            .all();
+        expect(rows).toContainEqual({
+            role: 'specialized',
+            provider: 'codex',
+            name: 'reviewer',
+            terminal_spec_id: 'spec-reviewer',
+            parent_agent_id: 'workspace:ws-old-agent',
+        });
+    });
+
+    it('is idempotent', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        expect(() => runMigrations(db)).not.toThrow();
+        expect(cols(db, 'workspace_agents').has('role')).toBe(true);
     });
 });

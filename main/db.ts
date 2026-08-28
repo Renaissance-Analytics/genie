@@ -1336,6 +1336,89 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // v50 — AMS makes an agent a durable configuration of its own.
+            // A terminal is the TUI an agent may be running in, not the record
+            // that makes the agent exist. This separation is what allows every
+            // workspace to have a dormant Workspace Agent before its first boot,
+            // and preserves identity/readiness while a terminal is restarted.
+            version: 50,
+            runner: (db) => {
+                db.exec(`
+                    CREATE TABLE IF NOT EXISTS workspace_agents (
+                        id               TEXT PRIMARY KEY,
+                        workspace_id     TEXT NOT NULL,
+                        provider         TEXT,
+                        name             TEXT NOT NULL,
+                        purpose          TEXT NOT NULL DEFAULT '',
+                        avatar           TEXT,
+                        boot_cwd         TEXT,
+                        persona_path     TEXT,
+                        role             TEXT NOT NULL DEFAULT 'specialized'
+                                         CHECK (role IN ('workspace','specialized','gapp')),
+                        parent_agent_id  TEXT,
+                        terminal_spec_id TEXT,
+                        reachability     TEXT NOT NULL DEFAULT 'workspace'
+                                         CHECK (reachability IN ('workspace','workstation','hidden')),
+                        wake_on_dm       INTEGER NOT NULL DEFAULT 1,
+                        ready_at         INTEGER,
+                        created_at       INTEGER NOT NULL,
+                        updated_at       INTEGER NOT NULL,
+                        FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+                        FOREIGN KEY (parent_agent_id) REFERENCES workspace_agents(id) ON DELETE SET NULL,
+                        FOREIGN KEY (terminal_spec_id) REFERENCES terminal_specs(id) ON DELETE SET NULL
+                    );
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_agents_key
+                        ON workspace_agents(workspace_id, provider, name);
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_agents_terminal
+                        ON workspace_agents(terminal_spec_id) WHERE terminal_spec_id IS NOT NULL;
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_agents_master
+                        ON workspace_agents(workspace_id) WHERE role = 'workspace';
+                    CREATE INDEX IF NOT EXISTS idx_workspace_agents_parent
+                        ON workspace_agents(parent_agent_id);
+
+                    INSERT OR IGNORE INTO workspace_agents
+                        (id, workspace_id, provider, name, purpose, role, reachability,
+                         wake_on_dm, created_at, updated_at)
+                    SELECT 'workspace:' || id, id, NULL, 'workspace',
+                           'Drive this workspace and coordinate its agents.',
+                           'workspace', 'workspace', 1,
+                           CAST(strftime('%s','now') AS INTEGER) * 1000,
+                           CAST(strftime('%s','now') AS INTEGER) * 1000
+                    FROM workspaces;
+
+                    INSERT OR IGNORE INTO workspace_agents
+                        (id, workspace_id, provider, name, purpose, boot_cwd,
+                         persona_path, role, parent_agent_id, terminal_spec_id,
+                         reachability, wake_on_dm, created_at, updated_at)
+                    SELECT
+                        'agent:' || t.id,
+                        t.workspace_id,
+                        json_extract(t.meta_json, '$.agent'),
+                        COALESCE(NULLIF(json_extract(t.meta_json, '$.whisper_purpose'), ''),
+                                 NULLIF(t.label, ''), 'agent'),
+                        COALESCE(NULLIF(json_extract(t.meta_json, '$.whisper_purpose'), ''),
+                                 NULLIF(t.label, ''), 'Agent'),
+                        t.cwd,
+                        json_extract(t.meta_json, '$.gapp_persona'),
+                        'specialized',
+                        'workspace:' || t.workspace_id,
+                        t.id,
+                        CASE json_extract(t.meta_json, '$.whisper_scope')
+                            WHEN 'all' THEN 'workstation'
+                            WHEN 'hidden' THEN 'hidden'
+                            ELSE 'workspace'
+                        END,
+                        1,
+                        CAST(strftime('%s','now') AS INTEGER) * 1000,
+                        CAST(strftime('%s','now') AS INTEGER) * 1000
+                    FROM terminal_specs t
+                    WHERE t.workspace_id IS NOT NULL
+                      AND json_valid(t.meta_json)
+                      AND json_type(t.meta_json, '$.agent') = 'text';
+                `);
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -1372,6 +1455,29 @@ function terminalSpecColumns(d: Database.Database): Set<string> {
         .prepare<[], { name: string }>(`PRAGMA table_info(terminal_specs)`)
         .all();
     return new Set(rows.map((r) => r.name));
+}
+
+/**
+ * Ensure the invariant that every workspace owns one Workspace Agent, even
+ * before that agent has a provider or terminal. Exported with an explicit DB
+ * argument so migrations/import paths can converge the same invariant without
+ * relying on the process singleton.
+ */
+export function ensureWorkspaceAgent(
+    database: Database.Database,
+    workspaceId: string,
+    now = Date.now(),
+): void {
+    database
+        .prepare(
+            `INSERT OR IGNORE INTO workspace_agents
+                (id, workspace_id, provider, name, purpose, role, reachability,
+                 wake_on_dm, created_at, updated_at)
+             VALUES (?, ?, NULL, 'workspace',
+                     'Drive this workspace and coordinate its agents.',
+                     'workspace', 'workspace', 1, ?, ?)`,
+        )
+        .run(`workspace:${workspaceId}`, workspaceId, now, now);
 }
 
 // Settings helpers ------------------------------------------------------
@@ -1715,6 +1821,29 @@ export function setSettings(patch: Partial<Settings>): Settings {
 
 // Workspace helpers -----------------------------------------------------
 
+export type WorkspaceAgentRole = 'workspace' | 'specialized' | 'gapp';
+export type WorkspaceAgentReachability = 'workspace' | 'workstation' | 'hidden';
+
+/** A first-class AMS configuration. Its terminal binding is intentionally nullable. */
+export interface WorkspaceAgentRow {
+    id: string;
+    workspace_id: string;
+    provider: string | null;
+    name: string;
+    purpose: string;
+    avatar: string | null;
+    boot_cwd: string | null;
+    persona_path: string | null;
+    role: WorkspaceAgentRole;
+    parent_agent_id: string | null;
+    terminal_spec_id: string | null;
+    reachability: WorkspaceAgentReachability;
+    wake_on_dm: number;
+    ready_at: number | null;
+    created_at: number;
+    updated_at: number;
+}
+
 export interface WorkspaceRow {
     id: string;
     backend: 'tynn' | 'aionima';
@@ -1808,6 +1937,17 @@ export function listWorkspaces(): WorkspaceRow[] {
              ORDER BY sort_order ASC, (last_opened_at IS NULL) ASC, last_opened_at DESC, project_name ASC`,
         )
         .all();
+}
+
+export function listWorkspaceAgents(workspaceId: string): WorkspaceAgentRow[] {
+    return getDb()
+        .prepare<[string], WorkspaceAgentRow>(
+            `SELECT * FROM workspace_agents
+             WHERE workspace_id = ?
+             ORDER BY CASE role WHEN 'workspace' THEN 0 WHEN 'specialized' THEN 1 ELSE 2 END,
+                      name ASC`,
+        )
+        .all(workspaceId);
 }
 
 /**
@@ -1909,13 +2049,17 @@ export function addWorkspace(
         // reconcile never tears it down.
         assignment_managed: row.assignment_managed ?? 0,
     };
-    getDb()
-        .prepare(
+    const database = getDb();
+    const insert = database.transaction(() => {
+        database.prepare(
             `INSERT INTO workspaces
              (id, backend, project_id, project_name, tynn_project_id, tynn_project_name, shape, path, editor, editor_cmd, start_cmd, env_file, last_opened_at, created_by_genie, sort_order, mcp_enabled, assignment_managed)
              VALUES (@id, @backend, @project_id, @project_name, @tynn_project_id, @tynn_project_name, @shape, @path, @editor, @editor_cmd, @start_cmd, @env_file, @last_opened_at, @created_by_genie, @sort_order, @mcp_enabled, @assignment_managed)`,
         )
         .run(full);
+        ensureWorkspaceAgent(database, row.id);
+    });
+    insert();
     return getWorkspace(row.id)!;
 }
 
