@@ -94,6 +94,11 @@ export interface ServerDeps {
     };
     /** Pulse the given terminal's attention glow (imDone). */
     onImDone: (terminalId: string) => void;
+    onThumbsUp?: (
+        terminalId: string,
+        reason: 'boot' | 'ack' | 'shutdown',
+        to?: string,
+    ) => Promise<{ ok: boolean; agentId?: string; error?: string }>;
     /** Resolve the caller's workspace IssueWatch snapshot (checkIssues + imDone counts). */
     checkIssues: (terminalId: string) => Promise<IssueWatchSnapshot>;
     /** A "you have N unread AgentInbox messages" nudge for the caller's terminal, folded into
@@ -662,6 +667,7 @@ async function handle(
         serverName: SERVER_NAME,
         serverVersion: deps.serverVersion,
         onImDone: deps.onImDone,
+        onThumbsUp: deps.onThumbsUp,
         checkIssues: deps.checkIssues,
         agentInboxMailLine: deps.agentInboxMailLine,
         onForceQuestion: deps.onForceQuestion,

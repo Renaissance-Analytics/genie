@@ -11,6 +11,7 @@ function ctx(overrides: Partial<McpContext> = {}): McpContext {
         serverName: 'genie',
         serverVersion: '0.7.0',
         onImDone: vi.fn(),
+        onThumbsUp: vi.fn().mockResolvedValue({ ok: true, agentId: 'cfg-1' }),
         checkIssues: vi.fn().mockResolvedValue({
             connected: true,
             workspaceResolved: true,
@@ -76,6 +77,7 @@ describe('handleMcpMessage', () => {
         const tools = (res?.result as { tools: Array<{ name: string }> }).tools;
         expect(tools.map((t) => t.name)).toEqual([
             'imDone',
+            'thumbsUp',
             'checkIssues',
             'ForceTheQuestion',
             'manageProcess',
@@ -111,6 +113,7 @@ describe('handleMcpMessage', () => {
         const tools = (res?.result as { tools: Array<{ name: string }> }).tools;
         expect(tools.map((t) => t.name)).toEqual([
             'imDone',
+            'thumbsUp',
             'checkIssues',
             'ForceTheQuestion',
             'manageProcess',
@@ -1237,6 +1240,24 @@ describe('handleMcpMessage', () => {
         );
         expect(onImDone).toHaveBeenCalledWith('term-XYZ');
         expect((res?.result as { content: unknown[] }).content).toBeInstanceOf(Array);
+    });
+
+    it('thumbsUp marks the bound agent ready and reports the acknowledgement', async () => {
+        const onThumbsUp = vi.fn().mockResolvedValue({ ok: true, agentId: 'cfg-ready' });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 90,
+                method: 'tools/call',
+                params: { name: 'thumbsUp', arguments: { reason: 'boot' } },
+            },
+            ctx({ terminalId: 'term-ready', onThumbsUp }),
+        );
+
+        expect(onThumbsUp).toHaveBeenCalledWith('term-ready', 'boot', undefined);
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toContain('ready');
+        expect(text).toContain('cfg-ready');
     });
 
     it('imDone reminds the agent to raise questions via ForceTheQuestion, not plaintext', async () => {

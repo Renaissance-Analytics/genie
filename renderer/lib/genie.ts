@@ -3976,6 +3976,15 @@ export interface GenieApi {
         terminalAttention: (
             cb: (payload: { id: string; on: boolean }) => void,
         ) => () => void;
+        agentThumbsUp?: (
+            cb: (payload: {
+                agentId: string;
+                terminalId: string;
+                workspaceId: string;
+                reason: 'boot' | 'ack' | 'shutdown';
+                to?: string;
+            }) => void,
+        ) => () => void;
         /** The imDone toast was clicked: go to the terminal that finished —
          *  activate its workspace and surface its panel. `workspaceId` is the
          *  synthetic System Workspace id for a System-Workspace terminal, and

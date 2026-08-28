@@ -1549,6 +1549,17 @@ export function broadcastWorkspacePulse(workspaceId: string): void {
     mobileEmit('workspace:pulse', { workspaceId });
 }
 
+export function broadcastAgentThumbsUp(payload: {
+    agentId: string;
+    terminalId: string;
+    workspaceId: string;
+    reason: 'boot' | 'ack' | 'shutdown';
+    to?: string;
+}): void {
+    broadcastLocal('agent:thumbs-up', payload);
+    mobileEmit('agent:thumbs-up', payload);
+}
+
 /**
  * AgentPulse — install the tracker's emitter so its per-workspace activity events
  * fan out to the renderer (rail glow + live sparkline), the mobile dashboard, and

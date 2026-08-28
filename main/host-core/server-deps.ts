@@ -1,8 +1,16 @@
-import { listTerminalSpecs, getTerminalSpec, getWorkspace, listWorkspaces } from '../db';
+import {
+    listTerminalSpecs,
+    getTerminalSpec,
+    getWorkspace,
+    listWorkspaces,
+    getDb,
+    markWorkspaceAgentReadyByTerminal,
+} from '../db';
 import {
     lastActiveTerminalForWorkspace,
     broadcastTerminalAttention,
     broadcastWorkspacePulse,
+    broadcastAgentThumbsUp,
 } from '../terminal/ipc';
 import { mobileEmit } from '../mobile/server';
 import {
@@ -108,6 +116,20 @@ export function buildHostServerDeps(
                     ? { provider: spec.meta.agent, name: spec.meta.whisper_purpose ?? '' }
                     : null,
             });
+        },
+        onThumbsUp: async (terminalId, reason, to) => {
+            const agent = markWorkspaceAgentReadyByTerminal(getDb(), terminalId);
+            if (!agent) {
+                return { ok: false, error: 'This terminal is not bound to a registered AMS agent.' };
+            }
+            broadcastAgentThumbsUp({
+                agentId: agent.id,
+                terminalId,
+                workspaceId: agent.workspace_id,
+                reason,
+                ...(to ? { to } : {}),
+            });
+            return { ok: true, agentId: agent.id };
         },
         checkIssues: (terminalId) => checkIssuesForMcp(terminalId),
         agentInboxMailLine: (terminalId) =>

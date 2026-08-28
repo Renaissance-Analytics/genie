@@ -8,6 +8,7 @@ import {
     DEFAULT_ISSUEWATCH_GRANULARITY,
     parsePolicyBuckets,
     ensureWorkspaceAgent,
+    markWorkspaceAgentReadyByTerminal,
 } from '../db';
 
 /**
@@ -1695,5 +1696,32 @@ describe('v50 — first-class AMS agents', () => {
         runMigrations(db);
         expect(() => runMigrations(db)).not.toThrow();
         expect(cols(db, 'workspace_agents').has('role')).toBe(true);
+    });
+
+    it('records readiness against the agent configuration bound to a terminal', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        db.prepare(
+            `INSERT INTO workspaces
+                (id, tynn_project_id, tynn_project_name, project_id, project_name,
+                 shape, path, sort_order)
+             VALUES ('ws-ready', 'p-ready', 'Ready', 'p-ready', 'Ready',
+                     'simple', '/tmp/ready', 0)`,
+        ).run();
+        ensureWorkspaceAgent(db, 'ws-ready', 1);
+        db.prepare(
+            `INSERT INTO terminal_specs
+                (id, workspace_id, label, cwd, args_json, env_json, sort_order, created_at)
+             VALUES ('term-ready', 'ws-ready', 'agent', '/tmp/ready', '[]', '{}', 0, 'now')`,
+        ).run();
+        db.prepare(
+            `UPDATE workspace_agents SET terminal_spec_id = 'term-ready'
+             WHERE workspace_id = 'ws-ready' AND role = 'workspace'`,
+        ).run();
+
+        const marked = markWorkspaceAgentReadyByTerminal(db, 'term-ready', 1234);
+
+        expect(marked?.id).toBe('workspace:ws-ready');
+        expect(marked?.ready_at).toBe(1234);
     });
 });

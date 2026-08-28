@@ -2002,6 +2002,24 @@ export function bindWorkspaceAgentTerminal(agentId: string, terminalSpecId: stri
         .run(terminalSpecId, Date.now(), agentId);
 }
 
+export function markWorkspaceAgentReadyByTerminal(
+    database: Database.Database,
+    terminalSpecId: string,
+    readyAt = Date.now(),
+): WorkspaceAgentRow | undefined {
+    database
+        .prepare(
+            `UPDATE workspace_agents SET ready_at = ?, updated_at = ?
+             WHERE terminal_spec_id = ?`,
+        )
+        .run(readyAt, readyAt, terminalSpecId);
+    return database
+        .prepare<[string], WorkspaceAgentRow>(
+            'SELECT * FROM workspace_agents WHERE terminal_spec_id = ?',
+        )
+        .get(terminalSpecId);
+}
+
 export function deleteWorkspaceAgent(agentId: string): void {
     getDb()
         .prepare(`DELETE FROM workspace_agents WHERE id = ? AND role <> 'workspace'`)

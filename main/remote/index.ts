@@ -1160,6 +1160,7 @@ export async function remoteReconnect(wcId: number): Promise<{ ok: boolean; erro
 // terminal-spec + workspace-list changes) work transparently in remote mode.
 export const PASSTHROUGH_EVENTS = new Set([
     'terminal:attention',
+    'agent:thumbs-up',
     'workspace:pulse',
     'process:status',
     // A scheduled task armed / fired / was disarmed on the host — keeps a remote

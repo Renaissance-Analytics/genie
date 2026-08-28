@@ -333,6 +333,11 @@ export interface McpContext {
     serverVersion: string;
     /** Side effect for the imDone tool — pulse the caller's terminal. */
     onImDone: (terminalId: string) => void;
+    onThumbsUp?: (
+        terminalId: string,
+        reason: 'boot' | 'ack' | 'shutdown',
+        to?: string,
+    ) => Promise<{ ok: boolean; agentId?: string; error?: string }>;
     /**
      * Resolve the caller's workspace and return its IssueWatch snapshot (open
      * Issues / PRs / security alerts + per-bucket counts) for the `checkIssues`
@@ -2184,6 +2189,28 @@ const REGISTER_AGENT_TOOL = {
     },
 };
 
+const THUMBS_UP_TOOL = {
+    name: 'thumbsUp',
+    description:
+        'Signal agent readiness without spending a DM: after boot, as an agent-to-agent acknowledgement, or when prepared for Genie shutdown. The agent grid shows a green animated thumb on the sender.',
+    inputSchema: {
+        type: 'object',
+        properties: {
+            ...TERMINAL_ID_PROP,
+            reason: {
+                type: 'string',
+                enum: ['boot', 'ack', 'shutdown'],
+                description: 'Why readiness is being signalled. Default ack.',
+            },
+            to: {
+                type: 'string',
+                description: 'ack only: optional registered agent ref waiting for confirmation.',
+            },
+        },
+        additionalProperties: false,
+    },
+};
+
 const RUN_AGENT_TOOL = {
     name: 'runAgent',
     description:
@@ -3141,6 +3168,7 @@ function readStateNote(state: TerminalReadState | undefined): string {
  */
 const CORE_TOOLS = [
     IMDONE_TOOL,
+    THUMBS_UP_TOOL,
     CHECK_ISSUES_TOOL,
     FORCE_QUESTION_TOOL,
     MANAGE_PROCESS_TOOL,
@@ -3261,6 +3289,17 @@ export async function handleMcpMessage(
                     priority?: QuestionPriority;
                 } & Partial<ManageProcessRequest>;
             };
+            if (params.name === 'thumbsUp') {
+                if (!ctx.onThumbsUp) return err(msg.id, -32603, 'thumbsUp is unavailable.');
+                const raw = (params.arguments ?? {}) as Record<string, unknown>;
+                const reason = raw.reason === 'boot' || raw.reason === 'shutdown' ? raw.reason : 'ack';
+                const to = typeof raw.to === 'string' && raw.to.trim() ? raw.to.trim() : undefined;
+                const result = await ctx.onThumbsUp(ctx.terminalId, reason, to);
+                const text = result.ok
+                    ? `Agent ${result.agentId ?? ''} is ready (${reason}).`
+                    : `thumbsUp failed: ${result.error ?? 'unknown error'}`;
+                return ok(msg.id, { content: [{ type: 'text', text: `${text}\n\n${JSON.stringify(result, null, 2)}` }] });
+            }
             if (params.name === 'imDone') {
                 ctx.onImDone(ctx.terminalId);
                 // Fold the caller's workspace IssueWatch counts into the response

@@ -65,6 +65,7 @@ function appMcpContext(deps: ServerDeps, appId: string) {
         serverName: 'genie',
         serverVersion: deps.serverVersion,
         onImDone: deps.onImDone,
+        onThumbsUp: deps.onThumbsUp,
         checkIssues: deps.checkIssues,
         agentInboxMailLine: deps.agentInboxMailLine,
         onForceQuestion: deps.onForceQuestion,

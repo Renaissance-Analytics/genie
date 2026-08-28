@@ -1500,6 +1500,19 @@ const api = {
             ipcRenderer.on('terminal:attention', handler);
             return () => ipcRenderer.off('terminal:attention', handler);
         },
+        agentThumbsUp: (
+            cb: (payload: {
+                agentId: string;
+                terminalId: string;
+                workspaceId: string;
+                reason: 'boot' | 'ack' | 'shutdown';
+                to?: string;
+            }) => void,
+        ) => {
+            const handler = (_e: unknown, payload: Parameters<typeof cb>[0]) => cb(payload);
+            ipcRenderer.on('agent:thumbs-up', handler);
+            return () => ipcRenderer.off('agent:thumbs-up', handler);
+        },
         /** The imDone toast was clicked: go to the terminal that finished —
          *  activate its workspace and surface its panel. */
         terminalReveal: (
