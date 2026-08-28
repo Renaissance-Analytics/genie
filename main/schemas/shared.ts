@@ -1,4 +1,4 @@
-export const SHARED_SCHEMA_VERSION = '1.0.0';
+export const SHARED_SCHEMA_VERSION = '1.0.1';
 export const SHARED_SCHEMA_BASE =
     `https://raw.githubusercontent.com/Civicognita/shared-schemas/v${SHARED_SCHEMA_VERSION}/schemas/workspace`;
 
