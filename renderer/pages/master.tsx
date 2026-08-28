@@ -4237,6 +4237,7 @@ function Toolbar({
                 onAgentCreated={onAgentCreated}
                 customCommand={agentCustomCommand}
                 includeFiles
+                panelLauncher
             />
         </div>
     );

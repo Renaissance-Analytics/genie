@@ -317,7 +317,8 @@ workspace or one you govern.
 
 An agent is **SAVED WORKSPACE CONFIGURATION**, like a site or a service: defined
 once, it persists, and it is **reopened rather than recreated**. It is still a
-terminal — it lives in the workspace sidebar and the Floor UX like any other.
+agent session. Its live TUI appears in a distinct AgentPanel on the Floor rather
+than as an ordinary terminal panel.
 
 **Identity** is \`{provider}:{name}:{chat-id}\` — e.g. \`claude:tynn\`,
 \`codex:tynn-slave\`. The \`{provider}:{name}\` half is the saved config and is

@@ -91,5 +91,5 @@ export function agentTerminalTypes(): TerminalTypeDef[] {
 
 /** Built-in terminal-backed choices in the workspace Add Panel launcher. */
 export function panelLauncherTypes(): TerminalTypeDef[] {
-    return [...TERMINAL_TYPES];
+    return TERMINAL_TYPES.filter((type) => !type.specialized);
 }

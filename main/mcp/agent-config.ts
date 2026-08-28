@@ -1122,6 +1122,31 @@ Always follow the workspace's AGENTS.md; it may impose stronger project-specific
 `;
 }
 
+/** Built into the immutable Genie workstation agent; never synced to projects. */
+export function osAgentBuilderSkill(): string {
+    return `---
+name: genie-agent-builder
+description: Use only as Genie's built-in workstation operator when the user asks to create or configure an AMS agent for a workspace.
+---
+
+# AgentBuilder
+
+You are the hardcoded Genie OS agent and workstation operator. Build durable AMS
+agents for workspaces; never perform their project work yourself.
+
+1. Use \`manageWorkspaces list\` to resolve the exact target workspace. Never guess.
+2. Gather the agent's stable name, purpose, model provider, optional command,
+   working folder, access scope, wake behavior, and IssueWatch behavior. Ask the
+   user one concise \`ForceTheQuestion\` batch for anything material that is missing.
+3. Call \`registerAgent\` with the explicit target \`workspaceId\`. Registration
+   creates durable identity/configuration only; do not create a terminal panel.
+4. Confirm the saved result. Call \`runAgent start\` only when the user also asked
+   to launch it; starting produces its distinct AgentPanel on the Floor.
+5. Never edit agent tables or workspace manifests directly, and never use
+   \`manageTerminals create\` as a substitute for an AMS agent.
+`;
+}
+
 /** Focused Genie workflow skills installed beside the base routing skill. */
 export function genieCoreSkills(): Record<string, string> {
     const skill = (name: string, description: string, body: string): string => `---

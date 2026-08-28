@@ -75,11 +75,8 @@ describe('terminal-type registry', () => {
         expect(agentTerminalTypes().every((type) => type.specialized && type.agent)).toBe(true);
     });
 
-    it('offers a plain terminal and every agent provider in Add Panel', () => {
-        expect(panelLauncherTypes().map((type) => type.id)).toEqual([
-            'regular',
-            ...agentProviders(),
-        ]);
+    it('keeps agents out of Add Panel because AgentBuilder owns agent creation', () => {
+        expect(panelLauncherTypes().map((type) => type.id)).toEqual(['regular']);
     });
 });
 

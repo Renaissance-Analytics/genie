@@ -56,9 +56,17 @@ export function decideTargetWorkspace(
     callerWorkspaceId: string | null,
     requestedWorkspaceId: string | undefined,
     governedIds: ReadonlySet<string>,
-    opts: { callerIsOperator?: boolean } = {},
+    opts: { callerIsOperator?: boolean; callerIsOsAgent?: boolean } = {},
 ): TargetDecision {
     if (!callerWorkspaceId) {
+        if (opts.callerIsOsAgent && requestedWorkspaceId?.trim()) {
+            return {
+                allowed: true,
+                workspaceId: requestedWorkspaceId.trim(),
+                reason: 'Acting as the built-in Genie workstation operator.',
+                via: 'operator',
+            };
+        }
         return {
             allowed: false,
             workspaceId: '',
@@ -129,6 +137,8 @@ export interface TargetResolverDeps {
     /** WORKSTATION OPERATOR (Tynn #248) — the caller's own workspace holds the
      *  designation, so it may act on every workspace on this machine. */
     callerIsOperator?: boolean;
+    /** Immutable Genie OS identity; unlike an unattached shell it may target an explicit workspace. */
+    callerIsOsAgent?: boolean;
 }
 
 /**
@@ -141,7 +151,10 @@ export async function resolveTargetWorkspace(
     deps: TargetResolverDeps,
 ): Promise<TargetDecision> {
     const requested = requestedWorkspaceId?.trim();
-    const operator = { callerIsOperator: deps.callerIsOperator === true };
+    const operator = {
+        callerIsOperator: deps.callerIsOperator === true,
+        callerIsOsAgent: deps.callerIsOsAgent === true,
+    };
     // Fast path: own workspace (or no/unattached caller) — no governance lookup.
     if (!requested || requested === deps.callerWorkspaceId || !deps.callerWorkspaceId) {
         return decideTargetWorkspace(deps.callerWorkspaceId, requested, new Set(), operator);

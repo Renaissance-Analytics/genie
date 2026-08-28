@@ -23,7 +23,12 @@ let skills: unknown[] = [];
 vi.mock('../../db', () => ({ getAllSettings: () => settings }));
 vi.mock('../../plugins/registry', () => ({ pluginAgentSkills: () => skills }));
 
-import { writeWorkspaceAgentMcp, genieCodexSkill, pluginSkillBody } from '../agent-config';
+import {
+    writeWorkspaceAgentMcp,
+    genieCodexSkill,
+    osAgentBuilderSkill,
+    pluginSkillBody,
+} from '../agent-config';
 
 const URL = 'http://127.0.0.1:51717/mcp/tok';
 let WS: string;
@@ -53,6 +58,15 @@ describe('agent skills sync', () => {
         // Claude previously got no skill at all — only .mcp.json and AGENTS.md.
         expect(read(path.join(codexRoot(), 'genie', 'SKILL.md'))).toBe(genieCodexSkill());
         expect(read(path.join(claudeRoot(), 'genie', 'SKILL.md'))).toBe(genieCodexSkill());
+    });
+
+    it('keeps AgentBuilder exclusive to the built-in Genie OS agent', () => {
+        writeWorkspaceAgentMcp(WS, true, URL);
+        expect(read(path.join(codexRoot(), 'genie-agent-builder', 'SKILL.md'))).toBeNull();
+        expect(read(path.join(claudeRoot(), 'genie-agent-builder', 'SKILL.md'))).toBeNull();
+        expect(osAgentBuilderSkill()).toContain('registerAgent');
+        expect(osAgentBuilderSkill()).toContain('runAgent');
+        expect(osAgentBuilderSkill()).toContain('workstation operator');
     });
 
     it('writes a skill per plugin that declares a guide, for both agents', () => {

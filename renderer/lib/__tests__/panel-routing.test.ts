@@ -56,6 +56,11 @@ describe('panelKindForSpecType', () => {
     it('routes a plugin-panel spec to the plugin-panel host', () => {
         expect(panelKindForSpecType('plugin-panel')).toBe('plugin-panel');
     });
+
+    it('routes an agent terminal to the distinct AgentPanel surface', () => {
+        expect(panelKindForSpecType('terminal', { agent: 'codex' })).toBe('agent');
+        expect(panelKindForSpecType('terminal', {})).toBe('terminal');
+    });
 });
 
 const panelRef: PluginPanelRef = {

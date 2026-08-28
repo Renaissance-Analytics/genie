@@ -3034,6 +3034,38 @@ body.gutter-dragging .grid-gutter {
     cursor: pointer;
 }
 
+/* AMS agents are Floor citizens, not shell presets. The provider accent and
+   identity rail make the distinction visible even when the TUI body is idle. */
+.agent-panel-shell {
+    min-width: 0;
+    min-height: 0;
+    height: 100%;
+    border-radius: 12px;
+    background: linear-gradient(145deg, color-mix(in srgb, var(--agent-accent, #8b5cf6) 10%, transparent), transparent 42%);
+}
+.agent-panel-shell > .tpanel { height: 100%; }
+.agent-panel-shell.agent-provider-claude { --agent-accent: #d97757; }
+.agent-panel-shell.agent-provider-codex { --agent-accent: #74a7ff; }
+.agent-panel-shell.agent-provider-kiwi { --agent-accent: #84cc16; }
+.agent-panel-shell.agent-provider-genie { --agent-accent: #2dd4bf; }
+.agent-panel .tpanel-head {
+    border-bottom-color: color-mix(in srgb, var(--agent-accent) 45%, var(--border));
+    background: color-mix(in srgb, var(--agent-accent) 9%, var(--panel));
+}
+.agent-panel-role {
+    display: block;
+    color: var(--muted);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: .08em;
+    line-height: 1.2;
+    text-transform: uppercase;
+}
+.agent-panel-provider {
+    color: var(--agent-accent);
+    margin-right: 7px;
+}
+
 .ams-agent-grid {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));

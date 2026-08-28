@@ -1191,6 +1191,8 @@ export async function resolveAgentTarget(
     }
 
     const callerWorkspaceId = caller.workspaceId;
+    const callerSpec = getTerminalSpec(callerTerminalId);
+    const callerIsOsAgent = callerSpec?.meta?.agent_id === 'genie:workstation';
     const callerWs = callerWorkspaceId ? getWorkspace(callerWorkspaceId) : null;
     const decision = await resolveTargetWorkspace(requestedWorkspaceId, {
         callerWorkspaceId,
@@ -1202,6 +1204,7 @@ export async function resolveAgentTarget(
         // row, never from the request: the authority has to come from what the
         // machine was configured to trust, not from what a caller claims.
         callerIsOperator: callerWorkspaceId ? isWorkstationOperator(callerWorkspaceId) : false,
+        callerIsOsAgent,
     });
     const ws = decision.allowed ? getWorkspace(decision.workspaceId) ?? null : null;
     return { decision, ws };

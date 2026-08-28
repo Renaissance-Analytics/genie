@@ -382,7 +382,9 @@ function withTerminalGenieUrlForCodex(
     agent: string | undefined,
     command: string,
 ): string {
-    if (agent !== 'codex' || !workspaceId || !workspaceMcpEnabled(workspaceId)) return command;
+    const spec = getTerminalSpec(terminalId);
+    const osAgent = spec?.meta?.agent_id === 'genie:workstation';
+    if (agent !== 'codex' || (!osAgent && (!workspaceId || !workspaceMcpEnabled(workspaceId)))) return command;
     const mcpUrl = registerTerminalEndpoint(terminalId);
     if (!mcpUrl) return command;
     return withCodexGenieMcpLaunch(command, {
@@ -810,12 +812,19 @@ function maybeRelaunchAgent(id: string, existing: boolean): void {
     // A restart re-runs the stored base `agent_command`, which carries no genie
     // override — re-point Codex at THIS terminal's endpoint so the relaunched
     // agent keeps its terminal-scoped genie URL (genie #35). No-op for non-codex.
-    const command = withTerminalGenieUrlForCodex(
+    let command = withTerminalGenieUrlForCodex(
         id,
         spec?.workspace_id,
         spec?.meta?.agent,
         decision.command,
     );
+    if (typeof spec?.meta?.agent_instructions === 'string') {
+        command = withProviderStartupInstructions(
+            spec.meta.agent as Parameters<typeof withProviderStartupInstructions>[0],
+            command,
+            spec.meta.agent_instructions,
+        );
+    }
     deliverAgentLaunch(id, command);
 }
 
@@ -1077,7 +1086,10 @@ export function registerTerminalIpc(): void {
             // Agent-integration MCP: when the spec's workspace has opted in, mint
             // this terminal's auto-wired endpoint and expose it as GENIE_MCP_URL
             // (+ GENIE_TERMINAL_ID) so an agent can drive the Genie UI (imDone).
-            if (spec?.workspace_id && workspaceMcpEnabled(spec.workspace_id)) {
+            if (
+                (spec?.workspace_id && workspaceMcpEnabled(spec.workspace_id)) ||
+                spec?.meta?.agent_id === 'genie:workstation'
+            ) {
                 const mcpUrl = registerTerminalEndpoint(opts.id);
                 if (mcpUrl) {
                     opts = {

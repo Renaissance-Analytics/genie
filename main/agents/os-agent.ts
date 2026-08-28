@@ -10,6 +10,7 @@ export const GENIE_OS_AGENT = Object.freeze({
     role: 'workstation-operator' as const,
     workspaceId: null,
     mutable: false,
+    skills: ['genie-agent-builder'] as const,
 });
 
 export type OsAgentTarget =

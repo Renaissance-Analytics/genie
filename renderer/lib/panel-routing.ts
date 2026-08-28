@@ -12,13 +12,14 @@ import type { ViewType, ViewMeta, TerminalSpec } from './genie';
  */
 
 /** The panel component kind a view spec dispatches to. */
-export type PanelKind = 'terminal' | 'code' | 'plugin' | 'plugin-panel';
+export type PanelKind = 'terminal' | 'agent' | 'code' | 'plugin' | 'plugin-panel';
 
 /** Map a spec's `type` to its panel component kind. Drives PanelFor's dispatch. */
-export function panelKindForSpecType(type: ViewType): PanelKind {
+export function panelKindForSpecType(type: ViewType, meta: ViewMeta = {}): PanelKind {
     if (type === 'code') return 'code';
     if (type === 'plugin') return 'plugin';
     if (type === 'plugin-panel') return 'plugin-panel';
+    if (type === 'terminal' && typeof meta.agent === 'string') return 'agent';
     return 'terminal';
 }
 

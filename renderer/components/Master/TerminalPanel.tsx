@@ -42,6 +42,8 @@ interface Props {
      * is a drop target.
      */
     drag?: PanelDragHandlers;
+    /** AgentPanel supplies agent-specific chrome while sharing the stable PTY host. */
+    surface?: 'terminal' | 'agent';
 }
 
 function toProfile(s: ShellDetection): ShellProfile {
@@ -80,6 +82,7 @@ export default function TerminalPanel({
     onMarkActive,
     onMarkInactive,
     drag,
+    surface = 'terminal',
 }: Props) {
     // Fire onMarkActive exactly once on mount, regardless of how many
     // times the panel rerenders. Cleaner than wiring this into XTerm.
@@ -143,7 +146,7 @@ export default function TerminalPanel({
 
     return (
         <section
-            className={`tpanel${focused ? ' focus' : ''}${attention ? ' attention' : ''}${
+            className={`tpanel ${surface === 'agent' ? 'agent-panel' : 'terminal-panel'}${focused ? ' focus' : ''}${attention ? ' attention' : ''}${
                 drag?.dragging ? ' dragging' : ''
             }`}
             style={style}
@@ -169,9 +172,15 @@ export default function TerminalPanel({
                 onDragEnd={drag?.onDragEnd}
                 title={drag ? 'Drag onto another panel to reorder' : undefined}
             >
-                <span className="pdot" style={{ background: '#10b981' }} />
+                <span className="pdot" style={{ background: surface === 'agent' ? 'var(--agent-accent, #8b5cf6)' : '#10b981' }} />
                 <span className="pn">
                     <span className="nm">{spec.label}</span>
+                    {surface === 'agent' && (
+                        <span className="agent-panel-role">
+                            <span className="agent-panel-provider">{String(spec.meta.agent)}</span>
+                            {String(spec.meta.whisper_purpose ?? 'workspace agent')}
+                        </span>
+                    )}
                 </span>
                 {workspace && (
                     <span className="ploc">
@@ -250,7 +259,7 @@ export default function TerminalPanel({
                         // falls back to requiring host:all.
                         workspaceId={spec.workspace_id ?? undefined}
                         onExit={onMarkInactive}
-                        shells={shellOptions}
+                        shells={surface === 'agent' ? [] : shellOptions}
                         activeShell={shell.id ?? undefined}
                         onShellChange={onShellChange}
                     />

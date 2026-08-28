@@ -2245,7 +2245,7 @@ const THUMBS_UP_TOOL = {
 const RUN_AGENT_TOOL = {
     name: 'runAgent',
     description:
-        "Start and control a REGISTERED coding agent (claude / codex / a custom CLI) in this workspace — or one you govern. Registration is a separate `registerAgent` call; `runAgent` never creates configuration. Actions: `list` (registered agents, including dormant ones); `start` (launch or resume the registered `name`; defaults to the Workspace Agent); `send`; `read`; `stop`; `restart`. Every agent remains terminal-based, while its durable AMS identity survives terminal restarts. SAFETY: first launch, `send`, and `restart` are approval-gated when the workspace requires it; listing, reading, and reattaching are read-only/already-approved.",
+        "Start and control a REGISTERED coding agent (claude / codex / a custom CLI) in this workspace — or one you govern. Registration is a separate `registerAgent` call; `runAgent` never creates configuration. Actions: `list` (registered agents, including dormant ones); `start` (launch or resume the registered `name`; defaults to the Workspace Agent); `send`; `read`; `stop`; `restart`. A running agent uses a distinct AgentPanel on the Floor while its durable AMS identity survives TUI and panel restarts. SAFETY: first launch, `send`, and `restart` are approval-gated when the workspace requires it; listing, reading, and reattaching are read-only/already-approved.",
     inputSchema: {
         type: 'object',
         properties: {

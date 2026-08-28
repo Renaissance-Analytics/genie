@@ -29,6 +29,7 @@ import {
     getWorkspace,
     toWorkspaceAppKind,
     createTerminalSpec,
+    updateTerminalSpec,
     workspaceProcessApproval,
     workspaceTerminalApproval,
     removeWorkspace,
@@ -57,6 +58,7 @@ import {
     writeWorkspaceAgentMcp,
     healTynnMcpEntry,
     syncWorkspaceCodexTynnMcp,
+    osAgentBuilderSkill,
 } from './mcp/agent-config';
 import { resolveAlertSound, deliverAlertSound } from './notify-sound';
 import { demandWindowAttention, resolveAttentionWindow } from './attention-flash';
@@ -1103,7 +1105,9 @@ app.whenReady().then(async () => {
     // Persist only its terminal shell so it can resume like every other agent;
     // `system:true` keeps it outside every project and the fixed id makes this
     // seed idempotent across upgrades.
-    if (!getTerminalSpec('genie-workstation-agent')) {
+    const existingOsAgent = getTerminalSpec('genie-workstation-agent');
+    const osAgentInstructions = osAgentBuilderSkill();
+    if (!existingOsAgent) {
         const provider = resolveWorkstationProvider(getAllSettings());
         createTerminalSpec({
             id: 'genie-workstation-agent',
@@ -1116,10 +1120,15 @@ app.whenReady().then(async () => {
                 agent: provider,
                 agent_command: providerDef(provider).defaultCommand,
                 agent_id: 'genie:workstation',
+                agent_instructions: osAgentInstructions,
                 whisper_purpose: 'genie',
                 whisper_scope: 'all',
                 whisper_wake_on_dm: true,
             },
+        });
+    } else if (existingOsAgent.meta.agent_instructions !== osAgentInstructions) {
+        updateTerminalSpec(existingOsAgent.id, {
+            meta: { ...existingOsAgent.meta, agent_instructions: osAgentInstructions },
         });
     }
     // The container DEV SERVER — sites (#234 P2), services (P3) and their

@@ -161,3 +161,19 @@ describe('without the operator designation', () => {
         expect(decision.via).toBe('denied');
     });
 });
+
+describe('the built-in Genie OS agent', () => {
+    it('may target an explicit workspace but never guesses one', () => {
+        const explicit = decideTargetWorkspace(null, 'project-1', new Set(), {
+            callerIsOsAgent: true,
+        });
+        expect(explicit.allowed).toBe(true);
+        expect(explicit.workspaceId).toBe('project-1');
+        expect(explicit.via).toBe('operator');
+
+        const missing = decideTargetWorkspace(null, undefined, new Set(), {
+            callerIsOsAgent: true,
+        });
+        expect(missing.allowed).toBe(false);
+    });
+});

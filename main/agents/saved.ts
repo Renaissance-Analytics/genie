@@ -14,7 +14,8 @@
  * (the durable AgentInbox identity), `meta.agent_command`, `meta.chat_session_id`.
  * So a saved agent is a VIEW over the specs a workspace already has, and this
  * module is the reading of it — no migration, no second store to keep in sync,
- * and an agent stays a terminal in the sidebar and the Floor UX, as required.
+ * and an agent stays a durable AMS identity in the sidebar while its live TUI
+ * is rendered through a distinct AgentPanel on the Floor.
  *
  * The decision is separated from the doing because the doing is a pty spawn and
  * an approval modal. What is worth pinning is which of the three things happens,

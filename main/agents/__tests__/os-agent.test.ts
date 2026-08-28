@@ -7,6 +7,7 @@ describe('the hardcoded workstation Genie agent', () => {
         expect(GENIE_OS_AGENT.role).toBe('workstation-operator');
         expect(GENIE_OS_AGENT.workspaceId).toBeNull();
         expect(GENIE_OS_AGENT.mutable).toBe(false);
+        expect(GENIE_OS_AGENT.skills).toContain('genie-agent-builder');
     });
 
     it('refuses project work while allowing workstation operations', () => {

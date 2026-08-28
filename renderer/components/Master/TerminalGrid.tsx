@@ -7,6 +7,7 @@ import {
     type PointerEvent as ReactPointerEvent,
 } from 'react';
 import TerminalPanel from './TerminalPanel';
+import AgentPanel from './AgentPanel';
 import CodePanel from '../Code/CodePanel';
 import PluginEditorHost from '../Plugins/PluginEditorHost';
 import PluginPanelHost from '../Plugins/PluginPanelHost';
@@ -784,6 +785,29 @@ function PanelFor({
                 onClose={onClose}
                 onMaximize={onMaximize}
                 onMinimize={onMinimize}
+                drag={drag}
+            />
+        );
+    }
+
+    if (spec.type === 'terminal' && typeof spec.meta.agent === 'string') {
+        return (
+            <AgentPanel
+                spec={spec}
+                workspace={workspace}
+                attention={attention}
+                pendingNudge={pendingNudge}
+                onSendPendingNudge={onSendPendingNudge}
+                onAttentionClear={onAttentionClear}
+                focused={focused}
+                maximized={maximized}
+                style={style}
+                onClose={onClose}
+                onMaximize={onMaximize}
+                onMinimize={onMinimize}
+                onDisable={onDisable}
+                onMarkActive={onMarkActive}
+                onMarkInactive={onMarkInactive}
                 drag={drag}
             />
         );
