@@ -41,6 +41,7 @@ import { applySetEnv, applyCheckEnv } from '../env-store';
 import { pluginToolDescriptors, dispatchPluginTool } from '../plugins/registry';
 import { agentInboxBroker } from '../agentinbox/broker';
 import { agentPulse } from '../terminal/agent-pulse';
+import { agentShutdownReadiness } from '../agents/shutdown-readiness';
 import { backendOfKind } from '../backend/registry';
 import { formatAgentInboxMailLine } from '../mcp/protocol';
 import type { ServerDeps } from '../mcp/server';
@@ -129,6 +130,7 @@ export function buildHostServerDeps(
                 reason,
                 ...(to ? { to } : {}),
             });
+            agentShutdownReadiness.acknowledge(agent.id, reason);
             return { ok: true, agentId: agent.id };
         },
         checkIssues: (terminalId) => checkIssuesForMcp(terminalId),

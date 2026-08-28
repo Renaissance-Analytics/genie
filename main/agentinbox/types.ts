@@ -201,9 +201,9 @@ export interface AgentInboxMessage {
     seq: number;
     /** Stable message uuid. */
     id: string;
-    /** Sender: the literal `human`, or an agent's `agentId`. */
+    /** Sender: `human`, `genie:system`, or an agent's `agentId`. */
     from: string;
-    /** Human-readable sender label (`You` for the human; else the agent's label). */
+    /** Human-readable sender label (`You`, `Genie (no reply)`, or the agent label). */
     fromLabel: string;
     kind: AgentInboxKind;
     /** Channel messages: the channel key. */

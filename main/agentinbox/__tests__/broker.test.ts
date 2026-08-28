@@ -151,6 +151,21 @@ describe('AgentInboxBroker — discovery scopes', () => {
 });
 
 describe('AgentInboxBroker — direct messages', () => {
+    it('delivers Genie lifecycle notices as durable no-reply system mail', async () => {
+        const b = fresh();
+        b.join(input({ agentId: 'A' }));
+
+        expect(b.send({ system: true, toAgentId: 'A', text: 'Prepare for shutdown.' }).ok).toBe(true);
+        const received = await b.receive('A');
+        expect(received.messages).toEqual([
+            expect.objectContaining({
+                from: 'genie:system',
+                fromLabel: 'Genie (no reply)',
+                text: 'Prepare for shutdown.',
+            }),
+        ]);
+    });
+
     it('delivers agent mail through the native harness transport and never the PTY wake sink', () => {
         const b = fresh();
         const native = vi.fn(() => true);

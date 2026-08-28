@@ -20,6 +20,8 @@ import {
     initDatabase,
     listWorkspaces,
     listTerminalSpecs,
+    listWorkspaceAgents,
+    getTerminalSpec,
     getAllSettings,
     setSettings,
     getWorkspace,
@@ -95,10 +97,12 @@ import {
     announceInboxIncoming,
     beginInputHold,
     releaseInputHold,
+    isTerminalLive,
 } from './terminal/ipc';
 import { installAgentInboxPresence } from './agentinbox/presence';
 import { agentInboxBroker } from './agentinbox/broker';
 import { harnessTransportRegistry } from './agentinbox/harness-transport';
+import { agentShutdownReadiness } from './agents/shutdown-readiness';
 import { deliverNudge, type NudgeIO } from './agentinbox/nudge-delivery';
 import { dbAgentInboxStore } from './agentinbox/store';
 import { getWorkspaceAgentAccess } from './db';
@@ -2023,6 +2027,24 @@ app.whenReady().then(async () => {
         stopSchedules();
         const forUpdate = isQuittingForUpdate();
         const kind = hostBackendKind();
+        const fullShutdown = !isHostBacked() ||
+            (shouldKillHostForUpdate(forUpdate, kind) && detachedHostPinsBinary());
+        if (fullShutdown) {
+            const targets = listWorkspaces().flatMap((workspace) =>
+                listWorkspaceAgents(workspace.id).flatMap((agent) => {
+                    if (!agent.terminal_spec_id || !isTerminalLive(agent.terminal_spec_id)) return [];
+                    const inboxAgentId = getTerminalSpec(agent.terminal_spec_id)?.meta?.agent_id;
+                    return typeof inboxAgentId === 'string' && inboxAgentId
+                        ? [{
+                              agentId: agent.id,
+                              inboxAgentId,
+                              terminalId: agent.terminal_spec_id,
+                          }]
+                        : [];
+                }),
+            );
+            await agentShutdownReadiness.begin(targets, 30_000);
+        }
         if (isHostBacked()) {
             // UPDATE-quit teardown branches on the ACTIVE BACKEND KIND, because
             // only ONE kind pins Genie's binary:

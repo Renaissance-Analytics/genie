@@ -1152,6 +1152,7 @@ export class AgentInboxBroker {
     send(input: {
         fromAgentId?: string;
         human?: boolean;
+        system?: boolean;
         toAgentId?: string;
         channelArg?: string;
         text: string;
@@ -1166,7 +1167,10 @@ export class AgentInboxBroker {
         let from: string;
         let fromLabel: string;
         let sender: AgentInboxAgent | null = null;
-        if (input.human) {
+        if (input.system) {
+            from = 'genie:system';
+            fromLabel = 'Genie (no reply)';
+        } else if (input.human) {
             from = AGENTINBOX_HUMAN;
             fromLabel = 'You';
         } else {
