@@ -1018,22 +1018,32 @@ export class AgentInboxBroker {
         }
     }
 
-    /**
-     * Whether `target` appears in `caller`'s directory AT ALL. Denial by the
-     * workspace tier, or an explicit `hidden` scope, omits the agent; every other
-     * agent is listed (possibly as unreachable) so peers can discover it and ask
-     * for access.
-     */
+    /** Whether `target` appears in `caller`'s directory at all. */
     private visible(caller: AgentInboxAgent, target: AgentInboxAgent): boolean {
         if (caller.agentId === target.agentId) return true; // always sees itself
         if (target.scope === 'hidden') return false;
-        return this.workspaceAllows(caller.workspaceId, target.workspaceId);
+        if (!this.workspaceAllows(caller.workspaceId, target.workspaceId)) return false;
+        // An agent is always discoverable by peers in its own workspace. Across
+        // workspaces, its mailbox scope is also its roster-visibility boundary:
+        // private agents must not leak their identity or presence.
+        return (
+            caller.workspaceId === target.workspaceId ||
+            target.scope === 'all' ||
+            (target.scope === 'specific' && target.scopeWorkspaces.includes(caller.workspaceId))
+        );
     }
 
-    /** Whether `caller` may actually DM `target` — BOTH tiers must admit it. */
+    /** Whether `caller` may DM `target`, including replies in an existing thread. */
     private reachable(caller: AgentInboxAgent, target: AgentInboxAgent): boolean {
         if (caller.agentId === target.agentId) return true;
-        return this.visible(caller, target) && this.scopeAllows(caller, target);
+        if (!this.workspaceAllows(caller.workspaceId, target.workspaceId)) return false;
+        // A private agent may initiate a conversation with a public peer. Once
+        // that durable DM pair exists, the recipient can reply without making
+        // the private initiator discoverable to the rest of its workspace.
+        const thread = this.dmLogs.get(pairKey(caller.agentId, target.agentId));
+        const opener = thread?.[0];
+        if (opener?.from === target.agentId && opener.to === caller.agentId) return true;
+        return this.scopeAllows(caller, target);
     }
 
     /** Every agent (the human panel's directory — the human sees all, no scope). */
@@ -1042,9 +1052,8 @@ export class AgentInboxBroker {
     }
 
     /**
-     * The peers an agent can DISCOVER (excludes itself). Includes agents it may
-     * not message — those carry `reachable: false` so the caller knows they exist
-     * and can request access, rather than the peer silently not existing.
+     * The peers an agent can discover (excludes itself). Private agents outside
+     * the caller's workspace are omitted rather than exposed as unavailable.
      */
     discoverableFor(callerAgentId: string): AgentInboxAgentInfo[] {
         const caller = this.agents.get(callerAgentId);

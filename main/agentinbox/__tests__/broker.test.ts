@@ -72,7 +72,7 @@ describe('AgentInboxBroker — workspace access (outer tier)', () => {
         // Workspace is open, but the agent itself only accepts its own workspace.
         b.join(input({ agentId: 'S', workspaceId: 'w2', slug: 'ws-two', scope: 'self' }));
         const entry = b.discoverableFor('A').find((a) => a.agentId === 'S');
-        expect(entry?.reachable).toBe(false); // listed, but unavailable
+        expect(entry).toBeUndefined(); // private agents leak no external roster entry
         expect(b.send({ fromAgentId: 'A', toAgentId: 'S', text: 'x' }).ok).toBe(false);
     });
 
@@ -98,19 +98,18 @@ describe('AgentInboxBroker — workspace access (outer tier)', () => {
 });
 
 describe('AgentInboxBroker — discovery scopes', () => {
-    it('lists un-DMable peers as unreachable, and omits only `hidden`', () => {
+    it('keeps private agents invisible outside their workspace', () => {
         const b = fresh();
         // Caller A in w1. (No workspace-access resolver wired → the OUTER tier is
         // permissive, so this exercises the per-agent scope tier in isolation.)
         b.join(input({ agentId: 'A', workspaceId: 'w1' }));
         // Same workspace, self → reachable.
         b.join(input({ agentId: 'B', workspaceId: 'w1', scope: 'self' }));
-        // Other workspace, self → LISTED but unreachable.
+        // Other workspace, self → private and invisible.
         b.join(input({ agentId: 'C', workspaceId: 'w2', slug: 'ws-two', scope: 'self' }));
         // Other workspace, all → reachable.
         b.join(input({ agentId: 'D', workspaceId: 'w2', slug: 'ws-two', scope: 'all' }));
-        // Other workspace, none → LISTED but unreachable (discoverable so a peer
-        // can find it and ask for access; `none` closes the mailbox, not the door).
+        // Other workspace, none → invisible.
         b.join(input({ agentId: 'E', workspaceId: 'w2', slug: 'ws-two', scope: 'none' }));
         // Other workspace, specific [w1] → reachable by A.
         b.join(
@@ -121,15 +120,13 @@ describe('AgentInboxBroker — discovery scopes', () => {
 
         const seen = b.discoverableFor('A');
         const ids = seen.map((a) => a.agentId).sort();
-        // `hidden` is the ONLY scope that disappears; everything else is listed.
-        expect(ids).toEqual(['B', 'C', 'D', 'E', 'F']);
+        expect(ids).toEqual(['B', 'D', 'F']);
         // Never includes itself in the peer list.
         expect(ids).not.toContain('A');
 
         const reachable = seen.filter((a) => a.reachable).map((a) => a.agentId).sort();
         expect(reachable).toEqual(['B', 'D', 'F']);
-        const unavailable = seen.filter((a) => !a.reachable).map((a) => a.agentId).sort();
-        expect(unavailable).toEqual(['C', 'E']);
+        expect(seen.filter((a) => !a.reachable)).toEqual([]);
     });
 
     it('redacts the `specific` allow-list from callers it excludes', () => {
@@ -140,8 +137,7 @@ describe('AgentInboxBroker — discovery scopes', () => {
             input({ agentId: 'S', workspaceId: 'w2', slug: 'ws-two', scope: 'specific', scopeWorkspaces: ['w9'] }),
         );
         const entry = b.discoverableFor('A').find((a) => a.agentId === 'S');
-        expect(entry?.reachable).toBe(false);
-        expect(entry?.scopeWorkspaces).toEqual([]);
+        expect(entry).toBeUndefined();
         // The human panel still sees the real list — it owns the workstation.
         expect(b.directory().find((a) => a.agentId === 'S')?.scopeWorkspaces).toEqual(['w9']);
     });
@@ -155,6 +151,17 @@ describe('AgentInboxBroker — discovery scopes', () => {
 });
 
 describe('AgentInboxBroker — direct messages', () => {
+    it('lets a private agent initiate outward and the recipient reply in that durable thread', () => {
+        const b = fresh();
+        b.join(input({ agentId: 'PRIVATE', workspaceId: 'w1', scope: 'self' }));
+        b.join(input({ agentId: 'PUBLIC', workspaceId: 'w2', slug: 'ws-two', scope: 'all' }));
+
+        expect(b.discoverableFor('PRIVATE').map((a) => a.agentId)).toContain('PUBLIC');
+        expect(b.discoverableFor('PUBLIC').map((a) => a.agentId)).not.toContain('PRIVATE');
+        expect(b.send({ fromAgentId: 'PRIVATE', toAgentId: 'PUBLIC', text: 'Can you help?' }).ok).toBe(true);
+        expect(b.send({ fromAgentId: 'PUBLIC', toAgentId: 'PRIVATE', text: 'Yes.' }).ok).toBe(true);
+    });
+
     it('delivers a DM to a discoverable peer and rejects an invisible one', () => {
         const b = fresh();
         b.join(input({ agentId: 'A', workspaceId: 'w1' }));
