@@ -1455,6 +1455,29 @@ export function runMigrations(d: Database.Database): void {
                 `);
             },
         },
+        {
+            // v52 — an AMS agent is not ready until its harness-native message
+            // transport has completed its own handshake. PTY input is never an
+            // AgentInbox transport.
+            version: 52,
+            runner: (db) => {
+                const columns = new Set(
+                    db.prepare<[], { name: string }>('PRAGMA table_info(workspace_agents)')
+                        .all()
+                        .map((row) => row.name),
+                );
+                if (!columns.has('transport')) {
+                    db.exec(`ALTER TABLE workspace_agents ADD COLUMN transport TEXT
+                        CHECK (transport IN ('claude-channel','codex-app-server'))`);
+                }
+                if (!columns.has('transport_verified_at')) {
+                    db.exec('ALTER TABLE workspace_agents ADD COLUMN transport_verified_at INTEGER');
+                }
+                if (!columns.has('transport_error')) {
+                    db.exec('ALTER TABLE workspace_agents ADD COLUMN transport_error TEXT');
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -1859,6 +1882,7 @@ export function setSettings(patch: Partial<Settings>): Settings {
 
 export type WorkspaceAgentRole = 'workspace' | 'specialized' | 'gapp';
 export type WorkspaceAgentReachability = 'workspace' | 'workstation' | 'hidden';
+export type WorkspaceAgentTransport = 'claude-channel' | 'codex-app-server';
 
 /** A first-class AMS configuration. Its terminal binding is intentionally nullable. */
 export interface WorkspaceAgentRow {
@@ -1876,6 +1900,9 @@ export interface WorkspaceAgentRow {
     reachability: WorkspaceAgentReachability;
     wake_on_dm: number;
     ready_at: number | null;
+    transport: WorkspaceAgentTransport | null;
+    transport_verified_at: number | null;
+    transport_error: string | null;
     created_at: number;
     updated_at: number;
 }
@@ -2000,7 +2027,7 @@ export function getWorkspaceAgent(
 }
 
 export function createWorkspaceAgent(
-    row: Omit<WorkspaceAgentRow, 'created_at' | 'updated_at' | 'ready_at' | 'terminal_spec_id'> & {
+    row: Omit<WorkspaceAgentRow, 'created_at' | 'updated_at' | 'ready_at' | 'terminal_spec_id' | 'transport' | 'transport_verified_at' | 'transport_error'> & {
         ready_at?: number | null;
         terminal_spec_id?: string | null;
     },
@@ -2046,7 +2073,7 @@ export function markWorkspaceAgentReadyByTerminal(
     database
         .prepare(
             `UPDATE workspace_agents SET ready_at = ?, updated_at = ?
-             WHERE terminal_spec_id = ?`,
+             WHERE terminal_spec_id = ? AND transport_verified_at IS NOT NULL`,
         )
         .run(readyAt, readyAt, terminalSpecId);
     return database
@@ -2054,6 +2081,30 @@ export function markWorkspaceAgentReadyByTerminal(
             'SELECT * FROM workspace_agents WHERE terminal_spec_id = ?',
         )
         .get(terminalSpecId);
+}
+
+export function markWorkspaceAgentTransportState(
+    database: Database.Database,
+    agentId: string,
+    transport: WorkspaceAgentTransport,
+    result: { ok: true; at?: number } | { ok: false; error: string },
+): WorkspaceAgentRow | undefined {
+    const now = result.ok ? (result.at ?? Date.now()) : Date.now();
+    database.prepare(
+        `UPDATE workspace_agents
+         SET transport = ?, transport_verified_at = ?, transport_error = ?,
+             ready_at = NULL, updated_at = ?
+         WHERE id = ?`,
+    ).run(
+        transport,
+        result.ok ? now : null,
+        result.ok ? null : result.error.trim(),
+        now,
+        agentId,
+    );
+    return database.prepare<[string], WorkspaceAgentRow>(
+        'SELECT * FROM workspace_agents WHERE id = ?',
+    ).get(agentId);
 }
 
 export function deleteWorkspaceAgent(agentId: string): void {

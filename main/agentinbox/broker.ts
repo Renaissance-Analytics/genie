@@ -252,6 +252,15 @@ export class AgentInboxBroker {
      */
     private notifySink: ((target: AgentInboxNotifyTarget, msg: AgentInboxMessage) => void) | null =
         null;
+    /** Harness-native agent delivery (Claude Channel / Codex App Server).
+     * This is deliberately separate from wakeSink: AgentInbox never owns PTY input. */
+    private transportSink: ((target: AgentInboxNotifyTarget, msg: AgentInboxMessage) => boolean | void) | null = null;
+
+    setTransportSink(
+        fn: (target: AgentInboxNotifyTarget, msg: AgentInboxMessage) => boolean | void,
+    ): void {
+        this.transportSink = fn;
+    }
 
     setNotifySink(fn: (target: AgentInboxNotifyTarget, msg: AgentInboxMessage) => void): void {
         this.notifySink = fn;
@@ -1033,6 +1042,22 @@ export class AgentInboxBroker {
         );
     }
 
+    private deliverToHarness(agent: AgentInboxAgent, msg: AgentInboxMessage): void {
+        if (!this.transportSink) return;
+        try {
+            this.transportSink(
+                {
+                    workspaceId: agent.workspaceId,
+                    terminalId: agent.terminalId,
+                    agentId: agent.agentId,
+                },
+                msg,
+            );
+        } catch {
+            /* durable inbox remains queued; there is never a PTY fallback */
+        }
+    }
+
     /** Whether `caller` may DM `target`, including replies in an existing thread. */
     private reachable(caller: AgentInboxAgent, target: AgentInboxAgent): boolean {
         if (caller.agentId === target.agentId) return true;
@@ -1193,12 +1218,9 @@ export class AgentInboxBroker {
             // Server-push: nudge the recipient's MCP GET stream (if it has one)
             // so a connected, waiting agent sees the DM without re-polling.
             this.notifyDelivery(target, msg);
-            // Tell the recipient NOW (beta.248) — mid-turn is fine, a TUI queues
-            // it; only the human's own draft holds it back. Carries the urgency
-            // so the agent can decide whether to break flow. When it lands it IS
-            // the wake, so the opt-in idle nudge is only the FALLBACK for a notice
-            // held back by a human mid-draft.
-            if (!this.notifyNow(target, msg)) this.maybeWake(target);
+            this.deliverToHarness(target, msg);
+            // The native harness transport owns live delivery. Failure leaves
+            // the durable message queued; PTY input is never a fallback.
             if (input.interrupt) {
                 if (target.terminalId) {
                     this.emit({ type: 'interrupt', terminalId: target.terminalId });
@@ -1259,11 +1281,7 @@ export class AgentInboxBroker {
                 if (!member) continue;
                 this.push(member, msg);
                 this.notifyDelivery(member, msg);
-                // Channels get the same immediate notice as DMs (beta.248): the
-                // owner's ask is "a message to any channel or DM the agent has
-                // access to", and a room posting that nobody hears until their
-                // next idle moment is the same deafness in a different shape.
-                this.notifyNow(member, msg);
+                this.deliverToHarness(member, msg);
                 delivered++;
             }
             this.appendLog(this.channelLogs, key, msg);

@@ -151,6 +151,23 @@ describe('AgentInboxBroker — discovery scopes', () => {
 });
 
 describe('AgentInboxBroker — direct messages', () => {
+    it('delivers agent mail through the native harness transport and never the PTY wake sink', () => {
+        const b = fresh();
+        const native = vi.fn(() => true);
+        const pty = vi.fn(() => true);
+        b.setTransportSink(native);
+        b.setWakeSink(pty);
+        b.join(input({ agentId: 'A', workspaceId: 'w1' }));
+        b.join(input({ agentId: 'B', workspaceId: 'w1' }));
+
+        expect(b.send({ fromAgentId: 'A', toAgentId: 'B', text: 'native only' }).ok).toBe(true);
+        expect(native).toHaveBeenCalledWith(
+            expect.objectContaining({ agentId: 'B', terminalId: 't-B' }),
+            expect.objectContaining({ text: 'native only' }),
+        );
+        expect(pty).not.toHaveBeenCalled();
+    });
+
     it('lets a private agent initiate outward and the recipient reply in that durable thread', () => {
         const b = fresh();
         b.join(input({ agentId: 'PRIVATE', workspaceId: 'w1', scope: 'self' }));

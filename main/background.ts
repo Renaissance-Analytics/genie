@@ -98,6 +98,7 @@ import {
 } from './terminal/ipc';
 import { installAgentInboxPresence } from './agentinbox/presence';
 import { agentInboxBroker } from './agentinbox/broker';
+import { harnessTransportRegistry } from './agentinbox/harness-transport';
 import { deliverNudge, type NudgeIO } from './agentinbox/nudge-delivery';
 import { dbAgentInboxStore } from './agentinbox/store';
 import { getWorkspaceAgentAccess } from './db';
@@ -1365,6 +1366,16 @@ app.whenReady().then(async () => {
         });
         agentInboxBroker.setPendingNudgeSink(({ terminalId, pending }) => {
             announceInboxIncoming(terminalId, false, pending);
+        });
+        agentInboxBroker.setTransportSink((target, msg) => {
+            void harnessTransportRegistry.deliver(target.agentId, {
+                text: msg.text,
+                messageId: msg.id,
+                from: msg.from,
+                fromLabel: msg.fromLabel,
+                priority: msg.interrupt ? 'high' : 'normal',
+            });
+            return true;
         });
         // AgentInbox OUTER tier: the broker asks the workspaces table who may reach
         // into a given workspace. Kept a seam so the broker stays db-free (and

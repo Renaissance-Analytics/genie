@@ -12,6 +12,7 @@ import {
     createWorkspaceTodo,
     resolveUserTodo,
     listWorkspaceTodos,
+    markWorkspaceAgentTransportState,
 } from '../db';
 
 /**
@@ -1721,11 +1722,40 @@ describe('v50 — first-class AMS agents', () => {
             `UPDATE workspace_agents SET terminal_spec_id = 'term-ready'
              WHERE workspace_id = 'ws-ready' AND role = 'workspace'`,
         ).run();
+        markWorkspaceAgentTransportState(
+            db,
+            'workspace:ws-ready',
+            'codex-app-server',
+            { ok: true, at: 1200 },
+        );
 
         const marked = markWorkspaceAgentReadyByTerminal(db, 'term-ready', 1234);
 
         expect(marked?.id).toBe('workspace:ws-ready');
         expect(marked?.ready_at).toBe(1234);
+    });
+
+    it('refuses readiness until the harness-native transport is verified', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        db.prepare(
+            `INSERT INTO workspaces
+                (id, tynn_project_id, tynn_project_name, project_id, project_name,
+                 shape, path, sort_order)
+             VALUES ('ws-unverified', 'p', 'P', 'p', 'P', 'simple', '/tmp/p', 0)`,
+        ).run();
+        ensureWorkspaceAgent(db, 'ws-unverified', 1);
+        db.prepare(
+            `INSERT INTO terminal_specs
+                (id, workspace_id, label, cwd, args_json, env_json, sort_order, created_at)
+             VALUES ('term-unverified', 'ws-unverified', 'agent', '/tmp/p', '[]', '{}', 0, 'now')`,
+        ).run();
+        db.prepare(
+            `UPDATE workspace_agents SET terminal_spec_id = 'term-unverified'
+             WHERE id = 'workspace:ws-unverified'`,
+        ).run();
+
+        expect(markWorkspaceAgentReadyByTerminal(db, 'term-unverified', 999)?.ready_at).toBeNull();
     });
 });
 
@@ -1779,5 +1809,66 @@ describe('v51 — bounded short-term AMS todos', () => {
             `SELECT action, comment FROM workspace_todo_events WHERE todo_id = '${made.todo.id}'`,
         ).get();
         expect(event).toEqual({ action: 'refused', comment: 'Use the staging account instead.' });
+    });
+});
+
+describe('v52 — harness transport verification', () => {
+    it('persists the required transport separately from readiness', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        const columns = cols(db, 'workspace_agents');
+        for (const column of ['transport', 'transport_verified_at', 'transport_error']) {
+            expect(columns.has(column), column).toBe(true);
+        }
+    });
+
+    it('records a successful Claude Channel or Codex App Server handshake', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        db.prepare(
+            `INSERT INTO workspaces
+                (id, tynn_project_id, tynn_project_name, project_id, project_name,
+                 shape, path, sort_order)
+             VALUES ('ws-transport', 'p', 'P', 'p', 'P', 'simple', '/tmp/p', 0)`,
+        ).run();
+        ensureWorkspaceAgent(db, 'ws-transport', 1);
+
+        const row = markWorkspaceAgentTransportState(
+            db,
+            'workspace:ws-transport',
+            'claude-channel',
+            { ok: true, at: 456 },
+        );
+        expect(row).toMatchObject({
+            transport: 'claude-channel',
+            transport_verified_at: 456,
+            transport_error: null,
+            ready_at: null,
+        });
+    });
+
+    it('keeps a failed handshake unready and stores the actionable failure', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        db.prepare(
+            `INSERT INTO workspaces
+                (id, tynn_project_id, tynn_project_name, project_id, project_name,
+                 shape, path, sort_order)
+             VALUES ('ws-failed', 'p', 'P', 'p', 'P', 'simple', '/tmp/p', 0)`,
+        ).run();
+        ensureWorkspaceAgent(db, 'ws-failed', 1);
+
+        const row = markWorkspaceAgentTransportState(
+            db,
+            'workspace:ws-failed',
+            'codex-app-server',
+            { ok: false, error: 'initialize timed out' },
+        );
+        expect(row).toMatchObject({
+            transport: 'codex-app-server',
+            transport_verified_at: null,
+            transport_error: 'initialize timed out',
+            ready_at: null,
+        });
     });
 });
