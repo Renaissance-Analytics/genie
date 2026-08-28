@@ -48,6 +48,10 @@ export class HarnessTransportRegistry {
         return !!session && (kind === undefined || session.kind === kind);
     }
 
+    kindFor(agentId: string): WorkspaceAgentTransport | null {
+        return this.sessions.get(agentId)?.kind ?? null;
+    }
+
     deliver(
         agentId: string,
         payload: HarnessTransportPayload,

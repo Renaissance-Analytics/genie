@@ -76,6 +76,11 @@ class WsSocket implements CodexAppServerSocket {
     onMessage(listener: (data: string) => void): void {
         this.socket.on('message', (data) => listener(data.toString()));
     }
+
+    onClose(listener: (error?: Error) => void): void {
+        this.socket.once('close', () => listener());
+        this.socket.once('error', (error) => listener(error));
+    }
 }
 
 export interface RunningCodexAppServer {

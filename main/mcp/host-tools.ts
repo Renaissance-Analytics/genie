@@ -2181,8 +2181,15 @@ export async function agentInboxForMcp(
                     cursor: req.cursor,
                     wait: req.wait,
                     timeoutMs: req.timeoutMs,
+                    acknowledge: req.acknowledge,
                 });
                 return { ok: true, messages, cursor };
+            }
+            case 'acknowledge': {
+                if (typeof req.cursor !== 'number' || !agentInboxBroker.acknowledge(agentId, req.cursor)) {
+                    return { ok: false, error: 'acknowledge requires a valid delivered cursor.' };
+                }
+                return { ok: true, cursor: req.cursor };
             }
             case 'receipts': {
                 // Read-receipts for the caller's sent DMs: `seen` once the recipient's

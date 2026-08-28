@@ -84,6 +84,12 @@ function write(message) {
     process.stdout.write(JSON.stringify(message) + '\\n');
 }
 
+function writeAccepted(message) {
+    return new Promise((resolve, reject) => {
+        process.stdout.write(JSON.stringify(message) + '\\n', (error) => error ? reject(error) : resolve());
+    });
+}
+
 function decodeRpc(body) {
     const lines = body.split(/\\r?\\n/).filter((line) => line.startsWith('data:'));
     const raw = lines.length ? lines.at(-1).slice(5).trim() : body.trim();
@@ -117,10 +123,11 @@ async function agentInbox(args) {
 async function deliver() {
     await agentInbox({ action: 'registerTransport', transport: 'claude-channel' });
     while (!stopped) {
-        const result = await agentInbox({ action: 'receive', cursor, wait: true, timeoutMs: 240000 });
-        cursor = Number(result.cursor || cursor);
+        const result = await agentInbox({
+            action: 'receive', cursor, wait: true, timeoutMs: 240000, acknowledge: false
+        });
         for (const message of result.messages || []) {
-            write({
+            await writeAccepted({
                 jsonrpc: '2.0',
                 method: 'notifications/claude/channel',
                 params: {
@@ -133,6 +140,8 @@ async function deliver() {
                     },
                 },
             });
+            cursor = Number(message.seq || cursor);
+            await agentInbox({ action: 'acknowledge', cursor });
         }
     }
 }

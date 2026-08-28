@@ -142,7 +142,8 @@ describe('the guide documents attachments', () => {
     it('documents every action the tool accepts', async () => {
         const { properties } = await agentInboxSchema();
         for (const action of properties.action.enum ?? []) {
-            if (action === 'registerSession') continue; // hook-only, deliberately undocumented
+            if (action === 'registerSession' || action === 'acknowledge') continue;
+            // Both are native-adapter-only and deliberately undocumented to agents.
             expect(
                 GENIE_MCP_GUIDE,
                 `the guide never mentions the \`${action}\` action — an agent cannot use what it is not told about`,

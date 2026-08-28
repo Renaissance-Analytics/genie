@@ -132,6 +132,24 @@ describe('AgentInboxBroker — discovery scopes', () => {
 });
 
 describe('AgentInboxBroker — direct messages', () => {
+    it('ACKs live native delivery only after the harness accepts it', async () => {
+        const b = fresh();
+        b.join(input({ agentId: 'A' }));
+        b.join(input({ agentId: 'B' }));
+        let accept!: () => void;
+        b.setTransportSink(() => new Promise<boolean>((resolve) => {
+            accept = () => resolve(true);
+        }));
+
+        b.send({ fromAgentId: 'A', toAgentId: 'B', text: 'durable until accepted' });
+        expect(b.unreadForTerminal('t-B').count).toBe(1);
+
+        accept();
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(b.unreadForTerminal('t-B').count).toBe(0);
+    });
+
     it('delivers Genie lifecycle notices as durable no-reply system mail', async () => {
         const b = fresh();
         b.join(input({ agentId: 'A' }));
@@ -250,6 +268,20 @@ describe('AgentInboxBroker — identity updates', () => {
 });
 
 describe('AgentInboxBroker — cursor + inbox', () => {
+    it('does not mark a native-transport fetch seen until the adapter explicitly acknowledges it', async () => {
+        const b = fresh();
+        b.join(input({ agentId: 'A' }));
+        b.join(input({ agentId: 'B' }));
+        b.send({ fromAgentId: 'A', toAgentId: 'B', text: 'accept me first' });
+
+        const fetched = await b.receive('B', { cursor: 0, acknowledge: false });
+        expect(b.unreadForTerminal('t-B').count).toBe(1);
+
+        b.acknowledge('B', fetched.cursor);
+        expect(b.unreadForTerminal('t-B').count).toBe(0);
+        expect(b.acknowledge('B', fetched.cursor + 10_000)).toBe(false);
+    });
+
     it('pages by cursor monotonically', async () => {
         const b = fresh();
         b.join(input({ agentId: 'A' }));

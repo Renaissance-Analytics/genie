@@ -219,10 +219,10 @@ export class AgentInboxBroker {
         null;
     /** Harness-native agent delivery (Claude Channel / Codex App Server).
      * This is deliberately separate from wakeSink: AgentInbox never owns PTY input. */
-    private transportSink: ((target: AgentInboxNotifyTarget, msg: AgentInboxMessage) => boolean | void) | null = null;
+    private transportSink: ((target: AgentInboxNotifyTarget, msg: AgentInboxMessage) => boolean | Promise<boolean> | void) | null = null;
 
     setTransportSink(
-        fn: (target: AgentInboxNotifyTarget, msg: AgentInboxMessage) => boolean | void,
+        fn: (target: AgentInboxNotifyTarget, msg: AgentInboxMessage) => boolean | Promise<boolean> | void,
     ): void {
         this.transportSink = fn;
     }
@@ -836,7 +836,7 @@ export class AgentInboxBroker {
     private deliverToHarness(agent: AgentInboxAgent, msg: AgentInboxMessage): void {
         if (!this.transportSink) return;
         try {
-            this.transportSink(
+            const accepted = this.transportSink(
                 {
                     workspaceId: agent.workspaceId,
                     terminalId: agent.terminalId,
@@ -844,9 +844,27 @@ export class AgentInboxBroker {
                 },
                 msg,
             );
+            if (accepted && typeof (accepted as Promise<boolean>).then === 'function') {
+                void Promise.resolve(accepted).then((ok) => {
+                    if (ok) this.acknowledge(agent.agentId, msg.seq);
+                }).catch(() => {});
+            } else if (accepted === true) {
+                this.acknowledge(agent.agentId, msg.seq);
+            }
         } catch {
             /* durable inbox remains queued; there is never a PTY fallback */
         }
+    }
+
+    /** Commit native-harness acceptance after a non-acknowledging fetch. */
+    acknowledge(agentId: string, cursor: number): boolean {
+        const agent = this.agents.get(agentId);
+        const highestDelivered = agent?.inbox.at(-1)?.seq ?? agent?.cursor ?? 0;
+        if (!agent || !Number.isInteger(cursor) || cursor < 0 || cursor > highestDelivered) {
+            return false;
+        }
+        this.ackCursor(agent, cursor);
+        return true;
     }
 
     /** Whether `caller` may DM `target`, including replies in an existing thread. */
@@ -1046,7 +1064,7 @@ export class AgentInboxBroker {
      */
     receive(
         agentId: string,
-        opts: { cursor?: number; wait?: boolean; timeoutMs?: number } = {},
+        opts: { cursor?: number; wait?: boolean; timeoutMs?: number; acknowledge?: boolean } = {},
     ): Promise<{ messages: AgentInboxMessage[]; cursor: number }> {
         const agent = this.agents.get(agentId);
         const cursor = opts.cursor ?? 0;
@@ -1058,7 +1076,7 @@ export class AgentInboxBroker {
 
         if (pending.length > 0 || !opts.wait) {
             const c = nextCursor(pending);
-            this.ackCursor(agent, c);
+            if (opts.acknowledge !== false) this.ackCursor(agent, c);
             return Promise.resolve({ messages: pending, cursor: c });
         }
 
@@ -1071,7 +1089,7 @@ export class AgentInboxBroker {
         return new Promise((resolve) => {
             const finish = (msgs: AgentInboxMessage[]): void => {
                 const c = nextCursor(msgs);
-                this.ackCursor(agent, c);
+                if (opts.acknowledge !== false) this.ackCursor(agent, c);
                 resolve({ messages: msgs, cursor: c });
             };
             const timer = setTimeout(() => {

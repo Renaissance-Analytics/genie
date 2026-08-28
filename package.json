@@ -4,6 +4,9 @@
   "description": "Tynn desktop companion — tray-resident workspace manager",
   "private": true,
   "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22"
+  },
   "main": "app/background.js",
   "scripts": {
     "dev": "nextron",

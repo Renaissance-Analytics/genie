@@ -1376,14 +1376,19 @@ app.whenReady().then(async () => {
             announceInboxIncoming(terminalId, false, pending);
         });
         agentInboxBroker.setTransportSink((target, msg) => {
-            void harnessTransportRegistry.deliver(target.agentId, {
+            // Claude Channels pull from the durable inbox and ACK only after
+            // stdout accepts the notification. Codex is host-pushed and its
+            // delivery promise resolves only after App Server accepts turn/start.
+            if (harnessTransportRegistry.kindFor(target.agentId) !== 'codex-app-server') {
+                return false;
+            }
+            return Promise.resolve(harnessTransportRegistry.deliver(target.agentId, {
                 text: msg.text,
                 messageId: msg.id,
                 from: msg.from,
                 fromLabel: msg.fromLabel,
                 priority: msg.interrupt ? 'high' : 'normal',
-            });
-            return true;
+            })).then((result) => result.ok);
         });
         // AgentInbox OUTER tier: the broker asks the workspaces table who may reach
         // into a given workspace. Kept a seam so the broker stays db-free (and

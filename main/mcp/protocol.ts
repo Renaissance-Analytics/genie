@@ -1374,6 +1374,7 @@ export interface AgentInboxRequest {
         | 'saveAttachment'
         | 'registerSession'
         | 'registerTransport'
+        | 'acknowledge'
         | 'setAccessibility';
     /** send: DM this agent id. */
     to?: string;
@@ -1387,6 +1388,8 @@ export interface AgentInboxRequest {
     wait?: boolean;
     /** receive (optional): long-poll window in ms (default ~55s, capped). */
     timeoutMs?: number;
+    /** Native adapters fetch without ACK, then acknowledge after harness acceptance. */
+    acknowledge?: boolean;
     /** setAccessibility: who can see/DM you. */
     scope?: AgentInboxScope;
     /** setAccessibility (scope `specific`): the workspace ids you're visible to. */
@@ -2338,6 +2341,7 @@ const AGENTINBOX_TOOL = {
                     'saveAttachment',
                     'registerSession',
                     'registerTransport',
+                    'acknowledge',
                     'setAccessibility',
                 ],
                 description: 'What to do.',
@@ -2394,7 +2398,11 @@ const AGENTINBOX_TOOL = {
             },
             cursor: {
                 type: 'number',
-                description: 'receive (optional): page from this cursor (a prior receive returned it).',
+                description: 'receive: page from this cursor; acknowledge: commit this cursor after native harness acceptance.',
+            },
+            acknowledge: {
+                type: 'boolean',
+                description: 'receive (internal native adapters): false fetches without advancing the durable read cursor.',
             },
             wait: {
                 type: 'boolean',
@@ -3801,12 +3809,13 @@ export async function handleMcpMessage(
                     action !== 'saveAttachment' &&
                     action !== 'registerSession' &&
                     action !== 'registerTransport' &&
+                    action !== 'acknowledge' &&
                     action !== 'setAccessibility'
                 ) {
                     return err(
                         msg.id,
                         -32602,
-                        'agentinbox requires `action`: list | send | receive | receipts | saveAttachment | registerSession | registerTransport | setAccessibility.',
+                        'agentinbox requires `action`: list | send | receive | receipts | saveAttachment | registerSession | registerTransport | acknowledge | setAccessibility.',
                     );
                 }
                 const result = await ctx.agentInbox(ctx.terminalId, {
@@ -3817,6 +3826,7 @@ export async function handleMcpMessage(
                     cursor: a.cursor,
                     wait: a.wait,
                     timeoutMs: a.timeoutMs,
+                    acknowledge: a.acknowledge,
                     scope: a.scope,
                     workspaces: a.workspaces,
                     purpose: a.purpose,

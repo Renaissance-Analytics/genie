@@ -701,7 +701,7 @@ export function createAgentTerminal(opts: {
                 );
             }
             deliverAgentLaunch(id, codexRemoteTuiLaunch(command, running.address));
-            const backlog = await agentInboxBroker.receive(agentId!);
+            const backlog = await agentInboxBroker.receive(agentId!, { acknowledge: false });
             for (const message of backlog.messages) {
                 await running.session.deliver({
                     text: message.text,
@@ -710,6 +710,7 @@ export function createAgentTerminal(opts: {
                     fromLabel: message.fromLabel,
                     priority: message.interrupt ? 'high' : 'normal',
                 });
+                agentInboxBroker.acknowledge(agentId!, message.seq);
             }
         }).catch((error: unknown) => {
             const configured = configuredAgent();

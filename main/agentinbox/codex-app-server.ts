@@ -3,6 +3,7 @@ import type { HarnessTransportPayload } from './harness-transport';
 export interface CodexAppServerSocket {
     send(data: string): void;
     onMessage(listener: (data: string) => void): void;
+    onClose(listener: (error?: Error) => void): void;
 }
 
 interface RpcResponse {
@@ -16,6 +17,20 @@ interface RpcResponse {
 interface PendingRequest {
     resolve(value: unknown): void;
     reject(error: Error): void;
+    timer: ReturnType<typeof setTimeout>;
+}
+
+interface QueuedDelivery {
+    payload: HarnessTransportPayload;
+    bytes: number;
+    resolve(): void;
+    reject(error: Error): void;
+}
+
+export interface CodexAgentInboxSessionOptions {
+    requestTimeoutMs?: number;
+    maxQueuedMessages?: number;
+    maxQueuedBytes?: number;
 }
 
 /**
@@ -29,13 +44,26 @@ interface PendingRequest {
 export class CodexAgentInboxSession {
     private nextId = 1;
     private pending = new Map<number, PendingRequest>();
-    private queue: HarnessTransportPayload[] = [];
+    private queue: QueuedDelivery[] = [];
+    private queuedBytes = 0;
     private deliveredMessageIds = new Set<string>();
+    private inFlightMessageIds = new Map<string, Promise<void>>();
     private busy = true;
     private currentThreadId: string | null = null;
 
-    constructor(private readonly socket: CodexAppServerSocket) {
+    private readonly requestTimeoutMs: number;
+    private readonly maxQueuedMessages: number;
+    private readonly maxQueuedBytes: number;
+
+    constructor(
+        private readonly socket: CodexAppServerSocket,
+        options: CodexAgentInboxSessionOptions = {},
+    ) {
+        this.requestTimeoutMs = Math.max(1, options.requestTimeoutMs ?? 10_000);
+        this.maxQueuedMessages = Math.max(1, options.maxQueuedMessages ?? 100);
+        this.maxQueuedBytes = Math.max(1, options.maxQueuedBytes ?? 1024 * 1024);
         socket.onMessage((data) => this.handleMessage(data));
+        socket.onClose((error) => this.close(error ?? new Error('Codex App Server connection closed.')));
     }
 
     get threadId(): string | null {
@@ -68,18 +96,36 @@ export class CodexAgentInboxSession {
         if (!this.currentThreadId) throw new Error('Codex App Server session is not initialized.');
         const messageId = typeof payload.messageId === 'string' ? payload.messageId : null;
         if (messageId && this.deliveredMessageIds.has(messageId)) return;
-        if (messageId) {
+        if (messageId && this.inFlightMessageIds.has(messageId)) {
+            return this.inFlightMessageIds.get(messageId)!;
+        }
+        const delivery = this.accept(payload);
+        if (messageId) this.inFlightMessageIds.set(messageId, delivery);
+        try {
+            await delivery;
+            if (!messageId) return;
             this.deliveredMessageIds.add(messageId);
             if (this.deliveredMessageIds.size > 1_000) {
                 const oldest = this.deliveredMessageIds.values().next().value as string | undefined;
                 if (oldest) this.deliveredMessageIds.delete(oldest);
             }
+        } finally {
+            if (messageId) this.inFlightMessageIds.delete(messageId);
         }
+    }
+
+    private accept(payload: HarnessTransportPayload): Promise<void> {
         if (this.busy) {
-            this.queue.push(payload);
-            return;
+            const bytes = Buffer.byteLength(JSON.stringify(payload), 'utf8');
+            if (this.queue.length >= this.maxQueuedMessages || this.queuedBytes + bytes > this.maxQueuedBytes) {
+                return Promise.reject(new Error('Codex App Server delivery queue is at capacity.'));
+            }
+            return new Promise<void>((resolve, reject) => {
+                this.queue.push({ payload, bytes, resolve, reject });
+                this.queuedBytes += bytes;
+            });
         }
-        await this.startTurn(payload);
+        return this.startTurn(payload);
     }
 
     private async startTurn(payload: HarnessTransportPayload): Promise<void> {
@@ -100,9 +146,8 @@ export class CodexAgentInboxSession {
         if (this.busy) return;
         const next = this.queue.shift();
         if (!next) return;
-        void this.startTurn(next).catch(() => {
-            this.queue.unshift(next);
-        });
+        this.queuedBytes -= next.bytes;
+        void this.startTurn(next.payload).then(next.resolve, next.reject);
     }
 
     private handleMessage(data: string): void {
@@ -116,6 +161,7 @@ export class CodexAgentInboxSession {
             const request = this.pending.get(message.id);
             if (!request) return;
             this.pending.delete(message.id);
+            clearTimeout(request.timer);
             if (message.error) {
                 request.reject(new Error(message.error.message || 'Codex App Server request failed.'));
             } else {
@@ -134,9 +180,30 @@ export class CodexAgentInboxSession {
     private request(method: string, params: Record<string, unknown>): Promise<unknown> {
         const id = this.nextId++;
         return new Promise((resolve, reject) => {
-            this.pending.set(id, { resolve, reject });
-            this.socket.send(JSON.stringify({ jsonrpc: '2.0', id, method, params }));
+            const timer = setTimeout(() => {
+                this.pending.delete(id);
+                reject(new Error(`Codex App Server request ${method} timed out.`));
+            }, this.requestTimeoutMs);
+            this.pending.set(id, { resolve, reject, timer });
+            try {
+                this.socket.send(JSON.stringify({ jsonrpc: '2.0', id, method, params }));
+            } catch (error) {
+                clearTimeout(timer);
+                this.pending.delete(id);
+                reject(error instanceof Error ? error : new Error(String(error)));
+            }
         });
+    }
+
+    private close(error: Error): void {
+        for (const request of this.pending.values()) {
+            clearTimeout(request.timer);
+            request.reject(error);
+        }
+        this.pending.clear();
+        for (const queued of this.queue.splice(0)) queued.reject(error);
+        this.queuedBytes = 0;
+        this.busy = true;
     }
 
     private notify(method: string, params: Record<string, unknown>): void {
