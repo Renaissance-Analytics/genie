@@ -3475,8 +3475,8 @@ function AppsSection() {
 
             <SettingRow
                 label="Install from a folder"
-                desc="Choose a folder containing a genie-app.json. Genie validates it, asks what to allow, then creates its workspace and serves it."
-                keywords="install genie app gapp folder genie-app.json"
+                desc="Choose a folder containing a gapp.json. Genie validates it, asks what to allow, then creates its workspace and serves it."
+                keywords="install genie app gapp folder gapp.json"
             >
                 <Action icon="folder" disabled={busy} onClick={() => void install(false)}>
                     Install an app…

@@ -28,13 +28,15 @@ import {
     GitHubErrorNotice,
 } from './GitHubConnect';
 import { useGithubCapabilities } from '../lib/githubCapabilities';
+import { ADD_WORKSPACE_SOURCES, tynnWorkspaceSource, type AddWorkspaceSourceId } from '../lib/workspace-onboarding';
 
 type Stage =
-    | 'shape'
+    | 'source'
     | 'simple'
     | 'agi-pick'
     | 'agi-create'
     | 'agi-import'
+    | 'tynn-import'
     | 'agi-convert'
     | 'agi-interactive'
     | 'done';
@@ -45,7 +47,7 @@ interface Props {
 }
 
 export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
-    const [stage, setStage] = useState<Stage>('shape');
+    const [stage, setStage] = useState<Stage>('source');
     const [projects, setProjects] = useState<TynnProject[]>([]);
     const [loadingProjects, setLoadingProjects] = useState(true);
 
@@ -72,13 +74,17 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
                 </span>
             </Modal.Header>
             <Modal.Body>
-                {stage === 'shape' && <ShapePicker onPick={setStage} />}
+                {stage === 'source' && <ManagedSourcePicker onPick={(source) => {
+                    if (source === 'new') setStage('agi-create');
+                    else if (source === 'tynn') setStage('tynn-import');
+                    else setStage('agi-interactive');
+                }} />}
                 {stage === 'simple' && (
                     <SimpleWizard
                         projects={projects}
                         loadingProjects={loadingProjects}
                         onProjectCreated={onProjectCreated}
-                        onCancel={() => setStage('shape')}
+                        onCancel={() => setStage('source')}
                         onCreated={(row) => {
                             onAdded(row);
                             setStage('done');
@@ -92,14 +98,14 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
                         onImport={() => setStage('agi-import')}
                         onConvert={() => setStage('agi-convert')}
                         onInteractive={() => setStage('agi-interactive')}
-                        onBack={() => setStage('shape')}
+                        onBack={() => setStage('source')}
                     />
                 )}
                 {stage === 'agi-interactive' && (
                     <InteractiveUpgradeWizard
                         projects={projects}
                         loadingProjects={loadingProjects}
-                        onCancel={() => setStage('agi-pick')}
+                        onCancel={() => setStage('source')}
                         onCreated={(row) => {
                             onAdded(row);
                             setStage('done');
@@ -112,7 +118,7 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
                         projects={projects}
                         loadingProjects={loadingProjects}
                         onProjectCreated={onProjectCreated}
-                        onCancel={() => setStage('agi-pick')}
+                        onCancel={() => setStage('source')}
                         onCreated={(row) => {
                             onAdded(row);
                             setStage('done');
@@ -125,7 +131,7 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
                         projects={projects}
                         loadingProjects={loadingProjects}
                         onProjectCreated={onProjectCreated}
-                        onCancel={() => setStage('agi-pick')}
+                        onCancel={() => setStage('source')}
                         onCreated={(row) => {
                             onAdded(row);
                             setStage('done');
@@ -138,7 +144,19 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
                         projects={projects}
                         loadingProjects={loadingProjects}
                         onProjectCreated={onProjectCreated}
-                        onCancel={() => setStage('agi-pick')}
+                        onCancel={() => setStage('source')}
+                        onCreated={(row) => {
+                            onAdded(row);
+                            setStage('done');
+                            onClose();
+                        }}
+                    />
+                )}
+                {stage === 'tynn-import' && (
+                    <TynnImportWizard
+                        projects={projects}
+                        loading={loadingProjects}
+                        onCancel={() => setStage('source')}
                         onCreated={(row) => {
                             onAdded(row);
                             setStage('done');
@@ -148,6 +166,123 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
                 )}
             </Modal.Body>
         </Modal>
+    );
+}
+
+function TynnImportWizard({
+    projects,
+    loading,
+    onCancel,
+    onCreated,
+}: {
+    projects: TynnProject[];
+    loading: boolean;
+    onCancel: () => void;
+    onCreated: (row: WorkspaceRow) => void;
+}) {
+    const available = projects.filter((project) => tynnWorkspaceSource(project));
+    const [projectId, setProjectId] = useState('');
+    const [parent, setParent] = useState('');
+    const [submitting, setSubmitting] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    useEffect(() => {
+        void api().settings.get().then((settings) => setParent(settings.primary_workspace ?? ''));
+    }, []);
+
+    const chooseParent = async () => {
+        const picked = await pickPath({ mode: 'directory', title: 'Choose where to clone the workspace' });
+        if (picked) setParent(picked);
+    };
+
+    const submit = async () => {
+        const project = available.find((candidate) => candidate.id === projectId);
+        const source = project ? tynnWorkspaceSource(project) : null;
+        if (!project || !source) return;
+        if (!parent.trim()) {
+            setError('Choose where this workspace should live.');
+            return;
+        }
+        setSubmitting(true);
+        setError(null);
+        try {
+            const cloned = await api().workspaces.clone(source.url, parent.trim());
+            const detection = await api().agi.detect(cloned.path);
+            if (!detection.has_project_json) {
+                throw new Error('Tynn declared this project as a workspace, but its envelope repository has no project.json. Nothing was registered.');
+            }
+            const settings = await api().settings.get();
+            const saved = await api().workspaces.add({
+                id: project.id,
+                backend: project.backend ?? 'tynn',
+                project_id: project.id,
+                project_name: project.name,
+                tynn_project_id: project.id,
+                tynn_project_name: project.name,
+                shape: 'agi',
+                path: cloned.path,
+                editor: null,
+                editor_cmd: null,
+                start_cmd: null,
+                env_file: settings.default_env_file ?? '.env',
+                last_opened_at: null,
+                created_by_genie: 0,
+            });
+            onCreated(saved);
+        } catch (cause) {
+            setError(cause instanceof Error ? cause.message : String(cause));
+        } finally {
+            setSubmitting(false);
+        }
+    };
+
+    return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div>
+                <Heading as="h3" size="sm">Import from Tynn</Heading>
+                <Text size="xs" className="text-zinc-500" style={{ display: 'block', marginTop: 4 }}>
+                    Choose a managed Tynn workspace. Genie clones its declared envelope repository, inspects project.json, then registers it here.
+                </Text>
+            </div>
+            <Select
+                value={projectId}
+                onValueChange={setProjectId}
+                list={available.map((project) => ({ value: project.id, label: project.name }))}
+                placeholder={loading ? 'Loading Tynn workspaces…' : available.length ? 'Choose a workspace…' : 'No importable Tynn workspaces'}
+                aria-label="Tynn workspace"
+            />
+            <FolderRow folder={parent} onChoose={chooseParent} description="The envelope repository will be cloned inside this folder." />
+            {error && <Text size="xs" className="text-rose-500">{error}</Text>}
+            <Footer onCancel={onCancel} onSubmit={() => void submit()} submitting={submitting} label="Inspect and import" disabled={!projectId || !parent.trim()} />
+        </div>
+    );
+}
+
+function ManagedSourcePicker({ onPick }: { onPick: (source: AddWorkspaceSourceId) => void }) {
+    return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div>
+                <Heading as="h3" size="sm">How should Genie start?</Heading>
+                <Text size="xs" className="text-zinc-500" style={{ display: 'block', marginTop: 4 }}>
+                    Every choice is inspected first. Genie shows the workspace plan and only writes after you approve it.
+                </Text>
+            </div>
+            <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(3, 1fr)' }}>
+                {ADD_WORKSPACE_SOURCES.map((source) => (
+                    <Card
+                        key={source.id}
+                        style={{ padding: 16, cursor: 'pointer', minHeight: 150 }}
+                        onClick={() => onPick(source.id)}
+                    >
+                        <Icon name={source.icon as never} size="lg" className="text-violet-500" />
+                        <Heading as="h3" size="sm" style={{ marginTop: 10 }}>{source.title}</Heading>
+                        <Text size="xs" className="text-zinc-500" style={{ display: 'block', marginTop: 6, lineHeight: 1.5 }}>
+                            {source.description}
+                        </Text>
+                    </Card>
+                ))}
+            </div>
+        </div>
     );
 }
 

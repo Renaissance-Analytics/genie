@@ -231,7 +231,7 @@ so **ask**: \`manageGappDev\` with \`action:'status'\`. Every other action repor
 the status too, so a single call always answers "where am I". Actions
 (\`action\`):
 - \`status\` — am I in a GDW; the source folder; the app the folder declares
-  (name, slug, version) or that it has no \`genie-app.json\` yet; any preview
+  (name, slug, version) or that it has no \`gapp.json\` yet; any preview
   open right now.
 - \`check\` — run the **full check suite** over this folder: manifest, files,
   agent roster, services, front end. Deliberately STRICTER than the installer —
@@ -292,6 +292,13 @@ Target a governed workspace with \`workspaceId\`; omit it for your own.
 requires approval (the default) each blocks on an OS modal until the user
 approves; when the user turned approval OFF they run immediately. \`read\` /
 \`list\` never prompt.
+
+### agentUpgrade
+**Move an agent in an old terminal into AMS without replacing its chat.** Call
+\`agentUpgrade\` for the current, ordered migration checklist. It registers the
+durable identity, binds the live harness session, verifies Claude Channels or
+Codex app-server, and finishes with \`thumbsUp(reason:'boot')\`. Never paste an
+upgrade prompt into the terminal input and never mint a duplicate agent.
 
 ### registerAgent
 **Register a durable workspace agent without starting its TUI.** Supply its

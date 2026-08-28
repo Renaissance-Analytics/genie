@@ -53,6 +53,8 @@ export function clean(v: string | null | undefined): string | null {
 const PROVIDER_LABEL: Record<AgentProvider, string> = {
     claude: 'Claude Code',
     codex: 'Codex',
+    kiwi: 'Kiwi Code',
+    genie: 'Genie TUI',
     custom: 'Custom agent',
 };
 

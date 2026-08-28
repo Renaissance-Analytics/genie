@@ -11,6 +11,7 @@ import type { AgentInboxIncomingPayload } from './terminal/ipc';
 // runtime import across the context bridge.
 import type { TypeCounts } from './issue-watch';
 import type { TynnHealth } from './mcp/tynn-health';
+import type { HostToolName } from './dev-server/toolchain-detect';
 import {
     TERMINAL_RECOVER_CHANNEL,
     TERMINAL_RECOVERY_STATUS_CHANNEL,
@@ -794,12 +795,12 @@ const api = {
          *  has, which package managers could install the rest, the plan for the
          *  missing set, and the consent object. Inspecting installs NOTHING; pass
          *  a package-manager choice to re-plan with it. */
-        toolchainInspect: (pmChoice?: string) =>
-            ipcRenderer.invoke('toolchain:inspect', pmChoice),
+        toolchainInspect: (pmChoice?: string, wanted?: HostToolName[]) =>
+            ipcRenderer.invoke('toolchain:inspect', pmChoice, wanted),
         /** Run the reviewed install plan (main runs its OWN plan; the choice is the
          *  only lever). Per-tool progress arrives on `on.toolchainProgress`. */
-        toolchainInstall: (pmChoice?: string) =>
-            ipcRenderer.invoke('toolchain:install', pmChoice),
+        toolchainInstall: (pmChoice?: string, wanted?: HostToolName[]) =>
+            ipcRenderer.invoke('toolchain:install', pmChoice, wanted),
         /** Toolchain Manager (#242): scan installed tools for available updates.
          *  A pure read — it queries `<pm> outdated` but installs nothing. */
         toolchainUpdates: (force?: boolean) => ipcRenderer.invoke('toolchain:updates', force),
@@ -1081,7 +1082,7 @@ const api = {
          *  and launches it. Returns the created spec. */
         createAgent: (input: {
             workspace_id: string;
-            agent: 'claude' | 'codex' | 'custom';
+            agent: 'claude' | 'codex' | 'kiwi' | 'genie' | 'custom';
             command?: string;
             cwd?: string;
             label?: string;

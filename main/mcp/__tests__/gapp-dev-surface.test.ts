@@ -180,7 +180,7 @@ describe('what a `status` call actually tells the agent', () => {
                         {
                             check: 'manifest.slug',
                             severity: 'error',
-                            where: 'genie-app.json',
+                            where: 'gapp.json',
                             problem: 'The slug is missing.',
                             fix: 'Add a `slug`.',
                         },
@@ -193,7 +193,7 @@ describe('what a `status` call actually tells the agent', () => {
 
         expect(text).toContain('The slug is missing.');
         expect(text).toContain('Add a `slug`.');
-        expect(text).toContain('genie-app.json');
+        expect(text).toContain('gapp.json');
     });
 
     it('reports where a preview opened, so the agent can drive it', async () => {

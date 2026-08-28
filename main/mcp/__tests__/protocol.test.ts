@@ -95,6 +95,7 @@ describe('handleMcpMessage', () => {
             'checkEnv',
             'submitFeedback',
             'initializeWorkspace',
+            'agentUpgrade',
             'genieGuide',
         ]);
     });
@@ -131,6 +132,7 @@ describe('handleMcpMessage', () => {
             'checkEnv',
             'submitFeedback',
             'initializeWorkspace',
+            'agentUpgrade',
             'genieGuide',
         ]);
     });

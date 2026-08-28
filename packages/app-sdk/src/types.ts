@@ -1,7 +1,7 @@
 /**
  * The shapes a Genie App is written against (Tynn #250).
  *
- * Two halves. {@link GenieAppManifest} is what you AUTHOR — `genie-app.json`, the
+ * Two halves. {@link GenieAppManifest} is what you AUTHOR — `gapp.json`, the
  * declaration Genie validates at install and turns into a consent prompt.
  * {@link GenieAppHost} is what Genie EXPOSES to your page at runtime, and it is
  * deliberately two calls wide.

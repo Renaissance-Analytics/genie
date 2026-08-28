@@ -1,12 +1,14 @@
 import type { WorkspaceAgentTransport } from '../db';
 
-export type HarnessAgentProvider = 'claude' | 'codex' | 'custom';
+export type HarnessAgentProvider = 'claude' | 'codex' | 'kiwi' | 'genie' | 'custom';
 
 export function requiredHarnessTransport(
     provider: HarnessAgentProvider | string | null | undefined,
 ): WorkspaceAgentTransport | null {
     if (provider === 'claude') return 'claude-channel';
     if (provider === 'codex') return 'codex-app-server';
+    if (provider === 'kiwi') return 'kiwi-native';
+    if (provider === 'genie') return 'genie-mcp';
     return null;
 }
 

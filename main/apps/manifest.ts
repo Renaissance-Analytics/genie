@@ -1,5 +1,5 @@
 /**
- * PURE. The GApp manifest (`genie-app.json`) — what a Genie App IS, and what it
+ * PURE. The GApp manifest (`gapp.json`) — what a Genie App IS, and what it
  * may ask for (Tynn #250).
  *
  * A GApp is a whole agentic application: its own workspace, its own hosting, its
@@ -32,7 +32,7 @@ import {
     isAppCapability,
 } from './capabilities';
 
-export const APP_MANIFEST_FILENAME = 'genie-app.json';
+export const APP_MANIFEST_FILENAME = 'gapp.json';
 
 /**
  * Names a GApp may not take.
@@ -316,7 +316,7 @@ export interface AppManifest {
 }
 
 /**
- * Every key `genie-app.json` has a meaning for — and the reason an unknown one is
+ * Every key `gapp.json` has a meaning for — and the reason an unknown one is
  * an ERROR.
  *
  * `validateAppManifest` rebuilds a fresh object from the fields below, so anything
@@ -1016,7 +1016,7 @@ function unknownCapabilityMessage(entry: unknown): string {
 }
 
 /**
- * Validate a `genie-app.json`. Collects EVERY problem rather than stopping at the
+ * Validate a `gapp.json`. Collects EVERY problem rather than stopping at the
  * first — an install that fails one reason at a time wastes the developer's day.
  */
 export function validateAppManifest(raw: unknown): ValidationResult<AppManifest> {

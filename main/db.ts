@@ -1478,6 +1478,24 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // v53 — Kiwi and the Genie TUI are native AMS harnesses too. The
+            // v52 `transport` column has a two-value SQLite CHECK that cannot be
+            // widened in place without retargeting every foreign key. Preserve
+            // it for old readers and add the unconstrained canonical column.
+            version: 53,
+            runner: (db) => {
+                const columns = new Set(
+                    db.prepare<[], { name: string }>('PRAGMA table_info(workspace_agents)')
+                        .all()
+                        .map((row) => row.name),
+                );
+                if (!columns.has('native_transport')) {
+                    db.exec('ALTER TABLE workspace_agents ADD COLUMN native_transport TEXT');
+                    db.exec('UPDATE workspace_agents SET native_transport = transport');
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -1886,7 +1904,11 @@ export function setSettings(patch: Partial<Settings>): Settings {
 
 export type WorkspaceAgentRole = 'workspace' | 'specialized' | 'gapp';
 export type WorkspaceAgentReachability = 'workspace' | 'workstation' | 'hidden';
-export type WorkspaceAgentTransport = 'claude-channel' | 'codex-app-server';
+export type WorkspaceAgentTransport =
+    | 'claude-channel'
+    | 'codex-app-server'
+    | 'kiwi-native'
+    | 'genie-mcp';
 
 /** A first-class AMS configuration. Its terminal binding is intentionally nullable. */
 export interface WorkspaceAgentRow {
@@ -2009,7 +2031,7 @@ export function listWorkspaces(): WorkspaceRow[] {
 export function listWorkspaceAgents(workspaceId: string): WorkspaceAgentRow[] {
     return getDb()
         .prepare<[string], WorkspaceAgentRow>(
-            `SELECT * FROM workspace_agents
+            `SELECT *, COALESCE(native_transport, transport) AS transport FROM workspace_agents
              WHERE workspace_id = ?
              ORDER BY CASE role WHEN 'workspace' THEN 0 WHEN 'specialized' THEN 1 ELSE 2 END,
                       name ASC`,
@@ -2024,7 +2046,7 @@ export function getWorkspaceAgent(
 ): WorkspaceAgentRow | undefined {
     return getDb()
         .prepare<[string, string, string], WorkspaceAgentRow>(
-            `SELECT * FROM workspace_agents
+            `SELECT *, COALESCE(native_transport, transport) AS transport FROM workspace_agents
              WHERE workspace_id = ? AND provider = ? AND name = ?`,
         )
         .get(workspaceId, provider, name);
@@ -2055,7 +2077,7 @@ export function createWorkspaceAgent(
             updated_at: now,
         });
     return getDb()
-        .prepare<[string], WorkspaceAgentRow>('SELECT * FROM workspace_agents WHERE id = ?')
+        .prepare<[string], WorkspaceAgentRow>('SELECT *, COALESCE(native_transport, transport) AS transport FROM workspace_agents WHERE id = ?')
         .get(row.id)!;
 }
 
@@ -2092,7 +2114,7 @@ export function markWorkspaceAgentReadyByTerminal(
         .run(readyAt, readyAt, terminalSpecId);
     return database
         .prepare<[string], WorkspaceAgentRow>(
-            'SELECT * FROM workspace_agents WHERE terminal_spec_id = ?',
+            'SELECT *, COALESCE(native_transport, transport) AS transport FROM workspace_agents WHERE terminal_spec_id = ?',
         )
         .get(terminalSpecId);
 }
@@ -2106,10 +2128,13 @@ export function markWorkspaceAgentTransportState(
     const now = result.ok ? (result.at ?? Date.now()) : Date.now();
     database.prepare(
         `UPDATE workspace_agents
-         SET transport = ?, transport_verified_at = ?, transport_error = ?,
+         SET transport = CASE WHEN ? IN ('claude-channel','codex-app-server') THEN ? ELSE NULL END,
+             native_transport = ?, transport_verified_at = ?, transport_error = ?,
              ready_at = NULL, updated_at = ?
          WHERE id = ?`,
     ).run(
+        transport,
+        transport,
         transport,
         result.ok ? now : null,
         result.ok ? null : result.error.trim(),
@@ -2117,7 +2142,7 @@ export function markWorkspaceAgentTransportState(
         agentId,
     );
     return database.prepare<[string], WorkspaceAgentRow>(
-        'SELECT * FROM workspace_agents WHERE id = ?',
+        'SELECT *, COALESCE(native_transport, transport) AS transport FROM workspace_agents WHERE id = ?',
     ).get(agentId);
 }
 
@@ -3545,7 +3570,7 @@ export interface TerminalSpecMeta {
     gapp_agent?: string;
     gapp_persona?: string;
     /** Agent terminals (runAgent / specialized): which AI TUI this runs. */
-    agent?: 'claude' | 'codex' | 'custom';
+    agent?: 'claude' | 'codex' | 'kiwi' | 'genie' | 'custom';
     /** Agent terminals: the CLI command line that was launched (display). */
     agent_command?: string;
     /** Who asked for this terminal (Tynn #117). Absent on terminals created before

@@ -5,6 +5,10 @@ import { PROJECT_JSON_SCHEMA } from '../schemas/shared';
 
 export { PROJECT_JSON_SCHEMA } from '../schemas/shared';
 
+const MIGRATABLE_PROJECT_SCHEMAS = new Set([
+    'https://raw.githubusercontent.com/Civicognita/shared-schemas/v0.1.1/schemas/workspace/project.schema.json',
+]);
+
 /**
  * Shared config between Genie and the Aionima AGI gateway. Unknown
  * fields are preserved verbatim on write so neither tool clobbers the
@@ -153,7 +157,11 @@ export function writeProjectJson(folder: string, patch: ProjectJson): void {
         throw new Error(`Cannot migrate invalid project.json at ${file}; the original was left unchanged.`);
     }
     const existing = parsed ?? {};
-    if (typeof existing.$schema === 'string' && existing.$schema !== PROJECT_JSON_SCHEMA) {
+    if (
+        typeof existing.$schema === 'string' &&
+        existing.$schema !== PROJECT_JSON_SCHEMA &&
+        !MIGRATABLE_PROJECT_SCHEMAS.has(existing.$schema)
+    ) {
         throw new Error(
             `Unsupported project.json schema "${existing.$schema}". ` +
                 'Genie will not overwrite a workspace written by a different schema revision.',

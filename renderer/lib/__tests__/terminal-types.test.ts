@@ -21,7 +21,7 @@ describe('terminal-type registry', () => {
         expect(TERMINAL_TYPES[0].specialized).toBe(false);
         expect(TERMINAL_TYPES[0].agent).toBeUndefined();
         const specialized = TERMINAL_TYPES.filter((t) => t.specialized);
-        expect(specialized.map((t) => t.agent)).toEqual(['claude', 'codex', 'custom']);
+        expect(specialized.map((t) => t.agent)).toEqual(['claude', 'codex', 'kiwi', 'genie', 'custom']);
         // Every specialized type carries an agent kind; regular never does.
         for (const t of specialized) expect(t.agent).toBeTruthy();
     });

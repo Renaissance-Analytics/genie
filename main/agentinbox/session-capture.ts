@@ -35,6 +35,8 @@ interface LaunchProfile {
 export const LAUNCH_PROFILES: Record<AgentInboxAgentType, LaunchProfile> = {
     claude: { strategy: 'flag', flagTemplate: '--session-id {id}' },
     codex: { strategy: 'hook' },
+    kiwi: { strategy: 'detect' },
+    genie: { strategy: 'hook' },
     custom: { strategy: 'detect' },
 };
 

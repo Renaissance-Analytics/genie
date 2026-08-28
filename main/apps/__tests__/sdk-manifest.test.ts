@@ -5,7 +5,7 @@ import type { GenieAppManifest } from '../../../packages/app-sdk/src/types';
 /**
  * The SDK's authored shape, against the validator that actually decides (#250).
  *
- * `GenieAppManifest` is what a developer writes their `genie-app.json` against.
+ * `GenieAppManifest` is what a developer writes their `gapp.json` against.
  * Genie's own `validateAppManifest` is what accepts or refuses it. Nothing bound
  * the two together, and they had already drifted: `panels` and `tabs` shipped in
  * the validator months ago and never reached the SDK, so an author typing against
@@ -69,7 +69,7 @@ describe('what the SDK says you may write', () => {
 
     it('survives the round trip through JSON, which is how it actually arrives', () => {
         // A manifest reaches Genie as a file, never as an object. A type that only
-        // works in memory would be a type that does not describe `genie-app.json`.
+        // works in memory would be a type that does not describe `gapp.json`.
         const result = validateAppManifest(JSON.parse(JSON.stringify(authored)));
 
         expect(result.ok).toBe(true);

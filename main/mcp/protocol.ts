@@ -1101,7 +1101,7 @@ export interface ManagedTerminalInfo {
     /** cwd relative to the workspace root, or '' for the root. */
     cwd: string;
     /** True when this terminal is currently running an agent (via runAgent). */
-    agent?: 'claude' | 'codex' | 'custom' | null;
+    agent?: 'claude' | 'codex' | 'kiwi' | 'genie' | 'custom' | null;
     /** The captured AI chat-session uuid for an agent terminal, or null. */
     chatSessionId?: string | null;
 }
@@ -1186,7 +1186,7 @@ export interface SavedAgentInfo {
     /** Is its TUI running right now? Not-live is dormant, not gone. */
     live: boolean;
     /** Harness-native AgentInbox adapter required by this provider. */
-    transport?: 'claude-channel' | 'codex-app-server';
+    transport?: 'claude-channel' | 'codex-app-server' | 'kiwi-native' | 'genie-mcp';
     /** Timestamp of the current boot's successful transport handshake. */
     transportVerifiedAt?: number;
     /** Actionable failure from the current boot's transport handshake. */
@@ -1402,7 +1402,7 @@ export interface AgentInboxRequest {
     /** registerSession: the generated Codex session id from SessionStart stdin. */
     sessionId?: string;
     /** registerTransport: Genie-owned harness adapter readiness handshake. */
-    transport?: 'claude-channel' | 'codex-app-server';
+    transport?: 'claude-channel' | 'codex-app-server' | 'kiwi-native' | 'genie-mcp';
     /** receipts (optional): how many recent sent DMs to report (default 20, cap 100). */
     limit?: number;
     /** send (optional): files to attach — paths inside the SENDER's workspace.
@@ -2197,6 +2197,29 @@ const REGISTER_AGENT_TOOL = {
     },
 };
 
+const AGENT_UPGRADE_GUIDE = `# Upgrade this agent to AMS
+
+This terminal predates Genie's Agent Management System. Preserve the conversation; do not create a replacement chat.
+
+1. Call \`registerAgent\` with this agent's stable name, purpose, provider, and boot folder.
+2. Call \`agentinbox\` with \`action: "registerSession"\` to bind the current harness session to that durable agent.
+3. Verify the native transport: Claude Code must report \`claude-channel\`; Codex must report \`codex-app-server\`. Never deliver through terminal input.
+4. Call \`thumbsUp\` with \`reason: "boot"\`. Genie refuses readiness until the required transport is verified.
+5. Future starts use \`runAgent start\` and resume this registered agent.
+
+If registration reports an existing name, list agents first and bind this session to the matching identity; do not mint a duplicate.`;
+
+const AGENT_UPGRADE_TOOL = {
+    name: 'agentUpgrade',
+    description:
+        'Return the migration guide for an agent running in an old terminal to join AMS without losing or duplicating its conversation.',
+    inputSchema: {
+        type: 'object',
+        properties: { ...TERMINAL_ID_PROP },
+        additionalProperties: false,
+    },
+};
+
 const THUMBS_UP_TOOL = {
     name: 'thumbsUp',
     description:
@@ -2387,7 +2410,7 @@ const AGENTINBOX_TOOL = {
             },
             transport: {
                 type: 'string',
-                enum: ['claude-channel', 'codex-app-server'],
+                enum: ['claude-channel', 'codex-app-server', 'kiwi-native', 'genie-mcp'],
                 description: 'registerTransport: native harness adapter that completed its connection handshake.',
             },
             text: { type: 'string', description: 'send: the message body.' },
@@ -3199,6 +3222,7 @@ const CORE_TOOLS = [
     CHECK_ENV_TOOL,
     SUBMIT_FEEDBACK_TOOL,
     INITIALIZE_WORKSPACE_TOOL,
+    AGENT_UPGRADE_TOOL,
     GUIDE_TOOL,
 ];
 
@@ -3702,6 +3726,11 @@ export async function handleMcpMessage(
                     : `registerAgent failed: ${result.error ?? 'unknown error'}`;
                 return ok(msg.id, {
                     content: [{ type: 'text', text: `${summary}\n\n${JSON.stringify(result, null, 2)}` }],
+                });
+            }
+            if (params.name === 'agentUpgrade') {
+                return ok(msg.id, {
+                    content: [{ type: 'text', text: AGENT_UPGRADE_GUIDE }],
                 });
             }
             if (params.name === 'runAgent') {

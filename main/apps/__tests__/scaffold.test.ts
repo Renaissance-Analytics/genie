@@ -24,6 +24,10 @@ const find = (name: string, path: string) =>
     files(name).find((f) => f.path === path)?.contents ?? '';
 
 describe('what it writes', () => {
+    it('uses the canonical hard-cut GApp manifest filename', () => {
+        expect(APP_MANIFEST_FILENAME).toBe('gapp.json');
+    });
+
     it('produces a manifest the real validator accepts', () => {
         const manifest = JSON.parse(find('My Thing', APP_MANIFEST_FILENAME));
         expect(validateAppManifest(manifest).ok).toBe(true);
@@ -32,7 +36,7 @@ describe('what it writes', () => {
     it('pins the shared schema revision Genie used to create the manifest', () => {
         const manifest = JSON.parse(find('My Thing', APP_MANIFEST_FILENAME));
         expect(manifest.$schema).toBe(
-            'https://raw.githubusercontent.com/Civicognita/shared-schemas/v0.1.1/schemas/workspace/genie-app.schema.json',
+            'https://raw.githubusercontent.com/Civicognita/shared-schemas/v0.2.0/schemas/workspace/gapp.schema.json',
         );
     });
 

@@ -214,7 +214,7 @@ describe('what gets copied into the workspace', () => {
 
         expect(plan.wholeFolder).toBe(false);
         expect(plan.components.sort()).toEqual(['backend', 'desktop']);
-        expect(plan.envelopePaths).toContain('genie-app.json');
+        expect(plan.envelopePaths).toContain('gapp.json');
     });
 
     it('carries `.agents/` when the app declares agents', () => {

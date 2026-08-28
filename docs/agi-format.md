@@ -54,7 +54,7 @@ explicit migrator for that revision exists. This prevents an older client from
 silently downgrading a newer workspace. The canonical cross-product procedure,
 rollback rules, and release order live in that registry's `MIGRATIONS.md`.
 
-The GApp manifest filename is `genie-app.json` (not `gapp.json`). Manifests
+The GApp manifest filename is `gapp.json` (not `genie-app.json`). Manifests
 created by Genie's scaffold carry their own pinned `$schema`; validating or
 installing a developer-owned manifest never rewrites it as a side effect.
 

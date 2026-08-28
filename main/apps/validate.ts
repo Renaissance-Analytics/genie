@@ -50,7 +50,7 @@ import {
 } from './manifest';
 
 export interface FolderProbe {
-    /** The raw `genie-app.json`, or null when the folder has none. */
+    /** The raw `gapp.json`, or null when the folder has none. */
     readManifest: (folder: string) => string | null;
     exists: (absolutePath: string) => boolean;
     /**

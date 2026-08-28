@@ -49,7 +49,7 @@ describe('which TUI a GApp agent launches under', () => {
         expect(resolveGappProvider({ gapp_ai_provider: 'rm -rf /', agent_default: 'codex' })).toBe(
             'codex',
         );
-        expect([...GAPP_PROVIDERS]).toEqual(['claude', 'codex', 'custom']);
+        expect([...GAPP_PROVIDERS]).toEqual(['claude', 'codex', 'kiwi', 'genie', 'custom']);
     });
 });
 

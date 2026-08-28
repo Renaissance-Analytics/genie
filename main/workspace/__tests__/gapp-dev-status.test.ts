@@ -49,7 +49,7 @@ describe('formatGappDevStatus — the GDW case', () => {
     it('says a folder with no manifest has no app YET, and how to get one', () => {
         const text = formatGappDevStatus({ ...GDW, app: null });
 
-        expect(text).toMatch(/genie-app\.json/);
+        expect(text).toMatch(/gapp\.json/);
         // A GDW whose folder holds nothing is the START of the loop, not an error.
         expect(text).not.toMatch(/is not a GApp Development Workspace/i);
     });
@@ -137,7 +137,7 @@ describe('decideGappDevAction — what the tool will actually do', () => {
         const decision = decideGappDevAction({ ...GDW, app: null }, 'preview');
 
         expect(decision.allowed).toBe(false);
-        expect(decision.reason).toContain('genie-app.json');
+        expect(decision.reason).toContain('gapp.json');
     });
 
     it('still allows `check` on a folder with no manifest — that IS the finding', () => {

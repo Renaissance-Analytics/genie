@@ -12,6 +12,8 @@ import path from 'path';
 import { createTray, rebuildMenu } from './tray';
 import { registerShortcuts, unregisterShortcuts } from './shortcuts';
 import { launchedFromAutostart } from './autostart';
+import { resolveWorkstationProvider } from './agents/provider';
+import { providerDef } from './agents/registry';
 import { registerIpcHandlers, applyStartupToolchainPrecedence, addWorkspaceFromFolder } from './ipc';
 import { writeClipboardImagePng } from './clipboard-image';
 import crypto from 'node:crypto';
@@ -1097,6 +1099,29 @@ app.whenReady().then(async () => {
     });
 
     initDatabase(app.getPath('userData'));
+    // The workstation operator is built in, not a project-owned configuration.
+    // Persist only its terminal shell so it can resume like every other agent;
+    // `system:true` keeps it outside every project and the fixed id makes this
+    // seed idempotent across upgrades.
+    if (!getTerminalSpec('genie-workstation-agent')) {
+        const provider = resolveWorkstationProvider(getAllSettings());
+        createTerminalSpec({
+            id: 'genie-workstation-agent',
+            workspace_id: null,
+            label: 'Genie',
+            cwd: os.homedir(),
+            type: 'terminal',
+            meta: {
+                system: true,
+                agent: provider,
+                agent_command: providerDef(provider).defaultCommand,
+                agent_id: 'genie:workstation',
+                whisper_purpose: 'genie',
+                whisper_scope: 'all',
+                whisper_wake_on_dm: true,
+            },
+        });
+    }
     // The container DEV SERVER — sites (#234 P2), services (P3) and their
     // lifecycle (P4). Hosting is an agent ability, so the WIRING lives in
     // host-core's `initHosting`; this desktop shell supplies only the Electron +

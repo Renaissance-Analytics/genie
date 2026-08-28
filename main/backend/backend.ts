@@ -48,6 +48,12 @@ export interface BackendProject {
      * concept leave it undefined.
      */
     isGapp?: boolean;
+    isWorkspace?: boolean;
+    repositories?: Array<{
+        url: string;
+        defaultBranch?: string;
+        kind?: 'code' | 'knowledge' | 'envelope';
+    }>;
 }
 
 export interface BackendInboxEvent {

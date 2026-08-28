@@ -16,8 +16,8 @@
  * gate it is scaffolding for is worse than no scaffold at all.
  */
 
-import { claimsGenieTabTitle, claimsReservedName } from './manifest';
-import { GENIE_APP_SCHEMA } from '../schemas/shared';
+import { APP_MANIFEST_FILENAME, claimsGenieTabTitle, claimsReservedName } from './manifest';
+import { GAPP_SCHEMA } from '../schemas/shared';
 
 export interface ScaffoldOptions {
     /** The human name. Becomes the slug, and the address. */
@@ -66,7 +66,7 @@ export function scaffoldApp(options: ScaffoldOptions): ScaffoldFile[] {
     const slug = slugify(name);
 
     const manifest = {
-        $schema: GENIE_APP_SCHEMA,
+        $schema: GAPP_SCHEMA,
         id: options.id,
         slug,
         name,
@@ -82,7 +82,7 @@ export function scaffoldApp(options: ScaffoldOptions): ScaffoldFile[] {
     };
 
     return [
-        { path: 'genie-app.json', contents: `${JSON.stringify(manifest, null, 4)}\n` },
+        { path: APP_MANIFEST_FILENAME, contents: `${JSON.stringify(manifest, null, 4)}\n` },
         { path: 'web/index.html', contents: indexHtml(name) },
         { path: 'README.md', contents: readme(name, slug) },
     ];
@@ -147,7 +147,7 @@ A Genie App. Install it with **Settings → Genie Apps → Install an app…** a
 it at this folder.
 
 - Served at \`https://${slug}.gen/\` once installed.
-- \`genie-app.json\` declares what it is and what it may do.
+- \`gapp.json\` declares what it is and what it may do.
 - \`web/\` is the front end Genie serves.
 
 ## Asking for a permission

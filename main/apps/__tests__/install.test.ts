@@ -103,7 +103,7 @@ describe('a bad manifest', () => {
         const result = await installAppFromFolder('C:/src/nothing', io({ readManifest: () => null }));
 
         expect(result.ok).toBe(false);
-        expect(result.errors?.join(' ')).toMatch(/genie-app\.json/);
+        expect(result.errors?.join(' ')).toMatch(/gapp\.json/);
     });
 
     it('does not crash on a file that is not JSON', async () => {

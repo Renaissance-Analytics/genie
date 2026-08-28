@@ -432,7 +432,7 @@ export function createAgentTerminal(opts: {
     rows?: number;
     /** Marks this terminal as running an agent (surfaced in the list). */
     agentMeta?: {
-        agent: 'claude' | 'codex' | 'custom';
+        agent: 'claude' | 'codex' | 'kiwi' | 'genie' | 'custom';
         command: string;
         /** Positional opening prompt, rendered only after all provider options. */
         instructions?: string;

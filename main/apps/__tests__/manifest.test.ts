@@ -783,7 +783,7 @@ describe('a manifest that declares something Genie does not know', () => {
     it('still allows `$schema`, which editors add and Genie does not read', () => {
         const result = validateAppManifest({
             ...valid(),
-            $schema: 'https://genie.tynn.ai/schemas/genie-app.json',
+            $schema: 'https://genie.tynn.ai/schemas/gapp.json',
         });
         expect(result.ok).toBe(true);
     });
@@ -791,7 +791,7 @@ describe('a manifest that declares something Genie does not know', () => {
 
 describe('shared schema identity', () => {
     it('preserves the pinned `$schema` in the validated manifest', () => {
-        const schema = 'https://raw.githubusercontent.com/Civicognita/shared-schemas/v0.1.1/schemas/workspace/genie-app.schema.json';
+        const schema = 'https://raw.githubusercontent.com/Civicognita/shared-schemas/v0.2.0/schemas/workspace/gapp.schema.json';
         const result = validateAppManifest({ ...valid(), $schema: schema });
 
         expect(result.ok).toBe(true);

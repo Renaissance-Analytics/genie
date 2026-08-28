@@ -45,6 +45,7 @@ const DEP_FOR_TOOL: Readonly<Record<string, string | null>> = {
     ForceTheQuestion: 'onForceQuestion',
     agentinbox: 'agentInbox',
     initializeWorkspace: 'describeWorkspace',
+    agentUpgrade: null,
     genieGuide: null,
 };
 

@@ -122,7 +122,7 @@ describe('renderAgentLaunch — post-launch agents', () => {
     });
 
     it('the profile registry is exhaustive over the agent types', () => {
-        expect(Object.keys(LAUNCH_PROFILES).sort()).toEqual(['claude', 'codex', 'custom']);
+        expect(Object.keys(LAUNCH_PROFILES).sort()).toEqual(['claude', 'codex', 'custom', 'genie', 'kiwi']);
     });
 });
 

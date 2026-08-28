@@ -28,7 +28,7 @@ So: multi-repo, multi-language, and not necessarily a human-facing surface at al
 
 ---
 
-## The manifest — `genie-app.json`
+## The manifest — `gapp.json`
 
 At the root of your app's folder.
 
@@ -157,7 +157,7 @@ holding the persona and config for each agent your app can run. It pairs with
 
 ```
 trader.gapp/
-├── genie-app.json
+├── gapp.json
 ├── .agents/
 │   ├── strategist.md
 │   └── reviewer/persona.md
@@ -394,7 +394,7 @@ things — where to look, what is wrong, and what to do:
 ```
 ERRORS — this must be fixed before the app will work
 
-  [agents.unreachable]  genie-app.json → panels.agents
+  [agents.unreachable]  gapp.json → panels.agents
     The app declares 3 agents but its Agent tab lays out 1 slot(s) that can run one,
     so "Reviewer", "Reporter" never start. The user is asked to consent to the whole
     roster at install and would silently get fewer — which is the failure declaring

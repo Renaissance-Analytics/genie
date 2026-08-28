@@ -60,7 +60,7 @@ async function advertisedAgentTools(): Promise<Array<{ name: string; inputSchema
 
 describe('the registry is the source of truth', () => {
     it('knows the providers Genie ships', () => {
-        expect(REGISTRY_IDS).toEqual(['claude', 'codex', 'custom']);
+        expect(REGISTRY_IDS).toEqual(['claude', 'codex', 'custom', 'genie', 'kiwi']);
     });
 
     it('gives every provider a complete definition', () => {
@@ -74,7 +74,7 @@ describe('the registry is the source of truth', () => {
     });
 
     it('lists providers in a stable order, so every derived UI agrees', () => {
-        expect(agentProviders()).toEqual(['claude', 'codex', 'custom']);
+        expect(agentProviders()).toEqual(['claude', 'codex', 'kiwi', 'genie', 'custom']);
         expect(agentProviders()).toEqual(Object.keys(PROVIDER_REGISTRY));
     });
 });

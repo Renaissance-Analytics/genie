@@ -8,6 +8,8 @@ describe('AMS harness-native transport registry', () => {
     it('maps Claude and Codex to their native transports', () => {
         expect(requiredHarnessTransport('claude')).toBe('claude-channel');
         expect(requiredHarnessTransport('codex')).toBe('codex-app-server');
+        expect(requiredHarnessTransport('kiwi')).toBe('kiwi-native');
+        expect(requiredHarnessTransport('genie')).toBe('genie-mcp');
         expect(requiredHarnessTransport('custom')).toBeNull();
     });
 

@@ -111,7 +111,7 @@ export function formatGappDevStatus(status: GappDevStatus): string {
         );
     } else {
         lines.push(
-            '- No `genie-app.json` here yet, so there is no app to check or preview. Writing that manifest is the first step — the folder is a GDW because a human said so, not because an app already exists.',
+            '- No `gapp.json` here yet, so there is no app to check or preview. Writing that manifest is the first step — the folder is a GDW because a human said so, not because an app already exists.',
         );
     }
 
@@ -197,7 +197,7 @@ export function decideGappDevAction(
         if (!status.app) {
             return {
                 allowed: false,
-                reason: `There is no \`genie-app.json\` in ${status.root}, so there is no app to preview yet. Write the manifest first, then run \`check\`.`,
+                reason: `There is no \`gapp.json\` in ${status.root}, so there is no app to preview yet. Write the manifest first, then run \`check\`.`,
             };
         }
         if (!status.previewAvailable) {

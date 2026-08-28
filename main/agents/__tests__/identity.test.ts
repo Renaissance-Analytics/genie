@@ -87,6 +87,8 @@ describe('the canonical ref', () => {
     it('knows which providers are ours', () => {
         expect(isAgentProvider('claude')).toBe(true);
         expect(isAgentProvider('codex')).toBe(true);
+        expect(isAgentProvider('kiwi')).toBe(true);
+        expect(isAgentProvider('genie')).toBe(true);
         expect(isAgentProvider('custom')).toBe(true);
         expect(isAgentProvider('CLAUDE')).toBe(false);
         expect(isAgentProvider(undefined)).toBe(false);

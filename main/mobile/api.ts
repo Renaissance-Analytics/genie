@@ -392,7 +392,7 @@ export interface MobileDataDeps {
      */
     createSpecializedAgentTerminal?: (input: {
         workspace_id: string;
-        agent: 'claude' | 'codex' | 'custom';
+        agent: 'claude' | 'codex' | 'kiwi' | 'genie' | 'custom';
         command?: string;
         cwd?: string;
         label?: string;
@@ -412,7 +412,7 @@ export interface MobileDataDeps {
     restartAgentTerminal?: (
         id: string,
     ) =>
-        | { ok: true; oldId: string; newId: string; agent: 'claude' | 'codex' | 'custom'; command: string }
+        | { ok: true; oldId: string; newId: string; agent: 'claude' | 'codex' | 'kiwi' | 'genie' | 'custom'; command: string }
         | { ok: false; error: string };
     /**
      * Edit a specialized (agent) terminal's AgentInbox settings — purpose / scope /

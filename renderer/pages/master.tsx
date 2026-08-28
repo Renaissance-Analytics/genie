@@ -8,7 +8,7 @@ import Chooser from '../components/Master/Chooser';
 import ProjectContextMenu from '../components/Master/ProjectContextMenu';
 import WorkspaceSettingsModal from '../components/Master/WorkspaceSettingsModal';
 import WorkspaceSiteManager from '../components/Master/WorkspaceSiteManager';
-import { ToolchainSetupWizard } from '../components/Master/ToolchainSetupWizard';
+import { FirstRunOnboarding } from '../components/Master/FirstRunOnboarding';
 import SpecContextMenu from '../components/Master/SpecContextMenu';
 import { PromptHost, showPrompt } from '../components/Master/Prompt';
 import QuitTerminalsModal, {
@@ -361,25 +361,9 @@ function MasterInner() {
     const [siteManagerWsId, setSiteManagerWsId] = useState<string | null>(null);
     const [devSites, setDevSites] = useState<Record<string, DevSiteInfo[]>>({});
 
-    // First-run toolchain setup (#240): on a fresh machine that is missing dev
-    // tools, offer to install them ONCE. `toolchainInspect` is a pure probe (it
-    // installs nothing), so this is safe to run on boot; a dismissal is remembered
-    // so it never nags, and a machine that already has everything never sees it.
-    const [toolchainWizardOpen, setToolchainWizardOpen] = useState(false);
-    useEffect(() => {
-        if (!hasGenieBridge()) return;
-        if (localStorage.getItem('toolchain-setup-dismissed') === '1') return;
-        let cancelled = false;
-        void api()
-            .devServer.toolchainInspect()
-            .then((insp) => {
-                if (!cancelled && insp.report.missing.length > 0) setToolchainWizardOpen(true);
-            })
-            .catch(() => {});
-        return () => {
-            cancelled = true;
-        };
-    }, []);
+    const [onboardingOpen, setOnboardingOpen] = useState(
+        () => localStorage.getItem('genie-onboarding-complete') !== '1',
+    );
     useEffect(() => {
         if (!hasGenieBridge()) return;
         const load = () => {
@@ -897,6 +881,14 @@ function MasterInner() {
         ]);
         setWorkspaces(ws);
         setSpecs(sp);
+        if (
+            !isRemoteWindow() &&
+            !isStage &&
+            ws.filter((workspace) => !isSystemWorkspace(workspace)).length === 0 &&
+            localStorage.getItem('genie-onboarding-complete') !== '1'
+        ) {
+            setOnboardingOpen(true);
+        }
         // Warm THIS window's client-local view store from the (local) settings
         // so the launch restore + subsequent switches read a settled cache.
         const connKey = currentConnKey();
@@ -936,7 +928,7 @@ function MasterInner() {
         }
         // The launch restore has run — subsequent view changes may now persist.
         viewRestoredRef.current = true;
-    }, [stageSeedWorkspace]);
+    }, [isStage, stageSeedWorkspace]);
 
     /**
      * Persist a user-defined sidebar order (full ordered list of workspace
@@ -2001,15 +1993,20 @@ function MasterInner() {
                     paints the corner itself — see AppCorner). */}
                 <div className="winframe stacked">
                     <TitleBar isStage={false} />
-                    <div
-                        style={{
-                            flex: 1,
-                            minHeight: 0,
-                            display: 'grid',
-                            placeItems: 'center',
-                            background: 'var(--bg-0)',
+                    <div style={{ flex: 1, minHeight: 0, background: 'var(--bg-0)' }} />
+                </div>
+                {localStorage.getItem('genie-onboarding-complete') !== '1' ? (
+                    <FirstRunOnboarding
+                        open
+                        onComplete={async () => {
+                            setOnboardingOpen(false);
+                            await refreshAuth();
+                            await refresh();
                         }}
-                    >
+                        onWorkspaceAdded={(row) => setWorkspaces([row])}
+                    />
+                ) : (
+                    <div style={{ position: 'absolute', inset: 40, display: 'grid', placeItems: 'center' }}>
                         <div style={{ maxWidth: 720, width: '100%' }}>
                             <SignInPrompt
                                 tynnHost={hosts.tynn}
@@ -2021,7 +2018,7 @@ function MasterInner() {
                             />
                         </div>
                     </div>
-                </div>
+                )}
                 <PromptHost />
             </div>
         );
@@ -2407,13 +2404,12 @@ function MasterInner() {
                 );
             })()}
 
-            {/* First-run toolchain setup (#240): auto-offered once when a fresh
-                machine is missing dev tools; closing remembers the dismissal. */}
-            <ToolchainSetupWizard
-                open={toolchainWizardOpen}
-                onClose={() => {
-                    localStorage.setItem('toolchain-setup-dismissed', '1');
-                    setToolchainWizardOpen(false);
+            <FirstRunOnboarding
+                open={onboardingOpen}
+                onComplete={() => setOnboardingOpen(false)}
+                onWorkspaceAdded={(row) => {
+                    setWorkspaces((previous) => [...previous.filter((item) => item.id !== row.id), row]);
+                    nudgeGappDevSync();
                 }}
             />
 

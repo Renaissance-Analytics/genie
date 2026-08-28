@@ -131,7 +131,7 @@ describe('the manifest itself', () => {
         const report = validateAppFolder('C:/src/nothing', probe({ readManifest: () => null }));
 
         expect(report.ok).toBe(false);
-        expect(report.errors.join(' ')).toContain('genie-app.json');
+        expect(report.errors.join(' ')).toContain('gapp.json');
     });
 
     it('does not crash on a file that is not JSON', () => {

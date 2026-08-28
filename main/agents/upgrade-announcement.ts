@@ -2,7 +2,7 @@ export function formatAgentUpgradeMessage(version: string, changes: string[]): s
     const summary = changes.length > 0
         ? ` What changed:\n${changes.map((change) => `- ${change}`).join('\n')}`
         : '';
-    return `Genie upgraded to v${version}.${summary}\n\nThis is a system notice; no reply is needed.`;
+    return `Genie upgraded to v${version}.${summary}\n\nIf this terminal predates AMS, call agentUpgrade now and follow its ordered migration guide.\n\nThis is a system notice; no reply is needed.`;
 }
 
 export function announceAgentUpgrade(input: {

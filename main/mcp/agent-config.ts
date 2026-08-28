@@ -1187,6 +1187,15 @@ Use \`checkIssues\` for the detailed workspace feed. \`imDone\` also reports ope
 
 The \`feedback:\` count is unresolved project feedback in Tynn — NOT a GitHub item and NOT a failure. It is input from outside the build waiting on triage: read it with the Tynn \`feedback\` tool and convert what should become work, but never close entries to bring the number down, because judging whether a piece of feedback is worth acting on is a human call.`,
         ),
+        'genie-gdw': skill(
+            'genie-gdw',
+            'Use when building a Genie App in a GApp Development Workspace or updating one to the current shared schemas.',
+            `# Build and update a Genie App
+
+Call \`manageGappDev\` with \`action: "status"\` first; the filesystem alone cannot tell you whether this is a GDW. The canonical developer-owned manifest is \`gapp.json\`, pinned to \`https://raw.githubusercontent.com/Civicognita/shared-schemas/v0.2.0/schemas/workspace/gapp.schema.json\`. The managed workspace file is \`project.json\`, pinned to the matching v0.2.0 schema.
+
+For an older app, back up each file before changing it, refuse when both \`genie-app.json\` and \`gapp.json\` exist, rename \`genie-app.json\` to \`gapp.json\` only after validation, then run \`manageGappDev check\`. Use \`preview\` only after check is clean. Never add a compatibility reader or silently discard unknown fields.`,
+        ),
     };
 }
 

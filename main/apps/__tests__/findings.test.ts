@@ -82,7 +82,7 @@ describe('the whole report, as a developer reads it', () => {
                 error({
                     check: 'permissions.high-risk',
                     severity: 'advice',
-                    where: 'genie-app.json → permissions.capabilities',
+                    where: 'gapp.json → permissions.capabilities',
                     problem: '“Run commands” is a high-risk permission.',
                     fix: 'Make sure the app still works without it.',
                 }),

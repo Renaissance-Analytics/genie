@@ -46,7 +46,7 @@
  */
 
 /** The AI TUIs Genie can launch. Adding one starts here and nowhere else. */
-export const PROVIDER_IDS = ['claude', 'codex', 'custom'] as const;
+export const PROVIDER_IDS = ['claude', 'codex', 'kiwi', 'genie', 'custom'] as const;
 
 export type AgentProviderId = (typeof PROVIDER_IDS)[number];
 
@@ -90,6 +90,22 @@ export const PROVIDER_REGISTRY: Record<AgentProviderId, ProviderDef> = {
         defaultCommand: 'codex',
         commandSettingKey: 'agent_command_codex',
         flagsSettingKey: 'agent_flags_codex',
+    },
+    kiwi: {
+        id: 'kiwi',
+        label: 'Kiwi Code',
+        hint: 'Launch the native Kiwi Code CLI',
+        defaultCommand: 'kiwi',
+        commandSettingKey: 'agent_command_kiwi',
+        flagsSettingKey: 'agent_flags_kiwi',
+    },
+    genie: {
+        id: 'genie',
+        label: 'Genie TUI',
+        hint: 'Launch the local-first Genie TUI',
+        defaultCommand: 'genie-tui',
+        commandSettingKey: 'agent_command_genie',
+        flagsSettingKey: 'agent_flags_genie',
     },
     custom: {
         id: 'custom',

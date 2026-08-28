@@ -4,7 +4,7 @@ import { announceAgentUpgrade, formatAgentUpgradeMessage } from '../upgrade-anno
 describe('agent upgrade announcement', () => {
     it('formats a concise no-reply system message', () => {
         expect(formatAgentUpgradeMessage('0.8.0', ['Native AgentInbox transport', 'What’s New menu'])).toBe(
-            'Genie upgraded to v0.8.0. What changed:\n- Native AgentInbox transport\n- What’s New menu\n\nThis is a system notice; no reply is needed.',
+            'Genie upgraded to v0.8.0. What changed:\n- Native AgentInbox transport\n- What’s New menu\n\nIf this terminal predates AMS, call agentUpgrade now and follow its ordered migration guide.\n\nThis is a system notice; no reply is needed.',
         );
     });
 

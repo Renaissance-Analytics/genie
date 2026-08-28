@@ -74,6 +74,8 @@ import {
     createKnowledgeFolder,
 } from './workspace/envelope';
 import { stopProcess, forgetProcess } from './terminal/process-supervisor';
+import { isProviderId, providerDef } from './agents/registry';
+import { osAgentMetaForProvider } from './agents/os-agent';
 import { armSchedule, forgetSchedule } from './terminal/process-scheduler';
 import { broadcastTerminalSpecsChanged, liveTerminalCount } from './terminal/ipc';
 import { agentPulse } from './terminal/agent-pulse';
@@ -469,6 +471,19 @@ export function registerIpcHandlers(): void {
             patch = { ...patch, ai_system: patch.ai_system.slice(0, AI_SYSTEM_MAX) };
         }
         const next = setSettings(patch as Record<string, string>);
+        if ('agent_default' in patch && isProviderId(next.agent_default)) {
+            const spec = getTerminalSpec('genie-workstation-agent');
+            if (spec) {
+                const def = providerDef(next.agent_default);
+                updateTerminalSpec(spec.id, {
+                    meta: osAgentMetaForProvider(
+                        spec.meta,
+                        next.agent_default,
+                        next[def.commandSettingKey] || def.defaultCommand,
+                    ),
+                });
+            }
+        }
         if ('global_hotkey' in patch) registerShortcuts();
         // Tell every window a setting changed so live UI (e.g. a terminal's
         // copy/paste mode) re-reads without a restart. Settings are global, so
@@ -764,12 +779,13 @@ export function registerIpcHandlers(): void {
     // package managers it could install with, the plan for what's missing, and the
     // consent object to approve. A PURE probe — inspecting never installs. Local
     // (this machine) because zero-setup runs where Genie runs.
-    ipcMain.handle('toolchain:inspect', (_e, pmChoice?: string) =>
+    ipcMain.handle('toolchain:inspect', (_e, pmChoice?: string, wanted?: HostToolName[]) =>
         inspectToolchain({
             runner: hostToolCommandRunner,
             os: process.platform,
             arch: process.arch,
             ...(pmChoice ? { pmChoice: pmChoice as never } : {}),
+            ...(Array.isArray(wanted) ? { wanted } : {}),
         }),
     );
     // Scan the installed toolchain for available updates (Toolchain Manager,
@@ -812,12 +828,13 @@ export function registerIpcHandlers(): void {
     // run an arbitrary command; the only lever it has is the package-manager
     // choice. Clicking Install in the reviewed wizard IS the consent (approved).
     // Per-tool progress streams back on `toolchain:progress`.
-    ipcMain.handle('toolchain:install', async (e, pmChoice?: string) => {
+    ipcMain.handle('toolchain:install', async (e, pmChoice?: string, wanted?: HostToolName[]) => {
         const ctx = { os: process.platform, arch: process.arch, genieRoot: toolchainRoot() };
         const insp = await inspectToolchain({
             runner: hostToolCommandRunner,
             ...ctx,
             ...(pmChoice ? { pmChoice: pmChoice as never } : {}),
+            ...(Array.isArray(wanted) ? { wanted } : {}),
         });
         const perform = createToolchainInstallEffect(ctx, toolchainManagerDeps());
         return runInstallPlan({
@@ -1484,7 +1501,7 @@ export function registerIpcHandlers(): void {
             _e,
             input: {
                 workspace_id: string;
-                agent: 'claude' | 'codex' | 'custom';
+                agent: 'claude' | 'codex' | 'kiwi' | 'genie' | 'custom';
                 command?: string;
                 cwd?: string;
                 label?: string;

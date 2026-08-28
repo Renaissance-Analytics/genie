@@ -31,7 +31,7 @@ const app = (over: Record<string, unknown> = {}) => ({
 
 /** The files that make the manifest above true. */
 const TREE: Record<string, string> = {
-    'genie-app.json': '',
+    'gapp.json': '',
     'web/dist/index.html': '<!doctype html><html><body><script src="app.js"></script></body></html>',
     'web/dist/app.js': 'const genie = window.genieApp;\n',
 };
@@ -118,7 +118,7 @@ describe('the front end a user will actually look at', () => {
         // The purest form of the failure this suite exists for: it installs, the
         // site starts, the window opens on nothing at all.
         const report = check(app(), {
-            'genie-app.json': '',
+            'gapp.json': '',
             'web/dist/bundle.js': '',
         });
 
@@ -198,7 +198,7 @@ describe('the front end a user will actually look at', () => {
 
     it('does not scan a PROXY front end for a built directory it never has', () => {
         const report = check(app({ frontend: { serve: { mode: 'proxy', hostPort: 5273 } } }), {
-            'genie-app.json': '',
+            'gapp.json': '',
         });
 
         expect(find(report.findings, 'frontend.no-index')).toBeUndefined();
@@ -461,7 +461,7 @@ describe('what every finding owes the developer', () => {
                 permissions: { scope: 'workstation', capabilities: ['terminals'] },
             }),
             {
-                'genie-app.json': '',
+                'gapp.json': '',
                 'web/dist/app.js': 'window.genie.call()',
                 'service/x.mjs': '',
                 '.agents/one.md': '# One',
@@ -484,7 +484,7 @@ describe('what every finding owes the developer', () => {
     it('puts every error above every piece of advice', () => {
         const report = check(
             app({ permissions: { scope: 'workstation', capabilities: ['terminals'] } }),
-            { 'genie-app.json': '', 'web/dist/bundle.js': '' },
+            { 'gapp.json': '', 'web/dist/bundle.js': '' },
         );
 
         const severities = report.findings.map((f) => f.severity);
@@ -503,7 +503,7 @@ describe('what every finding owes the developer', () => {
  * everything reports exactly what a clean one does. `ran` is what tells them apart.
  */
 const ENVELOPE_TREE: Record<string, string> = {
-    'genie-app.json': '',
+    'gapp.json': '',
     'project.json': '{"name":"trader","repos":[{"name":"web"}]}',
     'repos/web/dist/index.html':
         '<!doctype html><html><body><script src="app.js"></script></body></html>',
@@ -579,7 +579,7 @@ describe('a PROXY front end inside a converted envelope', () => {
 
     it('scans the component source where the envelope keeps it', () => {
         const report = check(proxy(), {
-            'genie-app.json': '',
+            'gapp.json': '',
             'project.json': '{"name":"trader"}',
             'repos/web/src/main.js': 'const g = window.genieApp;\n',
         });
@@ -592,7 +592,7 @@ describe('a PROXY front end inside a converted envelope', () => {
 
     it('still catches window.genie in that layout', () => {
         const report = check(proxy(), {
-            'genie-app.json': '',
+            'gapp.json': '',
             'project.json': '{"name":"trader"}',
             'repos/web/src/main.js': 'const g = window.genie;\n',
         });

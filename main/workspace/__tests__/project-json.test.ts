@@ -56,6 +56,26 @@ describe('project-json', () => {
         expect(fs.readdirSync(dir).filter((name) => name.startsWith('project.json.pre-schema-'))).toHaveLength(1);
     });
 
+    it('migrates the previous shared schema with a backup and preserves unknown fields', () => {
+        const dir = makeTmpDir('pj-v011-migration');
+        const file = path.join(dir, 'project.json');
+        fs.writeFileSync(file, JSON.stringify({
+            $schema: 'https://raw.githubusercontent.com/Civicognita/shared-schemas/v0.1.1/schemas/workspace/project.schema.json',
+            name: 'Legacy',
+            futureFlag: 'keep-me',
+        }, null, 2) + '\n');
+
+        writeProjectJson(dir, { description: 'current' });
+
+        expect(readProjectJson(dir)).toMatchObject({
+            $schema: PROJECT_JSON_SCHEMA,
+            name: 'Legacy',
+            description: 'current',
+            futureFlag: 'keep-me',
+        });
+        expect(fs.readdirSync(dir).filter((name) => name.endsWith('.bak'))).toHaveLength(1);
+    });
+
     it('refuses to overwrite a project stamped with an unsupported schema', () => {
         const dir = makeTmpDir('pj-future-schema');
         const file = path.join(dir, 'project.json');

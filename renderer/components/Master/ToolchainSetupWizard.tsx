@@ -84,7 +84,16 @@ type Step = 'inspecting' | 'review' | 'installing' | 'done' | 'error';
 /** Per-tool live status: `start` while running, then the settled outcome. */
 type LiveStatus = 'start' | ToolchainStepStatus;
 
-export function ToolchainSetupWizard({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function ToolchainSetupWizard({
+    open,
+    onClose,
+    wanted,
+}: {
+    open: boolean;
+    onClose: () => void;
+    /** First-run onboarding installs only the base tools + selected drivers. */
+    wanted?: HostToolName[];
+}) {
     const [insp, setInsp] = useState<ToolchainInspection | null>(null);
     const [step, setStep] = useState<Step>('inspecting');
     const [error, setError] = useState<string | null>(null);
@@ -100,7 +109,7 @@ export function ToolchainSetupWizard({ open, onClose }: { open: boolean; onClose
             setStep('inspecting');
             setError(null);
             try {
-                const result = await api().devServer.toolchainInspect(choice);
+                const result = await api().devServer.toolchainInspect(choice, wanted);
                 setInsp(result);
                 setStep('review');
             } catch (e) {
@@ -108,7 +117,7 @@ export function ToolchainSetupWizard({ open, onClose }: { open: boolean; onClose
                 setStep('error');
             }
         },
-        [],
+        [wanted],
     );
 
     useEffect(() => {
@@ -136,7 +145,7 @@ export function ToolchainSetupWizard({ open, onClose }: { open: boolean; onClose
             }));
         });
         try {
-            const r = await api().devServer.toolchainInstall(pmChoice);
+            const r = await api().devServer.toolchainInstall(pmChoice, wanted);
             setResult(r);
             setStep('done');
         } catch (e) {

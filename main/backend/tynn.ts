@@ -121,6 +121,8 @@ export class TynnBackend implements Backend {
                           owner_name?: string;
                           base_url?: string;
                           is_gapp?: boolean;
+                          is_workspace?: boolean;
+                          repositories?: Array<{ url: string; default_branch?: string; kind?: 'code' | 'knowledge' | 'envelope' }>;
                       }>;
                   }
                 | Array<{
@@ -131,6 +133,8 @@ export class TynnBackend implements Backend {
                       owner_name?: string;
                       base_url?: string;
                       is_gapp?: boolean;
+                      is_workspace?: boolean;
+                      repositories?: Array<{ url: string; default_branch?: string; kind?: 'code' | 'knowledge' | 'envelope' }>;
                   }>
             >('/api/v1/projects');
             const rows = Array.isArray(data) ? data : data.data;
@@ -148,6 +152,12 @@ export class TynnBackend implements Backend {
                 // Absent on an older Tynn: `!!` answers "not a GApp" rather than
                 // leaking undefined into the UI.
                 isGapp: !!p.is_gapp,
+                isWorkspace: !!p.is_workspace,
+                repositories: (p.repositories ?? []).map((repository) => ({
+                    url: repository.url,
+                    defaultBranch: repository.default_branch,
+                    kind: repository.kind,
+                })),
             }));
         } catch {
             return [];

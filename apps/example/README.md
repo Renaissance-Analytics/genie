@@ -5,7 +5,7 @@ then copy whatever you need.
 
 ```
 apps/example/
-├── genie-app.json      the declaration Genie validates and turns into a consent prompt
+├── gapp.json      the declaration Genie validates and turns into a consent prompt
 ├── web/                the front end, served by Genie at https://example.gen
 │   ├── index.html
 │   └── app.js
@@ -17,7 +17,7 @@ apps/example/
 
 **Apps → Install from folder**, and pick this directory. Genie will:
 
-1. validate `genie-app.json`,
+1. validate `gapp.json`,
 2. ask you what to allow (hosting and Genie's memory — nothing high-risk),
 3. create a workspace, copy the source in, serve `web/` at `example.gen`,
 4. start `node server.mjs` beside it.

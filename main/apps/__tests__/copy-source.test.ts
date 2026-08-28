@@ -46,7 +46,7 @@ describe('a converted .agi envelope as the source', () => {
     const envelope = () => [
         path.join(SOURCE, 'project.json'),
         path.join(SOURCE, 'repos', 'the-ripple-effect'),
-        path.join(SOURCE, 'genie-app.json'),
+        path.join(SOURCE, 'gapp.json'),
     ];
 
     it('takes the component from repos/, and still lands it at repos/', () => {
@@ -66,8 +66,8 @@ describe('a converted .agi envelope as the source', () => {
         copyAppSource(SOURCE, WORKSPACE, manifest(), io);
 
         expect(io.copies).toContainEqual({
-            from: path.normalize(path.join(SOURCE, 'genie-app.json')),
-            to: path.normalize(path.join(WORKSPACE, 'genie-app.json')),
+            from: path.normalize(path.join(SOURCE, 'gapp.json')),
+            to: path.normalize(path.join(WORKSPACE, 'gapp.json')),
         });
     });
 
@@ -75,7 +75,7 @@ describe('a converted .agi envelope as the source', () => {
         // POSITIVE CONTROL for the two tests above: they assert a copy HAPPENED,
         // which a copier that blindly copied everything would also satisfy. This is
         // the same fixture with the component removed, and it has to throw.
-        const io = fsWith([path.join(SOURCE, 'project.json'), path.join(SOURCE, 'genie-app.json')]);
+        const io = fsWith([path.join(SOURCE, 'project.json'), path.join(SOURCE, 'gapp.json')]);
 
         expect(() => copyAppSource(SOURCE, WORKSPACE, manifest(), io)).toThrow(
             /the-ripple-effect/,
@@ -85,7 +85,7 @@ describe('a converted .agi envelope as the source', () => {
 
 describe('a scaffolded staging folder as the source', () => {
     const STAGING = 'C:/src/trader';
-    const flat = () => [path.join(STAGING, 'web'), path.join(STAGING, 'genie-app.json')];
+    const flat = () => [path.join(STAGING, 'web'), path.join(STAGING, 'gapp.json')];
     const traderManifest = () =>
         manifest({ frontend: { repo: 'web', serve: { mode: 'static', root: 'dist' } } });
 
@@ -114,7 +114,7 @@ describe('a scaffolded staging folder as the source', () => {
     });
 
     it('still refuses when the flat component is missing', () => {
-        const io = fsWith([path.join(STAGING, 'genie-app.json')]);
+        const io = fsWith([path.join(STAGING, 'gapp.json')]);
 
         expect(() => copyAppSource(STAGING, WORKSPACE, traderManifest(), io)).toThrow(/web/);
     });

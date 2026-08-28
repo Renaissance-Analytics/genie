@@ -1,0 +1,34 @@
+import { describe, expect, it } from 'vitest';
+import { GENIE_OS_AGENT, authorizeOsAgentTarget, osAgentMetaForProvider } from '../os-agent';
+
+describe('the hardcoded workstation Genie agent', () => {
+    it('is workstation-scoped and cannot own a project', () => {
+        expect(GENIE_OS_AGENT.name).toBe('Genie');
+        expect(GENIE_OS_AGENT.role).toBe('workstation-operator');
+        expect(GENIE_OS_AGENT.workspaceId).toBeNull();
+        expect(GENIE_OS_AGENT.mutable).toBe(false);
+    });
+
+    it('refuses project work while allowing workstation operations', () => {
+        expect(authorizeOsAgentTarget({ kind: 'workstation' }).allowed).toBe(true);
+        const project = authorizeOsAgentTarget({ kind: 'project', workspaceId: 'project-1' });
+        expect(project.allowed).toBe(false);
+        if (!project.allowed) expect(project.reason).toMatch(/workstation|project/i);
+    });
+
+    it('switches its launch provider without losing workstation security metadata', () => {
+        expect(osAgentMetaForProvider({
+            system: true,
+            agent: 'claude',
+            agent_command: 'claude',
+            agent_id: 'genie:workstation',
+            whisper_scope: 'all',
+        }, 'codex', 'codex --profile genie')).toEqual({
+            system: true,
+            agent: 'codex',
+            agent_command: 'codex --profile genie',
+            agent_id: 'genie:workstation',
+            whisper_scope: 'all',
+        });
+    });
+});

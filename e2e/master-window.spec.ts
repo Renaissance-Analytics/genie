@@ -289,7 +289,7 @@ test('a workspace switch never fits the panel it hid (genie#229)', async () => {
  * the MOUNT is. That cost a red build to learn, so it is written down here.
  *
  * The launch is asserted through its FAILURE on purpose. The fixture folder has a
- * `project.json` but no `genie-app.json`, so the preview refuses with a message
+ * `project.json` but no `gapp.json`, so the preview refuses with a message
  * instead of opening a real window in CI — which makes the toast a positive
  * control: it proves the control actually fired, so "the workspace did not
  * switch" cannot pass against a button that did nothing at all.
@@ -315,7 +315,7 @@ test('on a GDW the row switches and the GApp control launches — never each oth
     // one toast surface, and a bare selector would be a strict-mode violation the
     // day a second one happens to be up.
     await expect(
-        page.locator('.g-toast').filter({ hasText: 'genie-app.json' }),
+        page.locator('.g-toast').filter({ hasText: 'gapp.json' }),
     ).toBeVisible();
     // …and the active workspace is untouched.
     await expect(plainRow).toHaveClass(/\bis-active\b/);
@@ -355,7 +355,7 @@ test('the GApp Store lists a ribboned dev launcher, and launching it previews', 
     // Any toast the launcher test left is still on screen for up to 4s and says
     // exactly what this test is about to assert. Waiting it out is the difference
     // between proving this button fired and re-reading the last one's receipt.
-    const refusal = page.locator('.g-toast').filter({ hasText: 'genie-app.json' });
+    const refusal = page.locator('.g-toast').filter({ hasText: 'gapp.json' });
     await expect(refusal).toHaveCount(0, { timeout: 10_000 });
 
     await page.getByRole('button', { name: 'Genie Apps' }).click();
@@ -394,7 +394,7 @@ test('the GApp Store lists a ribboned dev launcher, and launching it previews', 
     expect(paint.bar).toBe('rgb(236, 72, 153)');
 
     // LAUNCHING FROM HERE IS THE SAME LAUNCH. The fixture folder has a
-    // `project.json` and no `genie-app.json`, so the preview refuses with a
+    // `project.json` and no `gapp.json`, so the preview refuses with a
     // message instead of opening a real window in CI — which makes the toast a
     // positive control (the button really fired) AND the evidence that the store
     // goes through the same `openPreview` the workspace row does, since it comes

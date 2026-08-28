@@ -39,6 +39,8 @@ export interface TerminalTypeDef {
 const PROVIDER_ICONS: Record<AgentType, ComponentType<{ size?: number; className?: string }>> = {
     claude: IconTynn,
     codex: IconBox,
+    kiwi: IconCode,
+    genie: IconTynn,
     custom: IconCode,
 };
 

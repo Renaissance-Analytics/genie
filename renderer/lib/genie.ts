@@ -100,6 +100,12 @@ export interface TynnProject {
      * developer's Tynn data (`.ai/plans/gapp-store-and-tynn-linkage.md`).
      */
     isGapp?: boolean;
+    isWorkspace?: boolean;
+    repositories?: Array<{
+        url: string;
+        defaultBranch?: string;
+        kind?: 'code' | 'knowledge' | 'envelope';
+    }>;
 }
 
 /**
@@ -2690,11 +2696,11 @@ export interface GenieApi {
          *  has, the managers that could install the rest, the plan, and the
          *  consent object. Inspecting installs nothing; pass a package-manager
          *  choice to re-plan with it. */
-        toolchainInspect: (pmChoice?: string) => Promise<ToolchainInspection>;
+        toolchainInspect: (pmChoice?: string, wanted?: HostToolName[]) => Promise<ToolchainInspection>;
         /** Run the reviewed install plan (main runs its own plan; the package-
          *  manager choice is the only lever). Per-tool progress arrives on
          *  `on.toolchainProgress`. */
-        toolchainInstall: (pmChoice?: string) => Promise<ToolchainInstallResult>;
+        toolchainInstall: (pmChoice?: string, wanted?: HostToolName[]) => Promise<ToolchainInstallResult>;
         /** Toolchain Manager (#242): scan installed tools for available updates.
          *  A pure read — queries `<pm> outdated` but installs nothing. CACHED:
          *  a fresh answer is reused so opening the page twice is not two scans;
