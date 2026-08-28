@@ -59,6 +59,7 @@ import {
     SYSTEM_WORKSPACE_ID,
     type DevSiteInfo,
     type McpStatus,
+    type PluginPanelView,
     type ProcessStatus,
     type ScheduleInfo,
     type WatchTypeCounts,
@@ -148,6 +149,8 @@ interface Props {
     onAgentCreated: (spec: TerminalSpec) => void;
     /** The configured custom-agent command (create-form placeholder). */
     agentCustomCommand?: string;
+    pluginPanels?: PluginPanelView[];
+    onAddPluginPanel?: (workspaceId: string, panel: PluginPanelView) => void;
 }
 
 /**
@@ -190,6 +193,8 @@ export default function Chooser({
     onLastTerminalType,
     onAgentCreated,
     agentCustomCommand,
+    pluginPanels = [],
+    onAddPluginPanel,
 }: Props) {
     const [thumbedAgentTerminals, setThumbedAgentTerminals] = useState<Set<string>>(new Set());
     useEffect(() => api().on.agentThumbsUp?.((event) => {
@@ -1239,26 +1244,18 @@ export default function Chooser({
                                             />
                                         </span>
                                     )}
-                                    <span
-                                        className={`proc-ind proc-${wsProcStatus(
-                                            wsProcs,
-                                        )}${
-                                            expandedProcs.has(ws.id) ? ' open' : ''
-                                        }`}
-                                        role="button"
-                                        tabIndex={-1}
-                                        title={
-                                            wsProcs.length
-                                                ? `Background processes (${wsProcs.length})`
-                                                : 'Background processes'
-                                        }
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            toggleProcs(ws.id);
-                                        }}
-                                    >
-                                        <IconCpu size={13} />
-                                    </span>
+                                    <WorkspaceRuntimePill
+                                        processTone={wsProcStatus(wsProcs)}
+                                        processTitle={wsProcs.length
+                                            ? `Background processes (${wsProcs.length})`
+                                            : 'Background processes'}
+                                        processOpen={expandedProcs.has(ws.id)}
+                                        siteTone={railSitesTone(devSites[ws.id] ?? [], ws.id) ?? 'none'}
+                                        siteTitle={railSitesTitle(devSites[ws.id] ?? [], ws.id)}
+                                        siteAvailable={!!onShowSiteManager}
+                                        onProcesses={() => toggleProcs(ws.id)}
+                                        onSites={() => onShowSiteManager?.(ws.id)}
+                                    />
                                     {/* LAUNCH THE APP THIS WORKSPACE BUILDS
                                         (genie#245). Only a GDW has it, which is
                                         also the row's strongest at-a-glance
@@ -1291,32 +1288,6 @@ export default function Chooser({
                                                 <IconWand size={13} />
                                             </span>
                                         )}
-                                    {/* Genie HOSTS sites for this workspace. Always
-                                        shown (greyed when nothing is hosted, like
-                                        the Processes icon) so the entry point to the
-                                        Site Manager is always discoverable; the
-                                        colour says whether a site is up. Hidden only
-                                        when site management isn't available at all
-                                        (no handler). */}
-                                    {onShowSiteManager &&
-                                        (() => {
-                                            const mine = devSites[ws.id] ?? [];
-                                            const tone = railSitesTone(mine, ws.id) ?? 'none';
-                                            return (
-                                                <span
-                                                    className={`sites-ind sites-${tone}`}
-                                                    role="button"
-                                                    tabIndex={-1}
-                                                    title={railSitesTitle(mine, ws.id)}
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        onShowSiteManager(ws.id);
-                                                    }}
-                                                >
-                                                    <IconServer size={13} />
-                                                </span>
-                                            );
-                                        })()}
                                 </button>
                                 <div className="tproj-body">
                                     {splitAmsSpecs(wsSpecs).agents.length > 0 && (
@@ -1360,40 +1331,24 @@ export default function Chooser({
                                         />
                                     ))}
                                     <div className="tproj-adds">
-                                        {!system && (
-                                            <TerminalTypeSplitButton
-                                                variant="row"
-                                                agentOnly
-                                                disabled={false}
-                                                workspaceId={ws.id}
-                                                workspaces={workspaces}
-                                                lastType={lastTerminalType}
-                                                onLastTypeChange={onLastTerminalType}
-                                                onAddView={(type) => onAddSpec(ws.id, type)}
-                                                onAgentCreated={onAgentCreated}
-                                                customCommand={agentCustomCommand}
-                                            />
-                                        )}
-                                        <button
-                                            type="button"
-                                            className="tterm tterm-add"
-                                            onClick={() => onAddSpec(ws.id, 'terminal')}
-                                        >
-                                            <span className="pick" />
-                                            <IconTerminal size={12} />
-                                            <span className="tname">Add Terminal…</span>
-                                        </button>
-                                        {/* "Add Files…" stays a distinct action next to the
-                                            terminal-type split button. */}
-                                        <button
-                                            type="button"
-                                            className="tterm tterm-add"
-                                            onClick={() => onAddSpec(ws.id, 'code')}
-                                        >
-                                            <span className="pick" />
-                                            <IconCode size={12} />
-                                            <span className="tname">Add Files…</span>
-                                        </button>
+                                        <TerminalTypeSplitButton
+                                            variant="row"
+                                            panelLauncher
+                                            allowAgents={!system}
+                                            disabled={false}
+                                            workspaceId={ws.id}
+                                            workspaces={workspaces}
+                                            lastType={lastTerminalType}
+                                            onLastTypeChange={onLastTerminalType}
+                                            onAddView={(type) => onAddSpec(ws.id, type)}
+                                            pluginPanels={pluginPanels}
+                                            onAddPluginPanel={onAddPluginPanel
+                                                ? (panel) => onAddPluginPanel(ws.id, panel)
+                                                : undefined}
+                                            onAgentCreated={onAgentCreated}
+                                            customCommand={agentCustomCommand}
+                                            includeFiles
+                                        />
                                     </div>
                                     {expandedProcs.has(ws.id) && (
                                         <div className="tproj-procs">
@@ -2375,6 +2330,110 @@ function SpecRow({
  * terminal is currently streaming. Pointer-events-none so it never blocks the
  * row's own clicks/drag.
  */
+function WorkspaceRuntimePill({
+    processTone,
+    processTitle,
+    processOpen,
+    siteTone,
+    siteTitle,
+    siteAvailable,
+    onProcesses,
+    onSites,
+}: {
+    processTone: 'none' | 'idle' | 'running' | 'crashed';
+    processTitle: string;
+    processOpen: boolean;
+    siteTone: 'none' | 'running' | 'failed' | 'starting' | 'idle';
+    siteTitle: string;
+    siteAvailable: boolean;
+    onProcesses: () => void;
+    onSites: () => void;
+}) {
+    const anchor = useRef<HTMLSpanElement>(null);
+    const menu = useRef<HTMLDivElement>(null);
+    const [open, setOpen] = useState(false);
+    const [position, setPosition] = useState<{ top: number; right: number } | null>(null);
+
+    const toggle = () => {
+        const rect = anchor.current?.getBoundingClientRect();
+        if (rect) setPosition({ top: rect.bottom + 5, right: window.innerWidth - rect.right });
+        setOpen((current) => !current);
+    };
+
+    useEffect(() => {
+        if (!open) return;
+        const close = (event: MouseEvent) => {
+            const target = event.target as Node;
+            if (anchor.current?.contains(target) || menu.current?.contains(target)) return;
+            setOpen(false);
+        };
+        const escape = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') setOpen(false);
+        };
+        document.addEventListener('mousedown', close);
+        document.addEventListener('keydown', escape);
+        return () => {
+            document.removeEventListener('mousedown', close);
+            document.removeEventListener('keydown', escape);
+        };
+    }, [open]);
+
+    const choose = (action: () => void) => {
+        setOpen(false);
+        action();
+    };
+
+    return (
+        <>
+            <span
+                ref={anchor}
+                className={`runtime-pill${open ? ' open' : ''}${processOpen ? ' processes-open' : ''}`}
+                role="button"
+                tabIndex={0}
+                aria-label="Workspace runtime managers"
+                aria-expanded={open}
+                title={`${processTitle} · ${siteTitle}`}
+                onClick={(event) => {
+                    event.stopPropagation();
+                    toggle();
+                }}
+                onKeyDown={(event) => {
+                    if (event.key !== 'Enter' && event.key !== ' ') return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    toggle();
+                }}
+            >
+                <i className={`runtime-half runtime-process proc-${processTone}`} />
+                <i className={`runtime-half runtime-site sites-${siteAvailable ? siteTone : 'none'}`} />
+            </span>
+            {open && position && createPortal(
+                <div
+                    ref={menu}
+                    className="runtime-pill-menu"
+                    role="menu"
+                    style={{ top: position.top, right: position.right }}
+                >
+                    <button type="button" role="menuitem" onClick={() => choose(onProcesses)}>
+                        <IconCpu size={13} />
+                        <span>Background processes</span>
+                    </button>
+                    <button
+                        type="button"
+                        role="menuitem"
+                        disabled={!siteAvailable}
+                        onClick={() => choose(onSites)}
+                    >
+                        <IconServer size={13} />
+                        <span>Site Manager</span>
+                    </button>
+                </div>,
+                document.body,
+            )}
+        </>
+    );
+}
+
 function AgentPulseSparkline({ ring, active }: { ring?: number[]; active: boolean }) {
     if (!ring || ring.length === 0) return null;
     const max = Math.max(...ring);

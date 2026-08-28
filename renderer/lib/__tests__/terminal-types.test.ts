@@ -5,6 +5,7 @@ import {
     terminalTypeById,
     terminalTypeForAgent,
     agentTerminalTypes,
+    panelLauncherTypes,
 } from '../terminal-types';
 import { workspaceSlug } from '../genie';
 import { normalizePurpose } from '../../components/Master/AgentTerminalForm';
@@ -72,6 +73,13 @@ describe('terminal-type registry', () => {
     it('offers only agent providers in the dedicated New Agent picker', () => {
         expect(agentTerminalTypes().map((type) => type.id)).toEqual(agentProviders());
         expect(agentTerminalTypes().every((type) => type.specialized && type.agent)).toBe(true);
+    });
+
+    it('offers a plain terminal and every agent provider in Add Panel', () => {
+        expect(panelLauncherTypes().map((type) => type.id)).toEqual([
+            'regular',
+            ...agentProviders(),
+        ]);
     });
 });
 

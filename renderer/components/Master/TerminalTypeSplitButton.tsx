@@ -14,6 +14,7 @@ import {
     TERMINAL_TYPES,
     terminalTypeById,
     agentTerminalTypes,
+    panelLauncherTypes,
     type TerminalTypeId,
 } from '../../lib/terminal-types';
 import { anchoredPopoverTop } from '../../lib/anchored-popover';
@@ -43,6 +44,8 @@ export default function TerminalTypeSplitButton({
     includeFiles,
     variant = 'toolbar',
     agentOnly = false,
+    panelLauncher = false,
+    allowAgents = true,
 }: {
     disabled: boolean;
     disabledReason?: string;
@@ -69,6 +72,10 @@ export default function TerminalTypeSplitButton({
     variant?: 'toolbar' | 'row';
     /** Dedicated AMS affordance: one obvious New Agent button, no plain shell. */
     agentOnly?: boolean;
+    /** One-button workspace launcher for terminals, files, agents and plugins. */
+    panelLauncher?: boolean;
+    /** System workspace uses Add Panel too, but cannot create project agents. */
+    allowAgents?: boolean;
 }) {
     const [menuOpen, setMenuOpen] = useState(false);
     const [formAgent, setFormAgent] = useState<AgentType | null>(null);
@@ -236,7 +243,12 @@ export default function TerminalTypeSplitButton({
     };
 
     const LastIcon = lastDef.icon;
-    const choices = agentOnly ? agentTerminalTypes() : TERMINAL_TYPES;
+    const choices = agentOnly
+        ? agentTerminalTypes()
+        : panelLauncher
+            ? panelLauncherTypes().filter((type) => allowAgents || !type.specialized)
+            : TERMINAL_TYPES;
+    const menuOnly = agentOnly || panelLauncher;
 
     return (
         <div
@@ -247,14 +259,20 @@ export default function TerminalTypeSplitButton({
             <button
                 type="button"
                 className="gbtn accent addview-main"
-                onClick={() => agentOnly ? setMenuOpen((open) => !open) : pickType(lastDef.id)}
+                onClick={() => menuOnly ? setMenuOpen((open) => !open) : pickType(lastDef.id)}
                 disabled={disabled}
-                title={disabled ? disabledReason : agentOnly ? 'Create a workspace agent' : `Add ${lastDef.label}`}
+                title={disabled
+                    ? disabledReason
+                    : panelLauncher
+                        ? 'Add a panel'
+                        : agentOnly
+                            ? 'Create a workspace agent'
+                            : `Add ${lastDef.label}`}
             >
-                {agentOnly ? <IconCode size={14} /> : <LastIcon size={14} />}
-                {agentOnly ? 'New Agent…' : `Add ${lastDef.label}`}
+                {menuOnly ? <IconCode size={14} /> : <LastIcon size={14} />}
+                {panelLauncher ? 'Add Panel…' : agentOnly ? 'New Agent…' : `Add ${lastDef.label}`}
             </button>
-            {!agentOnly && <button
+            {!menuOnly && <button
                 type="button"
                 className="gbtn accent addview-caret"
                 onClick={() => {

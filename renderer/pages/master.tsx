@@ -2133,6 +2133,10 @@ function MasterInner() {
                         onLastTerminalType={setLastTerminalType}
                         onAgentCreated={selectAgentSpec}
                         agentCustomCommand={agentCustomCommand}
+                        pluginPanels={pluginPanels}
+                        onAddPluginPanel={(workspaceId, panel) =>
+                            void addPluginPanel(workspaceId, panel)
+                        }
                     />
                 </div>
                 <div className="gright">

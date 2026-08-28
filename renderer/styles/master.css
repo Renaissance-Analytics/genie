@@ -3769,6 +3769,89 @@ body.gutter-dragging .grid-gutter {
     color: var(--term-warn, #e2c08d);
 }
 
+/* One compact runtime control replaces the two process/site glyph buttons.
+   Left half = background processes; right half = hosted sites. The halves carry
+   status by colour only; the menu names the destinations after a click. */
+.tproj-head .runtime-pill {
+    display: inline-grid;
+    grid-template-columns: 1fr 1fr;
+    width: 30px;
+    height: 14px;
+    padding: 2px;
+    gap: 2px;
+    flex: 0 0 auto;
+    cursor: pointer;
+    border: 1px solid var(--border-1);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--bg-2) 90%, transparent);
+}
+.tproj-head .runtime-pill:hover,
+.tproj-head .runtime-pill.open {
+    border-color: var(--fg-4);
+    background: rgba(255, 255, 255, 0.08);
+}
+.runtime-half {
+    display: block;
+    min-width: 0;
+    border-radius: 999px;
+    background: var(--fg-4);
+    opacity: 0.42;
+}
+.runtime-half.proc-idle,
+.runtime-half.sites-starting,
+.runtime-half.sites-idle {
+    background: var(--term-warn, #e2c08d);
+    opacity: 1;
+}
+.runtime-half.proc-running,
+.runtime-half.sites-running {
+    background: #10b981;
+    opacity: 1;
+}
+.runtime-half.proc-crashed,
+.runtime-half.sites-failed {
+    background: #f48771;
+    opacity: 1;
+}
+.runtime-pill.processes-open .runtime-process {
+    box-shadow: 0 0 0 1px color-mix(in srgb, currentColor 65%, white);
+}
+.runtime-pill-menu {
+    position: fixed;
+    z-index: 10020;
+    display: flex;
+    flex-direction: column;
+    min-width: 190px;
+    padding: 4px;
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-md, 7px);
+    background: var(--bg-1);
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.42);
+}
+.runtime-pill-menu button {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 7px 8px;
+    border: 0;
+    border-radius: var(--radius-sm, 4px);
+    background: transparent;
+    color: var(--fg-2);
+    font: inherit;
+    font-size: 12px;
+    text-align: left;
+    cursor: pointer;
+}
+.runtime-pill-menu button:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--fg-1);
+}
+.runtime-pill-menu button:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
 /* Inline process manager, revealed under the row when the indicator is clicked. */
 .tproj-procs {
     display: flex;

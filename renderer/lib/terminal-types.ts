@@ -88,3 +88,8 @@ export function terminalTypeForAgent(agent: AgentType): TerminalTypeDef {
 export function agentTerminalTypes(): TerminalTypeDef[] {
     return TERMINAL_TYPES.filter((type) => type.specialized && type.agent);
 }
+
+/** Built-in terminal-backed choices in the workspace Add Panel launcher. */
+export function panelLauncherTypes(): TerminalTypeDef[] {
+    return [...TERMINAL_TYPES];
+}
