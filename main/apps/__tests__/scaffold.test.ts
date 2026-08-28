@@ -32,7 +32,7 @@ describe('what it writes', () => {
     it('pins the shared schema revision Genie used to create the manifest', () => {
         const manifest = JSON.parse(find('My Thing', APP_MANIFEST_FILENAME));
         expect(manifest.$schema).toBe(
-            'https://raw.githubusercontent.com/Civicognita/shared-schemas/v1.0.1/schemas/workspace/genie-app.schema.json',
+            'https://raw.githubusercontent.com/Civicognita/shared-schemas/v0.1.0/schemas/workspace/genie-app.schema.json',
         );
     });
 

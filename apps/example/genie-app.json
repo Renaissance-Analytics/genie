@@ -1,5 +1,5 @@
 {
-    "$schema": "https://raw.githubusercontent.com/Civicognita/shared-schemas/v1.0.1/schemas/workspace/genie-app.schema.json",
+    "$schema": "https://raw.githubusercontent.com/Civicognita/shared-schemas/v0.1.0/schemas/workspace/genie-app.schema.json",
     "id": "com.genie.example",
     "slug": "example",
     "name": "Genie App Example",

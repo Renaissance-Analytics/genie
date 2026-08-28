@@ -791,7 +791,7 @@ describe('a manifest that declares something Genie does not know', () => {
 
 describe('shared schema identity', () => {
     it('preserves the pinned `$schema` in the validated manifest', () => {
-        const schema = 'https://raw.githubusercontent.com/Civicognita/shared-schemas/v1.0.1/schemas/workspace/genie-app.schema.json';
+        const schema = 'https://raw.githubusercontent.com/Civicognita/shared-schemas/v0.1.0/schemas/workspace/genie-app.schema.json';
         const result = validateAppManifest({ ...valid(), $schema: schema });
 
         expect(result.ok).toBe(true);
