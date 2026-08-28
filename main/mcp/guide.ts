@@ -67,10 +67,9 @@ and that is correct, not a fault.
 succeeded, so the envelope's \`isError\` stays unset.** Parse the JSON and check
 \`ok\`. Treating "not \`isError\`" as success reports refusals as wins.
 
-This is not hypothetical. A channel \`send\` that reaches nobody comes back
-\`ok:false, delivered:0\` with an error saying NO agent received it — deliberately,
-so a broadcast into an empty room can never be mistaken for a filed report. A
-caller checking only \`isError\` prints "Sent" over exactly that.
+This is not hypothetical. A DM to an unavailable agent comes back \`ok:false\`
+with the reason inside the payload. A caller checking only \`isError\` would
+incorrectly report that refusal as a successful send.
 
 When \`ok\` is false, the accompanying \`error\` says what to do next; surface it
 rather than a generic failure.
@@ -292,6 +291,12 @@ requires approval (the default) each blocks on an OS modal until the user
 approves; when the user turned approval OFF they run immediately. \`read\` /
 \`list\` never prompt.
 
+### registerAgent
+**Register a durable workspace agent without starting its TUI.** Supply its
+\`name\` and provider plus optional command, working directory, and specialized
+persona. Registration creates configuration and identity only; call \`runAgent\`
+with \`action:'start'\` when the agent should consume resources and begin work.
+
 ### runAgent
 **Start and control a coding agent** (claude / codex / a custom CLI) — your own
 workspace or one you govern.
@@ -315,12 +320,6 @@ Actions (\`action\`):
   name saved under two providers; the record decides otherwise. Optional
   \`instructions\` are PRE-LOADED as the agent's opening prompt. Optional
   \`repo\`/\`cwd\`. Returns \`id\`, \`ref\`, and \`reattached\`.
-- \`start\` with \`create: true\` — **DEFINE A NEW saved agent** under \`name\`.
-  This is the deliberate act of creating one; it is refused if the name is taken,
-  and a start with no matching saved agent is refused without it. \`agent\` picks
-  the provider (default: the workstation's). The real CLI is configurable in
-  Genie Settings, or pass an explicit \`command\` (required for \`custom\` unless
-  one is configured). It SPAWNS AN AUTONOMOUS AGENT.
 - \`send\` — deliver a \`prompt\` to the running agent \`id\`. SUBMITTED by default,
   even multi-line: the prompt is wrapped in bracketed paste and the Enter is
   delivered separately (outside the paste) so the agent's TUI submits it instead
@@ -350,28 +349,25 @@ your own or a governed workspace. To CREATE missing child workspaces, use
 \`provisionWorkspaces\`.
 
 ### agentinbox
-**Coordinate with the OTHER AI agents in this Genie** — AgentInbox, a LOCAL
-inter-agent messaging network. Discover peer agents, DM them 1:1, and broadcast
-on shared CHANNELS. You FETCH messages with \`receive\`; nothing is injected
-MID-TURN (that would corrupt it). To wait for a reply, make **ONE blocking
+**Coordinate with the OTHER AI agents in this Genie** — AgentInbox, a LOCAL,
+durable 1:1 messaging network. Discover visible peers and DM them directly. To
+wait for a reply, make **ONE blocking
 \`receive\` with \`wait: true\`** — it returns the moment a message lands, so do NOT
 sit in a poll loop. Actions (\`action\`):
 
 For Codex, Genie automatically installs a SessionStart hook that sends Codex's generated session id back to Genie and rebinds the existing AgentInbox identity and history in place. Agents should not hand-edit this hook or create a second registration. Codex owns hook trust; if it reports a pending hook, review it once with \`/hooks\`. Genie cannot inspect or bypass that trust decision.
 
-- \`list\` — discovery: your own agent info (\`self\`), the peers you can SEE
-  (\`agents\`), and your \`channels\`. Each peer carries \`reachable\`: **false means
+- \`list\` — discovery: your own agent info (\`self\`) and the peers you can SEE
+  (\`agents\`). Each peer carries \`reachable\`: **false means
   you can see it but cannot DM it** — discover-then-ask, rather than the agent
   silently not existing. Two tiers decide this and you must clear BOTH: the
-  WORKSPACE's access setting (who may reach into it at all — its channels and its
+  WORKSPACE's access setting (who may reach into it at all — its
   agents) and that agent's own \`scope\`.
 - \`send\` — DM a peer with \`to\` = their TAG (\`{provider}:{name}\`, e.g. \`claude:tynn\`;
   or \`{workspace}:{provider}:{name}\` for another workspace). That is the \`ref\`
   \`list\` prints for every peer. A raw \`agentId\` still works, but prefer the tag:
   an id lives on the TERMINAL spec, so it dies with a replaced terminal while a
-  name does not. OR broadcast with \`channel\` =
-  a purpose (\`frontend\` → your workspace's room) or \`slug:purpose\` (another
-  workspace's). Needs \`text\`. Optional \`interrupt: true\` also glows a DM target's
+  name does not. Needs \`text\`. Optional \`interrupt: true\` also glows a DM target's
   terminal so they notice (never injected into their pty). Optional
   \`attachments\` — a list of file paths inside **your own workspace** to send
   along. Genie READS each file and stores its BYTES, so the recipient gets a real
@@ -398,22 +394,21 @@ For Codex, Genie automatically installs a SessionStart hook that sends Codex's g
   whether to escalate to a nudge. Optional \`limit\` (default 20).
 - \`setAccessibility\` — \`scope\`, who may **DM you**: \`self\` (your workspace only,
   the default) / \`specific\` + \`workspaces\` (a chosen set — limited to workspaces
-  you govern) / \`all\` (the whole workstation) / \`none\` (nobody — but you stay
-  LISTED to peers as unreachable, so they can find you and ask) / \`hidden\`
-  (nobody, and you're omitted from their discovery entirely — the true opt-out).
+  you govern) / \`all\` (the whole workstation) / \`none\` or \`hidden\` (private
+  outside your workspace and omitted from external discovery).
   Your WORKSPACE's own access setting applies on top: it decides which workspaces
   may reach yours at all, and a workspace that refuses yours hides its agents from
   you completely.
-  Optional \`purpose\` renames your channel. Optional \`wakeOnDm\` (default ON): when
-  ON, a DM or channel message is ANNOUNCED in your chat as soon as it arrives —
+  A private agent may initiate a DM to a visible agent; that recipient can reply
+  in the durable thread without making the private sender externally discoverable.
+  Optional \`wakeOnDm\` (default ON): when ON, a DM is ANNOUNCED in your chat as soon as it arrives —
   mid-turn is fine, your TUI queues it — carrying its urgency so you can decide
   whether to break off. It is held back only while the HUMAN is typing at your
   terminal or has a draft in the box. Turn it OFF to stay silent until you check
   your inbox yourself.
-- \`join\` / \`leave\` — opt in/out of a \`channel\`.
 Your identity + accessibility persist across restarts. Local-only — no relay, no
 cross-host. Use it to hand a peer context, ask another agent to take a task, or
-watch a shared channel while you work.
+continue a durable direct conversation while you work.
 **Attachments** are byte COPIES Genie stores, never path references — so send the
 file rather than telling a peer where it lives. You may only attach from your own
 workspace and only save into your own; files are size-capped, and
@@ -474,6 +469,11 @@ failure**: it is input from outside the build that nobody has triaged yet. Read
 the entries with the Tynn \`feedback\` tool and convert what should become work;
 whether a given piece of feedback is worth acting on stays a **human call**, so
 never close entries just to bring the number down.
+
+### thumbsUp
+Call \`thumbsUp\` after startup and orientation are complete to mark the bound
+workspace agent ready. This is a durable readiness acknowledgement, not task
+completion; use \`imDone\` when handing control back to the user.
 
 ### imDone
 Call this the moment you **finish your work / hand back to the user** in THIS

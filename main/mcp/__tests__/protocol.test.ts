@@ -940,7 +940,6 @@ describe('handleMcpMessage', () => {
                 // "N agents" never implies you can DM all of them.
                 { agentId: 'walled', label: 'Walled', reachable: false },
             ],
-            channels: [{ key: 'w1:general', slug: 'ws-one', purpose: 'general' }],
         });
         const res = await handleMcpMessage(
             {
@@ -954,7 +953,6 @@ describe('handleMcpMessage', () => {
         expect(agentInbox).toHaveBeenCalledWith('term-W', {
             action: 'list',
             to: undefined,
-            channel: undefined,
             text: undefined,
             interrupt: undefined,
             cursor: undefined,
@@ -966,8 +964,7 @@ describe('handleMcpMessage', () => {
             sessionId: undefined,
         });
         const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
-        expect(text).toContain('1 agent(s) reachable, 1 visible but unavailable, 1 channel(s).');
-        expect(text).toContain('w1:general'); // the JSON block
+        expect(text).toContain('1 agent(s) reachable, 1 visible but unavailable.');
     });
 
     it('agentinbox exposes and routes the Codex SessionStart registration action', async () => {
@@ -1020,8 +1017,8 @@ describe('handleMcpMessage', () => {
         );
     });
 
-    it('agentinbox plumbs send args (to/channel/text/interrupt) and summarizes delivery', async () => {
-        const agentInbox = vi.fn().mockResolvedValue({ ok: true, delivered: 2 });
+    it('agentinbox plumbs direct-message args and summarizes delivery', async () => {
+        const agentInbox = vi.fn().mockResolvedValue({ ok: true, delivered: 1 });
         const res = await handleMcpMessage(
             {
                 jsonrpc: '2.0',
@@ -1029,17 +1026,17 @@ describe('handleMcpMessage', () => {
                 method: 'tools/call',
                 params: {
                     name: 'agentinbox',
-                    arguments: { action: 'send', channel: 'general', text: 'hey', interrupt: true },
+                    arguments: { action: 'send', to: 'claude:reviewer', text: 'hey', interrupt: true },
                 },
             },
             ctx({ agentInbox }),
         );
         expect(agentInbox).toHaveBeenCalledWith(
             'term-1',
-            expect.objectContaining({ action: 'send', channel: 'general', text: 'hey', interrupt: true }),
+            expect.objectContaining({ action: 'send', to: 'claude:reviewer', text: 'hey', interrupt: true }),
         );
         const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
-        expect(text).toContain('delivered to 2 recipient(s)');
+        expect(text).toContain('delivered to 1 recipient(s)');
     });
 
     it('agentinbox summarizes a receive with its message count', async () => {
@@ -1094,12 +1091,15 @@ describe('handleMcpMessage', () => {
             ctx(),
         );
         const tools = (res?.result as {
-            tools: Array<{ name: string; inputSchema: { properties: Record<string, unknown> } }>;
+            tools: Array<{ name: string; inputSchema: { properties: Record<string, { enum?: string[] }> } }>;
         }).tools;
         const props = tools.find((t) => t.name === 'agentinbox')!.inputSchema.properties;
-        for (const k of ['action', 'to', 'channel', 'text', 'wait', 'cursor', 'scope']) {
+        for (const k of ['action', 'to', 'text', 'wait', 'cursor', 'scope']) {
             expect(props).toHaveProperty(k);
         }
+        expect(props).not.toHaveProperty('channel');
+        expect(props.action.enum).not.toContain('join');
+        expect(props.action.enum).not.toContain('leave');
     });
 
     it('knowledge plumbs search args and summarizes the result count', async () => {

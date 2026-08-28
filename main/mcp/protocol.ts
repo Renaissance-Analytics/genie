@@ -1365,13 +1365,9 @@ export interface AgentInboxRequest {
         | 'receipts'
         | 'saveAttachment'
         | 'registerSession'
-        | 'setAccessibility'
-        | 'join'
-        | 'leave';
-    /** send: DM this agent id (mutually exclusive with `channel`). */
+        | 'setAccessibility';
+    /** send: DM this agent id. */
     to?: string;
-    /** send/join/leave: a channel — a bare purpose (own workspace) or `slug:purpose`. */
-    channel?: string;
     /** send: the message body. */
     text?: string;
     /** send (optional): also nudge a DM target's terminal glow (no pty injection). */
@@ -1426,8 +1422,6 @@ export interface AgentInboxResult {
     self?: AgentInboxAgentInfo;
     /** list: the peers discoverable by the caller (scope-filtered). */
     agents?: AgentInboxAgentInfo[];
-    /** list / join / leave: the caller's channels. */
-    channels?: AgentInboxChannelInfo[];
     /** receive: the new messages since the cursor. */
     messages?: AgentInboxMessage[];
     /** receive: the cursor to pass to the NEXT receive. */
@@ -2318,7 +2312,7 @@ const MANAGE_WORKSPACES_TOOL = {
 const AGENTINBOX_TOOL = {
     name: 'agentinbox',
     description:
-        "Coordinate with OTHER AI agents running in this Genie instance — AgentInbox, a LOCAL inter-agent messaging network. Discover peer agents (in your workspace, or across the workstation when they allow it), DM them 1:1, broadcast on shared CHANNELS, and ATTACH FILES to a message. Delivery is PULL-based — you FETCH messages; they're never injected mid-turn (which would corrupt it). To await a reply, make ONE blocking `receive` with `wait:true` rather than polling in a loop — it returns the moment a message lands. Actions (`action`): `list` (discovery — returns YOUR agent info `self`, the peers you can reach `agents`, and your `channels`); `send` (message a peer with `to` = their TAG — `{provider}:{name}` like `claude:tynn`, or `{workspace}:{provider}:{name}` like `ripple:codex:builder` for another workspace; the `ref` field `list` returns for every peer IS that tag, and a raw `agentId` still works, OR broadcast with `channel` = a purpose like `frontend` (your workspace's room) or `slug:purpose` (another workspace's) — needs `text`; optional `interrupt:true` also glows a DM target's terminal so they notice; optional `attachments` = paths in YOUR workspace to send as files); `receive` (fetch NEW messages — pass a `cursor` from a prior receive to page forward; set `wait:true` to LONG-POLL until a message arrives (optional `timeoutMs`), so you can block waiting for a peer's reply; each message carries `attachments` metadata when files rode it); `saveAttachment` (write a received file into YOUR workspace — `attachmentId` from the message, optional `path` and `overwrite`); `receipts` (read-receipts for the DMs YOU sent — each with a `seen` flag that's true once the recipient has received it, so you can tell 'queued' from 'seen' and decide whether to escalate; optional `limit`, default 20); `setAccessibility` (`scope` — who may DM you: `self` your workspace only (default) / `specific` + `workspaces` a chosen set / `all` the whole workstation / `none` nobody, but you STAY LISTED to peers as unreachable so they can find you and ask / `hidden` nobody, and you're omitted from discovery entirely; optional `purpose` renames your channel); `join`/`leave` (`channel`) to opt in/out of a channel. Attachments are BYTE COPIES stored by Genie, not path references — the recipient may be in a different workspace and never sees your disk. You can only attach files inside your OWN workspace and only save into YOUR OWN; files are size-capped and natively-executable types (.exe/.msi/.bat/…) are refused at both ends. Your identity, accessibility AND channel memberships are remembered across restarts — a channel you joined stays joined until you `leave` it. A channel `send` that reaches NOBODY comes back `ok:false` with `delivered:0` (the text is still kept in the channel history for the human): treat that as NOT REPORTED — check `list` for who's in the room, or DM someone with `to`. Local-only — no relay, no cross-host.",
+        "Coordinate with OTHER AI agents running in this Genie instance through durable 1:1 direct messages. Discover peers that chose to be visible, DM them by the `ref` returned from `list`, attach byte-copied files, receive messages, and inspect read receipts. Private agents outside your workspace are not listed; when one messages you first, you may reply in that durable thread using the sender id from the message. To await a reply, make ONE blocking `receive` with `wait:true` rather than polling. Local-only — no relay, no cross-host.",
     inputSchema: {
         type: 'object',
         properties: {
@@ -2333,14 +2327,12 @@ const AGENTINBOX_TOOL = {
                     'saveAttachment',
                     'registerSession',
                     'setAccessibility',
-                    'join',
-                    'leave',
                 ],
                 description: 'What to do.',
             },
             to: {
                 type: 'string',
-                description: 'send: the recipient agent id (DM). Mutually exclusive with `channel`.',
+                description: 'send: the recipient agent id or discovery `ref` (DM).',
             },
             attachments: {
                 type: 'array',
@@ -2377,11 +2369,6 @@ const AGENTINBOX_TOOL = {
                 description:
                     'registerSession: the generated Codex session id supplied by its SessionStart hook.',
             },
-            channel: {
-                type: 'string',
-                description:
-                    'send/join/leave: a channel — a bare purpose (`frontend` → your workspace room) or `slug:purpose` (another workspace).',
-            },
             text: { type: 'string', description: 'send: the message body.' },
             interrupt: {
                 type: 'boolean',
@@ -2406,7 +2393,7 @@ const AGENTINBOX_TOOL = {
                 type: 'string',
                 enum: ['none', 'self', 'specific', 'all', 'hidden'],
                 description:
-                    "setAccessibility: who may DM you — self (your workspace, default) / specific (a chosen set) / all (the workstation) / none (nobody — but you remain LISTED to peers as unreachable, so they can discover you and request access) / hidden (nobody, and you're omitted from discovery entirely). Your workspace's own access setting still applies on top: it decides which workspaces may reach yours at all.",
+                    "setAccessibility: who may discover and DM you — self (your workspace, default) / specific (a chosen set) / all (the workstation) / none or hidden (nobody outside your workspace). A private agent that initiates a DM can still receive replies in that durable thread.",
             },
             workspaces: {
                 type: 'array',
@@ -3796,20 +3783,17 @@ export async function handleMcpMessage(
                     action !== 'receipts' &&
                     action !== 'saveAttachment' &&
                     action !== 'registerSession' &&
-                    action !== 'setAccessibility' &&
-                    action !== 'join' &&
-                    action !== 'leave'
+                    action !== 'setAccessibility'
                 ) {
                     return err(
                         msg.id,
                         -32602,
-                        'agentinbox requires `action`: list | send | receive | receipts | saveAttachment | registerSession | setAccessibility | join | leave.',
+                        'agentinbox requires `action`: list | send | receive | receipts | saveAttachment | registerSession | setAccessibility.',
                     );
                 }
                 const result = await ctx.agentInbox(ctx.terminalId, {
                     action,
                     to: a.to,
-                    channel: a.channel,
                     text: a.text,
                     interrupt: a.interrupt,
                     cursor: a.cursor,
@@ -3839,7 +3823,7 @@ export async function handleMcpMessage(
                     summary =
                         `${reachable} agent(s) reachable` +
                         (blocked > 0 ? `, ${blocked} visible but unavailable` : '') +
-                        `, ${result.channels?.length ?? 0} channel(s).`;
+                        '.';
                 } else if (action === 'receive') {
                     // Attachments are easy to miss inside a JSON blob, and a file
                     // an agent never notices is a file that was never sent — so

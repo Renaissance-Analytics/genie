@@ -2138,14 +2138,13 @@ export async function agentInboxForMcp(
                     ok: true,
                     self: agentInboxBroker.getInfo(agentId) ?? undefined,
                     agents: agentInboxBroker.discoverableFor(agentId),
-                    channels: agentInboxBroker.channelsForAgent(agentId),
                 };
             case 'send': {
                 if (!req.text || !req.text.trim()) {
                     return { ok: false, error: 'send needs a non-empty `text`.' };
                 }
-                if (!req.to && !req.channel) {
-                    return { ok: false, error: 'send needs `to` (an agent) or `channel`.' };
+                if (!req.to) {
+                    return { ok: false, error: 'send needs `to` (an agent).' };
                 }
                 // Attachments are read + stored BEFORE the message is created, so
                 // a message never claims files that aren't in the store. The read
@@ -2193,32 +2192,17 @@ export async function agentInboxForMcp(
                 const r = agentInboxBroker.send({
                     fromAgentId: agentId,
                     toAgentId,
-                    channelArg: req.channel,
                     text: req.text,
                     interrupt: req.interrupt,
                     attachments,
                 });
-                // A channel send auto-joins the room — make that membership durable
-                // so it isn't silently lost on the next restart (genie #65).
-                if (req.channel) persistAgentChannels(spec.id, agentId);
-                // `delivered` / `channel` / `rejoined` ride BOTH arms: a broadcast
-                // that reached NOBODY comes back `ok: false` (it used to read as a
-                // clean success and the report was lost), and the caller still needs
-                // the facts to act on it.
                 return r.ok
                     ? {
                           ok: true,
                           delivered: r.delivered,
                           ...(attachments.length ? { attachments } : {}),
-                          ...(r.channel ? { channel: r.channel, rejoined: r.rejoined === true } : {}),
                       }
-                    : {
-                          ok: false,
-                          error: r.error,
-                          ...(r.channel
-                              ? { delivered: r.delivered ?? 0, channel: r.channel, rejoined: r.rejoined === true }
-                              : {}),
-                      };
+                    : { ok: false, error: r.error };
             }
             case 'receive': {
                 const { messages, cursor } = await agentInboxBroker.receive(agentId, {
@@ -2309,21 +2293,6 @@ export async function agentInboxForMcp(
                     updateTerminalSpec(spec.id, { meta });
                 }
                 return { ok: true, self: info ?? undefined };
-            }
-            case 'join': {
-                if (!req.channel) return { ok: false, error: 'join needs a `channel`.' };
-                const ok = agentInboxBroker.joinChannel(agentId, req.channel);
-                if (!ok) return { ok: false, error: `Couldn't resolve channel "${req.channel}".` };
-                // Durable membership (genie #65) — a join that lives only in the
-                // broker's memory evaporates on the next restart.
-                persistAgentChannels(spec.id, agentId);
-                return { ok: true, channels: agentInboxBroker.channelsForAgent(agentId) };
-            }
-            case 'leave': {
-                if (!req.channel) return { ok: false, error: 'leave needs a `channel`.' };
-                agentInboxBroker.leaveChannel(agentId, req.channel);
-                persistAgentChannels(spec.id, agentId);
-                return { ok: true, channels: agentInboxBroker.channelsForAgent(agentId) };
             }
         }
     } catch (e) {
