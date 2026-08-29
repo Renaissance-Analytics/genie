@@ -54,7 +54,7 @@ test.beforeAll(async () => {
     // is now Add workspace → New → Local folder → Browse. Done once: every test
     // below drives Browse from here. The old Simple route no longer exists in
     // the managed-workspace UX.
-    await page.getByRole('heading', { name: 'New', exact: true }).click();
+    await page.getByRole('heading', { name: 'New workspace', exact: true }).click();
     // `local` is the New wizard's default source mode; clicking it keeps the
     // spec on the documented path if that default ever changes.
     await page.getByRole('button', { name: 'Local folder' }).click();

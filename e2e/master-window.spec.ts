@@ -47,9 +47,9 @@ test.beforeAll(async () => {
     // returning-user path is to dismiss onboarding and continue into the
     // existing workspace. Exercise that real path instead of mutating
     // localStorage behind the product's back.
-    const onboarding = page.getByRole('heading', {
-        name: 'Getting the Workstation Ready',
-    });
+    const onboarding = page
+        .locator('[data-react-fancy-modal]')
+        .filter({ hasText: 'Getting the Workstation Ready' });
     await onboarding.waitFor({ state: 'visible', timeout: 20_000 }).catch(() => {});
     if (await onboarding.count()) {
         await page.keyboard.press('Escape');
@@ -205,7 +205,10 @@ test('the floor lays out the seeded terminal, and the status bar counts it', asy
     // visited workspace's panel is kept mounted-hidden so its pty survives, so the
     // count never comes back down and switching back does not restore it. Put any
     // test that switches workspaces AFTER this one.
-    await expect(page.locator('.tpanel')).toHaveCount(1);
+    // Genie OS is an always-mounted flyout AgentPanel, but it is not part of
+    // the workspace Floor while closed. Count what the user can actually see,
+    // not hidden system chrome outside the active workspace.
+    await expect(page.locator('.tpanel:visible')).toHaveCount(1);
 
     // A panel with no terminal in it is a box. The floor's job is to host a live
     // shell, so the assertion goes as far as the xterm the panel mounts.
