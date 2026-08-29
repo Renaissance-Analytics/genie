@@ -205,10 +205,12 @@ test('the floor lays out the seeded terminal, and the status bar counts it', asy
     // visited workspace's panel is kept mounted-hidden so its pty survives, so the
     // count never comes back down and switching back does not restore it. Put any
     // test that switches workspaces AFTER this one.
-    // Genie OS is an always-mounted flyout AgentPanel, but it is not part of
-    // the workspace Floor while closed. Count what the user can actually see,
-    // not hidden system chrome outside the active workspace.
-    await expect(page.locator('.tpanel:visible')).toHaveCount(1);
+    // Genie OS is its own AgentPanel surface and may be mounted alongside the
+    // Floor. This assertion is specifically about workspace TERMINAL panels:
+    // the active workspace contributes one and the inactive peer contributes
+    // none. Keeping the surface qualifier also guards the distinct AgentPanel
+    // contract instead of folding system agents back into terminal counts.
+    await expect(page.locator('.tpanel.terminal-panel:visible')).toHaveCount(1);
 
     // A panel with no terminal in it is a box. The floor's job is to host a live
     // shell, so the assertion goes as far as the xterm the panel mounts.
