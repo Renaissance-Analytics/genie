@@ -2,11 +2,12 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Action, Card, Heading, Icon, Modal, Text } from '@particle-academy/react-fancy';
 import { agentProviders, providerDef, type AgentProviderId } from '../../../main/agents/registry';
 import { api, type BackendUser, type HostToolName, type WorkspaceRow } from '../../lib/genie';
-import { GitHubConnect, useGitHubAccount } from '../GitHubConnect';
+import { GitHubConnect, OwnerSelect, useGitHubAccount } from '../GitHubConnect';
 import AddWorkspaceModal from '../AddWorkspaceModal';
 import { ToolchainSetupWizard } from './ToolchainSetupWizard';
+import { canFinishFirstRun } from '../../lib/workspace-onboarding';
 
-type Step = 'welcome' | 'drivers' | 'toolchain' | 'tynn' | 'github' | 'workspace';
+type Step = 'welcome' | 'drivers' | 'toolchain' | 'tynn' | 'github' | 'os' | 'workspace';
 
 const DRIVER_TOOL: Partial<Record<AgentProviderId, HostToolName>> = {
     claude: 'claude-code',
@@ -17,10 +18,12 @@ export function FirstRunOnboarding({
     open,
     onComplete,
     onWorkspaceAdded,
+    existingWorkspaceCount,
 }: {
     open: boolean;
     onComplete: () => void;
     onWorkspaceAdded: (workspace: WorkspaceRow) => void;
+    existingWorkspaceCount: number;
 }) {
     const [step, setStep] = useState<Step>('welcome');
     const [drivers, setDrivers] = useState<AgentProviderId[]>(['claude']);
@@ -28,7 +31,15 @@ export function FirstRunOnboarding({
     const [tynnUser, setTynnUser] = useState<BackendUser | null>(null);
     const [signingIn, setSigningIn] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [osPath, setOsPath] = useState('');
+    const [osOwner, setOsOwner] = useState('');
+    const [osSyncing, setOsSyncing] = useState(false);
+    const [osSynced, setOsSynced] = useState(false);
     const github = useGitHubAccount();
+    const finish = () => {
+        localStorage.setItem('genie-onboarding-complete', '1');
+        onComplete();
+    };
 
     const wanted = useMemo<HostToolName[]>(() => {
         const tools: HostToolName[] = ['git', 'node', 'npm'];
@@ -49,6 +60,10 @@ export function FirstRunOnboarding({
         return api().on.authChanged(refresh);
     }, [open]);
 
+    useEffect(() => {
+        if (open) void api().app.genieOsWorkspace().then((result) => setOsPath(result.path));
+    }, [open]);
+
     if (!open) return null;
     if (step === 'toolchain') {
         return (
@@ -62,11 +77,12 @@ export function FirstRunOnboarding({
     if (step === 'workspace') {
         return (
             <AddWorkspaceModal
-                onClose={() => {}}
+                onClose={() => {
+                    if (existingWorkspaceCount > 0) finish();
+                }}
                 onAdded={(workspace) => {
                     onWorkspaceAdded(workspace);
-                    localStorage.setItem('genie-onboarding-complete', '1');
-                    onComplete();
+                    finish();
                 }}
             />
         );
@@ -91,7 +107,9 @@ export function FirstRunOnboarding({
 
     return (
         <>
-            <Modal open onClose={() => {}} size="lg">
+            <Modal open onClose={() => {
+                if (existingWorkspaceCount > 0) finish();
+            }} size="lg">
                 <Modal.Header>
                     <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <Icon name="sparkles" size="sm" /> Getting the Workstation Ready
@@ -176,10 +194,52 @@ export function FirstRunOnboarding({
                         >
                             <GitHubConnect account={github} />
                             <div style={{ display: 'flex', gap: 8 }}>
-                                <Action color="blue" onClick={() => setStep('workspace')}>
+                                <Action color="blue" onClick={() => setStep('os')}>
                                     {github.connected ? 'Continue' : 'Skip for now'}
                                 </Action>
+                                {existingWorkspaceCount > 0 && (
+                                    <Action variant="ghost" onClick={() => setStep('workspace')}>
+                                        Add another workspace
+                                    </Action>
+                                )}
                             </div>
+                        </OnboardingPage>
+                    )}
+
+                    {step === 'os' && (
+                        <OnboardingPage
+                            title="Set up Genie OS"
+                            body="Genie has its own private AGI workspace and memory. It operates this workstation, never your project folders. You can optionally back that workspace up to a private GitHub repository."
+                        >
+                            <Text size="xs" className="text-zinc-500">Workspace: <code>{osPath || 'Preparing…'}</code></Text>
+                            {github.connected && !osSynced && (
+                                <>
+                                    <OwnerSelect account={github} value={osOwner} onChange={setOsOwner} />
+                                    <Action variant="ghost" disabled={osSyncing} onClick={async () => {
+                                        setOsSyncing(true);
+                                        setError(null);
+                                        try {
+                                            const created = await api().github.createRepo({
+                                                name: 'genie-os.agi', owner: osOwner || null,
+                                                ownerId: osOwner ? github.installations.find((item) => item.login === osOwner)?.id ?? null : null,
+                                                description: 'Private Genie OS workspace and memory', private: true,
+                                            });
+                                            await api().app.syncGenieOs(created.clone_url);
+                                            setOsSynced(true);
+                                        } catch (cause) {
+                                            setError(cause instanceof Error ? cause.message : String(cause));
+                                        } finally {
+                                            setOsSyncing(false);
+                                        }
+                                    }}>{osSyncing ? 'Creating private backup…' : 'Back up Genie OS to GitHub'}</Action>
+                                </>
+                            )}
+                            {osSynced && <Text size="sm">✓ Genie OS workspace is synced.</Text>}
+                            {error && <Text size="xs" className="text-rose-500">{error}</Text>}
+                            <Action color="blue" onClick={() => {
+                                if (canFinishFirstRun({ existingWorkspaceCount, setupComplete: true })) finish();
+                                else setStep('workspace');
+                            }}>{existingWorkspaceCount > 0 ? 'Finish setup' : 'Add first workspace'}</Action>
                         </OnboardingPage>
                     )}
                 </Modal.Body>

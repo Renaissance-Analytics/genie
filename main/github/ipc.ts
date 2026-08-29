@@ -26,6 +26,7 @@ import {
     getRepoOwner,
     getViewer,
     listInstallations,
+    listAccessibleRepositories,
     listOrgs,
     parseGitHubRemote,
     type CreateRepoOpts,
@@ -216,6 +217,7 @@ export function registerGithubIpc(): void {
         'github:installations',
         async (): Promise<GitHubInstallation[]> => listInstallations(),
     );
+    ipcMain.handle('github:repositories', () => listAccessibleRepositories());
     // Resolve a source repo's owner so create/fork can target the SAME
     // account (personal or org) the original repo lives in.
     ipcMain.handle(

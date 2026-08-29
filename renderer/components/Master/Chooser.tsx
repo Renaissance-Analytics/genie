@@ -13,7 +13,6 @@ import {
     IconCpu,
     IconGlobe,
     IconHome,
-    IconMonitorCog,
     IconPanelLeftOpen,
     IconPause,
     IconPin,
@@ -81,10 +80,6 @@ interface Props {
     activeWorkspaceId: string | null;
     pinned: boolean;
     onTogglePin: () => void;
-    /** Whether the synthetic System Workspace is currently shown in the list. */
-    systemRevealed: boolean;
-    /** Toggle the System Workspace's visibility (the sidebar chip button). */
-    onToggleSystemWorkspace: () => void;
     onActivateWorkspace: (workspaceId: string) => void;
     onToggleSpec: (id: string) => void;
     onAddSpec: (workspaceId: string, type: ViewType) => void;
@@ -169,8 +164,6 @@ export default function Chooser({
     activeWorkspaceId,
     pinned,
     onTogglePin,
-    systemRevealed,
-    onToggleSystemWorkspace,
     onActivateWorkspace,
     onToggleSpec,
     onAddSpec,
@@ -999,32 +992,7 @@ export default function Chooser({
             </aside>
 
             <aside className="chooser-flyout">
-                {/* Top row: the System Workspace toggle (its chip icon mirrors
-                    how regular workspaces render in the sidebar) + the search
-                    box, on a single line. The old "Terminals" title + subtext +
-                    pin lived here; the side rail already owns the pin, so this
-                    reclaims the space. */}
                 <div className="rail-head">
-                    <button
-                        type="button"
-                        className={`gicon rail-system-toggle${
-                            systemRevealed ? ' on' : ''
-                        }`}
-                        onClick={onToggleSystemWorkspace}
-                        title={
-                            systemRevealed
-                                ? 'Hide System Workspace'
-                                : 'Show System Workspace'
-                        }
-                        aria-label={
-                            systemRevealed
-                                ? 'Hide System Workspace'
-                                : 'Show System Workspace'
-                        }
-                        aria-pressed={systemRevealed}
-                    >
-                        <IconMonitorCog size={16} />
-                    </button>
                     <div className="rail-search">
                         <IconSearch />
                         <input

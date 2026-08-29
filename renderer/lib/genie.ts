@@ -3436,6 +3436,8 @@ export interface GenieApi {
         getCurrentProject: () => Promise<{ id: string; name: string } | null>;
         /** The user's home directory (roots the synthetic System Workspace). */
         homeDir: () => Promise<string>;
+        genieOsWorkspace: () => Promise<{ path: string }>;
+        syncGenieOs: (remoteUrl: string) => Promise<{ ok: true; path: string }>;
         /** Open Settings. `fromRemote:true` (a remote/host window) restricts it to
          *  the connection-relevant subset (Appearance / Notifications / copy-paste). */
         showSettings: (fromRemote?: boolean) => Promise<{ ok: boolean }>;
@@ -3804,6 +3806,15 @@ export interface GenieApi {
                 isOrg: boolean;
             }>
         >;
+        repositories: () => Promise<Array<{
+            id: number;
+            name: string;
+            fullName: string;
+            owner: string;
+            private: boolean;
+            cloneUrl: string;
+            installationId: number;
+        }>>;
         /** Resolve a source repo's owner (login + id + isOrg) so create/fork
          *  can target the SAME account the original repo lives in. */
         repoOwner: (

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Action, Select, Text } from '@particle-academy/react-fancy';
 import { api } from '../lib/genie';
+import { installationLoadState } from '../lib/github-installations';
 
 /**
  * Shared GitHub account surface for every .agi creation flow. Two pieces:
@@ -52,6 +53,7 @@ export interface GitHubAccount {
     installations: GitHubInstallationLite[];
     /** True once installations have been fetched at least once after connect. */
     installationsLoaded: boolean;
+    installationsError: string | null;
     /** True when the App is installed NOWHERE — authorized but can't act yet. */
     noInstallations: boolean;
     /** True when the App is installed on the user's personal account. */
@@ -90,6 +92,7 @@ interface GitHubAccountSnapshot {
     orgs: GitHubOrgLite[];
     installations: GitHubInstallationLite[];
     installationsLoaded: boolean;
+    installationsError: string | null;
     storageOk: boolean;
     clientIdSet: boolean;
 }
@@ -105,6 +108,9 @@ export function useGitHubAccount(): GitHubAccount {
     );
     const [installationsLoaded, setInstallationsLoaded] = useState(
         accountCache?.installationsLoaded ?? false,
+    );
+    const [installationsError, setInstallationsError] = useState<string | null>(
+        accountCache?.installationsError ?? null,
     );
     const [storageOk, setStorageOk] = useState(accountCache?.storageOk ?? true);
     const [clientIdSet, setClientIdSet] = useState(accountCache?.clientIdSet ?? false);
@@ -130,6 +136,7 @@ export function useGitHubAccount(): GitHubAccount {
         let nextInstallations: GitHubInstallationLite[] = [];
         let nextOrgs: GitHubOrgLite[] = [];
         let nextInstallationsLoaded = false;
+        let nextInstallationsError: string | null = null;
         if (st.connected) {
             // One installations fetch covers both the org picker AND the
             // "where is Genie installed" detection — orgs are derived from it.
@@ -141,19 +148,21 @@ export function useGitHubAccount(): GitHubAccount {
                     isOrg: i.isOrg,
                 }));
                 nextOrgs = list.filter((i) => i.isOrg).map((o) => ({ login: o.login }));
-            } catch {
-                nextInstallations = [];
-                nextOrgs = [];
-            } finally {
-                nextInstallationsLoaded = true;
+                const outcome = installationLoadState({ connected: true, installations: list });
+                nextInstallationsLoaded = outcome.loaded;
+            } catch (cause) {
+                const outcome = installationLoadState({ connected: true, error: cause });
+                nextInstallationsError = outcome.error;
             }
             setInstallations(nextInstallations);
             setOrgs(nextOrgs);
             setInstallationsLoaded(nextInstallationsLoaded);
+            setInstallationsError(nextInstallationsError);
         } else {
             setInstallations([]);
             setOrgs([]);
             setInstallationsLoaded(false);
+            setInstallationsError(null);
         }
         // Persist the account-global snapshot so the NEXT mount of any consumer
         // starts from this known state instead of flashing disconnected while
@@ -164,6 +173,7 @@ export function useGitHubAccount(): GitHubAccount {
             orgs: nextOrgs,
             installations: nextInstallations,
             installationsLoaded: nextInstallationsLoaded,
+            installationsError: nextInstallationsError,
             storageOk: st.storageOk,
             clientIdSet: st.clientIdSet,
         };
@@ -307,6 +317,7 @@ export function useGitHubAccount(): GitHubAccount {
         orgs,
         installations,
         installationsLoaded,
+        installationsError,
         noInstallations,
         personalInstalled,
         storageOk,
@@ -426,6 +437,7 @@ export function GitHubConnect({ account }: { account: GitHubAccount }) {
         flow,
         installations,
         installationsLoaded,
+        installationsError,
         noInstallations,
     } = account;
 
@@ -455,7 +467,17 @@ export function GitHubConnect({ account }: { account: GitHubAccount }) {
                 <Text size="xs" style={{ color: 'var(--emerald-600)', display: 'block' }}>
                     ✓ Connected as <strong>{username}</strong>
                 </Text>
-                {noInstallations ? (
+                {installationsError && (
+                    <div style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid var(--rose-500)' }}>
+                        <Text size="xs" className="text-rose-500" style={{ display: 'block' }}>
+                            Genie could not refresh the GitHub App installations: {installationsError}
+                        </Text>
+                        <Action size="sm" variant="ghost" icon="refresh-cw" onClick={() => void account.refresh()}>
+                            Retry installation discovery
+                        </Action>
+                    </div>
+                )}
+                {!installationsError && noInstallations ? (
                     <div
                         style={{
                             display: 'flex',
@@ -491,7 +513,7 @@ export function GitHubConnect({ account }: { account: GitHubAccount }) {
                             </Action>
                         </div>
                     </div>
-                ) : (
+                ) : !installationsError ? (
                     installationsLoaded && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                             <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
@@ -518,7 +540,7 @@ export function GitHubConnect({ account }: { account: GitHubAccount }) {
                             </div>
                         </div>
                     )
-                )}
+                ) : null}
             </div>
         );
     }

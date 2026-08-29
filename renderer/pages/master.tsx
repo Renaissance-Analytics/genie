@@ -28,6 +28,7 @@ import QuestionInboxFlyout from '../components/Master/QuestionInboxFlyout';
 import AppStoreFlyout from '../components/Master/AppStoreFlyout';
 import AppTray from '../components/Master/AppTray';
 import Floor from '../components/Master/Floor';
+import AgentPanel from '../components/Master/AgentPanel';
 import { questionBadgeCount } from '../lib/question-badge';
 import TerminalTypeSplitButton from '../components/Master/TerminalTypeSplitButton';
 import AgentTerminalForm from '../components/Master/AgentTerminalForm';
@@ -274,12 +275,8 @@ function MasterInner() {
     const [focusId, setFocusId] = useState<string | null>(null);
     const [maximizedId, setMaximizedId] = useState<string | null>(null);
     const [chooserPinned, setChooserPinned] = useState(true);
-    // System Workspace — a synthetic, never-persisted sidebar entry rooted at
-    // the user's home dir, hosting system (non-workspace) processes. Hidden by
-    // default; the sidebar's chip button toggles `systemRevealed`. `homeDir`
-    // comes from main on mount.
+    // Legacy fallback until the dedicated Genie OS terminal spec resolves.
     const [homeDir, setHomeDir] = useState<string | null>(null);
-    const [systemRevealed, setSystemRevealed] = useState(false);
     useEffect(() => {
         void api()
             .app.homeDir()
@@ -364,6 +361,7 @@ function MasterInner() {
     const [onboardingOpen, setOnboardingOpen] = useState(
         () => localStorage.getItem('genie-onboarding-complete') !== '1',
     );
+    const [genieOsOpen, setGenieOsOpen] = useState(false);
     useEffect(() => {
         if (!hasGenieBridge()) return;
         const load = () => {
@@ -732,20 +730,21 @@ function MasterInner() {
     // concept. In a remote/host window you're driving ANOTHER machine, so it makes
     // no sense there and must NOT appear in the rail: keep it null (which also
     // inerts the reveal chip + the id resolver entry for a host window).
+    const genieOsSpec = useMemo(
+        () => specs.find((spec) => spec.meta?.agent_id === 'genie:workstation') ?? null,
+        [specs],
+    );
     const systemWorkspace = useMemo(
-        () => (homeDir && !isRemoteWindow() ? makeSystemWorkspace(homeDir) : null),
-        [homeDir],
+        () => (!isRemoteWindow() && (genieOsSpec?.cwd || homeDir)
+            ? makeSystemWorkspace(genieOsSpec?.cwd || homeDir!)
+            : null),
+        [genieOsSpec?.cwd, homeDir],
     );
 
     // Workspaces shown in the sidebar: the persisted list, with the System
     // Workspace pinned to the TOP when revealed. It's fixed (never draggable /
     // reorderable) so it always sits first and doesn't shuffle the user's order.
-    const displayWorkspaces = useMemo(() => {
-        if (systemRevealed && systemWorkspace) {
-            return [systemWorkspace, ...workspaces];
-        }
-        return workspaces;
-    }, [workspaces, systemRevealed, systemWorkspace]);
+    const displayWorkspaces = workspaces;
 
     // id → workspace resolver. ALWAYS includes the System Workspace (even when
     // hidden) so handlers can resolve its id for terminals/editors/processes
@@ -1777,7 +1776,7 @@ function MasterInner() {
                         setFocusId(id);
                         setMaximizedId((cur) => surfaceMaximized(cur, id));
                     },
-                    revealSystem: () => setSystemRevealed(true),
+                    revealSystem: () => setGenieOsOpen(true),
                     emitOpenInPanel,
                 });
                 void api().editor.openFileResult(requestId, result);
@@ -1799,9 +1798,7 @@ function MasterInner() {
     // and cannot open it is half a fix.
     const revealTerminal = useCallback((id: string, workspaceId: string | null) => {
         if (workspaceId) {
-            // A System-Workspace panel is hidden until the section is revealed,
-            // so activating alone would land on a workspace with nothing shown.
-            if (workspaceId === SYSTEM_WORKSPACE_ID) setSystemRevealed(true);
+            if (workspaceId === SYSTEM_WORKSPACE_ID) setGenieOsOpen(true);
             activateWorkspaceRef.current(workspaceId);
         }
         setSelected((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
@@ -1998,6 +1995,7 @@ function MasterInner() {
                 {localStorage.getItem('genie-onboarding-complete') !== '1' ? (
                     <FirstRunOnboarding
                         open
+                        existingWorkspaceCount={workspaces.length}
                         onComplete={async () => {
                             setOnboardingOpen(false);
                             await refreshAuth();
@@ -2088,27 +2086,6 @@ function MasterInner() {
                         activeWorkspaceId={activeWorkspaceId}
                         pinned={chooserPinned}
                         onTogglePin={() => setChooserPinned((p) => !p)}
-                        systemRevealed={systemRevealed}
-                        onToggleSystemWorkspace={() => {
-                            setSystemRevealed((on) => {
-                                const next = !on;
-                                if (next && systemWorkspace) {
-                                    // Revealing → jump straight to it.
-                                    activateWorkspace(SYSTEM_WORKSPACE_ID);
-                                } else if (
-                                    !next &&
-                                    activeWorkspaceId === SYSTEM_WORKSPACE_ID
-                                ) {
-                                    // Hiding while it's active → fall back to the
-                                    // first real workspace so the toolbar/grid
-                                    // don't keep pointing at a now-hidden row.
-                                    const fallback = workspaces[0]?.id ?? null;
-                                    if (fallback) activateWorkspace(fallback);
-                                    else setActiveWorkspaceId(null);
-                                }
-                                return next;
-                            });
-                        }}
                         onActivateWorkspace={activateWorkspace}
                         onToggleSpec={toggleSpec}
                         onAddSpec={(wsId, type) => void addSpec(wsId, type)}
@@ -2178,6 +2155,9 @@ function MasterInner() {
                         ).unknown}
                         githubNeedsResolve={githubNeedsResolve}
                         onShowGithubCaps={() => setGithubCapsOpen((o) => !o)}
+                        genieOsActive={!!genieOsSpec && activeIds.has(genieOsSpec.id)}
+                        genieOsOpen={genieOsOpen}
+                        onShowGenieOs={() => setGenieOsOpen((open) => !open)}
                     />
                     <UpdateReadyBanner />
                     <Toolbar
@@ -2228,6 +2208,17 @@ function MasterInner() {
                         onFocus={(id) => setFocusId((cur) => (cur === id ? null : id))}
                         onToggleMaximize={toggleMaximize}
                         onDisable={(id) => void disableSpec(id)}
+                        onAgentSettings={(spec) => setAgentEditSpec(spec)}
+                        onRestartAgent={async (spec) => {
+                            const ok = await showPrompt({
+                                title: 'Restart agent',
+                                body: `Restart "${spec.label}"? Any unsent terminal input will be lost. Genie will resume the saved conversation when the provider supports it.`,
+                                confirmLabel: 'Restart',
+                            });
+                            if (ok === null) return;
+                            const result = await api().terminalSpec.restartAgent(spec.id);
+                            setToast(result.ok ? 'Agent restarted.' : result.error || 'Could not restart the agent.');
+                        }}
                         onAddTerminal={() =>
                             activeWorkspaceId && void addSpec(activeWorkspaceId, 'terminal')
                         }
@@ -2243,6 +2234,29 @@ function MasterInner() {
                     />
                 </div>
             </div>
+
+            {!isStage && genieOsSpec && systemWorkspace && (
+                <div className={`genie-os-layer${genieOsOpen ? ' is-open' : ''}`} aria-hidden={!genieOsOpen}>
+                    <button className="genie-os-backdrop" aria-label="Close Genie OS" onClick={() => setGenieOsOpen(false)} />
+                    <aside className="genie-os-flyout" aria-label="Genie OS agent">
+                        <AgentPanel
+                            spec={genieOsSpec}
+                            workspace={systemWorkspace}
+                            focused={genieOsOpen}
+                            attention={attentionIds.has(genieOsSpec.id)}
+                            onAttentionClear={() => clearAttention(genieOsSpec.id)}
+                            onClose={() => setGenieOsOpen(false)}
+                            onAgentSettings={() => setAgentEditSpec(genieOsSpec)}
+                            onRestartAgent={async () => {
+                                const result = await api().terminalSpec.restartAgent(genieOsSpec.id);
+                                setToast(result.ok ? 'Genie OS restarted.' : result.error || 'Could not restart Genie OS.');
+                            }}
+                            onMarkActive={() => markActive(genieOsSpec.id)}
+                            onMarkInactive={() => markInactive(genieOsSpec.id)}
+                        />
+                    </aside>
+                </div>
+            )}
 
             <DocsFlyout open={docsOpen} onClose={() => setDocsOpen(false)} />
             <IssueWatchFlyout
@@ -2410,6 +2424,7 @@ function MasterInner() {
 
             <FirstRunOnboarding
                 open={onboardingOpen}
+                existingWorkspaceCount={workspaces.length}
                 onComplete={() => setOnboardingOpen(false)}
                 onWorkspaceAdded={(row) => {
                     setWorkspaces((previous) => [...previous.filter((item) => item.id !== row.id), row]);
@@ -3066,6 +3081,9 @@ function TitleBar({
     githubNeedsResolve = false,
     onShowGithubCaps,
     cornerInRail = false,
+    genieOsActive = false,
+    genieOsOpen = false,
+    onShowGenieOs,
 }: {
     isStage: boolean;
     stageWorkspaceName?: string;
@@ -3084,6 +3102,9 @@ function TitleBar({
     /** True when GitHub permissions are missing — shows a persistent warning. */
     githubNeedsResolve?: boolean;
     onShowGithubCaps?: () => void;
+    genieOsActive?: boolean;
+    genieOsOpen?: boolean;
+    onShowGenieOs?: () => void;
     /**
      * True in the master layout, where this bar is the RIGHT column's header
      * and the LEFT column already owns the window's top-left corner (traffic
@@ -3148,6 +3169,18 @@ function TitleBar({
                 spacer, so installing an app never shifts the icons the user aims
                 at. Its own layout is row-reverse; see AppTray. */}
             {!isStage && <AppTray onOpenStore={() => onShowAppStore?.()} />}
+            {!isStage && onShowGenieOs && (
+                <button
+                    type="button"
+                    className={`gicon genie-os-button${genieOsActive ? ' is-active' : ''}${genieOsOpen ? ' is-open' : ''}`}
+                    title="Genie OS — operate this workstation"
+                    aria-label="Open Genie OS agent"
+                    aria-pressed={genieOsOpen}
+                    onClick={onShowGenieOs}
+                >
+                    <IconWand size={16} />
+                </button>
+            )}
             <SitesButton />
             <HostsButton />
             <UpdatePill />

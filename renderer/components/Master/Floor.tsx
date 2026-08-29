@@ -39,6 +39,8 @@ export interface FloorState {
     onFocus: (id: string) => void;
     onToggleMaximize: (id: string) => void;
     onDisable?: (id: string) => void;
+    onAgentSettings?: (spec: TerminalSpec) => void;
+    onRestartAgent?: (spec: TerminalSpec) => void;
     onAddTerminal: () => void;
     onAddCode?: () => void;
     onMarkActive: (id: string) => void;

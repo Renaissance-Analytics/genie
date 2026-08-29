@@ -380,6 +380,62 @@ export async function listInstallations(): Promise<GitHubInstallation[]> {
     return out;
 }
 
+export interface GitHubAccessibleRepository {
+    id: number;
+    name: string;
+    fullName: string;
+    owner: string;
+    private: boolean;
+    cloneUrl: string;
+    installationId: number;
+}
+
+/** Browse repositories exposed to this GitHub App user token, installation by installation. */
+export async function listAccessibleRepositories(): Promise<GitHubAccessibleRepository[]> {
+    const installations = await listInstallations();
+    const rows = await Promise.all(
+        installations.flatMap((installation) => {
+            if (!installation.installationId) return [];
+            return [(async () => {
+                const repositories: Array<{
+                id?: number;
+                name?: string;
+                full_name?: string;
+                private?: boolean;
+                clone_url?: string;
+                owner?: { login?: string };
+                }> = [];
+                let page = 1;
+                let totalCount = Number.POSITIVE_INFINITY;
+                while (repositories.length < totalCount) {
+                    const response = await gh<{ total_count?: number; repositories?: typeof repositories }>(
+                        'GET',
+                        `/user/installations/${installation.installationId}/repositories?per_page=100&page=${page}`,
+                    );
+                    const batch = response.repositories ?? [];
+                    repositories.push(...batch);
+                    totalCount = response.total_count ?? repositories.length;
+                    if (batch.length === 0 || batch.length < 100) break;
+                    page += 1;
+                }
+                return repositories.flatMap((repo) => {
+                if (!repo.id || !repo.name || !repo.full_name || !repo.clone_url) return [];
+                return [{
+                    id: repo.id,
+                    name: repo.name,
+                    fullName: repo.full_name,
+                    owner: repo.owner?.login ?? repo.full_name.split('/')[0] ?? installation.login,
+                    private: repo.private === true,
+                    cloneUrl: repo.clone_url,
+                    installationId: installation.installationId!,
+                }];
+                });
+            })()];
+        }),
+    );
+    return rows.flat().sort((a, b) => a.fullName.localeCompare(b.fullName));
+}
+
 /**
  * Read every installation's GRANTED permission map (permission name → access
  * level). This is the raw input to capability detection: aggregate these (see

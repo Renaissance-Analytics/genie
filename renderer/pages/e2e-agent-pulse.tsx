@@ -93,8 +93,6 @@ export default function E2EAgentPulse() {
                 // the wrapper behind them.
                 pinned={true}
                 onTogglePin={NOOP}
-                systemRevealed={false}
-                onToggleSystemWorkspace={NOOP}
                 onActivateWorkspace={NOOP}
                 onToggleSpec={NOOP}
                 onAddSpec={NOOP}

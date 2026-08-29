@@ -29,6 +29,25 @@ export const ADD_WORKSPACE_SOURCES: readonly AddWorkspaceSource[] = [
     },
 ] as const;
 
+export function workspaceWizardEntry(source: AddWorkspaceSourceId): {
+    mode: 'local' | 'remote' | 'tynn';
+} {
+    if (source === 'git') return { mode: 'remote' };
+    if (source === 'tynn') return { mode: 'tynn' };
+    return { mode: 'local' };
+}
+
+export function canFinishFirstRun(input: {
+    existingWorkspaceCount: number;
+    setupComplete: boolean;
+}): boolean {
+    return input.setupComplete && input.existingWorkspaceCount > 0;
+}
+
+export function scannedWorkspaceAction(scan: { has_project_json: boolean }): 'register' | 'convert' {
+    return scan.has_project_json ? 'register' : 'convert';
+}
+
 export type FirstRunStepId =
     | 'welcome'
     | 'drivers'
@@ -70,5 +89,23 @@ export function tynnWorkspaceSource(project: {
     );
     return envelope
         ? { url: envelope.url, branch: envelope.defaultBranch?.trim() || 'main' }
+        : null;
+}
+
+export function tynnProjectImportSource(project: {
+    isWorkspace?: boolean;
+    repositories?: Array<{ url: string; defaultBranch?: string; kind?: string }>;
+}): { kind: 'envelope' | 'project'; url: string; branch: string } | null {
+    const envelope = tynnWorkspaceSource(project);
+    if (envelope) return { kind: 'envelope', ...envelope };
+    const repository = project.repositories?.find(
+        (candidate) => candidate.kind === 'code' && candidate.url.trim(),
+    );
+    return repository
+        ? {
+            kind: 'project',
+            url: repository.url,
+            branch: repository.defaultBranch?.trim() || 'main',
+        }
         : null;
 }

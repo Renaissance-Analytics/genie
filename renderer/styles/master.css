@@ -6323,3 +6323,22 @@ body.gutter-dragging .grid-gutter {
        a distorted mockup would be reviewed as a design flaw. */
     object-fit: contain;
 }
+/* Genie OS is a workstation surface, never a workspace-sidebar row. */
+.genie-os-layer { position: fixed; inset: 40px 0 0; z-index: 850; pointer-events: none; }
+.genie-os-layer.is-open { pointer-events: auto; }
+.genie-os-backdrop { position: absolute; inset: 0; border: 0; background: rgba(0,0,0,.38); opacity: 0; transition: opacity 240ms ease; }
+.genie-os-layer.is-open .genie-os-backdrop { opacity: 1; }
+.genie-os-flyout { position: absolute; top: 12px; right: 12px; bottom: 12px; width: min(760px, calc(100vw - 48px)); padding: 2px; border-radius: 14px; overflow: hidden; background: conic-gradient(from var(--genie-os-angle, 0deg), #111318 0 78%, #35f2a3 84%, #8b5cf6 91%, #111318 97%); transform: translateX(calc(100% + 24px)); opacity: 0; transition: transform 280ms cubic-bezier(.22,.8,.3,1), opacity 220ms ease; }
+.genie-os-flyout > * { height: 100%; border-radius: 12px; background: var(--bg-0); }
+.genie-os-layer.is-open .genie-os-flyout { transform: translateX(0); opacity: 1; animation: genie-os-chase 1.45s linear infinite; }
+.genie-os-button.is-active { animation: genie-os-pulse 1.4s ease-in-out infinite; }
+@property --genie-os-angle { syntax: '<angle>'; initial-value: 0deg; inherits: false; }
+@keyframes genie-os-chase { to { --genie-os-angle: 360deg; } }
+@keyframes genie-os-pulse { 50% { color: #35f2a3; filter: drop-shadow(0 0 5px #35f2a3); } }
+@media (prefers-reduced-motion: reduce) { .genie-os-flyout, .genie-os-backdrop { transition-duration: 1ms; } .genie-os-flyout, .genie-os-button { animation: none !important; } }
+.agent-panel-shell { position: relative; }
+.agent-panel-restart { position: absolute; top: 7px; right: 72px; z-index: 4; width: 26px; height: 24px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-1); color: var(--muted); cursor: pointer; }
+.agent-panel-restart:hover { color: var(--text); border-color: var(--violet-500); }
+.agent-panel-menu { min-width: 180px; padding: 6px; z-index: 1200; }
+.agent-panel-menu button { width: 100%; display: flex; align-items: center; gap: 8px; border: 0; border-radius: 6px; padding: 8px 9px; background: transparent; color: var(--text); text-align: left; cursor: pointer; }
+.agent-panel-menu button:hover { background: var(--hover); }

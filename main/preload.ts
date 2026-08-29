@@ -603,6 +603,7 @@ const api = {
         user: () => ipcRenderer.invoke('github:user'),
         orgs: () => ipcRenderer.invoke('github:orgs'),
         installations: () => ipcRenderer.invoke('github:installations'),
+        repositories: () => ipcRenderer.invoke('github:repositories'),
         repoOwner: (owner: string, repo: string) =>
             ipcRenderer.invoke('github:repo-owner', owner, repo),
         createRepo: (opts: {
@@ -977,6 +978,8 @@ const api = {
         getCurrentProject: () => ipcRenderer.invoke('app:get-current-project'),
         /** The user's home directory (for the synthetic System Workspace). */
         homeDir: () => ipcRenderer.invoke('app:home-dir') as Promise<string>,
+        genieOsWorkspace: () => ipcRenderer.invoke('app:genie-os-workspace') as Promise<{ path: string }>,
+        syncGenieOs: (remoteUrl: string) => ipcRenderer.invoke('app:genie-os-sync', remoteUrl) as Promise<{ ok: true; path: string }>,
         showSettings: (fromRemote?: boolean) =>
             ipcRenderer.invoke('app:show-settings', fromRemote),
         showDocs: () => ipcRenderer.invoke('app:show-docs'),

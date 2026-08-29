@@ -13,6 +13,7 @@ import { createTray, rebuildMenu } from './tray';
 import { registerShortcuts, unregisterShortcuts } from './shortcuts';
 import { launchedFromAutostart } from './autostart';
 import { resolveWorkstationProvider } from './agents/provider';
+import { ensureGenieOsWorkspace } from './agents/os-workspace';
 import { providerDef } from './agents/registry';
 import { registerIpcHandlers, applyStartupToolchainPrecedence, addWorkspaceFromFolder } from './ipc';
 import { writeClipboardImagePng } from './clipboard-image';
@@ -1101,6 +1102,7 @@ app.whenReady().then(async () => {
     });
 
     initDatabase(app.getPath('userData'));
+    const genieOsWorkspace = await ensureGenieOsWorkspace(app.getPath('userData'));
     // The workstation operator is built in, not a project-owned configuration.
     // Persist only its terminal shell so it can resume like every other agent;
     // `system:true` keeps it outside every project and the fixed id makes this
@@ -1113,7 +1115,7 @@ app.whenReady().then(async () => {
             id: 'genie-workstation-agent',
             workspace_id: null,
             label: 'Genie',
-            cwd: os.homedir(),
+            cwd: genieOsWorkspace,
             type: 'terminal',
             meta: {
                 system: true,
@@ -1126,8 +1128,12 @@ app.whenReady().then(async () => {
                 whisper_wake_on_dm: true,
             },
         });
-    } else if (existingOsAgent.meta.agent_instructions !== osAgentInstructions) {
+    } else if (
+        existingOsAgent.cwd !== genieOsWorkspace ||
+        existingOsAgent.meta.agent_instructions !== osAgentInstructions
+    ) {
         updateTerminalSpec(existingOsAgent.id, {
+            cwd: genieOsWorkspace,
             meta: { ...existingOsAgent.meta, agent_instructions: osAgentInstructions },
         });
     }

@@ -28,7 +28,7 @@ import {
     GitHubErrorNotice,
 } from './GitHubConnect';
 import { useGithubCapabilities } from '../lib/githubCapabilities';
-import { ADD_WORKSPACE_SOURCES, tynnWorkspaceSource, type AddWorkspaceSourceId } from '../lib/workspace-onboarding';
+import { ADD_WORKSPACE_SOURCES, tynnProjectImportSource, tynnWorkspaceSource, workspaceWizardEntry, type AddWorkspaceSourceId } from '../lib/workspace-onboarding';
 
 type Stage =
     | 'source'
@@ -50,11 +50,16 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
     const [stage, setStage] = useState<Stage>('source');
     const [projects, setProjects] = useState<TynnProject[]>([]);
     const [loadingProjects, setLoadingProjects] = useState(true);
+    const [projectsError, setProjectsError] = useState<string | null>(null);
+    const [interactiveMode, setInteractiveMode] = useState<'local' | 'remote'>('local');
+    const [interactiveSourceUrl, setInteractiveSourceUrl] = useState('');
+    const [interactiveProjectId, setInteractiveProjectId] = useState('');
 
     useEffect(() => {
         api()
             .tynn.projects()
             .then((p) => setProjects(p))
+            .catch((cause) => setProjectsError(cause instanceof Error ? cause.message : String(cause)))
             .finally(() => setLoadingProjects(false));
     }, []);
 
@@ -75,9 +80,12 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
             </Modal.Header>
             <Modal.Body>
                 {stage === 'source' && <ManagedSourcePicker onPick={(source) => {
-                    if (source === 'new') setStage('agi-create');
-                    else if (source === 'tynn') setStage('tynn-import');
-                    else setStage('agi-interactive');
+                    const entry = workspaceWizardEntry(source);
+                    if (entry.mode === 'tynn') setStage('tynn-import');
+                    else {
+                        setInteractiveMode(entry.mode);
+                        setStage('agi-interactive');
+                    }
                 }} />}
                 {stage === 'simple' && (
                     <SimpleWizard
@@ -103,6 +111,9 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
                 )}
                 {stage === 'agi-interactive' && (
                     <InteractiveUpgradeWizard
+                        initialSourceMode={interactiveMode}
+                        initialSourceUrl={interactiveSourceUrl}
+                        initialProjectId={interactiveProjectId}
                         projects={projects}
                         loadingProjects={loadingProjects}
                         onCancel={() => setStage('source')}
@@ -156,11 +167,13 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
                     <TynnImportWizard
                         projects={projects}
                         loading={loadingProjects}
+                        loadError={projectsError}
                         onCancel={() => setStage('source')}
-                        onCreated={(row) => {
-                            onAdded(row);
-                            setStage('done');
-                            onClose();
+                        onInspectProject={(project, source) => {
+                            setInteractiveMode('remote');
+                            setInteractiveSourceUrl(source.url);
+                            setInteractiveProjectId(project.id);
+                            setStage('agi-interactive');
                         }}
                     />
                 )}
@@ -172,68 +185,24 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
 function TynnImportWizard({
     projects,
     loading,
+    loadError,
     onCancel,
-    onCreated,
+    onInspectProject,
 }: {
     projects: TynnProject[];
     loading: boolean;
+    loadError: string | null;
     onCancel: () => void;
-    onCreated: (row: WorkspaceRow) => void;
+    onInspectProject: (project: TynnProject, source: { url: string; branch: string }) => void;
 }) {
-    const available = projects.filter((project) => tynnWorkspaceSource(project));
+    const available = projects.filter((project) => tynnProjectImportSource(project));
     const [projectId, setProjectId] = useState('');
-    const [parent, setParent] = useState('');
-    const [submitting, setSubmitting] = useState(false);
-    const [error, setError] = useState<string | null>(null);
-
-    useEffect(() => {
-        void api().settings.get().then((settings) => setParent(settings.primary_workspace ?? ''));
-    }, []);
-
-    const chooseParent = async () => {
-        const picked = await pickPath({ mode: 'directory', title: 'Choose where to clone the workspace' });
-        if (picked) setParent(picked);
-    };
 
     const submit = async () => {
         const project = available.find((candidate) => candidate.id === projectId);
-        const source = project ? tynnWorkspaceSource(project) : null;
+        const source = project ? tynnProjectImportSource(project) : null;
         if (!project || !source) return;
-        if (!parent.trim()) {
-            setError('Choose where this workspace should live.');
-            return;
-        }
-        setSubmitting(true);
-        setError(null);
-        try {
-            const cloned = await api().workspaces.clone(source.url, parent.trim());
-            const detection = await api().agi.detect(cloned.path);
-            if (!detection.has_project_json) {
-                throw new Error('Tynn declared this project as a workspace, but its envelope repository has no project.json. Nothing was registered.');
-            }
-            const settings = await api().settings.get();
-            const saved = await api().workspaces.add({
-                id: project.id,
-                backend: project.backend ?? 'tynn',
-                project_id: project.id,
-                project_name: project.name,
-                tynn_project_id: project.id,
-                tynn_project_name: project.name,
-                shape: 'agi',
-                path: cloned.path,
-                editor: null,
-                editor_cmd: null,
-                start_cmd: null,
-                env_file: settings.default_env_file ?? '.env',
-                last_opened_at: null,
-                created_by_genie: 0,
-            });
-            onCreated(saved);
-        } catch (cause) {
-            setError(cause instanceof Error ? cause.message : String(cause));
-        } finally {
-            setSubmitting(false);
-        }
+        onInspectProject(project, source);
     };
 
     return (
@@ -251,9 +220,12 @@ function TynnImportWizard({
                 placeholder={loading ? 'Loading Tynn workspaces…' : available.length ? 'Choose a workspace…' : 'No importable Tynn workspaces'}
                 aria-label="Tynn workspace"
             />
-            <FolderRow folder={parent} onChoose={chooseParent} description="The envelope repository will be cloned inside this folder." />
-            {error && <Text size="xs" className="text-rose-500">{error}</Text>}
-            <Footer onCancel={onCancel} onSubmit={() => void submit()} submitting={submitting} label="Inspect and import" disabled={!projectId || !parent.trim()} />
+            {loadError && (
+                <Text size="xs" className="text-rose-500">
+                    Genie could not load Tynn workspaces: {loadError}
+                </Text>
+            )}
+            <Footer onCancel={onCancel} onSubmit={() => void submit()} submitting={false} label="Inspect workspace" disabled={!projectId} />
         </div>
     );
 }

@@ -82,6 +82,7 @@ import {
     getRepoMetadata,
     getRepoOwner,
     listInstallations,
+    listAccessibleRepositories,
     listOrgs,
     worseError,
 } from '../api';
@@ -188,6 +189,58 @@ describe('listInstallations (every installed account)', () => {
     it('returns [] when the App is installed nowhere', async () => {
         fetchMock.mockResolvedValueOnce(res(200, { total_count: 0, installations: [] }));
         expect(await listInstallations()).toEqual([]);
+    });
+});
+
+describe('listAccessibleRepositories (GitHub App user access)', () => {
+    it('browses repositories through every accessible installation', async () => {
+        fetchMock
+            .mockResolvedValueOnce(res(200, {
+                installations: [
+                    { id: 1001, account: { login: 'me', id: 1, type: 'User' } },
+                    { id: 2002, account: { login: 'acme', id: 2, type: 'Organization' } },
+                ],
+            }))
+            .mockResolvedValueOnce(res(200, {
+                repositories: [{ id: 11, name: 'personal', full_name: 'me/personal', private: true, clone_url: 'https://github.com/me/personal.git' }],
+            }))
+            .mockResolvedValueOnce(res(200, {
+                repositories: [{ id: 22, name: 'product', full_name: 'acme/product', private: false, clone_url: 'https://github.com/acme/product.git' }],
+            }));
+
+        await expect(listAccessibleRepositories()).resolves.toEqual([
+            { id: 22, name: 'product', fullName: 'acme/product', owner: 'acme', private: false, cloneUrl: 'https://github.com/acme/product.git', installationId: 2002 },
+            { id: 11, name: 'personal', fullName: 'me/personal', owner: 'me', private: true, cloneUrl: 'https://github.com/me/personal.git', installationId: 1001 },
+        ]);
+        expect(fetchMock.mock.calls[1][0]).toContain('/user/installations/1001/repositories');
+        expect(fetchMock.mock.calls[2][0]).toContain('/user/installations/2002/repositories');
+    });
+
+    it('loads every page for an installation with more than 100 repositories', async () => {
+        const firstPage = Array.from({ length: 100 }, (_, index) => ({
+            id: index + 1,
+            name: `repo-${index + 1}`,
+            full_name: `acme/repo-${index + 1}`,
+            private: false,
+            clone_url: `https://github.com/acme/repo-${index + 1}.git`,
+        }));
+        fetchMock
+            .mockResolvedValueOnce(res(200, {
+                installations: [
+                    { id: 2002, account: { login: 'acme', id: 2, type: 'Organization' } },
+                ],
+            }))
+            .mockResolvedValueOnce(res(200, { total_count: 101, repositories: firstPage }))
+            .mockResolvedValueOnce(res(200, {
+                total_count: 101,
+                repositories: [{ id: 101, name: 'last', full_name: 'acme/last', private: true, clone_url: 'https://github.com/acme/last.git' }],
+            }));
+
+        const repositories = await listAccessibleRepositories();
+
+        expect(repositories).toHaveLength(101);
+        expect(fetchMock.mock.calls[1][0]).toContain('page=1');
+        expect(fetchMock.mock.calls[2][0]).toContain('page=2');
     });
 });
 

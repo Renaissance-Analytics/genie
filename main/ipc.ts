@@ -66,6 +66,7 @@ import { syncGappDevWorkspaces } from './workspace/gapp-dev-sync';
 import { validateSimpleWorkspace } from './workspace/create-simple';
 import { openWorkspace } from './workspace/open';
 import { cloneRepo } from './workspace/clone';
+import { genieOsWorkspacePath, syncGenieOsWorkspace } from './agents/os-workspace';
 import {
     listEnvelopeRepos,
     addEnvelopeRepo,
@@ -1874,6 +1875,10 @@ export function registerIpcHandlers(): void {
     // terminals/editors here, and the directory picker for system processes
     // defaults to it. Surfaced from main (renderer has no `os` access).
     ipcMain.handle('app:home-dir', () => os.homedir());
+    ipcMain.handle('app:genie-os-workspace', () => ({ path: genieOsWorkspacePath(app.getPath('userData')) }));
+    ipcMain.handle('app:genie-os-sync', (_e, remoteUrl: string) =>
+        syncGenieOsWorkspace(app.getPath('userData'), remoteUrl).then((workspacePath) => ({ ok: true, path: workspacePath })),
+    );
     ipcMain.handle('app:show-settings', (e, fromRemote?: boolean) => {
         // fromRemote = the caller is a remote/host window → restrict Settings to the
         // connection-relevant subset. The tray/menu callers pass nothing (local).

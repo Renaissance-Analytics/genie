@@ -11,6 +11,7 @@ import {
 } from '@particle-academy/react-fancy';
 import { pickPath } from './FilePickerModal';
 import { projectPickerOptions } from '../lib/project-picker';
+import { scannedWorkspaceAction } from '../lib/workspace-onboarding';
 import {
     api,
     ulid,
@@ -18,6 +19,7 @@ import {
     type AnalyseRepoCandidate,
     type AnalyseResult,
     type ConvertPlanOpts,
+    type DetectResult,
     type RootEntry,
     type SourceKind,
     type SubmoduleEntry,
@@ -35,6 +37,9 @@ import {
 interface Props {
     /** Optional source folder pre-filled by the caller. */
     initialFolder?: string;
+    initialSourceMode?: 'local' | 'remote';
+    initialSourceUrl?: string;
+    initialProjectId?: string;
     /** Tynn projects to bind the new workspace to. */
     projects: TynnProject[];
     loadingProjects: boolean;
@@ -126,6 +131,9 @@ const KIND_COPY: Record<
  */
 export default function InteractiveUpgradeWizard({
     initialFolder,
+    initialSourceMode = 'local',
+    initialSourceUrl = '',
+    initialProjectId = '',
     projects,
     loadingProjects,
     onCancel,
@@ -136,14 +144,15 @@ export default function InteractiveUpgradeWizard({
     const [busyStep, setBusyStep] = useState<string | null>(null);
     const [sourceFolder, setSourceFolder] = useState<string>(initialFolder ?? '');
     const [scan, setScan] = useState<AnalyseResult | null>(null);
+    const [existingEnvelope, setExistingEnvelope] = useState<DetectResult | null>(null);
     const [scanning, setScanning] = useState(false);
     const [error, setError] = useState<string | null>(null);
     // Source can be a LOCAL folder (default) or a REMOTE git repo Genie clones
     // into a chosen parent and then analyses in place — the same workspaces.clone
     // path the Simple/Convert/Import flows use. After a clone the rest of the
     // wizard treats it exactly like a local source (it IS a local checkout).
-    const [sourceMode, setSourceMode] = useState<'local' | 'remote'>('local');
-    const [sourceUrl, setSourceUrl] = useState<string>('');
+    const [sourceMode, setSourceMode] = useState<'local' | 'remote'>(initialSourceMode);
+    const [sourceUrl, setSourceUrl] = useState<string>(initialSourceUrl);
     const [cloneParent, setCloneParent] = useState<string>('');
     const [cloning, setCloning] = useState(false);
 
@@ -161,7 +170,7 @@ export default function InteractiveUpgradeWizard({
     const [primaryName, setPrimaryName] = useState<string>('');
 
     // Configure state
-    const [projectId, setProjectId] = useState('');
+    const [projectId, setProjectId] = useState(initialProjectId);
     const [slug, setSlug] = useState('');
     // True once the user has manually edited the slug — after that we stop
     // auto-deriving it (from the source basename or the chosen primary).
@@ -275,6 +284,16 @@ export default function InteractiveUpgradeWizard({
         setScanning(true);
         setError(null);
         try {
+            const detection = await api().agi.detect(folder);
+            if (scannedWorkspaceAction(detection) === 'register') {
+                setExistingEnvelope(detection);
+                setScan(null);
+                const leaf = folder.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? 'workspace';
+                if (!slugTouched) setSlug(leaf.replace(/\.(agi|gapp)$/i, ''));
+                setStep(3);
+                return;
+            }
+            setExistingEnvelope(null);
             const r = await api().agi.analyse(folder);
             setScan(r);
             // Monorepo defaults to EXPLODE: surface its member submodules as
@@ -506,7 +525,7 @@ export default function InteractiveUpgradeWizard({
     /** Per-step forward gating. Back is always allowed. */
     const canLeave = (s: number): boolean => {
         if (busy) return false;
-        if (s === 0) return !!scan;
+        if (s === 0) return !!scan || !!existingEnvelope;
         if (s === 1) return repoNamesValid;
         return true;
     };
@@ -526,7 +545,7 @@ export default function InteractiveUpgradeWizard({
     };
 
     const execute = async () => {
-        if (!planValid || busy) return;
+        if ((!existingEnvelope && !planValid) || busy) return;
         setBusy(true);
         setError(null);
         setBusyStep(null);
@@ -535,6 +554,29 @@ export default function InteractiveUpgradeWizard({
             // to the slug for the envelope name / display when none is chosen.
             const project = projects.find((p) => p.id === projectId);
             const envelopeName = project?.name || slug.trim();
+
+            if (existingEnvelope) {
+                setBusyStep('Registering existing workspace…');
+                const settings = await api().settings.get();
+                const saved = await api().workspaces.add({
+                    id: project?.id ?? ulid(),
+                    backend: project?.backend ?? 'tynn',
+                    project_id: project?.id ?? '',
+                    project_name: project?.name ?? slug.trim(),
+                    tynn_project_id: project?.id ?? '',
+                    tynn_project_name: project?.name ?? '',
+                    shape: 'agi',
+                    path: sourceFolder,
+                    editor: null,
+                    editor_cmd: null,
+                    start_cmd: null,
+                    env_file: settings.default_env_file ?? '.env',
+                    last_opened_at: null,
+                    created_by_genie: 0,
+                });
+                onCreated(saved);
+                return;
+            }
 
             // Fork any repos set to 'fork' FIRST — the fork's clone URL
             // becomes the submodule source. Forks land under the chosen
@@ -726,6 +768,7 @@ export default function InteractiveUpgradeWizard({
                             cloning={cloning}
                             onClone={() => void cloneAndScan()}
                             primaryWorkspace={primaryWorkspace}
+                            account={account}
                         />
                     </Carousel.Slide>
 
@@ -806,7 +849,7 @@ export default function InteractiveUpgradeWizard({
                             ? 'Create on GitHub + build envelope'
                             : 'Build envelope'
                     }
-                    finishEnabled={planValid && !busy}
+                    finishEnabled={(!!existingEnvelope || planValid) && !busy}
                     onFinish={() => void execute()}
                 />
             </Carousel>
@@ -894,6 +937,7 @@ function SourceStep({
     cloning,
     onClone,
     primaryWorkspace,
+    account,
 }: {
     folder: string;
     scan: AnalyseResult | null;
@@ -909,7 +953,27 @@ function SourceStep({
     cloning: boolean;
     onClone: () => void;
     primaryWorkspace?: string;
+    account: GitHubAccount;
 }) {
+    const [repositories, setRepositories] = useState<Array<{ fullName: string; cloneUrl: string }>>([]);
+    const [repositoriesLoading, setRepositoriesLoading] = useState(false);
+    const [repositoriesError, setRepositoriesError] = useState<string | null>(null);
+    const refreshRepositories = async () => {
+        if (!account.connected) return;
+        setRepositoriesLoading(true);
+        setRepositoriesError(null);
+        try {
+            setRepositories(await api().github.repositories());
+        } catch (cause) {
+            setRepositoriesError(cause instanceof Error ? cause.message : String(cause));
+        } finally {
+            setRepositoriesLoading(false);
+        }
+    };
+    useEffect(() => {
+        if (sourceMode === 'remote' && account.connected) void refreshRepositories();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [sourceMode, account.connected]);
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
@@ -954,6 +1018,24 @@ function SourceStep({
                 </div>
             ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <GitHubConnect account={account} />
+                    {account.connected && (
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                            <div style={{ flex: 1 }}>
+                                <Select
+                                    value={repositories.find((repo) => repo.cloneUrl === sourceUrl)?.cloneUrl ?? ''}
+                                    onValueChange={onSourceUrlChange}
+                                    list={repositories.map((repo) => ({ value: repo.cloneUrl, label: repo.fullName }))}
+                                    placeholder={repositoriesLoading ? 'Loading accessible repositories…' : repositories.length ? 'Browse accessible repositories…' : 'No repositories returned'}
+                                    aria-label="Accessible GitHub repository"
+                                />
+                            </div>
+                            <Action variant="ghost" icon="refresh-cw" disabled={repositoriesLoading} onClick={() => void refreshRepositories()}>
+                                Refresh
+                            </Action>
+                        </div>
+                    )}
+                    {repositoriesError && <Text size="xs" className="text-rose-500">{repositoriesError}</Text>}
                     <Input
                         label="Repository URL"
                         description="Genie clones it with your existing git auth (SSH key / credential helper), then analyses the clone; submodules included."

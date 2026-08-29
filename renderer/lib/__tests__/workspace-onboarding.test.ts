@@ -2,9 +2,18 @@ import { describe, expect, it } from 'vitest';
 import {
     ADD_WORKSPACE_SOURCES,
     FIRST_RUN_STEPS,
+    canFinishFirstRun,
     nextIncompleteFirstRunStep,
+    workspaceWizardEntry,
     tynnWorkspaceSource,
+    tynnProjectImportSource,
+    scannedWorkspaceAction,
 } from '../workspace-onboarding';
+
+it('registers an existing AGI/GApp envelope instead of wrapping it again', () => {
+    expect(scannedWorkspaceAction({ has_project_json: true })).toBe('register');
+    expect(scannedWorkspaceAction({ has_project_json: false })).toBe('convert');
+});
 
 describe('managed workspace entry points', () => {
     it('offers only the three managed sources', () => {
@@ -13,6 +22,12 @@ describe('managed workspace entry points', () => {
             'tynn',
             'git',
         ]);
+    });
+
+    it('routes every open-world source through the scanner-driven wizard', () => {
+        expect(workspaceWizardEntry('new')).toEqual({ mode: 'local' });
+        expect(workspaceWizardEntry('git')).toEqual({ mode: 'remote' });
+        expect(workspaceWizardEntry('tynn')).toEqual({ mode: 'tynn' });
     });
 
     it('never offers a plain-folder or Aionima-owned workspace', () => {
@@ -31,13 +46,20 @@ describe('Tynn workspace import', () => {
         })).toEqual({ url: 'git@github.com:acme/workspace.git', branch: 'trunk' });
     });
 
+    it('can start the scanner from an ordinary Tynn project repository', () => {
+        expect(tynnProjectImportSource({
+            isWorkspace: false,
+            repositories: [{ url: 'https://github.com/acme/product.git', kind: 'code' }],
+        })).toEqual({ kind: 'project', url: 'https://github.com/acme/product.git', branch: 'main' });
+    });
+
     it('refuses a project that is not a managed workspace', () => {
         expect(tynnWorkspaceSource({ isWorkspace: false, repositories: [] })).toBeNull();
     });
 });
 
 describe('first-run onboarding contract', () => {
-    it('puts model drivers before accounts and requires a first workspace', () => {
+    it('puts model drivers before accounts without forcing existing users to add a workspace', () => {
         expect(FIRST_RUN_STEPS.map((step) => step.id)).toEqual([
             'welcome',
             'drivers',
@@ -49,7 +71,8 @@ describe('first-run onboarding contract', () => {
         ]);
         expect(FIRST_RUN_STEPS.find((step) => step.id === 'tynn')?.optional).toBe(false);
         expect(FIRST_RUN_STEPS.find((step) => step.id === 'github')?.optional).toBe(true);
-        expect(FIRST_RUN_STEPS.find((step) => step.id === 'workspace')?.optional).toBe(false);
+        expect(canFinishFirstRun({ existingWorkspaceCount: 2, setupComplete: true })).toBe(true);
+        expect(canFinishFirstRun({ existingWorkspaceCount: 0, setupComplete: true })).toBe(false);
     });
 
     it('resumes at the first incomplete required step', () => {

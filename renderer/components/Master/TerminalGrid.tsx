@@ -68,6 +68,8 @@ interface Props {
     onToggleMaximize: (id: string) => void;
     /** Tier 2: suspend a terminal (keep its pty alive, hide the panel). */
     onDisable?: (id: string) => void;
+    onAgentSettings?: (spec: TerminalSpec) => void;
+    onRestartAgent?: (spec: TerminalSpec) => void;
     onAddTerminal: () => void;
     onAddCode?: () => void;
     onMarkActive: (id: string) => void;
@@ -132,6 +134,8 @@ export default function TerminalGrid({
     onFocus,
     onToggleMaximize,
     onDisable,
+    onAgentSettings,
+    onRestartAgent,
     onAddTerminal,
     onAddCode,
     onMarkActive,
@@ -230,6 +234,8 @@ export default function TerminalGrid({
             onFocus={onFocus}
             onToggleMaximize={onToggleMaximize}
             onDisable={onDisable}
+            onAgentSettings={onAgentSettings}
+            onRestartAgent={onRestartAgent}
             onAddTerminal={onAddTerminal}
             onAddCode={onAddCode}
             onMarkActive={onMarkActive}
@@ -262,6 +268,8 @@ interface ResizableGridProps {
     onFocus: (id: string) => void;
     onToggleMaximize: (id: string) => void;
     onDisable?: (id: string) => void;
+    onAgentSettings?: (spec: TerminalSpec) => void;
+    onRestartAgent?: (spec: TerminalSpec) => void;
     onAddTerminal: () => void;
     onAddCode?: () => void;
     onMarkActive: (id: string) => void;
@@ -295,6 +303,8 @@ const ResizableGrid = ({
     onFocus,
     onToggleMaximize,
     onDisable,
+    onAgentSettings,
+    onRestartAgent,
     onAddTerminal,
     onAddCode,
     onMarkActive,
@@ -520,6 +530,8 @@ const ResizableGrid = ({
                                 p.isMainInStack ? () => onFocus(p.spec.id) : undefined
                             }
                             onDisable={onDisable ? () => onDisable(p.spec.id) : undefined}
+                            onAgentSettings={onAgentSettings}
+                            onRestartAgent={onRestartAgent}
                             onMarkActive={() => onMarkActive(p.spec.id)}
                             onMarkInactive={() => onMarkInactive(p.spec.id)}
                             // Off-workspace (display:none) panels aren't on
@@ -706,6 +718,8 @@ interface PanelForProps {
     onMaximize: () => void;
     onMinimize?: () => void;
     onDisable?: () => void;
+    onAgentSettings?: (spec: TerminalSpec) => void;
+    onRestartAgent?: (spec: TerminalSpec) => void;
     onMarkActive: () => void;
     onMarkInactive: () => void;
     /** Drag-reorder wiring for this tile (undefined = not reorderable). */
@@ -731,6 +745,8 @@ function PanelFor({
     onMaximize,
     onMinimize,
     onDisable,
+    onAgentSettings,
+    onRestartAgent,
     onMarkActive,
     onMarkInactive,
     drag,
@@ -806,6 +822,8 @@ function PanelFor({
                 onMaximize={onMaximize}
                 onMinimize={onMinimize}
                 onDisable={onDisable}
+                onAgentSettings={onAgentSettings ? () => onAgentSettings(spec) : undefined}
+                onRestartAgent={onRestartAgent ? () => onRestartAgent(spec) : undefined}
                 onMarkActive={onMarkActive}
                 onMarkInactive={onMarkInactive}
                 drag={drag}
