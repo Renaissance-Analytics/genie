@@ -73,6 +73,16 @@ test.beforeAll(async () => {
         await expect(wizard).toHaveCount(0);
     }
 
+    // A fresh throwaway profile has never acknowledged this build's curated
+    // release notes. They load asynchronously, so dismiss the real dialog here
+    // before any test starts driving the workspace behind it.
+    const whatsNew = page.locator('.whats-new-backdrop');
+    await whatsNew.waitFor({ state: 'visible', timeout: 20_000 }).catch(() => {});
+    if (await whatsNew.count()) {
+        await page.getByRole('button', { name: 'Got it' }).click();
+        await expect(whatsNew).toHaveCount(0);
+    }
+
     const seeded = await readMasterSeed(app);
     if (!seeded) {
         throw new Error(
