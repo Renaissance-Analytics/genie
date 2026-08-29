@@ -61,14 +61,16 @@ export function releaseBodyChanges(body?: string | null): string[] {
     const source = body?.trim() ?? '';
     if (!source || /^Automated build for v?\S+\.?$/i.test(source)) return [];
 
-    const changes: string[] = [];
-    let section = '';
+    const outcomes: string[] = [];
+    const migrations: string[] = [];
+    let section: 'outcomes' | 'migration' | 'ignore' = 'outcomes';
     let paragraph: string[] = [];
     const flushParagraph = () => {
         const text = paragraph.join(' ').replace(/[*_`]/g, '').trim();
         paragraph = [];
         if (!text) return;
-        changes.push(section.toLowerCase().startsWith('migration') ? `Migration: ${text}` : text);
+        if (section === 'migration') migrations.push(`Migration: ${text}`);
+        else if (section === 'outcomes') outcomes.push(text);
     };
 
     for (const raw of source.split(/\r?\n/)) {
@@ -76,7 +78,12 @@ export function releaseBodyChanges(body?: string | null): string[] {
         const heading = /^#{1,6}\s+(.+)$/.exec(line);
         if (heading) {
             flushParagraph();
-            section = heading[1].replace(/[*_`]/g, '').trim();
+            const name = heading[1].replace(/[*_`]/g, '').trim().toLowerCase();
+            section = name.startsWith('migration')
+                ? 'migration'
+                : /what.?s new|highlights|changes/.test(name)
+                  ? 'outcomes'
+                  : 'ignore';
             continue;
         }
         const bullet = /^[-*+]\s+(.+)$/.exec(line);
@@ -89,7 +96,7 @@ export function releaseBodyChanges(body?: string | null): string[] {
         else paragraph.push(line);
     }
     flushParagraph();
-    return changes.filter(Boolean);
+    return [...outcomes.slice(0, 4), ...migrations.slice(0, 1)];
 }
 
 async function ghJson<T>(path: string): Promise<T | null> {

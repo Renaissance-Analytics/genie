@@ -74,24 +74,24 @@ describe('tools/list gating', () => {
         );
     });
 
-    it('OMITS it where none is', async () => {
-        expect(await listTools({ devServerAvailable: async () => false })).not.toContain(
+    it('lists it without Docker because WebSockets are Host-native', async () => {
+        expect(await listTools({ devServerAvailable: async () => false })).toContain(
             'manageService',
         );
     });
 
-    it('omits it when the probe THROWS — fail closed', async () => {
+    it('does not let a failing Docker probe hide Host-native services', async () => {
         const tools = await listTools({
             devServerAvailable: async () => {
                 throw new Error('docker socket exploded');
             },
         });
-        expect(tools).not.toContain('manageService');
+        expect(tools).toContain('manageService');
         expect(tools).toContain('manageProcess');
     });
 
     it('omits it when the seam is not wired at all', async () => {
-        expect(await listTools()).not.toContain('manageService');
+        expect(await listTools({ manageService: undefined })).not.toContain('manageService');
     });
 });
 

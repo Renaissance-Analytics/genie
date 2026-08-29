@@ -66,6 +66,8 @@ export interface HostingPorts {
     devServicesFor: (workspaceId: string) => DevServices;
     /** The engine superuser credential, minted once per engine container. */
     engineAdmin: (req: EngineAdminRequest) => EngineAdmin;
+    /** Bundled Host-native Pusher service (Sockudo on desktop/host). */
+    hostWebSockets?: DevServiceManagerDeps['hostWebSockets'];
     /** This workspace's provisioned services, as environment. */
     devServiceEnvFor: (workspaceId: string) => Record<string, string>;
     /** This workspace's provisioned services in HOST form (127.0.0.1:<published
@@ -155,6 +157,7 @@ export function buildHostingDeps(ports: HostingPorts): HostingDeps {
         listWorkspaces: ports.listWorkspaces,
         devServicesFor: ports.devServicesFor,
         engineAdmin: ports.engineAdmin,
+        ...(ports.hostWebSockets ? { hostWebSockets: ports.hostWebSockets } : {}),
         ...(ports.confirmImagePull ? { confirmImagePull: ports.confirmImagePull } : {}),
         // REQUIRED for engines with no in-container check (Mailpit/Meilisearch/
         // MinIO): without a host-side probe `waitReady` answers "not ready"

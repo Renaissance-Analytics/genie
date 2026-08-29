@@ -56,6 +56,32 @@ Open **Workspace settings → Migrate** and review the backup path.
             'AgentInbox uses Claude Channels and Codex app-server. Messages are no longer typed into chat input.',
         ]);
     });
+
+    it('keeps the popover to four outcomes plus one migration note', () => {
+        const body = `
+# Internal release title
+This explanatory release essay does not belong in the popover.
+
+## What’s new
+- First outcome.
+- Second outcome.
+- Third outcome.
+- Fourth outcome.
+- Fifth lower-priority detail.
+- Sixth implementation detail.
+
+## Migration
+- One user action.
+- Another edge-case detail.
+`;
+        expect(releaseBodyChanges(body)).toEqual([
+            'First outcome.',
+            'Second outcome.',
+            'Third outcome.',
+            'Fourth outcome.',
+            'Migration: One user action.',
+        ]);
+    });
 });
 
 /**

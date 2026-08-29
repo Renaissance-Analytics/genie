@@ -52,6 +52,23 @@ const rowFor = (rows: ReturnType<typeof buildEngineInventory>, recordKey: string
     rows.find((r) => r.recordKey === recordKey);
 
 describe('buildEngineInventory', () => {
+    it('reports the bundled WebSocket runtime as installed without a container image', () => {
+        expect(rowFor(buildEngineInventory(bare), 'reverb-1')).toMatchObject({
+            image: 'sockudo/sockudo@4.7.0',
+            installed: true,
+            state: 'stopped',
+        });
+        expect(
+            rowFor(
+                buildEngineInventory({
+                    ...bare,
+                    holders: new Map([['reverb-1', new Set(['workspace-a'])]]),
+                }),
+                'reverb-1',
+            ),
+        ).toMatchObject({ installed: true, state: 'running', holders: 1 });
+    });
+
     it('lists every catalog engine+version as an available row, with nothing claimed', () => {
         // The "what could I run" half. A machine with no Docker images still has
         // to be able to say what the catalog offers, or the page is empty
@@ -213,7 +230,9 @@ describe('buildEngineInventory', () => {
             containers: new Map([['genie-svc-redis-7', { id: 'c1', state: 'running' }]]),
         });
         expect(rows[0]?.recordKey).toBe('redis-7');
-        expect(rows[1]?.recordKey).toBe('mysql-8.4');
+        expect(rows.findIndex((row) => row.recordKey === 'mysql-8.4')).toBeLessThan(
+            rows.findIndex((row) => row.recordKey === 'postgres-16'),
+        );
     });
 
     it('reports the images it needs probed, so nothing is downloaded to answer', () => {

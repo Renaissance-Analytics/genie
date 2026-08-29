@@ -87,10 +87,10 @@ describe('tools/list gating', () => {
         expect(tools).toContain('manageTerminals');
     });
 
-    it('gates manageService (a container SERVICE) on a usable container runtime', async () => {
+    it('keeps manageService available without a container runtime for Host-native engines', async () => {
         const svc = vi.fn().mockResolvedValue({ ok: true });
         expect(await listTools({ devServerAvailable: async () => true, manageService: svc })).toContain('manageService');
-        expect(await listTools({ devServerAvailable: async () => false, manageService: svc })).not.toContain(
+        expect(await listTools({ devServerAvailable: async () => false, manageService: svc })).toContain(
             'manageService',
         );
     });

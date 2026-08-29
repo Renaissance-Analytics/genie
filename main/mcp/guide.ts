@@ -185,7 +185,7 @@ carries the install hint. Pass \`terminalId\` for exact workspace resolution.
 
 ### manageService
 **Give this workspace a backing SERVICE** — Postgres, MySQL, Redis, Meilisearch,
-MinIO (S3), Mailpit, Reverb (WebSockets/broadcasting), or any image — and get
+MinIO (S3), Mailpit, WebSockets (bundled Sockudo), or any image — and get
 back how to connect. These are the
 same engines a \`manageSite\` site runs against, so a hosted site is backed the
 way production is. THE MODEL: an engine is WORKSTATION-hosted and normally **shared per
@@ -212,7 +212,8 @@ releases it. Actions (\`action\`):
 A service is BACKEND: it is never given a browser-facing name — reach it
 in-container through the injected \`envKeys\` (\`DATABASE_URL\`, …), which are also
 present in a site's BUILD steps, so a \`manageSite\` app needs no \`.env\` edit.
-Requires Docker or Podman. Pass \`terminalId\`.
+WebSockets run natively on the Genie Host without Docker. The other engines require
+Docker or Podman and return an install hint when no runtime is available. Pass \`terminalId\`.
 
 ### manageGappDev
 **Build the Genie App this workspace is the home of** — the GApp Development

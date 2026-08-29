@@ -34,26 +34,27 @@ describe('the catalog', () => {
         ]);
     });
 
-    it('models Reverb as a namespace-isolated, stateless engine off a genie-owned image', () => {
+    it('models WebSockets as a bundled Host-native, namespace-isolated Sockudo engine', () => {
         const reverb = engineSpecFor('reverb');
         // Namespace isolation (shared master, per-workspace app) — NOT a
         // per-workspace credential engine, exactly like MinIO/Meilisearch.
         expect(reverb.provision).toBe('namespace');
-        // The master the server derives every app secret from (HMAC key).
-        expect(reverb.adminEnv?.('sekret')).toEqual({ REVERB_MASTER_SECRET: 'sekret' });
+        expect(reverb.runtime).toBe('host');
+        expect(reverb.distribution).toEqual({ project: 'sockudo/sockudo', version: '4.7.0' });
         // Stateless — no data volume to persist.
         expect(reverb.volumes).toEqual([]);
-        // A genie-OWNED image, pinned by major, on our registry (no third party).
-        expect(reverb.image('1')).toBe('ghcr.io/renaissance-analytics/genie-reverb:1');
-        expect(reverb.ports[0]).toMatchObject({ container: 8080, primary: true });
+        expect(reverb.image('1')).toBe('');
+        expect(reverb.ports).toEqual([
+            { name: 'websocket', container: 6001, kind: 'http', primary: true },
+        ]);
     });
 
-    it('gives every engine an image, a primary port and a default version', () => {
+    it('gives container engines an image and every engine a primary port and default version', () => {
         for (const engine of SERVICE_ENGINES) {
             if (engine === 'custom') continue;
             const spec = engineSpecFor(engine);
             expect(spec.versions.length).toBeGreaterThan(0);
-            expect(spec.image(DEFAULT_VERSIONS[engine])).toMatch(/\S/);
+            if (spec.runtime === 'container') expect(spec.image?.(DEFAULT_VERSIONS[engine])).toMatch(/\S/);
             expect(spec.ports.some((p) => p.primary)).toBe(true);
         }
     });

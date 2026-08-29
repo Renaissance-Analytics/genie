@@ -98,6 +98,10 @@ export interface EngineVolume {
 
 export interface EngineSpec {
     engine: ServiceEngine;
+    /** Host-native engines ship with Genie; container engines require Docker/Podman. */
+    runtime: 'host' | 'container';
+    /** Pinned upstream bundled with a host-native engine. */
+    distribution?: { project: string; version: string };
     /** For a human and for the MCP `catalog` action. */
     label: string;
     /** One line an agent can act on: what this is for. */
@@ -105,6 +109,7 @@ export interface EngineSpec {
     /** Known versions, newest-preferred first. An unknown version is REFUSED —
      *  an arbitrary tag is an arbitrary image to run. */
     versions: readonly string[];
+    /** Container image; host-native engines return an empty string. */
     image: (version: string) => string;
     ports: readonly EnginePort[];
     volumes: readonly EngineVolume[];
@@ -128,6 +133,7 @@ export interface EngineSpec {
 
 const POSTGRES: EngineSpec = {
     engine: 'postgres',
+    runtime: 'container',
     label: 'Postgres',
     summary: 'PostgreSQL. Each workspace gets its own database + login role on the shared engine.',
     versions: ['17', '16', '15', '14'],
@@ -159,6 +165,7 @@ const POSTGRES: EngineSpec = {
 
 const MYSQL: EngineSpec = {
     engine: 'mysql',
+    runtime: 'container',
     label: 'MySQL',
     summary: 'MySQL. Each workspace gets its own schema + user, granted only on that schema.',
     versions: ['8.4', '8.0'],
@@ -180,6 +187,7 @@ const MYSQL: EngineSpec = {
 
 const REDIS: EngineSpec = {
     engine: 'redis',
+    runtime: 'container',
     label: 'Redis',
     summary:
         'Redis. Dedicated per workspace so framework cache clears can use FLUSHDB without touching another workspace.',
@@ -201,6 +209,7 @@ const REDIS: EngineSpec = {
 
 const MEILISEARCH: EngineSpec = {
     engine: 'meilisearch',
+    runtime: 'container',
     label: 'Meilisearch',
     summary:
         'Meilisearch. Shared instance; each workspace gets an index-name prefix (namespace isolation, shared master key).',
@@ -214,6 +223,7 @@ const MEILISEARCH: EngineSpec = {
 
 const MINIO: EngineSpec = {
     engine: 'minio',
+    runtime: 'container',
     label: 'MinIO (S3)',
     summary:
         'S3-compatible object storage. Shared instance; each workspace gets its own bucket and its own IAM user, admitted by policy to that bucket alone.',
@@ -235,6 +245,7 @@ const MINIO: EngineSpec = {
 
 const MAILPIT: EngineSpec = {
     engine: 'mailpit',
+    runtime: 'container',
     label: 'Mailpit',
     summary:
         'Catch-all SMTP + a web inbox. Shared instance; each workspace tags its mail with its own namespace.',
@@ -254,22 +265,19 @@ const MAILPIT: EngineSpec = {
 
 const REVERB: EngineSpec = {
     engine: 'reverb',
-    label: 'Reverb (WebSockets)',
+    runtime: 'host',
+    distribution: { project: 'sockudo/sockudo', version: '4.7.0' },
+    label: 'WebSockets (Sockudo)',
     summary:
-        'Laravel Reverb — a Pusher-protocol WebSocket + broadcast server. Shared instance; each workspace gets its OWN Reverb app (namespace isolation) whose secret is DERIVED from the shared master, so no per-workspace registration is needed.',
-    // The genie-owned image major (`ghcr.io/renaissance-analytics/genie-reverb`),
-    // NOT the Reverb library version — a same-major rebuild is one edit here.
+        'Bundled Sockudo Pusher-protocol WebSocket server. Runs natively on the Genie Host without Docker; each workspace gets its own app credentials.',
     versions: ['1'],
-    image: (version) => `ghcr.io/renaissance-analytics/genie-reverb:${version}`,
+    image: () => '',
     // Reverb speaks HTTP and upgrades to WebSocket on the SAME port. `http` so
     // readiness probes the published port (any HTTP answer = the server is up).
     // The image also serves a monitoring/debugging DASHBOARD on 8081 (live apps,
     // channels, connections) — published + listed like MinIO's console so a
     // person or agent can open it; NOT the primary.
-    ports: [
-        { name: 'reverb', container: 8080, kind: 'http', primary: true },
-        { name: 'dashboard', container: 8081, kind: 'http' },
-    ],
+    ports: [{ name: 'websocket', container: 6001, kind: 'http', primary: true }],
     // Stateless: connection + channel state is in memory, nothing to persist.
     volumes: [],
     // Namespace isolation, exactly like MinIO/Meilisearch: the engine is shared,
@@ -277,11 +285,11 @@ const REVERB: EngineSpec = {
     // here the master is the HMAC key the server derives every app secret from,
     // so a workspace can never forge another's secret without the master.
     provision: 'namespace',
-    adminEnv: (password) => ({ REVERB_MASTER_SECRET: password }),
 };
 
 const CUSTOM: EngineSpec = {
     engine: 'custom',
+    runtime: 'container',
     label: 'Custom image',
     summary:
         'Any image, one port, your env. Always DEDICATED to the workspace — an arbitrary image has no multi-tenant story to share.',

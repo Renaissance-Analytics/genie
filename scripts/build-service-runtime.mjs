@@ -52,6 +52,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createGunzip } from 'node:zlib';
 import https from 'node:https';
+import { createHash } from 'node:crypto';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
@@ -71,6 +72,14 @@ const CADDY_VERSION = process.env.CADDY_VERSION || '2.9.1';
 const CADDY_REPLACE_RESPONSE_VERSION =
     process.env.CADDY_REPLACE_RESPONSE_VERSION || 'v0.0.0-20250618171559-80962887e4c6';
 const XCADDY_VERSION = process.env.XCADDY_VERSION || 'v0.4.5';
+const SOCKUDO_VERSION = process.env.SOCKUDO_VERSION || '4.7.0';
+const SOCKUDO_ASSETS = {
+    'win32-x64': ['x86_64-pc-windows-msvc.zip', 'ec87c4afbc1d2d37d28165c911c961e2e0e2cdf546b3e6d4766a28c60518c585'],
+    'darwin-x64': ['x86_64-apple-darwin.tgz', '31f329475f2bd730e2e095da532ebb4449dca2f06967ec66b7aad7a14b2e9b12'],
+    'darwin-arm64': ['aarch64-apple-darwin.tgz', 'c2d05805d7f034fd2c811a364064c4874c72070de4794a2fd6ff30390be5b50f'],
+    'linux-x64': ['x86_64-unknown-linux-gnu.tgz', '384b50916f03afb7f1c25db783fcb493391e2c20c930f9d199bbe93621d8e89a'],
+    'linux-arm64': ['aarch64-unknown-linux-gnu.tgz', 'd34c230f24941e544a8952764ab518fda370870e28a6f8c9fda2fe2a4b2f3caf'],
+};
 
 /** Parse `--platform x --arch y` overrides; default to the current process. */
 function parseArgs(argv) {
@@ -341,6 +350,59 @@ async function buildCaddy(tmpDir) {
     return out;
 }
 
+async function bundleSockudo(tmpDir) {
+    const selected = SOCKUDO_ASSETS[`${platform}-${arch}`];
+    if (!selected) die(`Sockudo ${SOCKUDO_VERSION} has no pinned binary for ${platform}-${arch}`);
+    const [suffix, expectedSha256] = selected;
+    const archiveName = `sockudo-v${SOCKUDO_VERSION}-${suffix}`;
+    const archive = path.join(tmpDir, archiveName);
+    const url = `https://github.com/sockudo/sockudo/releases/download/v${SOCKUDO_VERSION}/${archiveName}`;
+    log(`downloading Sockudo ${SOCKUDO_VERSION} (${platform}-${arch})…`);
+    await downloadToFile(url, archive);
+    const actualSha256 = createHash('sha256').update(await fs.readFile(archive)).digest('hex');
+    if (actualSha256 !== expectedSha256) {
+        die(`Sockudo archive checksum mismatch: expected ${expectedSha256}, got ${actualSha256}`);
+    }
+
+    const extracted = path.join(tmpDir, 'sockudo');
+    await fs.mkdir(extracted, { recursive: true });
+    if (platform === 'win32') {
+        // Git for Windows (present on Genie dev machines and GitHub runners)
+        // ships a real Info-ZIP extractor. Windows tar does not read ZIP here,
+        // and PowerShell's Archive module is absent on some clean hosts.
+        execFileSync('unzip', ['-q', archive, '-d', extracted], { stdio: 'inherit' });
+    } else {
+        execFileSync('tar', ['-xf', archiveName, '-C', 'sockudo'], {
+            cwd: tmpDir,
+            stdio: 'inherit',
+        });
+    }
+    const wanted = platform === 'win32' ? 'sockudo.exe' : 'sockudo';
+    const find = async (dir) => {
+        for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+            const candidate = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+                const nested = await find(candidate);
+                if (nested) return nested;
+            } else if (entry.name === wanted) return candidate;
+        }
+        return null;
+    };
+    const source = await find(extracted);
+    if (!source) die(`Sockudo archive did not contain ${wanted}`);
+    const dest = path.join(RUNTIME_DIR, wanted);
+    await fs.copyFile(source, dest);
+    await fs.copyFile(
+        path.join(REPO_ROOT, 'resources', 'licenses', 'sockudo-MIT.txt'),
+        path.join(RUNTIME_DIR, 'sockudo-LICENSE.txt'),
+    );
+    if (platform !== 'win32') await fs.chmod(dest, 0o755);
+    if (platform === process.platform && arch === process.arch) {
+        execFileSync(dest, ['--version'], { stdio: 'inherit' });
+    }
+    return dest;
+}
+
 /** Recursive copy (dirs + files + exec bits), no symlink following surprises. */
 async function copyDir(src, dest) {
     await fs.mkdir(dest, { recursive: true });
@@ -409,6 +471,9 @@ async function main() {
         const caddyBin = await buildCaddy(tmpDir);
         if (caddyBin) log(`host Caddy → ${path.relative(REPO_ROOT, caddyBin)}`);
 
+        const sockudoBin = await bundleSockudo(tmpDir);
+        log(`Sockudo → ${path.relative(REPO_ROOT, sockudoBin)}`);
+
         // Version marker, read by materializeRuntimeToUserData() to key the
         // per-user MATERIALIZED copy of this runtime (<userData>/runtime/<key>/).
         // The pty-host AND the bundled Caddy both run from that copy — OUTSIDE
@@ -423,7 +488,7 @@ async function main() {
         // unit, so the marker names the unit.
         await fs.writeFile(
             path.join(RUNTIME_DIR, 'version.txt'),
-            `${NODE_VERSION}-${platform}-${arch}-caddy${CADDY_VERSION}+rr${CADDY_REPLACE_RESPONSE_VERSION}\n`,
+            `${NODE_VERSION}-${platform}-${arch}-caddy${CADDY_VERSION}+rr${CADDY_REPLACE_RESPONSE_VERSION}-sockudo${SOCKUDO_VERSION}\n`,
         );
 
         log('\x1b[32mresources/runtime/ built successfully.\x1b[0m');
@@ -433,6 +498,7 @@ async function main() {
         if (existsSync(path.join(RUNTIME_DIR, platform === 'win32' ? 'caddy.exe' : 'caddy'))) {
             log(`  resources/runtime/caddy${platform === 'win32' ? '.exe' : ''}  (Caddy ${CADDY_VERSION} + replace-response)`);
         }
+        log(`  resources/runtime/${platform === 'win32' ? 'sockudo.exe' : 'sockudo'}  (Sockudo ${SOCKUDO_VERSION})`);
         log(
             `  resources/runtime/version.txt  (${NODE_VERSION}-${platform}-${arch}-caddy${CADDY_VERSION})`,
         );

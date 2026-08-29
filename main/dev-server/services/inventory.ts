@@ -124,7 +124,10 @@ export function buildEngineInventory(input: EngineInventoryInput): EngineInvento
                 engine,
                 version,
                 dedicated: false,
-                image: spec.image(version),
+                image:
+                    spec.runtime === 'host' && spec.distribution
+                        ? `${spec.distribution.project}@${spec.distribution.version}`
+                        : spec.image(version),
                 workspaces: [],
             });
         }
@@ -164,6 +167,8 @@ export function buildEngineInventory(input: EngineInventoryInput): EngineInvento
         const engineKey = engineKeyFor(draft.engine, draft.version);
         const containerName = serviceContainerNameFor(engineKey, draft.ownerWorkspaceId);
         const container = input.containers.get(containerName);
+        const held = input.holders.get(recordKey)?.size ?? 0;
+        const hostNative = spec.runtime === 'host';
         rows.push({
             recordKey,
             engineKey,
@@ -174,12 +179,20 @@ export function buildEngineInventory(input: EngineInventoryInput): EngineInvento
             provision: spec.provision,
             image: draft.image,
             containerName,
-            installed: draft.image ? input.images.has(draft.image) : false,
-            state: container ? (container.state === 'running' ? 'running' : 'stopped') : 'absent',
+            installed: hostNative || (draft.image ? input.images.has(draft.image) : false),
+            state: hostNative
+                ? held > 0
+                    ? 'running'
+                    : 'stopped'
+                : container
+                  ? container.state === 'running'
+                      ? 'running'
+                      : 'stopped'
+                  : 'absent',
             ...(container ? { containerId: container.id } : {}),
             dedicated: draft.dedicated,
             ...(draft.ownerWorkspaceId ? { ownerWorkspaceId: draft.ownerWorkspaceId } : {}),
-            holders: input.holders.get(recordKey)?.size ?? 0,
+            holders: held,
             configured: draft.workspaces.length,
             workspaces: draft.workspaces,
         });
@@ -206,7 +219,10 @@ export function inventoryImages(
     for (const engine of SERVICE_ENGINES) {
         const spec = engineSpecFor(engine);
         if (spec.alwaysDedicated) continue;
-        for (const version of spec.versions) images.add(spec.image(version));
+        for (const version of spec.versions) {
+            const image = spec.image(version);
+            if (image) images.add(image);
+        }
     }
     for (const { services } of configs) {
         for (const config of Object.values(services)) {

@@ -53,6 +53,9 @@ import {
 import { resolveContainerRuntime } from './dev-server';
 import { devServerHostBrowserRoutes } from './dev-server/site-manager';
 import { createDesktopHostBrowserReconciler } from './dev-server/host-browser-desktop';
+import { waitForHttp } from './dev-server/port-probe';
+import { preferredServicePort } from './dev-server/services/service-ports';
+import { createBundledHostWebSocketService } from './dev-server/services/host-websocket';
 import type { HostBrowserReconciler } from './dev-server/host-browser-reconcile';
 import { initHosting } from './host-core/hosting';
 import {
@@ -1200,6 +1203,12 @@ app.whenReady().then(async () => {
         // Machine-scoped, minted once per engine CONTAINER: a shared engine's
         // superuser credential cannot live in any one workspace's row.
         engineAdmin: (req) => getOrCreateDevServiceEngine(req),
+        hostWebSockets: createBundledHostWebSocketService({
+            resourcesPath: process.resourcesPath,
+            userDataDir: app.getPath('userData'),
+            port: preferredServicePort('reverb-1', 'websocket'),
+            probe: (port) => waitForHttp(port, 60_000),
+        }),
         // Machine-scoped for the same reason the credential is: the publication
         // belongs to the CONTAINER, which several workspaces may share. Keeping it
         // is what stops a port moving when the derived one was unavailable once.

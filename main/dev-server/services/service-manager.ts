@@ -15,7 +15,7 @@ import {
     workspaceDnsName,
     workspaceSqlIdentifier,
 } from './catalog';
-import { serviceEnv } from './env-wiring';
+import { reverbAppSecret, serviceEnv } from './env-wiring';
 import { buildEngineInventory, inventoryImages } from './inventory';
 import { provisionSteps, runProvisionSteps } from './provision';
 import { planServicePorts, preferredServicePort } from './service-ports';
@@ -148,6 +148,17 @@ export interface DevServiceManagerDeps {
     /** Which runtime, and is it usable. Called per action, so installing Docker
      *  mid-session works without a restart. */
     resolveRuntime: () => Promise<ResolvedRuntimeLike>;
+    /** Bundled Host-native Pusher service. Required for the `reverb` engine. */
+    hostWebSockets?: {
+        acquire: (app: { id: string; key: string; secret: string }) => Promise<{
+            processId: string;
+            port: number;
+            ready: boolean;
+        }>;
+        release: (appId: string) => Promise<void>;
+        logs: (tail?: number) => string | Promise<string>;
+        stop: () => Promise<void>;
+    };
     listWorkspaces: () => DevWorkspace[];
     devServicesFor: (workspaceId: string) => DevServices;
     /**
@@ -389,6 +400,7 @@ interface Live {
     admin: EngineAdmin;
     endpoints: ServiceEndpoint[];
     ready: boolean;
+    hostNative?: boolean;
 }
 
 const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -566,6 +578,70 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
         }
         const { config } = found;
 
+        const spec = engineSpecFor(config.engine);
+        const engineKey = engineKeyFor(config.engine, config.version);
+        if (spec.runtime === 'host') {
+            const host = deps.hostWebSockets;
+            if (!host) {
+                return failed(
+                    workspaceId,
+                    serviceId,
+                    config,
+                    `${spec.label} is not available in this Genie build.`,
+                );
+            }
+            const recordKey = engineRecordKeyFor(engineKey, null);
+            const admin = deps.engineAdmin({
+                recordKey,
+                engine: config.engine,
+                version: config.version,
+                workspaceId: null,
+                adminUser: 'admin',
+            });
+            const slice: WorkspaceSlice = {
+                identifier: workspaceSqlIdentifier(workspaceId),
+                dnsName: workspaceDnsName(workspaceId),
+                password: config.password,
+            };
+            try {
+                const process = await host.acquire({
+                    id: slice.identifier,
+                    key: slice.identifier,
+                    secret: reverbAppSecret(admin.password, slice.identifier),
+                });
+                if (!process.ready) {
+                    return failed(workspaceId, serviceId, config, `${spec.label} did not become ready.`);
+                }
+                const endpoint: ServiceEndpoint = {
+                    name: 'websocket',
+                    kind: 'http',
+                    host: 'host.docker.internal',
+                    port: process.port,
+                    hostPort: process.port,
+                    localAddress: `http://127.0.0.1:${process.port}`,
+                };
+                holdersOf(recordKey).add(workspaceId);
+                live.set(serviceId, {
+                    workspaceId,
+                    serviceId,
+                    config,
+                    engineKey,
+                    recordKey,
+                    containerId: process.processId,
+                    containerName: 'host.docker.internal',
+                    slice,
+                    admin,
+                    endpoints: [endpoint],
+                    ready: true,
+                    hostNative: true,
+                });
+                changed();
+                return statusOf(live.get(serviceId)!);
+            } catch (e) {
+                return failed(workspaceId, serviceId, config, messageOf(e));
+            }
+        }
+
         const { runtime, detection } = await deps.resolveRuntime();
         if (!runtime || detection.kind === 'none') {
             // The guided-install path, not an error — the message carries the
@@ -579,8 +655,6 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
             );
         }
 
-        const spec = engineSpecFor(config.engine);
-        const engineKey = engineKeyFor(config.engine, config.version);
         // `custom` is always dedicated — an arbitrary image has no multi-tenant
         // story, so it cannot be shared.
         const dedicated = config.dedicated || Boolean(spec.alwaysDedicated);
@@ -1002,8 +1076,9 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
             ...(entry.config.active ? { active: true } : {}),
             state: 'running',
             ready: entry.ready,
-            containerId: entry.containerId,
-            containerName: entry.containerName,
+            ...(entry.hostNative
+                ? {}
+                : { containerId: entry.containerId, containerName: entry.containerName }),
             holders: holdersOf(entry.recordKey).size,
             endpoints: entry.endpoints,
             namespace: { identifier: entry.slice.identifier, dnsName: entry.slice.dnsName },
@@ -1040,6 +1115,18 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
         const { runtime } = await deps.resolveRuntime();
         const held = holdersOf(entry.recordKey);
         held.delete(workspaceId);
+
+        if (entry.hostNative) {
+            try {
+                await deps.hostWebSockets?.release(entry.slice.identifier);
+                if (held.size === 0) await deps.hostWebSockets?.stop();
+            } catch {
+                /* tolerant — release converges on the next reconciliation */
+            }
+            changed();
+            envChanged(workspaceId);
+            return;
+        }
 
         if (runtime) {
             try {
@@ -1143,6 +1230,9 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
                 return failure?.error
                     ? `This service is not running. It last failed with:\n${failure.error}`
                     : 'This service is not running, so it has no engine log.';
+            }
+            if (entry.hostNative) {
+                return (await deps.hostWebSockets?.logs(tail)) ?? 'The Host WebSocket runtime is unavailable.';
             }
             const { runtime } = await deps.resolveRuntime();
             if (!runtime) return 'No container runtime is available, so the log cannot be read.';
@@ -1336,6 +1426,45 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
         },
 
         async engineAction({ recordKey, action, tail }) {
+            const parsedRecord = parseEngineKey(recordKey.split('@')[0] ?? '');
+            if (parsedRecord && engineSpecFor(parsedRecord.engine).runtime === 'host') {
+                if (!deps.hostWebSockets) {
+                    return { ok: false, error: 'The bundled Host WebSocket runtime is unavailable.' };
+                }
+                if (action === 'install') return { ok: true };
+                if (action === 'logs') {
+                    return { ok: true, logs: await deps.hostWebSockets.logs(tail) };
+                }
+                if (action === 'stop') {
+                    await deps.hostWebSockets.stop();
+                    holders.delete(recordKey);
+                    for (const [serviceId, entry] of [...live.entries()]) {
+                        if (entry.recordKey === recordKey) live.delete(serviceId);
+                    }
+                    changed();
+                    return { ok: true };
+                }
+                const consumers: Array<{ workspaceId: string; serviceId: string }> = [];
+                for (const workspace of deps.listWorkspaces()) {
+                    for (const [serviceId, config] of Object.entries(deps.devServicesFor(workspace.id))) {
+                        if (
+                            engineKeyFor(config.engine, config.version) ===
+                            engineKeyFor(parsedRecord.engine, parsedRecord.version)
+                        ) {
+                            consumers.push({ workspaceId: workspace.id, serviceId });
+                        }
+                    }
+                }
+                if (consumers.length === 0) {
+                    return { ok: false, error: 'No workspace uses this Host WebSocket engine.' };
+                }
+                for (const consumer of consumers) {
+                    const status = await acquire(consumer.workspaceId, consumer.serviceId);
+                    if (status.state === 'failed') return { ok: false, error: status.error };
+                }
+                return { ok: true };
+            }
+
             const { runtime, detection } = await deps.resolveRuntime();
             if (!runtime) {
                 return {

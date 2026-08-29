@@ -246,6 +246,81 @@ function deps(
 const pgFor = (serviceId: string): DevServices => ({ [serviceId]: { ...PG16 } });
 
 describe('one engine, two workspaces', () => {
+    it('runs the bundled WebSocket engine on the Host without a container runtime', async () => {
+        const runtime = fakeRuntime();
+        const acquired: Array<{ id: string; key: string; secret: string }> = [];
+        let hostStops = 0;
+        const manager = createDevServiceManager(
+            deps(
+                runtime,
+                {
+                    a: {
+                        'ws-a': {
+                            engine: 'reverb',
+                            version: '1',
+                            dedicated: false,
+                            password: 'workspace_websocket_password_0123456789',
+                            enabled: true,
+                        },
+                    },
+                },
+                {
+                    resolveRuntime: async () => ({
+                        runtime: null,
+                        detection: { kind: 'none', probes: [] },
+                    }),
+                    hostWebSockets: {
+                        acquire: async (app) => {
+                            acquired.push(app);
+                            return { processId: 'sockudo-1', port: 49_123, ready: true };
+                        },
+                        release: async () => {},
+                        logs: () => 'Sockudo ready',
+                        stop: async () => {
+                            hostStops += 1;
+                        },
+                    },
+                },
+            ),
+        );
+
+        const status = await manager.acquire('a', 'ws-a');
+
+        expect(status).toMatchObject({
+            state: 'running',
+            ready: true,
+            endpoints: [
+                {
+                    host: 'host.docker.internal',
+                    port: 49_123,
+                    hostPort: 49_123,
+                    localAddress: 'http://127.0.0.1:49123',
+                },
+            ],
+        });
+        expect(status).not.toHaveProperty('containerId');
+        expect(runtime.ran).toHaveLength(0);
+        expect(acquired).toHaveLength(1);
+        expect(manager.hostEnvFor('a')).toMatchObject({
+            REVERB_HOST: '127.0.0.1',
+            REVERB_PORT: '49123',
+        });
+        expect(manager.envFor('a')).toMatchObject({
+            REVERB_HOST: 'host.docker.internal',
+            REVERB_PORT: '49123',
+        });
+        expect(await manager.logs('ws-a')).toBe('Sockudo ready');
+        expect(await manager.engineAction({ recordKey: 'reverb-1', action: 'logs' })).toEqual({
+            ok: true,
+            logs: 'Sockudo ready',
+        });
+        expect(await manager.engineAction({ recordKey: 'reverb-1', action: 'stop' })).toEqual({
+            ok: true,
+        });
+        expect(hostStops).toBe(1);
+        expect(manager.list('a')[0]?.state).toBe('stopped');
+    });
+
     it('starts ONE container and the second workspace adopts it', async () => {
         const runtime = fakeRuntime();
         const manager = createDevServiceManager(
@@ -760,7 +835,15 @@ describe('the machine-level view', () => {
         );
         const rows = await manager.inventory();
         expect(rows.length).toBeGreaterThan(0);
-        expect(rows.every((r) => r.state === 'absent' && !r.installed)).toBe(true);
+        expect(
+            rows
+                .filter((row) => row.engine !== 'reverb')
+                .every((row) => row.state === 'absent' && !row.installed),
+        ).toBe(true);
+        expect(rows.find((row) => row.engine === 'reverb')).toMatchObject({
+            state: 'stopped',
+            installed: true,
+        });
     });
 
     it('STOPS a shared engine and drops every hold on it, so the count stays honest', async () => {
