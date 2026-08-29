@@ -42,6 +42,20 @@ let seed: MasterSeed;
 test.beforeAll(async () => {
     ({ app, page } = await launchGenieE2E('master'));
 
+    // The throwaway profile deliberately starts without the first-run marker.
+    // This fixture already contains registered workspaces, so the supported
+    // returning-user path is to dismiss onboarding and continue into the
+    // existing workspace. Exercise that real path instead of mutating
+    // localStorage behind the product's back.
+    const onboarding = page.getByRole('heading', {
+        name: 'Getting the Workstation Ready',
+    });
+    await onboarding.waitFor({ state: 'visible', timeout: 20_000 }).catch(() => {});
+    if (await onboarding.count()) {
+        await page.keyboard.press('Escape');
+        await expect(onboarding).toHaveCount(0);
+    }
+
     // A machine missing dev tools is offered the first-run toolchain setup, raised
     // over the whole window — and a clean CI runner is exactly the machine that
     // offer exists for, so it opens on every leg. It is real behaviour with a story
