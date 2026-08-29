@@ -219,9 +219,10 @@ test('the floor lays out the seeded terminal, and the status bar counts it', asy
     const status = page.locator('.gstatus');
     await expect(status).toContainText('1 panel');
     await expect(status).toContainText('1 project');
-    // `live` drops back to 0 when a panel's terminal EXITS, so this says the shell
-    // is still running and not just that a panel was mounted.
-    await expect(status).toContainText('1 live');
+    // `live` is workstation-wide, unlike the Floor's panel/project counts. The
+    // seeded shell and the always-running Genie OS agent are both live, while
+    // only the seeded workspace terminal is laid out above.
+    await expect(status).toContainText('2 live');
 });
 
 test('a workspace switch never fits the panel it hid (genie#229)', async () => {
