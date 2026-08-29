@@ -1245,6 +1245,8 @@ export interface Settings {
     /** Workstation Setup: the enabled-agent ids as a JSON string array. Written by
      *  the setup wizard; HOST-SOURCED (mirrors `agent_default`). */
     agent_enabled?: string;
+    /** Private GitHub HTTPS repository used to back up the Genie OS workspace. */
+    genie_os_backup_repo?: string;
 }
 
 /** Health of a workspace's agent docs (AGENTS.md + Genie section + CLAUDE sync). */
@@ -3438,6 +3440,7 @@ export interface GenieApi {
         homeDir: () => Promise<string>;
         genieOsWorkspace: () => Promise<{ path: string }>;
         syncGenieOs: (remoteUrl: string) => Promise<{ ok: true; path: string }>;
+        genieOsFiles: (relativePath?: string) => Promise<Array<{ id: string; name: string; path: string; kind: 'file' | 'directory' | 'symlink' }>>;
         /** Open Settings. `fromRemote:true` (a remote/host window) restricts it to
          *  the connection-relevant subset (Appearance / Notifications / copy-paste). */
         showSettings: (fromRemote?: boolean) => Promise<{ ok: boolean }>;

@@ -200,6 +200,7 @@ export const HOST_SOURCED_SETTINGS_KEYS = [
     // and a re-run pre-fills from the host. Mirrors renderer/lib/settings-nav.ts.
     'agent_default',
     'agent_enabled',
+    'genie_os_backup_repo',
 ] as const satisfies readonly (keyof Settings)[];
 
 /** The bucket-2 subset of the host's settings a remote may see (allow-list filter). */

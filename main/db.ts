@@ -1757,6 +1757,8 @@ export interface Settings extends ProviderSettingKeys {
     /** Workstation Setup: the enabled-agent ids as a JSON string array, written by
      *  the desktop setup wizard. HOST-SOURCED. Default '' (none chosen). */
     agent_enabled?: string;
+    /** Private GitHub HTTPS repository used to back up the Genie OS workspace. */
+    genie_os_backup_repo?: string;
     /** Plugin System Developer Mode. When 'on', the user may install/enable
      *  UNSIGNED plugins (with escalated consent + restricted runtime) and manage
      *  developer-trusted signing keys. Default 'off' — the signed registry is the

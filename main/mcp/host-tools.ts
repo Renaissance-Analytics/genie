@@ -70,6 +70,7 @@ import {
 } from '../terminal/ipc';
 import { agentName, agentRef, savedAgentKey } from '../agents/identity';
 import { resolveWorkstationProvider } from '../agents/provider';
+import { restartProviderForSpec } from '../agents/restart';
 import { decideAgentStart, savedAgentsOf, type SavedAgent } from '../agents/saved';
 import { resolveAgentRegistration } from '../agents/registration';
 import { withProviderStartupInstructions } from '../agents/startup';
@@ -1647,6 +1648,36 @@ export function restartAgentTerminal(id: string): RestartAgentResult {
     if (!spec || !agent) {
         return { ok: false, error: `"${id}" is not an agent terminal.` };
     }
+    const provider = restartProviderForSpec(spec.meta ?? {}, getAllSettings());
+    if (!provider) return { ok: false, error: `"${id}" is not an agent terminal.` };
+
+    // Genie OSA is a recovery surface: restart means a complete teardown and a
+    // fresh launch using CURRENT provider settings. It must work even when the
+    // old TUI never captured a resumable session or its input path is wedged.
+    if (spec.meta?.system === true) {
+        const ws = getWorkspace(spec.workspace_id!);
+        if (!ws) return { ok: false, error: 'Genie OS workspace is unavailable.' };
+        const command = resolveAgentLaunch(provider, undefined, ws);
+        if (!command) return { ok: false, error: `No command configured for agent "${provider}".` };
+        const identity = spec.meta.agent_id;
+        const preserved = { ...spec.meta };
+        killTerminalById(id);
+        deleteTerminalSpec(id);
+        const restarted = createAgentTerminal({
+            workspaceId: spec.workspace_id!, cwd: spec.cwd, label: spec.label,
+            agentMeta: { agent: provider, command },
+            agentInbox: {
+                purpose: spec.meta.whisper_purpose,
+                scope: spec.meta.whisper_scope,
+                scopeWorkspaces: spec.meta.whisper_workspaces,
+            },
+        });
+        const fresh = getTerminalSpec(restarted.id);
+        if (fresh) updateTerminalSpec(restarted.id, { meta: { ...preserved, ...fresh.meta, system: true, ...(identity ? { agent_id: identity } : {}) } });
+        broadcastTerminalSpecsChanged();
+        return { ok: true, oldId: id, newId: restarted.id, agent: provider, command: restarted.command ?? command };
+    }
+
     // Resolve the relaunch command with the ON-DISK transcript check, so a
     // drifted session id falls back to `--continue` instead of dead-ending at
     // `--resume <phantom>` ("No conversation found" — reads as lost work). Refuses

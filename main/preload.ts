@@ -980,6 +980,7 @@ const api = {
         homeDir: () => ipcRenderer.invoke('app:home-dir') as Promise<string>,
         genieOsWorkspace: () => ipcRenderer.invoke('app:genie-os-workspace') as Promise<{ path: string }>,
         syncGenieOs: (remoteUrl: string) => ipcRenderer.invoke('app:genie-os-sync', remoteUrl) as Promise<{ ok: true; path: string }>,
+        genieOsFiles: (relativePath = '') => ipcRenderer.invoke('app:genie-os-files', relativePath),
         showSettings: (fromRemote?: boolean) =>
             ipcRenderer.invoke('app:show-settings', fromRemote),
         showDocs: () => ipcRenderer.invoke('app:show-docs'),

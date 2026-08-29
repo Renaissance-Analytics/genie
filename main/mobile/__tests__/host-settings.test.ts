@@ -28,6 +28,7 @@ describe('pickHostSettings — host-sourced allow-list', () => {
                 'gapp_ai_provider',
                 'agent_default',
                 'agent_enabled',
+                'genie_os_backup_repo',
             ].sort(),
         );
     });

@@ -66,13 +66,13 @@ describe('remote (restricted) Settings', () => {
         const items = groups.flatMap((g) => g.items.map((i) => i.id));
         // Order preserved from NAV_GROUPS: Tools + Customization (Workspace group),
         // then Agent MCP (Agents & network group).
-        expect(items).toEqual(['tools', 'customization', 'agent-mcp']);
-        expect(groups.map((g) => g.label)).toEqual(['Workspace', 'Agents & network']);
+        expect(items).toEqual(['customization', 'agent-providers', 'agent-mcp', 'genie-osa']);
+        expect(groups.map((g) => g.label)).toEqual(['Workspace', 'Agents']);
         // The "System" group (Updates) has no visible item → dropped.
     });
 
     it('only Customization + Tools + Agent MCP render; everything else is hidden', () => {
-        for (const id of ['customization', 'tools', 'agent-mcp'] as SectionId[]) {
+        for (const id of ['customization', 'agent-providers', 'agent-mcp', 'genie-osa'] as SectionId[]) {
             expect(isSectionVisible(id, true)).toBe(true);
         }
         for (const id of [
@@ -92,16 +92,17 @@ describe('remote (restricted) Settings', () => {
     });
 
     it('defaults to the first surviving section (Tools)', () => {
-        expect(defaultSection(true)).toBe('tools');
+        expect(defaultSection(true)).toBe('customization');
     });
 });
 
 describe('host-sourced (bucket 2) classification', () => {
     it('Tools + Agent MCP are host-sourced; Customization is device-local', () => {
-        expect(isHostSourcedSection('tools')).toBe(true);
+        expect(isHostSourcedSection('agent-providers')).toBe(true);
         expect(isHostSourcedSection('agent-mcp')).toBe(true);
+        expect(isHostSourcedSection('genie-osa')).toBe(true);
         expect(isHostSourcedSection('customization')).toBe(false);
-        expect([...HOST_SOURCED_SECTIONS].sort()).toEqual(['agent-mcp', 'tools']);
+        expect([...HOST_SOURCED_SECTIONS].sort()).toEqual(['agent-mcp', 'agent-providers', 'genie-osa']);
     });
 
     it('the host-sourced key allow-list is exactly the workspace/agent-env keys', () => {
@@ -125,6 +126,7 @@ describe('host-sourced (bucket 2) classification', () => {
                 // Workstation Setup: the owner's default + enabled agents.
                 'agent_default',
                 'agent_enabled',
+                'genie_os_backup_repo',
             ].sort(),
         );
     });

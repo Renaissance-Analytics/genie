@@ -9,10 +9,11 @@ import type { Settings } from './genie';
 /** The Settings sidebar sections. */
 export type SectionId =
     | 'general'
-    | 'tools'
+    | 'agent-providers'
     | 'workspaces'
     | 'customization'
     | 'agent-mcp'
+    | 'genie-osa'
     | 'plugins'
     | 'apps'
     | 'mobile'
@@ -41,15 +42,16 @@ export const NAV_GROUPS: NavGroup[] = [
         label: 'Workspace',
         items: [
             { id: 'general', label: 'General', icon: 'settings' },
-            { id: 'tools', label: 'Tools', icon: 'terminal' },
             { id: 'workspaces', label: 'Workspaces', icon: 'layout-grid' },
             { id: 'customization', label: 'Customization', icon: 'palette' },
         ],
     },
     {
-        label: 'Agents & network',
+        label: 'Agents',
         items: [
+            { id: 'agent-providers', label: 'Providers', icon: 'terminal' },
             { id: 'agent-mcp', label: 'Agent MCP', icon: 'plug' },
+            { id: 'genie-osa', label: 'Genie OSA', icon: 'sparkles' },
             { id: 'plugins', label: 'Plugins', icon: 'puzzle' },
             // Genie Apps (Tynn #250) — whole agentic applications, each with its
             // own workspace, hosting, window and consented permissions. Beside
@@ -57,7 +59,19 @@ export const NAV_GROUPS: NavGroup[] = [
             // and separate because they are different KINDS of trust: a plugin
             // extends Genie's surfaces, an app is a program of its own.
             { id: 'apps', label: 'Genie Apps', icon: 'layout-dashboard' },
+        ],
+    },
+    {
+        label: 'Network',
+        items: [
             { id: 'mobile', label: 'Work Mode', icon: 'monitor' },
+            { id: 'connections', label: 'Connections', icon: 'link' },
+            { id: 'devices', label: 'Devices', icon: 'smartphone' },
+        ],
+    },
+    {
+        label: 'System',
+        items: [
             // THIS MACHINE's toolchain: the language versions Genie installs and
             // owns (php/node/python/go/rust, many side by side, one default),
             // the single-version dev tools, and the agent CLIs. Its own page and
@@ -76,13 +90,8 @@ export const NAV_GROUPS: NavGroup[] = [
             // service ENGINES are shared across every workspace on the machine,
             // so they are managed here and nowhere else.
             { id: 'dev-server', label: 'Hosting Manager', icon: 'server' },
-            { id: 'connections', label: 'Connections', icon: 'link' },
-            { id: 'devices', label: 'Devices', icon: 'smartphone' },
+            { id: 'updates', label: 'Updates', icon: 'download' },
         ],
-    },
-    {
-        label: 'System',
-        items: [{ id: 'updates', label: 'Updates', icon: 'download' }],
     },
 ];
 
@@ -140,6 +149,7 @@ export const HOST_SOURCED_SETTINGS_KEYS = [
     // status reads them, and a re-run pre-fills from the host, not the client).
     'agent_default',
     'agent_enabled',
+    'genie_os_backup_repo',
 ] as const satisfies readonly (keyof Settings)[];
 
 export type HostSourcedSettingKey = (typeof HOST_SOURCED_SETTINGS_KEYS)[number];
@@ -226,14 +236,14 @@ export function withoutRuntimeOwnedSettings(s: Partial<Settings>): Partial<Setti
  *    values come from + write to the HOST (badged "On the host" in the UI).
  * Every other section is host-machine-only / wrong-scoped and stays hidden.
  */
-export const REMOTE_SECTIONS = new Set<SectionId>(['customization', 'tools', 'agent-mcp']);
+export const REMOTE_SECTIONS = new Set<SectionId>(['customization', 'agent-providers', 'agent-mcp', 'genie-osa']);
 
 /**
  * The remote-visible sections whose content is HOST-sourced (bucket 2) — the UI
  * badges these "On the host" so it's clear they edit the AGENT's environment on the
  * host, not the client. `customization` is device-local and NOT included.
  */
-export const HOST_SOURCED_SECTIONS = new Set<SectionId>(['tools', 'agent-mcp']);
+export const HOST_SOURCED_SECTIONS = new Set<SectionId>(['agent-providers', 'agent-mcp', 'genie-osa']);
 
 /** Whether a section's values are HOST-sourced in a remote window (drives the badge). */
 export function isHostSourcedSection(id: SectionId): boolean {

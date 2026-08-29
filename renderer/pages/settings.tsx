@@ -22,6 +22,7 @@ import {
     Text,
     Textarea,
 } from '@particle-academy/react-fancy';
+import { RepositoryBrowser } from '@particle-academy/fancy-git-ui';
 import {
     api,
     type McpServerState,
@@ -350,8 +351,8 @@ export default function SettingsPage() {
 
                             </SearchGroup>
                         )}
-                        {show('tools') && (
-                            <SearchGroup label="Tools" searching={searching}>
+                        {show('agent-providers') && (
+                            <SearchGroup label="Providers" searching={searching}>
 
             <SetSection
                 title="Specialized terminals"
@@ -814,6 +815,16 @@ export default function SettingsPage() {
                 }
             />
 
+                            </SearchGroup>
+                        )}
+                        {show('genie-osa') && (
+                            <SearchGroup label="Genie OSA" searching={searching}>
+                                <GenieOsaSection
+                                    provider={s.agent_default ?? ''}
+                                    onProviderChange={(provider) => patch({ agent_default: provider })}
+                                    backupRepo={s.genie_os_backup_repo ?? ''}
+                                    onBackupRepoChange={(backupRepo) => patch({ genie_os_backup_repo: backupRepo })}
+                                />
                             </SearchGroup>
                         )}
                         {show('plugins') && (
@@ -2660,6 +2671,72 @@ function AgentMcpSection({
                 </>
             )}
         </SetSection>
+    );
+}
+
+function GenieOsaSection({
+    provider,
+    onProviderChange,
+    backupRepo,
+    onBackupRepoChange,
+}: {
+    provider: string;
+    onProviderChange: (provider: string) => void;
+    backupRepo: string;
+    onBackupRepoChange: (repo: string) => void;
+}) {
+    const [syncing, setSyncing] = useState(false);
+    const [message, setMessage] = useState('');
+    const [repoPath, setRepoPath] = useState('');
+    const [repoEntries, setRepoEntries] = useState<Array<{ id: string; name: string; path: string; kind: 'file' | 'directory' | 'symlink' }>>([]);
+    const [repoLoading, setRepoLoading] = useState(true);
+    useEffect(() => {
+        setRepoLoading(true);
+        api().app.genieOsFiles(repoPath)
+            .then(setRepoEntries)
+            .catch((error) => setMessage(error instanceof Error ? error.message : 'Could not read the Genie OS repository.'))
+            .finally(() => setRepoLoading(false));
+    }, [repoPath]);
+    const sync = async () => {
+        setSyncing(true);
+        setMessage('');
+        try {
+            const result = await api().app.syncGenieOs(backupRepo.trim());
+            setMessage(result.ok ? `Synced at ${result.path}` : 'Could not sync the Genie OS repository.');
+        } catch (error) {
+            setMessage(error instanceof Error ? error.message : 'Could not sync the Genie OS repository.');
+        } finally {
+            setSyncing(false);
+        }
+    };
+    return (
+        <>
+            <SetSection title="Genie OS agent" desc="The workstation operator that is always available from the header">
+                <SettingRow label="Provider" desc="The TUI used the next time Genie OS starts or restarts." keywords="genie osa provider claude codex kiwi tui" grow>
+                    <Select value={provider} onValueChange={onProviderChange} list={[
+                        { value: 'claude', label: 'Claude Code' },
+                        { value: 'codex', label: 'Codex' },
+                        { value: 'kiwi', label: 'Kiwi' },
+                        { value: 'genie', label: 'Genie TUI' },
+                    ]} />
+                </SettingRow>
+                <SettingRow label="Backup repository" desc="Private GitHub HTTPS repository for the Genie OS workspace and memory." keywords="genie osa backup github repository memory sync" vertical>
+                    <Input value={backupRepo} onValueChange={onBackupRepoChange} placeholder="https://github.com/owner/genie-os.git" />
+                    <Action icon="refresh-cw" disabled={!backupRepo.trim() || syncing} onClick={() => void sync()}>
+                        {syncing ? 'Syncing…' : 'Sync backup repository'}
+                    </Action>
+                    {message && <Text size="sm">{message}</Text>}
+                </SettingRow>
+            </SetSection>
+            <SetSection title="Managed repository" desc="Fancy Git view of the files Genie keeps in the OS workspace">
+                <RepositoryBrowser
+                    path={repoPath}
+                    value={repoEntries}
+                    loading={repoLoading}
+                    onPathChange={setRepoPath}
+                />
+            </SetSection>
+        </>
     );
 }
 
