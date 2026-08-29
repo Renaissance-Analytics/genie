@@ -83,7 +83,6 @@ export function tynnWorkspaceSource(project: {
     isWorkspace?: boolean;
     repositories?: Array<{ url: string; defaultBranch?: string; kind?: string }>;
 }): { url: string; branch: string } | null {
-    if (!project.isWorkspace) return null;
     const envelope = project.repositories?.find(
         (repository) => repository.kind === 'envelope' && repository.url.trim(),
     );
@@ -108,4 +107,22 @@ export function tynnProjectImportSource(project: {
             branch: repository.defaultBranch?.trim() || 'main',
         }
         : null;
+}
+
+/**
+ * Tynn is the project catalog, not merely a repository catalog. Every project
+ * the signed-in user can access is importable until a local Genie workspace is
+ * already linked to it; projects without repositories continue in the local
+ * source branch of the interactive wizard.
+ */
+export function availableTynnProjects<T extends { id: string }>(
+    projects: readonly T[],
+    workspaces: readonly { project_id?: string | null; tynn_project_id?: string | null }[],
+): T[] {
+    const linked = new Set(
+        workspaces.flatMap((workspace) => [workspace.tynn_project_id, workspace.project_id])
+            .map((id) => id?.trim())
+            .filter((id): id is string => !!id),
+    );
+    return projects.filter((project) => !linked.has(project.id));
 }

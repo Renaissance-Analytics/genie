@@ -7,6 +7,7 @@ import {
     workspaceWizardEntry,
     tynnWorkspaceSource,
     tynnProjectImportSource,
+    availableTynnProjects,
     scannedWorkspaceAction,
 } from '../workspace-onboarding';
 
@@ -36,6 +37,19 @@ describe('managed workspace entry points', () => {
 });
 
 describe('Tynn workspace import', () => {
+    it('offers every accessible project except ones already linked to a Genie workspace', () => {
+        const projects = [
+            { id: 'available-empty', name: 'Empty', slug: 'empty', repositories: [] },
+            { id: 'available-repo', name: 'Repo', slug: 'repo', repositories: [{ url: 'https://github.com/acme/repo.git', kind: 'code' as const }] },
+            { id: 'linked', name: 'Linked', slug: 'linked', repositories: [] },
+        ];
+
+        expect(availableTynnProjects(projects, [
+            { project_id: '', tynn_project_id: 'linked' },
+            { project_id: '__genie_os__', tynn_project_id: '__genie_os__' },
+        ]).map((project) => project.id)).toEqual(['available-empty', 'available-repo']);
+    });
+
     it('uses the declared envelope repository, independent of its suffix', () => {
         expect(tynnWorkspaceSource({
             isWorkspace: true,
@@ -53,8 +67,11 @@ describe('Tynn workspace import', () => {
         })).toEqual({ kind: 'project', url: 'https://github.com/acme/product.git', branch: 'main' });
     });
 
-    it('refuses a project that is not a managed workspace', () => {
-        expect(tynnWorkspaceSource({ isWorkspace: false, repositories: [] })).toBeNull();
+    it('treats every Tynn project as a workspace regardless of legacy isWorkspace metadata', () => {
+        expect(tynnWorkspaceSource({
+            isWorkspace: false,
+            repositories: [{ url: 'https://github.com/acme/envelope.git', kind: 'envelope' }],
+        })).toEqual({ url: 'https://github.com/acme/envelope.git', branch: 'main' });
     });
 });
 

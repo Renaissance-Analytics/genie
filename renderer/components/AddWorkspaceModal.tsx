@@ -28,7 +28,7 @@ import {
     GitHubErrorNotice,
 } from './GitHubConnect';
 import { useGithubCapabilities } from '../lib/githubCapabilities';
-import { ADD_WORKSPACE_SOURCES, tynnProjectImportSource, tynnWorkspaceSource, workspaceWizardEntry, type AddWorkspaceSourceId } from '../lib/workspace-onboarding';
+import { ADD_WORKSPACE_SOURCES, availableTynnProjects, tynnProjectImportSource, tynnWorkspaceSource, workspaceWizardEntry, type AddWorkspaceSourceId } from '../lib/workspace-onboarding';
 
 type Stage =
     | 'source'
@@ -49,6 +49,7 @@ interface Props {
 export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
     const [stage, setStage] = useState<Stage>('source');
     const [projects, setProjects] = useState<TynnProject[]>([]);
+    const [workspaces, setWorkspaces] = useState<WorkspaceRow[]>([]);
     const [loadingProjects, setLoadingProjects] = useState(true);
     const [projectsError, setProjectsError] = useState<string | null>(null);
     const [interactiveMode, setInteractiveMode] = useState<'local' | 'remote'>('local');
@@ -56,9 +57,11 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
     const [interactiveProjectId, setInteractiveProjectId] = useState('');
 
     useEffect(() => {
-        api()
-            .tynn.projects()
-            .then((p) => setProjects(p))
+        Promise.all([api().tynn.projects(), api().workspaces.list()])
+            .then(([p, w]) => {
+                setProjects(p);
+                setWorkspaces(w);
+            })
             .catch((cause) => setProjectsError(cause instanceof Error ? cause.message : String(cause)))
             .finally(() => setLoadingProjects(false));
     }, []);
@@ -166,12 +169,13 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
                 {stage === 'tynn-import' && (
                     <TynnImportWizard
                         projects={projects}
+                        workspaces={workspaces}
                         loading={loadingProjects}
                         loadError={projectsError}
                         onCancel={() => setStage('source')}
                         onInspectProject={(project, source) => {
-                            setInteractiveMode('remote');
-                            setInteractiveSourceUrl(source.url);
+                            setInteractiveMode(source ? 'remote' : 'local');
+                            setInteractiveSourceUrl(source?.url ?? '');
                             setInteractiveProjectId(project.id);
                             setStage('agi-interactive');
                         }}
@@ -184,24 +188,26 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
 
 function TynnImportWizard({
     projects,
+    workspaces,
     loading,
     loadError,
     onCancel,
     onInspectProject,
 }: {
     projects: TynnProject[];
+    workspaces: WorkspaceRow[];
     loading: boolean;
     loadError: string | null;
     onCancel: () => void;
-    onInspectProject: (project: TynnProject, source: { url: string; branch: string }) => void;
+    onInspectProject: (project: TynnProject, source: { url: string; branch: string } | null) => void;
 }) {
-    const available = projects.filter((project) => tynnProjectImportSource(project));
+    const available = availableTynnProjects(projects, workspaces);
     const [projectId, setProjectId] = useState('');
 
     const submit = async () => {
         const project = available.find((candidate) => candidate.id === projectId);
         const source = project ? tynnProjectImportSource(project) : null;
-        if (!project || !source) return;
+        if (!project) return;
         onInspectProject(project, source);
     };
 
@@ -210,7 +216,7 @@ function TynnImportWizard({
             <div>
                 <Heading as="h3" size="sm">Import from Tynn</Heading>
                 <Text size="xs" className="text-zinc-500" style={{ display: 'block', marginTop: 4 }}>
-                    Choose a managed Tynn workspace. Genie clones its declared envelope repository, inspects project.json, then registers it here.
+                    Choose any Tynn project not already linked to a Genie workspace. Genie uses its declared repository when available, or lets you choose a local source, then inspects it before registering the workspace.
                 </Text>
             </div>
             <Select
