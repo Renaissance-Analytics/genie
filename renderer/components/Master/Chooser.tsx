@@ -13,9 +13,10 @@ import {
     IconCpu,
     IconGlobe,
     IconHome,
+    IconMonitorCog,
+    IconPanelLeft,
     IconPanelLeftOpen,
     IconPause,
-    IconPin,
     IconPlay,
     IconPlus,
     IconRefresh,
@@ -92,6 +93,8 @@ interface Props {
     onOpenContextMenu: (specId: string, position: { x: number; y: number }) => void;
     onOpenProjectMenu: (workspaceId: string, position: { x: number; y: number }) => void;
     onAddWorkspace: () => void;
+    systemRevealed?: boolean;
+    onToggleSystemWorkspace?: () => void;
     /** Persist a new sidebar order (full ordered list of workspace ids). */
     onReorderWorkspaces: (ids: string[]) => void;
     /** Create a Process (background service runner) for a workspace. `cwd`
@@ -174,6 +177,8 @@ export default function Chooser({
     onOpenContextMenu,
     onOpenProjectMenu,
     onAddWorkspace,
+    systemRevealed = false,
+    onToggleSystemWorkspace,
     onReorderWorkspaces,
     onAddProcess,
     onUpdateProcess,
@@ -927,14 +932,21 @@ export default function Chooser({
     return (
         <>
         <div className={`chooser${pinned ? ' pinned' : ''}`}>
+            {/* The rail IS the sidebar, minimized -- so it renders only while the
+                sidebar is closed. Showing both put the same workspace list on
+                screen twice, once as icons and once as rows, and cost 56px of
+                width to say nothing new. Closed: the rail, with the flyout on
+                hover. Open: the sidebar alone, which carries its own collapse
+                control because the pin toggle lived in the rail. */}
+            {!pinned && (
             <aside className="chooser-rail">
                 <button
                     type="button"
                     className="crail-toggle"
                     onClick={onTogglePin}
-                    title={pinned ? 'Unpin terminals panel' : 'Pin terminals panel'}
+                    title="Pin terminals panel"
                 >
-                    {pinned ? <IconPin size={18} /> : <IconPanelLeftOpen size={18} />}
+                    <IconPanelLeftOpen size={18} />
                 </button>
                 <span className="crail-sep" />
                 {orderedWorkspaces.map((ws) => {
@@ -991,9 +1003,54 @@ export default function Chooser({
                     <IconPlus size={18} />
                 </button>
             </aside>
+            )}
 
             <aside className="chooser-flyout">
+                {/* One line: collapse, the System Workspace chip, add-workspace,
+                    then search. The two workspace-level actions sit together at
+                    the head where they are reachable without scrolling past the
+                    list they act on. */}
                 <div className="rail-head">
+                    <button
+                        type="button"
+                        className="gicon rail-collapse"
+                        onClick={onTogglePin}
+                        title="Collapse to rail"
+                        aria-label="Collapse to rail"
+                    >
+                        <IconPanelLeft size={16} />
+                    </button>
+                    {onToggleSystemWorkspace && (
+                        <button
+                            type="button"
+                            className={`gicon rail-system-toggle${
+                                systemRevealed ? ' on' : ''
+                            }`}
+                            onClick={onToggleSystemWorkspace}
+                            title={
+                                systemRevealed
+                                    ? 'Hide System Workspace'
+                                    : 'Show System Workspace'
+                            }
+                            aria-label={
+                                systemRevealed
+                                    ? 'Hide System Workspace'
+                                    : 'Show System Workspace'
+                            }
+                            aria-pressed={systemRevealed}
+                        >
+                            <IconMonitorCog size={16} />
+                        </button>
+                    )}
+                    <button
+                        type="button"
+                        className="gicon rail-add-workspace"
+                        onClick={onAddWorkspace}
+                        title="Add workspace"
+                        aria-label="Add workspace"
+                    >
+                        <IconPlus size={16} />
+                    </button>
                     <div className="rail-search">
                         <IconSearch />
                         <input
@@ -1006,15 +1063,6 @@ export default function Chooser({
                 </div>
 
                 <div className="rail-scroll">
-                    <button
-                        type="button"
-                        className="tproj-add"
-                        onClick={onAddWorkspace}
-                    >
-                        <IconPlus size={13} />
-                        <span>Add workspace…</span>
-                    </button>
-
                     {workspaces.length === 0 && (
                         <div
                             style={{
@@ -1024,7 +1072,7 @@ export default function Chooser({
                                 lineHeight: 1.5,
                             }}
                         >
-                            No workspaces yet. Click <strong>Add workspace…</strong>{' '}
+                            No workspaces yet. Use the <strong>+</strong> button
                             above to register a project folder.
                         </div>
                     )}

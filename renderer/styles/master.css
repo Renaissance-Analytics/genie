@@ -1903,9 +1903,12 @@ button.iw-feedback-note.as-link:hover {
     transform: none;
     pointer-events: auto;
 }
+/* Open, the sidebar is the whole chooser -- the rail is its minimized form and
+   is not rendered beside it, so this is 282px of sidebar rather than 56px of
+   rail plus 282px of sidebar saying the same thing twice. */
 .chooser.pinned {
-    flex-basis: 338px;
-    width: 338px;
+    flex-basis: 282px;
+    width: 282px;
     display: flex;
 }
 /* Inside the full-height left column the chooser fills the column instead of
@@ -1920,9 +1923,6 @@ button.iw-feedback-note.as-link:hover {
     /* Flex (not block) in both states so .chooser-rail stretches to the
        column's full height without depending on a percentage height. */
     display: flex;
-}
-.chooser.pinned .chooser-rail {
-    flex: 0 0 56px;
 }
 .chooser.pinned .chooser-flyout {
     position: relative;
@@ -1944,7 +1944,15 @@ button.iw-feedback-note.as-link:hover {
     padding: 11px 12px 9px;
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
+}
+
+/* Collapse back to the rail. The pin toggle used to live in the rail, which is
+   no longer on screen once the sidebar is open -- without this the sidebar
+   would have no way to close itself. */
+.rail-collapse,
+.rail-add-workspace {
+    flex: 0 0 auto;
 }
 
 /* System Workspace reveal toggle — sits left of the search box on the
@@ -1989,29 +1997,6 @@ button.iw-feedback-note.as-link:hover {
     padding: 4px 8px 12px;
 }
 
-.tproj-add {
-    width: 100%;
-    margin-bottom: 6px;
-    padding: 8px 10px;
-    border: 1px dashed var(--border-2);
-    border-radius: var(--radius-lg);
-    background: transparent;
-    color: var(--fg-3);
-    font: inherit;
-    font-size: 12px;
-    font-weight: 500;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    transition: border-color var(--dur-fast), color var(--dur-fast),
-        background var(--dur-fast);
-}
-.tproj-add:hover {
-    border-color: var(--agent);
-    color: var(--agent);
-    background: var(--agent-soft);
-}
 
 /* project group */
 .tproj {

@@ -4318,6 +4318,30 @@ export function workspaceSurfaceRows<T extends { path: string }>(
 }
 
 /**
+ * The workspace rows the sidebar lists, with the System Workspace composed in.
+ *
+ * The System Workspace is SYNTHETIC — never persisted, never in `workspaces` —
+ * so the sidebar has to add it rather than filter for it, and it is pinned to
+ * the top because it is fixed: never draggable, never reorderable, so a reorder
+ * of the real workspaces can't shuffle it down.
+ *
+ * `workspaceSurfaceRows` runs FIRST and keeps running while the chip is on. A
+ * legacy registered row pointing at the managed OSA directory must stay hidden
+ * whether or not its synthetic replacement is on screen — otherwise revealing
+ * the chip lists the same directory twice under two different ids.
+ */
+export function sidebarWorkspaceRows<T extends { path: string }>(
+    workspaces: readonly T[],
+    systemWorkspace: T | null,
+    revealed: boolean,
+    genieOsPath?: string | null,
+): T[] {
+    const rows = workspaceSurfaceRows(workspaces, genieOsPath);
+    if (!revealed || !systemWorkspace) return rows;
+    return [systemWorkspace, ...rows];
+}
+
+/**
  * The workspace that OWNS a process spec — the lookup the process context menu's
  * "Edit…" needs. Mirrors the sidebar's own bucketing: a System Workspace process
  * persists UNATTACHED ({@link TerminalSpec.workspace_id} `null` + `meta.system`)

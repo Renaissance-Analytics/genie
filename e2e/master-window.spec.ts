@@ -180,12 +180,21 @@ test('a GApp Development Workspace wears its own chrome; an ordinary one does no
     await expect(plainRow).not.toHaveClass(/\bws-gapp-dev\b/);
 
     // …and the same mark on the 56px rail, which identifies workspaces on its own.
+    // The rail is the sidebar MINIMIZED, so it is only on screen once the sidebar
+    // is collapsed — collapsing here is what proves the mark survives the switch
+    // rather than living in one of the two renderings.
+    await page.locator('.rail-collapse').click();
+    await expect(page.locator('.chooser-rail')).toBeVisible();
     await expect(page.locator(`.crail-btn[title*="${seed.peerName}"]`)).toHaveClass(
         /\bws-gapp-dev\b/,
     );
     await expect(page.locator(`.crail-btn[title*="${seed.workspaceName}"]`)).not.toHaveClass(
         /\bws-gapp-dev\b/,
     );
+    // Back to the sidebar — every test after this one drives workspace ROWS, and
+    // leaving the chooser collapsed would strand them behind a hover flyout.
+    await page.locator('.crail-toggle').click();
+    await expect(page.locator('.chooser-rail')).toHaveCount(0);
 
     // The class is only half of it. A rule has to MATCH, so compare what the two
     // rows actually paint: the GDW's header carries a ring the ordinary one does

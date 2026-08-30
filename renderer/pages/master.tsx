@@ -95,6 +95,7 @@ import {
     workspaceSurfaceRows,
     makeSystemWorkspace,
     SYSTEM_WORKSPACE_ID,
+    sidebarWorkspaceRows,
     ulid,
     type AgentInboxIncomingNotice,
     type Changelog,
@@ -362,6 +363,9 @@ function MasterInner() {
 
     const [onboardingOpen, setOnboardingOpen] = useState(false);
     const [genieOsOpen, setGenieOsOpen] = useState(false);
+    // The System Workspace row is hidden by default; the sidebar's chip toggles
+    // it. Distinct from `genieOsOpen`, which is the full-screen Genie OS layer.
+    const [systemRevealed, setSystemRevealed] = useState(false);
     useEffect(() => {
         if (isRemoteWindow()) return;
         void api().app.genieOsStatus().then(({ setup }) => {
@@ -751,7 +755,16 @@ function MasterInner() {
     // Workspaces shown in the sidebar: the persisted list, with the System
     // Workspace pinned to the TOP when revealed. It's fixed (never draggable /
     // reorderable) so it always sits first and doesn't shuffle the user's order.
-    const displayWorkspaces = workspaceSurfaceRows(workspaces, genieOsSpec?.cwd);
+    const displayWorkspaces = useMemo(
+        () =>
+            sidebarWorkspaceRows(
+                workspaces,
+                systemWorkspace,
+                systemRevealed,
+                genieOsSpec?.cwd,
+            ),
+        [workspaces, systemWorkspace, systemRevealed, genieOsSpec?.cwd],
+    );
 
     // id → workspace resolver. ALWAYS includes the System Workspace (even when
     // hidden) so handlers can resolve its id for terminals/editors/processes
@@ -1797,7 +1810,7 @@ function MasterInner() {
     // and cannot open it is half a fix.
     const revealTerminal = useCallback((id: string, workspaceId: string | null) => {
         if (workspaceId) {
-            if (workspaceId === SYSTEM_WORKSPACE_ID) setGenieOsOpen(true);
+            if (workspaceId === SYSTEM_WORKSPACE_ID) setSystemRevealed(true);
             activateWorkspaceRef.current(workspaceId);
         }
         setSelected((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
@@ -2072,6 +2085,25 @@ function MasterInner() {
                         activeWorkspaceId={activeWorkspaceId}
                         pinned={chooserPinned}
                         onTogglePin={() => setChooserPinned((p) => !p)}
+                        systemRevealed={systemRevealed}
+                        onToggleSystemWorkspace={() => {
+                            setSystemRevealed((on) => {
+                                const next = !on;
+                                if (next && systemWorkspace) {
+                                    // Revealing → jump straight to it.
+                                    activateWorkspace(SYSTEM_WORKSPACE_ID);
+                                } else if (
+                                    !next &&
+                                    activeWorkspaceId === SYSTEM_WORKSPACE_ID
+                                ) {
+                                    // Hiding while it's active → fall back to the
+                                    // first real workspace so the toolbar/grid
+                                    // don't keep pointing at a now-hidden row.
+                                    activateWorkspace(workspaces[0]?.id ?? null);
+                                }
+                                return next;
+                            });
+                        }}
                         onActivateWorkspace={activateWorkspace}
                         onToggleSpec={toggleSpec}
                         onAddSpec={(wsId, type) => void addSpec(wsId, type)}
