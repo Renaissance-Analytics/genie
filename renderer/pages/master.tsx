@@ -2591,7 +2591,6 @@ function AgentSettingsModal({
                             ? (meta.whisper_workspaces as string[])
                             : [],
                         command: typeof meta.agent_command === 'string' ? meta.agent_command : '',
-                        wakeOnDm: meta.whisper_wake_on_dm === true,
                         issuewatchHandle: meta.issuewatch_handle === true,
                         issuewatchAction: meta.issuewatch_action === 'wake' ? 'wake' : 'notify',
                     }}
@@ -2608,7 +2607,6 @@ function AgentSettingsModal({
                                 scope: v.scope,
                                 scope_workspaces:
                                     v.scope === 'specific' ? v.scopeWorkspaces : [],
-                                wake_on_dm: v.wakeOnDm,
                                 issuewatch_handle: v.issuewatchHandle,
                                 issuewatch_action: v.issuewatchAction,
                             });

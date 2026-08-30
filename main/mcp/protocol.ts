@@ -1396,9 +1396,6 @@ export interface AgentInboxRequest {
     workspaces?: string[];
     /** setAccessibility (optional): change your channel purpose (re-keys the room). */
     purpose?: string;
-    /** setAccessibility (optional): opt in/out of wake-on-DM — a DM to you when idle
-     *  injects a nudge to start a turn (issue #9). Default off. */
-    wakeOnDm?: boolean;
     /** registerSession: the generated Codex session id from SessionStart stdin. */
     sessionId?: string;
     /** registerTransport: Genie-owned harness adapter readiness handshake. */
@@ -2397,11 +2394,6 @@ const AGENTINBOX_TOOL = {
             limit: {
                 type: 'number',
                 description: 'receipts (optional): how many recent sent DMs to report (default 20, cap 100).',
-            },
-            wakeOnDm: {
-                type: 'boolean',
-                description:
-                    'setAccessibility (optional): opt in/out of wake-on-DM. When ON, a DM that arrives while you are IDLE (turn ended, prompt empty) injects a one-line nudge so you start a turn and see it — instead of the DM sitting unread until you next act. Fail-safe: never fires mid-turn. Default off.',
             },
             sessionId: {
                 type: 'string',
@@ -3853,7 +3845,6 @@ export async function handleMcpMessage(
                     purpose: a.purpose,
                     sessionId: a.sessionId,
                     transport: a.transport,
-                    wakeOnDm: a.wakeOnDm,
                     limit: a.limit,
                     attachments: a.attachments,
                     attachmentId: a.attachmentId,

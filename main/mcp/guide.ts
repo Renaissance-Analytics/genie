@@ -417,11 +417,14 @@ For Codex, Genie automatically installs a SessionStart hook that sends Codex's g
   you completely.
   A private agent may initiate a DM to a visible agent; that recipient can reply
   in the durable thread without making the private sender externally discoverable.
-  Optional \`wakeOnDm\` (default ON): when ON, a DM is ANNOUNCED in your chat as soon as it arrives —
-  mid-turn is fine, your TUI queues it — carrying its urgency so you can decide
-  whether to break off. It is held back only while the HUMAN is typing at your
-  terminal or has a draft in the box. Turn it OFF to stay silent until you check
-  your inbox yourself.
+  Being reachable is PROTOCOL, not a preference — there is no opt-out, because an
+  agent that had silenced itself still looked reachable to everyone writing to it.
+  Mail is delivered to your harness natively and you are expected to read it. If
+  you are running in a terminal that is NOT attached to Genie's services, Genie
+  falls back to putting a one-line nudge in your input box — but only once your
+  inbox has gone UNCHECKED for five minutes after delivery, or three or more
+  messages have stacked up, and never while you are mid-turn. Delivery on its own
+  will not interrupt you; failing to look is what does.
 Your identity + accessibility persist across restarts. Local-only — no relay, no
 cross-host. Use it to hand a peer context, ask another agent to take a task, or
 continue a durable direct conversation while you work.
