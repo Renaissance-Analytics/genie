@@ -68,10 +68,14 @@ import {
     agentSessionTranscriptExists,
     isTerminalLive,
 } from '../terminal/ipc';
-import { agentName, agentRef, savedAgentKey } from '../agents/identity';
+import { agentName, agentRef, savedAgentKey, type AgentProvider } from '../agents/identity';
 import { resolveWorkstationProvider } from '../agents/provider';
 import { restartProviderForSpec } from '../agents/restart';
-import { decideAgentStart, savedAgentsOf, type SavedAgent } from '../agents/saved';
+import {
+    adoptableAgentSpec,
+    savedAgentsOf,
+    type SavedAgent,
+} from '../agents/saved';
 import { resolveAgentRegistration } from '../agents/registration';
 import { providerInstructionFiles, withProviderStartupInstructions } from '../agents/startup';
 import {
@@ -1953,6 +1957,20 @@ export async function runAgentForMcp(
                     );
                     if (saved) return await reattachSavedAgent(ws, saved, saved.live ? 'warm' : 'revive');
                     bindWorkspaceAgentTerminal(config.id, null);
+                }
+                // The registry's binding is not the only way this agent's
+                // terminal can be on screen: an unbound one is still THIS agent
+                // by (provider, name), and creating past it would abandon it as
+                // a phantom square under the same name rather than start
+                // anything new. Adopt it and rebind.
+                const adopted = adoptableAgentSpec(
+                    savedAgentsOfWorkspace(ws.id),
+                    config.provider as AgentProvider,
+                    config.name,
+                );
+                if (adopted) {
+                    bindWorkspaceAgentTerminal(config.id, adopted.specId);
+                    return await reattachSavedAgent(ws, adopted, adopted.live ? 'warm' : 'revive');
                 }
                 // Base command + the agent type's always-on flags (session-id
                 // injected later in createAgentTerminal), then the agent's
