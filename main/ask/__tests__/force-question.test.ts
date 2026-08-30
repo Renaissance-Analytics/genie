@@ -585,9 +585,12 @@ describe('ForceTheQuestion DND availability', () => {
         win().close();
     });
 
-    it('an agent FTQ always returns immediately through the inbox and reports active presence', async () => {
+    it('an available agent FTQ returns immediately, opens the modal, and delivers its answer through AgentInbox', async () => {
         setAvailabilityReader(() => ({ availability: 'available', dndMessage: 'x' }));
         setUserPresenceReader(() => ({ away: false, idleSeconds: 12 }));
+        const delivered: Array<{ terminalId: string; questionId: string; answers: ForceAnswer[] }> =
+            [];
+        setDeferredAnswerSink((d) => delivered.push(d));
         const before = state.windows.length;
 
         const result = await forceQuestion(
@@ -601,7 +604,21 @@ describe('ForceTheQuestion DND availability', () => {
         expect(result.deferred).toBe(true);
         expect(result.dndMessage).toMatch(/active/i);
         expect(result.dndMessage).toMatch(/AgentInbox/i);
-        expect(state.windows.length).toBe(before);
+        expect(state.windows.length).toBe(before + 1);
+
+        const row = listPendingQuestions().find((p) => p.workspaceLabel === 'Workspace')!;
+        expect(row.deferred).not.toBe(true);
+        const answers: ForceAnswer[] = [
+            { header: 'Need input', question: 'Need input?', selected: ['Yes'], note: 'continue' },
+        ];
+        expect(answerPendingQuestion(row.id, answers)).toBe(true);
+        expect(delivered).toEqual([
+            expect.objectContaining({
+                terminalId: 'terminal-1',
+                questionId: result.questionId,
+                answers,
+            }),
+        ]);
     });
 
     it('an agent FTQ reports user-away after five minutes without activity', async () => {
