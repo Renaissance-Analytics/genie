@@ -1,5 +1,4 @@
 import { buildNudgeSequence, type NudgePlan } from './draft';
-import { CR } from '../terminal/keystrokes';
 
 /**
  * Carry out one approved nudge against a terminal. The broker only calls this
@@ -35,11 +34,10 @@ export async function deliverNudge(
     terminalId: string,
     text: string,
     plan: NudgePlan,
-    submitBytes: string = CR,
 ): Promise<boolean> {
     let landed = true;
     try {
-        for (const w of buildNudgeSequence(plan, text, submitBytes)) {
+        for (const w of buildNudgeSequence(plan, text)) {
             if (w.delayMs > 0) await io.sleep(w.delayMs);
             if (!io.write(terminalId, w.bytes)) landed = false;
         }
