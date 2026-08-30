@@ -30,7 +30,7 @@ import { showPrompt } from './Prompt';
 import { terminalTypeForAgent, type TerminalTypeId } from '../../lib/terminal-types';
 import { amsAgentCard, splitAmsSpecs } from '../../lib/ams-grid';
 import TerminalTypeSplitButton from './TerminalTypeSplitButton';
-import { workspaceNeedsAttention } from '../../lib/attention';
+import { workspaceHasThumb, workspaceNeedsAttention } from '../../lib/attention';
 import { gappLaunchLabel, gappLaunchTarget } from '../../lib/gapp-launch';
 import {
     resolveWorkspaceKind,
@@ -1039,6 +1039,13 @@ export default function Chooser({
                         // workspace flagged for attention → the ROW glows, so a
                         // COLLAPSED workspace shows it's ready without expanding.
                         const wsAttention = workspaceNeedsAttention(wsAll, attentionIds);
+                        // Readiness has to reach a COLLAPSED row too. The thumb is
+                        // drawn on an agent's SQUARE, and a collapsed workspace
+                        // renders no grid — so without this the agent signals ready
+                        // and the person waiting sees nothing. Same rule the
+                        // attention glow already uses, for the same reason.
+                        const wsThumb =
+                            collapsed && workspaceHasThumb(wsAll, thumbedAgentTerminals);
                         const isActive = ws.id === activeWorkspaceId;
                         const dragging = draggingId.current === ws.id;
                         // Same resolution the rail uses, from Genie's own columns
@@ -1068,7 +1075,8 @@ export default function Chooser({
                                 }${dragging ? ' dragging' : ''}${
                                     ws.shape === 'agi' ? ' agi' : ''
                                 }${wsAttention ? ' attention' : ''}${
-                                    pulsingWs.has(ws.id) ? ' pulsing' : ''
+                                    wsThumb ? ' ws-thumb' : ''
+                                }${pulsingWs.has(ws.id) ? ' pulsing' : ''
                                 }${activeWs.has(ws.id) ? ' agent-active' : ''}${
                                     enteringWs.has(ws.id) ? ' ws-enter' : ''
                                 }${kindClass ? ` ${kindClass}` : ''}`}

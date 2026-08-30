@@ -16,3 +16,22 @@ export function workspaceNeedsAttention(
 ): boolean {
     return specs.some((s) => attentionIds.has(s.id));
 }
+
+/**
+ * Has any agent in this workspace just signalled readiness?
+ *
+ * The thumb is drawn on an agent's SQUARE in the grid. Collapse the workspace and
+ * the grid is not rendered — so the agent thumbs up, the animation fires against
+ * nothing, and the person waiting to see it sees nothing. Readiness that is only
+ * visible if you already had the row open is not a signal.
+ *
+ * Same shape as {@link workspaceNeedsAttention}, deliberately: the row already
+ * carries "a terminal in here wants you" for a collapsed workspace, and this is
+ * "a terminal in here is ready" for the same reason. One rule, one place.
+ */
+export function workspaceHasThumb(
+    specs: ReadonlyArray<{ id: string }>,
+    thumbedTerminalIds: ReadonlySet<string>,
+): boolean {
+    return specs.some((s) => thumbedTerminalIds.has(s.id));
+}

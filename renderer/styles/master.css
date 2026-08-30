@@ -6342,3 +6342,31 @@ body.gutter-dragging .grid-gutter {
 .agent-panel-menu { min-width: 180px; padding: 6px; z-index: 1200; background: var(--bg-0); border: 1px solid var(--border); box-shadow: 0 16px 38px rgba(0, 0, 0, .38); }
 .agent-panel-menu button { width: 100%; display: flex; align-items: center; gap: 8px; border: 0; border-radius: 6px; padding: 8px 9px; background: transparent; color: var(--text); text-align: left; cursor: pointer; }
 .agent-panel-menu button:hover { background: var(--hover); }
+
+/* ── Thumbs-up on a COLLAPSED workspace row ──────────────────────────────────
+   The thumb is drawn on an agent's SQUARE in the grid, and a collapsed workspace
+   renders no grid — so readiness fired against nothing and the person waiting to
+   see it saw nothing. The row already carries the attention glow for exactly this
+   reason; this is the readiness half.
+
+   REUSES `ams-thumb-boing` rather than defining a second animation: the same
+   gesture should read as the same event whether the workspace is open or shut,
+   and two keyframe sets would drift. Smaller here because a row is not a card. */
+.tproj.ws-thumb {
+    position: relative;
+}
+
+.tproj.ws-thumb::after {
+    content: '👍';
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    margin-top: -11px;
+    font-size: 18px;
+    z-index: 2;
+    filter: drop-shadow(0 3px 6px rgb(0 0 0 / 45%));
+    animation: ams-thumb-boing 1.8s cubic-bezier(.2, .85, .25, 1) both;
+    /* Never eats a click on the row it sits over — the row is a target and the
+       thumb is a notification. */
+    pointer-events: none;
+}
