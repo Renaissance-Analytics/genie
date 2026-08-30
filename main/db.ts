@@ -1496,6 +1496,54 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // ONE AGENT, ONE ID. Migration 51 keyed terminal-backed AMS rows as
+            // `agent:<terminalSpecId>` while AgentInbox keys the SAME agent on
+            // `terminal_specs.meta.agent_id`. Nothing reconciled them, so an agent
+            // could be READY in AMS and INVISIBLE to the inbox at once — observed
+            // live: `thumbsUp` set `ready_at` while `agentinbox list` returned no
+            // `self`, both calls reporting ok.
+            //
+            // The INBOX id wins: it already keys durable messages, receipts and
+            // peer addressing, so renaming it would break message history and every
+            // saved reference. The AMS row moves instead — nothing outside AMS
+            // points at its id.
+            //
+            // Workspace rows (`workspace:<id>`) are untouched: they are not
+            // terminal-backed, have no inbox identity to adopt, and are the target
+            // of `parent_agent_id`.
+            version: 54,
+            runner: (db) => {
+                const rows = db
+                    .prepare<[], { id: string; inbox_agent_id: string | null }>(
+                        `SELECT wa.id AS id,
+                                json_extract(ts.meta_json, '$.agent_id') AS inbox_agent_id
+                           FROM workspace_agents wa
+                           JOIN terminal_specs ts ON ts.id = wa.terminal_spec_id
+                          WHERE wa.terminal_spec_id IS NOT NULL`,
+                    )
+                    .all();
+                const rename = db.prepare(
+                    'UPDATE workspace_agents SET id = ?, updated_at = ? WHERE id = ?',
+                );
+                const now = Date.now();
+                for (const row of rows) {
+                    const next = String(row.inbox_agent_id ?? '').trim();
+                    // Skip when there is nothing to adopt, when they already agree
+                    // (so re-running is a true no-op and does not churn
+                    // updated_at), and when the target id is somehow already taken
+                    // — a collision must not destroy the row that holds it.
+                    if (!next || next === row.id) continue;
+                    const taken = db
+                        .prepare<[string], { c: number }>(
+                            'SELECT COUNT(*) AS c FROM workspace_agents WHERE id = ?',
+                        )
+                        .get(next);
+                    if (taken && taken.c > 0) continue;
+                    rename.run(next, now, row.id);
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
