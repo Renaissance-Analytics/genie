@@ -2166,6 +2166,33 @@ export async function agentInboxForMcp(
                 : [],
             chatSessionId: (meta.chat_session_id as string | undefined) ?? null,
         });
+    } else if (!agentInboxBroker.getInfo(agentId)) {
+        // SELF-HEAL. `markOnline` is a no-op for an agent the broker does not
+        // know, so an agent whose entry went missing — boot rehydrate skipped or
+        // failed, or its spec appeared after rehydrate ran — could never come
+        // back: every AgentInbox call silently did nothing, `list` returned no
+        // `self`, and the tool it would use to report that is the broken one.
+        // Observed on a live workstation: 49 registered agents, none reachable,
+        // not even to themselves.
+        //
+        // The identity is DURABLE in the spec, so re-joining restores exactly the
+        // same agent rather than minting a second one, and `join` is idempotent
+        // per agentId — which is what makes this safe to attempt on every call.
+        agentInboxBroker.join({
+            agentId,
+            terminalId: spec.id,
+            workspaceId: ws.id,
+            workspaceName: ws.project_name,
+            slug: workspaceSlug(ws),
+            agentType: (spec.meta?.agent as AgentInboxAgentType) ?? 'custom',
+            label: spec.label,
+            purpose: normalizePurpose(spec.meta?.whisper_purpose),
+            scope: (spec.meta?.whisper_scope as AgentInboxScope) ?? 'self',
+            scopeWorkspaces: Array.isArray(spec.meta?.whisper_workspaces)
+                ? (spec.meta.whisper_workspaces as string[])
+                : [],
+            chatSessionId: (spec.meta?.chat_session_id as string | undefined) ?? null,
+        });
     } else agentInboxBroker.markOnline(agentId);
 
     try {
