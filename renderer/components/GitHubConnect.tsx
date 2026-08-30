@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Action, Select, Text } from '@particle-academy/react-fancy';
 import { api } from '../lib/genie';
-import { installationLoadState } from '../lib/github-installations';
+import { installationLoadState, isGitHubAuthenticationFailure } from '../lib/github-installations';
 
 /**
  * Shared GitHub account surface for every .agi creation flow. Two pieces:
@@ -153,6 +153,10 @@ export function useGitHubAccount(): GitHubAccount {
             } catch (cause) {
                 const outcome = installationLoadState({ connected: true, error: cause });
                 nextInstallationsError = outcome.error;
+                if (isGitHubAuthenticationFailure(cause)) {
+                    setConnected(false);
+                    st.connected = false;
+                }
             }
             setInstallations(nextInstallations);
             setOrgs(nextOrgs);

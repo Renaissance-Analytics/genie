@@ -37,6 +37,7 @@ type Stage =
     | 'agi-create'
     | 'agi-import'
     | 'tynn-import'
+    | 'gapp-create'
     | 'agi-convert'
     | 'agi-interactive'
     | 'done';
@@ -55,6 +56,8 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
     const [interactiveMode, setInteractiveMode] = useState<'local' | 'remote'>('local');
     const [interactiveSourceUrl, setInteractiveSourceUrl] = useState('');
     const [interactiveProjectId, setInteractiveProjectId] = useState('');
+    const [createProjectId, setCreateProjectId] = useState('');
+    const [createGappDev, setCreateGappDev] = useState(false);
 
     useEffect(() => {
         Promise.all([api().tynn.projects(), api().workspaces.list()])
@@ -85,11 +88,24 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
                 {stage === 'source' && <ManagedSourcePicker onPick={(source) => {
                     const entry = workspaceWizardEntry(source);
                     if (entry.mode === 'tynn') setStage('tynn-import');
+                    else if (entry.mode === 'gapp') setStage('gapp-create');
                     else {
                         setInteractiveMode(entry.mode);
                         setStage('agi-interactive');
                     }
                 }} />}
+                {stage === 'gapp-create' && (
+                    <CreateProjectForm
+                        isGapp
+                        onCancel={() => setStage('source')}
+                        onCreated={(project) => {
+                            onProjectCreated(project);
+                            setCreateProjectId(project.id);
+                            setCreateGappDev(true);
+                            setStage('agi-create');
+                        }}
+                    />
+                )}
                 {stage === 'simple' && (
                     <SimpleWizard
                         projects={projects}
@@ -142,6 +158,8 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
                 )}
                 {stage === 'agi-create' && (
                     <AgiCreateWizard
+                        initialProjectId={createProjectId}
+                        initialGappDev={createGappDev}
                         projects={projects}
                         loadingProjects={loadingProjects}
                         onProjectCreated={onProjectCreated}
@@ -245,7 +263,7 @@ function ManagedSourcePicker({ onPick }: { onPick: (source: AddWorkspaceSourceId
                     Every choice is inspected first. Genie shows the workspace plan and only writes after you approve it.
                 </Text>
             </div>
-            <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(3, 1fr)' }}>
+            <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(2, 1fr)' }}>
                 {ADD_WORKSPACE_SOURCES.map((source) => (
                     <Card
                         key={source.id}
@@ -1045,19 +1063,24 @@ function AgiConvertWizard({
 }
 
 function AgiCreateWizard({
+    initialProjectId = '',
+    initialGappDev = false,
     projects,
     loadingProjects,
     onProjectCreated,
     onCancel,
     onCreated,
 }: {
+    initialProjectId?: string;
+    initialGappDev?: boolean;
     projects: TynnProject[];
     loadingProjects: boolean;
     onProjectCreated: (p: TynnProject) => void;
     onCancel: () => void;
     onCreated: (row: WorkspaceRow) => void;
 }) {
-    const [projectId, setProjectId] = useState('');
+    const [projectId, setProjectId] = useState(initialProjectId);
+    const [gappDev, setGappDev] = useState(initialGappDev);
     const [slug, setSlug] = useState('');
     const [primaryWorkspace, setPrimaryWorkspace] = useState<string | undefined>();
     const [parentFolder, setParentFolder] = useState<string>('');
@@ -1169,6 +1192,7 @@ function AgiCreateWizard({
                 env_file: settings.default_env_file ?? '.env',
                 last_opened_at: null,
                 created_by_genie: 1,
+                gapp_dev: gappDev ? 1 : 0,
             };
             const saved = await api().workspaces.add(row);
             onCreated(saved);
@@ -1191,6 +1215,13 @@ function AgiCreateWizard({
                     setProjectId(p.id);
                 }}
             />
+            <label style={{ display: 'flex', gap: 10, alignItems: 'flex-start', cursor: 'pointer' }}>
+                <input type="checkbox" checked={gappDev} onChange={(event) => setGappDev(event.target.checked)} />
+                <span>
+                    <Text size="sm" style={{ display: 'block', fontWeight: 600 }}>GApp Development Workspace</Text>
+                    <Text size="xs" className="text-zinc-500">Create this empty envelope as a GDW.</Text>
+                </span>
+            </label>
             <Input
                 label="Slug"
                 description="Becomes the {slug}.agi folder name and GitHub remote."
@@ -1620,9 +1651,11 @@ function ProjectPicker({
 function CreateProjectForm({
     onCancel,
     onCreated,
+    isGapp = false,
 }: {
     onCancel: () => void;
     onCreated: (p: TynnProject) => void;
+    isGapp?: boolean;
 }) {
     const [name, setName] = useState('');
     const [slug, setSlug] = useState('');
@@ -1668,6 +1701,7 @@ function CreateProjectForm({
                 owner_type: owner?.kind,
                 owner_id: owner?.id,
                 slug: slug.trim() || undefined,
+                is_gapp: isGapp,
             });
             onCreated(created);
         } catch (e: unknown) {
@@ -1681,7 +1715,7 @@ function CreateProjectForm({
         <Card style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
             <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
                 <Text size="sm" style={{ fontWeight: 600 }}>
-                    Create new project
+                    {isGapp ? 'Create GApp Development Workspace' : 'Create new project'}
                 </Text>
                 <Action variant="ghost" size="sm" icon="arrow-left" onClick={onCancel}>
                     Select existing
@@ -1691,9 +1725,14 @@ function CreateProjectForm({
                 label="Name"
                 value={name}
                 onValueChange={onNameChange}
-                placeholder="My New Project"
+                placeholder={isGapp ? 'My New GApp' : 'My New Project'}
                 required
             />
+            {isGapp && (
+                <Text size="xs" className="text-zinc-500">
+                    Genie creates this as a GApp project in Tynn, then opens the normal inspection wizard so you can choose and review the starting folder before anything is written.
+                </Text>
+            )}
             {owners.length > 1 && (
                 <Select
                     label="Owner"

@@ -21,7 +21,8 @@ export type SectionId =
     | 'dev-server'
     | 'connections'
     | 'devices'
-    | 'updates';
+    | 'updates'
+    | 'maintenance';
 
 export interface NavItem {
     id: SectionId;
@@ -91,6 +92,7 @@ export const NAV_GROUPS: NavGroup[] = [
             // so they are managed here and nowhere else.
             { id: 'dev-server', label: 'Hosting Manager', icon: 'server' },
             { id: 'updates', label: 'Updates', icon: 'download' },
+            { id: 'maintenance', label: 'Maintenance', icon: 'life-buoy' },
         ],
     },
 ];

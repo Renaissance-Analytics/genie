@@ -23,10 +23,12 @@ The two you'll notice most:
   workspace and the agent — *"tynn.ai — Claude Code · reviewer finished"* — and
   **clicking it takes you to that terminal**, activating its workspace on the
   way.
-- **`ForceTheQuestion` — a real prompt.** When an agent needs a decision, it
-  raises an **OS-level, always-on-top modal** (above every app) with a few
-  options and a free-text box, and waits for your answer. You can't miss it, and
-  the agent doesn't guess.
+- **`ForceTheQuestion` — a durable question.** Agent-originated questions always
+  enter Genie's pending-question surface and return their answers to the asking
+  agent through AgentInbox; they never block a TUI process or paste into terminal
+  input. Genie uses five minutes without mouse activity to report that the owner
+  is away. Internal approval gates may still use an immediate modal because they
+  protect an action that cannot proceed safely without consent.
 
 ## What the server lets agents do
 
@@ -38,7 +40,7 @@ The MCP server is enabled per workspace and runs on a fixed loopback port (see
 |------|----------------------|
 | **initializeWorkspace** | Maps a fresh `.agi` envelope and its repos, then returns a numbered orientation plan. Also remains available as an MCP prompt for clients with prompt pickers. |
 | **imDone** | Glows this terminal in the sidebar when the agent is done or waiting. |
-| **ForceTheQuestion** | Pops an always-on-top modal to ask you 1–4 questions; blocks until you answer. |
+| **ForceTheQuestion** | Queues 1–4 answerable questions and returns the eventual answer over AgentInbox, with automatic user-away status. |
 | **manageProcess** | Runs and supervises background processes (dev servers, workers) **and scheduled/cron tasks** — see **[Processes](14-processes.md)**. |
 | **manageSite** | Builds a repo and serves it the **production** way at `https://<name>.gen` in a container sandbox (the Hosting Manager) — see **[Hosting sites at `.gen`](18-dev-sites.md)**. *Needs Docker or Podman.* |
 | **manageService** | Gives a workspace a shared backing engine (Postgres, MySQL, Redis, Meilisearch, MinIO, Mailpit, …) and injects its connection env — see **[Hosting sites at `.gen`](18-dev-sites.md)**. *Needs Docker or Podman.* |

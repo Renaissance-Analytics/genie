@@ -1,17 +1,23 @@
 # Plugins & marketplaces
 
-Plugins extend Genie with **new document editors** and **new agent tools**
+Plugins extend Genie with **document editors, workspace panels, agent tools,
+recipes, flyouts, modals, wizards, and settings surfaces**
 without touching Genie itself. A plugin declares what it adds in a signed
 manifest; Genie runs its code in an isolated worker with only the capabilities
 you granted.
 
-Genie ships with three first-party plugins in the box:
+Genie ships with first-party plugins in the box, including:
 
 | Plugin | What it adds |
 | --- | --- |
 | **Presentation** | A Slides editor for `.pptx`/`.odp`, a full-screen Present mode, and a `presentation.createDeck` agent tool that generates decks. |
 | **Spreadsheet** | A Sheets editor for `.xlsx`/`.csv`/`.ods` and a `spreadsheet.createWorkbook` agent tool that generates workbooks. |
 | **Document** | A WYSIWYG editor for Markdown (`.md`, `.markdown`), Cursor rules (`.mdc`) and Word (`.docx`) files. Markdown round-trips exactly, and a YAML front-matter block is edited through the **fm** pill instead of being typed into the document (see below); `.docx` opens and saves with document-level fidelity (headings, lists, formatting, links, tables, embedded images) — Word-only features like tracked changes don't survive a save. |
+| **ArtBoard** | A Fancy ArtBoard workspace panel where agents post rendered HTML or images for approval; verdicts return through AgentInbox. |
+| **Repository** | A Fancy Git workspace panel for repository status and actions. |
+
+Workspace panels appear in the workspace's **Add Panel** menu and persist as a
+distinct `plugin-panel` surface. They are not terminals and never launch a shell.
 
 ## Installing plugins
 
@@ -126,6 +132,8 @@ A plugin is a tiny npm-shaped package: a `genie-plugin.json` manifest plus a
 - **[Writing a Genie plugin](plugin-authoring.md)** — the manifest format, the
   worker contract, capabilities, and a complete minimal example
   (`hello-world`) you can copy as a starting point.
+- **`@genie/plugin-sdk`** — `definePlugin()` and TypeScript contracts for tools,
+  capabilities, Fancy editors, and Fancy workspace panels.
 - **[Plugin signing](plugin-signing.md)** — how official signing works in CI,
   and how to sign your own plugins for distribution.
 

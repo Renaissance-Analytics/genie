@@ -1,6 +1,6 @@
 # Welcome to Genie
 
-Genie is a **backend-agnostic desktop companion for agentic engineering** — a
+Genie is a **workstation for people and software agents** — a
 tray-resident window that gives every project you work on its own set of live
 terminals, coding agents, and file editors, all in one place. It signs in to
 your work backend (Tynn or Aionima) so you can jump from a shell straight to
@@ -11,8 +11,8 @@ your project management.
 - **One window, many workspaces.** Add the folders you work in as *workspaces*.
   Each workspace gets its own terminals and editors; switch between them from
   the sidebar without losing anything that's running.
-- **A home for agents.** Launch Claude Code, Codex, or your own agent right in a
-  terminal, give each one a purpose, and let them talk to each other and reach
+- **A home for agents.** Create durable AMS agents backed by Claude Code, Codex,
+  Kiwi, Genie TUI, or a custom provider, and let them talk to each other and reach
   *you* through Genie — glowing the sidebar when they're done or popping a
   question when they're blocked.
 - **Terminals that survive.** Genie keeps your shells alive across workspace
@@ -32,13 +32,13 @@ your project management.
 
 ```
 Tray icon  ──►  Genie window
-                 ├── Sidebar (the "chooser")   pick / add workspaces + terminals
-                 ├── View grid                 terminals + agents + Files, tiled
+                 ├── Sidebar                    workspaces, status + Add Panel
+                 ├── Floor                      terminals, AgentPanels, files + plugins
                  ├── Toolbar                    layout, add views, active workspace
                  └── Title bar                  Knowledge Graph · AgentInbox ·
                                                 Task Manager · Issue Watch ·
                                                 .gen sites · Hosts · update pill ·
-                                                Docs · Settings
+                                                Genie OSA · Docs · Settings
 ```
 
 Genie lives in your system tray. Closing the window **hides** it rather than

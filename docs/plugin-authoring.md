@@ -28,6 +28,10 @@ The two files below are the complete, verbatim source of the bundled example
 (`main/plugins/examples/hello-world/`). Nothing else is required for a working
 plugin.
 
+For TypeScript authoring, use `@genie/plugin-sdk` and wrap the manifest object in
+`definePlugin()`. The helper changes no data; it type-checks contributions before
+you serialize the object to `genie-plugin.json`, including declared Fancy panels.
+
 ### `genie-plugin.json`
 
 ```json

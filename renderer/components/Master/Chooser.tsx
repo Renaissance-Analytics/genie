@@ -54,6 +54,7 @@ import {
     api,
     detectedShells,
     isSystemWorkspace,
+    workspaceSurfaceSpecs,
     processSpecWorkspace,
     SYSTEM_WORKSPACE_ID,
     type DevSiteInfo,
@@ -892,7 +893,7 @@ export default function Chooser({
     // row is present (revealed). They are NEVER orphaned, so they don't leak
     // into the Unattached group when the System Workspace is hidden.
     const systemWs = workspaces.find(isSystemWorkspace);
-    for (const s of specs) {
+    for (const s of workspaceSurfaceSpecs(specs)) {
         const isSystemSpec = s.workspace_id === null && s.meta?.system === true;
         if (isSystemSpec) {
             if (systemWs) byWorkspace.get(systemWs.id)!.push(s);

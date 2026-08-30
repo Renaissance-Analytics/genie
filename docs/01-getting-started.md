@@ -1,7 +1,11 @@
 # Getting Started
 
-This page walks you from a fresh launch to your first running terminal and
-editor.
+On first launch, the built-in **Genie workstation operator** opens and owns the
+setup conversation. Tynn sign-in comes first; Genie then helps verify a model
+provider and toolchain, connect GitHub when wanted, prepare its private Genie OS
+workspace and memory, and add a workspace. Setup is complete only after the
+operator has booted, oriented itself, verified its native transport and called
+Genie's readiness acknowledgement.
 
 ## 1. Open Genie
 
@@ -13,17 +17,20 @@ If the window is already open, the tray icon brings it to the front.
 
 ## 2. Add a workspace
 
-A *workspace* is just a folder you work in. To add one:
+A workspace follows Genie's `.agi` protocol; single-repository workspace mode is
+no longer created. Choose **New**, **Import from Tynn**, or **Import from Git**.
+Every route is inspected before registration. Open-world sources such as a local
+folder or Git repository always go through the interactive wizard, which detects
+an existing AGI/GApp envelope or proposes the conversion before writing anything.
 
 1. In the left **icon rail**, click the **Add workspace…** button (the `+` at
    the bottom of the rail). You can also open the chooser flyout and click
    **Add workspace…** there.
-2. Pick the folder for your project.
+2. Choose the source. **New** can start empty, create a GApp Development
+   Workspace, or place an existing project folder inside a new envelope.
 
-Genie inspects the folder. If it's an **`.agi` envelope** (an Aionima-format
-project), Genie recognises it and shows the envelope (box) icon. Otherwise it's
-treated as a plain folder. See **[Workspaces](02-workspaces.md)** for the full
-story on `.agi` detect / create / convert / import.
+Genie scans first and shows the exact plan. It does not silently reshape a
+folder. See **[Workspaces](02-workspaces.md)** for create, import, and conversion.
 
 Once added, the workspace becomes the **active workspace** and its icon appears
 in the icon rail.
@@ -54,11 +61,11 @@ The panel shows a file tree on the left; click a file to open it. See the
 **[Files panel](06-files.md)** page for saving, live refresh, locking to a
 folder, and the tree context menu.
 
-## 5. Sign in (optional, but recommended)
+## 5. Return to the workstation operator
 
-To capture wishes and reach your projects, sign in to Tynn or Aionima from
-**Settings** (the gear in the title bar). To create `.agi` repositories, connect
-GitHub. See **[Sign in & integrations](10-sign-in-and-integrations.md)**.
+The Genie button in the header opens the workstation operator over the current
+Floor. It has its own private workspace and memory and never appears as a project
+in the workspace sidebar. Click outside the flyout to slide it away.
 
 ## You're set
 

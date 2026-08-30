@@ -17,16 +17,18 @@ Any of these create a terminal in the active (or chosen) workspace:
 Each terminal gets an auto-generated label (e.g. `myproject`, `myproject-1`)
 and opens rooted at the workspace folder.
 
-## Terminal types (specialized terminals)
+## Agents are distinct panels
 
-The **Add Terminal** button's chevron opens a menu of terminal types. The main
-button repeats the **last type you used**, so the common case is one click.
+Use the workspace's **Add Panel** menu. Plain terminals remain shell panels;
+agents are durable AMS identities rendered as distinct AgentPanels.
 
 | Type | What it launches |
 |------|------------------|
 | **Terminal** | A plain shell. |
 | **Claude Code** | The Claude Code TUI (a coding agent). |
 | **Codex** | The Codex TUI (a coding agent). |
+| **Kiwi Code** | The Kiwi Code TUI. |
+| **Genie TUI** | Genie's local-first TUI. |
 | **Custom agent** | Your own agent command. |
 
 Picking a plain **Terminal** creates it immediately. Picking an agent type opens
@@ -44,14 +46,19 @@ a short form first:
 - **Command** — *(Custom agent only)* the command to run, e.g.
   `my-agent --interactive`.
 
-Click **Create** to launch. Agent terminals otherwise behave exactly like plain
-ones — same focus, hide, suspend, close, and session-restore behaviour below.
+Click **Create** to register and launch the agent. Its AMS identity, inbox,
+channels, and settings survive a TUI restart. AgentPanels provide agent settings
+and a complete provider-terminal restart action.
 
 > **Command & extra flags.** Each agent type's launch command and its
 > **always-on extra flags** (for example `--dangerously-skip-permissions`) are
-> set once in **Settings → Specialized terminals** — they apply to every terminal
-> of that type. A **Custom agent**'s command can still be overridden per terminal
+> set once in **Settings → Agents → Providers** — they apply to every project agent
+> of that type. A **Custom agent**'s command can still be overridden per agent
 > in the create form above.
+
+The Genie OSA always receives the selected provider's supported full-permission
+flag because it must repair the workstation and toolchain. It is not a project
+agent and cannot work directly in project folders.
 
 ## Shells
 

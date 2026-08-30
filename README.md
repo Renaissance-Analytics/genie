@@ -1,17 +1,16 @@
 # Genie
 
-The Tynn desktop companion. A tray-resident workspace + terminal
-manager for projects you track in [Tynn](https://tynn.ai) and (later)
-sessions you run against an [Aionima](https://github.com/Civicognita/agi)
-local AGI gateway.
+The workstation for agentic work: `.agi` workspaces, durable AMS agents,
+AgentInbox, hosted `.gen` sites, managed toolchains, and plugin-provided Fancy
+surfaces in one desktop app.
 
 > **Status:** beta. Public so developers can audit what the binary
 > does on their machine and contribute back. Expect rapid iteration.
 
 ## What Genie is
 
-- **TheFloor** — a cross-project window with a tree of every terminal
-  you've defined, organised by workspace, with adaptive grid layouts
+- **TheFloor** — a cross-project window with distinct terminal, AgentPanel,
+  editor, and plugin-panel surfaces, with adaptive grid layouts
   (1 = full, 2 = split, 3 = focus-stack, 4 = grid). Terminals are real
   PTYs (xterm.js + node-pty), so they run TUI apps like `claude code`,
   `vim`, `htop` cleanly.
@@ -22,7 +21,11 @@ local AGI gateway.
   of sub-repos) as an Aionima `{slug}.agi` envelope: each sub-repo
   becomes a git submodule under `repos/`; loose knowledge folders
   (`plans/`, `docs/`, `k/`, etc.) migrate into `.ai/`.
-- **GitHub Device Flow** — connect a GitHub account once, then create
+- **Genie OSA** — a built-in full-authority workstation operator with its own
+  private workspace and memory, first-boot orientation, and recovery boot.
+- **AgentInbox** — native messaging over Claude Code Channels and Codex
+  app-server, without pasting messages into terminal input.
+- **GitHub connection** — connect a GitHub account once, then create
   `.agi` envelopes directly on GitHub under your user or any org you
   belong to. No client secret stored anywhere — Device Flow + OS
   keychain (`safeStorage`).
@@ -85,7 +88,7 @@ diagnostic walkthrough in
 
 ### Developer install
 
-You need **Node.js ≥ 20**, **npm**, and **git**.
+You need **Node.js ≥ 22**, **npm**, and **git**.
 
 ```bash
 git clone https://github.com/renaissance-analytics/genie.git
@@ -110,7 +113,10 @@ flow (Settings → Updates), which runs `git fetch && git checkout
 genie/
 ├── main/                  ← Electron main process
 │   ├── background.ts      ← boot, window factory
-│   ├── terminal/          ← PTY manager (multi-attach, scrollback)
+│   ├── terminal/          ← PTY + AgentPanel lifecycle
+│   ├── agentinbox/        ← durable native agent messaging
+│   ├── agents/            ← AMS + Genie OSA lifecycle
+│   ├── plugins/           ← signed plugins and contributed surfaces
 │   ├── workspace/         ← .agi envelope create / convert / analyse
 │   ├── github/            ← Device Flow OAuth + repo API
 │   └── updater/           ← git-pull-and-rebuild updater
@@ -118,6 +124,9 @@ genie/
 │   ├── pages/master.tsx   ← TheFloor
 │   ├── components/Master/ ← chooser, grid, panels, context menus
 │   └── components/Terminal/XTerm.tsx
+├── packages/
+│   ├── app-sdk/           ← GApp host bridge
+│   └── plugin-sdk/        ← typed plugin manifest contracts
 ├── docs/
 │   └── agi-format.md      ← public `.agi` envelope contract
 └── test/                  ← Vitest unit tests

@@ -36,11 +36,12 @@ Each **agent terminal** you create picks up a **purpose** and a reach **scope**
 - **Specific workspaces** — the ones you tick, plus its own.
 - **All — whole workstation** — every agent on this machine.
 
-Under the hood, agents use a single `agentinbox` MCP tool to list peers, send DMs or
-channel broadcasts, and long-poll for replies (see
+AgentInbox is the bridge, not text pasted into a TUI. Claude Code connects through
+native Channels and Codex through app-server; each boot verifies the transport
+before the AMS agent becomes ready. Agents use the `agentinbox` surface to list
+peers, send DMs or channel broadcasts, and receive durable replies (see
 **[Agents & the Genie MCP](12-agents-and-mcp.md)**). A message can optionally
-**nudge** its target — glowing that agent's terminal — without injecting into its
-input.
+**nudge** its target — glowing that agent's panel — without injecting into its input.
 
 ## Attachments
 

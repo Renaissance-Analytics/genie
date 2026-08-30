@@ -1,4 +1,4 @@
-import { BrowserWindow, ipcMain, shell } from 'electron';
+import { BrowserWindow, ipcMain, powerMonitor, shell } from 'electron';
 import crypto from 'crypto';
 import path from 'path';
 import { getAllSettings } from '../db';
@@ -72,6 +72,34 @@ export function setAvailabilityReader(
     r: ((scope: QuestionScope) => AvailabilityDecision) | null,
 ): void {
     availabilityReader = r ?? readAvailabilityFromSettings;
+}
+
+export interface UserPresence {
+    away: boolean;
+    idleSeconds: number;
+}
+
+const USER_AWAY_SECONDS = 5 * 60;
+function readUserPresence(): UserPresence {
+    try {
+        const idleSeconds = Math.max(0, powerMonitor.getSystemIdleTime());
+        return { away: idleSeconds >= USER_AWAY_SECONDS, idleSeconds };
+    } catch {
+        return { away: false, idleSeconds: 0 };
+    }
+}
+
+let userPresenceReader: () => UserPresence = readUserPresence;
+export function setUserPresenceReader(reader: (() => UserPresence) | null): void {
+    userPresenceReader = reader ?? readUserPresence;
+}
+
+function deferredAgentMessage(decision: AvailabilityDecision): string {
+    if (decision.availability === 'dnd') return decision.dndMessage;
+    const presence = userPresenceReader();
+    return presence.away
+        ? 'the user appears away (no workstation activity for at least 5 minutes); the question is waiting in their Genie inbox and the answer will be delivered to your AgentInbox'
+        : 'the user is active; the question is waiting in their Genie inbox and the answer will be delivered to your AgentInbox';
 }
 
 /**
@@ -661,7 +689,7 @@ function raiseDesktopModal(
     return new Promise((resolve) => {
         const id = crypto.randomBytes(9).toString('hex');
         const decision = availabilityReader(scope ?? {});
-        if (decision.availability === 'dnd') {
+        if (askerTerminalId || decision.availability === 'dnd') {
             // DND for this scope: NEVER pop the modal or steal focus. Park the question
             // in the top-bar inbox (deferred) to answer at leisure. Record the asking
             // terminal so the eventual flyout answer is delivered back to that agent's
@@ -679,14 +707,18 @@ function raiseDesktopModal(
             // Opt-in AUDIBLE cue: a chime (no modal, no focus steal) so the owner
             // knows a question landed while heads-down — the whole point of DND is to
             // stop focus theft, not to go silent.
-            if (dndSoundEnabled()) playForceQuestionChime();
+            if (decision.availability === 'dnd' ? dndSoundEnabled() : true) {
+                playForceQuestionChime();
+            }
             notifyQuestionsChanged();
             resolve({
                 cancelled: true,
                 answers: [],
                 deferred: true,
                 questionId: id,
-                dndMessage: decision.dndMessage,
+                dndMessage: askerTerminalId
+                    ? deferredAgentMessage(decision)
+                    : decision.dndMessage,
             });
             return;
         }

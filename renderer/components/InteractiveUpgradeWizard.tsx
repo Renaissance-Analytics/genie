@@ -40,6 +40,7 @@ interface Props {
     initialSourceMode?: 'local' | 'remote';
     initialSourceUrl?: string;
     initialProjectId?: string;
+    initialGappDev?: boolean;
     /** Tynn projects to bind the new workspace to. */
     projects: TynnProject[];
     loadingProjects: boolean;
@@ -134,6 +135,7 @@ export default function InteractiveUpgradeWizard({
     initialSourceMode = 'local',
     initialSourceUrl = '',
     initialProjectId = '',
+    initialGappDev = false,
     projects,
     loadingProjects,
     onCancel,
@@ -171,6 +173,10 @@ export default function InteractiveUpgradeWizard({
 
     // Configure state
     const [projectId, setProjectId] = useState(initialProjectId);
+    const [gappDev, setGappDev] = useState(initialGappDev);
+    useEffect(() => {
+        if (projects.find((project) => project.id === projectId)?.isGapp) setGappDev(true);
+    }, [projectId, projects]);
     const [slug, setSlug] = useState('');
     // True once the user has manually edited the slug — after that we stop
     // auto-deriving it (from the source basename or the chosen primary).
@@ -573,6 +579,7 @@ export default function InteractiveUpgradeWizard({
                     env_file: settings.default_env_file ?? '.env',
                     last_opened_at: null,
                     created_by_genie: 0,
+                    gapp_dev: gappDev ? 1 : 0,
                 });
                 onCreated(saved);
                 return;
@@ -723,6 +730,7 @@ export default function InteractiveUpgradeWizard({
                 env_file: settings.default_env_file ?? '.env',
                 last_opened_at: null,
                 created_by_genie: 1,
+                gapp_dev: gappDev ? 1 : 0,
             };
             const saved = await api().workspaces.add(row);
             onCreated(saved);
@@ -811,6 +819,8 @@ export default function InteractiveUpgradeWizard({
                             loadingProjects={loadingProjects}
                             projectId={projectId}
                             setProjectId={setProjectId}
+                            gappDev={gappDev}
+                            setGappDev={setGappDev}
                             slug={slug}
                             setSlug={onSlugEdited}
                             parentFolder={parentFolder}
@@ -1567,6 +1577,8 @@ function EnvelopeStep({
     loadingProjects,
     projectId,
     setProjectId,
+    gappDev,
+    setGappDev,
     slug,
     setSlug,
     parentFolder,
@@ -1590,6 +1602,8 @@ function EnvelopeStep({
     loadingProjects: boolean;
     projectId: string;
     setProjectId: (v: string) => void;
+    gappDev: boolean;
+    setGappDev: (v: boolean) => void;
     slug: string;
     setSlug: (v: string) => void;
     parentFolder: string;
@@ -1639,6 +1653,22 @@ function EnvelopeStep({
                     />
                 </div>
             )}
+            <label style={{ display: 'flex', gap: 10, alignItems: 'flex-start', cursor: 'pointer' }}>
+                <input
+                    type="checkbox"
+                    checked={gappDev}
+                    onChange={(event) => setGappDev(event.target.checked)}
+                />
+                <span>
+                    <Text size="sm" style={{ display: 'block', fontWeight: 600 }}>
+                        GApp Development Workspace
+                    </Text>
+                    <Text size="xs" className="text-zinc-500">
+                        Mark this inspected envelope as a GDW so Genie exposes GApp build,
+                        schema-check, and preview workflows.
+                    </Text>
+                </span>
+            </label>
             <Input
                 label="Envelope slug"
                 description={`Becomes the folder name: ${slug || '{slug}'}.agi`}

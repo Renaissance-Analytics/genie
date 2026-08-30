@@ -42,6 +42,9 @@ import { pluginToolDescriptors, dispatchPluginTool } from '../plugins/registry';
 import { agentInboxBroker } from '../agentinbox/broker';
 import { agentPulse } from '../terminal/agent-pulse';
 import { agentShutdownReadiness } from '../agents/shutdown-readiness';
+import { authorizeOsAgentBoot, GENIE_OS_TERMINAL_ID } from '../agents/os-agent';
+import { markOsAgentOriented } from '../agents/os-lifecycle';
+import { harnessTransportRegistry, requiredHarnessTransport } from '../agentinbox/harness-transport';
 import { backendOfKind } from '../backend/registry';
 import { formatAgentInboxMailLine } from '../mcp/protocol';
 import type { ServerDeps } from '../mcp/server';
@@ -119,6 +122,21 @@ export function buildHostServerDeps(
             });
         },
         onThumbsUp: async (terminalId, reason, to) => {
+            if (terminalId === GENIE_OS_TERMINAL_ID) {
+                const provider = String(getTerminalSpec(terminalId)?.meta?.agent ?? '');
+                const required = requiredHarnessTransport(provider);
+                const authorization = authorizeOsAgentBoot(
+                    provider,
+                    required ? harnessTransportRegistry.isVerified('genie:workstation', required) : true,
+                );
+                if (!authorization.allowed) return { ok: false, error: authorization.reason };
+                if (reason === 'boot') markOsAgentOriented(cfg.userDataDir);
+                broadcastAgentThumbsUp({
+                    agentId: 'genie:workstation', terminalId, workspaceId: SYSTEM_WORKSPACE_ID, reason,
+                    ...(to ? { to } : {}),
+                });
+                return { ok: true, agentId: 'genie:workstation' };
+            }
             const agent = markWorkspaceAgentReadyByTerminal(getDb(), terminalId);
             if (!agent) {
                 return { ok: false, error: 'This terminal is not bound to a registered AMS agent.' };

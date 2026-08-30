@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { GENIE_OS_AGENT, authorizeOsAgentTarget, osAgentMetaForProvider } from '../os-agent';
+import { GENIE_OS_AGENT, authorizeOsAgentTarget, obsoleteOsAgentSpecIds, osAgentMetaForProvider, osAgentLaunchCommand, authorizeOsAgentBoot } from '../os-agent';
 
 describe('the hardcoded workstation Genie agent', () => {
     it('is workstation-scoped and cannot own a project', () => {
@@ -31,5 +31,29 @@ describe('the hardcoded workstation Genie agent', () => {
             agent_id: 'genie:workstation',
             whisper_scope: 'all',
         });
+    });
+
+    it('always grants the workstation operator the provider full-access mode', () => {
+        expect(osAgentLaunchCommand('claude', 'claude')).toBe('claude --dangerously-skip-permissions');
+        expect(osAgentLaunchCommand('codex', 'codex --profile genie')).toBe('codex --profile genie --yolo');
+        expect(osAgentLaunchCommand('codex', 'codex --yolo')).toBe('codex --yolo');
+    });
+
+    it('refuses setup completion until a native harness transport is verified', () => {
+        expect(authorizeOsAgentBoot('claude', false).allowed).toBe(false);
+        expect(authorizeOsAgentBoot('codex', false).allowed).toBe(false);
+        expect(authorizeOsAgentBoot('claude', true).allowed).toBe(true);
+        expect(authorizeOsAgentBoot('kiwi', false).allowed).toBe(true);
+    });
+});
+
+describe('legacy Genie OSA terminal convergence', () => {
+    it('removes every duplicate while retaining the one canonical terminal', () => {
+        expect(obsoleteOsAgentSpecIds([
+            { id: 'legacy-one', meta: { agent_id: 'genie:workstation' } },
+            { id: 'genie-workstation-agent', meta: { agent_id: 'genie:workstation' } },
+            { id: 'legacy-two', meta: { agent_id: 'genie:workstation' } },
+            { id: 'project-agent', meta: { agent_id: 'project:agent' } },
+        ])).toEqual(['legacy-one', 'legacy-two']);
     });
 });

@@ -122,6 +122,17 @@ describe('TynnBackend.listProjects — is_gapp', () => {
 });
 
 describe('TynnBackend.createProject — is_gapp', () => {
+    it('sends the requested GDW marker to Tynn', async () => {
+        const captured: CapturedRequest[] = [];
+        mockFetch(captured, () => {
+            return json({ data: { id: 'p9', name: 'New App', slug: 'new-app', is_gapp: true } });
+        });
+
+        await new TynnBackend().createProject({ name: 'New App', is_gapp: true });
+
+        expect(JSON.parse(captured[0].body!).is_gapp).toBe(true);
+    });
+
     it('maps is_gapp on a freshly created project', async () => {
         // Tynn shares ONE `projectRow()` between list and create precisely so a
         // new project is indistinguishable from a listed one. If Genie maps the

@@ -565,10 +565,10 @@ NOT for asking the user something — that is \`ForceTheQuestion\`.
 
 ### ForceTheQuestion
 Call this whenever you are **blocked on a decision, clarification, or approval
-only the user can give**. It raises an OS-level, always-on-top modal that floats
-above EVERY window (not just Genie), so the user sees it even if they're heads-
-down in another app — then it blocks until they answer. Far better than printing
-a question into a terminal they aren't looking at.
+only the user can give**. It queues the request in Genie's question inbox and
+returns immediately with an intelligent active/away notice. The eventual answer
+is delivered to your AgentInbox, so continue safe independent work or hold when
+the decision is a true blocker — never poll ForceTheQuestion.
 
 - Optionally pass \`terminalId\` (your \`GENIE_TERMINAL_ID\`) so the modal is
   attributed to this terminal.
@@ -682,7 +682,7 @@ export const GENIE_AGENTS_BRIEF = `You are running inside **Genie** — a deskto
 
 - **Fresh or newly converted workspace? → \`initializeWorkspace\`.** Call it once to receive the envelope/repo map and a numbered orientation plan. It is also available as an MCP prompt in clients that expose prompt pickers.
 - **Finished, or handing back? → \`imDone\` — ALWAYS, every time.** The instant you stop (done, blocked-and-waiting, or handing off), call it — otherwise your result sits unseen and the work stalls. Genie glows this terminal across the whole UI until the user looks. HOW: pass \`terminalId\` = your \`GENIE_TERMINAL_ID\` for exact targeting (required once the workspace has more than one terminal — Genie refuses to guess rather than glow the wrong one). NEVER end a turn by just printing "done".
-- **Need a decision, or blocked? → \`ForceTheQuestion\` — NEVER ask in plaintext and wait.** A plaintext question is invisible to the user; you'll hang forever. HOW: ONE call with 1–4 questions, each offering 2–4 options plus an always-available free-text note — **batch every open question together.** It pops an OS-level, always-on-top modal (above every app) and blocks until answered. Pass your \`terminalId\`.
+- **Need a decision, or blocked? → \`ForceTheQuestion\` — NEVER ask in plaintext and wait.** A plaintext question is invisible to the user. HOW: ONE call with 1–4 questions, each offering 2–4 options plus free text — **batch every open question together.** It returns immediately with active/away status; the answer arrives later through AgentInbox. Pass your \`terminalId\`.
   - **WRITE the question as MARKDOWN, structured.** The modal renders markdown: a short lead sentence, then blank-line paragraphs / bullet lists / **bold** for the key facts. Never one run-on paragraph.
   - **NAME THE ACTOR in every option.** The modal is read by the USER, so bare "I"/"you" invert and confuse. Convention: the agent = "Agent:"/"the agent", the user = "You:"/"you" — lead each option label with the actor (e.g. \`Agent: I create the repo and push\` vs \`You: you create the repo\`).
 - **Need to HOST a repo as a real site at \`<name>.gen\`, or give it a database/cache? → \`manageSite\` / \`manageService\` (the Hosting Manager).** \`manageSite\` runs the repo's dev server on the host against the live source and fronts it at \`https://<name>.gen\` over https (or serves a built directory / PHP app itself via \`hostServe\`). To host an app, use this — not a hand-rolled \`manageProcess\` process. \`manageService\` backs it with workstation-managed engines and injects the connection env (Docker/Podman needed for services); Redis is dedicated per workspace, while engines with safe native tenancy remain shared.

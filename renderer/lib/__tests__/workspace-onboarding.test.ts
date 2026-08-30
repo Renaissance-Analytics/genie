@@ -9,6 +9,7 @@ import {
     tynnProjectImportSource,
     availableTynnProjects,
     scannedWorkspaceAction,
+    gdwChoicesForSource,
 } from '../workspace-onboarding';
 
 it('registers an existing AGI/GApp envelope instead of wrapping it again', () => {
@@ -17,16 +18,24 @@ it('registers an existing AGI/GApp envelope instead of wrapping it again', () =>
 });
 
 describe('managed workspace entry points', () => {
-    it('offers only the three managed sources', () => {
+    it('offers GApp Development Workspace creation alongside the managed sources', () => {
         expect(ADD_WORKSPACE_SOURCES.map((source) => source.id)).toEqual([
             'new',
+            'gapp',
             'tynn',
             'git',
         ]);
     });
 
+    it('offers GDW as a destination for scratch, local, Git, and Tynn sources', () => {
+        expect(gdwChoicesForSource('new')).toEqual(['workspace', 'gdw']);
+        expect(gdwChoicesForSource('git')).toEqual(['workspace', 'gdw']);
+        expect(gdwChoicesForSource('tynn')).toEqual(['workspace', 'gdw']);
+    });
+
     it('routes every open-world source through the scanner-driven wizard', () => {
         expect(workspaceWizardEntry('new')).toEqual({ mode: 'local' });
+        expect(workspaceWizardEntry('gapp')).toEqual({ mode: 'gapp' });
         expect(workspaceWizardEntry('git')).toEqual({ mode: 'remote' });
         expect(workspaceWizardEntry('tynn')).toEqual({ mode: 'tynn' });
     });

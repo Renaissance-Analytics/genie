@@ -48,6 +48,15 @@ describe('the Toolchain page is TOP-LEVEL, not buried in Hosting', () => {
     });
 });
 
+describe('workstation maintenance', () => {
+    it('is a local System section beside the other machine controls', () => {
+        const system = NAV_GROUPS.find((group) => group.label === 'System')!;
+        expect(system.items.map((item) => item.id)).toContain('maintenance');
+        expect(isSectionVisible('maintenance', false)).toBe(true);
+        expect(isSectionVisible('maintenance', true)).toBe(false);
+    });
+});
+
 describe('local (unrestricted) Settings', () => {
     it('shows the full nav unchanged', () => {
         expect(filterNavGroups(NAV_GROUPS, false)).toBe(NAV_GROUPS);

@@ -1,30 +1,23 @@
 # Workspaces
 
-A **workspace** is a folder you work in. Each workspace owns its own terminals
-and editors, and Genie keeps them organised in the left sidebar (the
-**chooser**).
+A **workspace** is a Genie-managed `.agi` envelope. Each workspace owns panels,
+agents, sites, and background processes, organised in the workspace sidebar.
 
-## The sidebar: icon rail + flyout
+## The workspace sidebar
 
-The sidebar has two parts:
+The sidebar gives every workspace one expandable row:
 
-- **Icon rail** (always visible, narrow): one icon per workspace, plus a pin
-  toggle at the top and an **Add workspace…** (`+`) button at the bottom. The
-  icon reflects the workspace type:
-  - **Box** icon — an `.agi` envelope.
-  - **CPU** icon — an Aionima-backed workspace.
-  - **Globe** icon — a plain / desktop / Tynn workspace.
-  - A small **green badge** with a count appears when a workspace has live
-    terminals running.
-- **Flyout panel** (the "Terminals" panel): titled *"Terminals — Pick from any
-  project"*. It lists each workspace as a collapsible group with its terminals,
-  a search box, and **Add Terminal…** / **Add Files…** buttons per workspace.
+- The two-sided status pill reports background-process status on the left and
+  hosted-site status on the right. Click it to choose the relevant manager.
+- **Add Panel…** opens one menu for shells, files, AMS AgentPanels, and enabled
+  plugin panels such as ArtBoard and Repository.
+- The built-in Genie OSA is a header system surface and is never listed here.
 
 ## Adding a workspace
 
-Click **Add workspace…** in the icon rail (or in the flyout), then pick a
-folder. Genie analyses the folder and registers it. The folder on disk is never
-modified just by adding it.
+Click **Add workspace…**, then choose New, Import from Tynn, or Import from Git.
+The interactive inspection wizard validates the source and shows any planned
+envelope changes before Genie registers it.
 
 ## Switching the active workspace
 
@@ -50,7 +43,7 @@ Toggle it with the **pin button** at the top of the sidebar. Titles:
 
 ## `.agi` envelopes — detect, create, convert, import
 
-Genie has first-class support for **Aionima-format `.agi` envelopes** —
+Genie requires its managed **`.agi` envelopes** —
 project folders structured with `README.md`, `AGENTS.md`, `CLAUDE.md`, a
 `project.json`, and (often) git submodules under `repos/`.
 
@@ -80,7 +73,7 @@ envelope's own metadata files.
 **Right-click a workspace** header in the flyout for project actions:
 
 - **Open in Stage** — pops the workspace out into its own dedicated window.
-- **Add Terminal** — adds a terminal to this workspace.
+- **Add Panel** — choose a terminal, files, agent, or plugin panel.
 - **Open project in browser** — opens the project's dashboard in your browser
   (uses the workspace's backend).
 - **Remove from Genie** — removes the workspace from Genie. *The folder on disk

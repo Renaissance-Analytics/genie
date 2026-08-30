@@ -38,7 +38,7 @@ shells **survive a full quit** and reattach on next launch.
 > in-process terminals — which still restore from a snapshot, but don't survive
 > a full quit. See **[Terminal session persistence](05-session-persistence.md)**.
 
-## Specialized terminals
+## Agents → Providers
 
 The launch command and always-on flags for each AI-agent terminal type:
 
@@ -51,7 +51,13 @@ The launch command and always-on flags for each AI-agent terminal type:
 
 See **[Terminals → Terminal types](04-terminals.md)**.
 
-## Agent MCP server
+The built-in Genie OSA always runs with the selected provider's full workstation
+authority. Genie adds the provider's supported non-interactive permission flag
+for the OSA only (`--dangerously-skip-permissions` for Claude Code and `--yolo`
+for Codex). Project agents keep their normal provider settings and approval
+boundaries.
+
+## Agents → Agent MCP
 
 A small **loopback MCP server** that lets agents in your terminals reach you —
 glow the sidebar when done (`imDone`), pop a question (`ForceTheQuestion`),
@@ -125,6 +131,15 @@ read — it never pulls an image, builds, or starts a container.
 
 See **[Hosting sites at `.gen` (the Hosting Manager)](18-dev-sites.md)** for the
 full picture.
+
+## System → Maintenance
+
+**Reset Workstation** returns Genie to first-boot state after a confirmation and
+clean restart. It removes Genie's local registrations, agents, panels, plugins,
+connections, services state, Genie OS setup marker, and local workstation data.
+It does **not** delete workspace folders and does **not** reset or remove anything
+inside Genie's managed toolchain. After restart, the Genie OSA runs the first-boot
+orientation again.
 
 ## Integrations & more
 

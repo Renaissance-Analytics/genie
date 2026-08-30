@@ -200,6 +200,7 @@ export class TynnBackend implements Backend {
         owner_type?: 'user' | 'organization' | 'team';
         owner_id?: string;
         slug?: string;
+        is_gapp?: boolean;
     }): Promise<BackendProject> {
         const data = await this.fetch<{
             data: {
@@ -218,6 +219,7 @@ export class TynnBackend implements Backend {
                 owner_type: input.owner_type,
                 owner_id: input.owner_id,
                 slug: input.slug,
+                is_gapp: input.is_gapp,
             },
         });
         const p = data.data;

@@ -1,0 +1,12 @@
+{
+  "name": "@genie/plugin-sdk",
+  "version": "0.1.0",
+  "description": "Typed manifest contracts for Genie plugins and Fancy panel contributions.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": { ".": "./src/index.ts" },
+  "files": ["src", "README.md"],
+  "sideEffects": false
+}

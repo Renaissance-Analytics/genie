@@ -3473,7 +3473,7 @@ export function setAionimaConfig(patch: BackendConfig): BackendConfig {
 // Terminal spec helpers -------------------------------------------------
 
 /** A view spec is a terminal, a fancy-code editor, or a background process runner. */
-export type TerminalSpecType = 'terminal' | 'code' | 'process' | 'plugin';
+export type TerminalSpecType = 'terminal' | 'code' | 'process' | 'plugin' | 'plugin-panel';
 
 /** Per-type metadata. Code views persist the open file's workspace-relative path. */
 export interface TerminalSpecMeta {
@@ -3693,6 +3693,8 @@ function rowFromRecord(r: TerminalSpecRecord): TerminalSpecRow {
               ? 'process'
               : r.type === 'plugin'
                 ? 'plugin'
+                : r.type === 'plugin-panel'
+                  ? 'plugin-panel'
                 : 'terminal';
     return {
         id: r.id,
@@ -3771,6 +3773,8 @@ export function createTerminalSpec(input: {
                       ? 'process'
                       : input.type === 'plugin'
                         ? 'plugin'
+                        : input.type === 'plugin-panel'
+                          ? 'plugin-panel'
                         : 'terminal',
             meta_json: JSON.stringify(input.meta ?? {}),
             sort_order: nextOrder,

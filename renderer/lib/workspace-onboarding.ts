@@ -1,4 +1,4 @@
-export type AddWorkspaceSourceId = 'new' | 'tynn' | 'git';
+export type AddWorkspaceSourceId = 'new' | 'gapp' | 'tynn' | 'git';
 
 export interface AddWorkspaceSource {
     id: AddWorkspaceSourceId;
@@ -16,6 +16,12 @@ export const ADD_WORKSPACE_SOURCES: readonly AddWorkspaceSource[] = [
         icon: 'sparkles',
     },
     {
+        id: 'gapp',
+        title: 'New GApp workspace',
+        description: 'Create a GApp Development Workspace and inspect its starting folder.',
+        icon: 'blocks',
+    },
+    {
         id: 'tynn',
         title: 'Import from Tynn',
         description: 'Choose one of your Tynn workspaces and bring its repositories to this machine.',
@@ -30,11 +36,21 @@ export const ADD_WORKSPACE_SOURCES: readonly AddWorkspaceSource[] = [
 ] as const;
 
 export function workspaceWizardEntry(source: AddWorkspaceSourceId): {
-    mode: 'local' | 'remote' | 'tynn';
+    mode: 'local' | 'remote' | 'tynn' | 'gapp';
 } {
+    if (source === 'gapp') return { mode: 'gapp' };
     if (source === 'git') return { mode: 'remote' };
     if (source === 'tynn') return { mode: 'tynn' };
     return { mode: 'local' };
+}
+
+export type WorkspaceDestinationKind = 'workspace' | 'gdw';
+
+/** GDW is a destination contract, independent of where the source came from. */
+export function gdwChoicesForSource(
+    source: 'new' | 'git' | 'tynn',
+): WorkspaceDestinationKind[] {
+    return ['workspace', 'gdw'];
 }
 
 export function canFinishFirstRun(input: {

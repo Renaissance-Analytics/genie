@@ -13,6 +13,45 @@ export const GENIE_OS_AGENT = Object.freeze({
     skills: ['genie-agent-builder'] as const,
 });
 
+export const GENIE_OS_TERMINAL_ID = 'genie-workstation-agent';
+
+const FULL_ACCESS_FLAGS: Partial<Record<string, string>> = {
+    claude: '--dangerously-skip-permissions',
+    codex: '--yolo',
+};
+
+/** OSA-only authority. Ordinary project agents continue to use owner settings. */
+export function osAgentLaunchCommand(provider: string, command: string): string {
+    const flag = FULL_ACCESS_FLAGS[provider];
+    if (!flag || command.split(/\s+/).includes(flag)) return command.trim();
+    return `${command.trim()} ${flag}`;
+}
+
+export function authorizeOsAgentBoot(
+    provider: string,
+    nativeTransportVerified: boolean,
+): OsAgentAuthorization {
+    if ((provider === 'claude' || provider === 'codex') && !nativeTransportVerified) {
+        return {
+            allowed: false,
+            reason: `${provider} must verify its native AgentInbox transport before Genie can complete workstation setup.`,
+        };
+    }
+    return { allowed: true };
+}
+
+export function obsoleteOsAgentSpecIds(
+    specs: readonly { id: string; meta?: { agent_id?: string } | null }[],
+): string[] {
+    return specs
+        .filter(
+            (spec) =>
+                spec.meta?.agent_id === GENIE_OS_AGENT.id &&
+                spec.id !== GENIE_OS_TERMINAL_ID,
+        )
+        .map((spec) => spec.id);
+}
+
 export type OsAgentTarget =
     | { kind: 'workstation' }
     | { kind: 'project'; workspaceId: string };

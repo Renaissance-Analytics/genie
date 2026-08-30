@@ -14,7 +14,11 @@ import { registerShortcuts, unregisterShortcuts } from './shortcuts';
 import { launchedFromAutostart } from './autostart';
 import { resolveWorkstationProvider } from './agents/provider';
 import { ensureGenieOsWorkspace } from './agents/os-workspace';
+import { GENIE_OS_TERMINAL_ID, obsoleteOsAgentSpecIds, osAgentLaunchCommand } from './agents/os-agent';
+import { osAgentBootInstructions, osAgentBootMode } from './agents/os-lifecycle';
+import { applyPendingWorkstationReset, isWorkstationResetPending } from './workstation/reset';
 import { providerDef } from './agents/registry';
+import { appendLaunchFlags } from './agentinbox/session-capture';
 import { registerIpcHandlers, applyStartupToolchainPrecedence, addWorkspaceFromFolder } from './ipc';
 import { writeClipboardImagePng } from './clipboard-image';
 import crypto from 'node:crypto';
@@ -31,6 +35,7 @@ import {
     toWorkspaceAppKind,
     createTerminalSpec,
     updateTerminalSpec,
+    deleteTerminalSpec,
     workspaceProcessApproval,
     workspaceTerminalApproval,
     removeWorkspace,
@@ -1104,26 +1109,40 @@ app.whenReady().then(async () => {
         });
     });
 
+    // A reset is applied before any database, terminal host, service, or window
+    // opens the files. Genie's managed toolchain is deliberately outside the
+    // reset boundary and survives intact.
+    applyPendingWorkstationReset(app.getPath('userData'));
     initDatabase(app.getPath('userData'));
     const genieOsWorkspace = await ensureGenieOsWorkspace(app.getPath('userData'));
+    for (const obsoleteId of obsoleteOsAgentSpecIds(listTerminalSpecs())) {
+        deleteTerminalSpec(obsoleteId);
+    }
     // The workstation operator is built in, not a project-owned configuration.
     // Persist only its terminal shell so it can resume like every other agent;
     // `system:true` keeps it outside every project and the fixed id makes this
     // seed idempotent across upgrades.
-    const existingOsAgent = getTerminalSpec('genie-workstation-agent');
-    const osAgentInstructions = osAgentBuilderSkill();
+    const existingOsAgent = getTerminalSpec(GENIE_OS_TERMINAL_ID);
+    const osAgentInstructions = `${osAgentBootInstructions(osAgentBootMode(app.getPath('userData')))}\n\n${osAgentBuilderSkill()}`;
+    const osSettings = getAllSettings();
+    const osProvider = resolveWorkstationProvider(osSettings);
+    const osDef = providerDef(osProvider);
+    const osBase = osSettings[osDef.commandSettingKey] || osDef.defaultCommand;
+    const osCommand = osAgentLaunchCommand(
+        osProvider,
+        appendLaunchFlags(osBase, osSettings[osDef.flagsSettingKey] || ''),
+    );
     if (!existingOsAgent) {
-        const provider = resolveWorkstationProvider(getAllSettings());
         createTerminalSpec({
-            id: 'genie-workstation-agent',
+            id: GENIE_OS_TERMINAL_ID,
             workspace_id: null,
             label: 'Genie',
             cwd: genieOsWorkspace,
             type: 'terminal',
             meta: {
                 system: true,
-                agent: provider,
-                agent_command: providerDef(provider).defaultCommand,
+                agent: osProvider,
+                agent_command: osCommand,
                 agent_id: 'genie:workstation',
                 agent_instructions: osAgentInstructions,
                 whisper_purpose: 'genie',
@@ -1133,11 +1152,15 @@ app.whenReady().then(async () => {
         });
     } else if (
         existingOsAgent.cwd !== genieOsWorkspace ||
-        existingOsAgent.meta.agent_instructions !== osAgentInstructions
+        existingOsAgent.workspace_id !== null ||
+        existingOsAgent.meta.agent_instructions !== osAgentInstructions ||
+        existingOsAgent.meta.agent !== osProvider ||
+        existingOsAgent.meta.agent_command !== osCommand
     ) {
         updateTerminalSpec(existingOsAgent.id, {
             cwd: genieOsWorkspace,
-            meta: { ...existingOsAgent.meta, agent_instructions: osAgentInstructions },
+            workspace_id: null,
+            meta: { ...existingOsAgent.meta, system: true, agent: osProvider, agent_command: osCommand, agent_id: 'genie:workstation', agent_instructions: osAgentInstructions },
         });
     }
     // The container DEV SERVER — sites (#234 P2), services (P3) and their
@@ -2122,8 +2145,9 @@ app.whenReady().then(async () => {
         // next launch, so nothing is lost.
         stopSchedules();
         const forUpdate = isQuittingForUpdate();
+        const forReset = isWorkstationResetPending(app.getPath('userData'));
         const kind = hostBackendKind();
-        const fullShutdown = !isHostBacked() ||
+        const fullShutdown = forReset || !isHostBacked() ||
             (shouldKillHostForUpdate(forUpdate, kind) && detachedHostPinsBinary());
         if (fullShutdown) {
             const targets = listWorkspaces().flatMap((workspace) =>
@@ -2155,7 +2179,7 @@ app.whenReady().then(async () => {
             //     present) does NOT pin genie.exe and SURVIVES the update like a
             //     service-backed host. So only kill when it actually pins
             //     (detachedHostPinsBinary) — conservative: unknown ⇒ pins ⇒ kill.
-            if (shouldKillHostForUpdate(forUpdate, kind) && detachedHostPinsBinary()) {
+            if (forReset || (shouldKillHostForUpdate(forUpdate, kind) && detachedHostPinsBinary())) {
                 // Snapshot windowless host ptys (windowed ones are covered by the
                 // renderer snapshot broadcast) BEFORE the host dies, so the cold
                 // post-update launch replays their history.

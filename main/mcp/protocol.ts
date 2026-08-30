@@ -351,7 +351,7 @@ export interface McpContext {
      *  retained for callers that need the fact directly. */
     isOpsProject: (terminalId: string) => Promise<boolean>;
     /**
-     * Raise an OS-level always-on-top modal asking the user one or more
+     * Queue one or more questions in the user's Genie question inbox
      * questions; resolves with their answers (or cancelled). Powers
      * ForceTheQuestion.
      */
@@ -3103,7 +3103,7 @@ const MANAGE_GAPP_DEV_TOOL = {
 const FORCE_QUESTION_TOOL = {
     name: 'ForceTheQuestion',
     description:
-        'Ask the user one or more questions via an OS-level, always-on-top modal that floats above every window (not just Genie) and demands an answer before the user continues. Use this when you are blocked and need a decision only the user can make. Batch ALL your open questions into a SINGLE call — each question can offer its own choices, and every question additionally accepts a free-text note, so there is no reason to call this tool more than once in a row. Blocks until the user answers or dismisses; returns the selected option(s) and note for each question.',
+        'Ask the user one or more questions through the Genie question inbox. Use this when you need a decision only the user can make. Batch ALL open questions into one call. The call returns immediately with active/away status; the eventual answer is delivered through AgentInbox, so do not block or poll this tool.',
     inputSchema: {
         type: 'object',
         properties: {

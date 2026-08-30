@@ -926,6 +926,11 @@ export default function SettingsPage() {
 
                             </SearchGroup>
                         )}
+                        {show('maintenance') && (
+                            <SearchGroup label="Maintenance" searching={searching}>
+                                <MaintenanceSection />
+                            </SearchGroup>
+                        )}
                     </div>
 
                     <div className="set-foot">
@@ -2671,6 +2676,53 @@ function AgentMcpSection({
                 </>
             )}
         </SetSection>
+    );
+}
+
+function MaintenanceSection() {
+    const [confirming, setConfirming] = useState(false);
+    const [resetting, setResetting] = useState(false);
+    return (
+        <>
+            <div className="set-section">
+                <Heading as="h3" size="sm">Reset Workstation</Heading>
+                <Text size="sm">
+                    Remove Genie&apos;s workspaces, agents, panels, plugins, connections, and local
+                    workstation state, then restart as a new installation. Genie's managed
+                    toolchain and every tool installed in it are preserved.
+                </Text>
+                <Action color="red" icon="rotate-ccw" onClick={() => setConfirming(true)}>
+                    Reset Workstation
+                </Action>
+            </div>
+            <Modal open={confirming} onClose={() => !resetting && setConfirming(false)}>
+                <div className="set-section">
+                    <Heading as="h2" size="md">Reset this Genie workstation?</Heading>
+                    <Text>
+                        This removes Genie&apos;s local configuration and data. Workspace folders and
+                        the managed toolchain remain on disk, but they will no longer be registered
+                        in Genie. This cannot be undone from Genie.
+                    </Text>
+                    <div className="set-actions">
+                        <Action onClick={() => setConfirming(false)} disabled={resetting}>Cancel</Action>
+                        <Action
+                            color="red"
+                            disabled={resetting}
+                            onClick={async () => {
+                                setResetting(true);
+                                const result = await api().app.resetWorkstation();
+                                if (result.cancelled) {
+                                    setResetting(false);
+                                    setConfirming(false);
+                                }
+                            }}
+                        >
+                            {resetting ? 'Resetting…' : 'Reset and restart'}
+                        </Action>
+                    </div>
+                </div>
+            </Modal>
+        </>
     );
 }
 

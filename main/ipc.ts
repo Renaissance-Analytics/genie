@@ -76,7 +76,9 @@ import {
 } from './workspace/envelope';
 import { stopProcess, forgetProcess } from './terminal/process-supervisor';
 import { isProviderId, providerDef } from './agents/registry';
-import { osAgentMetaForProvider } from './agents/os-agent';
+import { osAgentLaunchCommand, osAgentMetaForProvider } from './agents/os-agent';
+import { requestWorkstationReset } from './workstation/reset';
+import { osAgentBootMode } from './agents/os-lifecycle';
 import { armSchedule, forgetSchedule } from './terminal/process-scheduler';
 import { broadcastTerminalSpecsChanged, liveTerminalCount } from './terminal/ipc';
 import { agentPulse } from './terminal/agent-pulse';
@@ -87,6 +89,7 @@ import {
 } from './mcp/host-tools';
 import { agentInboxBroker } from './agentinbox/broker';
 import { type AgentInboxScope } from './agentinbox/types';
+import { appendLaunchFlags } from './agentinbox/session-capture';
 import {
     postAsHuman,
     readHumanAttachment,
@@ -472,15 +475,23 @@ export function registerIpcHandlers(): void {
             patch = { ...patch, ai_system: patch.ai_system.slice(0, AI_SYSTEM_MAX) };
         }
         const next = setSettings(patch as Record<string, string>);
-        if ('agent_default' in patch && isProviderId(next.agent_default)) {
+        if (isProviderId(next.agent_default)) {
             const spec = getTerminalSpec('genie-workstation-agent');
-            if (spec) {
-                const def = providerDef(next.agent_default);
+            const def = providerDef(next.agent_default);
+            if (spec && (
+                'agent_default' in patch ||
+                def.commandSettingKey in patch ||
+                def.flagsSettingKey in patch
+            )) {
+                const configured = appendLaunchFlags(
+                    next[def.commandSettingKey] || def.defaultCommand,
+                    next[def.flagsSettingKey] || '',
+                );
                 updateTerminalSpec(spec.id, {
                     meta: osAgentMetaForProvider(
                         spec.meta,
                         next.agent_default,
-                        next[def.commandSettingKey] || def.defaultCommand,
+                        osAgentLaunchCommand(next.agent_default, configured),
                     ),
                 });
             }
@@ -1708,6 +1719,7 @@ export function registerIpcHandlers(): void {
                 owner_type?: 'user' | 'organization' | 'team';
                 owner_id?: string;
                 slug?: string;
+                is_gapp?: boolean;
             },
         ) => getTynnBackend().createProject(input),
     );
@@ -1876,6 +1888,10 @@ export function registerIpcHandlers(): void {
     // defaults to it. Surfaced from main (renderer has no `os` access).
     ipcMain.handle('app:home-dir', () => os.homedir());
     ipcMain.handle('app:genie-os-workspace', () => ({ path: genieOsWorkspacePath(app.getPath('userData')) }));
+    ipcMain.handle('app:genie-os-status', () => ({
+        setup: osAgentBootMode(app.getPath('userData')) === 'recovery',
+        bootMode: osAgentBootMode(app.getPath('userData')),
+    }));
     ipcMain.handle('app:genie-os-sync', (_e, remoteUrl: string) =>
         syncGenieOsWorkspace(app.getPath('userData'), remoteUrl).then((workspacePath) => ({ ok: true, path: workspacePath })),
     );
@@ -1908,6 +1924,34 @@ export function registerIpcHandlers(): void {
         (app as any).isQuiting = true;
         app.quit();
         return { ok: true };
+    });
+    ipcMain.handle('app:reset-workstation', async () => {
+        const confirmation = await dialog.showMessageBox({
+            type: 'warning',
+            title: 'Reset Genie Workstation',
+            message: 'Reset this Genie workstation?',
+            detail:
+                'Genie local data, registrations, agents, plugins, and connections will be removed after restart. Workspace folders and the managed toolchain are preserved.',
+            buttons: ['Cancel', 'Reset and restart'],
+            defaultId: 0,
+            cancelId: 0,
+            noLink: true,
+        });
+        if (confirmation.response !== 1) return { ok: false, cancelled: true };
+        // A workstation reset must not strand containers/services whose only
+        // ownership record is about to be removed. Release each workspace while
+        // the database still exists; the quit path separately kills every PTY host.
+        const lifecycle = devLifecycle();
+        if (lifecycle) {
+            for (const workspace of listWorkspaces()) {
+                await lifecycle.onWorkspaceRemove(workspace.id);
+            }
+        }
+        requestWorkstationReset(app.getPath('userData'));
+        (app as any).isQuiting = true;
+        app.relaunch();
+        app.quit();
+        return { ok: true, cancelled: false };
     });
     ipcMain.handle('app:signed-in-summary', async () => {
         const list = await signedInBackends();

@@ -149,6 +149,7 @@ import {
     setQuestionClock,
     setQuestionTransport,
     setDeferredAnswerSink,
+    setUserPresenceReader,
 } from '../force-question';
 import type { ForceAnswer } from '../../mcp/protocol';
 
@@ -479,6 +480,7 @@ describe('ForceTheQuestion DND availability', () => {
     afterEach(() => {
         setAvailabilityReader(null); // restore the settings-backed reader
         setDeferredAnswerSink(null); // restore no deferred-answer delivery
+        setUserPresenceReader(null);
         mockDb.settings = { notify_sound: 'off' }; // restore inert chime settings
         // Clear anything left in the inbox (deferred + queue) so tests don't leak.
         for (const p of listPendingQuestions()) answerPendingQuestion(p.id, []);
@@ -581,6 +583,42 @@ describe('ForceTheQuestion DND availability', () => {
         void forceQuestion(Q('C'), 'ws', 'normal', { workspaceId: 'ws1' });
         expect(state.windows.length).toBe(before + 1); // the modal opened
         win().close();
+    });
+
+    it('an agent FTQ always returns immediately through the inbox and reports active presence', async () => {
+        setAvailabilityReader(() => ({ availability: 'available', dndMessage: 'x' }));
+        setUserPresenceReader(() => ({ away: false, idleSeconds: 12 }));
+        const before = state.windows.length;
+
+        const result = await forceQuestion(
+            Q('Need input'),
+            'Workspace',
+            'normal',
+            { workspaceId: 'ws1' },
+            'terminal-1',
+        );
+
+        expect(result.deferred).toBe(true);
+        expect(result.dndMessage).toMatch(/active/i);
+        expect(result.dndMessage).toMatch(/AgentInbox/i);
+        expect(state.windows.length).toBe(before);
+    });
+
+    it('an agent FTQ reports user-away after five minutes without activity', async () => {
+        setAvailabilityReader(() => ({ availability: 'available', dndMessage: 'x' }));
+        setUserPresenceReader(() => ({ away: true, idleSeconds: 301 }));
+
+        const result = await forceQuestion(
+            Q('Need input'),
+            'Workspace',
+            'normal',
+            { workspaceId: 'ws1' },
+            'terminal-1',
+        );
+
+        expect(result.deferred).toBe(true);
+        expect(result.dndMessage).toMatch(/away/i);
+        expect(result.dndMessage).toMatch(/5 minutes/i);
     });
 
     it('a modal that CANNOT be shown routes to the inbox with a notice — never a false "dismissed"', async () => {

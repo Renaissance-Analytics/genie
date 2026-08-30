@@ -898,6 +898,7 @@ const api = {
             owner_type?: 'user' | 'organization' | 'team';
             owner_id?: string;
             slug?: string;
+            is_gapp?: boolean;
         }) => ipcRenderer.invoke('tynn:create-project', input),
         submitFeedback: (
             projectId: string,
@@ -979,6 +980,7 @@ const api = {
         /** The user's home directory (for the synthetic System Workspace). */
         homeDir: () => ipcRenderer.invoke('app:home-dir') as Promise<string>,
         genieOsWorkspace: () => ipcRenderer.invoke('app:genie-os-workspace') as Promise<{ path: string }>,
+        genieOsStatus: () => ipcRenderer.invoke('app:genie-os-status') as Promise<{ setup: boolean; bootMode: 'first-boot' | 'recovery' }>,
         syncGenieOs: (remoteUrl: string) => ipcRenderer.invoke('app:genie-os-sync', remoteUrl) as Promise<{ ok: true; path: string }>,
         genieOsFiles: (relativePath = '') => ipcRenderer.invoke('app:genie-os-files', relativePath),
         showSettings: (fromRemote?: boolean) =>
@@ -988,6 +990,7 @@ const api = {
         openStage: (workspaceId?: string) =>
             ipcRenderer.invoke('app:open-stage', workspaceId),
         quit: () => ipcRenderer.invoke('app:quit'),
+        resetWorkstation: () => ipcRenderer.invoke('app:reset-workstation') as Promise<{ ok: boolean; cancelled: boolean }>,
         /**
          * Reply to the manual-quit terminal confirmation (see
          * on.confirmQuitTerminals). `confirmed:false` aborts the quit; otherwise

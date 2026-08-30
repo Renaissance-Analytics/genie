@@ -3322,6 +3322,7 @@ export interface GenieApi {
             owner_type?: 'user' | 'organization' | 'team';
             owner_id?: string;
             slug?: string;
+            is_gapp?: boolean;
         }) => Promise<TynnProject>;
         captureWish: (
             projectId: string,
@@ -3439,6 +3440,7 @@ export interface GenieApi {
         /** The user's home directory (roots the synthetic System Workspace). */
         homeDir: () => Promise<string>;
         genieOsWorkspace: () => Promise<{ path: string }>;
+        genieOsStatus: () => Promise<{ setup: boolean; bootMode: 'first-boot' | 'recovery' }>;
         syncGenieOs: (remoteUrl: string) => Promise<{ ok: true; path: string }>;
         genieOsFiles: (relativePath?: string) => Promise<Array<{ id: string; name: string; path: string; kind: 'file' | 'directory' | 'symlink' }>>;
         /** Open Settings. `fromRemote:true` (a remote/host window) restricts it to
@@ -3448,6 +3450,7 @@ export interface GenieApi {
         showMain: () => Promise<{ ok: boolean }>;
         openStage: (workspaceId?: string) => Promise<{ ok: boolean }>;
         quit: () => Promise<{ ok: boolean }>;
+        resetWorkstation: () => Promise<{ ok: boolean; cancelled: boolean }>;
         /**
          * Reply to the manual-quit terminal confirmation (see
          * on.confirmQuitTerminals). `confirmed:false` aborts the quit; otherwise
@@ -4292,6 +4295,26 @@ export const SYSTEM_WORKSPACE_ID = '__system__';
 /** True for the synthetic System Workspace row (see {@link SYSTEM_WORKSPACE_ID}). */
 export function isSystemWorkspace(ws: { id: string }): boolean {
     return ws.id === SYSTEM_WORKSPACE_ID;
+}
+
+export function isGenieOsTerminalSpec(spec: { meta?: Record<string, unknown> | null }): boolean {
+    return spec.meta?.agent_id === 'genie:workstation';
+}
+
+export function workspaceSurfaceSpecs<T extends { meta?: Record<string, unknown> | null }>(
+    specs: readonly T[],
+): T[] {
+    return specs.filter((spec) => !isGenieOsTerminalSpec(spec));
+}
+
+export function workspaceSurfaceRows<T extends { path: string }>(
+    workspaces: readonly T[],
+    genieOsPath?: string | null,
+): T[] {
+    if (!genieOsPath) return [...workspaces];
+    const normalize = (value: string) => value.replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase();
+    const managedPath = normalize(genieOsPath);
+    return workspaces.filter((workspace) => normalize(workspace.path) !== managedPath);
 }
 
 /**

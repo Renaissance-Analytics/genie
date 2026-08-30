@@ -8,7 +8,6 @@ import Chooser from '../components/Master/Chooser';
 import ProjectContextMenu from '../components/Master/ProjectContextMenu';
 import WorkspaceSettingsModal from '../components/Master/WorkspaceSettingsModal';
 import WorkspaceSiteManager from '../components/Master/WorkspaceSiteManager';
-import { FirstRunOnboarding } from '../components/Master/FirstRunOnboarding';
 import SpecContextMenu from '../components/Master/SpecContextMenu';
 import { PromptHost, showPrompt } from '../components/Master/Prompt';
 import QuitTerminalsModal, {
@@ -91,6 +90,9 @@ import {
     hasGenieBridge,
     isRemoteWindow,
     isSystemWorkspace,
+    isGenieOsTerminalSpec,
+    workspaceSurfaceSpecs,
+    workspaceSurfaceRows,
     makeSystemWorkspace,
     SYSTEM_WORKSPACE_ID,
     ulid,
@@ -358,10 +360,15 @@ function MasterInner() {
     const [siteManagerWsId, setSiteManagerWsId] = useState<string | null>(null);
     const [devSites, setDevSites] = useState<Record<string, DevSiteInfo[]>>({});
 
-    const [onboardingOpen, setOnboardingOpen] = useState(
-        () => localStorage.getItem('genie-onboarding-complete') !== '1',
-    );
+    const [onboardingOpen, setOnboardingOpen] = useState(false);
     const [genieOsOpen, setGenieOsOpen] = useState(false);
+    useEffect(() => {
+        if (isRemoteWindow()) return;
+        void api().app.genieOsStatus().then(({ setup }) => {
+            setOnboardingOpen(!setup);
+            if (!setup) setGenieOsOpen(true);
+        });
+    }, []);
     useEffect(() => {
         if (!hasGenieBridge()) return;
         const load = () => {
@@ -731,7 +738,7 @@ function MasterInner() {
     // no sense there and must NOT appear in the rail: keep it null (which also
     // inerts the reveal chip + the id resolver entry for a host window).
     const genieOsSpec = useMemo(
-        () => specs.find((spec) => spec.meta?.agent_id === 'genie:workstation') ?? null,
+        () => specs.find(isGenieOsTerminalSpec) ?? null,
         [specs],
     );
     const systemWorkspace = useMemo(
@@ -744,7 +751,7 @@ function MasterInner() {
     // Workspaces shown in the sidebar: the persisted list, with the System
     // Workspace pinned to the TOP when revealed. It's fixed (never draggable /
     // reorderable) so it always sits first and doesn't shuffle the user's order.
-    const displayWorkspaces = workspaces;
+    const displayWorkspaces = workspaceSurfaceRows(workspaces, genieOsSpec?.cwd);
 
     // id → workspace resolver. ALWAYS includes the System Workspace (even when
     // hidden) so handlers can resolve its id for terminals/editors/processes
@@ -880,14 +887,6 @@ function MasterInner() {
         ]);
         setWorkspaces(ws);
         setSpecs(sp);
-        if (
-            !isRemoteWindow() &&
-            !isStage &&
-            ws.filter((workspace) => !isSystemWorkspace(workspace)).length === 0 &&
-            localStorage.getItem('genie-onboarding-complete') !== '1'
-        ) {
-            setOnboardingOpen(true);
-        }
         // Warm THIS window's client-local view store from the (local) settings
         // so the launch restore + subsequent switches read a settled cache.
         const connKey = currentConnKey();
@@ -1073,7 +1072,7 @@ function MasterInner() {
     // headless services — they never surface in the main grid.
     const selectedSpecs = useMemo(
         () =>
-            specs.filter(
+            workspaceSurfaceSpecs(specs).filter(
                 (s) =>
                     s.type !== 'process' &&
                     specWorkspaceId(s) === activeWorkspaceId &&
@@ -1086,7 +1085,7 @@ function MasterInner() {
     // PTYs survive a workspace switch (Decision 1: keep-alive).
     const backgroundSpecs = useMemo(
         () =>
-            specs.filter(
+            workspaceSurfaceSpecs(specs).filter(
                 (s) =>
                     s.type !== 'process' &&
                     specWorkspaceId(s) !== activeWorkspaceId &&
@@ -1992,19 +1991,7 @@ function MasterInner() {
                     <TitleBar isStage={false} />
                     <div style={{ flex: 1, minHeight: 0, background: 'var(--bg-0)' }} />
                 </div>
-                {localStorage.getItem('genie-onboarding-complete') !== '1' ? (
-                    <FirstRunOnboarding
-                        open
-                        existingWorkspaceCount={workspaces.length}
-                        onComplete={async () => {
-                            setOnboardingOpen(false);
-                            await refreshAuth();
-                            await refresh();
-                        }}
-                        onWorkspaceAdded={(row) => setWorkspaces([row])}
-                    />
-                ) : (
-                    <div style={{ position: 'absolute', inset: 40, display: 'grid', placeItems: 'center' }}>
+                <div style={{ position: 'absolute', inset: 40, display: 'grid', placeItems: 'center' }}>
                         <div style={{ maxWidth: 720, width: '100%' }}>
                             <SignInPrompt
                                 tynnHost={hosts.tynn}
@@ -2016,7 +2003,6 @@ function MasterInner() {
                             />
                         </div>
                     </div>
-                )}
                 <PromptHost />
             </div>
         );
@@ -2422,15 +2408,15 @@ function MasterInner() {
                 );
             })()}
 
-            <FirstRunOnboarding
-                open={onboardingOpen}
-                existingWorkspaceCount={workspaces.length}
-                onComplete={() => setOnboardingOpen(false)}
-                onWorkspaceAdded={(row) => {
-                    setWorkspaces((previous) => [...previous.filter((item) => item.id !== row.id), row]);
-                    nudgeGappDevSync();
-                }}
-            />
+            {onboardingOpen && !genieOsOpen && (
+                <button
+                    className="gbtn accent genie-osa-onboarding-return"
+                    style={{ position: 'fixed', right: 18, top: 54, zIndex: 80 }}
+                    onClick={() => setGenieOsOpen(true)}
+                >
+                    Continue workstation setup with Genie
+                </button>
+            )}
 
             {/* "Run a recipe" (Toolbar wand). Scoped to the active workspace:
                 the launcher lists every registered recipe (built-in + plugin —
