@@ -5,7 +5,31 @@ import {
     withPersonaBriefing,
     withStartupInstructions,
     withProviderStartupInstructions,
+    providerInstructionFiles,
 } from '../startup';
+
+describe('provider instruction files', () => {
+    it('uses native root routers for Codex and Claude', () => {
+        expect(providerInstructionFiles('codex', 'C:\\Work\\demo.agi')).toEqual([
+            'C:/Work/demo.agi/AGENTS.md',
+        ]);
+        expect(providerInstructionFiles('claude', 'C:\\Work\\demo.agi')).toEqual([
+            'C:/Work/demo.agi/CLAUDE.md',
+        ]);
+    });
+
+    it.each(['kiwi', 'genie', 'custom'] as const)(
+        'gives %s explicit shared, workspace-context, and provider paths',
+        (provider) => {
+            expect(providerInstructionFiles(provider, 'C:\\Work\\demo.agi')).toEqual([
+                'C:/Work/demo.agi/README.md',
+                'C:/Work/demo.agi/RULES.md',
+                'C:/Work/demo.agi/.agents/_genie/shared.md',
+                `C:/Work/demo.agi/.agents/_genie/genie-${provider}.md`,
+            ]);
+        },
+    );
+});
 import { LAUNCH_PROFILES } from '../../agentinbox/session-capture';
 
 /**

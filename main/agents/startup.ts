@@ -54,6 +54,23 @@ import type { AgentProvider } from './identity';
  */
 export type ChatIdBinding = 'at-launch' | 'after-launch';
 
+/**
+ * The physical instruction entry points Genie gives a provider at launch.
+ * Codex and Claude expand their managed root routers themselves. Providers
+ * without a native root-file contract receive every relevant file explicitly.
+ */
+export function providerInstructionFiles(provider: AgentProvider, workspacePath: string): string[] {
+    const root = String(workspacePath ?? '').replace(/\\/g, '/').replace(/\/$/, '');
+    if (provider === 'codex') return [`${root}/AGENTS.md`];
+    if (provider === 'claude') return [`${root}/CLAUDE.md`];
+    return [
+        `${root}/README.md`,
+        `${root}/RULES.md`,
+        `${root}/.agents/_genie/shared.md`,
+        `${root}/.agents/_genie/genie-${provider}.md`,
+    ];
+}
+
 export function chatIdBinding(provider: AgentProvider): ChatIdBinding {
     return LAUNCH_PROFILES[provider]?.strategy === 'flag' ? 'at-launch' : 'after-launch';
 }

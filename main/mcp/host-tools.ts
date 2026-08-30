@@ -73,7 +73,7 @@ import { resolveWorkstationProvider } from '../agents/provider';
 import { restartProviderForSpec } from '../agents/restart';
 import { decideAgentStart, savedAgentsOf, type SavedAgent } from '../agents/saved';
 import { resolveAgentRegistration } from '../agents/registration';
-import { withProviderStartupInstructions } from '../agents/startup';
+import { providerInstructionFiles, withProviderStartupInstructions } from '../agents/startup';
 import {
     PASTE_SUBMIT_DELAY_MS,
     resolveTerminalInput,
@@ -1969,8 +1969,12 @@ export async function runAgentForMcp(
                     };
                 }
                 const command = base;
+                const instructionFiles = providerInstructionFiles(agent, ws.path)
+                    .filter((file) => fs.existsSync(file));
                 const bootInstructions = [
-                    'Before doing work, read and follow the workspace AGENTS.md/CLAUDE.md router and the applicable `.agents/_genie/genie-{tui}.md` provider instructions.',
+                    instructionFiles.length > 0
+                        ? `Before doing work, read and follow these instruction files in order: ${instructionFiles.join(', ')}.`
+                        : '',
                     config.persona_path && fs.existsSync(config.persona_path)
                         ? `Then read and adopt your specialized persona from ${config.persona_path}.`
                         : '',

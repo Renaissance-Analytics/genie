@@ -38,6 +38,9 @@ const rulesMd = path.join(WS, 'RULES.md');
 const managedShared = path.join(WS, '.agents', '_genie', 'shared.md');
 const managedCodex = path.join(WS, '.agents', '_genie', 'genie-codex.md');
 const managedClaude = path.join(WS, '.agents', '_genie', 'genie-claude.md');
+const managedKiwi = path.join(WS, '.agents', '_genie', 'genie-kiwi.md');
+const managedGenie = path.join(WS, '.agents', '_genie', 'genie-genie.md');
+const managedCustom = path.join(WS, '.agents', '_genie', 'genie-custom.md');
 const agentsBackup = path.join(WS, '.agents', '_genie', 'backups', 'AGENTS.md.pre-router.bak');
 const claudeBackup = path.join(WS, '.agents', '_genie', 'backups', 'CLAUDE.md.pre-router.bak');
 const codexSkill = path.join(WS, '.agents', 'skills', 'genie', 'SKILL.md');
@@ -75,10 +78,13 @@ describe('writeWorkspaceAgentMcp — per-target sync gating', () => {
     it('migrates instruction files to harness-specific @ routers without losing human rules', () => {
         files.set(agentsMd, '# Project rules\n\nNever force-push.\n');
         files.set(claudeMd, '@AGENTS.md\n\n## Claude Code\n\nUse a narrow context window.\n');
+        files.set(path.join(WS, 'README.md'), '# Demo workspace\n');
 
         writeWorkspaceAgentMcp(WS, true, URL);
 
         expect(files.get(agentsMd)).toContain('@.agents/_genie/shared.md');
+        expect(files.get(agentsMd)).toContain('@README.md');
+        expect(files.get(agentsMd)).toContain('@RULES.md');
         expect(files.get(agentsMd)).toContain('@.agents/_genie/genie-codex.md');
         expect(files.get(agentsMd)).not.toContain('genie-claude.md');
         expect(files.get(claudeMd)).toContain('@.agents/_genie/shared.md');
@@ -92,6 +98,9 @@ describe('writeWorkspaceAgentMcp — per-target sync gating', () => {
         expect(files.get(managedShared)).toContain('GENIE PROTOCOL');
         expect(files.get(managedCodex)).toContain('Codex');
         expect(files.get(managedClaude)).toContain('Claude Code');
+        expect(files.get(managedKiwi)).toContain('Kiwi Code');
+        expect(files.get(managedGenie)).toContain('Genie TUI');
+        expect(files.get(managedCustom)).toContain('Custom agent');
     });
 
     it('writes all targets when every sync flag is on (default)', () => {

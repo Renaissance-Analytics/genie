@@ -813,15 +813,31 @@ export const AGENT_DOC_FILES: Record<AgentDocHarness, string> = {
  * A deliberately tiny harness-specific entry point. Each file imports only the
  * shared protocol and the guide for the harness that actually reads it.
  */
-export function agentDocsRouter(filename = AGENT_DOC_FILES.codex): string {
+export interface AgentDocsContext {
+    readme?: boolean;
+    rules?: boolean;
+}
+
+export function agentDocsRouter(
+    filename = AGENT_DOC_FILES.codex,
+    context: AgentDocsContext = {},
+): string {
     const harness: AgentDocHarness = filename === AGENT_DOC_FILES.claude ? 'claude' : 'codex';
     return [
         '# Agent instructions',
         '',
+        context.readme ? '@README.md' : '',
+        context.rules ? '@RULES.md' : '',
         '@.agents/_genie/shared.md',
         `@.agents/_genie/genie-${harness}.md`,
         '',
-    ].join('\n');
+    ].filter((line, index, lines) => line !== '' || index < 2 || index === lines.length - 1).join('\n');
+}
+
+function isManagedAgentDocsRouter(content: string, filename: string): boolean {
+    return [false, true].some((readme) =>
+        [false, true].some((rules) => content === agentDocsRouter(filename, { readme, rules })),
+    );
 }
 
 /** The one line that differs: which TUI reads this file, and how it gets it. */
@@ -961,7 +977,7 @@ function syncAgentsMd(workspacePath: string, enabled: boolean): void {
         // entry point. Stable names make recovery discoverable and ensure a later
         // sync can never overwrite the original snapshot.
         for (const target of read) {
-            if (!target.present || target.existing === agentDocsRouter(AGENT_DOC_FILES[target.harness])) continue;
+            if (!target.present || isManagedAgentDocsRouter(target.existing, AGENT_DOC_FILES[target.harness])) continue;
             const backup = path.join(backupRoot, `${AGENT_DOC_FILES[target.harness]}.pre-router.bak`);
             if (!fs.existsSync(backup)) {
                 try {
@@ -973,7 +989,7 @@ function syncAgentsMd(workspacePath: string, enabled: boolean): void {
         }
 
         const stripManaged = (content: string): string => {
-            if (Object.values(AGENT_DOC_FILES).some((file) => content === agentDocsRouter(file))) return '';
+            if (Object.values(AGENT_DOC_FILES).some((file) => isManagedAgentDocsRouter(content, file))) return '';
             let body = content;
             const begin = body.indexOf(AGENTS_BEGIN);
             const end = body.indexOf(AGENTS_END);
@@ -1036,21 +1052,29 @@ function syncAgentsMd(workspacePath: string, enabled: boolean): void {
             AGENTS_END,
             '',
         ].join('\n');
-        const providerDocs: Record<AgentDocHarness, string> = {
+        const providerDocs: Record<string, string> = {
             codex: '# Genie for Codex\n\nCodex must call `genieGuide` and follow the Codex-specific setup it returns.\n',
             claude: '# Genie for Claude Code\n\nClaude Code must call `genieGuide` and follow the Claude-specific setup it returns.\n',
+            kiwi: '# Genie for Kiwi Code\n\nKiwi Code must call `genieGuide` and follow the Kiwi-specific setup it returns.\n',
+            genie: '# Genie for Genie TUI\n\nGenie TUI must call `genieGuide` and follow the Genie TUI-specific setup it returns.\n',
+            custom: '# Genie for Custom agent\n\nThe custom agent must call `genieGuide` and follow the setup for its harness.\n',
         };
         try {
             fs.writeFileSync(path.join(managedRoot, 'shared.md'), shared);
-            fs.writeFileSync(path.join(managedRoot, 'genie-codex.md'), providerDocs.codex);
-            fs.writeFileSync(path.join(managedRoot, 'genie-claude.md'), providerDocs.claude);
+            for (const [provider, content] of Object.entries(providerDocs)) {
+                fs.writeFileSync(path.join(managedRoot, `genie-${provider}.md`), content);
+            }
+            const context = {
+                readme: fs.existsSync(path.join(workspacePath, 'README.md')),
+                rules: fs.existsSync(path.join(workspacePath, 'RULES.md')),
+            };
             fs.writeFileSync(
                 path.join(workspacePath, AGENT_DOC_FILES.codex),
-                agentDocsRouter(AGENT_DOC_FILES.codex),
+                agentDocsRouter(AGENT_DOC_FILES.codex, context),
             );
             fs.writeFileSync(
                 path.join(workspacePath, AGENT_DOC_FILES.claude),
-                agentDocsRouter(AGENT_DOC_FILES.claude),
+                agentDocsRouter(AGENT_DOC_FILES.claude, context),
             );
         } catch {
             /* backups and migrated rules remain recoverable */

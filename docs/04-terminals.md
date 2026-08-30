@@ -50,6 +50,24 @@ Click **Create** to register and launch the agent. Its AMS identity, inbox,
 channels, and settings survive a TUI restart. AgentPanels provide agent settings
 and a complete provider-terminal restart action.
 
+### Startup instructions
+
+Genie manages the root instruction routers used by Codex (`AGENTS.md`) and
+Claude Code (`CLAUDE.md`). Their `@` imports are ordered so the agent first learns
+which workspace it entered, then receives Genie's shared protocol and only its
+own provider guide:
+
+1. `README.md`, when the workspace provides it.
+2. `RULES.md`, when the workspace provides it.
+3. `.agents/_genie/shared.md`.
+4. `.agents/_genie/genie-codex.md` or `genie-claude.md`.
+
+Genie owns the routers and `.agents/_genie/*`; it never owns or rewrites the
+workspace's `README.md` or `RULES.md`. Kiwi, Genie TUI, and custom providers do
+not have a universal native router filename, so Genie supplies the same ordered
+files as explicit absolute paths in their opening prompt, ending with their own
+provider guide.
+
 > **Command & extra flags.** Each agent type's launch command and its
 > **always-on extra flags** (for example `--dangerously-skip-permissions`) are
 > set once in **Settings → Agents → Providers** — they apply to every project agent
