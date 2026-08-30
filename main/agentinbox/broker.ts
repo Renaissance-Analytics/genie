@@ -110,8 +110,6 @@ interface AgentInboxAgent extends Omit<AgentInboxAgentInfo, 'reachable' | 'ref'>
  */
 export interface NudgeDelivery {
     terminalId: string;
-    /** Exact bytes this terminal last emitted for a real submitting Enter. */
-    submitBytes: string;
     /** The notice itself. */
     text: string;
     /** How it may be delivered — see {@link planNudge}. */
@@ -193,7 +191,7 @@ export class AgentInboxBroker {
             return { ok: false, reason: 'input-not-empty' };
         }
         try {
-            if (this.wakeSink({ terminalId, submitBytes: target.draft.submitBytes, text: pending.text, plan: { mode: 'submit' } }) === false) {
+            if (this.wakeSink({ terminalId, text: pending.text, plan: { mode: 'submit' } }) === false) {
                 return { ok: false, reason: 'delivery-failed' };
             }
         } catch {
@@ -343,7 +341,6 @@ export class AgentInboxBroker {
             if (
                 this.wakeSink({
                     terminalId: target.terminalId,
-                    submitBytes: target.draft.submitBytes,
                     text,
                     plan,
                 }) === false
@@ -391,7 +388,6 @@ export class AgentInboxBroker {
             // Provably idle, so the box is empty: submit it and start the turn.
             this.wakeSink({
                 terminalId: target.terminalId,
-                submitBytes: target.draft.submitBytes,
                 text: wakeNudgeText(unread),
                 plan: planNudge(target.draft),
             });
@@ -429,7 +425,6 @@ export class AgentInboxBroker {
         try {
             this.wakeSink({
                 terminalId,
-                submitBytes: a.draft.submitBytes,
                 text,
                 plan: planNudge(a.draft),
             });

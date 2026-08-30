@@ -18,8 +18,8 @@ const NOTICE = '[Genie] You just received a message.';
 describe('deliverNudge', () => {
     it('writes and submits only an approved nudge', async () => {
         const h = harness();
-        expect(await deliverNudge(h.io, 'term-7', NOTICE, { mode: 'submit' }, '\x1b[13;1u')).toBe(true);
-        expect(h.writes).toEqual([NOTICE, '\x1b[13;1u']);
+        expect(await deliverNudge(h.io, 'term-7', NOTICE, { mode: 'submit' })).toBe(true);
+        expect(h.writes).toEqual([NOTICE, '\r']);
     });
 
     it('a deferred nudge performs no PTY write', async () => {

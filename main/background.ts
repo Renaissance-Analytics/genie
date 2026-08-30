@@ -1441,11 +1441,11 @@ app.whenReady().then(async () => {
         // The broker decides WHAT to say and HOW it may land (see agentinbox/
         // draft.ts); this sink performs it. Returns false when it cannot start,
         // so the broker can fall back to the idle-only wake.
-        agentInboxBroker.setWakeSink(({ terminalId, submitBytes, text, plan }) => {
+        agentInboxBroker.setWakeSink(({ terminalId, text, plan }) => {
             // One swap per terminal: a second notice must never cut the same box
             // while the first is still putting the draft back.
             if (!beginInputHold(terminalId)) return false;
-            void deliverNudge(nudgeIO, terminalId, text, plan, submitBytes);
+            void deliverNudge(nudgeIO, terminalId, text, plan);
             return true;
         });
         agentInboxBroker.setPendingNudgeSink(({ terminalId, pending }) => {
