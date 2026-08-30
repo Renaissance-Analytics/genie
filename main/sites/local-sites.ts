@@ -1,4 +1,5 @@
 import { devServerGenSites } from '../dev-server/site-manager';
+import { devServiceManager } from '../dev-server/services/service-manager';
 import type { ResolvedSite } from '../mobile/site-proxy';
 import type { EnabledGenSite } from '../remote';
 import type { LocalTarget } from './local-carrier';
@@ -33,7 +34,7 @@ import type { LocalTarget } from './local-carrier';
  * sibling on the remote path genuinely is.
  */
 export async function listLocalEnabledGenSites(): Promise<EnabledGenSite[]> {
-    return devServerGenSites();
+    return [...devServerGenSites(), ...(devServiceManager()?.genSites() ?? [])];
 }
 
 /**

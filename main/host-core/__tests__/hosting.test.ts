@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { buildHostingDeps, initHosting, type HostingPorts } from '../hosting';
+import { browserWebSocketEnv, buildHostingDeps, initHosting, type HostingPorts } from '../hosting';
 import { devSiteManager } from '../../dev-server/site-manager';
 import { devServiceManager } from '../../dev-server/services/service-manager';
 import { devLifecycle } from '../../dev-server/lifecycle';
@@ -39,6 +39,21 @@ function fakePorts(over: Partial<HostingPorts> = {}): HostingPorts {
 }
 
 describe('buildHostingDeps — the host-core hosting seam', () => {
+    it('injects the trusted WSS endpoint used by browser Echo clients', () => {
+        expect(
+            browserWebSocketEnv('Workspace A', {
+                REVERB_APP_KEY: 'workspace_a',
+                REVERB_HOST: '127.0.0.1',
+                REVERB_PORT: '49123',
+                REVERB_SCHEME: 'http',
+            }),
+        ).toMatchObject({
+            VITE_REVERB_APP_KEY: 'workspace_a',
+            VITE_REVERB_HOST: 'reverb.ws-workspace-a-3bbd1699.gen',
+            VITE_REVERB_PORT: '443',
+            VITE_REVERB_SCHEME: 'https',
+        });
+    });
     it('maps ports into the three managers so the SHELL supplies the DB reads, not the boot', () => {
         const ports = fakePorts();
         const d = buildHostingDeps(ports);

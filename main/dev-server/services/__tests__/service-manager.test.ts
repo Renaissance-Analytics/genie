@@ -310,6 +310,20 @@ describe('one engine, two workspaces', () => {
             REVERB_PORT: '49123',
         });
         expect(await manager.logs('ws-a')).toBe('Sockudo ready');
+        expect(manager.hostBrowserRoutes()).toEqual([
+            { genName: 'reverb.ws-a.gen', port: 49_123 },
+        ]);
+        expect(manager.genSites()).toEqual([
+            {
+                workspaceId: 'a',
+                siteId: 'service-reverb-ws-a',
+                genName: 'reverb.ws-a.gen',
+                hostname: 'reverb.ws-a.gen',
+                scheme: 'http',
+                port: 49_123,
+                loopback: '127.0.0.1',
+            },
+        ]);
         expect(await manager.engineAction({ recordKey: 'reverb-1', action: 'logs' })).toEqual({
             ok: true,
             logs: 'Sockudo ready',

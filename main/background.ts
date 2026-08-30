@@ -57,7 +57,7 @@ import { waitForHttp } from './dev-server/port-probe';
 import { preferredServicePort } from './dev-server/services/service-ports';
 import { createBundledHostWebSocketService } from './dev-server/services/host-websocket';
 import type { HostBrowserReconciler } from './dev-server/host-browser-reconcile';
-import { initHosting } from './host-core/hosting';
+import { initHosting, type HostingHandles } from './host-core/hosting';
 import {
     writeWorkspaceAgentMcp,
     healTynnMcpEntry,
@@ -1177,11 +1177,15 @@ app.whenReady().then(async () => {
     // `.ai/_discovery/genie-process-supervisor.md` §3.4). Resolved once so the
     // two callers can never end up on different binaries.
     const hostCaddyBin = resolveShippedCaddyBin();
+    let hostingHandles: HostingHandles | null = null;
     hostBrowserReconciler = createDesktopHostBrowserReconciler({
         userDataDir: app.getPath('userData'),
         caddyBin: hostCaddyBin,
         platform: process.platform,
-        routes: () => devServerHostBrowserRoutes(),
+        routes: () => [
+            ...devServerHostBrowserRoutes(),
+            ...(hostingHandles?.services.hostBrowserRoutes() ?? []),
+        ],
         log: (m) => console.warn('[host-browser]', m),
     });
     // A workspace as the hosting managers see it. `appKind` travels with it so a
@@ -1191,7 +1195,7 @@ app.whenReady().then(async () => {
         const appKind = toWorkspaceAppKind(w.app_kind);
         return { id: w.id, path: w.path, label: w.project_name, ...(appKind ? { appKind } : {}) };
     };
-    initHosting({
+    hostingHandles = initHosting({
         resolveRuntime: () => resolveContainerRuntime(),
         listWorkspaces: () => listWorkspaces().map(asDevWorkspace),
         workspaceFor: (id) => {

@@ -49,6 +49,22 @@ import type { DevServices } from '../dev-server/services/services-config';
 import type { EngineAdmin } from '../dev-server/services/provision';
 import type { ImagePullConsent } from '../dev-server/workspace-sandbox';
 import type { HostIds } from '../dev-server/host-ids';
+import { workspaceDnsName } from '../dev-server/services/catalog';
+
+/** Add the trusted browser endpoint while leaving server-to-server traffic internal. */
+export function browserWebSocketEnv(
+    workspaceId: string,
+    env: Record<string, string>,
+): Record<string, string> {
+    if (!env.REVERB_APP_KEY) return env;
+    return {
+        ...env,
+        VITE_REVERB_APP_KEY: env.REVERB_APP_KEY,
+        VITE_REVERB_HOST: `reverb.${workspaceDnsName(workspaceId)}.gen`,
+        VITE_REVERB_PORT: '443',
+        VITE_REVERB_SCHEME: 'https',
+    };
+}
 
 /**
  * The shell-supplied inputs the hosting managers need. Everything that differs
@@ -210,7 +226,7 @@ export function buildHostingDeps(ports: HostingPorts): HostingDeps {
             for (const row of svc.list(workspaceId)) {
                 if (row.enabled) await svc.acquire(workspaceId, row.serviceId);
             }
-            return ports.devServiceEnvFor(workspaceId);
+            return browserWebSocketEnv(workspaceId, ports.devServiceEnvFor(workspaceId));
         },
         // The HOST-FORM service env (127.0.0.1:<published port>) a host-native dev
         // server uses — same ensure-services-up-first as serviceEnvFor (story #238),
@@ -229,7 +245,7 @@ export function buildHostingDeps(ports: HostingPorts): HostingDeps {
             }
             // A host that supplies the report port gets the full diagnostic; one that
             // only supplies the env port still gets the env (no counts ⇒ no warning).
-            return ports.devServiceHostEnvReportFor
+            const report = ports.devServiceHostEnvReportFor
                 ? ports.devServiceHostEnvReportFor(workspaceId)
                 : {
                       env: ports.devServiceHostEnvFor(workspaceId),
@@ -238,6 +254,7 @@ export function buildHostingDeps(ports: HostingPorts): HostingDeps {
                       withHostPort: 0,
                       gaps: [],
                   };
+            return { ...report, env: browserWebSocketEnv(workspaceId, report.env) };
         },
         // Genie runs a host-native site's dev server as a real HOST process (no
         // container). Only when a log dir is provided — otherwise host-native is off.

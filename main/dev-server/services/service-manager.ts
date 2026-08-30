@@ -19,6 +19,8 @@ import { reverbAppSecret, serviceEnv } from './env-wiring';
 import { buildEngineInventory, inventoryImages } from './inventory';
 import { provisionSteps, runProvisionSteps } from './provision';
 import { planServicePorts, preferredServicePort } from './service-ports';
+import type { HostSiteRoute } from '../host-reconcile';
+import type { DevGenSite } from '../site-manager';
 import { purgeVerdict, sliceTenantsOf } from './tenancy';
 import type { EngineSpec, ServiceEngine } from './catalog';
 import type { EngineInventoryRow } from './inventory';
@@ -322,6 +324,10 @@ export interface DevServiceManager {
      *  host-native site can log an actionable line instead of silently serving
      *  DB-less when its services are up but unreachable from the host. */
     hostEnvReportFor(workspaceId: string): HostEnvReport;
+    /** Trusted browser-facing WSS routes terminated by Genie's Host Caddy. */
+    hostBrowserRoutes(): HostSiteRoute[];
+    /** The same endpoint carried through local/remote Genie browser sessions. */
+    genSites(): DevGenSite[];
     /** Acquire every enabled service; release everything that no longer is. */
     reconcile(): Promise<void>;
     releaseAll(): Promise<void>;
@@ -1370,6 +1376,38 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
                 withHostPort: provisioned.length,
                 gaps,
             };
+        },
+
+        hostBrowserRoutes() {
+            const routes = new Map<string, HostSiteRoute>();
+            for (const entry of live.values()) {
+                if (!entry.hostNative || entry.config.engine !== 'reverb' || !entry.ready) continue;
+                const endpoint = entry.endpoints.find((candidate) => candidate.name === 'websocket');
+                if (!endpoint?.hostPort) continue;
+                const genName = `reverb.${entry.slice.dnsName}.gen`;
+                routes.set(genName, { genName, port: endpoint.hostPort });
+            }
+            return [...routes.values()].sort((a, b) => a.genName.localeCompare(b.genName));
+        },
+
+        genSites() {
+            const sites: DevGenSite[] = [];
+            for (const entry of live.values()) {
+                if (!entry.hostNative || entry.config.engine !== 'reverb' || !entry.ready) continue;
+                const endpoint = entry.endpoints.find((candidate) => candidate.name === 'websocket');
+                if (!endpoint?.hostPort) continue;
+                const genName = `reverb.${entry.slice.dnsName}.gen`;
+                sites.push({
+                    workspaceId: entry.workspaceId,
+                    siteId: `service-reverb-${entry.slice.dnsName}`,
+                    genName,
+                    hostname: genName,
+                    scheme: 'http',
+                    port: endpoint.hostPort,
+                    loopback: '127.0.0.1',
+                });
+            }
+            return sites.sort((a, b) => a.genName.localeCompare(b.genName));
         },
 
         async reconcile() {
