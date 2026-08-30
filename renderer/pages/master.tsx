@@ -60,7 +60,7 @@ import {
     type WorkspaceViewState,
 } from '../lib/view-state';
 import { planCommitStep, shouldDriveRestart } from '../lib/updater-flow';
-import { shouldShowWhatsNew } from '../lib/whats-new';
+import { autoOpenWhatsNew } from '../lib/whats-new';
 import { emitOpenInPanel, openFileInEditor, surfaceMaximized } from '../lib/editor-open';
 import { pluginPanelSpecMeta } from '../lib/panel-routing';
 import {
@@ -3107,6 +3107,7 @@ function TitleBar({
     const [whatsNewChangelog, setWhatsNewChangelog] = useState<Changelog | null>(null);
 
     const openWhatsNew = useCallback(async (automatic = false) => {
+        const askedAt = Date.now();
         const [status, settings] = await Promise.all([
             api().updater.status(),
             api().settings.get(),
@@ -3114,7 +3115,16 @@ function TitleBar({
         const current = status.currentVersion;
         const previous = (settings as Record<string, string | undefined>)
             .whats_new_seen_version;
-        if (automatic && !shouldShowWhatsNew(previous, current)) return;
+        // An automatic announcement may only open while the window is still
+        // settling. These two round-trips are unbounded, and a full-screen
+        // backdrop that arrives afterwards lands on top of whatever the user is
+        // doing and eats the click they were making. Past the budget we skip it
+        // for this session -- the header menu still opens it on demand.
+        if (
+            automatic &&
+            !autoOpenWhatsNew({ previous, current, elapsedMs: Date.now() - askedAt })
+        )
+            return;
         setWhatsNewVersion(current);
         setWhatsNewPrevious(previous);
         setWhatsNewOpen(true);
