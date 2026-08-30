@@ -168,7 +168,7 @@ describe('AgentInboxBroker — direct messages', () => {
     it('delivers agent mail through the native harness transport and never the PTY wake sink', () => {
         const b = fresh();
         const native = vi.fn(() => true);
-        const pty = vi.fn(() => true);
+        const pty = vi.fn((_o: { terminalId: string; text: string }) => true);
         b.setTransportSink(native);
         b.setWakeSink(pty);
         b.join(input({ agentId: 'A', workspaceId: 'w1' }));
@@ -512,5 +512,86 @@ describe('AgentInboxBroker — dmThreads (human panel)', () => {
         b.join(input({ agentId: 'B' }));
         // No DMs sent yet.
         expect(b.dmThreads()).toEqual([]);
+    });
+});
+
+/**
+ * WHAT reaches an agent's chat, and WHEN.
+ *
+ * The rule the owner set: nothing posts to chat while the agent's internal hooks
+ * are engaged. An attached agent gets its mail natively over
+ * `deliverToHarness`, its cursor moves, and its input box is never touched — a
+ * notice injected on top of that would be a second copy of something it already
+ * has.
+ *
+ * The PTY is only for an agent RUNNING in a terminal but NOT attached: the
+ * harness declines, is absent, or throws. There, two separate things exist and
+ * they are rate-limited differently:
+ *
+ *  - the ANNOUNCEMENT — "message from X" — stays IMMEDIATE (beta.248). It is
+ *    what tells the agent something arrived, and delaying it would leave an
+ *    unattached agent blind for five minutes.
+ *  - the WAKE — "you have N unread" — is the backstop for an agent that was told
+ *    and still has not looked, so it waits out {@link nudgeWarranted}.
+ */
+describe('AgentInboxBroker — what reaches the chat', () => {
+    const idle = (b: AgentInboxBroker, terminalId: string) => {
+        // A wake needs a provably-idle agent; without this the safety gate
+        // refuses and the test would pass for the wrong reason.
+        b.markTurnEnd(terminalId);
+    };
+
+    it('posts NOTHING to the chat while the harness is taking delivery', () => {
+        const b = fresh();
+        const pty = vi.fn((_o: { terminalId: string; text: string }) => true);
+        b.setTransportSink(() => true);
+        b.setWakeSink(pty);
+        b.join(input({ agentId: 'A' }));
+        b.join(input({ agentId: 'B' }));
+        idle(b, 't-B');
+
+        b.send({ fromAgentId: 'A', toAgentId: 'B', text: 'hello' });
+        expect(pty).not.toHaveBeenCalled();
+    });
+
+    it('announces IMMEDIATELY when the hooks are not engaged', () => {
+        const b = fresh();
+        const pty = vi.fn((_o: { terminalId: string; text: string }) => true);
+        b.setWakeSink(pty); // no transport sink at all — an unattached agent
+        b.join(input({ agentId: 'A' }));
+        b.join(input({ agentId: 'B' }));
+        idle(b, 't-B');
+
+        b.send({ fromAgentId: 'A', toAgentId: 'B', text: 'hello' });
+        expect(pty).toHaveBeenCalledTimes(1);
+        expect(pty.mock.calls[0]![0]).toMatchObject({ terminalId: 't-B' });
+    });
+
+    it('announces the MESSAGE, not the unread count, on that first delivery', () => {
+        // The distinction the owner drew. "You have 1 unread" on arrival is the
+        // wake wearing the announcement's clothes, and it is the thing that is
+        // supposed to wait.
+        const b = fresh();
+        const pty = vi.fn((_o: { terminalId: string; text: string }) => true);
+        b.setWakeSink(pty);
+        b.join(input({ agentId: 'A' }));
+        b.join(input({ agentId: 'B' }));
+        idle(b, 't-B');
+
+        b.send({ fromAgentId: 'A', toAgentId: 'B', text: 'hello' });
+        expect(pty.mock.calls[0]![0].text).not.toMatch(/unread/i);
+    });
+
+    it('does not also fire the wake on that same delivery', () => {
+        // One injection, not two competing prompts.
+        const b = fresh();
+        const pty = vi.fn((_o: { terminalId: string; text: string }) => true);
+        b.setWakeSink(pty);
+        b.join(input({ agentId: 'A' }));
+        b.join(input({ agentId: 'B' }));
+        idle(b, 't-B');
+
+        b.send({ fromAgentId: 'A', toAgentId: 'B', text: 'one' });
+        expect(pty).toHaveBeenCalledTimes(1);
     });
 });

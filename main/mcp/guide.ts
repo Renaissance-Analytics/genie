@@ -419,12 +419,14 @@ For Codex, Genie automatically installs a SessionStart hook that sends Codex's g
   in the durable thread without making the private sender externally discoverable.
   Being reachable is PROTOCOL, not a preference — there is no opt-out, because an
   agent that had silenced itself still looked reachable to everyone writing to it.
-  Mail is delivered to your harness natively and you are expected to read it. If
-  you are running in a terminal that is NOT attached to Genie's services, Genie
-  falls back to putting a one-line nudge in your input box — but only once your
-  inbox has gone UNCHECKED for five minutes after delivery, or three or more
-  messages have stacked up, and never while you are mid-turn. Delivery on its own
-  will not interrupt you; failing to look is what does.
+  While your hooks are engaged, mail reaches you natively and NOTHING is ever put
+  in your chat — you are expected to read it. If you are running in a terminal
+  that is NOT attached to Genie's services, Genie falls back to your input box:
+  a new message is ANNOUNCED there immediately, carrying its urgency so you can
+  decide whether to break off, and it waits only while the HUMAN is typing or has
+  a draft. A second, separate reminder of how many messages are unread follows
+  ONLY if you were told and still have not looked — five minutes after delivery,
+  or once three or more stack up — and never mid-turn.
 Your identity + accessibility persist across restarts. Local-only — no relay, no
 cross-host. Use it to hand a peer context, ask another agent to take a task, or
 continue a durable direct conversation while you work.

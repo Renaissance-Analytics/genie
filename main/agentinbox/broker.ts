@@ -321,6 +321,82 @@ export class AgentInboxBroker {
     }
 
     /**
+     * The agent's internal hooks are NOT engaged — it is running in a terminal
+     * but not attached to Genie's services, so the durable message would sit
+     * unread with the sender seeing nothing but a stale read-receipt.
+     *
+     * Two things, deliberately rate-limited differently:
+     *
+     *  - the ANNOUNCEMENT, immediately. It is the only thing that tells this
+     *    agent something arrived.
+     *  - the WAKE, as a backstop, if it was told and STILL has not looked. That
+     *    one waits out {@link nudgeWarranted}, and the one-wake-per-idle-period
+     *    gate stops it landing a second prompt on top of the announcement it
+     *    just made.
+     */
+    private notAttached(agent: AgentInboxAgent, msg: AgentInboxMessage): void {
+        this.notifyNow(agent, msg);
+        this.scheduleNudge(agent);
+    }
+
+    /**
+     * Announce a just-delivered message in the agent's own chat, IMMEDIATELY —
+     * the owner's beta.248 behaviour, now scoped to agents that need it.
+     *
+     * ONLY reached when the agent's internal hooks are not engaged: the harness
+     * declined delivery, threw, or there is no transport at all. An ATTACHED
+     * agent already has the message natively, and injecting a notice on top of
+     * that would be a second copy of something it is already holding.
+     *
+     * For an unattached agent this stays immediate on purpose. It is the only
+     * thing that tells it something arrived, so delaying it behind the wake's
+     * five-minute rule would leave it blind for five minutes. Mid-turn is fine —
+     * a TUI queues text, which is how a human interjects — and it carries the
+     * urgency so the agent decides whether to break off.
+     *
+     * What holds it back is the HUMAN's draft, and only as far as it must:
+     * {@link planNudge} takes an empty box and submits; cuts out a draft Genie is
+     * CERTAIN of, submits, and pastes it back; and when Genie is not certain,
+     * appends WITHOUT submitting so nothing of theirs is cut, raising a toast
+     * instead. Returns whether the notice actually landed.
+     */
+    private notifyNow(target: AgentInboxAgent, msg: AgentInboxMessage): boolean {
+        if (!this.wakeSink || !target.terminalId) return false;
+        const text = inboxNoticeText({
+            from: msg.fromLabel,
+            priority: msg.interrupt ? 'high' : 'normal',
+        });
+        const plan = planNudge(target.draft);
+        if (plan.mode === 'defer') {
+            this.pendingNudges.set(target.terminalId, { text });
+            this.pendingNudgeSink?.({ terminalId: target.terminalId, pending: true });
+            return true;
+        }
+        try {
+            // The host refuses when a swap is already in flight on this terminal —
+            // two notices must never both cut the same box.
+            if (
+                this.wakeSink({
+                    terminalId: target.terminalId,
+                    submitBytes: target.draft.submitBytes,
+                    text,
+                    plan,
+                }) === false
+            ) {
+                return false;
+            }
+            // Submitting text to an idle TUI IS what starts a turn, so a delivered
+            // notice is also a wake: record it, and the one-wake-per-idle-period
+            // gate keeps the backstop from firing a second prompt on top of it.
+            target.lastWokenAt = this.now();
+            return true;
+        } catch {
+            /* a failed notice still leaves the message in the inbox to be pulled */
+            return false;
+        }
+    }
+
+    /**
      * The PTY-nudge FALLBACK, and when it is allowed to fire.
      *
      * `deliverToHarness` owns live delivery: an agent attached to Genie's
@@ -895,7 +971,7 @@ export class AgentInboxBroker {
         if (!this.transportSink) {
             // No native transport at all: this agent is not attached to Genie's
             // services, which is precisely the case the PTY fallback exists for.
-            this.scheduleNudge(agent);
+            this.notAttached(agent, msg);
             return;
         }
         try {
@@ -910,18 +986,21 @@ export class AgentInboxBroker {
             if (accepted && typeof (accepted as Promise<boolean>).then === 'function') {
                 void Promise.resolve(accepted).then((ok) => {
                     if (ok) this.acknowledge(agent.agentId, msg.seq);
-                    else this.scheduleNudge(agent);
-                }).catch(() => this.scheduleNudge(agent));
+                    else this.notAttached(agent, msg);
+                }).catch(() => this.notAttached(agent, msg));
             } else if (accepted === true) {
                 this.acknowledge(agent.agentId, msg.seq);
-            } else {
-                // The harness declined or returned nothing — the message is
-                // durable but the agent has not been told. Arm the fallback.
-                this.scheduleNudge(agent);
+            } else if (accepted === false) {
+                // Declined outright: the harness is there and said no. Only
+                // `false` means that. Returning NOTHING is an adapter that took
+                // the message and leaves the ACK to the agent's own fetch — it
+                // is attached, and treating that as a refusal would inject a
+                // PTY notice for mail the agent already has.
+                this.notAttached(agent, msg);
             }
         } catch {
-            /* durable inbox remains queued; the fallback deadline is the only nudge */
-            this.scheduleNudge(agent);
+            /* durable inbox remains queued; the PTY is the only way to say so */
+            this.notAttached(agent, msg);
         }
     }
 
