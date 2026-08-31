@@ -29,7 +29,14 @@ import {
 } from './icons';
 import { showPrompt } from './Prompt';
 import { terminalTypeForAgent, type TerminalTypeId } from '../../lib/terminal-types';
-import { amsAgentCard, splitAmsSpecs } from '../../lib/ams-grid';
+import {
+    agentGridRows,
+    amsAgentCard,
+    splitAmsSpecs,
+    type AgentGridRow,
+    type AgentRecordSpec,
+    type AgentRuntimeSpec,
+} from '../../lib/ams-grid';
 import TerminalTypeSplitButton from './TerminalTypeSplitButton';
 import { workspaceHasThumb, workspaceNeedsAttention } from '../../lib/attention';
 import { gappLaunchLabel, gappLaunchTarget } from '../../lib/gapp-launch';
@@ -196,6 +203,33 @@ export default function Chooser({
     onAddPluginPanel,
 }: Props) {
     const [thumbedAgentTerminals, setThumbedAgentTerminals] = useState<Set<string>>(new Set());
+    // THE AGENT RECORD, per workspace. The grid used to be built from terminal
+    // specs carrying `meta.agent`, which meant a leftover spec looked like an
+    // agent and a registered-but-dormant one was invisible. Reloaded whenever
+    // the spec list moves, because starting or stopping an agent is what changes
+    // both.
+    const [agentRecords, setAgentRecords] = useState<
+        Record<string, { agents: AgentRecordSpec[]; runtimes: AgentRuntimeSpec[] }>
+    >({});
+    const workspaceIds = workspaces.map((w) => w.id).join(',');
+    useEffect(() => {
+        let cancelled = false;
+        void Promise.all(
+            workspaces.map((w) =>
+                api()
+                    .agents.list(w.id)
+                    .then((r) => [w.id, r] as const)
+                    .catch(() => [w.id, { agents: [], runtimes: [] }] as const),
+            ),
+        ).then((entries) => {
+            if (!cancelled) setAgentRecords(Object.fromEntries(entries));
+        });
+        return () => {
+            cancelled = true;
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [workspaceIds, specs.length]);
+
     useEffect(() => api().on.agentThumbsUp?.((event) => {
         setThumbedAgentTerminals((current) => new Set(current).add(event.terminalId));
         window.setTimeout(() => {
@@ -1315,26 +1349,58 @@ export default function Chooser({
                                         )}
                                 </button>
                                 <div className="tproj-body">
-                                    {splitAmsSpecs(wsSpecs).agents.length > 0 && (
-                                        <div className="ams-agent-grid" aria-label="Workspace agents">
-                                            {splitAmsSpecs(wsSpecs).agents.map((s) => (
-                                                <AgentSquare
-                                                    key={s.id}
-                                                    spec={s}
-                                                    checked={selected.has(s.id)}
-                                                    running={activeIds.has(s.id)}
-                                                    active={streamingTerms.has(s.id)}
-                                                    attention={attentionIds.has(s.id)}
-                                                    thumbed={thumbedAgentTerminals.has(s.id)}
-                                                    onOpen={() => {
-                                                        onActivateWorkspace(ws.id);
-                                                        if (!selected.has(s.id)) onToggleSpec(s.id);
-                                                    }}
-                                                    onContextMenu={(p) => onOpenContextMenu(s.id, p)}
-                                                />
-                                            ))}
-                                        </div>
-                                    )}
+                                    {(() => {
+                                        // Drawn from the RECORD, not from specs:
+                                        // a dormant agent appears, and a spec no
+                                        // runtime owns is shown AS orphaned
+                                        // rather than as a second agent.
+                                        const record = agentRecords[ws.id];
+                                        const rows = record
+                                            ? agentGridRows({
+                                                  agents: record.agents,
+                                                  runtimes: record.runtimes,
+                                                  specs: wsSpecs,
+                                                  isLive: (id) => activeIds.has(id),
+                                              })
+                                            : [];
+                                        if (rows.length === 0) return null;
+                                        return (
+                                            <div className="ams-agent-grid" aria-label="Workspace agents">
+                                                {rows.map((row) => {
+                                                    const specId =
+                                                        row.kind === 'orphan'
+                                                            ? row.specId!
+                                                            : record!.runtimes.find(
+                                                                  (r) => r.agentId === row.id && r.fronted,
+                                                              )?.terminalSpecId ?? null;
+                                                    return (
+                                                        <AgentSquare
+                                                            key={row.id}
+                                                            row={row}
+                                                            checked={!!specId && selected.has(specId)}
+                                                            active={!!specId && streamingTerms.has(specId)}
+                                                            attention={!!specId && attentionIds.has(specId)}
+                                                            thumbed={
+                                                                !!specId && thumbedAgentTerminals.has(specId)
+                                                            }
+                                                            onOpen={() => {
+                                                                onActivateWorkspace(ws.id);
+                                                                // A dormant agent has no panel to
+                                                                // open yet; starting one is a
+                                                                // deliberate action, not a click.
+                                                                if (specId && !selected.has(specId)) {
+                                                                    onToggleSpec(specId);
+                                                                }
+                                                            }}
+                                                            onContextMenu={(p) => {
+                                                                if (specId) onOpenContextMenu(specId, p);
+                                                            }}
+                                                        />
+                                                    );
+                                                })}
+                                            </div>
+                                        );
+                                    })()}
                                     {splitAmsSpecs(wsSpecs).panels.map((s) => (
                                         <SpecRow
                                             key={s.id}
@@ -2123,33 +2189,54 @@ interface SpecRowProps {
     onContextMenu: (position: { x: number; y: number }) => void;
 }
 
+/**
+ * One agent in the grid — or one ORPHAN.
+ *
+ * Takes a row from `agentGridRows`, not a terminal spec. That is the whole
+ * change: a square is now an agent Genie has a record of, so a registered agent
+ * that has never been started is finally visible, and a leftover agent-stamped
+ * spec is drawn as the orphan it is rather than as another agent.
+ *
+ * `running` comes off the row because an agent is running when ANY of its TUIs
+ * is — a fronted one that exited while a sidecar keeps working is still working.
+ */
 function AgentSquare({
-    spec,
+    row,
     checked,
-    running,
     active,
     attention,
     thumbed,
     onOpen,
     onContextMenu,
 }: {
-    spec: TerminalSpec;
+    row: AgentGridRow;
     checked: boolean;
-    running: boolean;
     active: boolean;
     attention: boolean;
     thumbed: boolean;
     onOpen: () => void;
     onContextMenu: (position: { x: number; y: number }) => void;
 }) {
-    const card = amsAgentCard(spec, { running, active });
-    const agentDef = terminalTypeForAgent(card.provider);
+    const running = row.running;
+    const orphan = row.kind === 'orphan';
+    // The record stores a provider string; the icon table is keyed by the union.
+    // An unknown driver falls back to the initial rather than mis-badging itself
+    // as claude, which is what a cast would have done silently.
+    const agentDef = row.provider
+        ? terminalTypeForAgent(row.provider as Parameters<typeof terminalTypeForAgent>[0])
+        : undefined;
     const AgentIcon = agentDef?.icon;
+    const driver = row.provider ? (agentDef?.label ?? row.provider) : 'no TUI yet';
+    const title = orphan
+        ? `${row.name} · orphaned terminal — no agent owns it`
+        : `${row.name} · ${driver} · ${running ? 'running' : 'not running'}` +
+          (row.tuis.length > 1 ? ` · ${row.tuis.length} TUIs` : '') +
+          (row.collisionGroup ? ' · name conflict, needs resolving' : '');
     return (
         <button
             type="button"
-            className={`ams-agent-card${running ? ' is-running' : ''}${active ? ' is-active' : ''}${checked ? ' is-open' : ''}${attention ? ' attention' : ''}`}
-            title={`${card.name} · ${agentDef?.label ?? card.provider} · ${running ? 'running' : 'not running'}${active ? ' · active' : ''}`}
+            className={`ams-agent-card${running ? ' is-running' : ''}${active ? ' is-active' : ''}${checked ? ' is-open' : ''}${attention ? ' attention' : ''}${orphan ? ' is-orphan' : ''}${row.collisionGroup ? ' is-collision' : ''}${!running && !orphan ? ' is-dormant' : ''}`}
+            title={title}
             onClick={onOpen}
             onContextMenu={(event) => {
                 event.preventDefault();
@@ -2157,10 +2244,22 @@ function AgentSquare({
             }}
         >
             <span className="ams-agent-avatar" aria-hidden="true">
-                {AgentIcon ? <AgentIcon size={20} /> : card.name.slice(0, 1).toUpperCase()}
+                {row.avatar
+                    ? row.avatar
+                    : AgentIcon
+                      ? <AgentIcon size={20} />
+                      : row.name.slice(0, 1).toUpperCase()}
             </span>
-            <span className="ams-agent-name">{card.name}</span>
+            <span className="ams-agent-name">{row.name}</span>
             <span className="ams-agent-state" aria-label={running ? 'Running' : 'Not running'} />
+            {/* Sidecars: the TUIs this agent holds beyond the visible one. */}
+            {row.tuis.length > 1 && (
+                <span className="ams-agent-tuis" aria-hidden="true">
+                    {row.tuis.filter((t) => !t.fronted).map((t) => (
+                        <span key={t.runtimeId} className={`ams-tui-pip${t.running ? ' is-running' : ''}`} />
+                    ))}
+                </span>
+            )}
             {thumbed && <span className="ams-agent-thumb" aria-label="Ready">👍</span>}
         </button>
     );

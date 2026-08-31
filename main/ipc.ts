@@ -10,6 +10,9 @@ import {
     AI_SYSTEM_MAX,
     getAllSettings,
     getWorkspace,
+    listWorkspaceAgents,
+    listAgentRuntimes,
+    frontAgentRuntime,
     listWorkspaces,
     removeWorkspace,
     reorderWorkspaces,
@@ -86,6 +89,7 @@ import {
     createSpecializedAgentTerminal,
     restartAgentTerminal,
     updateAgentInboxChannel,
+    registerAgentInWorkspace,
 } from './mcp/host-tools';
 import { agentInboxBroker } from './agentinbox/broker';
 import { type AgentInboxScope } from './agentinbox/types';
@@ -566,6 +570,63 @@ export function registerIpcHandlers(): void {
 
     // --- Workspaces -----------------------------------------------------
     ipcMain.handle('workspaces:list', () => listWorkspaces());
+    // The AGENT RECORD, for the renderer.
+    //
+    // Until now `main/preload.ts` exposed no bridge to `workspace_agents` at
+    // all, so every agent surface read `TerminalSpec.meta` instead: a leftover
+    // spec looked like an agent, and a registered agent that was not running
+    // was invisible. The grid reads this instead.
+    ipcMain.handle('agents:list', (_e, workspaceId: string) => {
+        const agents = listWorkspaceAgents(String(workspaceId ?? ''));
+        return {
+            agents: agents.map((a) => ({
+                id: a.id,
+                name: a.name,
+                purpose: a.purpose,
+                avatar: a.avatar,
+                role: a.role,
+                collisionGroup: a.collision_group ?? null,
+            })),
+            runtimes: agents.flatMap((a) =>
+                listAgentRuntimes(a.id).map((r) => ({
+                    id: r.id,
+                    agentId: r.agent_id,
+                    provider: r.provider,
+                    terminalSpecId: r.terminal_spec_id,
+                    fronted: r.fronted === 1,
+                })),
+            ),
+        };
+    });
+    ipcMain.handle('agents:front', (_e, agentId: string, runtimeId: string) =>
+        frontAgentRuntime(String(agentId ?? ''), String(runtimeId ?? '')),
+    );
+    // CREATE an agent from the UI — a record and a file, never a terminal.
+    // Until now this was MCP-only: the form existed in the renderer and was
+    // unreachable. Goes through the same core the MCP tool uses so there is one
+    // place that writes AGENT.md and checks the name.
+    ipcMain.handle(
+        'agents:create',
+        async (
+            _e,
+            input: {
+                workspaceId: string;
+                name: string;
+                purpose: string;
+                agent?: string;
+                bootFolder?: string;
+            },
+        ) => {
+            const ws = getWorkspace(String(input?.workspaceId ?? ''));
+            if (!ws) return { ok: false, error: 'That workspace is no longer registered.' };
+            return registerAgentInWorkspace(ws, {
+                name: String(input.name ?? ''),
+                purpose: String(input.purpose ?? ''),
+                agent: input.agent as never,
+                bootFolder: input.bootFolder,
+            } as never);
+        },
+    );
     ipcMain.handle('workspaces:add', (_e, row: WorkspaceRow) => {
         if (row.shape === 'simple') {
             validateSimpleWorkspace({ path: row.path });

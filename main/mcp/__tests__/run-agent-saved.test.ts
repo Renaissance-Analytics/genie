@@ -242,7 +242,11 @@ describe('registering an agent before start', () => {
         const second = await registerAndStart({ name: 'tynn', agent: 'claude' });
 
         expect(second.ok).toBe(false);
-        expect(second.error).toContain('claude:tynn');
+        // The NAME, not `claude:tynn`: since v55 the TUI is not part of the
+        // identity, so naming it in the refusal would describe a key that no
+        // longer exists and imply a `codex:tynn` were still available.
+        expect(second.error).toContain('tynn');
+        expect(second.error).not.toContain('claude:tynn');
         expect(agentSpecs()).toHaveLength(1);
         // POSITIVE CONTROL — the one that exists is genuinely running.
         expect(terminalManager().isLive(first.id!)).toBe(true);
@@ -342,23 +346,32 @@ describe('runAgent start on a SAVED agent', () => {
         expect(terminalManager().isLive(created.id!)).toBe(true);
     });
 
-    it('keeps two providers under the same name distinct', async () => {
+    it('refuses a second agent under a name the workspace already has, whatever TUI it names', async () => {
+        // The contract this asserted is deliberately reversed by v55. It used to
+        // require that `claude:tynn` and `codex:tynn` be two DISTINCT agents,
+        // because the TUI was part of the identity key -- which is the model the
+        // owner removed: an agent is bigger than the TUI driving it, and a name
+        // it answers to must mean one agent.
+        //
+        // A second TUI for the same agent is now a RUNTIME, not a second agent,
+        // so the way to get one is to add a runtime rather than to register
+        // again under a different provider.
         const claude = await registerAndStart({ name: 'tynn', agent: 'claude' });
-        const codex = await registerAndStart({ name: 'tynn', agent: 'codex' });
-        expect(claude.ok && codex.ok).toBe(true);
-        expect(claude.id).not.toBe(codex.id);
+        expect(claude.ok).toBe(true);
 
-        // A name alone is now ambiguous — answering with either would silently
-        // attach the caller to an agent it did not ask for.
-        const ambiguous = await start({ name: 'tynn' });
-        expect(ambiguous.ok).toBe(false);
-        expect(ambiguous.error).toContain('claude:tynn');
-        expect(ambiguous.error).toContain('codex:tynn');
+        const second = await registerAgentForMcp(CALLER_ID, {
+            name: 'tynn',
+            purpose: 'the same name, a different driver',
+            agent: 'codex',
+        });
 
-        // Named with its provider, each reattaches to its own.
-        expect((await start({ name: 'tynn', agent: 'codex' })).id).toBe(codex.id);
-        expect((await start({ name: 'tynn', agent: 'claude' })).id).toBe(claude.id);
-        expect(agentSpecs()).toHaveLength(2);
+        expect(second.ok).toBe(false);
+        // POSITIVE CONTROL: the refusal left the original alone and running,
+        // rather than being a failure that happened to leave one agent behind.
+        expect(agentSpecs()).toHaveLength(1);
+        expect(terminalManager().isLive(claude.id!)).toBe(true);
+        // And a bare name is no longer ambiguous, because it cannot be.
+        expect((await start({ name: 'tynn' })).id).toBe(claude.id);
     });
 });
 

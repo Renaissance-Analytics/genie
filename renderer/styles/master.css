@@ -6355,3 +6355,42 @@ body.gutter-dragging .grid-gutter {
        thumb is a notification. */
     pointer-events: none;
 }
+
+/* ── Agent square states the RECORD makes renderable ─────────────────────────
+   Three states that could not exist while the grid was built from terminal
+   specs: an agent Genie knows about but that is not running, a leftover
+   agent-stamped spec no agent owns, and a name two agents still claim. */
+.ams-agent-card.is-dormant {
+    opacity: 0.62;
+    border-style: dashed;
+}
+.ams-agent-card.is-dormant:hover {
+    opacity: 1;
+}
+/* An orphan is NOT an agent, and must not read as one — it is a terminal left
+   behind, offered for repair. */
+.ams-agent-card.is-orphan {
+    opacity: 0.55;
+    border-style: dotted;
+    border-color: var(--border-2);
+}
+.ams-agent-card.is-collision {
+    border-color: var(--amber-500, #f59e0b);
+}
+/* Sidecars: one pip per TUI this agent holds beyond the visible one. */
+.ams-agent-tuis {
+    position: absolute;
+    left: 6px;
+    bottom: 6px;
+    display: flex;
+    gap: 3px;
+}
+.ams-tui-pip {
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: var(--fg-4);
+}
+.ams-tui-pip.is-running {
+    background: var(--agent);
+}

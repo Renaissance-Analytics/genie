@@ -1,3 +1,4 @@
+import type { AgentRecordSpec, AgentRuntimeSpec } from './ams-grid';
 import type { BoardRead, ReviewOutcome } from './artboard-model';
 /**
  * Typed handle on the contextBridge surface exposed in main/preload.ts.
@@ -3920,6 +3921,24 @@ export interface GenieApi {
         clearAttention: (id: string) => Promise<void>;
     };
     /** Agent-integration MCP: the ForceTheQuestion OS-level modal. */
+    /** The AGENT RECORD — what the AMS grid draws, instead of agent-stamped
+     *  terminal specs. See lib/ams-grid.ts for why that distinction matters. */
+    agents: {
+        list: (workspaceId: string) => Promise<{
+            agents: AgentRecordSpec[];
+            runtimes: AgentRuntimeSpec[];
+        }>;
+        /** Make one of an agent's TUIs the visible one. A SWAP, not an add. */
+        /** Create an agent: a record and its AGENT.md, never a terminal. */
+        create: (input: {
+            workspaceId: string;
+            name: string;
+            purpose: string;
+            agent?: string;
+            bootFolder?: string;
+        }) => Promise<{ ok: boolean; error?: string }>;
+        front: (agentId: string, runtimeId: string) => Promise<boolean>;
+    };
     ask: {
         onShow: (
             cb: (payload: {

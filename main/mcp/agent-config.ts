@@ -412,6 +412,67 @@ function syncCodexServer(
     }
 }
 
+/**
+ * What Genie REGENERATES under `.agents/`, and nothing else.
+ *
+ * `.agents/` is a tracked folder now: an agent's `AGENT.md` is committed, so
+ * agents ship with the project and a change to one is reviewable like any other.
+ * That only works if the folder is not also full of files Genie rewrites on
+ * every sync, which would leave every workspace permanently dirty.
+ *
+ * The precision matters in one direction especially. `.agents/skills/` holds
+ * BOTH Genie's managed skills and skills the USER wrote — this file guards
+ * deletion on the `genie-` prefix for exactly that reason — so ignoring the
+ * folder wholesale would quietly stop tracking their own work. The rule is
+ * scoped to Genie's prefix instead.
+ */
+export const GENIE_AGENTS_IGNORE_RULES = [
+    '.agents/_genie/',
+    '.agents/skills/genie*/',
+] as const;
+
+/**
+ * Add any missing rules to a `.gitignore`, leaving what is there alone.
+ *
+ * Idempotent because sync runs on every workspace open: a rule appended each
+ * time would grow the file without bound and show up as a diff every session.
+ */
+export function gitignoreWithRules(
+    existing: string,
+    rules: readonly string[],
+    comment: string,
+): string {
+    const present = new Set(existing.split(/\r?\n/).map((line) => line.trim()));
+    const missing = rules.filter((rule) => !present.has(rule));
+    if (missing.length === 0) return existing;
+    // A file with no trailing newline would otherwise join its last line to the
+    // first rule, making BOTH wrong -- and a .gitignore that silently stops
+    // ignoring `dist` is not noticed until a build directory lands in a PR.
+    const prefix = existing && !existing.endsWith('\n') ? '\n' : '';
+    return `${existing}${prefix}\n# ${comment}\n${missing.join('\n')}\n`;
+}
+
+/** Apply {@link GENIE_AGENTS_IGNORE_RULES} to the workspace's `.gitignore`. */
+function ensureGenieAgentsGitignored(workspacePath: string): void {
+    const file = path.join(workspacePath, '.gitignore');
+    try {
+        let existing = '';
+        try {
+            existing = fs.readFileSync(file, 'utf8');
+        } catch {
+            /* absent — created below */
+        }
+        const next = gitignoreWithRules(
+            existing,
+            GENIE_AGENTS_IGNORE_RULES,
+            'Genie: regenerated agent scaffolding (the agents themselves are tracked)',
+        );
+        if (next !== existing) fs.writeFileSync(file, next);
+    } catch {
+        /* best-effort — a missing ignore rule is untidy, not broken */
+    }
+}
+
 function ensureCodexConfigGitignored(workspacePath: string): void {
     const file = path.join(workspacePath, '.gitignore');
     const rule = '.codex/config.toml';
@@ -1086,6 +1147,10 @@ function syncAgentsMd(workspacePath: string, enabled: boolean): void {
             custom: '# Genie for Custom agent\n\nThe custom agent must call `genieGuide` and follow the setup for its harness.\n',
         };
         try {
+            // `.agents/` is TRACKED now -- an agent's AGENT.md ships with the
+            // project -- so what Genie regenerates under it has to be ignored,
+            // or every workspace would sit permanently dirty.
+            ensureGenieAgentsGitignored(workspacePath);
             fs.writeFileSync(path.join(managedRoot, 'shared.md'), shared);
             for (const [provider, content] of Object.entries(providerDocs)) {
                 fs.writeFileSync(path.join(managedRoot, `genie-${provider}.md`), content);

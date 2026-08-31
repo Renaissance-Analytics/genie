@@ -322,13 +322,20 @@ once, it persists, and it is **reopened rather than recreated**. It is still a
 agent session. Its live TUI appears in a distinct AgentPanel on the Floor rather
 than as an ordinary terminal panel.
 
-**Identity** is \`{provider}:{name}:{chat-id}\` — e.g. \`claude:tynn\`,
-\`codex:tynn-slave\`. The \`{provider}:{name}\` half is the saved config and is
-what you address it by; the chat-id is addressing only and is bound during
-startup (Codex cannot know its session id until its harness is running). Show
-people the provider's LOGO and the NAME, never the chat-id.
-
+**Identity** is the agent's NAME within its workspace. A name means ONE agent,
+whatever TUI is driving it — \`claude:tynn\` and \`codex:tynn\` are no longer two
+agents but one agent with two possible drivers. The chat-id is addressing only
+and is bound during startup (Codex cannot know its session id until its harness
+is running). Show people the agent's NAME and its active TUI's logo, never the
+chat-id.
 Actions (\`action\`):
+- \`switchTui\` — change the TUI an agent RUNS UNDER, keeping the agent. An
+  agent is not its TUI: its identity, inbox, history and prompt carry across, and
+  the TUI it leaves keeps its own pty and conversation as a hidden SIDECAR you
+  can flip straight back to. Nothing is ever stopped by a switch. Pass \`tui\` and
+  the agent's \`name\`. Refused when the agent's own \`AGENT.md\` lists \`tuis\` and
+  yours is not among them — a prompt tuned for one harness is not automatically
+  safe on another.
 - \`list\` — read-only: this workspace's saved agents, each with its \`ref\`,
   \`name\`, terminal \`id\`, and whether it is live. Start here.
 - \`start\` — bring the saved agent \`name\` up. It **REATTACHES** to that agent —
