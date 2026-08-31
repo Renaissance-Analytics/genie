@@ -98,6 +98,7 @@ vi.mock('../../tray', () => ({
 import { app } from 'electron';
 import {
     addWorkspace,
+    getWorkspace,
     createTerminalSpec,
     deleteWorkspaceAgent,
     deleteTerminalSpec,
@@ -112,6 +113,7 @@ import {
     manageTerminalsForMcp,
     manageWorkspacesForMcp,
     registerAgentForMcp,
+    startRegisteredAgent,
     runAgentForMcp,
 } from '../host-tools';
 import { terminalManager } from '@particle-academy/fancy-term-host';
@@ -527,5 +529,60 @@ describe('a workspace override', () => {
         await fillToLimit(5);
         const extra = await startAgent();
         expect(extra.ok).toBe(true);
+    });
+});
+
+/**
+ * A CLICK on a dormant agent goes through the SAME start path as the tool.
+ *
+ * The sidebar starts a registered agent via `startRegisteredAgent`, which is
+ * literally the body `runAgent start` runs. Only the approval MODAL is skipped:
+ * it gates an AGENT launching an agent, and a person clicking the square is the
+ * approval — asking them to approve their own click is noise.
+ *
+ * Extracting a shared path is exactly the refactor that quietly drops a check on
+ * one branch, so the human branch is asserted against the cap directly rather
+ * than assumed to have inherited it.
+ */
+describe('a human-initiated start', () => {
+    it('is refused at the agent-terminal limit, like any other start', async () => {
+        setWorkspaceAgentCap(WS_ID, 1);
+        await fillToLimit(1);
+        const registered = await registerAgentForMcp(CALLER_ID, {
+            name: 'clicked',
+            purpose: 'started from the sidebar',
+            agent: 'claude',
+        });
+        expect(registered.ok).toBe(true); // POSITIVE CONTROL: the agent exists
+
+        const result = await startRegisteredAgent(
+            getWorkspace(WS_ID)!,
+            { action: 'start', name: 'clicked', command: 'echo agent' } as never,
+            { humanInitiated: true },
+        );
+
+        expect(result.ok).toBe(false);
+        expect(String(('error' in result && result.error) || '')).toMatch(/limit/i);
+    });
+
+    it('raises NO approval modal', async () => {
+        setWorkspaceAgentCap(WS_ID, null);
+        await registerAgentForMcp(CALLER_ID, {
+            name: 'quiet',
+            purpose: 'started from the sidebar',
+            agent: 'claude',
+        });
+        modalsRaised.length = 0;
+
+        const result = await startRegisteredAgent(
+            getWorkspace(WS_ID)!,
+            { action: 'start', name: 'quiet', command: 'echo agent' } as never,
+            { humanInitiated: true },
+        );
+
+        // POSITIVE CONTROL: it really started. "No modal" is also true of a
+        // start that failed before reaching one.
+        expect(result.ok).toBe(true);
+        expect(modalsRaised).toHaveLength(0);
     });
 });

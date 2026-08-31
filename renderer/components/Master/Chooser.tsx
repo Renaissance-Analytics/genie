@@ -1408,11 +1408,25 @@ export default function Chooser({
                                                             }
                                                             onOpen={() => {
                                                                 onActivateWorkspace(ws.id);
-                                                                // A dormant agent has no panel to
-                                                                // open yet; starting one is a
-                                                                // deliberate action, not a click.
-                                                                if (specId && !selected.has(specId)) {
-                                                                    onToggleSpec(specId);
+                                                                // A DORMANT agent has no panel yet,
+                                                                // so clicking it STARTS it. It used
+                                                                // to do nothing at all, which reads
+                                                                // as a broken square. Goes through
+                                                                // the same path `runAgent start`
+                                                                // uses, so the terminal cap still
+                                                                // applies -- a click must not be a
+                                                                // way past a limit the owner set.
+                                                                if (specId) {
+                                                                    if (!selected.has(specId)) onToggleSpec(specId);
+                                                                } else if (row.kind === 'agent') {
+                                                                    void api()
+                                                                        .agents.start(ws.id, row.name)
+                                                                        // No refresh call needed:
+                                                                        // starting creates a terminal
+                                                                        // spec, main broadcasts it, and
+                                                                        // the effect above reloads the
+                                                                        // records when the spec list moves.
+                                                                        .catch(() => {});
                                                                 }
                                                             }}
                                                             onContextMenu={(p) => {
