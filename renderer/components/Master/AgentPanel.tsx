@@ -2,10 +2,17 @@ import { useEffect, useRef, useState, type ComponentProps, type MouseEvent } fro
 import { createPortal } from 'react-dom';
 import TerminalPanel from './TerminalPanel';
 import { IconRefresh, IconSettings } from './icons';
+import AgentTuiSwitcher from './AgentTuiSwitcher';
+import type { AgentRuntimeSpec } from '../../lib/ams-grid';
 
 type Props = ComponentProps<typeof TerminalPanel> & {
     onAgentSettings?: () => void;
     onRestartAgent?: () => void;
+    /** This agent's record id + the TUIs it may run under — drives the panel's
+     *  driver switcher. Absent for a panel whose agent has no record yet. */
+    agentId?: string;
+    runtimes?: AgentRuntimeSpec[];
+    onRuntimesChanged?: () => void;
 };
 
 /**
@@ -16,7 +23,8 @@ type Props = ComponentProps<typeof TerminalPanel> & {
  */
 export default function AgentPanel(props: Props) {
     const provider = String(props.spec.meta.agent ?? 'custom');
-    const { style, onAgentSettings, onRestartAgent, ...terminalProps } = props;
+    const { style, onAgentSettings, onRestartAgent, agentId, runtimes, onRuntimesChanged,
+        ...terminalProps } = props;
     const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
     const menuRef = useRef<HTMLDivElement>(null);
     useEffect(() => {
@@ -46,17 +54,27 @@ export default function AgentPanel(props: Props) {
                 {...terminalProps}
                 surface="agent"
                 headerActions={
-                    onRestartAgent ? (
-                        <button
-                            type="button"
-                            className="pctl"
-                            title="Restart agent"
-                            aria-label="Restart agent"
-                            onClick={onRestartAgent}
-                        >
-                            <IconRefresh size={14} />
-                        </button>
-                    ) : undefined
+                    <>
+                        {/* Driver + sidecars, where the agent actually is. */}
+                        {agentId && (
+                            <AgentTuiSwitcher
+                                agentId={agentId}
+                                runtimes={runtimes ?? []}
+                                onChanged={() => onRuntimesChanged?.()}
+                            />
+                        )}
+                        {onRestartAgent && (
+                            <button
+                                type="button"
+                                className="pctl"
+                                title="Restart agent"
+                                aria-label="Restart agent"
+                                onClick={onRestartAgent}
+                            >
+                                <IconRefresh size={14} />
+                            </button>
+                        )}
+                    </>
                 }
             />
             {menu && createPortal(

@@ -13,6 +13,8 @@ import {
     listWorkspaceAgents,
     listAgentRuntimes,
     frontAgentRuntime,
+    setWorkspaceDefaultAgent,
+    createAgentRuntime,
     listWorkspaces,
     removeWorkspace,
     reorderWorkspaces,
@@ -601,6 +603,22 @@ export function registerIpcHandlers(): void {
     ipcMain.handle('agents:front', (_e, agentId: string, runtimeId: string) =>
         frontAgentRuntime(String(agentId ?? ''), String(runtimeId ?? '')),
     );
+    // Designate a workspace's DEFAULT agent -- the one that boots from the
+    // workspace root. A property of a real agent, set by a human in workspace
+    // settings; null clears it.
+    ipcMain.handle('agents:setDefault', (_e, workspaceId: string, agentId: string | null) =>
+        setWorkspaceDefaultAgent(String(workspaceId ?? ''), agentId ? String(agentId) : null),
+    );
+    // Add a TUI an agent may run under, and front it. The TERMINAL is not
+    // started here: `runAgent start` owns the approval gate and the agent cap,
+    // and a switch must not become a second way past either.
+    ipcMain.handle('agents:addRuntime', (_e, agentId: string, provider: string) => {
+        const id = String(agentId ?? '');
+        const existing = listAgentRuntimes(id).find((r) => r.provider === provider);
+        const runtime = existing ?? createAgentRuntime({ agentId: id, provider: String(provider) });
+        frontAgentRuntime(id, runtime.id);
+        return { ok: true, runtimeId: runtime.id };
+    });
     // CREATE an agent from the UI — a record and a file, never a terminal.
     // Until now this was MCP-only: the form existed in the renderer and was
     // unreachable. Goes through the same core the MCP tool uses so there is one

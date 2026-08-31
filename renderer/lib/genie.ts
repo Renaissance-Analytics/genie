@@ -3940,6 +3940,13 @@ export interface GenieApi {
             agent?: string;
             bootFolder?: string;
         }) => Promise<{ ok: boolean; error?: string }>;
+        /** Designate the workspace's default agent (boots from the root). */
+        setDefault: (workspaceId: string, agentId: string | null) => Promise<boolean>;
+        /** Add a TUI this agent may run under, and front it. Starts no terminal. */
+        addRuntime: (
+            agentId: string,
+            provider: string,
+        ) => Promise<{ ok: boolean; runtimeId: string }>;
         front: (agentId: string, runtimeId: string) => Promise<boolean>;
     };
     ask: {

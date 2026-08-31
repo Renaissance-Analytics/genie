@@ -6521,3 +6521,78 @@ body.gutter-dragging .grid-gutter {
         box-shadow: inset 0 0 0 2px var(--gapp-dev-border), 0 0 0 0 transparent;
     }
 }
+
+/* ── Panel driver switcher ───────────────────────────────────────────────────
+   The TUI an agent runs under, and its sidecars, in the panel's own controls —
+   where the agent actually is, rather than two menus away. */
+.agent-tui-trigger {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+}
+/* One number, not a row of pips: the panel header has no room, and the count is
+   what you need before opening the menu. */
+.agent-tui-count {
+    position: absolute;
+    right: -1px;
+    bottom: -1px;
+    min-width: 11px;
+    height: 11px;
+    padding: 0 2px;
+    border-radius: 6px;
+    background: var(--agent, #8b5cf6);
+    color: #fff;
+    font-size: 8px;
+    line-height: 11px;
+    text-align: center;
+}
+.agent-tui-menu {
+    min-width: 230px;
+    padding: 6px;
+    display: grid;
+    gap: 2px;
+    border-radius: var(--radius-md, 7px);
+    border: 1px solid var(--border-1);
+    background: var(--bg-1);
+    box-shadow: 0 16px 38px rgba(0, 0, 0, 0.38);
+}
+.agent-tui-head,
+.agent-tui-note {
+    padding: 4px 8px;
+    font-size: 10px;
+    color: var(--fg-4);
+}
+.agent-tui-note {
+    border-top: 1px solid var(--border-1);
+    margin-top: 4px;
+    line-height: 1.45;
+}
+.agent-tui-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 8px;
+    border: 0;
+    border-radius: var(--radius-sm, 4px);
+    background: transparent;
+    color: var(--text);
+    text-align: left;
+    cursor: pointer;
+}
+.agent-tui-item:hover {
+    background: var(--hover);
+}
+.agent-tui-item.is-fronted {
+    color: var(--agent, #8b5cf6);
+}
+.agent-tui-label {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.agent-tui-state {
+    font-size: 10px;
+    color: var(--fg-4);
+}
