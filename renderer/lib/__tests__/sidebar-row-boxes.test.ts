@@ -37,43 +37,77 @@ function px(selector: string, prop: string): number {
     const body = ruleBody(selector);
     const m = new RegExp(`(?:^|;)\\s*${prop}:\\s*(-?[\\d.]+)px`, 'm').exec(body);
     if (m) return Number(m[1]);
+    // A bare `0` carries no unit and is still zero pixels -- `top: 0` is the
+    // idiomatic way to write flush, so requiring `0px` would fail a
+    // correct stylesheet.
+    const zero = new RegExp(`(?:^|;)\\s*${prop}:\\s*0\\s*(?:;|$)`, 'm').exec(body);
+    if (zero) return 0;
     throw new Error(`${selector} declares no ${prop} in px:\n${body}`);
 }
 
-/** Every control that sits in the row, and must read as a sibling of the others. */
-const BOXES = ['.iw-pill', '.tproj-head .runtime-pill'];
-
-/** The size the agent avatars already are, and therefore the size the row is. */
+/** The IssueWatch control, which is one square among the row's controls. */
 const EDGE = 18;
 
 describe('the workspace row is a line of squares', () => {
-    it.each(BOXES)('%s is square, not a lozenge', (selector) => {
-        const w = px(selector, 'width');
-        const h = px(selector, 'height');
-        expect(w).toBe(h);
+    it('.iw-pill is square, not a lozenge', () => {
+        expect(px('.iw-pill', 'width')).toBe(px('.iw-pill', 'height'));
     });
 
-    it.each(BOXES)('%s shares the avatar edge of %ipx', (selector) => {
-        // One edge for the whole row. A square that is merely square while
-        // being half the height of its neighbours still reads as a different
-        // KIND of control, which is the thing being fixed.
-        expect(px(selector, 'width')).toBe(EDGE);
-        expect(px(selector, 'height')).toBe(EDGE);
+    it('.iw-pill shares the avatar edge', () => {
+        expect(px('.iw-pill', 'width')).toBe(EDGE);
+        expect(px('.iw-pill', 'height')).toBe(EDGE);
     });
 
-    it('the agent avatar is the edge the boxes match', () => {
-        // POSITIVE CONTROL. If the avatars are ever resized, the two
-        // assertions above are pinning a number that no longer means anything,
-        // and this fails to say so rather than letting the row drift apart.
+    it('the agent avatar is the edge the square matches', () => {
+        // POSITIVE CONTROL. If the avatars are resized, the assertion above is
+        // pinning a number that no longer means anything, and this says so.
         expect(px('.ws-agent-avatar', 'width')).toBe(EDGE);
         expect(px('.ws-agent-avatar', 'height')).toBe(EDGE);
     });
 
     it('the IssueWatch square stacks its four dots, rather than lining them up', () => {
-        // Four dots in a row is what MADE it a lozenge. In a square they have
-        // to wrap, so the grid is the shape rather than an incidental choice.
         const body = ruleBody('.iw-pill');
         expect(body).toMatch(/display:\s*(inline-)?grid/);
         expect(body).toMatch(/grid-template-columns:\s*1fr\s+1fr/);
+    });
+});
+
+/**
+ * The SITE / PROCESS control is TWO BOXES STACKED, flush to the row's right
+ * edge and to its top and bottom — the owner's words, after two wrong passes.
+ *
+ * First it was a 30x14 lozenge. Then I read "square" as square CORNERS and made
+ * it an 18x18 box with its two halves SIDE BY SIDE, which is neither stacked
+ * nor flush to anything. The spec is not a square at all: it is a full-height
+ * strip on the right edge, split into an upper box and a lower box.
+ *
+ * So what is pinned here is the geometry that was actually asked for —
+ * stacked ROWS, and zero offset on three sides. A test that only checked "is it
+ * square" passed while the control was still wrong, twice.
+ */
+describe('the site/process control', () => {
+    const body = () => ruleBody('.tproj-head .runtime-pill');
+
+    it('STACKS its two boxes rather than sitting them side by side', () => {
+        expect(body()).toMatch(/grid-template-rows:\s*1fr\s+1fr/);
+        // And explicitly NOT the column split it had before.
+        expect(body()).not.toMatch(/grid-template-columns:\s*1fr\s+1fr/);
+    });
+
+    it('is flush to the right edge and to the top and bottom', () => {
+        // The row has 8px of padding; the control has to escape it on three
+        // sides, so it is positioned rather than laid out as a flex child.
+        expect(body()).toMatch(/position:\s*absolute/);
+        for (const side of ['top', 'right', 'bottom']) {
+            expect(px('.tproj-head .runtime-pill', side)).toBe(0);
+        }
+    });
+
+    it('reserves its own width, so the row content cannot run under it', () => {
+        // Taking the control out of flow is what makes "flush" possible and is
+        // also how the workspace name would end up sliding beneath it.
+        expect(px('.tproj-head', 'padding-right')).toBeGreaterThanOrEqual(
+            px('.tproj-head .runtime-pill', 'width'),
+        );
     });
 });

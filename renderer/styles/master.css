@@ -2115,6 +2115,9 @@ button.iw-feedback-note.as-link:hover {
     align-items: center;
     gap: 8px;
     padding: 8px;
+    /* Room for the full-height site/process strip, which is positioned against
+       the right edge and therefore out of flow. */
+    padding-right: 24px;
     border-radius: var(--radius-lg);
     position: relative;
     cursor: pointer;
@@ -3810,33 +3813,45 @@ body.gutter-dragging .grid-gutter {
    Left half = background processes; right half = hosted sites. The halves carry
    status by colour only; the menu names the destinations after a click. */
 .tproj-head .runtime-pill {
-    display: inline-grid;
-    grid-template-columns: 1fr 1fr;
-    width: 18px;
-    height: 18px;
-    padding: 2px;
-    gap: 2px;
-    flex: 0 0 auto;
+    /* TWO BOXES, STACKED, flush to the row's right edge and to its top and
+       bottom (owner). Two earlier passes got this wrong in different ways: a
+       30x14 lozenge, then an 18x18 box whose halves sat SIDE BY SIDE. Neither
+       is what was asked for -- this is a full-height strip on the right edge
+       split into an upper box (background processes) and a lower box (hosted
+       sites).
+
+       Positioned rather than laid out as a flex child, because "flush" means
+       escaping the row's own 8px padding on three sides. `.tproj-head` reserves
+       the width with padding-right so the workspace name cannot slide under it. */
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 16px;
+    display: grid;
+    grid-template-rows: 1fr 1fr;
+    padding: 3px;
+    gap: 3px;
     cursor: pointer;
-    border: 1px solid var(--border-1);
-    /* A SQUARE too, on the same 18px edge. The owner calls these the row's
-       "side boxes", and squaring only the IssueWatch control would leave the
-       mismatch that change was made to remove. Two halves still: left is
-       background processes, right is hosted sites. */
-    border-radius: var(--radius-sm);
-    background: color-mix(in srgb, var(--bg-2) 90%, transparent);
+    border: 0;
+    background: transparent;
 }
 .tproj-head .runtime-pill:hover,
 .tproj-head .runtime-pill.open {
     border-color: var(--fg-4);
     background: rgba(255, 255, 255, 0.08);
 }
+/* Each half is a BOX in its own right -- bordered, with the tone as its fill.
+   As bars they read as a progress meter; as boxes they read as two controls,
+   which is what they are. */
 .runtime-half {
     display: block;
     min-width: 0;
-    border-radius: 999px;
-    background: var(--fg-4);
-    opacity: 0.42;
+    min-height: 0;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-1);
+    background: var(--bg-2);
+    opacity: 0.85;
 }
 .runtime-half.proc-idle,
 .runtime-half.sites-starting,

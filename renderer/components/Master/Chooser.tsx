@@ -1280,6 +1280,42 @@ export default function Chooser({
                                             />
                                         );
                                     })()}
+                                    {/* Beside the avatar stack, not at the row's
+                                        right edge: it belongs with WHO is working
+                                        here, and the right edge is now the
+                                        full-height site/process strip. */}
+                                    {/* LAUNCH THE APP THIS WORKSPACE BUILDS
+                                        (genie#245). Only a GDW has it, which is
+                                        also the row's strongest at-a-glance
+                                        mark: no other workspace carries a
+                                        fourth control. Same grammar as the
+                                        Processes and Sites indicators beside it
+                                        — the glyph IS the way in — because the
+                                        alternative was Workspace Settings, two
+                                        clicks deep, in a section that appears
+                                        for some workspaces and not others. */}
+                                    {onLaunchGapp &&
+                                        gappLaunchTarget(ws) !== null && (
+                                            <span
+                                                className={`gapp-ind${
+                                                    launchingGappWsId === ws.id ? ' is-busy' : ''
+                                                }`}
+                                                role="button"
+                                                tabIndex={-1}
+                                                title={
+                                                    launchingGappWsId === ws.id
+                                                        ? 'Opening the app…'
+                                                        : `${gappLaunchLabel(ws)} — opens a preview window on this workspace's live source`
+                                                }
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    if (launchingGappWsId === ws.id) return;
+                                                    onLaunchGapp(ws.id);
+                                                }}
+                                            >
+                                                <IconWand size={13} />
+                                            </span>
+                                        )}
                                     {/* Issue Watch is GitHub-scoped — not for the
                                         synthetic System Workspace. */}
                                     {!system && (
@@ -1347,38 +1383,6 @@ export default function Chooser({
                                         onProcesses={() => toggleProcs(ws.id)}
                                         onSites={() => onShowSiteManager?.(ws.id)}
                                     />
-                                    {/* LAUNCH THE APP THIS WORKSPACE BUILDS
-                                        (genie#245). Only a GDW has it, which is
-                                        also the row's strongest at-a-glance
-                                        mark: no other workspace carries a
-                                        fourth control. Same grammar as the
-                                        Processes and Sites indicators beside it
-                                        — the glyph IS the way in — because the
-                                        alternative was Workspace Settings, two
-                                        clicks deep, in a section that appears
-                                        for some workspaces and not others. */}
-                                    {onLaunchGapp &&
-                                        gappLaunchTarget(ws) !== null && (
-                                            <span
-                                                className={`gapp-ind${
-                                                    launchingGappWsId === ws.id ? ' is-busy' : ''
-                                                }`}
-                                                role="button"
-                                                tabIndex={-1}
-                                                title={
-                                                    launchingGappWsId === ws.id
-                                                        ? 'Opening the app…'
-                                                        : `${gappLaunchLabel(ws)} — opens a preview window on this workspace's live source`
-                                                }
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    if (launchingGappWsId === ws.id) return;
-                                                    onLaunchGapp(ws.id);
-                                                }}
-                                            >
-                                                <IconWand size={13} />
-                                            </span>
-                                        )}
                                 </button>
                                 <div className="tproj-body">
                                     {(() => {

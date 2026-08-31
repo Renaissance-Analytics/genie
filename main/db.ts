@@ -82,6 +82,20 @@ export function getDataDir(): string {
 }
 
 /**
+ * Commands a provider USED to ship that are not commands at all.
+ *
+ * These are cleared out of the two caches that outrank the registry (the
+ * `agent_command_<id>` setting and a spec's `meta.agent_command`) by migration
+ * v58, so a corrected registry default can actually reach an existing install.
+ * Add to this ONLY for a value that was never a working binary -- an entry here
+ * silently discards whatever a user had stored.
+ */
+export const RETIRED_AGENT_COMMANDS: Record<string, string[]> = {
+    // Never existed. The Genie TUI's binary is `genie`.
+    genie: ['genie-tui'],
+};
+
+/**
  * Run all pending append-only migrations against `d`. Exported so the
  * migration suite can exercise the runner against a fresh `:memory:`
  * database without the Electron `app.getPath` singleton path.
@@ -1653,6 +1667,46 @@ export function runMigrations(d: Database.Database): void {
                         AND terminal_spec_id IS NULL
                         AND id NOT IN (SELECT agent_id FROM agent_runtimes)`,
                 ).run();
+            },
+        },
+        {
+            // v58 -- A RETIRED COMMAND MUST NOT SURVIVE IN THE CACHES THAT
+            // OUTRANK THE REGISTRY.
+            //
+            // `resolveAgentCommand` reads, in order: the spec's own
+            // `meta.agent_command`, the owner's `agent_command_<id>` SETTING,
+            // then the registry default. The Genie TUI shipped with a default of
+            // `genie-tui`, which is not a binary -- selecting it produced
+            // `bash: genie-tui: command not found`.
+            //
+            // Correcting the registry fixed nothing on any machine that had
+            // already run Genie: both higher-precedence copies had the dead
+            // string baked in, so the fix could not reach an existing install
+            // and the agent kept failing after the release said it was repaired.
+            //
+            // The defect is that a DEFAULT was persisted into two caches. This
+            // clears them wherever they hold a value that is no longer any
+            // provider's command, so resolution falls through to the registry --
+            // the one place the default belongs.
+            //
+            // EXACT matches only. A command the owner actually chose survives
+            // untouched, or the repair becomes a worse bug than the one it fixes.
+            version: 58,
+            runner: (db) => {
+                for (const [provider, retired] of Object.entries(RETIRED_AGENT_COMMANDS)) {
+                    for (const dead of retired) {
+                        db.prepare(
+                            `UPDATE settings SET value = ''
+                              WHERE key = ? AND value = ?`,
+                        ).run(`agent_command_${provider}`, dead);
+                        db.prepare(
+                            `UPDATE terminal_specs
+                                SET meta_json = json_remove(meta_json, '$.agent_command')
+                              WHERE json_extract(meta_json, '$.agent') = ?
+                                AND json_extract(meta_json, '$.agent_command') = ?`,
+                        ).run(provider, dead);
+                    }
+                }
             },
         },
     ];
