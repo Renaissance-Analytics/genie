@@ -2028,127 +2028,14 @@ export async function runAgentForMcp(
                     })),
                 };
             }
-            case 'start': {
-                const requestedName = agentName(req.name ?? 'workspace');
-                const candidates = listWorkspaceAgents(ws.id).filter(
-                    (item) =>
-                        item.provider &&
-                        item.name === requestedName &&
-                        (!req.agent || item.provider === req.agent),
-                );
-                if (candidates.length !== 1) {
-                    const reason = candidates.length > 1
-                        ? `More than one registered agent is named "${requestedName}" (${candidates.map((item) => savedAgentKey(item.provider as AgentType, item.name)).join(', ')}); pass \`agent\` to choose its provider.`
-                        : `No registered agent "${requestedName}" in this workspace. Use registerAgent first.`;
-                    return { ok: false, error: reason };
-                }
-                const config = candidates[0]!;
-                const agent = config.provider as AgentType;
-                if (config.terminal_spec_id) {
-                    const saved = savedAgentsOfWorkspace(ws.id).find(
-                        (item) => item.specId === config.terminal_spec_id,
-                    );
-                    if (saved) return await reattachSavedAgent(ws, saved, saved.live ? 'warm' : 'revive');
-                    bindWorkspaceAgentTerminal(config.id, null);
-                }
-                // The registry's binding is not the only way this agent's
-                // terminal can be on screen: an unbound one is still THIS agent
-                // by (provider, name), and creating past it would abandon it as
-                // a phantom square under the same name rather than start
-                // anything new. Adopt it and rebind.
-                const adopted = adoptableAgentSpec(
-                    savedAgentsOfWorkspace(ws.id),
-                    config.provider as AgentProvider,
-                    config.name,
-                );
-                if (adopted) {
-                    bindWorkspaceAgentTerminal(config.id, adopted.specId);
-                    return await reattachSavedAgent(ws, adopted, adopted.live ? 'warm' : 'revive');
-                }
-                // Base command + the agent type's always-on flags (session-id
-                // injected later in createAgentTerminal), then the agent's
-                // PRE-LOADED INSTRUCTIONS as an opening prompt — the same
-                // mechanism a GApp persona briefing uses (one implementation).
-                const base = resolveAgentLaunch(agent, req.command, ws);
-                if (!base) {
-                    return {
-                        ok: false,
-                        error:
-                            agent === 'custom'
-                                ? 'runAgent custom needs a `command` (or set agent_command_custom in Settings).'
-                                : `No command configured for agent "${agent}".`,
-                    };
-                }
-                const command = base;
-                const instructionFiles = providerInstructionFiles(agent, ws.path)
-                    .filter((file) => fs.existsSync(file));
-                const bootInstructions = [
-                    instructionFiles.length > 0
-                        ? `Before doing work, read and follow these instruction files in order: ${instructionFiles.join(', ')}.`
-                        : '',
-                    config.persona_path && fs.existsSync(config.persona_path)
-                        ? `Then read and adopt your specialized persona from ${config.persona_path}.`
-                        : '',
-                    req.instructions?.trim() ?? '',
-                ].filter(Boolean).join('\n\n');
-                const approvalCommand = bootInstructions
-                    ? withProviderStartupInstructions(agent, base, bootInstructions)
-                    : base;
-                const cwdR = req.repo || req.cwd
-                    ? resolveAgentCwd(ws, { repo: req.repo, cwd: req.cwd })
-                    : { cwd: config.boot_cwd || ws.path };
-                if ('error' in cwdR) return { ok: false, error: cwdR.error };
-
-                // The agent-terminal cap (Tynn #117), before the modal — see the
-                // matching check in `manageTerminals create`.
-                const cap = decideAgentTerminalSpawn(ws.id, 'agent');
-                if (!cap.allowed) {
-                    return {
-                        ok: false,
-                        error: cap.reason ?? 'This workspace is at its agent-terminal limit.',
-                    };
-                }
-                const approved = await approveTerminalAction(ws, {
-                    title: `An agent wants to LAUNCH a ${agent} coding agent (it can read, write, and run code on its own):`,
-                    lines: [
-                        `saved as: ${savedAgentKey(agent, config.name)}`,
-                        `command: ${approvalCommand}`,
-                        `in: ${cwdR.cwd}`,
-                    ],
-                });
-                if (!approved) {
-                    return { ok: false, error: 'Denied by user — no agent was launched.' };
-                }
-                // Spawns the pty AND launches the agent CLI into it, host-side —
-                // the agent is running the moment this returns, whether or not
-                // anyone ever opens the panel (genie #63 Phase 0).
-                const { id, chatSessionId, command: launchedCommand } = createAgentTerminal({
-                    workspaceId: ws.id,
-                    cwd: cwdR.cwd,
-                    // The NAME, not "<provider> agent". The label is what the
-                    // sidebar and the Floor render, and a roster of "claude agent"
-                    // rows is the anonymity this story removes.
-                    label: `${agent} · ${config.name}`,
-                    agentMeta: { agent, command, instructions: bootInstructions },
-                    createdBy: 'agent',
-                    // The name IS the AgentInbox purpose — one field, so the ref
-                    // and the inbox can never disagree about what it is called.
-                    agentInbox: { purpose: config.name },
-                });
-                bindWorkspaceAgentTerminal(config.id, id);
-                return {
-                    ok: true,
-                    id,
-                    agent,
-                    command: launchedCommand ?? command,
-                    name: config.name,
-                    reattached: false,
-                    sessionBinding: chatSessionId ? 'bound' : 'pending',
-                    // Null chat-id for Codex is correct, not a failure: it binds
-                    // at SessionStart, onto this record.
-                    ref: agentRef({ provider: agent, name: config.name, chatSessionId }),
-                };
-            }
+            case 'start':
+                // Delegated so the UI can start an agent by exactly this path.
+                // The ONLY difference for a human-initiated start is the
+                // approval modal: it exists to gate an AGENT launching an agent,
+                // and a person clicking the square IS the approval. Everything
+                // else -- resolution, reattach, adoption, the terminal cap --
+                // must be identical, or a click becomes a way past the cap.
+                return await startRegisteredAgent(ws, req, { humanInitiated: false });
             case 'send': {
                 if (!ownTerminal(req.id)) {
                     return { ok: false, error: `No agent terminal "${req.id ?? ''}" in this workspace.` };
@@ -2800,4 +2687,146 @@ export async function manageWorkspacesForMcp(
         workspaces: await actionableWorkspaces(callerTerminalId),
         affectedId: ws.id,
     };
+}
+
+/**
+ * Start a REGISTERED agent in a resolved workspace.
+ *
+ * Split out so the sidebar can start a dormant agent by exactly the path the
+ * MCP tool uses. A registered agent that has never run is a normal, renderable
+ * state -- and until now clicking its square did nothing at all, because there
+ * was no terminal to open and no way for the UI to make one.
+ *
+ * `humanInitiated` skips ONLY the approval modal. That modal gates an AGENT
+ * launching an agent; a person clicking the square is the approval, and asking
+ * them to approve their own click is noise. The terminal CAP still applies:
+ * a click must not become a way past a limit the owner set.
+ */
+export async function startRegisteredAgent(
+    ws: WorkspaceRow,
+    req: RunAgentRequest,
+    opts: { humanInitiated: boolean },
+): Promise<RunAgentResult> {
+                const requestedName = agentName(req.name ?? 'workspace');
+                const candidates = listWorkspaceAgents(ws.id).filter(
+                    (item) =>
+                        item.provider &&
+                        item.name === requestedName &&
+                        (!req.agent || item.provider === req.agent),
+                );
+                if (candidates.length !== 1) {
+                    const reason = candidates.length > 1
+                        ? `More than one registered agent is named "${requestedName}" (${candidates.map((item) => savedAgentKey(item.provider as AgentType, item.name)).join(', ')}); pass \`agent\` to choose its provider.`
+                        : `No registered agent "${requestedName}" in this workspace. Use registerAgent first.`;
+                    return { ok: false, error: reason };
+                }
+                const config = candidates[0]!;
+                const agent = config.provider as AgentType;
+                if (config.terminal_spec_id) {
+                    const saved = savedAgentsOfWorkspace(ws.id).find(
+                        (item) => item.specId === config.terminal_spec_id,
+                    );
+                    if (saved) return await reattachSavedAgent(ws, saved, saved.live ? 'warm' : 'revive');
+                    bindWorkspaceAgentTerminal(config.id, null);
+                }
+                // The registry's binding is not the only way this agent's
+                // terminal can be on screen: an unbound one is still THIS agent
+                // by (provider, name), and creating past it would abandon it as
+                // a phantom square under the same name rather than start
+                // anything new. Adopt it and rebind.
+                const adopted = adoptableAgentSpec(
+                    savedAgentsOfWorkspace(ws.id),
+                    config.provider as AgentProvider,
+                    config.name,
+                );
+                if (adopted) {
+                    bindWorkspaceAgentTerminal(config.id, adopted.specId);
+                    return await reattachSavedAgent(ws, adopted, adopted.live ? 'warm' : 'revive');
+                }
+                // Base command + the agent type's always-on flags (session-id
+                // injected later in createAgentTerminal), then the agent's
+                // PRE-LOADED INSTRUCTIONS as an opening prompt — the same
+                // mechanism a GApp persona briefing uses (one implementation).
+                const base = resolveAgentLaunch(agent, req.command, ws);
+                if (!base) {
+                    return {
+                        ok: false,
+                        error:
+                            agent === 'custom'
+                                ? 'runAgent custom needs a `command` (or set agent_command_custom in Settings).'
+                                : `No command configured for agent "${agent}".`,
+                    };
+                }
+                const command = base;
+                const instructionFiles = providerInstructionFiles(agent, ws.path)
+                    .filter((file) => fs.existsSync(file));
+                const bootInstructions = [
+                    instructionFiles.length > 0
+                        ? `Before doing work, read and follow these instruction files in order: ${instructionFiles.join(', ')}.`
+                        : '',
+                    config.persona_path && fs.existsSync(config.persona_path)
+                        ? `Then read and adopt your specialized persona from ${config.persona_path}.`
+                        : '',
+                    req.instructions?.trim() ?? '',
+                ].filter(Boolean).join('\n\n');
+                const approvalCommand = bootInstructions
+                    ? withProviderStartupInstructions(agent, base, bootInstructions)
+                    : base;
+                const cwdR = req.repo || req.cwd
+                    ? resolveAgentCwd(ws, { repo: req.repo, cwd: req.cwd })
+                    : { cwd: config.boot_cwd || ws.path };
+                if ('error' in cwdR) return { ok: false, error: cwdR.error };
+
+                // The agent-terminal cap (Tynn #117), before the modal — see the
+                // matching check in `manageTerminals create`.
+                const cap = decideAgentTerminalSpawn(ws.id, 'agent');
+                if (!cap.allowed) {
+                    return {
+                        ok: false,
+                        error: cap.reason ?? 'This workspace is at its agent-terminal limit.',
+                    };
+                }
+                // A person clicking the square IS the approval; asking them to
+                // approve their own click is noise. The modal gates an AGENT
+                // launching an agent, which is a different act.
+                const approved = opts.humanInitiated || await approveTerminalAction(ws, {
+                    title: `An agent wants to LAUNCH a ${agent} coding agent (it can read, write, and run code on its own):`,
+                    lines: [
+                        `saved as: ${savedAgentKey(agent, config.name)}`,
+                        `command: ${approvalCommand}`,
+                        `in: ${cwdR.cwd}`,
+                    ],
+                });
+                if (!approved) {
+                    return { ok: false, error: 'Denied by user — no agent was launched.' };
+                }
+                // Spawns the pty AND launches the agent CLI into it, host-side —
+                // the agent is running the moment this returns, whether or not
+                // anyone ever opens the panel (genie #63 Phase 0).
+                const { id, chatSessionId, command: launchedCommand } = createAgentTerminal({
+                    workspaceId: ws.id,
+                    cwd: cwdR.cwd,
+                    // The NAME, not "<provider> agent". The label is what the
+                    // sidebar and the Floor render, and a roster of "claude agent"
+                    // rows is the anonymity this story removes.
+                    label: `${agent} · ${config.name}`,
+                    agentMeta: { agent, command, instructions: bootInstructions },
+                    createdBy: 'agent',
+                    // The name IS the AgentInbox purpose — one field, so the ref
+                    // and the inbox can never disagree about what it is called.
+                    agentInbox: { purpose: config.name },
+                });
+                bindWorkspaceAgentTerminal(config.id, id);
+                return {
+                    ok: true,
+                    id,
+                    agent,
+                    command: launchedCommand ?? command,
+                    name: config.name,
+                    reattached: false,
+                    sessionBinding: chatSessionId ? 'bound' : 'pending',
+                    // Null chat-id for Codex is correct, not a failure: it binds
+                    // at SessionStart, onto this record.
+                    ref: agentRef({ provider: agent, name: config.name, chatSessionId }),
+                };
 }

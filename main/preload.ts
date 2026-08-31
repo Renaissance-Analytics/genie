@@ -1366,6 +1366,14 @@ const api = {
         setDefault: (workspaceId: string, agentId: string | null) =>
             ipcRenderer.invoke('agents:setDefault', workspaceId, agentId) as Promise<boolean>,
         /** Add a TUI this agent may run under, and front it. Starts no terminal. */
+        /** Start a registered agent. Same path as `runAgent start` — cap and
+         *  reattach still apply; only the approval modal is skipped, because
+         *  the click is the approval. */
+        start: (workspaceId: string, name: string) =>
+            ipcRenderer.invoke('agents:start', workspaceId, name) as Promise<{
+                ok: boolean;
+                error?: string;
+            }>,
         addRuntime: (agentId: string, provider: string) =>
             ipcRenderer.invoke('agents:addRuntime', agentId, provider) as Promise<{
                 ok: boolean;

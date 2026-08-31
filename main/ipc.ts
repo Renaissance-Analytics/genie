@@ -92,6 +92,7 @@ import {
     restartAgentTerminal,
     updateAgentInboxChannel,
     registerAgentInWorkspace,
+    startRegisteredAgent,
 } from './mcp/host-tools';
 import { agentInboxBroker } from './agentinbox/broker';
 import { type AgentInboxScope } from './agentinbox/types';
@@ -618,6 +619,19 @@ export function registerIpcHandlers(): void {
         const runtime = existing ?? createAgentRuntime({ agentId: id, provider: String(provider) });
         frontAgentRuntime(id, runtime.id);
         return { ok: true, runtimeId: runtime.id };
+    });
+    // START a registered agent from the UI. Clicking a dormant agent's square
+    // used to do nothing: there was no terminal to open and no way for the
+    // renderer to make one. Goes through the SAME path the MCP tool uses, so
+    // reattach, adoption and the agent-terminal cap all still apply -- a click
+    // must not become a way past a limit the owner set. Only the approval modal
+    // is skipped, because the click is the approval.
+    ipcMain.handle('agents:start', async (_e, workspaceId: string, name: string) => {
+        const ws = getWorkspace(String(workspaceId ?? ''));
+        if (!ws) return { ok: false, error: 'That workspace is no longer registered.' };
+        return startRegisteredAgent(ws, { action: 'start', name: String(name ?? '') } as never, {
+            humanInitiated: true,
+        });
     });
     // CREATE an agent from the UI — a record and a file, never a terminal.
     // Until now this was MCP-only: the form existed in the renderer and was

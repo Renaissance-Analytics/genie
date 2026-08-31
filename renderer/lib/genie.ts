@@ -3943,6 +3943,9 @@ export interface GenieApi {
         /** Designate the workspace's default agent (boots from the root). */
         setDefault: (workspaceId: string, agentId: string | null) => Promise<boolean>;
         /** Add a TUI this agent may run under, and front it. Starts no terminal. */
+        /** Start a registered agent. Same path as `runAgent start` — cap and
+         *  reattach still apply; only the approval modal is skipped. */
+        start: (workspaceId: string, name: string) => Promise<{ ok: boolean; error?: string }>;
         addRuntime: (
             agentId: string,
             provider: string,
