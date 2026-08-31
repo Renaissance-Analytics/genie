@@ -9,7 +9,7 @@
  * terminal is known from the endpoint. ctx carries that resolved id.
  */
 
-import { GENIE_MCP_GUIDE } from './guide';
+import { GENIE_MCP_GUIDE, GENIE_PROTOCOL_BRIEF } from './guide';
 import { agentProviders } from '../agents/registry';
 import type { AgentProviderId } from '../agents/registry';
 import type { QuestionPriority } from '../ask/question-priority';
@@ -1678,9 +1678,30 @@ const GUIDE_TOOL = {
  * prompt UIs and as a normal tool for clients such as Codex that surface MCP
  * tools but do not give the user a prompt picker.
  */
+/**
+ * CONNECTING TO GENIE — the one entry point, under one name.
+ *
+ * Exposed BOTH ways deliberately: as an MCP prompt, so a user can type it as a
+ * slash command in any client with a prompt picker, and as an ordinary tool, so
+ * an agent can call it and so clients such as Codex that surface tools but give
+ * the user no prompt picker still reach it. The SAME name on both — a thing the
+ * user invokes by name and the agent calls by name being two different names is
+ * exactly the confusion this consolidates away.
+ *
+ * `initializeWorkspace` is the name this shipped under and stays a working
+ * alias. It is written into AGENTS.md files across the estate and sits in the
+ * context of agents running right now, so renaming without an alias would turn
+ * every one of those into an unknown-tool error.
+ */
+export const CONNECT_TO_GENIE_PROMPT_NAME = 'connectToGenie';
 export const INITIALIZE_WORKSPACE_PROMPT_NAME = 'initializeWorkspace';
-const INITIALIZE_WORKSPACE_TOOL = {
-    name: INITIALIZE_WORKSPACE_PROMPT_NAME,
+
+/** Both names resolve to the same orientation. */
+export function isConnectToGenieName(name: string | undefined): boolean {
+    return name === CONNECT_TO_GENIE_PROMPT_NAME || name === INITIALIZE_WORKSPACE_PROMPT_NAME;
+}
+const CONNECT_TO_GENIE_TOOL = {
+    name: CONNECT_TO_GENIE_PROMPT_NAME,
     description:
         'Orient yourself in the current Genie workspace. Returns a map of the .agi envelope and every repo (paths, GitHub refs, orientation files), followed by a numbered learning plan. Call this first in a fresh or newly converted workspace.',
     inputSchema: {
@@ -1689,9 +1710,9 @@ const INITIALIZE_WORKSPACE_TOOL = {
         additionalProperties: false,
     },
 };
-const INITIALIZE_WORKSPACE_PROMPT = {
-    name: INITIALIZE_WORKSPACE_PROMPT_NAME,
-    title: 'Initialize workspace',
+const CONNECT_TO_GENIE_PROMPT = {
+    name: CONNECT_TO_GENIE_PROMPT_NAME,
+    title: 'Connect to Genie',
     description:
         'Orient in this Genie workspace: a map of the .agi envelope + every repo (paths, GitHub refs, orientation files) and a numbered plan for learning the project. Run this on first boot of a fresh/converted workspace.',
     // No required arguments; terminal is resolved from the connection.
@@ -3212,7 +3233,7 @@ const CORE_TOOLS = [
     SET_ENV_TOOL,
     CHECK_ENV_TOOL,
     SUBMIT_FEEDBACK_TOOL,
-    INITIALIZE_WORKSPACE_TOOL,
+    CONNECT_TO_GENIE_TOOL,
     AGENT_UPGRADE_TOOL,
     GUIDE_TOOL,
 ];
@@ -3242,8 +3263,11 @@ export async function handleMcpMessage(
                     prompts: { listChanged: false },
                 },
                 serverInfo: { name: ctx.serverName, version: ctx.serverVersion },
-                // MCP-native "how to use this server" channel. Mirrors genieGuide.
-                instructions: GENIE_MCP_GUIDE,
+                // MCP-native "how to use this server" channel. The PROTOCOL —
+                // what stops work stalling, and where to get the rest. The full
+                // manual is `genieGuide`, on demand, so an agent that never
+                // needs it never pays for it.
+                instructions: GENIE_PROTOCOL_BRIEF,
             });
 
         case 'notifications/initialized':
@@ -3287,16 +3311,18 @@ export async function handleMcpMessage(
         }
 
         case 'prompts/list':
-            return ok(msg.id, { prompts: [INITIALIZE_WORKSPACE_PROMPT] });
+            return ok(msg.id, { prompts: [
+                CONNECT_TO_GENIE_PROMPT,
+            ] });
 
         case 'prompts/get': {
             const name = (msg.params as { name?: string } | undefined)?.name;
-            if (name !== INITIALIZE_WORKSPACE_PROMPT_NAME) {
+            if (!isConnectToGenieName(name)) {
                 return err(msg.id, -32602, `Unknown prompt: ${String(name)}`);
             }
             const map = await ctx.describeWorkspace(ctx.terminalId);
             return ok(msg.id, {
-                description: INITIALIZE_WORKSPACE_PROMPT.description,
+                description: CONNECT_TO_GENIE_PROMPT.description,
                 messages: workspacePromptMessages(map),
             });
         }
@@ -3386,7 +3412,7 @@ export async function handleMcpMessage(
                     ],
                 });
             }
-            if (params.name === INITIALIZE_WORKSPACE_PROMPT_NAME) {
+            if (isConnectToGenieName(params.name)) {
                 const map = await ctx.describeWorkspace(ctx.terminalId);
                 const text = workspacePromptMessages(map)
                     .map((message) => message.content.text)

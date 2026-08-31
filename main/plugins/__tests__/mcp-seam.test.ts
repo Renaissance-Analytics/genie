@@ -104,7 +104,7 @@ describe('tools/list plugin generalization', () => {
             'setEnv',
             'checkEnv',
             'submitFeedback',
-            'initializeWorkspace',
+            'connectToGenie',
             'agentUpgrade',
             'genieGuide',
         ]);

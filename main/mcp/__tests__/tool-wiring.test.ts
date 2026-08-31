@@ -35,7 +35,7 @@ const DEPS = fs.readFileSync(
  * Tool name → the `ServerDeps` key behind it, where the two differ.
  *
  * The aliases are historical (`on*` for the two side-effect tools) or a
- * different noun for the same thing (`initializeWorkspace` is served by the
+ * different noun for the same thing (`connectToGenie` is served by the
  * workspace MAP). `genieGuide` has no dep at all: the protocol answers it from
  * the guide constant, so there is nothing for a shell to inject.
  */
@@ -44,7 +44,7 @@ const DEP_FOR_TOOL: Readonly<Record<string, string | null>> = {
     thumbsUp: 'onThumbsUp',
     ForceTheQuestion: 'onForceQuestion',
     agentinbox: 'agentInbox',
-    initializeWorkspace: 'describeWorkspace',
+    connectToGenie: 'describeWorkspace',
     agentUpgrade: null,
     genieGuide: null,
 };

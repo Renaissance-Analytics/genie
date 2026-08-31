@@ -69,7 +69,7 @@ describe('handleMcpMessage', () => {
         ).toBeNull();
     });
 
-    it('lists provisionWorkspaces for an Ops project and the Codex-callable initializeWorkspace tool', async () => {
+    it('lists provisionWorkspaces for an Ops project and the Codex-callable connectToGenie tool', async () => {
         const res = await handleMcpMessage(
             { jsonrpc: '2.0', id: 2, method: 'tools/list' },
             ctx({ isOpsProject: vi.fn().mockResolvedValue(true) }),
@@ -94,7 +94,7 @@ describe('handleMcpMessage', () => {
             'setEnv',
             'checkEnv',
             'submitFeedback',
-            'initializeWorkspace',
+            'connectToGenie',
             'agentUpgrade',
             'genieGuide',
         ]);
@@ -131,7 +131,7 @@ describe('handleMcpMessage', () => {
             'setEnv',
             'checkEnv',
             'submitFeedback',
-            'initializeWorkspace',
+            'connectToGenie',
             'agentUpgrade',
             'genieGuide',
         ]);
@@ -156,16 +156,16 @@ describe('handleMcpMessage', () => {
         expect(caps.tools).toBeDefined();
     });
 
-    it('lists the initializeWorkspace prompt via prompts/list', async () => {
+    it('lists the connectToGenie prompt via prompts/list', async () => {
         const res = await handleMcpMessage(
             { jsonrpc: '2.0', id: 21, method: 'prompts/list' },
             ctx(),
         );
         const prompts = (res?.result as { prompts: Array<{ name: string }> }).prompts;
-        expect(prompts.map((p) => p.name)).toEqual(['initializeWorkspace']);
+        expect(prompts.map((p) => p.name)).toEqual(['connectToGenie']);
     });
 
-    it('prompts/get initializeWorkspace routes to describeWorkspace and returns map + plan messages', async () => {
+    it('prompts/get connectToGenie routes to describeWorkspace and returns map + plan messages', async () => {
         const describeWorkspace = vi.fn().mockResolvedValue({
             root: '/ws/demo.agi',
             isAgiEnvelope: true,
@@ -205,7 +205,7 @@ describe('handleMcpMessage', () => {
                 jsonrpc: '2.0',
                 id: 22,
                 method: 'prompts/get',
-                params: { name: 'initializeWorkspace' },
+                params: { name: 'connectToGenie' },
             },
             ctx({ terminalId: 'term-X', describeWorkspace }),
         );
@@ -222,7 +222,7 @@ describe('handleMcpMessage', () => {
         expect(text).toContain('"isAgiEnvelope": true'); // machine-parseable JSON block
     });
 
-    it('tools/call initializeWorkspace returns the map + plan for clients without MCP prompts', async () => {
+    it('tools/call connectToGenie returns the map + plan for clients without MCP prompts', async () => {
         const describeWorkspace = vi.fn().mockResolvedValue({
             root: '/ws/demo.agi',
             isAgiEnvelope: true,
@@ -246,7 +246,7 @@ describe('handleMcpMessage', () => {
                 jsonrpc: '2.0',
                 id: 221,
                 method: 'tools/call',
-                params: { name: 'initializeWorkspace', arguments: {} },
+                params: { name: 'connectToGenie', arguments: {} },
             },
             ctx({ terminalId: 'term-X', describeWorkspace }),
         );
@@ -258,7 +258,7 @@ describe('handleMcpMessage', () => {
 
     it('prompts/get explains when the terminal maps to no workspace', async () => {
         const res = await handleMcpMessage(
-            { jsonrpc: '2.0', id: 23, method: 'prompts/get', params: { name: 'initializeWorkspace' } },
+            { jsonrpc: '2.0', id: 23, method: 'prompts/get', params: { name: 'connectToGenie' } },
             ctx({ describeWorkspace: vi.fn().mockResolvedValue(null) }),
         );
         const messages = (res?.result as { messages: Array<{ content: { text: string } }> }).messages;
@@ -1190,14 +1190,16 @@ describe('handleMcpMessage', () => {
         }
     });
 
-    it('serves the guide via initialize instructions and genieGuide', async () => {
+    it('serves the PROTOCOL via initialize instructions and the full guide via genieGuide', async () => {
         const init = await handleMcpMessage(
             { jsonrpc: '2.0', id: 8, method: 'initialize' },
             ctx(),
         );
-        expect((init?.result as { instructions: string }).instructions).toContain(
-            'Genie MCP',
-        );
+        // `instructions` is the PROTOCOL now, not the manual -- it names the entry
+        // point and the two tools that stop work stalling, and nothing else.
+        const instructions = (init?.result as { instructions: string }).instructions;
+        expect(instructions).toContain('connectToGenie');
+        expect(instructions).toContain('imDone');
         const call = await handleMcpMessage(
             {
                 jsonrpc: '2.0',
@@ -1217,9 +1219,9 @@ describe('handleMcpMessage', () => {
         expect(text).toContain('Automate imDone');
         expect(text).toContain('Stop');
         expect(text).toContain('$GENIE_MCP_URL');
-        // Documents the process tool + frames initializeWorkspace as a user-run prompt.
+        // Documents the process tool + frames connectToGenie as a user-run prompt.
         expect(text).toContain('manageProcess');
-        expect(text).toMatch(/initializeWorkspace[\s\S]*prompt/);
+        expect(text).toMatch(/connectToGenie[\s\S]*prompt/);
         // Documents the agent-control tools.
         expect(text).toContain('manageTerminals');
         expect(text).toContain('runAgent');

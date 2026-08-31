@@ -151,7 +151,7 @@ export const UNGRANTABLE_TOOLS: Readonly<Record<string, string>> = {
         'Orientation for an agent working IN Genie, not a surface for an installed app; it also describes tools the app was never granted.',
     agentUpgrade:
         'Migration instructions for a first-party AMS terminal, not a surface an installed app may impersonate.',
-    initializeWorkspace:
+    connectToGenie:
         'Hands back a map of the workspace and its repos — reconnaissance an app should not get for free from a tool meant to onboard agents.',
     manageGappDev:
         'Opens a REAL GApp window over whatever source a folder holds, with its own permission consent. An installed app that could drive that would be an app launching apps — a way to run unreviewed code in Genie’s own window that no capability the user granted describes.',
