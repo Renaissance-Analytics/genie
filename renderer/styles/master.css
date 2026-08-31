@@ -6642,3 +6642,58 @@ body.gutter-dragging .grid-gutter {
 .agent-tui-note.is-error {
     color: var(--red-500, #f48771);
 }
+
+/* ── The AGENT square's right-click menu ─────────────────────────────────────
+   Opens for an agent that is NOT running, which is exactly when it has no
+   terminal and so had no menu at all. Borrows `.ctx-menu`'s surface so the two
+   menus on this sidebar read as one thing; only the item shape differs, because
+   these items carry a line of explanation and the terminal menu's do not. */
+.agent-ctx-menu {
+    min-width: 230px;
+    max-width: 280px;
+}
+.ctx-header-sub {
+    display: block;
+    margin-top: 1px;
+    font-size: 11px;
+    color: var(--fg-3);
+}
+.agent-ctx-menu .ctx-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    width: 100%;
+    padding: 7px 10px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--fg-2);
+    text-align: left;
+    cursor: pointer;
+}
+.agent-ctx-menu .ctx-item:hover {
+    background: rgba(255, 255, 255, 0.07);
+    color: var(--fg-1);
+}
+.agent-ctx-menu .ctx-item.is-primary .ctx-item-label {
+    color: var(--fg-1);
+    font-weight: 600;
+}
+.agent-ctx-menu .ctx-item svg {
+    margin-top: 2px;
+    flex: 0 0 auto;
+}
+.ctx-item-body {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+}
+.ctx-item-label {
+    font-size: 12.5px;
+}
+.ctx-item-hint {
+    font-size: 11px;
+    line-height: 1.35;
+    color: var(--fg-3);
+}

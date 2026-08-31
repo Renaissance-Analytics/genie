@@ -40,6 +40,7 @@ import {
 import { agentStack } from '../../lib/agent-stack';
 import { workspaceInitials } from '../../lib/workspace-avatar';
 import AgentAvatarStack from './AgentAvatarStack';
+import AgentContextMenu from './AgentContextMenu';
 import TerminalTypeSplitButton from './TerminalTypeSplitButton';
 import { workspaceHasThumb, workspaceNeedsAttention } from '../../lib/attention';
 import { gappLaunchLabel, gappLaunchTarget } from '../../lib/gapp-launch';
@@ -248,6 +249,14 @@ export default function Chooser({
     // editProcId is set the form edits that process instead of creating one.
     const [addProcFor, setAddProcFor] = useState<string | null>(null);
     const [editProcId, setEditProcId] = useState<string | null>(null);
+    // Right-click menu for an AGENT square. Separate from the terminal menu
+    // because it opens for an agent that has no terminal -- which is the whole
+    // reason it exists: a paused agent's right-click did nothing at all.
+    const [agentMenu, setAgentMenu] = useState<{
+        ws: string;
+        row: AgentGridRow;
+        at: { x: number; y: number };
+    } | null>(null);
     // Right-click context menu for a process row.
     const [procMenu, setProcMenu] = useState<{
         spec: TerminalSpec;
@@ -1430,7 +1439,19 @@ export default function Chooser({
                                                                 }
                                                             }}
                                                             onContextMenu={(p) => {
+                                                                // A PAUSED agent has no spec, and
+                                                                // this used to be `if (specId)` --
+                                                                // so right-clicking one did nothing
+                                                                // and said nothing. The agent menu
+                                                                // is keyed on the RECORD, which a
+                                                                // stopped agent still has; a
+                                                                // running one also gets the
+                                                                // terminal menu, whose items act
+                                                                // on a terminal that exists.
                                                                 if (specId) onOpenContextMenu(specId, p);
+                                                                else if (row.kind === 'agent') {
+                                                                    setAgentMenu({ ws: ws.id, row, at: p });
+                                                                }
                                                             }}
                                                         />
                                                     );
@@ -1904,6 +1925,32 @@ export default function Chooser({
                         </button>
                     </div>
                 </div>,
+                document.body,
+            )}
+        {agentMenu &&
+            typeof document !== 'undefined' &&
+            createPortal(
+                <AgentContextMenu
+                    position={agentMenu.at}
+                    row={agentMenu.row}
+                    onClose={() => setAgentMenu(null)}
+                    onAct={(id) => {
+                        const { ws, row } = agentMenu;
+                        if (id === 'start') {
+                            onActivateWorkspace(ws);
+                            // The SAME path `runAgent start` takes, so the
+                            // workspace's agent cap still applies -- a menu
+                            // item must not be a way past a limit.
+                            void api().agents.start(ws, row.name).catch(() => {});
+                        } else if (id === 'make-default') {
+                            void api().agents.setDefault(ws, row.id).catch(() => {});
+                        } else if (id === 'clear-default') {
+                            void api().agents.setDefault(ws, null).catch(() => {});
+                        } else if (id === 'resolve-collision') {
+                            onActivateWorkspace(ws);
+                        }
+                    }}
+                />,
                 document.body,
             )}
         {procMenu &&

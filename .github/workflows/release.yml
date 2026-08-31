@@ -189,6 +189,19 @@ jobs:
           fi
           npx nextron build --mac
 
+      # Say whether the app is ACTUALLY signed. electron-builder prints one
+      # `skipped macOS application code signing` line among thousands and the
+      # job still goes green, so every release so far has shipped an unsigned
+      # mac build and reported success. Fails only when secrets were provided
+      # and signing did not happen -- an unsigned build with no certificate is
+      # expected and must still ship.
+      - name: Verify macOS signing
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+        run: node scripts/verify-mac-signing.mjs dist
+
       - name: Build (Linux)
         if: runner.os == 'Linux'
         env:

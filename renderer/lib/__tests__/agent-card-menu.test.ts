@@ -1,0 +1,88 @@
+import { describe, expect, it } from 'vitest';
+import { agentCardMenuItems } from '../agent-card-menu';
+import type { AgentGridRow } from '../ams-grid';
+
+/**
+ * A PAUSED agent has a right-click menu.
+ *
+ * The sidebar's agent squares opened their menu behind `if (specId)`, and a
+ * paused agent has no terminal spec — it is a registered agent whose runtime
+ * is not live. So right-clicking one did nothing at all, silently: the owner's
+ * report was "why the hell do I not have a menu for paused agents?"
+ *
+ * The cause is the menu being keyed on the TERMINAL rather than on the agent.
+ * That is the same mistake the whole agent redesign exists to undo — an agent
+ * is not its terminal, and the actions that matter most when it is NOT running
+ * (start it, make it the workspace default) need no terminal at all.
+ *
+ * So this model is built from the agent ROW. A running agent keeps the
+ * terminal menu, because its items — rename the terminal, restart, delete the
+ * terminal — genuinely act on a terminal that exists.
+ */
+
+const row = (over: Partial<AgentGridRow> = {}): AgentGridRow =>
+    ({
+        kind: 'agent',
+        id: 'a1',
+        name: 'ripple-builder',
+        purpose: 'builds',
+        avatar: null,
+        role: 'specialized',
+        provider: null,
+        tuis: [],
+        running: false,
+        collisionGroup: null,
+        ...over,
+    }) as AgentGridRow;
+
+const ids = (items: ReturnType<typeof agentCardMenuItems>) => items.map((i) => i.id);
+
+describe('agentCardMenuItems', () => {
+    it('offers to START a paused agent — the whole point of the menu', () => {
+        expect(ids(agentCardMenuItems(row()))).toContain('start');
+    });
+
+    it('offers to make it the workspace default', () => {
+        // A property OF an agent, and settable without the agent running.
+        const items = agentCardMenuItems(row());
+        expect(ids(items)).toContain('make-default');
+        expect(ids(items)).not.toContain('clear-default');
+    });
+
+    it('offers to CLEAR the designation on the agent that holds it', () => {
+        const items = agentCardMenuItems(row({ role: 'workspace' }));
+        expect(ids(items)).toContain('clear-default');
+        expect(ids(items)).not.toContain('make-default');
+    });
+
+    it('does not offer to start an agent that is already running', () => {
+        // POSITIVE CONTROL on the guard: a menu that always offered Start would
+        // give a second way to spawn past a live agent, which is the orphan bug
+        // this whole area exists to fix.
+        const items = agentCardMenuItems(row({ running: true, provider: 'claude' }));
+        expect(ids(items)).not.toContain('start');
+        // …but it is still an agent, so the agent-level items remain.
+        expect(ids(items)).toContain('make-default');
+    });
+
+    it('never offers agent actions for an ORPHAN', () => {
+        // An orphan is a terminal no agent owns. There is no record to start,
+        // designate, or rename — offering those would act on a guess.
+        expect(agentCardMenuItems(row({ kind: 'orphan' }))).toEqual([]);
+    });
+
+    it('marks a name conflict as needing the human, and offers nothing else', () => {
+        // Until someone picks which of two same-named agents survives, acting
+        // on "the" agent is ambiguous by construction.
+        const items = agentCardMenuItems(row({ collisionGroup: 'g1' }));
+        expect(ids(items)).toEqual(['resolve-collision']);
+    });
+
+    it('every item carries a label a human can read', () => {
+        for (const r of [row(), row({ running: true }), row({ role: 'workspace' })]) {
+            for (const item of agentCardMenuItems(r)) {
+                expect(item.label.trim().length).toBeGreaterThan(0);
+            }
+        }
+    });
+});
