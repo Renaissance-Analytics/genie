@@ -1666,8 +1666,15 @@ export function restartAgentTerminal(id: string): RestartAgentResult {
     // fresh launch using CURRENT provider settings. It must work even when the
     // old TUI never captured a resumable session or its input path is wedged.
     if (spec.meta?.system === true) {
-        const ws = getWorkspace(spec.workspace_id!);
-        if (!ws) return { ok: false, error: 'Genie OS workspace is unavailable.' };
+        // The OSA has NO workspace row -- by design, so deleting a project can
+        // never delete the workstation operator. This looked it up with
+        // `getWorkspace(spec.workspace_id!)`, asserting non-null on a value that
+        // is ALWAYS null here, so every restart failed with "Genie OS workspace
+        // is unavailable" and the operator could not be restarted at all.
+        //
+        // Its folder is its cwd, and `resolveAgentLaunch` takes the workspace
+        // optionally -- it needs a path, not a row.
+        const ws = { id: SYSTEM_WORKSPACE_ID, path: spec.cwd };
         const command = resolveAgentLaunch(provider, undefined, ws);
         if (!command) return { ok: false, error: `No command configured for agent "${provider}".` };
         const identity = spec.meta.agent_id;

@@ -28,7 +28,6 @@ export interface AgentFormValues {
     issuewatchHandle: boolean;
     /** How the agent reacts to an IssueWatch ping — `notify` glows its terminal;
      *  `wake` injects an idle-only nudge. Only meaningful when handling is on. */
-    issuewatchAction: 'notify' | 'wake';
 }
 
 // Who may DM this agent (the INNER tier). The workspace's own access setting
@@ -112,9 +111,6 @@ export default function AgentTerminalForm({
     const [issuewatchHandle, setIssuewatchHandle] = useState(
         () => initial?.issuewatchHandle ?? false,
     );
-    const [issuewatchAction, setIssuewatchAction] = useState<'notify' | 'wake'>(
-        () => initial?.issuewatchAction ?? 'notify',
-    );
 
     const ownWorkspace = useMemo(
         () => workspaces.find((w) => w.id === ownWorkspaceId),
@@ -154,7 +150,6 @@ export default function AgentTerminalForm({
             scopeWorkspaces: scope === 'specific' ? scopeWorkspaces : [],
             command: command.trim(),
             issuewatchHandle,
-            issuewatchAction,
         });
     };
 
@@ -253,26 +248,12 @@ export default function AgentTerminalForm({
                 </span>
             </label>
 
-            {issuewatchHandle && (
-                <label className="agent-form-field">
-                    <span className="agent-form-label">On a ping</span>
-                    <select
-                        className="input"
-                        value={issuewatchAction}
-                        onChange={(e) =>
-                            setIssuewatchAction(e.target.value as 'notify' | 'wake')
-                        }
-                    >
-                        <option value="notify">Notify — glow this terminal</option>
-                        <option value="wake">Wake — nudge a turn when idle</option>
-                    </select>
-                    <span className="agent-form-scope-desc">
-                        {issuewatchAction === 'wake'
-                            ? 'Injects a one-line nudge so an idle agent starts a turn and looks — only when it is provably idle, never mid-turn.'
-                            : 'Glows this terminal in the sidebar so you (or the agent) notice on the next turn — nothing is injected.'}
-                    </span>
-                </label>
-            )}
+            {/* NO "On a ping" selector. Waking an idle agent is ENFORCED at the
+                protocol level, not chosen per agent: an agent that had opted out
+                was unreachable while still looking reachable to everyone pinging
+                it. The rule is the same one AgentInbox uses -- nudge only when
+                the agent has failed to LOOK, and never mid-turn -- so there is
+                nothing here to configure. */}
 
             <div className="agent-form-preview">
                 Channel: <code>{`${slug}:${previewPurpose}`}</code>

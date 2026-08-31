@@ -2178,6 +2178,7 @@ function MasterInner() {
                         genieOsActive={!!genieOsSpec && activeIds.has(genieOsSpec.id)}
                         genieOsOpen={genieOsOpen}
                         onShowGenieOs={() => setGenieOsOpen((open) => !open)}
+                        setupIncomplete={onboardingOpen}
                     />
                     <UpdateReadyBanner />
                     <Toolbar
@@ -2457,15 +2458,6 @@ function MasterInner() {
                 );
             })()}
 
-            {onboardingOpen && !genieOsOpen && (
-                <button
-                    className="gbtn accent genie-osa-onboarding-return"
-                    style={{ position: 'fixed', right: 18, top: 54, zIndex: 80 }}
-                    onClick={() => setGenieOsOpen(true)}
-                >
-                    Continue workstation setup with Genie
-                </button>
-            )}
 
             {/* "Run a recipe" (Toolbar wand). Scoped to the active workspace:
                 the launcher lists every registered recipe (built-in + plugin —
@@ -2609,7 +2601,6 @@ function AgentSettingsModal({
                             : [],
                         command: typeof meta.agent_command === 'string' ? meta.agent_command : '',
                         issuewatchHandle: meta.issuewatch_handle === true,
-                        issuewatchAction: meta.issuewatch_action === 'wake' ? 'wake' : 'notify',
                     }}
                     submitLabel="Save"
                     busy={busy}
@@ -2625,7 +2616,6 @@ function AgentSettingsModal({
                                 scope_workspaces:
                                     v.scope === 'specific' ? v.scopeWorkspaces : [],
                                 issuewatch_handle: v.issuewatchHandle,
-                                issuewatch_action: v.issuewatchAction,
                             });
                             if (res.ok) onSaved();
                             else setError(res.error || 'Could not update the agent.');
@@ -3116,6 +3106,7 @@ function TitleBar({
     cornerInRail = false,
     genieOsActive = false,
     genieOsOpen = false,
+    setupIncomplete = false,
     onShowGenieOs,
 }: {
     isStage: boolean;
@@ -3137,6 +3128,7 @@ function TitleBar({
     onShowGithubCaps?: () => void;
     genieOsActive?: boolean;
     genieOsOpen?: boolean;
+    setupIncomplete?: boolean;
     onShowGenieOs?: () => void;
     /**
      * True in the master layout, where this bar is the RIGHT column's header
@@ -3329,6 +3321,16 @@ function TitleBar({
                         <button type="button" role="menuitem" onClick={() => void openWhatsNew()}>
                             What&apos;s new
                         </button>
+                        {/* Workstation setup lives in the MENU, not as a chip
+                            floating over the header. It only appears while setup
+                            is unfinished, so it disappears once it is done
+                            rather than becoming permanent furniture. */}
+                        {setupIncomplete && onShowGenieOs && (
+                            <button type="button" role="menuitem" onClick={() => {
+                                setSystemMenuOpen(false);
+                                onShowGenieOs();
+                            }}>Continue workstation setup</button>
+                        )}
                     </div>
                 )}
             </div>

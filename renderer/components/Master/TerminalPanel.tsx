@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { ShellProfile } from '@particle-academy/fancy-term';
 import Terminal from '../Terminal/Terminal';
@@ -44,6 +45,8 @@ interface Props {
     drag?: PanelDragHandlers;
     /** AgentPanel supplies agent-specific chrome while sharing the stable PTY host. */
     surface?: 'terminal' | 'agent';
+    /** Surface-specific header controls, rendered inside the actions row. */
+    headerActions?: ReactNode;
 }
 
 function toProfile(s: ShellDetection): ShellProfile {
@@ -83,6 +86,7 @@ export default function TerminalPanel({
     onMarkInactive,
     drag,
     surface = 'terminal',
+    headerActions,
 }: Props) {
     // Fire onMarkActive exactly once on mount, regardless of how many
     // times the panel rerenders. Cleaner than wiring this into XTerm.
@@ -189,6 +193,12 @@ export default function TerminalPanel({
                 )}
                 <span className="grow" />
                 <span className="pa">
+                    {/* Surface-specific controls (the agent restart) go INSIDE
+                        the actions row so layout spaces them. They used to be
+                        absolutely positioned at a hard-coded `right: 72px`,
+                        which overlapped these buttons the moment the set
+                        changed. */}
+                    {headerActions}
                     {onMinimize && !maximized && (
                         <button
                             type="button"

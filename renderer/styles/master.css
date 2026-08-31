@@ -6329,8 +6329,6 @@ body.gutter-dragging .grid-gutter {
 @keyframes genie-os-pulse { 50% { color: #35f2a3; filter: drop-shadow(0 0 5px #35f2a3); } }
 @media (prefers-reduced-motion: reduce) { .genie-os-flyout, .genie-os-backdrop { transition-duration: 1ms; } .genie-os-flyout, .genie-os-button { animation: none !important; } }
 .agent-panel-shell { position: relative; }
-.agent-panel-restart { position: absolute; top: 7px; right: 72px; z-index: 4; width: 26px; height: 24px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-1); color: var(--muted); cursor: pointer; }
-.agent-panel-restart:hover { color: var(--text); border-color: var(--violet-500); }
 .agent-panel-menu { min-width: 180px; padding: 6px; z-index: 1200; background: var(--bg-0); border: 1px solid var(--border); box-shadow: 0 16px 38px rgba(0, 0, 0, .38); }
 .agent-panel-menu button { width: 100%; display: flex; align-items: center; gap: 8px; border: 0; border-radius: 6px; padding: 8px 9px; background: transparent; color: var(--text); text-align: left; cursor: pointer; }
 .agent-panel-menu button:hover { background: var(--hover); }

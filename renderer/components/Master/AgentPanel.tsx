@@ -38,12 +38,27 @@ export default function AgentPanel(props: Props) {
             style={style}
             onContextMenu={openMenu}
         >
-            <TerminalPanel {...terminalProps} surface="agent" />
-            {onRestartAgent && (
-                <button type="button" className="agent-panel-restart" title="Restart agent" aria-label="Restart agent" onClick={onRestartAgent}>
-                    <IconRefresh size={14} />
-                </button>
-            )}
+            {/* The restart control rides in the panel's OWN actions row. It was
+                absolutely positioned at a hard-coded `right: 72px`, which
+                overlapped the panel's buttons -- a fixed offset cannot survive
+                the control set changing, and it had already stopped fitting. */}
+            <TerminalPanel
+                {...terminalProps}
+                surface="agent"
+                headerActions={
+                    onRestartAgent ? (
+                        <button
+                            type="button"
+                            className="pctl"
+                            title="Restart agent"
+                            aria-label="Restart agent"
+                            onClick={onRestartAgent}
+                        >
+                            <IconRefresh size={14} />
+                        </button>
+                    ) : undefined
+                }
+            />
             {menu && createPortal(
                 <div ref={menuRef} className="proj-popover ctx-menu agent-panel-menu" role="menu" style={{ position: 'fixed', left: menu.x, top: menu.y }}>
                     {onAgentSettings && <button type="button" role="menuitem" onClick={() => { setMenu(null); onAgentSettings(); }}><IconSettings size={14} /> Agent settings…</button>}
