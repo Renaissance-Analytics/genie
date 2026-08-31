@@ -363,6 +363,40 @@ Actions (\`action\`):
 (OFF runs immediately). \`list\`, \`read\`, and reattaching to an already-approved
 saved agent never prompt.
 
+### Sidecars — running an agent under more than one TUI
+
+An agent is not its TUI. A SIDECAR is a second driver the same agent holds: its
+own pty, its own conversation, running alongside the visible one. Switching
+drivers never stops anything, so the one you leave is simply parked and can be
+flipped back to instantly.
+
+Add one with \`runAgent switchTui\`, or from the driver control in the agent's
+panel. The agent's IDENTITY is unchanged either way -- same name, same
+AgentInbox, same history, same \`AGENT.md\`. Only the driver differs.
+
+**A sidecar is a general capability, not one feature.** What it is FOR is
+whatever the project needs. Some of the shapes it takes:
+
+- **A second opinion.** Ask the same question of a different model and compare.
+  Two harnesses disagreeing about a diagnosis is information, and it is cheapest
+  to get from an agent that already holds the context.
+- **Review from another perspective.** Have one driver write and another read --
+  the reviewer has the same repo and the same history, and no handover is needed.
+- **Shuttling data.** Long, mechanical fetch-and-transform work parked on a
+  sidecar leaves the visible driver free for the conversation you are actually
+  having.
+- **Administrative work.** Housekeeping, migrations, batch edits: real work that
+  does not need to occupy the driver you are talking to.
+
+None of these is built in. They are things a sidecar makes possible, and the
+reason the capability is deliberately unopinionated: Genie gives an agent more
+than one driver and gets out of the way.
+
+**Costs, so they are chosen and not discovered.** Every live sidecar is a real
+process holding a real conversation, and it spends tokens when it works. Genie
+never stops one for you -- not on a switch, not on a restart -- so stopping one
+is a deliberate act, and a sidecar you forgot is a sidecar still running.
+
 ### manageWorkspaces
 **Manage the Genie workspaces you can act on** — your own + (for an Ops agent)
 the ones you govern. Actions (\`action\`): \`list\`/\`status\` (read-only — each

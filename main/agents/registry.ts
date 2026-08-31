@@ -103,7 +103,10 @@ export const PROVIDER_REGISTRY: Record<AgentProviderId, ProviderDef> = {
         id: 'genie',
         label: 'Genie TUI',
         hint: 'Launch the local-first Genie TUI',
-        defaultCommand: 'genie-tui',
+        // The binary is `genie`. This said `genie-tui`, which does not exist --
+        // selecting the Genie TUI produced `bash: genie-tui: command not found`,
+        // so the provider was unusable from the moment it was listed.
+        defaultCommand: 'genie',
         commandSettingKey: 'agent_command_genie',
         flagsSettingKey: 'agent_flags_genie',
     },

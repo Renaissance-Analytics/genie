@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+    PROVIDER_IDS,
     PROVIDER_REGISTRY,
     agentProviders,
     providerDef,
@@ -228,5 +229,42 @@ describe('the silent skip this refactor exists to close', () => {
         );
         expect(found).toHaveLength(1);
         expect(found[0]?.name).toBe(agentName(undefined));
+    });
+});
+
+/**
+ * A provider's `defaultCommand` is the BINARY Genie will actually exec.
+ *
+ * `genie` shipped as `genie-tui`, which does not exist — selecting the Genie TUI
+ * produced `bash: genie-tui: command not found`, so the provider was unusable
+ * from the moment it appeared in the picker. Nothing caught it because nothing
+ * asserted the names: a command string is only wrong at spawn time, on someone
+ * else's machine.
+ *
+ * These pin the exact names rather than merely "non-empty", because non-empty is
+ * exactly what `genie-tui` was.
+ */
+describe('provider default commands', () => {
+    it('names the real binary for each provider', () => {
+        expect(PROVIDER_REGISTRY.claude.defaultCommand).toBe('claude');
+        expect(PROVIDER_REGISTRY.codex.defaultCommand).toBe('codex');
+        expect(PROVIDER_REGISTRY.kiwi.defaultCommand).toBe('kiwi');
+        expect(PROVIDER_REGISTRY.genie.defaultCommand).toBe('genie');
+    });
+
+    it('leaves `custom` empty — it has no binary of its own', () => {
+        // Positive control on the rule above: "every provider names a command"
+        // would be wrong here, and `custom` deliberately requires the caller to
+        // supply one.
+        expect(PROVIDER_REGISTRY.custom.defaultCommand).toBe('');
+    });
+
+    it('never names a command with a `-tui` suffix', () => {
+        // The specific mistake: a plausible-looking name nobody ships. Worth its
+        // own assertion because the next provider added is the next chance to
+        // invent one.
+        for (const id of PROVIDER_IDS) {
+            expect(PROVIDER_REGISTRY[id].defaultCommand, id).not.toMatch(/-tui$/);
+        }
     });
 });
