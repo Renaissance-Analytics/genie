@@ -735,6 +735,13 @@ const api = {
         remove: (id: string) => ipcRenderer.invoke('workspaces:remove', id),
         touch: (id: string) => ipcRenderer.invoke('workspaces:touch', id),
         reorder: (ids: string[]) => ipcRenderer.invoke('workspaces:reorder', ids),
+        /** The workspace's own mark. One glyph; '' clears it back to the
+         *  initials. Rejects longer input rather than truncating. */
+        setIcon: (id: string, icon: string | null) =>
+            ipcRenderer.invoke('workspaces:setIcon', id, icon) as Promise<{
+                ok: boolean;
+                error?: string;
+            }>,
         setMcp: (id: string, enabled: boolean) =>
             ipcRenderer.invoke('workspaces:set-mcp', id, enabled),
         setWorkstationOperator: (id: string, on: boolean) =>
@@ -1381,6 +1388,13 @@ const api = {
             }>,
         front: (agentId: string, runtimeId: string) =>
             ipcRenderer.invoke('agents:front', agentId, runtimeId) as Promise<boolean>,
+        /** The agent's own mark. One glyph; '' clears it back to the TUI's
+         *  brand mark. Rejects longer input rather than truncating. */
+        setAvatar: (agentId: string, avatar: string | null) =>
+            ipcRenderer.invoke('agents:setAvatar', agentId, avatar) as Promise<{
+                ok: boolean;
+                error?: string;
+            }>,
     },
     ask: {
         onShow: (

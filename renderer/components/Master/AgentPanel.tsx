@@ -11,6 +11,8 @@ type Props = ComponentProps<typeof TerminalPanel> & {
     /** This agent's record id + the TUIs it may run under — drives the panel's
      *  driver switcher. Absent for a panel whose agent has no record yet. */
     agentId?: string;
+    /** This agent's own mark, so the avatar field opens showing what is set. */
+    agentAvatar?: string | null;
     runtimes?: AgentRuntimeSpec[];
     onRuntimesChanged?: () => void;
 };
@@ -23,7 +25,7 @@ type Props = ComponentProps<typeof TerminalPanel> & {
  */
 export default function AgentPanel(props: Props) {
     const provider = String(props.spec.meta.agent ?? 'custom');
-    const { style, onAgentSettings, onRestartAgent, agentId, runtimes, onRuntimesChanged,
+    const { style, onAgentSettings, onRestartAgent, agentId, agentAvatar, runtimes, onRuntimesChanged,
         ...terminalProps } = props;
     const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
     const menuRef = useRef<HTMLDivElement>(null);
@@ -59,6 +61,7 @@ export default function AgentPanel(props: Props) {
                         {agentId && (
                             <AgentTuiSwitcher
                                 agentId={agentId}
+                                avatar={agentAvatar}
                                 runtimes={runtimes ?? []}
                                 onChanged={() => onRuntimesChanged?.()}
                             />

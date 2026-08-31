@@ -1,5 +1,6 @@
 import { IconBox, IconLayoutGrid } from './icons';
 import TerminalGrid from './TerminalGrid';
+import type { AgentRecordSpec, AgentRuntimeSpec } from '../../lib/ams-grid';
 import type { LayoutMode } from './TerminalGrid';
 import type { AgentInboxIncomingNotice, TerminalSpec, WorkspaceRow } from '../../lib/genie';
 
@@ -27,6 +28,10 @@ export interface FloorState {
     /** Off-workspace selected specs, rendered mounted-hidden to keep ptys alive. */
     backgroundSpecs?: TerminalSpec[];
     workspacesById: Map<string, WorkspaceRow>;
+    /** The active workspace's registered agents + their TUIs. Reaches each
+     *  agent panel so its driver control knows which agent it is showing. */
+    agentRecord?: { agents: AgentRecordSpec[]; runtimes: AgentRuntimeSpec[] };
+    onRuntimesChanged?: () => void;
     activeWorkspaceId?: string | null;
     focusId: string | null;
     attentionIds: Set<string>;

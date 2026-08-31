@@ -6629,3 +6629,16 @@ body.gutter-dragging .grid-gutter {
     align-items: center;
     gap: 10px;
 }
+
+/* The agent's own mark, in the driver popover. Same field chrome as the rest of
+   the menu — it is part of "what is this agent", not a settings excursion. */
+.agent-tui-avatar {
+    padding: 4px 8px 6px;
+}
+.agent-tui-avatar .input {
+    width: 100%;
+    font-size: 12px;
+}
+.agent-tui-note.is-error {
+    color: var(--red-500, #f48771);
+}

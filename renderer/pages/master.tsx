@@ -263,6 +263,14 @@ function MasterInner() {
         agents: AgentRecordSpec[];
         runtimes: AgentRuntimeSpec[];
     } | null>(null);
+    // The ACTIVE workspace's agents, for the panels on the floor. Separate from
+    // `agentRecord` above, which belongs to whichever agent the settings modal
+    // has open and is cleared when it closes -- a panel's driver control must
+    // not blink out because someone shut a modal.
+    const [activeAgentRecord, setActiveAgentRecord] = useState<{
+        agents: AgentRecordSpec[];
+        runtimes: AgentRuntimeSpec[];
+    } | null>(null);
     const [selected, setSelected] = useState<Set<string>>(() => new Set());
     // The workspace whose views fill the grid. Persisted as the
     // `active_workspace` setting; seeded on launch from that setting (or the
@@ -525,6 +533,18 @@ function MasterInner() {
         }
         void api().agents.list(agentEditWorkspace).then(setAgentRecord).catch(() => {});
     }, [agentEditWorkspace]);
+    // The ACTIVE workspace's agents, for the panels on the floor. Re-read on a
+    // driver switch so the control shows what happened rather than what was
+    // clicked -- `addRuntime` can front an existing sidecar instead of adding
+    // one, and the two look different.
+    const reloadActiveAgents = useCallback(() => {
+        if (!activeWorkspaceId) {
+            setActiveAgentRecord(null);
+            return;
+        }
+        void api().agents.list(activeWorkspaceId).then(setActiveAgentRecord).catch(() => {});
+    }, [activeWorkspaceId]);
+    useEffect(reloadActiveAgents, [reloadActiveAgents]);
     // GitHub capability gate: which GitHub-powered features are unavailable
     // because the App is missing permissions on the user's installation. Drives
     // a persistent header warning + a resolve flyout (also auto-shown once on
@@ -2231,6 +2251,8 @@ function MasterInner() {
                         window is a single workspace and derives the same shape
                         from far less. */}
                     <Floor
+                        agentRecord={activeAgentRecord ?? undefined}
+                        onRuntimesChanged={reloadActiveAgents}
                         specs={selectedSpecs}
                         backgroundSpecs={backgroundSpecs}
                         workspacesById={workspacesById}

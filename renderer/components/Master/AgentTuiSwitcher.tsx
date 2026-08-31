@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Popover } from '@particle-academy/react-fancy';
 import { api } from '../../lib/genie';
 import type { AgentRuntimeSpec } from '../../lib/ams-grid';
@@ -23,11 +24,16 @@ export default function AgentTuiSwitcher({
     agentId,
     runtimes,
     onChanged,
+    avatar,
 }: {
     agentId: string;
     runtimes: AgentRuntimeSpec[];
+    /** The agent's current mark, so the field opens showing what is set. */
+    avatar?: string | null;
     onChanged: () => void;
 }) {
+    const [mark, setMark] = useState(avatar ?? '');
+    const [markError, setMarkError] = useState<string | null>(null);
     const mine = runtimes.filter((r) => r.agentId === agentId);
     const fronted = mine.find((r) => r.fronted);
     const sidecars = mine.filter((r) => !r.fronted);
@@ -41,6 +47,25 @@ export default function AgentTuiSwitcher({
         )
             .then(onChanged)
             .catch(() => {});
+    };
+
+    // The agent's OWN mark, overriding the TUI brand icon everywhere it is
+    // drawn. It belongs beside the driver control because both answer "what is
+    // this agent" -- and because the brand mark it replaces is the thing the
+    // driver control changes.
+    const saveMark = (next: string): void => {
+        setMark(next);
+        setMarkError(null);
+        void api()
+            .agents.setAvatar(agentId, next)
+            .then((r) => {
+                // Main REJECTS more than one glyph rather than truncating, so
+                // the reason is shown; a silently dropped avatar reads as a
+                // dead field.
+                if (!r.ok) setMarkError(r.error ?? 'Could not save that avatar.');
+                else onChanged();
+            })
+            .catch(() => setMarkError('Could not save that avatar.'));
     };
 
     return (
@@ -91,6 +116,21 @@ export default function AgentTuiSwitcher({
                 <div className="agent-tui-note">
                     Switching keeps this agent — its inbox, history and prompt. The TUI you
                     leave keeps its conversation as a sidecar; nothing is stopped.
+                </div>
+                <div className="agent-tui-head">Avatar</div>
+                <div className="agent-tui-avatar">
+                    <input
+                        className="input"
+                        value={mark}
+                        onChange={(e) => saveMark(e.target.value)}
+                        placeholder="Emoji — empty uses the driver's logo"
+                        aria-label="Agent avatar"
+                        spellCheck={false}
+                    />
+                </div>
+                <div className={`agent-tui-note${markError ? ' is-error' : ''}`}>
+                    {markError ??
+                        'Shown wherever this agent appears. Clear it to go back to the driver’s own mark.'}
                 </div>
             </Popover.Content>
         </Popover>

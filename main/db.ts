@@ -1844,6 +1844,70 @@ export function setWorkspaceDefaultAgent(
     return true;
 }
 
+/**
+ * The user's own mark for a workspace or an agent — ONE glyph, or nothing.
+ *
+ * Both slots are ~18px squares sitting in a row of other 18px squares, so the
+ * value has to be a single grapheme. Rejecting longer input is not fussiness:
+ * a pasted word renders as overflow in the workspace rail, the flyout row, the
+ * avatar stack and the agent grid at once, and there is no width anywhere to
+ * absorb it.
+ *
+ * Empty means NULL, never ''. The renderer treats any truthy value as the
+ * user's choice, so an empty string would render a blank square permanently
+ * instead of returning to the initials or the provider's brand mark.
+ *
+ * Counted in GRAPHEMES rather than code points, because the emoji people
+ * actually pick are several code points each — a flag is two, a ZWJ sequence
+ * like a person-at-a-laptop is five or more — and a code-point cap either
+ * rejects them or, worse, stores half of one.
+ */
+function normalizeGlyph(value: string | null | undefined, label: string): string | null {
+    const trimmed = (value ?? '').trim();
+    if (!trimmed) return null;
+    let count: number;
+    try {
+        const seg = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+        count = Array.from(seg.segment(trimmed)).length;
+    } catch {
+        // No Segmenter: fall back to code points. Coarser, so it lets a couple
+        // of odd sequences through rather than rejecting a valid emoji.
+        count = Array.from(trimmed).length > 8 ? 2 : 1;
+    }
+    if (count > 1) {
+        throw new Error(
+            `${label} is too long: expected a single glyph, got ${count}. ` +
+                'Clear it to fall back to the default mark.',
+        );
+    }
+    return trimmed;
+}
+
+/** Set (or clear, with '' / null) a workspace's own icon. */
+export function setWorkspaceIcon(
+    d: Database.Database,
+    workspaceId: string,
+    icon: string | null | undefined,
+): void {
+    const value = normalizeGlyph(icon, 'Workspace icon');
+    d.prepare('UPDATE workspaces SET icon = ? WHERE id = ?').run(value, workspaceId);
+}
+
+/** Set (or clear, with '' / null) an agent's avatar. Cleared means the
+ *  provider's brand mark comes back, which is the documented default. */
+export function setAgentAvatar(
+    d: Database.Database,
+    agentId: string,
+    avatar: string | null | undefined,
+): void {
+    const value = normalizeGlyph(avatar, 'Agent avatar');
+    d.prepare('UPDATE workspace_agents SET avatar = ?, updated_at = ? WHERE id = ?').run(
+        value,
+        Date.now(),
+        agentId,
+    );
+}
+
 // Settings helpers ------------------------------------------------------
 
 export interface Settings extends ProviderSettingKeys {

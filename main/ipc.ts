@@ -14,6 +14,9 @@ import {
     listAgentRuntimes,
     frontAgentRuntime,
     setWorkspaceDefaultAgent,
+    setWorkspaceIcon,
+    setAgentAvatar,
+    getDb,
     createAgentRuntime,
     listWorkspaces,
     removeWorkspace,
@@ -610,6 +613,31 @@ export function registerIpcHandlers(): void {
     ipcMain.handle('agents:setDefault', (_e, workspaceId: string, agentId: string | null) =>
         setWorkspaceDefaultAgent(String(workspaceId ?? ''), agentId ? String(agentId) : null),
     );
+    // The user's own mark, for a workspace and for an agent. Both slots already
+    // PREFERRED a set value over the initials / the provider brand mark; there
+    // was simply no way to set one, so the fallback was the only reachable
+    // value. Rejection is surfaced rather than swallowed -- a silently ignored
+    // icon looks like the control is broken.
+    ipcMain.handle('agents:setAvatar', (_e, agentId: string, avatar: string | null) => {
+        try {
+            setAgentAvatar(getDb(), String(agentId ?? ''), avatar);
+            return { ok: true };
+        } catch (e) {
+            return { ok: false, error: e instanceof Error ? e.message : String(e) };
+        }
+    });
+    ipcMain.handle('workspaces:setIcon', (_e, workspaceId: string, icon: string | null) => {
+        try {
+            setWorkspaceIcon(getDb(), String(workspaceId ?? ''), icon);
+            // Same reason a rename broadcasts: the mark is drawn in the rail,
+            // the flyout row and the window chrome, and a change the user
+            // cannot see until relaunch reads as the control doing nothing.
+            broadcastWorkspacesChanged();
+            return { ok: true };
+        } catch (e) {
+            return { ok: false, error: e instanceof Error ? e.message : String(e) };
+        }
+    });
     // Add a TUI an agent may run under, and front it. The TERMINAL is not
     // started here: `runAgent start` owns the approval gate and the agent cap,
     // and a switch must not become a second way past either.

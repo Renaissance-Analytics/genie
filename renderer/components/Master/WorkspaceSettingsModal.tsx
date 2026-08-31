@@ -16,6 +16,7 @@ import type {
 import { api } from '../../lib/genie';
 import { scopeValue, setScopeEntry } from '../../lib/ftq-availability';
 import { resolveWorkspaceKind } from '../../lib/workspace-kind';
+import { workspaceInitials } from '../../lib/workspace-avatar';
 import {
     agentCapField,
     describeInheritedAgentCap,
@@ -84,6 +85,12 @@ export default function WorkspaceSettingsModal({
     const [name, setName] = useState(workspace.project_name);
     const [savingName, setSavingName] = useState(false);
     const [nameSaved, setNameSaved] = useState(false);
+    // The workspace's OWN mark. Empty means the initials, which is the default
+    // and not a missing value -- so clearing the box is a real, saveable
+    // choice rather than a no-op.
+    const [icon, setIcon] = useState(workspace.icon ?? '');
+    const [iconError, setIconError] = useState<string | null>(null);
+    const [iconSaved, setIconSaved] = useState(false);
     // Per-workspace "require approval before an agent starts a process".
     const [processApproval, setProcessApproval] = useState<boolean | null>(null);
     // WORKSTATION OPERATOR (Tynn #248): this workspace's agent may act on EVERY
@@ -133,6 +140,26 @@ export default function WorkspaceSettingsModal({
     // The RAW workstation default setting, so the field can say what an empty box
     // inherits — the actual number, not the word "default".
     const [capDefault, setCapDefault] = useState<string | undefined>(undefined);
+
+    const saveIcon = async (next: string): Promise<void> => {
+        setIcon(next);
+        setIconError(null);
+        const r = await api()
+            .workspaces.setIcon(workspace.id, next)
+            .catch((e: unknown) => ({
+                ok: false,
+                error: e instanceof Error ? e.message : String(e),
+            }));
+        // Main REJECTS anything longer than a glyph rather than truncating, so
+        // the reason has to reach the user -- a silently dropped icon reads as
+        // a broken control.
+        if (!r.ok) {
+            setIconError(r.error ?? 'Could not save that icon.');
+            return;
+        }
+        setIconSaved(true);
+        setTimeout(() => setIconSaved(false), 1800);
+    };
 
     const saveName = async () => {
         const next = name.trim();
@@ -346,6 +373,33 @@ export default function WorkspaceSettingsModal({
                         ) : undefined
                     }
                 >
+                    {/* The workspace's MARK, beside the name it belongs to.
+                        Both are identity; splitting them across sections would
+                        make the icon feel like a setting rather than part of
+                        what the workspace IS. */}
+                    <div className="ws-name-row" style={{ marginBottom: 8 }}>
+                        <Input
+                            value={icon}
+                            onValueChange={(v: string) => void saveIcon(v)}
+                            placeholder="Icon — one emoji, or empty for initials"
+                            aria-label="Workspace icon"
+                            style={{ maxWidth: 260 }}
+                        />
+                        <Text size="xs" style={{ color: 'var(--fg-3)' }}>
+                            {iconError ? (
+                                <span style={{ color: 'var(--red-500, #f48771)' }}>
+                                    {iconError}
+                                </span>
+                            ) : iconSaved ? (
+                                <>
+                                    <Icon name="check" size="xs" /> Saved
+                                </>
+                            ) : (
+                                <>Shown in the rail and the sidebar. Empty falls back to “
+                                {workspaceInitials(workspace.project_name)}”.</>
+                            )}
+                        </Text>
+                    </div>
                     <div className="ws-name-row">
                         <Input
                             value={name}

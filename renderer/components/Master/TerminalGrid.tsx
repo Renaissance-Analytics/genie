@@ -8,6 +8,8 @@ import {
 } from 'react';
 import TerminalPanel from './TerminalPanel';
 import AgentPanel from './AgentPanel';
+import { agentForSpec } from '../../lib/agent-for-spec';
+import type { AgentRecordSpec, AgentRuntimeSpec } from '../../lib/ams-grid';
 import CodePanel from '../Code/CodePanel';
 import PluginEditorHost from '../Plugins/PluginEditorHost';
 import PluginPanelHost from '../Plugins/PluginPanelHost';
@@ -49,6 +51,13 @@ interface Props {
      */
     backgroundSpecs?: TerminalSpec[];
     workspacesById: Map<string, WorkspaceRow>;
+    /** The active workspace's registered agents and their TUIs. An agent panel
+     *  needs the RECORD to know which agent it shows; without it the driver
+     *  control cannot render at all. */
+    agentRecord?: { agents: AgentRecordSpec[]; runtimes: AgentRuntimeSpec[] };
+    /** Re-read the record after a switch, so the control reflects what happened
+     *  rather than what was clicked. */
+    onRuntimesChanged?: () => void;
     /** Active workspace id — keys the persisted per-workspace track sizes. */
     activeWorkspaceId?: string | null;
     focusId: string | null;
@@ -119,6 +128,8 @@ interface FrTracks {
  * the gutters and gives the maximised panel the full area.
  */
 export default function TerminalGrid({
+    agentRecord,
+    onRuntimesChanged,
     specs,
     backgroundSpecs = [],
     workspacesById,
@@ -216,6 +227,8 @@ export default function TerminalGrid({
 
     return (
         <ResizableGrid
+            agentRecord={agentRecord}
+            onRuntimesChanged={onRuntimesChanged}
             mode={mode}
             ordered={ordered}
             panelDrag={panelDrag}
@@ -248,6 +261,10 @@ export default function TerminalGrid({
 }
 
 interface ResizableGridProps {
+    /** The active workspace's agents + TUIs, forwarded to each agent panel
+     *  so its driver control can tell WHICH agent it is showing. */
+    agentRecord?: { agents: AgentRecordSpec[]; runtimes: AgentRuntimeSpec[] };
+    onRuntimesChanged?: () => void;
     mode: ResolvedMode;
     /** Active-workspace visible specs, ordered for the resolved mode. */
     ordered: TerminalSpec[];
@@ -286,6 +303,8 @@ function evenTracks(n: number): number[] {
 }
 
 const ResizableGrid = ({
+    agentRecord,
+    onRuntimesChanged,
     mode,
     ordered,
     background,
@@ -513,6 +532,8 @@ const ResizableGrid = ({
                         <PanelFor
                             spec={p.spec}
                             workspacesById={workspacesById}
+                            agentRecord={agentRecord}
+                            onRuntimesChanged={onRuntimesChanged}
                             focused={p.visible && focusId === p.spec.id}
                             attention={attentionIds.has(p.spec.id)}
                             pendingNudge={pendingNudges[p.spec.id]}
@@ -724,6 +745,12 @@ interface PanelForProps {
     onMarkInactive: () => void;
     /** Drag-reorder wiring for this tile (undefined = not reorderable). */
     drag?: PanelDragHandlers;
+    /** The workspace's registered agents + their TUIs, so an agent panel can
+     *  find WHICH agent it is showing and render the driver control. Without
+     *  this the control's `agentId &&` guard is false and it never renders --
+     *  which is exactly how it shipped built-but-invisible. */
+    agentRecord?: { agents: AgentRecordSpec[]; runtimes: AgentRuntimeSpec[] };
+    onRuntimesChanged?: () => void;
 }
 
 /**
@@ -750,6 +777,8 @@ function PanelFor({
     onMarkActive,
     onMarkInactive,
     drag,
+    agentRecord,
+    onRuntimesChanged,
 }: PanelForProps) {
     const workspace = spec.workspace_id
         ? workspacesById.get(spec.workspace_id)
@@ -807,9 +836,23 @@ function PanelFor({
     }
 
     if (spec.type === 'terminal' && typeof spec.meta.agent === 'string') {
+        // WHICH agent this panel is, via the runtime that holds this terminal.
+        // Null for an orphan spec no runtime claims -- the driver control stays
+        // hidden there rather than acting on a guessed agent.
+        const owner = agentRecord
+            ? agentForSpec({
+                  agents: agentRecord.agents,
+                  runtimes: agentRecord.runtimes,
+                  specId: spec.id,
+              })
+            : null;
         return (
             <AgentPanel
                 spec={spec}
+                agentId={owner?.id}
+                agentAvatar={owner?.avatar ?? null}
+                runtimes={agentRecord?.runtimes ?? []}
+                onRuntimesChanged={onRuntimesChanged}
                 workspace={workspace}
                 attention={attention}
                 pendingNudge={pendingNudge}

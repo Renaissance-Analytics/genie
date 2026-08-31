@@ -3193,6 +3193,10 @@ export interface GenieApi {
         touch: (id: string) => Promise<{ ok: boolean }>;
         /** Persist a new sidebar order (full ordered list of workspace ids). */
         reorder: (ids: string[]) => Promise<{ ok: boolean }>;
+        /** The workspace's own mark. ONE glyph; '' clears it back to the
+         *  initials. Rejects longer input rather than truncating, so the error
+         *  is meant to be shown. */
+        setIcon: (id: string, icon: string | null) => Promise<{ ok: boolean; error?: string }>;
         /** Toggle the agent-integration MCP for a workspace's terminals. */
         setMcp: (id: string, enabled: boolean) => Promise<{ ok: boolean }>;
         /** Designate (or clear) this workspace as the WORKSTATION OPERATOR — its
@@ -3951,6 +3955,12 @@ export interface GenieApi {
             provider: string,
         ) => Promise<{ ok: boolean; runtimeId: string }>;
         front: (agentId: string, runtimeId: string) => Promise<boolean>;
+        /** The agent's own mark. ONE glyph; '' clears it back to the TUI's
+         *  brand mark. Rejects longer input rather than truncating. */
+        setAvatar: (
+            agentId: string,
+            avatar: string | null,
+        ) => Promise<{ ok: boolean; error?: string }>;
     };
     ask: {
         onShow: (
