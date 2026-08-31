@@ -1,7 +1,16 @@
 import { BrowserWindow, ipcMain, powerMonitor, shell } from 'electron';
 import crypto from 'crypto';
 import path from 'path';
-import { getAllSettings } from '../db';
+import { getAllSettings, setSettings } from '../db';
+import {
+    dropDraft,
+    parseDraftStore,
+    pruneDrafts,
+    putDraft,
+    serializeDraftStore,
+    type AskDraftEntry,
+    type AskDraftStore,
+} from './draft-store';
 import { LOCAL_CONN_KEY, openTestingBrowser } from '../testing-browser';
 import { wireAskLinkRouting } from './link-route';
 import { resolveAlertSound, deliverAlertSound } from '../notify-sound';
@@ -452,8 +461,24 @@ function payloadFor(item: QueueItem): {
  * user pick which to answer next / defer / dismiss. No-op when the window is down.
  */
 function pushQueue(): void {
+    // The queue is the list of questions that still exist, so this is where the
+    // draft store learns what to forget. Questions also leave by routes that
+    // never touch this process -- retracted by their agent, answered on the
+    // phone, resolved by the host first -- and without a prune the store grows
+    // without bound and a recycled id hands someone a stranger's half-answer.
+    const pending = listPendingQuestions();
+    try {
+        const drafts = readDrafts();
+        const pruned = pruneDrafts(drafts, pending.map((q) => q.id));
+        if (Object.keys(pruned).length !== Object.keys(drafts).length) writeDrafts(pruned);
+    } catch {
+        /* Housekeeping must never take the queue push down with it. This runs on
+           the path that SHOWS a question, and the store is reachable only through
+           settings -- which is not initialised in every context that raises one.
+           Losing a draft is bad; losing the question is worse. */
+    }
     if (win && !win.isDestroyed()) {
-        win.webContents.send('ask:queue', { pending: listPendingQuestions() });
+        win.webContents.send('ask:queue', { pending });
     }
 }
 
@@ -477,6 +502,10 @@ function finish(id: string, result: ForceQuestionResult): void {
     const idx = queue.findIndex((q) => q.id === id);
     if (idx === -1) return;
     const [item] = queue.splice(idx, 1);
+    // Answered or cancelled, the draft has done its job. Dropping it here
+    // covers every route out -- the modal, the flyout, the phone, and a host
+    // question resolved first -- because they all land in finish().
+    forgetDraft(item.id);
     item.resolve(result);
     // A pending question was removed — tell the mobile push channel so it can
     // emit question:resolved. Fires for BOTH head and queued removals.
@@ -507,10 +536,50 @@ function itemBySender(senderId: number): QueueItem | undefined {
 }
 
 /** Register the ask IPC handlers + capture window config. Idempotent. */
+/**
+ * The part-typed answers, in settings so they survive a window being destroyed
+ * AND an app restart. Someone who steps away mid-answer to check something is
+ * exactly as likely to close Genie as to close the modal.
+ */
+const DRAFTS_SETTING = 'ask_drafts';
+
+function readDrafts(): AskDraftStore {
+    try {
+        return parseDraftStore(
+            (getAllSettings() as Record<string, string | undefined>)[DRAFTS_SETTING],
+        );
+    } catch {
+        return {};
+    }
+}
+
+function writeDrafts(store: AskDraftStore): void {
+    try {
+        setSettings({ [DRAFTS_SETTING]: serializeDraftStore(store) } as never);
+    } catch {
+        /* a lost draft must never take the question down with it */
+    }
+}
+
+/** Forget one question's draft — it has been answered or cancelled. */
+function forgetDraft(id: string): void {
+    const store = readDrafts();
+    if (!(id in store)) return;
+    writeDrafts(dropDraft(store, id));
+}
+
 export function registerForceQuestionIpc(cfg: Config): void {
     config = cfg;
     if (registered) return;
     registered = true;
+
+    // A part-typed answer, so closing the modal or the flyout does not discard
+    // it. Both surfaces read and write the SAME entry, keyed by question id, so
+    // an answer begun in one is finished in the other.
+    ipcMain.handle('ask:draft:get', (_e, id: string) => readDrafts()[id] ?? null);
+    ipcMain.handle('ask:draft:set', (_e, id: string, entry: AskDraftEntry) => {
+        writeDrafts(putDraft(readDrafts(), id, entry));
+    });
 
     ipcMain.handle('ask:answer', (_e, id: string, answers: ForceAnswer[]) => {
         finish(id, { cancelled: false, answers: answers ?? [] });

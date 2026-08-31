@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+    cardStateFromDraft,
     clearDraft,
+    draftFromCardState,
     draftFor,
     draftToAnswers,
     isDraftReady,
@@ -161,5 +163,51 @@ describe('draftToAnswers', () => {
             { header: 'Ship', question: 'Ship it?', selected: ['Yes'], note: '' },
             { header: 'When', question: 'When?', selected: [], note: 'after lunch' },
         ]);
+    });
+});
+
+/**
+ * The two surfaces store a part-typed answer in DIFFERENT shapes, and both must
+ * round-trip through the one draft main holds.
+ *
+ * The FTQ modal keeps `{ selected: {qi: labels}, notes: {qi: text} }`; the
+ * question flyout keeps `{ qi: { selected, note } }` — the same facts,
+ * transposed. Main stores the modal's shape, so the flyout converts both ways.
+ * A transposition that drops a field is exactly the kind of thing that looks
+ * right and silently loses the note.
+ */
+describe('flyout ↔ draft conversion', () => {
+    const cardState = {
+        0: { selected: ['Yes'], note: 'because of the migration' },
+        2: { selected: ['A', 'B'], note: '' },
+    };
+    const draft = {
+        selected: { 0: ['Yes'], 2: ['A', 'B'] },
+        notes: { 0: 'because of the migration', 2: '' },
+    };
+
+    it('carries every selection AND note into the stored draft', () => {
+        expect(draftFromCardState(cardState)).toEqual(draft);
+    });
+
+    it('restores both halves coming back', () => {
+        expect(cardStateFromDraft(draft)).toEqual(cardState);
+    });
+
+    it('round-trips without losing a question that has only a note', () => {
+        // Typing a note without picking an option is a real answer, and the one
+        // most easily dropped by a converter that keys off selections.
+        const noteOnly = { 1: { selected: [], note: 'none of these' } };
+        expect(cardStateFromDraft(draftFromCardState(noteOnly))).toEqual(noteOnly);
+    });
+
+    it('round-trips a selection with no note', () => {
+        const pickOnly = { 0: { selected: ['Yes'], note: '' } };
+        expect(cardStateFromDraft(draftFromCardState(pickOnly))).toEqual(pickOnly);
+    });
+
+    it('turns an empty draft into an empty form, not a crash', () => {
+        expect(cardStateFromDraft({ selected: {}, notes: {} })).toEqual({});
+        expect(draftFromCardState({})).toEqual({ selected: {}, notes: {} });
     });
 });
