@@ -13,7 +13,7 @@ import { createTray, rebuildMenu } from './tray';
 import { registerShortcuts, unregisterShortcuts } from './shortcuts';
 import { launchedFromAutostart } from './autostart';
 import { resolveWorkstationProvider } from './agents/provider';
-import { ensureGenieOsWorkspace } from './agents/os-workspace';
+import { ensureGenieOsWorkspace, wireGenieOsWorkspace } from './agents/os-workspace';
 import { GENIE_OS_TERMINAL_ID, obsoleteOsAgentSpecIds, osAgentLaunchCommand } from './agents/os-agent';
 import { osAgentBootInstructions, osAgentBootMode } from './agents/os-lifecycle';
 import { applyPendingWorkstationReset, isWorkstationResetPending } from './workstation/reset';
@@ -67,7 +67,6 @@ import {
     writeWorkspaceAgentMcp,
     healTynnMcpEntry,
     syncWorkspaceCodexTynnMcp,
-    osAgentBuilderSkill,
 } from './mcp/agent-config';
 import { resolveAlertSound, deliverAlertSound } from './notify-sound';
 import { demandWindowAttention, resolveAttentionWindow } from './attention-flash';
@@ -135,6 +134,7 @@ import {
     pushToTerminal,
     serverPushDiagnostics,
     DEFAULT_MCP_PORT,
+    registerTerminalEndpoint,
 } from './mcp/server';
 import { startControlServer } from './control';
 import { startMobileServer, DEFAULT_MOBILE_PORT } from './mobile/server';
@@ -1115,6 +1115,13 @@ app.whenReady().then(async () => {
     applyPendingWorkstationReset(app.getPath('userData'));
     initDatabase(app.getPath('userData'));
     const genieOsWorkspace = await ensureGenieOsWorkspace(app.getPath('userData'));
+    // Wire the operator's OWN workspace the way every other workspace is wired.
+    // Without this it had no `.mcp.json`, no `.agents/skills/` and no Codex
+    // config, because every sync call site is keyed on a registered workspace
+    // row and the OSA deliberately has none. Its endpoint is stable: the
+    // terminal id is fixed and the token is persisted, so this is idempotent
+    // across restarts and can safely run before the terminal exists.
+    wireGenieOsWorkspace(genieOsWorkspace, registerTerminalEndpoint(GENIE_OS_TERMINAL_ID));
     for (const obsoleteId of obsoleteOsAgentSpecIds(listTerminalSpecs())) {
         deleteTerminalSpec(obsoleteId);
     }
@@ -1123,7 +1130,14 @@ app.whenReady().then(async () => {
     // `system:true` keeps it outside every project and the fixed id makes this
     // seed idempotent across upgrades.
     const existingOsAgent = getTerminalSpec(GENIE_OS_TERMINAL_ID);
-    const osAgentInstructions = `${osAgentBootInstructions(osAgentBootMode(app.getPath('userData')))}\n\n${osAgentBuilderSkill()}`;
+    // The BOOT TASK only. The AgentBuilder skill used to be concatenated here
+    // and typed into the TUI as a positional prompt on every relaunch -- 1.2KB
+    // of SKILL.md, frontmatter and all, arriving with no task attached. It is
+    // installed as a skill file by `wireGenieOsWorkspace` now, so the operator
+    // loads it when it is relevant instead of wearing it as an opening prompt.
+    const osAgentInstructions = osAgentBootInstructions(
+        osAgentBootMode(app.getPath('userData')),
+    );
     const osSettings = getAllSettings();
     const osProvider = resolveWorkstationProvider(osSettings);
     const osDef = providerDef(osProvider);
