@@ -163,13 +163,16 @@ process.stdin.on('data', (chunk) => {
                 id: message.id,
                 result: {
                     protocolVersion: message.params?.protocolVersion || '2025-06-18',
-                    capabilities: {},
+                    // Declared INSIDE capabilities. It used to sit beside them,
+                    // so the client read an EMPTY capability set and no
+                    // claude/channel -- a server that starts, answers and works
+                    // was declined as unable to do channels, because the
+                    // capability was in a place nothing looks.
+                    capabilities: { experimental: { 'claude/channel': {} } },
                     serverInfo: { name: 'genie-agentinbox-channel', version: '1' },
-                    experimental: { 'claude/channel': {} },
                 },
             });
         } else if (message.method === 'notifications/initialized') {
-            deliver().catch((error) => {
                 process.stderr.write('[AgentInbox Channel] ' + error.message + '\\n');
                 process.exitCode = 1;
             });
