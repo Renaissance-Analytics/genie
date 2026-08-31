@@ -1,3 +1,4 @@
+import { describeDroppedSiteFields } from '../dev-server/sites-config';
 import path from 'node:path';
 import {
     deleteWorkspaceDevSite,
@@ -730,6 +731,14 @@ export async function runManageSite(
                 );
                 const updateNotes = [
                     ...envNotes,
+                    // A field the sanitiser REFUSED. `setWorkspaceDevSite` copies
+                    // only values that pass their check, so a bad `repo` or
+                    // `genName` was previously dropped in silence and the site
+                    // came back looking updated. The rules are right — a repo name
+                    // becomes a path segment inside the workspace mount, and a
+                    // non-`.gen` name would mint a cert the session must not trust
+                    // — so this reports rather than relaxes.
+                    ...describeDroppedSiteFields(patch),
                     ...siteAdvisoryNotes(req),
                     ...(status ? [] : [pendingNote('restart', newId)]),
                 ];
