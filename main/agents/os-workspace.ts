@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { simpleGit } from 'simple-git';
 import { createAgiEnvelope } from '../workspace/create-agi';
+import { osAgentBuilderSkill, writeWorkspaceAgentMcp } from '../mcp/agent-config';
 
 export function genieOsWorkspacePath(userDataDir: string): string {
     return path.join(userDataDir, 'genie-os.agi');
@@ -63,4 +64,67 @@ export async function ensureGenieOsWorkspace(userDataDir: string): Promise<strin
     }
     fs.mkdirSync(path.join(workspacePath, '.ai', 'memory'), { recursive: true });
     return workspacePath;
+}
+
+/**
+ * Give the Genie OS workspace the SAME wiring every other workspace gets.
+ *
+ * The workstation operator had none. `ensureGenieOsWorkspace` creates the
+ * envelope and stops, and every `writeWorkspaceAgentMcp` call site is keyed on a
+ * REGISTERED workspace row — which the OSA deliberately has not, so that
+ * deleting a project can never delete or re-parent the operator. The result was
+ * a folder with no `.mcp.json`, no `.agents/skills/`, and no Codex config.
+ *
+ * What that looked like on first boot: the OSA reported that
+ * `manageWorkspaces`, `registerAgent`, `runAgent` and `manageTerminals` were not
+ * in its toolset and that the `genie-agent-builder` skill it was being told to
+ * act as did not exist. It was right on both counts. The agent responsible for
+ * managing every workspace, onboarding, toolchain installs and upgrades booted
+ * with none of the tools its own instructions named.
+ *
+ * A workspace-shaped folder needs workspace-shaped wiring, whether or not it has
+ * a row in the database.
+ */
+export function wireGenieOsWorkspace(workspacePath: string, mcpUrl: string | null): void {
+    // No endpoint means the MCP server has no port yet. Writing a config with a
+    // null URL leaves a BROKEN `.mcp.json` on disk that looks configured, which
+    // is worse than an absent one because nothing would retry it.
+    if (!mcpUrl) return;
+
+    // `writeWorkspaceAgentMcp` returns early unless an agents doc already
+    // exists — it deliberately does not litter one into projects that do not use
+    // one. Silently doing nothing is exactly how this stayed broken, so the
+    // precondition is guaranteed rather than assumed. An existing file is left
+    // alone: it is the operator's own instructions and may have been edited.
+    const agentsDoc = path.join(workspacePath, 'AGENTS.md');
+    if (!fs.existsSync(agentsDoc)) {
+        try {
+            fs.writeFileSync(agentsDoc, '# Genie OS\n');
+        } catch {
+            return; // nothing to sync into
+        }
+    }
+    writeWorkspaceAgentMcp(workspacePath, true, mcpUrl);
+
+    // The AgentBuilder skill is a FILE, not an opening prompt. It used to be
+    // concatenated into `agent_instructions` and typed into the TUI on every
+    // relaunch -- 1.2KB of SKILL.md, frontmatter and all, arriving repeatedly
+    // with no task attached and describing a skill the agent could correctly
+    // see it did not have. Installed, it loads when it is relevant, the way
+    // every other skill works.
+    //
+    // Written HERE rather than added to `genieCoreSkills()` because it is
+    // explicitly scoped to the workstation operator and has no business in a
+    // project. Written for BOTH harness roots, because the operator has to work
+    // whichever TUI the workstation defaults to.
+    for (const root of ['.agents', '.claude']) {
+        const dir = path.join(workspacePath, root, 'skills', 'genie-agent-builder');
+        try {
+            fs.mkdirSync(dir, { recursive: true });
+            fs.writeFileSync(path.join(dir, 'SKILL.md'), osAgentBuilderSkill());
+        } catch {
+            /* best-effort: a missing skill degrades the operator, it does not
+               stop it booting */
+        }
+    }
 }
