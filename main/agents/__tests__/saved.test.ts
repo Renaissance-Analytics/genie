@@ -138,8 +138,8 @@ describe('an ambiguous name', () => {
             { ...REQ, name: 'tynn' },
         );
         expect(d.kind).toBe('refuse');
-        expect(d.kind === 'refuse' && d.error).toContain('claude:tynn');
-        expect(d.kind === 'refuse' && d.error).toContain('codex:tynn');
+        expect(d.kind === 'refuse' && d.error).toContain('tynn (claude)');
+        expect(d.kind === 'refuse' && d.error).toContain('tynn (codex)');
     });
 
     it('resolves once the provider is given', () => {
@@ -157,7 +157,7 @@ describe('creating a new agent', () => {
         expect(d.kind === 'refuse' && d.error).toMatch(/create/);
         // The refusal teaches: it lists what the workspace HAS, because a caller
         // reaching for a near-miss name is the common case.
-        expect(d.kind === 'refuse' && d.error).toContain('claude:other');
+        expect(d.kind === 'refuse' && d.error).toContain('other (claude)');
     });
 
     it('says so plainly when the workspace has no agents at all', () => {
@@ -194,7 +194,7 @@ describe('creating a new agent', () => {
         // the caller that its brand-new agent is carrying somebody else's history.
         const d = decideAgentStart([AGENT()], { ...REQ, name: 'tynn', create: true });
         expect(d.kind).toBe('refuse');
-        expect(d.kind === 'refuse' && d.error).toContain('claude:tynn');
+        expect(d.kind === 'refuse' && d.error).toContain('"tynn"');
         expect(d.kind === 'refuse' && d.error).toMatch(/reattach/);
     });
 

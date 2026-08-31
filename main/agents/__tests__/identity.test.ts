@@ -20,9 +20,13 @@ import {
  */
 
 describe('the saved-config key', () => {
-    it('is provider + name, with NO chat-id', () => {
-        expect(savedAgentKey('claude', 'tynn')).toBe('claude:tynn');
-        expect(savedAgentKey('codex', 'tynn-slave')).toBe('codex:tynn-slave');
+    it('is the NAME, with no provider and no chat-id', () => {
+        // CHANGED CONTRACT. This was `{provider}:{name}`, which put the TUI
+        // inside the agent's identity while the schema (v55) says identity is
+        // `UNIQUE (workspace_id, name)`. The provider moved to agent_runtimes
+        // because an agent that switches drivers is the same agent.
+        expect(savedAgentKey('tynn')).toBe('tynn');
+        expect(savedAgentKey('tynn-slave')).toBe('tynn-slave');
     });
 
     it('is what makes a Codex agent resolvable BEFORE its harness runs', () => {
@@ -30,15 +34,15 @@ describe('the saved-config key', () => {
         // not exist until SessionStart fires, so anything needed to FIND a saved
         // agent must be knowable without it. This is that assertion — the key is
         // computable from what a caller types.
-        const key = savedAgentKey('codex', 'tynn-slave');
+        const key = savedAgentKey('tynn-slave');
         expect(key).not.toContain(':' + 'undefined');
-        expect(key.split(':')).toHaveLength(2);
+        expect(key.split(':')).toHaveLength(1);
     });
 
     it('normalises the name the same way the AgentInbox purpose does', () => {
         // One field, one normaliser. A second name with its own rules would let
         // the ref and the inbox disagree about what an agent is called.
-        expect(savedAgentKey('claude', 'Tynn Slave')).toBe('claude:tynn-slave');
+        expect(savedAgentKey('Tynn Slave')).toBe('tynn-slave');
         expect(agentName('  MY Agent!! ')).toBe('my-agent');
         expect(agentName('')).toBe('general');
         expect(agentName(undefined)).toBe('general');
@@ -46,44 +50,76 @@ describe('the saved-config key', () => {
 });
 
 describe('the canonical ref', () => {
-    it('is provider:name:chat-id when the chat-id is bound', () => {
+    it('is name:chat-id when the chat-id is bound', () => {
+        // CHANGED CONTRACT: the provider is gone from the ref. It was making the
+        // canonical identity change when an agent switched driver, which is the
+        // one thing a sidecar exists to prevent.
         expect(
             agentRef({ provider: 'claude', name: 'tynn', chatSessionId: 'abc-123' }),
-        ).toBe('claude:tynn:abc-123');
+        ).toBe('tynn:abc-123');
+    });
+
+    it('is the SAME ref on either driver', () => {
+        expect(agentRef({ provider: 'codex', name: 'tynn', chatSessionId: 'abc-123' })).toBe(
+            agentRef({ provider: 'claude', name: 'tynn', chatSessionId: 'abc-123' }),
+        );
     });
 
     it('degrades to the key — not an empty third field — before the bind', () => {
         // Codex spends its entire startup in this state, and `codex:tynn-slave:`
         // reads as "its chat is called nothing" rather than "not bound yet".
         expect(agentRef({ provider: 'codex', name: 'tynn-slave', chatSessionId: null })).toBe(
-            'codex:tynn-slave',
+            'tynn-slave',
         );
-        expect(agentRef({ provider: 'codex', name: 'tynn-slave' })).toBe('codex:tynn-slave');
+        expect(agentRef({ provider: 'codex', name: 'tynn-slave' })).toBe('tynn-slave');
         expect(agentRef({ provider: 'codex', name: 'tynn-slave', chatSessionId: '  ' })).toBe(
-            'codex:tynn-slave',
+            'tynn-slave',
         );
     });
 
     it('round-trips through parse, in both forms', () => {
-        for (const ref of ['claude:tynn:abc-123', 'codex:tynn-slave']) {
+        for (const ref of ['tynn:abc-123', 'tynn-slave']) {
             const parsed = parseAgentRef(ref);
             expect(parsed).not.toBeNull();
             expect(agentRef(parsed!)).toBe(ref);
         }
     });
 
+    it('reads a LEGACY provider-prefixed ref, and re-emits it in the new form', () => {
+        // Agents were told the old shape, so reading one keeps working. Writing
+        // one does not: the round trip deliberately NORMALISES to the new form
+        // rather than preserving a shape that encodes the wrong identity.
+        const parsed = parseAgentRef('claude:tynn:abc-123');
+        expect(parsed).toMatchObject({ provider: 'claude', name: 'tynn', chatSessionId: 'abc-123' });
+        expect(agentRef(parsed!)).toBe('tynn:abc-123');
+    });
+
     it('keeps a chat-id that contains a colon whole', () => {
         // Taken as the REMAINDER, so a harness whose session ids are structured
-        // is not silently truncated into a different agent's address.
+        // is not silently truncated into a different agent's address. True of
+        // both forms.
         expect(parseAgentRef('claude:tynn:sess:2026:01')?.chatSessionId).toBe('sess:2026:01');
+        expect(parseAgentRef('tynn:sess:2026:01')?.chatSessionId).toBe('sess:2026:01');
     });
 
     it('rejects what is not a ref', () => {
         expect(parseAgentRef('')).toBeNull();
-        expect(parseAgentRef('tynn')).toBeNull(); // no provider
-        expect(parseAgentRef(':tynn')).toBeNull(); // empty provider
-        expect(parseAgentRef('claude:')).toBeNull(); // empty name
-        expect(parseAgentRef('gemini:tynn')).toBeNull(); // not a provider Genie runs
+        expect(parseAgentRef('   ')).toBeNull();
+        expect(parseAgentRef(':tynn')).toBeNull(); // empty leading field
+        expect(parseAgentRef('claude:')).toBeNull(); // legacy form, empty name
+    });
+
+    it('accepts a bare NAME, which the old form could not', () => {
+        // `tynn` used to be rejected for having "no provider". Under the new
+        // identity that IS the whole ref, and rejecting it would make every
+        // chat-less agent unaddressable.
+        expect(parseAgentRef('tynn')).toMatchObject({ name: 'tynn', chatSessionId: null });
+        // A name that is not one of Genie's providers is just a name, not a
+        // broken legacy ref.
+        expect(parseAgentRef('gemini:tynn')).toMatchObject({
+            name: 'gemini',
+            chatSessionId: 'tynn',
+        });
     });
 
     it('knows which providers are ours', () => {

@@ -56,11 +56,19 @@ export interface AgentSpecLike {
 }
 
 /**
- * The saved agents of one workspace, in the order their specs came back.
+ * The agent-STAMPED TERMINAL SPECS of one workspace — not the workspace's agents.
  *
- * `meta.agent` is the whole test for "is this an agent": it is what
- * `createAgentTerminal` stamps and what every other agent-aware surface in Genie
- * already keys off, so anything stricter here would disagree with the sidebar.
+ * Read the name carefully, because the old one lied. This scans terminal specs
+ * for `meta.agent` and returns what it finds. That is a TERMINAL lookup: it
+ * answers "which terminal belongs to this agent" and "is there an unbound spec
+ * to adopt", both of which are real questions.
+ *
+ * It is NOT the workspace's agent list. `workspace_agents` is (see
+ * `listWorkspaceAgents`), and it has been since v50. An agent registered and
+ * never started has no spec and does not appear here — which is correct for a
+ * terminal lookup and would be a bug in an agent list. Using this as the agent
+ * list is what made a dormant agent invisible and a leftover spec look like an
+ * agent, and it is worth keeping the two straight.
  */
 export function savedAgentsOf(
     specs: readonly AgentSpecLike[],
@@ -112,9 +120,11 @@ export type AgentStartDecision =
     | { kind: 'create'; provider: AgentProvider; name: string }
     | { kind: 'refuse'; error: string };
 
-/** `provider:name` for every candidate, for an error a caller can act on. */
+/** Every candidate's name, for an error a caller can act on. The driver is
+ *  named alongside rather than inside the key -- it is which TUI is fronted,
+ *  not part of what the agent IS. */
 function refsOf(agents: readonly SavedAgent[]): string {
-    return agents.map((a) => savedAgentKey(a.provider, a.name)).join(', ');
+    return agents.map((a) => `${savedAgentKey(a.name)} (${a.provider})`).join(', ');
 }
 
 /**
@@ -166,7 +176,7 @@ export function decideAgentStart(
         return {
             kind: 'refuse',
             error:
-                `This workspace already has a saved agent "${savedAgentKey(existing.provider, existing.name)}". ` +
+                `This workspace already has a saved agent "${savedAgentKey(existing.name)}". ` +
                 'Start it without `create` to reattach to it, or create the new one under a ' +
                 'different `name`.',
         };

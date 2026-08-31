@@ -302,16 +302,21 @@ describe('a GApp that declares an agent', () => {
             terminalManager().isLive(id),
         );
 
-        expect(
-            saved.map((a) => savedAgentKey(a.provider, a.name)).sort(),
-        ).toEqual(['claude:reviewer', 'claude:strategist']);
+        // The key is the NAME now (v55 identity). The provider is asserted
+        // separately below, because it is still true and still matters -- it is
+        // just no longer part of who the agent IS.
+        expect(saved.map((a) => savedAgentKey(a.name)).sort()).toEqual([
+            'reviewer',
+            'strategist',
+        ]);
+        expect(saved.every((a) => a.provider === 'claude')).toBe(true);
         // POSITIVE CONTROL — these are live agents with durable identities, not
         // rows that merely parse. "Two names came back" would also be true of two
         // empty shells, which is the bug this whole area keeps producing.
         expect(saved.every((a) => a.agentId && a.live)).toBe(true);
         // …and they are addressable BEFORE any chat-id exists, which is what a
         // Codex agent depends on.
-        expect(saved.map((a) => savedAgentKey(a.provider, a.name)).every((k) => !k.includes('::')))
+        expect(saved.map((a) => savedAgentKey(a.name)).every((k) => !k.includes('::')))
             .toBe(true);
     });
 

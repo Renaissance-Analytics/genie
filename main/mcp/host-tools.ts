@@ -1822,12 +1822,21 @@ async function reattachSavedAgent(
 }
 
 /**
- * The workspace's SAVED AGENTS, read off its terminal specs (Tynn #254).
+ * The workspace's agent-stamped TERMINAL SPECS.
  *
- * There is no agents table: a saved agent IS a terminal spec carrying
- * `meta.agent`. That is what keeps an agent a terminal in the sidebar and the
- * Floor UX, and what makes "reopen the agent" the same operation as "revive the
- * terminal" instead of a second lifecycle to keep in sync.
+ * This comment used to say "There is no agents table: a saved agent IS a
+ * terminal spec carrying `meta.agent`." That was true when it was written and
+ * has been false since v50: `workspace_agents` is the agent, `agent_runtimes`
+ * holds the TUIs it may run under, and `listWorkspaceAgents` is the list.
+ *
+ * A stale comment asserting the old model is not a cosmetic problem — it is the
+ * thing the next reader builds from, and the terminal-is-the-agent assumption
+ * has already produced phantom squares, an invisible dormant agent, and a
+ * right-click menu that did nothing on a paused one.
+ *
+ * What this genuinely answers is which TERMINAL an agent has, and whether an
+ * unbound spec exists to adopt. Both are terminal questions. Neither is "what
+ * agents does this workspace have".
  */
 function savedAgentsOfWorkspace(workspaceId: string): SavedAgent[] {
     return savedAgentsOf(listTerminalSpecs(), workspaceId, (id) => isTerminalLive(id));
@@ -2013,7 +2022,7 @@ export async function runAgentForMcp(
                 return {
                     ok: true,
                     agents: configs.map((agent) => ({
-                        ref: savedAgentKey(agent.provider as AgentType, agent.name),
+                        ref: savedAgentKey(agent.name),
                         provider: agent.provider as AgentType,
                         name: agent.name,
                         id: agent.id,
@@ -2708,20 +2717,41 @@ export async function startRegisteredAgent(
     opts: { humanInitiated: boolean },
 ): Promise<RunAgentResult> {
                 const requestedName = agentName(req.name ?? 'workspace');
+                // IDENTITY IS (workspace, name). Not (workspace, provider, name)
+                // -- v55 collapsed the index for exactly this reason, and
+                // filtering by provider here made a driver switch look like a
+                // different agent.
                 const candidates = listWorkspaceAgents(ws.id).filter(
-                    (item) =>
-                        item.provider &&
-                        item.name === requestedName &&
-                        (!req.agent || item.provider === req.agent),
+                    (item) => item.name === requestedName,
                 );
                 if (candidates.length !== 1) {
                     const reason = candidates.length > 1
-                        ? `More than one registered agent is named "${requestedName}" (${candidates.map((item) => savedAgentKey(item.provider as AgentType, item.name)).join(', ')}); pass \`agent\` to choose its provider.`
+                        // Two agents CAN share a name only while a name conflict
+                        // is unresolved (the partial unique index excludes rows
+                        // in a collision group). So the fix is to resolve the
+                        // conflict -- not, as this used to say, to name a
+                        // provider, which is no longer part of the identity.
+                        ? `More than one registered agent is named "${requestedName}" in this workspace — an unresolved name conflict. Resolve it from the agent's square in the sidebar, then try again.`
                         : `No registered agent "${requestedName}" in this workspace. Use registerAgent first.`;
                     return { ok: false, error: reason };
                 }
                 const config = candidates[0]!;
-                const agent = config.provider as AgentType;
+                // WHICH DRIVER, resolved separately from which agent: an
+                // explicit request wins, then whichever TUI is fronted, then the
+                // record's own provider. An agent registered but never run has
+                // none of the three, and saying so beats launching a guess.
+                const frontedRuntime = listAgentRuntimes(config.id).find((r) => r.fronted);
+                const agent = (req.agent ?? frontedRuntime?.provider ?? config.provider) as
+                    | AgentType
+                    | null;
+                if (!agent) {
+                    return {
+                        ok: false,
+                        error:
+                            `Agent "${requestedName}" has no TUI yet. Pass \`agent\` to say which one ` +
+                            'to start it under, or pick a driver from its panel.',
+                    };
+                }
                 if (config.terminal_spec_id) {
                     const saved = savedAgentsOfWorkspace(ws.id).find(
                         (item) => item.specId === config.terminal_spec_id,
@@ -2792,7 +2822,7 @@ export async function startRegisteredAgent(
                 const approved = opts.humanInitiated || await approveTerminalAction(ws, {
                     title: `An agent wants to LAUNCH a ${agent} coding agent (it can read, write, and run code on its own):`,
                     lines: [
-                        `saved as: ${savedAgentKey(agent, config.name)}`,
+                        `saved as: ${savedAgentKey(config.name)}`,
                         `command: ${approvalCommand}`,
                         `in: ${cwdR.cwd}`,
                     ],

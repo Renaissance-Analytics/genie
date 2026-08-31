@@ -182,7 +182,14 @@ export default function TerminalPanel({
                     {surface === 'agent' && (
                         <span className="agent-panel-role">
                             <span className="agent-panel-provider">{String(spec.meta.agent)}</span>
-                            {String(spec.meta.whisper_purpose ?? 'workspace agent')}
+                            {/* An unnamed agent is UNNAMED. This used to fall
+                                back to "workspace agent", which is the phantom
+                                v57 deleted -- there is no agent called that. The
+                                Workspace Agent is a DESIGNATION carried by one of
+                                a workspace's real agents, so printing the phrase
+                                as a name re-invented the thing the migration
+                                removed, on every panel that had no purpose set. */}
+                            {String(spec.meta.whisper_purpose ?? 'unnamed')}
                         </span>
                     )}
                 </span>

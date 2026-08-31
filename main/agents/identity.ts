@@ -63,15 +63,21 @@ export function agentName(raw: string | null | undefined): string {
 }
 
 /**
- * The SAVED-CONFIG key — `{provider}:{name}`, no chat-id.
+ * The SAVED-CONFIG key — the agent's NAME, and nothing else.
  *
- * This is what a saved agent is looked up by, and the reason the lookup works
- * for Codex: it is knowable before the harness has run. Two agents may share a
- * name across providers (`claude:tynn` and `codex:tynn` are different agents
- * with different conversations); no two may share this key inside a workspace.
+ * This used to be `{provider}:{name}`, which made the TUI part of the agent's
+ * IDENTITY. The schema says otherwise: v55 collapsed
+ * `UNIQUE (workspace_id, provider, name)` to `UNIQUE (workspace_id, name)` and
+ * moved the provider onto `agent_runtimes`, because an agent that switches
+ * drivers is the same agent. The key disagreeing with the schema is how
+ * `claude:tynn` and `codex:tynn` could still read as two agents.
+ *
+ * Still knowable before the harness runs, which is what the lookup needs and
+ * why the chat-id is not in it: Codex cannot know its session id until it is
+ * running, and that is exactly when the agent has to be resolvable.
  */
-export function savedAgentKey(provider: AgentProvider, name: string): string {
-    return `${provider}${SEP}${agentName(name)}`;
+export function savedAgentKey(name: string): string {
+    return agentName(name);
 }
 
 /**
@@ -84,7 +90,7 @@ export function savedAgentKey(provider: AgentProvider, name: string): string {
  * {@link parseAgentRef}.
  */
 export function agentRef(identity: AgentIdentity): string {
-    const key = savedAgentKey(identity.provider, identity.name);
+    const key = savedAgentKey(identity.name);
     const chat = identity.chatSessionId?.trim();
     return chat ? `${key}${SEP}${chat}` : key;
 }
@@ -114,16 +120,33 @@ export function isAgentProvider(value: unknown): value is AgentProvider {
 export function parseAgentRef(ref: string): AgentIdentity | null {
     const raw = String(ref ?? '').trim();
     if (!raw) return null;
-    const first = raw.indexOf(SEP);
-    if (first <= 0) return null;
-    const provider = raw.slice(0, first);
-    if (!isAgentProvider(provider)) return null;
-    const rest = raw.slice(first + 1);
-    const second = rest.indexOf(SEP);
-    const name = second === -1 ? rest : rest.slice(0, second);
-    if (!name.trim()) return null;
-    const chat = second === -1 ? null : rest.slice(second + 1).trim() || null;
-    return { provider, name: agentName(name), chatSessionId: chat };
+
+    const parts = raw.split(SEP).map((part) => part.trim());
+
+    // LEGACY `{provider}:{name}[:{chat}]`. Agents were told this shape and may
+    // still have one written down, so reading it keeps working -- but only when
+    // there is something AFTER the provider. A bare `codex` is an agent NAMED
+    // codex, which is legal, and reading it as a provider with no name would
+    // turn a valid ref into null.
+    if (parts.length >= 2 && isAgentProvider(parts[0]!)) {
+        const name = parts[1]!;
+        if (!name) return null;
+        return {
+            provider: parts[0] as AgentProvider,
+            name: agentName(name),
+            chatSessionId: parts.slice(2).join(SEP).trim() || null,
+        };
+    }
+
+    const name = parts[0]!;
+    if (!name) return null;
+    return {
+        // The ref no longer carries a driver, because the driver is not the
+        // agent. Callers that need one read it off the fronted runtime.
+        provider: undefined as unknown as AgentProvider,
+        name: agentName(name),
+        chatSessionId: parts.slice(1).join(SEP).trim() || null,
+    };
 }
 
 /**

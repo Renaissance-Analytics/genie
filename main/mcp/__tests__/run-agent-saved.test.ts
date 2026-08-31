@@ -226,7 +226,7 @@ describe('registering an agent before start', () => {
         expect(r.id).toBeTruthy();
         expect(r.reattached).toBe(false);
         // The canonical machine-facing identity, provider first.
-        expect(r.ref).toMatch(/^claude:tynn:/);
+        expect(r.ref).toMatch(/^tynn:/);
 
         const spec = getTerminalSpec(r.id!);
         expect(spec?.meta?.agent).toBe('claude');
@@ -257,7 +257,7 @@ describe('runAgent start on a SAVED agent', () => {
     it('binds a Codex SessionStart id onto the just-created saved agent without duplicating it', async () => {
         const created = await registerAndStart({ name: 'tynn', agent: 'codex' });
         expect(created.ok).toBe(true);
-        expect(created.ref).toBe('codex:tynn');
+        expect(created.ref).toBe('tynn');
         expect(created.sessionBinding).toBe('pending');
 
         const registered = registerAgentInboxSession(created.id!, 'codex-session-1', {
@@ -270,7 +270,7 @@ describe('runAgent start on a SAVED agent', () => {
         const attached = await start({ name: 'tynn', agent: 'codex' });
         expect(attached.ok).toBe(true);
         expect(attached.id).toBe(created.id);
-        expect(attached.ref).toBe('codex:tynn:codex-session-1');
+        expect(attached.ref).toBe('tynn:codex-session-1');
         expect(attached.sessionBinding).toBe('bound');
         expect(agentSpecs()).toHaveLength(1);
         expect(agentIds()).toHaveLength(1);
