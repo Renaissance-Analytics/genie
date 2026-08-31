@@ -6596,3 +6596,19 @@ body.gutter-dragging .grid-gutter {
     font-size: 10px;
     color: var(--fg-4);
 }
+
+/* The RECORD half of Agent settings: which drivers this agent has, and whether
+   it is the workspace's default. The modal used to describe only the terminal —
+   titled `claude · moic`, with the driver in the identity. */
+.agent-settings-record {
+    display: grid;
+    gap: 8px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border-1);
+    margin-bottom: 10px;
+}
+.agent-settings-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}

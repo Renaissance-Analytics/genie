@@ -7,6 +7,8 @@ import FeedbackModal from '../components/Master/FeedbackModal';
 import Chooser from '../components/Master/Chooser';
 import ProjectContextMenu from '../components/Master/ProjectContextMenu';
 import NewAgentModal from '../components/Master/NewAgentModal';
+import AgentTuiSwitcher from '../components/Master/AgentTuiSwitcher';
+import type { AgentRecordSpec, AgentRuntimeSpec } from '../lib/ams-grid';
 import WorkspaceSettingsModal from '../components/Master/WorkspaceSettingsModal';
 import WorkspaceSiteManager from '../components/Master/WorkspaceSiteManager';
 import SpecContextMenu from '../components/Master/SpecContextMenu';
@@ -254,6 +256,13 @@ function MasterInner() {
     });
     const [workspaces, setWorkspaces] = useState<WorkspaceRow[]>([]);
     const [specs, setSpecs] = useState<TerminalSpec[]>([]);
+    // The agent RECORD for whichever agent's settings are open. Loaded on
+    // demand rather than kept for every workspace: this is the only surface in
+    // master.tsx that needs it, and the sidebar keeps its own copy.
+    const [agentRecord, setAgentRecord] = useState<{
+        agents: AgentRecordSpec[];
+        runtimes: AgentRuntimeSpec[];
+    } | null>(null);
     const [selected, setSelected] = useState<Set<string>>(() => new Set());
     // The workspace whose views fill the grid. Persisted as the
     // `active_workspace` setting; seeded on launch from that setting (or the
@@ -506,6 +515,16 @@ function MasterInner() {
     // The spec whose AgentInbox purpose/scope is being edited (context menu →
     // "Agent settings…"), or null. Rendered as a modal reusing the create form.
     const [agentEditSpec, setAgentEditSpec] = useState<TerminalSpec | null>(null);
+    // Load it when the settings modal opens on an agent. Cleared on close so a
+    // stale record can never describe the NEXT agent someone opens.
+    const agentEditWorkspace = agentEditSpec?.workspace_id ?? null;
+    useEffect(() => {
+        if (!agentEditWorkspace) {
+            setAgentRecord(null);
+            return;
+        }
+        void api().agents.list(agentEditWorkspace).then(setAgentRecord).catch(() => {});
+    }, [agentEditWorkspace]);
     // GitHub capability gate: which GitHub-powered features are unavailable
     // because the App is missing permissions on the user's installation. Drives
     // a persistent header warning + a resolve flyout (also auto-shown once on
@@ -2537,6 +2556,17 @@ function MasterInner() {
                         // purpose sub-label reflects the edit immediately.
                         void api().terminalSpec.list().then(setSpecs).catch(() => {});
                     }}
+                    record={agentRecord?.agents.find(
+                        (a) =>
+                            agentRecord.runtimes.some(
+                                (r) => r.agentId === a.id && r.terminalSpecId === agentEditSpec.id,
+                            ),
+                    )}
+                    runtimes={agentRecord?.runtimes ?? []}
+                    onRecordChanged={() => {
+                        const ws = agentEditSpec.workspace_id;
+                        if (ws) void api().agents.list(ws).then(setAgentRecord).catch(() => {});
+                    }}
                 />
             )}
         </div>
@@ -2554,11 +2584,20 @@ function AgentSettingsModal({
     workspaces,
     onClose,
     onSaved,
+    record,
+    runtimes,
+    onRecordChanged,
 }: {
     spec: TerminalSpec;
     workspaces: WorkspaceRow[];
     onClose: () => void;
     onSaved: () => void;
+    /** This agent's RECORD, when Genie has one. The modal used to describe the
+     *  terminal only — title `claude · moic`, no drivers, no designation — which
+     *  is the model that no longer exists. */
+    record?: AgentRecordSpec;
+    runtimes?: AgentRuntimeSpec[];
+    onRecordChanged?: () => void;
 }) {
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -2582,8 +2621,57 @@ function AgentSettingsModal({
                 onMouseDown={(e) => e.stopPropagation()}
             >
                 <div className="agent-settings-head">
-                    <span className="agent-settings-title">Agent settings — {spec.label}</span>
+                    {/* The agent's NAME. It used to be `spec.label` --
+                        `claude · moic` -- which puts the driver in the
+                        identity, the exact model this removed. */}
+                    <span className="agent-settings-title">
+                        Agent settings — {record?.name ?? spec.label}
+                    </span>
                 </div>
+                {record && (
+                    <div className="agent-settings-record">
+                        <div className="agent-settings-row">
+                            <span className="agent-form-label">Drivers</span>
+                            <AgentTuiSwitcher
+                                agentId={record.id}
+                                runtimes={runtimes ?? []}
+                                onChanged={() => onRecordChanged?.()}
+                            />
+                        </div>
+                        <span className="agent-form-scope-desc">
+                            An agent is not its TUI. Switching keeps this agent — its inbox,
+                            history and prompt — and the driver it leaves keeps its
+                            conversation as a sidecar. Nothing is stopped by switching.
+                        </span>
+                        <label className="agent-form-wake">
+                            <input
+                                type="checkbox"
+                                checked={record.role === 'workspace'}
+                                onChange={(e) => {
+                                    // The WORKSPACE AGENT is a designation, not an
+                                    // agent named 'workspace'. Unticking clears it
+                                    // rather than moving it to someone else.
+                                    void api()
+                                        .agents.setDefault(
+                                            spec.workspace_id ?? '',
+                                            e.target.checked ? record.id : null,
+                                        )
+                                        .then(() => onRecordChanged?.())
+                                        .catch(() => {});
+                                }}
+                            />
+                            <span className="agent-form-wake-text">
+                                <span className="agent-form-label">
+                                    Default agent for this workspace
+                                </span>
+                                <span className="agent-form-scope-desc">
+                                    Boots from the workspace root and is the default target for
+                                    actions that do not name an agent. One per workspace.
+                                </span>
+                            </span>
+                        </label>
+                    </div>
+                )}
                 <AgentTerminalForm
                     agent={agent}
                     workspaces={workspaces}
