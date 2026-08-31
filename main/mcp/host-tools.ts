@@ -70,6 +70,7 @@ import {
     isTerminalLive,
 } from '../terminal/ipc';
 import { agentName, agentRef, savedAgentKey, type AgentProvider } from '../agents/identity';
+import { agentScopeFor, renderAgentFile } from '../agents/agent-file';
 import { resolveWorkstationProvider } from '../agents/provider';
 import { restartProviderForSpec } from '../agents/restart';
 import {
@@ -1857,6 +1858,38 @@ export async function registerAgentForMcp(
             return { ok: false, error: 'The agent avatar must stay inside the workspace.' };
         }
         avatar = candidate;
+    }
+
+    // WRITE the agent's file. The path has been computed and stored since
+    // registerAgent shipped and nothing ever created it, so every registered
+    // agent has booted with no persona -- launch mentions the file only when it
+    // already exists. It is the source of truth for the agent's config and
+    // prompt, and it is tracked in git so an agent ships with the project.
+    //
+    // Never overwrite: the body is the author's system prompt, and re-registering
+    // must not be able to delete what someone wrote.
+    try {
+        if (!fs.existsSync(resolved.personaPath)) {
+            fs.mkdirSync(path.dirname(resolved.personaPath), { recursive: true });
+            fs.writeFileSync(
+                resolved.personaPath,
+                renderAgentFile(
+                    {
+                        name: resolved.name,
+                        purpose: resolved.purpose,
+                        scope: agentScopeFor(ws.path, resolved.bootCwd),
+                        tuis: [provider],
+                        avatar: null,
+                    },
+                    `You are ${resolved.name}. ${resolved.purpose}
+`,
+                ),
+            );
+        }
+    } catch {
+        /* A registered agent with no file still works -- it boots with the
+           workspace framing and no specialization -- so this must not fail the
+           registration and lose the record too. */
     }
 
     const row = createWorkspaceAgent({
