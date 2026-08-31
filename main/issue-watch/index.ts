@@ -1,4 +1,5 @@
 import { ipcMain } from 'electron';
+import { requestIssueWatchRefresh } from './force-refresh';
 import path from 'node:path';
 import simpleGit from 'simple-git';
 import {
@@ -921,6 +922,18 @@ export function registerIssueWatchIpc(): void {
         return { ok: true };
     });
     ipcMain.handle('issue-watch:counts', () => getOpenCounts());
+    // Force Tynn to re-read GitHub NOW. The whole path already existed for
+    // `checkIssues(refresh)` -- an AGENT could force a refresh and the owner
+    // could not, because nothing exposed it to the renderer.
+    //
+    // TYNN owns the rate limit: one window per workspace, shared by every agent
+    // and the human. Nothing is counted on this side, and the cooldown is
+    // passed through untouched -- a second limiter here would be a second
+    // answer to "when may I refresh", and the two would disagree the moment
+    // another window spent the window first.
+    ipcMain.handle('issue-watch:force-refresh', async (_e, workspaceId: string) =>
+        requestIssueWatchRefresh(String(workspaceId ?? '')),
+    );
     ipcMain.handle('issue-watch:status', async (_e, workspaceId: string) =>
         getWorkspaceStatus(workspaceId),
     );

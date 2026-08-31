@@ -6712,3 +6712,37 @@ body.gutter-dragging .grid-gutter {
     line-height: 1.35;
     color: var(--fg-3);
 }
+
+/* Force a Tynn re-read from the IssueWatch header. Compact, because it sits in
+   a title bar; worded with the WAIT rather than an icon alone, because a
+   disabled icon says "broken" and a named cooldown says "shared window". */
+.iw-refresh {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 8px;
+    font-size: 11px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-1);
+    background: var(--bg-2);
+    color: var(--fg-2);
+    cursor: pointer;
+}
+.iw-refresh:hover:not(:disabled) {
+    border-color: var(--fg-4);
+    color: var(--fg-1);
+}
+.iw-refresh:disabled {
+    cursor: default;
+    opacity: 0.6;
+}
+/* A cooldown is the limit working, so it reads as information. Only a genuine
+   failure borrows the warning colour. */
+.iw-refresh.tone-ok {
+    border-color: rgba(52, 211, 153, 0.5);
+    color: #34d399;
+}
+.iw-refresh.tone-error {
+    border-color: rgba(244, 135, 113, 0.5);
+    color: #f48771;
+}

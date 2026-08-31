@@ -2667,6 +2667,16 @@ export interface GenieApi {
         counts: () => Promise<Record<string, WatchTypeCounts>>;
         /** Why this workspace's feed is what it is (connected + worst read error). */
         status: (workspaceId: string) => Promise<WorkspaceWatchStatus>;
+        /** Ask TYNN to re-read GitHub for this workspace now. Tynn owns the
+         *  rate limit — one window per workspace, shared with every agent and
+         *  the human — and its cooldown comes back untouched, so the UI renders
+         *  the server's answer rather than counting down on its own. */
+        forceRefresh: (workspaceId: string) => Promise<{
+            refreshed: boolean;
+            reason: 'refreshed' | 'cooldown' | 'failed' | 'unavailable';
+            error?: string;
+            cooldown: { seconds: number; nextAllowedAt: string | null; label: string };
+        }>;
     };
     /**
      * Reading + opening this machine's `.gen` dev sites. HOST-SOURCED content in

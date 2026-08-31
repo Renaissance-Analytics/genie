@@ -1,5 +1,9 @@
 import { useEffect, useState } from 'react';
-import { IconX, IconAlert } from './icons';
+import { IconX, IconAlert, IconRefresh } from './icons';
+import {
+    refreshControlState,
+    type RefreshOutcome,
+} from '../../lib/issue-watch-refresh';
 import {
     api,
     hasGenieBridge,
@@ -174,6 +178,36 @@ export default function IssueWatchFlyout({
      * scaffolded envelope's do not.
      */
     const [feedbackPath, setFeedbackPath] = useState<string | null>(null);
+
+    // FORCE a Tynn re-read, as opposed to `refresh()` below, which only re-reads
+    // what Genie already has. Tynn owns the window -- shared with every agent on
+    // this workspace -- so the cooldown it returns is rendered as-is rather than
+    // counted down here, where it would drift out of agreement the moment
+    // anything else spent it.
+    const [forcing, setForcing] = useState(false);
+    const [forceResult, setForceResult] = useState<RefreshOutcome | null>(null);
+    const forceState = refreshControlState({ busy: forcing, last: forceResult });
+    const forceRefresh = async () => {
+        if (!workspaceId || !hasGenieBridge() || forceState.disabled) return;
+        setForcing(true);
+        try {
+            const r = await api().issueWatch.forceRefresh(workspaceId);
+            setForceResult(r);
+            // Tynn pushes the new snapshot through the normal delta path, but
+            // re-reading locally makes the panel reflect it without waiting for
+            // the push to land.
+            if (r.refreshed) await refresh();
+        } catch (e) {
+            setForceResult({
+                refreshed: false,
+                reason: 'failed',
+                error: e instanceof Error ? e.message : String(e),
+                cooldown: { seconds: 0, nextAllowedAt: null, label: 'now' },
+            });
+        } finally {
+            setForcing(false);
+        }
+    };
 
     const refresh = async () => {
         if (!workspaceId || !hasGenieBridge()) return;
@@ -355,6 +389,19 @@ export default function IssueWatchFlyout({
                 <div className="docs-head">
                     <span className="docs-title">Issue Watch</span>
                     <span className="grow" />
+                    {/* Make Tynn re-read GitHub NOW. The path existed only for
+                        agents (`checkIssues(refresh)`) -- an agent could force a
+                        refresh and the owner could not. */}
+                    <button
+                        type="button"
+                        className={`iw-refresh tone-${forceState.tone}`}
+                        onClick={forceRefresh}
+                        disabled={forceState.disabled}
+                        title={forceState.detail ?? 'Ask Tynn to re-read GitHub for this workspace now'}
+                    >
+                        <IconRefresh size={12} />
+                        <span>{forceState.label}</span>
+                    </button>
                     <button
                         type="button"
                         className="gicon"

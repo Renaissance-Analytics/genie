@@ -107,6 +107,19 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
                 method: 'POST',
                 json: { workspaceId, owner, repo, enabled },
             })) as { ok: boolean },
+        // Goes to the HOST, which asks Tynn — so a remote window shares the same
+        // per-workspace window as the host's own agents rather than getting a
+        // second one.
+        forceRefresh: async (workspaceId) =>
+            (await req('/api/desktop/issue-watch/force-refresh', {
+                method: 'POST',
+                json: { workspaceId },
+            })) as {
+                refreshed: boolean;
+                reason: 'refreshed' | 'cooldown' | 'failed' | 'unavailable';
+                error?: string;
+                cooldown: { seconds: number; nextAllowedAt: string | null; label: string };
+            },
     };
 
     // A `.gen` site belongs to the machine this window DRIVES — it is a

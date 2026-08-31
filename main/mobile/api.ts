@@ -54,6 +54,7 @@ import {
     setWorkspaceWatch,
     pollWorkspace,
 } from '../issue-watch';
+import { requestIssueWatchRefresh } from '../issue-watch/force-refresh';
 import { agentInboxBroker } from '../agentinbox/broker';
 import {
     postAsHuman,
@@ -1658,6 +1659,14 @@ export async function handleApi(
         if (pathname === '/api/desktop/issue-watch/set') {
             await setWorkspaceWatch(id, String(iw.owner ?? ''), String(iw.repo ?? ''), !!iw.enabled);
             sendJson(res, 200, { ok: true });
+            return true;
+        }
+        if (pathname === '/api/desktop/issue-watch/force-refresh') {
+            // The HOST asks Tynn, because the host is the machine whose
+            // IssueWatch this is. Tynn's per-workspace window is therefore
+            // shared with the host's own agents, which is the point: one limit,
+            // one answer, whoever asked.
+            sendJson(res, 200, await requestIssueWatchRefresh(id));
             return true;
         }
         sendJson(res, 404, { error: 'unknown issue-watch route' });

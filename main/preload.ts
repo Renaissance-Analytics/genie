@@ -156,6 +156,16 @@ const api = {
             >,
         status: (workspaceId: string) =>
             ipcRenderer.invoke('issue-watch:status', workspaceId),
+        /** Ask TYNN to re-read GitHub for this workspace now. Tynn owns the
+         *  rate limit — one window per workspace, shared with every agent — and
+         *  the cooldown it returns is passed through untouched. */
+        forceRefresh: (workspaceId: string) =>
+            ipcRenderer.invoke('issue-watch:force-refresh', workspaceId) as Promise<{
+                refreshed: boolean;
+                reason: 'refreshed' | 'cooldown' | 'failed' | 'unavailable';
+                error?: string;
+                cooldown: { seconds: number; nextAllowedAt: string | null; label: string };
+            }>,
     },
 
     mcp: {
