@@ -374,8 +374,9 @@ Add one with \`runAgent switchTui\`, or from the driver control in the agent's
 panel. The agent's IDENTITY is unchanged either way -- same name, same
 AgentInbox, same history, same \`AGENT.md\`. Only the driver differs.
 
-**A sidecar is a general capability, not one feature.** What it is FOR is
-whatever the project needs. Some of the shapes it takes:
+**What you use a sidecar FOR is yours.** Genie builds the capability and takes
+no view on the purpose -- that is the user's call, and the workspace agent's.
+Some shapes it takes:
 
 - **A second opinion.** Ask the same question of a different model and compare.
   Two harnesses disagreeing about a diagnosis is information, and it is cheapest
@@ -388,9 +389,9 @@ whatever the project needs. Some of the shapes it takes:
 - **Administrative work.** Housekeeping, migrations, batch edits: real work that
   does not need to occupy the driver you are talking to.
 
-None of these is built in. They are things a sidecar makes possible, and the
-reason the capability is deliberately unopinionated: Genie gives an agent more
-than one driver and gets out of the way.
+None of those is a separate feature to switch on -- they are things the same
+capability is put to. Reach for whichever fits the work in front of you, or
+something not listed here.
 
 **Costs, so they are chosen and not discovered.** Every live sidecar is a real
 process holding a real conversation, and it spends tokens when it works. Genie
