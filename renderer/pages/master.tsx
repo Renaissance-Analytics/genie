@@ -6,6 +6,7 @@ import GenieCommandWindow, { type SavedPrompt } from '../components/Master/Genie
 import FeedbackModal from '../components/Master/FeedbackModal';
 import Chooser from '../components/Master/Chooser';
 import ProjectContextMenu from '../components/Master/ProjectContextMenu';
+import NewAgentModal from '../components/Master/NewAgentModal';
 import WorkspaceSettingsModal from '../components/Master/WorkspaceSettingsModal';
 import WorkspaceSiteManager from '../components/Master/WorkspaceSiteManager';
 import SpecContextMenu from '../components/Master/SpecContextMenu';
@@ -359,6 +360,7 @@ function MasterInner() {
     // routes to the HOST over the bridge, so the rail indicator reflects the HOST's
     // sites and the `dev-server:changed` push arrives via PASSTHROUGH_EVENTS.
     const [siteManagerWsId, setSiteManagerWsId] = useState<string | null>(null);
+    const [newAgentWsId, setNewAgentWsId] = useState<string | null>(null);
     const [devSites, setDevSites] = useState<Record<string, DevSiteInfo[]>>({});
 
     const [onboardingOpen, setOnboardingOpen] = useState(false);
@@ -2357,6 +2359,20 @@ function MasterInner() {
                 />
             )}
 
+            {newAgentWsId && (() => {
+                const ws = workspacesById.get(newAgentWsId);
+                if (!ws) return null;
+                return (
+                    <NewAgentModal
+                        workspaceId={ws.id}
+                        workspaceName={ws.project_name}
+                        onClose={() => setNewAgentWsId(null)}
+                        // The grid reads the agent record, so a new one only
+                        // appears once that is re-read.
+                        onCreated={() => void refresh()}
+                    />
+                );
+            })()}
             {projectMenu && (() => {
                 const ws = workspacesById.get(projectMenu.workspaceId);
                 if (!ws) return null;
@@ -2366,6 +2382,7 @@ function MasterInner() {
                         workspace={ws}
                         onClose={() => setProjectMenu(null)}
                         onAddTerminal={() => void addSpec(ws.id)}
+                        onNewAgent={() => setNewAgentWsId(ws.id)}
                         onOpenStage={() => openProjectInStage(ws.id)}
                         onOpenInBrowser={() => openProjectInBrowser(ws.id)}
                         onSettings={() => setSettingsWorkspaceId(ws.id)}

@@ -23,6 +23,7 @@ interface Props {
     workspace: WorkspaceRow;
     onClose: () => void;
     onAddTerminal: () => void;
+    onNewAgent: () => void;
     onOpenStage: () => void;
     onOpenInBrowser: () => void;
     onSettings: () => void;
@@ -45,6 +46,7 @@ export default function ProjectContextMenu({
     workspace,
     onClose,
     onAddTerminal,
+    onNewAgent,
     onOpenStage,
     onOpenInBrowser,
     onSettings,
@@ -118,6 +120,18 @@ export default function ProjectContextMenu({
                     label="Add Terminal"
                     onClick={() => {
                         onAddTerminal();
+                        onClose();
+                    }}
+                />
+                {/* An AGENT, not a terminal. Creating one was MCP-only until now —
+                    the form existed and was unreachable, because `panelLauncherTypes()`
+                    filters out every specialized type. Right-clicking the workspace is
+                    where a person looks for this. */}
+                <CtxItem
+                    icon={<IconPlus size={14} />}
+                    label="New agent…"
+                    onClick={() => {
+                        onNewAgent();
                         onClose();
                     }}
                 />

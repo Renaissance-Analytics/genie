@@ -1354,6 +1354,14 @@ const api = {
                 runtimes: AgentRuntimePayload[];
             }>,
         /** Make one of an agent's TUIs the visible one. A SWAP, not an add. */
+        /** Create an agent: a record and its AGENT.md, never a terminal. */
+        create: (input: {
+            workspaceId: string;
+            name: string;
+            purpose: string;
+            agent?: string;
+            bootFolder?: string;
+        }) => ipcRenderer.invoke('agents:create', input) as Promise<{ ok: boolean; error?: string }>,
         front: (agentId: string, runtimeId: string) =>
             ipcRenderer.invoke('agents:front', agentId, runtimeId) as Promise<boolean>,
     },

@@ -21,6 +21,7 @@ import {
     getWorkspace,
     getWorkspaceAgent,
     getWorkspaceAgentByName,
+    type WorkspaceRow,
     listAgentRuntimes,
     createAgentRuntime,
     frontAgentRuntime,
@@ -1834,6 +1835,21 @@ export async function registerAgentForMcp(
         osAgentCapability: 'agent-register',
     });
     if (!decision.allowed || !ws) return { ok: false, error: decision.reason };
+    return registerAgentInWorkspace(ws, req);
+}
+
+/**
+ * Register an agent INTO an already-resolved workspace — the shared core.
+ *
+ * Split out so the MCP tool and the UI create agents by exactly ONE path. A
+ * second implementation would be a second place to forget the AGENT.md write,
+ * the by-name uniqueness check, or the containment guards — and the UI is
+ * precisely where a human is most likely to hit each of them.
+ */
+export async function registerAgentInWorkspace(
+    ws: WorkspaceRow,
+    req: RegisterAgentRequest,
+): Promise<RegisterAgentResult> {
 
     const resolved = resolveAgentRegistration(ws.path, req);
     if (!resolved.ok) return resolved;

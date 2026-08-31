@@ -89,6 +89,7 @@ import {
     createSpecializedAgentTerminal,
     restartAgentTerminal,
     updateAgentInboxChannel,
+    registerAgentInWorkspace,
 } from './mcp/host-tools';
 import { agentInboxBroker } from './agentinbox/broker';
 import { type AgentInboxScope } from './agentinbox/types';
@@ -599,6 +600,32 @@ export function registerIpcHandlers(): void {
     });
     ipcMain.handle('agents:front', (_e, agentId: string, runtimeId: string) =>
         frontAgentRuntime(String(agentId ?? ''), String(runtimeId ?? '')),
+    );
+    // CREATE an agent from the UI — a record and a file, never a terminal.
+    // Until now this was MCP-only: the form existed in the renderer and was
+    // unreachable. Goes through the same core the MCP tool uses so there is one
+    // place that writes AGENT.md and checks the name.
+    ipcMain.handle(
+        'agents:create',
+        async (
+            _e,
+            input: {
+                workspaceId: string;
+                name: string;
+                purpose: string;
+                agent?: string;
+                bootFolder?: string;
+            },
+        ) => {
+            const ws = getWorkspace(String(input?.workspaceId ?? ''));
+            if (!ws) return { ok: false, error: 'That workspace is no longer registered.' };
+            return registerAgentInWorkspace(ws, {
+                name: String(input.name ?? ''),
+                purpose: String(input.purpose ?? ''),
+                agent: input.agent as never,
+                bootFolder: input.bootFolder,
+            } as never);
+        },
     );
     ipcMain.handle('workspaces:add', (_e, row: WorkspaceRow) => {
         if (row.shape === 'simple') {
