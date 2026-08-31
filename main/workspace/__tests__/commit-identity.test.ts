@@ -57,15 +57,15 @@ describe('the fallback identity Genie commits under', () => {
         // when the EMAIL resolves to an account. `genie@localhost` belongs to
         // nobody, so GitHub rendered the raw name — no avatar, nothing to click.
         expect(GENIE_FALLBACK_IDENTITY).toEqual({
-            name: 'genie-ide[bot]',
-            email: '294734720+genie-ide[bot]@users.noreply.github.com',
+            name: 'genie-aos[bot]',
+            email: '294734720+genie-aos[bot]@users.noreply.github.com',
         });
     });
 
     it('uses the BOT USER id, not the App id', () => {
         // The trap, and the reason this test names the number. GitHub's noreply
         // form is `<bot-user-id>+<slug>[bot]@users.noreply.github.com`, where the
-        // id is the id of the BOT ACCOUNT (`GET /users/genie-ide[bot]` →
+        // id is the id of the BOT ACCOUNT (`GET /users/genie-aos[bot]` →
         // 294734720) — NOT the App id (4083762). The issue itself proposed
         // `<app-id>+…`, which would produce another address resolving to nothing:
         // precisely the bug being fixed, shipped again in a new disguise.

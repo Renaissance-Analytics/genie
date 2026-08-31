@@ -74,7 +74,7 @@ describe('computeCapabilityStatus', () => {
                 'issue-watch.dependabot',
             ]),
         );
-        // The genie-ide App declares neither code/secret scanning nor contents,
+        // The genie-aos App declares neither code/secret scanning nor contents,
         // so those three capabilities resolve as missing.
         expect(status.missing).toEqual([
             'issue-watch.code-scanning',
@@ -88,8 +88,8 @@ describe('computeCapabilityStatus', () => {
         ]);
     });
 
-    it('mirrors the genie-ide reality: issues/pulls/dependabot granted, scanning + contents missing', () => {
-        // The genie-ide App grants issues/pull_requests/metadata/
+    it('mirrors the genie-aos reality: issues/pulls/dependabot granted, scanning + contents missing', () => {
+        // The genie-aos App grants issues/pull_requests/metadata/
         // vulnerability_alerts/administration but NOT code/secret scanning or
         // contents — so those three capabilities are the missing ones.
         const granted = aggregatePermissions([

@@ -47,6 +47,9 @@ renders these same pages with a navigable sidebar.
 19. **[Hosting sites at `.gen`](18-dev-sites.md)** — the Hosting Manager: build a
     repo and serve it the production way at `*.gen`, its shared backing services,
     and the Genie Browser.
+20. **[Genie Apps (GApps)](19-genie-apps.md)** — whole agentic applications that
+    install into Genie with their own workspace, hosting, window and consented
+    permissions; GApp Development Workspaces, and the check/preview tools.
 
 ## Developer & reference docs
 

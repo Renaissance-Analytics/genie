@@ -6746,3 +6746,12 @@ body.gutter-dragging .grid-gutter {
     border-color: rgba(244, 135, 113, 0.5);
     color: #f48771;
 }
+
+/* The "not tracking" repair. A warning that only describes a problem is a dead
+   end; this one carries the control for whichever cause actually applies. */
+.iw-warn-actionable {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 7px;
+}

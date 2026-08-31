@@ -978,6 +978,10 @@ export interface IssuewatchPolicyBuckets {
 /** Issue Watch: the surfaced per-workspace status (why the feed is what it is). */
 export interface WorkspaceWatchStatus {
     connected: boolean;
+    /** Linked to a Tynn PROJECT. IssueWatch is tracked per project, so an
+     *  unlinked workspace can never be tracked — which is a different repair
+     *  from "linked but no repos" and from "Tynn has not polled yet". */
+    linked?: boolean;
     error: WatchFetchError | null;
     /** Raw detail (HTTP status + message) behind `error`, or null. */
     detail: WatchErrorDetail | null;

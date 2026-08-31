@@ -212,7 +212,7 @@ export function defaultE2EState(): E2EState {
                 missingPermissions: [],
                 missingByPermission: [],
                 appPermissionsUrl:
-                    'https://github.com/settings/apps/genie-ide/permissions',
+                    'https://github.com/settings/apps/genie-aos/permissions',
                 checked: true,
             },
         },
@@ -279,7 +279,7 @@ export function missingContentsCapabilities(): GithubCapabilities {
             },
         ],
         appPermissionsUrl:
-            'https://github.com/settings/apps/genie-ide/permissions',
+            'https://github.com/settings/apps/genie-aos/permissions',
         checked: true,
     };
 }

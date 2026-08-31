@@ -72,12 +72,12 @@ export interface RequiredPermission {
  *   - Issue Watch Code scanning → GET …/code-scanning/alerts   → `security_events:read`
  *   - Issue Watch Secret scanning → GET …/secret-scanning/alerts → `secret_scanning_alerts:read`
  *   - Provisioning / clone / fork / create → push to repos, read repo contents
- *     → `contents:write` (the genie-ide App historically does NOT declare
+ *     → `contents:write` (the genie-aos App historically does NOT declare
  *       `contents`, so this is the live "missing" candidate — but we COMPUTE
  *       it from the granted set rather than hardcoding the conclusion).
  *
  * `metadata:read` is the GitHub App baseline (always granted) and isn't gated.
- * The code/secret-scanning permissions are NOT yet declared on the genie-ide
+ * The code/secret-scanning permissions are NOT yet declared on the genie-aos
  * App, so those capabilities resolve as missing until the App grants them — the
  * proactive gate then disables their fetch, exactly like the contents case.
  */

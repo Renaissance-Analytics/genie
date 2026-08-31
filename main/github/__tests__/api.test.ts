@@ -505,7 +505,7 @@ describe('create/fork not-installed errors', () => {
         } catch (e) {
             expect(e).toBeInstanceOf(GitHubNotInstalledError);
             expect((e as GitHubNotInstalledError).installUrl).toMatch(
-                /github\.com\/apps\/genie-ide\/installations\/new/,
+                /github\.com\/apps\/genie-aos\/installations\/new/,
             );
         }
     });

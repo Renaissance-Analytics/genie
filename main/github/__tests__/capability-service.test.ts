@@ -83,7 +83,7 @@ describe('recheckCapabilities — disconnected', () => {
 });
 
 describe('recheckCapabilities — connected', () => {
-    it('computes missing=scanning+contents for the genie-ide-style grant set', async () => {
+    it('computes missing=scanning+contents for the genie-aos-style grant set', async () => {
         store.installations = installsFromPerms([
             {
                 metadata: 'read',
@@ -95,7 +95,7 @@ describe('recheckCapabilities — connected', () => {
         ]);
         const caps = await recheckCapabilities();
         expect(caps.connected).toBe(true);
-        // The genie-ide App declares neither code/secret scanning nor contents.
+        // The genie-aos App declares neither code/secret scanning nor contents.
         expect(caps.missing).toEqual([
             'issue-watch.code-scanning',
             'issue-watch.secret-scanning',
@@ -147,7 +147,7 @@ describe('recheckCapabilities — connected', () => {
         expect(caps.missingPermissions).toEqual(['contents']);
         // App-permission-settings deep-link (where the OWNER adds the perm).
         expect(caps.appPermissionsUrl).toBe(
-            'https://github.com/settings/apps/genie-ide/permissions',
+            'https://github.com/settings/apps/genie-aos/permissions',
         );
         const group = caps.missingByPermission.find(
             (g) => g.permission === 'contents',

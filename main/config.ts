@@ -27,10 +27,10 @@ export const GENIE_GITHUB_CLIENT_ID = 'Iv23liPssWsCpaUIxtIT';
 
 /**
  * The GitHub App's public slug, used to build the "install this App on an
- * account" URL. Derived from the App name "Genie IDE". If GitHub assigned a
+ * account" URL. Derived from the App name "Genie AOS". If GitHub assigned a
  * different slug, change it here — it's the only place the slug lives.
  */
-export const GENIE_GITHUB_APP_SLUG = 'genie-ide';
+export const GENIE_GITHUB_APP_SLUG = 'genie-aos';
 
 /**
  * The App's numeric ID, and the user ID of the BOT ACCOUNT it commits as.
@@ -43,8 +43,8 @@ export const GENIE_GITHUB_APP_SLUG = 'genie-ide';
  *     why that connection working tells you nothing about the two below.
  *   - `GENIE_GITHUB_APP_ID` (4083762) — the App itself. Used to sign the JWT for
  *     app-level auth. NOT part of any commit address.
- *   - `GENIE_GITHUB_BOT_USER_ID` (294734720) — the `genie-ide[bot]` ACCOUNT
- *     (`GET /users/genie-ide[bot]`). This is the one GitHub's noreply commit
+ *   - `GENIE_GITHUB_BOT_USER_ID` (294734720) — the `genie-aos[bot]` ACCOUNT
+ *     (`GET /users/genie-aos[bot]`). This is the one GitHub's noreply commit
  *     address is built from, and using the App id there produces an address that
  *     resolves to nobody — the exact failure #215 is about.
  */

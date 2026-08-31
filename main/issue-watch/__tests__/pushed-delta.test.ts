@@ -96,6 +96,11 @@ describe('server-fed IssueWatch override (#197)', () => {
             // explicitly rather than relaxed to toMatchObject: the whole point of
             // the flag is that an empty feed can no longer masquerade as healthy.
             knownToServer: true,
+            // The mocked row carries no `tynn_project_id`, so it is NOT linked.
+            // Included rather than dropped to toMatchObject for the same reason
+            // the flag above is: the exact shape is what stops a field going
+            // missing and the flyout silently offering the wrong repair.
+            linked: false,
         });
         expect(await getOpenCounts()).toEqual({ 'ws-1': { issue: 1, pr: 0, security: 2, feedback: 0, knownToServer: true } });
     });

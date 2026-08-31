@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { IconX, IconAlert, IconRefresh } from './icons';
 import {
     refreshControlState,
     type RefreshOutcome,
 } from '../../lib/issue-watch-refresh';
+import { notTrackingFix } from '../../lib/not-tracking-fix';
 import {
     api,
     hasGenieBridge,
@@ -136,6 +137,10 @@ export default function IssueWatchFlyout({
     // host that predates the field renders exactly as before rather than
     // accusing every workspace of being untracked.
     const [knownToServer, setKnownToServer] = useState(true);
+    // Whether this workspace is linked to a Tynn PROJECT. Only used to decide
+    // WHICH repair the "not tracking" message offers -- the main process knows
+    // it, and the old copy asked the owner to go and check it by hand.
+    const [linked, setLinked] = useState(true);
     /** Worst read error across the workspace's enabled repos (null = all ok). */
     const [error, setError] = useState<WatchFetchError | null>(null);
     /** Raw detail (HTTP status + message) behind `error`, for the precise copy. */
@@ -184,6 +189,9 @@ export default function IssueWatchFlyout({
     // this workspace -- so the cooldown it returns is rendered as-is rather than
     // counted down here, where it would drift out of agreement the moment
     // anything else spent it.
+    // Scroll target for the "not tracking" repair, whose fix for both the
+    // unlinked and no-repos cases is the repo list a few pixels above it.
+    const reposRef = useRef<HTMLDivElement>(null);
     const [forcing, setForcing] = useState(false);
     const [forceResult, setForceResult] = useState<RefreshOutcome | null>(null);
     const forceState = refreshControlState({ busy: forcing, last: forceResult });
@@ -241,9 +249,16 @@ export default function IssueWatchFlyout({
                     // knowledge — don't accuse the workspace of being untracked
                     // on top of an already-surfaced disconnection.
                     knownToServer: true,
+                    // Same reasoning: a failed read is not evidence the
+                    // workspace is unlinked, and claiming so would offer the
+                    // wrong repair on top of an already-surfaced failure.
+                    linked: true,
                 }));
             setConnected(!!st.connected);
             setKnownToServer(st.knownToServer ?? true);
+            // Default TRUE on an older payload: assuming "unlinked" would send
+            // someone to fix a link that is already fine.
+            setLinked(st.linked ?? true);
             setError(st.error ?? null);
             setDetail(st.detail ?? null);
             setNeedsReauth(!!st.needsReauth);
@@ -519,7 +534,7 @@ export default function IssueWatchFlyout({
                                     git remote pointing at github.com).
                                 </div>
                             ) : (
-                                <div className="iw-repos">
+                                <div className="iw-repos" ref={reposRef}>
                                     {repos.map((r) => (
                                         <label
                                             key={`${r.owner}/${r.repo}`}
@@ -613,12 +628,49 @@ export default function IssueWatchFlyout({
                                     // workspaces is still a successful delivery.
                                     // Saying "nothing open" here is a lie that hid
                                     // a completely dead feed (genie#22).
-                                    <div className="iw-warn">
-                                        Tynn isn’t tracking this workspace yet, so there’s
-                                        nothing to show. Check that it’s linked to a Tynn
-                                        project and that the project has repositories
-                                        registered for IssueWatch.
-                                    </div>
+                                    // A dead end is a bug. This used to be pure
+                                    // ADVICE -- "check that it's linked, check
+                                    // that it has repos" -- while Genie already
+                                    // held both answers, offered no button for
+                                    // either, and named two causes that are
+                                    // false on a workspace that IS linked with
+                                    // repos ticked. It now says which cause
+                                    // actually applies and hands over the
+                                    // control for it.
+                                    (() => {
+                                        const fix = notTrackingFix({
+                                            linked,
+                                            enabledRepoCount: repos.filter((r) => r.enabled).length,
+                                            needsReauth,
+                                        });
+                                        return (
+                                            <div className="iw-warn iw-warn-actionable">
+                                                <span>{fix.message}</span>
+                                                <button
+                                                    type="button"
+                                                    className="iw-linkbtn"
+                                                    onClick={() => {
+                                                        if (fix.action === 'reconnect-github') {
+                                                            void startReconnect();
+                                                        } else if (fix.action === 'force-refresh') {
+                                                            void forceRefresh();
+                                                        } else {
+                                                            // 'unlinked' and 'no-repos'
+                                                            // are both repaired in the
+                                                            // repo list right above
+                                                            // this message.
+                                                            reposRef.current?.scrollIntoView({
+                                                                behavior: 'smooth',
+                                                                block: 'center',
+                                                            });
+                                                        }
+                                                    }}
+                                                >
+                                                    {fix.actionLabel}
+                                                </button>
+                                            </div>
+                                        );
+                                    })()
                                 ) : (
                                     <div className="iw-muted">
                                         Nothing open on the watched repos.

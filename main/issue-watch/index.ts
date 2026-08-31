@@ -577,6 +577,15 @@ export interface WorkspaceWatchStatus {
      * a real, actionable state, not silence.
      */
     knownToServer: boolean;
+    /**
+     * Is this workspace LINKED to a Tynn project?
+     *
+     * IssueWatch is tracked per PROJECT, so an unlinked workspace can never be
+     * tracked. The flyout needs this to tell the owner which of the causes of
+     * "not tracking" actually applies — it used to print advice telling them to
+     * go and check a fact the main process was already holding.
+     */
+    linked: boolean;
 }
 
 /** The Issue Watch capability keys the flyout gates on (a subset of the full
@@ -596,6 +605,21 @@ const IW_CAPABILITY_KEYS: readonly CapabilityKey[] = [
  * inert then). Only the capability KEYS travel — no token, no installation
  * secret — so it is safe to serve to a remote client over the bridge.
  */
+
+/**
+ * Is this workspace linked to a Tynn PROJECT?
+ *
+ * IssueWatch is tracked per project, so an unlinked workspace can never be
+ * tracked — and that is a different repair from "linked but no repos" or
+ * "linked and Tynn simply has not polled". The flyout used to hand the owner
+ * advice to go and check this; it is answered here instead.
+ */
+function workspaceIsLinked(workspaceId: string): boolean {
+    const row = getWorkspace(workspaceId);
+    if (!row) return false;
+    return Boolean(row.tynn_project_id ?? resolveTynnLinkForRow(row)?.projectId);
+}
+
 function missingIssueWatchCapabilities(): CapabilityKey[] {
     const caps = getCapabilities();
     if (!caps.connected) return [];
@@ -800,6 +824,7 @@ export async function getWorkspaceStatus(
             needsReauth: false,
             missingCapabilities: [],
             knownToServer,
+            linked: workspaceIsLinked(workspaceId),
         };
     }
     return {
@@ -810,6 +835,7 @@ export async function getWorkspaceStatus(
         missingCapabilities: [],
         serviceState,
         knownToServer,
+        linked: workspaceIsLinked(workspaceId),
     };
 }
 
