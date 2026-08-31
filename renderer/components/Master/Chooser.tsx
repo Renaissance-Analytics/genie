@@ -37,6 +37,8 @@ import {
     type AgentRecordSpec,
     type AgentRuntimeSpec,
 } from '../../lib/ams-grid';
+import { agentStack } from '../../lib/agent-stack';
+import AgentAvatarStack from './AgentAvatarStack';
 import TerminalTypeSplitButton from './TerminalTypeSplitButton';
 import { workspaceHasThumb, workspaceNeedsAttention } from '../../lib/attention';
 import { gappLaunchLabel, gappLaunchTarget } from '../../lib/gapp-launch';
@@ -1248,6 +1250,26 @@ export default function Chooser({
                                         affordance. */}
                                     <span className="pname">{ws.project_name}</span>
                                     {ws.shape === 'agi' && <AgiHealth ws={ws} />}
+                                    {/* WHO is working here, on the row itself. Reads
+                                        the same rows the grid does -- a second
+                                        derivation from terminal specs is how the row
+                                        and the grid would come to disagree. */}
+                                    {!system && (() => {
+                                        const record = agentRecords[ws.id];
+                                        if (!record) return null;
+                                        return (
+                                            <AgentAvatarStack
+                                                stack={agentStack({
+                                                    rows: agentGridRows({
+                                                        agents: record.agents,
+                                                        runtimes: record.runtimes,
+                                                        specs: byWorkspace.get(ws.id) ?? [],
+                                                        isLive: (id) => activeIds.has(id),
+                                                    }),
+                                                })}
+                                            />
+                                        );
+                                    })()}
                                     {/* Issue Watch is GitHub-scoped — not for the
                                         synthetic System Workspace. */}
                                     {!system && (
