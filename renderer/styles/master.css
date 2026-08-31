@@ -6481,3 +6481,43 @@ body.gutter-dragging .grid-gutter {
     font-size: 10px;
     color: var(--fg-4);
 }
+
+/* ── Workspace avatar (replaces the generic cube) ────────────────────────────
+   Every .agi workspace drew the same box glyph, so a rail of six was six
+   identical marks — an icon that identifies nothing, in the exact spot the
+   identifying mark belongs. Initials are derived from the name, so they differ
+   by construction; a user-set icon overrides them. */
+.ws-avatar {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    font-weight: 650;
+    letter-spacing: -0.02em;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+}
+.ws-avatar-custom {
+    font-size: 15px;
+}
+
+/* A GDW keeps its identity WHILE pulsing. The plain pulse animates `box-shadow`,
+   which overwrote the inset ring that marks a GApp Development Workspace — so
+   the one moment the row is drawing attention to itself was the one moment it
+   stopped saying what kind of workspace it is. The ring is held in every frame
+   and the pulse itself is in the GDW colour. */
+.chooser-rail .crail-btn.ws-gapp-dev.pulsing {
+    animation: ws-pulse-rail-gdw 1.5s ease-out 1;
+}
+@keyframes ws-pulse-rail-gdw {
+    0% {
+        box-shadow: inset 0 0 0 2px var(--gapp-dev-border), 0 0 0 0 var(--gapp-dev);
+    }
+    40% {
+        box-shadow: inset 0 0 0 2px var(--gapp-dev-border), 0 0 0 3px var(--gapp-dev);
+    }
+    100% {
+        box-shadow: inset 0 0 0 2px var(--gapp-dev-border), 0 0 0 0 transparent;
+    }
+}

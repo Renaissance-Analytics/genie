@@ -129,6 +129,9 @@ export interface WorkspaceRow {
     tynn_project_id: string;
     tynn_project_name: string;
     shape: 'agi' | 'simple';
+    /** A user-set workspace icon. NULL/absent falls back to the workspace's
+     *  INITIALS — see lib/workspace-avatar. */
+    icon?: string | null;
     path: string;
     editor: string | null;
     editor_cmd: string | null;

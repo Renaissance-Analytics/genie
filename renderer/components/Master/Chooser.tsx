@@ -38,6 +38,7 @@ import {
     type AgentRuntimeSpec,
 } from '../../lib/ams-grid';
 import { agentStack } from '../../lib/agent-stack';
+import { workspaceInitials } from '../../lib/workspace-avatar';
 import AgentAvatarStack from './AgentAvatarStack';
 import TerminalTypeSplitButton from './TerminalTypeSplitButton';
 import { workspaceHasThumb, workspaceNeedsAttention } from '../../lib/attention';
@@ -1944,11 +1945,19 @@ export default function Chooser({
 }
 
 function workspaceIcon(ws: WorkspaceRow, size = 18) {
-    // The synthetic System Workspace gets a distinct home glyph.
+    // The synthetic System Workspace gets a distinct home glyph -- it is not a
+    // project and should not read as one.
     if (isSystemWorkspace(ws)) return <IconHome size={size} />;
-    if (ws.backend === 'aionima') return <IconCpu size={size} />;
-    if (ws.shape === 'agi') return <IconBox size={size} />;
-    return <IconGlobe size={size} />;
+    // A user-set icon wins. Set in Genie, and in time from Tynn.
+    if (ws.icon) return <span className="ws-avatar ws-avatar-custom">{ws.icon}</span>;
+    // Otherwise the workspace's INITIALS. Every .agi workspace used to draw the
+    // same generic cube, so a rail of six was six identical glyphs -- an icon
+    // that identifies nothing, in the exact spot the identifying mark belongs.
+    return (
+        <span className="ws-avatar" style={{ fontSize: Math.round(size * 0.5) }}>
+            {workspaceInitials(ws.project_name)}
+        </span>
+    );
 }
 
 /** Slug an envelope folder back to its base name (drops the .agi suffix). */

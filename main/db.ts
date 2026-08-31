@@ -1600,6 +1600,24 @@ export function runMigrations(d: Database.Database): void {
                 backfillRuntimes(db);
             },
         },
+        {
+            // v56 — a workspace can carry its OWN icon.
+            //
+            // Every `.agi` workspace drew the same generic cube, so a rail of six
+            // was six identical glyphs -- an icon that identifies nothing, in the
+            // exact spot the identifying mark belongs. The default is now the
+            // workspace's initials (derived, so they differ by construction) and
+            // this column is the override a human sets, in Genie or from Tynn.
+            //
+            // TEXT and free-form on purpose: an emoji today, a path or a URL
+            // later, without another migration to widen it.
+            version: 56,
+            runner: (db) => {
+                if (!workspaceColumns(db).has('icon')) {
+                    db.exec('ALTER TABLE workspaces ADD COLUMN icon TEXT');
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -2245,6 +2263,9 @@ export interface WorkspaceRow {
     tynn_project_id: string;
     tynn_project_name: string;
     shape: 'agi' | 'simple';
+    /** A user-set workspace icon (emoji today; a path or URL later). NULL means
+     *  fall back to the workspace's initials — see renderer/lib/workspace-avatar. */
+    icon?: string | null;
     path: string;
     editor: string | null;
     editor_cmd: string | null;
