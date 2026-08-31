@@ -10,6 +10,9 @@ import {
     AI_SYSTEM_MAX,
     getAllSettings,
     getWorkspace,
+    listWorkspaceAgents,
+    listAgentRuntimes,
+    frontAgentRuntime,
     listWorkspaces,
     removeWorkspace,
     reorderWorkspaces,
@@ -566,6 +569,37 @@ export function registerIpcHandlers(): void {
 
     // --- Workspaces -----------------------------------------------------
     ipcMain.handle('workspaces:list', () => listWorkspaces());
+    // The AGENT RECORD, for the renderer.
+    //
+    // Until now `main/preload.ts` exposed no bridge to `workspace_agents` at
+    // all, so every agent surface read `TerminalSpec.meta` instead: a leftover
+    // spec looked like an agent, and a registered agent that was not running
+    // was invisible. The grid reads this instead.
+    ipcMain.handle('agents:list', (_e, workspaceId: string) => {
+        const agents = listWorkspaceAgents(String(workspaceId ?? ''));
+        return {
+            agents: agents.map((a) => ({
+                id: a.id,
+                name: a.name,
+                purpose: a.purpose,
+                avatar: a.avatar,
+                role: a.role,
+                collisionGroup: a.collision_group ?? null,
+            })),
+            runtimes: agents.flatMap((a) =>
+                listAgentRuntimes(a.id).map((r) => ({
+                    id: r.id,
+                    agentId: r.agent_id,
+                    provider: r.provider,
+                    terminalSpecId: r.terminal_spec_id,
+                    fronted: r.fronted === 1,
+                })),
+            ),
+        };
+    });
+    ipcMain.handle('agents:front', (_e, agentId: string, runtimeId: string) =>
+        frontAgentRuntime(String(agentId ?? ''), String(runtimeId ?? '')),
+    );
     ipcMain.handle('workspaces:add', (_e, row: WorkspaceRow) => {
         if (row.shape === 'simple') {
             validateSimpleWorkspace({ path: row.path });

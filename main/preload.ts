@@ -13,6 +13,25 @@ import type { TypeCounts } from './issue-watch';
 import type { TynnHealth } from './mcp/tynn-health';
 import type { HostToolName } from './dev-server/toolchain-detect';
 import type { AskDraftEntry } from './ask/draft-store';
+
+/** One registered agent, as the renderer receives it. */
+export interface AgentRecordPayload {
+    id: string;
+    name: string;
+    purpose: string;
+    avatar: string | null;
+    role: 'workspace' | 'specialized' | 'gapp';
+    collisionGroup: string | null;
+}
+
+/** One TUI an agent may run under. */
+export interface AgentRuntimePayload {
+    id: string;
+    agentId: string;
+    provider: string;
+    terminalSpecId: string | null;
+    fronted: boolean;
+}
 import {
     TERMINAL_RECOVER_CHANNEL,
     TERMINAL_RECOVERY_STATUS_CHANNEL,
@@ -1324,6 +1343,20 @@ const api = {
 
     // Agent-integration MCP: the ForceTheQuestion modal. Main pushes a question
     // payload via `ask:show`; the modal replies with answer/cancel.
+    // The AGENT RECORD. Until this existed the renderer had no bridge to
+    // `workspace_agents` at all, so every agent surface read TerminalSpec.meta
+    // -- which is why a leftover spec looked like an agent and a registered but
+    // dormant agent was invisible.
+    agents: {
+        list: (workspaceId: string) =>
+            ipcRenderer.invoke('agents:list', workspaceId) as Promise<{
+                agents: AgentRecordPayload[];
+                runtimes: AgentRuntimePayload[];
+            }>,
+        /** Make one of an agent's TUIs the visible one. A SWAP, not an add. */
+        front: (agentId: string, runtimeId: string) =>
+            ipcRenderer.invoke('agents:front', agentId, runtimeId) as Promise<boolean>,
+    },
     ask: {
         onShow: (
             cb: (payload: {

@@ -2230,6 +2230,10 @@ export interface WorkspaceAgentRow {
     transport_error: string | null;
     created_at: number;
     updated_at: number;
+    /** Set when this workspace holds more than one agent under this name and a
+     *  human has not yet said which survives (v55). The name index is partial on
+     *  this, so marked rows coexist until the collision is answered. */
+    collision_group: string | null;
 }
 
 export interface WorkspaceRow {
@@ -2374,7 +2378,7 @@ export function getWorkspaceAgent(
 }
 
 export function createWorkspaceAgent(
-    row: Omit<WorkspaceAgentRow, 'created_at' | 'updated_at' | 'ready_at' | 'terminal_spec_id' | 'transport' | 'transport_verified_at' | 'transport_error'> & {
+    row: Omit<WorkspaceAgentRow, 'created_at' | 'updated_at' | 'ready_at' | 'terminal_spec_id' | 'transport' | 'transport_verified_at' | 'transport_error' | 'collision_group'> & {
         ready_at?: number | null;
         terminal_spec_id?: string | null;
     },
