@@ -1544,6 +1544,62 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // v55 — AN AGENT IS NOT ITS TUI.
+            //
+            // `UNIQUE (workspace_id, provider, name)` made the driver part of an
+            // agent's IDENTITY: `claude:tynn` and `codex:tynn` were two agents,
+            // and switching driver meant becoming someone else. The sibling
+            // `UNIQUE (terminal_spec_id)` allowed at most ONE terminal per agent,
+            // which forbids sidecars outright.
+            //
+            // So the record splits. `workspace_agents` keeps identity -- name,
+            // purpose, scope, persona -- and `agent_runtimes` holds each TUI it
+            // may run under, at most one of them fronted.
+            //
+            // `workspace_agents.provider` and `.terminal_spec_id` are KEPT, as a
+            // cached mirror of the fronted runtime. A great deal of code reads
+            // them, and mirroring is what makes this a staged migration rather
+            // than a flag day.
+            version: 55,
+            runner: (db) => {
+                db.exec(`
+                    CREATE TABLE IF NOT EXISTS agent_runtimes (
+                        id TEXT PRIMARY KEY,
+                        agent_id TEXT NOT NULL,
+                        provider TEXT NOT NULL,
+                        terminal_spec_id TEXT,
+                        chat_session_id TEXT,
+                        transport TEXT,
+                        native_transport TEXT,
+                        transport_verified_at INTEGER,
+                        transport_error TEXT,
+                        ready_at INTEGER,
+                        fronted INTEGER NOT NULL DEFAULT 0,
+                        created_at INTEGER NOT NULL,
+                        updated_at INTEGER NOT NULL,
+                        FOREIGN KEY (agent_id) REFERENCES workspace_agents(id) ON DELETE CASCADE,
+                        FOREIGN KEY (terminal_spec_id) REFERENCES terminal_specs(id) ON DELETE SET NULL
+                    );
+                    -- One terminal backs one runtime. Moved off workspace_agents,
+                    -- where it also meant "one terminal per AGENT" and blocked sidecars.
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_runtimes_spec
+                        ON agent_runtimes(terminal_spec_id) WHERE terminal_spec_id IS NOT NULL;
+                    -- At most one VISIBLE TUI per agent: flipping is a swap, not an add.
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_runtimes_fronted
+                        ON agent_runtimes(agent_id) WHERE fronted = 1;
+                    -- One runtime per TUI per agent.
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_runtimes_provider
+                        ON agent_runtimes(agent_id, provider);
+                    CREATE INDEX IF NOT EXISTS idx_agent_runtimes_agent
+                        ON agent_runtimes(agent_id);
+                `);
+                if (!tableColumns(db, 'workspace_agents').has('collision_group')) {
+                    db.exec('ALTER TABLE workspace_agents ADD COLUMN collision_group TEXT');
+                }
+                backfillRuntimes(db);
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -1568,6 +1624,89 @@ function workspaceColumns(d: Database.Database): Set<string> {
 }
 
 /** Column-name set for an arbitrary table (idempotent-ALTER guards). */
+/**
+ * Give every existing agent a runtime, then decide what is safe to enforce.
+ *
+ * Split out and exported because it is the only interesting half of v55 and the
+ * half that must be provably CONSERVATIVE. It runs inside the migration and is
+ * idempotent, so re-running it is a no-op.
+ *
+ * COLLISIONS ARE NOT RESOLVED HERE. Collapsing `(workspace, provider, name)` to
+ * `(workspace, name)` collides wherever a workspace holds `claude:general` AND
+ * `codex:general` -- two agents with two conversations, two inbox identities and
+ * two histories. Which one survives is the owner's call, made against previews of
+ * the real terminals; a migration that picked for them would silently discard a
+ * conversation on an unattended host at upgrade time.
+ *
+ * So colliding rows are MARKED and left whole, and the name index is PARTIAL --
+ * `WHERE collision_group IS NULL` -- which is what lets them coexist. A plain
+ * UNIQUE(workspace_id, name) would simply fail to build against such a profile
+ * and take the whole upgrade down with it.
+ */
+export function backfillRuntimes(d: Database.Database): void {
+    const now = Date.now();
+
+    // One fronted runtime per agent that names a TUI. `role='workspace'` rows
+    // carry provider NULL by design -- they are the workspace's own agent and
+    // have never had a driver -- so they get no runtime until one is chosen.
+    const agents = d
+        .prepare<[], {
+            id: string;
+            provider: string | null;
+            terminal_spec_id: string | null;
+            transport: string | null;
+            native_transport: string | null;
+            transport_verified_at: number | null;
+            transport_error: string | null;
+            ready_at: number | null;
+        }>(
+            `SELECT id, provider, terminal_spec_id, transport, native_transport,
+                    transport_verified_at, transport_error, ready_at
+               FROM workspace_agents
+              WHERE provider IS NOT NULL
+                AND id NOT IN (SELECT agent_id FROM agent_runtimes)`,
+        )
+        .all();
+    const insert = d.prepare(
+        `INSERT INTO agent_runtimes
+           (id, agent_id, provider, terminal_spec_id, transport, native_transport,
+            transport_verified_at, transport_error, ready_at, fronted, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+    );
+    for (const a of agents) {
+        insert.run(
+            `runtime:${a.id}`,
+            a.id,
+            a.provider,
+            a.terminal_spec_id,
+            a.transport,
+            a.native_transport,
+            a.transport_verified_at,
+            a.transport_error,
+            a.ready_at,
+            now,
+            now,
+        );
+    }
+
+    // Mark every name a workspace holds more than once. The group key is stable
+    // and readable so the resolution UI can list a collision by what it is.
+    d.prepare(
+        `UPDATE workspace_agents
+            SET collision_group = workspace_id || ':' || name
+          WHERE (workspace_id, name) IN (
+                SELECT workspace_id, name FROM workspace_agents
+                 GROUP BY workspace_id, name HAVING COUNT(*) > 1)`,
+    ).run();
+
+    // The old key goes; the new one is partial so marked collisions survive it.
+    d.exec(`
+        DROP INDEX IF EXISTS idx_workspace_agents_key;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_agents_name
+            ON workspace_agents(workspace_id, name) WHERE collision_group IS NULL;
+    `);
+}
+
 function tableColumns(d: Database.Database, table: string): Set<string> {
     const rows = d
         .prepare<[], { name: string }>(`PRAGMA table_info(${table})`)
@@ -2087,6 +2226,28 @@ export function listWorkspaceAgents(workspaceId: string): WorkspaceAgentRow[] {
                       name ASC`,
         )
         .all(workspaceId);
+}
+
+/**
+ * The agent a workspace knows by NAME.
+ *
+ * The lookup that matters since v55: a name means ONE agent, whatever TUI is
+ * driving it. `getWorkspaceAgent` still takes a provider for the callers that
+ * have one in hand, but a uniqueness check must use this -- checking
+ * (provider, name) let a second agent be registered under a name the workspace
+ * already had, and the insert then died on the index instead of refusing
+ * cleanly.
+ */
+export function getWorkspaceAgentByName(
+    workspaceId: string,
+    name: string,
+): WorkspaceAgentRow | undefined {
+    return getDb()
+        .prepare<[string, string], WorkspaceAgentRow>(
+            `SELECT *, COALESCE(native_transport, transport) AS transport FROM workspace_agents
+             WHERE workspace_id = ? AND name = ?`,
+        )
+        .get(workspaceId, name);
 }
 
 export function getWorkspaceAgent(

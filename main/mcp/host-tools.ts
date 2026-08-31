@@ -20,6 +20,7 @@ import {
     getTerminalSpec,
     getWorkspace,
     getWorkspaceAgent,
+    getWorkspaceAgentByName,
     createWorkspaceAgent,
     listWorkspaceAgents,
     bindWorkspaceAgentTerminal,
@@ -1832,10 +1833,19 @@ export async function registerAgentForMcp(
     const resolved = resolveAgentRegistration(ws.path, req);
     if (!resolved.ok) return resolved;
     const provider = req.agent ?? resolveWorkstationProvider(getAllSettings());
-    if (getWorkspaceAgent(ws.id, provider, resolved.name)) {
+    // By NAME, not by (provider, name). Since v55 a name means ONE agent
+    // whatever TUI drives it, so checking the pair let a second agent through
+    // under a name the workspace already had -- and the insert then died on the
+    // index instead of refusing cleanly. A second TUI is a RUNTIME of the
+    // existing agent, not another agent.
+    const held = getWorkspaceAgentByName(ws.id, resolved.name);
+    if (held) {
         return {
             ok: false,
-            error: `Agent "${savedAgentKey(provider, resolved.name)}" is already registered in this workspace.`,
+            error:
+                `Agent "${resolved.name}" is already registered in this workspace` +
+                (held.provider ? ` (running ${held.provider})` : '') +
+                '. An agent is not its TUI: add a runtime to it rather than registering a second one.',
         };
     }
 
