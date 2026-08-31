@@ -12,6 +12,7 @@ import type { AgentInboxIncomingPayload } from './terminal/ipc';
 import type { TypeCounts } from './issue-watch';
 import type { TynnHealth } from './mcp/tynn-health';
 import type { HostToolName } from './dev-server/toolchain-detect';
+import type { AskDraftEntry } from './ask/draft-store';
 import {
     TERMINAL_RECOVER_CHANNEL,
     TERMINAL_RECOVERY_STATUS_CHANNEL,
@@ -1381,6 +1382,12 @@ const api = {
         ready: () => ipcRenderer.invoke('ask:ready') as Promise<void>,
         /** Close this modal window regardless of state (resolves cancelled). */
         dismiss: () => ipcRenderer.invoke('ask:dismiss') as Promise<void>,
+        // A part-typed answer, held in main so it survives this window being
+        // destroyed and the flyout unmounting. Both surfaces share one entry.
+        draftGet: (id: string) =>
+            ipcRenderer.invoke('ask:draft:get', id) as Promise<AskDraftEntry | null>,
+        draftSet: (id: string, entry: AskDraftEntry) =>
+            ipcRenderer.invoke('ask:draft:set', id, entry) as Promise<void>,
     },
 
     on: {

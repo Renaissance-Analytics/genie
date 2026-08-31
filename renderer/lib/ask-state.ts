@@ -134,3 +134,40 @@ export function draftToAnswers<Q extends AnswerableQuestion>(
         note: (draft.notes[qi] ?? '').trim(),
     }));
 }
+
+/** How the question flyout holds a part-typed answer: per question index, the
+ *  labels picked and the note typed. The same facts as {@link AskDraft},
+ *  transposed. */
+export type CardState = Record<number, { selected: string[]; note: string }>;
+
+/**
+ * Flyout shape → the shared draft.
+ *
+ * Main stores ONE shape so both surfaces can share a draft — an answer begun in
+ * the flyout is finished in the modal. Every question index that appears in
+ * either half is carried, so a question with only a note (a real answer, and the
+ * one most easily lost by a converter that keys off selections) survives.
+ */
+export function draftFromCardState(state: CardState): AskDraft {
+    const selected: Record<number, string[]> = {};
+    const notes: Record<number, string> = {};
+    for (const [key, value] of Object.entries(state)) {
+        const qi = Number(key);
+        selected[qi] = value.selected;
+        notes[qi] = value.note;
+    }
+    return { selected, notes };
+}
+
+/** The shared draft → flyout shape. Inverse of {@link draftFromCardState}. */
+export function cardStateFromDraft(draft: AskDraft): CardState {
+    const out: CardState = {};
+    for (const key of new Set([
+        ...Object.keys(draft.selected),
+        ...Object.keys(draft.notes),
+    ])) {
+        const qi = Number(key);
+        out[qi] = { selected: draft.selected[qi] ?? [], note: draft.notes[qi] ?? '' };
+    }
+    return out;
+}

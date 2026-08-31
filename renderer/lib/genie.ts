@@ -194,6 +194,13 @@ export interface DetectResult {
 }
 
 /** A ForceTheQuestion question pushed to the modal (mirrors the MCP schema). */
+/** A part-typed answer to one ForceTheQuestion request: option labels + a note,
+ *  per question index. Mirrors main's `AskDraftEntry`. */
+export interface AskDraftSpec {
+    selected: Record<number, string[]>;
+    notes: Record<number, string>;
+}
+
 export interface ForceQuestionSpec {
     header: string;
     question: string;
@@ -3943,6 +3950,11 @@ export interface GenieApi {
         ready: () => Promise<void>;
         /** Close this modal window regardless of state (resolves cancelled). */
         dismiss: () => Promise<void>;
+        /** A part-typed answer, held in MAIN so it survives this window being
+         *  destroyed and the in-app flyout unmounting. Keyed by question id, so
+         *  an answer begun in one surface is finished in the other. */
+        draftGet: (id: string) => Promise<AskDraftSpec | null>;
+        draftSet: (id: string, entry: AskDraftSpec) => Promise<void>;
     };
     on: {
         authChanged: (
