@@ -1,5 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import { Popover } from '@particle-academy/react-fancy';
 import { providerBrandMark } from '../../lib/provider-brand';
 import type { AgentStack, AgentStackEntry } from '../../lib/agent-stack';
 import { BrandMark } from './BrandMark';
@@ -9,93 +8,65 @@ import { BrandMark } from './BrandMark';
  *
  * A workspace row said nothing about its agents — you had to expand it to find
  * out. The stack puts that on the row: one avatar per agent, running ones first,
- * with a count when they do not all fit. Hovering opens the detail: each agent's
- * active TUI and whether any sidecars are alive.
+ * with a count when they do not all fit. Hovering peeks at the detail: each
+ * agent's active TUI and whether any sidecars are alive.
  *
- * The detail is PORTALED and `position: fixed`, the same shape
- * `runtime-pill-menu` uses two controls to the right. The first version anchored
- * it `absolute` inside the row, and it rendered as loose text over the workspace
- * rows beneath — a row is a `<button>` inside a scrolling list, which is a bad
- * place to hang an overlay. Copying the pattern that already works on this exact
- * row removes the whole class of problem: no stacking context to fight, no
- * clipping, and nothing painted across the next workspace.
+ * Built on Fancy's `Popover`, not a hand-rolled panel. The first version hung an
+ * absolutely-positioned div inside the row — a `<button>` in a scrolling list —
+ * and it rendered as loose text across the workspaces underneath. Popover
+ * portals and positions itself, so nothing in the row's stacking context can
+ * clip or misplace it, INCLUDING the 56px rail when the sidebar is a flyout over
+ * it. Reaching for the component instead of rebuilding one is also the standing
+ * rule here.
  */
 export default function AgentAvatarStack({ stack }: { stack: AgentStack }) {
-    const anchor = useRef<HTMLSpanElement>(null);
-    const [at, setAt] = useState<{ top: number; right: number } | null>(null);
-
-    // Close on any scroll or resize: the popover is FIXED, so the row would
-    // slide out from under it and leave the detail floating beside a different
-    // workspace — which is worse than showing nothing, because it reads as true.
-    useEffect(() => {
-        if (!at) return;
-        const close = () => setAt(null);
-        window.addEventListener('scroll', close, true);
-        window.addEventListener('resize', close);
-        return () => {
-            window.removeEventListener('scroll', close, true);
-            window.removeEventListener('resize', close);
-        };
-    }, [at]);
-
     if (stack.total === 0) return null;
 
-    const open = (): void => {
-        const rect = anchor.current?.getBoundingClientRect();
-        if (rect) setAt({ top: rect.bottom + 6, right: window.innerWidth - rect.right });
-    };
-
     return (
-        <span
-            ref={anchor}
-            className="ws-agent-stack"
-            onMouseEnter={open}
-            onMouseLeave={() => setAt(null)}
-            // The row itself is a button, so this must not activate the
-            // workspace when someone is only reading the detail.
-            onClick={(e) => e.stopPropagation()}
-            aria-label={`${stack.running} of ${stack.total} agents running`}
-        >
-            {stack.entries.map((entry) => (
+        <Popover hover placement="bottom-end" offset={8}>
+            <Popover.Trigger
+                aria-label={`${stack.running} of ${stack.total} agents running`}
+            >
                 <span
-                    key={entry.id}
-                    className={`ws-agent-avatar${entry.running ? ' is-running' : ''}${
-                        entry.collisionGroup ? ' is-collision' : ''
-                    }`}
+                    className="ws-agent-stack"
+                    // The row itself is a button, so a peek must not activate the
+                    // workspace.
+                    onClick={(e) => e.stopPropagation()}
                 >
-                    <Face entry={entry} />
+                    {stack.entries.map((entry) => (
+                        <span
+                            key={entry.id}
+                            className={`ws-agent-avatar${entry.running ? ' is-running' : ''}${
+                                entry.collisionGroup ? ' is-collision' : ''
+                            }`}
+                        >
+                            <Face entry={entry} />
+                        </span>
+                    ))}
+                    {stack.overflow > 0 && (
+                        <span className="ws-agent-avatar is-overflow">+{stack.overflow}</span>
+                    )}
                 </span>
-            ))}
-            {stack.overflow > 0 && (
-                <span className="ws-agent-avatar is-overflow">+{stack.overflow}</span>
-            )}
-            {at &&
-                createPortal(
-                    <div
-                        className="ws-agent-popover"
-                        role="tooltip"
-                        style={{ top: at.top, right: at.right }}
-                    >
-                        {stack.entries.map((entry) => (
-                            <div key={entry.id} className="ws-agent-popover-row">
-                                <span className="ws-agent-popover-face">
-                                    <Face entry={entry} />
-                                </span>
-                                <span className="ws-agent-popover-text">
-                                    <strong>{entry.name}</strong>
-                                    <span className="ws-agent-popover-meta">{meta(entry)}</span>
-                                </span>
-                            </div>
-                        ))}
-                        {stack.overflow > 0 && (
-                            <div className="ws-agent-popover-more">
-                                and {stack.overflow} more — open the workspace to see them all
-                            </div>
-                        )}
-                    </div>,
-                    document.body,
+            </Popover.Trigger>
+            <Popover.Content className="ws-agent-popover" role="tooltip">
+                {stack.entries.map((entry) => (
+                    <div key={entry.id} className="ws-agent-popover-row">
+                        <span className="ws-agent-popover-face">
+                            <Face entry={entry} />
+                        </span>
+                        <span className="ws-agent-popover-text">
+                            <strong>{entry.name}</strong>
+                            <span className="ws-agent-popover-meta">{meta(entry)}</span>
+                        </span>
+                    </div>
+                ))}
+                {stack.overflow > 0 && (
+                    <div className="ws-agent-popover-more">
+                        and {stack.overflow} more — open the workspace to see them all
+                    </div>
                 )}
-        </span>
+            </Popover.Content>
+        </Popover>
     );
 }
 

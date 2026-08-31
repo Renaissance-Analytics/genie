@@ -6445,12 +6445,10 @@ body.gutter-dragging .grid-gutter {
 
 /* Hover detail: each agent's active TUI, and whether sidecars are alive. */
 .ws-agent-popover {
-    /* FIXED and portaled to <body>, positioned from the anchor's rect -- the
-       same shape `.runtime-pill-menu` uses on this row. Anchoring it inside the
-       row put it inside a <button> in a scrolling list, where it rendered as
-       loose text across the workspaces underneath. */
-    position: fixed;
-    z-index: 10020;
+    /* Fancy's Popover owns position, portaling and z-index -- it renders into
+       its own layer, so nothing in the row's stacking context can clip it,
+       including the 56px rail when the sidebar is a flyout over it. Only the
+       LOOK belongs here. */
     min-width: 220px;
     max-width: 320px;
     padding: 8px;
@@ -6460,8 +6458,6 @@ body.gutter-dragging .grid-gutter {
     border: 1px solid var(--border-1);
     background: var(--bg-1);
     box-shadow: 0 16px 38px rgba(0, 0, 0, 0.38);
-    cursor: default;
-    pointer-events: none;
 }
 .ws-agent-popover-row {
     display: flex;
