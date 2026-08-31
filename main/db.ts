@@ -1618,6 +1618,43 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // v57 — THE WORKSPACE AGENT IS A DESIGNATION, NOT A PLACEHOLDER ROW.
+            //
+            // v50 seeded one agent per workspace named 'workspace' with
+            // provider NULL, and nothing ever gave it a driver, a terminal or a
+            // purpose. Once the renderer started drawing registered agents,
+            // those inert rows became squares labelled "works..." that click
+            // into nothing -- a phantom agent in every workspace on the estate.
+            //
+            // The concept was wrong, not just the rendering. A workspace agent
+            // is whichever of a workspace's REAL agents is designated the
+            // default and boots from the workspace root: a property OF an agent,
+            // chosen by the owner. `role = 'workspace'` plus the existing
+            // `UNIQUE (workspace_id) WHERE role = 'workspace'` index already
+            // says exactly that; the placeholders were the only thing occupying
+            // the slot.
+            //
+            // Only INERT ones go -- no provider, no terminal, no runtime.
+            // Inertness is the test, not the name: deleting a row that owns a
+            // live terminal would strand the terminal.
+            //
+            // NOTHING is auto-designated. A workspace whose agents were never
+            // ranked has no default until someone says so; choosing here would
+            // put an agent in the boots-from-root position on a migration's
+            // guess. `parent_agent_id` references these rows and is
+            // ON DELETE SET NULL, so the children survive un-parented.
+            version: 57,
+            runner: (db) => {
+                db.prepare(
+                    `DELETE FROM workspace_agents
+                      WHERE role = 'workspace'
+                        AND provider IS NULL
+                        AND terminal_spec_id IS NULL
+                        AND id NOT IN (SELECT agent_id FROM agent_runtimes)`,
+                ).run();
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -1745,21 +1782,66 @@ function terminalSpecColumns(d: Database.Database): Set<string> {
  * argument so migrations/import paths can converge the same invariant without
  * relying on the process singleton.
  */
-export function ensureWorkspaceAgent(
-    database: Database.Database,
+/**
+ * The agent DESIGNATED as this workspace's default — the one that boots from the
+ * workspace root and is the default target for actions that do not name one.
+ *
+ * It is a property OF a real agent, not a separate record. v50 used to seed a
+ * placeholder named 'workspace' with no provider and no terminal; those were
+ * phantoms in every workspace and v57 removed them.
+ *
+ * Undefined is a NORMAL state: a workspace whose agents were never ranked has no
+ * default until someone picks one.
+ */
+export function workspaceDefaultAgent(
     workspaceId: string,
-    now = Date.now(),
-): void {
-    database
-        .prepare(
-            `INSERT OR IGNORE INTO workspace_agents
-                (id, workspace_id, provider, name, purpose, role, reachability,
-                 wake_on_dm, created_at, updated_at)
-             VALUES (?, ?, NULL, 'workspace',
-                     'Drive this workspace and coordinate its agents.',
-                     'workspace', 'workspace', 1, ?, ?)`,
+    database?: Database.Database,
+): WorkspaceAgentRow | undefined {
+    return (database ?? getDb())
+        .prepare<[string], WorkspaceAgentRow>(
+            `SELECT *, COALESCE(native_transport, transport) AS transport FROM workspace_agents
+              WHERE workspace_id = ? AND role = 'workspace'`,
         )
-        .run(`workspace:${workspaceId}`, workspaceId, now, now);
+        .get(workspaceId);
+}
+
+/**
+ * Designate one of a workspace's agents as its default.
+ *
+ * ONE transaction, because `UNIQUE (workspace_id) WHERE role = 'workspace'`
+ * means promoting before demoting trips the index, and demoting first leaves a
+ * window with no default at all. Pass null to clear the designation.
+ *
+ * Refuses an agent from a DIFFERENT workspace rather than obeying: that would
+ * put a stranger in the boots-from-root position, and the index would be
+ * satisfied by the wrong pair. Returns whether anything changed.
+ */
+export function setWorkspaceDefaultAgent(
+    workspaceId: string,
+    agentId: string | null,
+): boolean {
+    const d = getDb();
+    if (agentId) {
+        const target = d
+            .prepare<[string], { workspace_id: string }>(
+                'SELECT workspace_id FROM workspace_agents WHERE id = ?',
+            )
+            .get(agentId);
+        if (!target || target.workspace_id !== workspaceId) return false;
+    }
+    const now = Date.now();
+    d.transaction(() => {
+        d.prepare(
+            `UPDATE workspace_agents SET role = 'specialized', updated_at = ?
+              WHERE workspace_id = ? AND role = 'workspace'`,
+        ).run(now, workspaceId);
+        if (agentId) {
+            d.prepare(
+                `UPDATE workspace_agents SET role = 'workspace', updated_at = ? WHERE id = ?`,
+            ).run(now, agentId);
+        }
+    })();
+    return true;
 }
 
 // Settings helpers ------------------------------------------------------
@@ -2700,7 +2782,10 @@ export function addWorkspace(
              VALUES (@id, @backend, @project_id, @project_name, @tynn_project_id, @tynn_project_name, @shape, @path, @editor, @editor_cmd, @start_cmd, @env_file, @last_opened_at, @created_by_genie, @sort_order, @mcp_enabled, @assignment_managed)`,
         )
         .run(full);
-        ensureWorkspaceAgent(database, row.id);
+        // No placeholder agent. A new workspace has NO default until someone
+        // designates one of its real agents -- v50 seeded a driverless
+        // 'workspace' row here, which became a phantom square that clicked
+        // into nothing once the grid started drawing registered agents.
     });
     insert();
     return getWorkspace(row.id)!;

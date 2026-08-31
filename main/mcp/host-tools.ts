@@ -21,6 +21,7 @@ import {
     getWorkspace,
     getWorkspaceAgent,
     getWorkspaceAgentByName,
+    workspaceDefaultAgent,
     type WorkspaceRow,
     listAgentRuntimes,
     createAgentRuntime,
@@ -1929,7 +1930,12 @@ export async function registerAgentInWorkspace(
         boot_cwd: resolved.bootCwd,
         persona_path: resolved.personaPath,
         role: 'specialized',
-        parent_agent_id: `workspace:${ws.id}`,
+        // The workspace's DESIGNATED default agent, or nothing. This used to be
+        // a hard-coded `workspace:<id>` -- the placeholder v50 seeded and v57
+        // removed -- so it now points at a row that may not exist and trips the
+        // foreign key. A workspace with no default simply has un-parented
+        // agents, which is the honest shape: nothing is above them yet.
+        parent_agent_id: workspaceDefaultAgent(ws.id)?.id ?? null,
         reachability: 'workspace',
         wake_on_dm: 1,
     });

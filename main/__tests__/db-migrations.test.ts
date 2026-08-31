@@ -7,7 +7,6 @@ import {
     parseGranularity,
     DEFAULT_ISSUEWATCH_GRANULARITY,
     parsePolicyBuckets,
-    ensureWorkspaceAgent,
     markWorkspaceAgentReadyByTerminal,
     createWorkspaceTodo,
     resolveUserTodo,
@@ -1572,7 +1571,13 @@ describe('v49 — GApp Development Workspaces', () => {
 });
 
 describe('v50 — first-class AMS agents', () => {
-    it('creates the default agent when a new workspace is registered', () => {
+    it('registers a new workspace with NO agent — the default is designated, not seeded', () => {
+        // v50 seeded a placeholder named 'workspace' with no provider and no
+        // terminal. Once the renderer started drawing registered agents it
+        // became a square labelled "works…" that clicked into nothing, in every
+        // workspace on the estate. The workspace agent is a DESIGNATION on one
+        // of a workspace's real agents (v57), so a fresh workspace simply has
+        // no default until someone picks one.
         const db = new Database(':memory:');
         runMigrations(db);
         db.prepare(
@@ -1583,17 +1588,20 @@ describe('v50 — first-class AMS agents', () => {
                      'simple', '/tmp/new', 0)`,
         ).run();
 
-        ensureWorkspaceAgent(db, 'ws-new');
-
-        const row = db
-            .prepare<[], { role: string; terminal_spec_id: string | null }>(
-                `SELECT role, terminal_spec_id FROM workspace_agents WHERE workspace_id = 'ws-new'`,
+        const rows = db
+            .prepare<[], { c: number }>(
+                `SELECT COUNT(*) AS c FROM workspace_agents WHERE workspace_id = 'ws-new'`,
             )
             .get();
-        expect(row).toEqual({ role: 'workspace', terminal_spec_id: null });
+        expect(rows!.c).toBe(0);
     });
 
-    it('creates one dormant Workspace Agent for every existing workspace', () => {
+    it('leaves an upgraded workspace with no phantom agent', () => {
+        // v50 backfilled a placeholder Workspace Agent per workspace. v57
+        // removes it: the workspace agent is a DESIGNATION on a real agent, and
+        // a driverless placeholder was a square that clicked into nothing.
+        // Running BOTH migrations end to end is the point — the pair must
+        // converge on nothing rather than on a leftover.
         const db = new Database(':memory:');
         runMigrations(db);
         db.prepare(
@@ -1604,30 +1612,16 @@ describe('v50 — first-class AMS agents', () => {
                      'simple', '/tmp/ams', 0)`,
         ).run();
 
-        // Rewind only the not-yet-shipped migration marker to model an upgrade
-        // from v49 with this workspace already present.
         db.prepare('DELETE FROM schema_version WHERE version >= 50').run();
         runMigrations(db);
 
-        const row = db
-            .prepare<[], {
-                workspace_id: string;
-                role: string;
-                name: string;
-                terminal_spec_id: string | null;
-                reachability: string;
-                wake_on_dm: number;
-            }>(`SELECT workspace_id, role, name, terminal_spec_id, reachability, wake_on_dm
-                FROM workspace_agents WHERE workspace_id = 'ws-ams'`)
-            .get();
-        expect(row).toEqual({
-            workspace_id: 'ws-ams',
-            role: 'workspace',
-            name: 'workspace',
-            terminal_spec_id: null,
-            reachability: 'workspace',
-            wake_on_dm: 1,
-        });
+        expect(
+            db
+                .prepare<[], { c: number }>(
+                    `SELECT COUNT(*) AS c FROM workspace_agents WHERE workspace_id = 'ws-ams'`,
+                )
+                .get()!.c,
+        ).toBe(0);
     });
 
     it('stores identity, authority, boot, readiness, and terminal binding independently', () => {
@@ -1653,7 +1647,7 @@ describe('v50 — first-class AMS agents', () => {
         }
     });
 
-    it('adopts existing saved agent terminals as children of the Workspace Agent', () => {
+    it('adopts existing saved agent terminals, un-parented once the placeholder goes', () => {
         const db = new Database(':memory:');
         runMigrations(db);
         db.prepare(
@@ -1692,7 +1686,10 @@ describe('v50 — first-class AMS agents', () => {
             provider: 'codex',
             name: 'reviewer',
             terminal_spec_id: 'spec-reviewer',
-            parent_agent_id: 'workspace:ws-old-agent',
+            // The placeholder parent is GONE (v57), and the FK is
+            // ON DELETE SET NULL, so an adopted agent survives
+            // un-parented rather than being deleted with it.
+            parent_agent_id: null,
         });
     });
 
@@ -1713,7 +1710,14 @@ describe('v50 — first-class AMS agents', () => {
              VALUES ('ws-ready', 'p-ready', 'Ready', 'p-ready', 'Ready',
                      'simple', '/tmp/ready', 0)`,
         ).run();
-        ensureWorkspaceAgent(db, 'ws-ready', 1);
+        // A REAL designated agent. `ensureWorkspaceAgent` used to seed a
+        // driverless placeholder here; v57 removed those, so the fixture
+        // makes the agent it actually needs.
+        db.prepare(
+            `INSERT INTO workspace_agents
+                (id, workspace_id, provider, name, purpose, role, created_at, updated_at)
+             VALUES ('workspace:ws-ready', 'ws-ready', 'codex', 'workspace', '', 'workspace', 1, 1)`,
+        ).run();
         db.prepare(
             `INSERT INTO terminal_specs
                 (id, workspace_id, label, cwd, args_json, env_json, sort_order, created_at)
@@ -1745,7 +1749,14 @@ describe('v50 — first-class AMS agents', () => {
                  shape, path, sort_order)
              VALUES ('ws-unverified', 'p', 'P', 'p', 'P', 'simple', '/tmp/p', 0)`,
         ).run();
-        ensureWorkspaceAgent(db, 'ws-unverified', 1);
+        // A REAL designated agent. `ensureWorkspaceAgent` used to seed a
+        // driverless placeholder here; v57 removed those, so the fixture
+        // makes the agent it actually needs.
+        db.prepare(
+            `INSERT INTO workspace_agents
+                (id, workspace_id, provider, name, purpose, role, created_at, updated_at)
+             VALUES ('workspace:ws-unverified', 'ws-unverified', 'codex', 'workspace', '', 'workspace', 1, 1)`,
+        ).run();
         db.prepare(
             `INSERT INTO terminal_specs
                 (id, workspace_id, label, cwd, args_json, env_json, sort_order, created_at)
@@ -1771,7 +1782,14 @@ describe('v51 — bounded short-term AMS todos', () => {
              VALUES ('ws-todo', 'p-todo', 'Todo', 'p-todo', 'Todo',
                      'simple', '/tmp/todo', 0)`,
         ).run();
-        ensureWorkspaceAgent(db, 'ws-todo', 1);
+        // A REAL designated agent. `ensureWorkspaceAgent` used to seed a
+        // driverless placeholder here; v57 removed those, so the fixture
+        // makes the agent it actually needs.
+        db.prepare(
+            `INSERT INTO workspace_agents
+                (id, workspace_id, provider, name, purpose, role, created_at, updated_at)
+             VALUES ('workspace:ws-todo', 'ws-todo', 'codex', 'workspace', '', 'workspace', 1, 1)`,
+        ).run();
         return db;
     }
 
@@ -1832,7 +1850,14 @@ describe('v52 — harness transport verification', () => {
                  shape, path, sort_order)
              VALUES ('ws-transport', 'p', 'P', 'p', 'P', 'simple', '/tmp/p', 0)`,
         ).run();
-        ensureWorkspaceAgent(db, 'ws-transport', 1);
+        // A REAL designated agent. `ensureWorkspaceAgent` used to seed a
+        // driverless placeholder here; v57 removed those, so the fixture
+        // makes the agent it actually needs.
+        db.prepare(
+            `INSERT INTO workspace_agents
+                (id, workspace_id, provider, name, purpose, role, created_at, updated_at)
+             VALUES ('workspace:ws-transport', 'ws-transport', 'codex', 'workspace', '', 'workspace', 1, 1)`,
+        ).run();
 
         const row = markWorkspaceAgentTransportState(
             db,
@@ -1857,7 +1882,14 @@ describe('v52 — harness transport verification', () => {
                  shape, path, sort_order)
              VALUES ('ws-failed', 'p', 'P', 'p', 'P', 'simple', '/tmp/p', 0)`,
         ).run();
-        ensureWorkspaceAgent(db, 'ws-failed', 1);
+        // A REAL designated agent. `ensureWorkspaceAgent` used to seed a
+        // driverless placeholder here; v57 removed those, so the fixture
+        // makes the agent it actually needs.
+        db.prepare(
+            `INSERT INTO workspace_agents
+                (id, workspace_id, provider, name, purpose, role, created_at, updated_at)
+             VALUES ('workspace:ws-failed', 'ws-failed', 'codex', 'workspace', '', 'workspace', 1, 1)`,
+        ).run();
 
         const row = markWorkspaceAgentTransportState(
             db,
@@ -1882,7 +1914,14 @@ describe('v52 — harness transport verification', () => {
                  shape, path, sort_order)
              VALUES ('ws-rebind', 'p', 'P', 'p', 'P', 'simple', '/tmp/p', 0)`,
         ).run();
-        ensureWorkspaceAgent(db, 'ws-rebind', 1);
+        // A REAL designated agent. `ensureWorkspaceAgent` used to seed a
+        // driverless placeholder here; v57 removed those, so the fixture
+        // makes the agent it actually needs.
+        db.prepare(
+            `INSERT INTO workspace_agents
+                (id, workspace_id, provider, name, purpose, role, created_at, updated_at)
+             VALUES ('workspace:ws-rebind', 'ws-rebind', 'codex', 'workspace', '', 'workspace', 1, 1)`,
+        ).run();
         db.prepare(
             `INSERT INTO terminal_specs
                 (id, workspace_id, label, cwd, args_json, env_json, sort_order, created_at)
