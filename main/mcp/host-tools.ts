@@ -1693,10 +1693,27 @@ export function restartAgentTerminal(id: string): RestartAgentResult {
     const resume = decision.command;
 
     // Tear the old agent down FIRST (releases its pty + MCP endpoint + AgentInbox
-    // presence) so two processes never share the session id, THEN relaunch the
-    // resumed agent in a fresh terminal that picks up the current rig.
+    // presence) so two processes never share the session id, THEN relaunch into
+    // THE SAME SPEC so it picks up the current rig without becoming a new agent.
+    //
+    // Reusing `spec.id` is the whole fix. Restarting into a FRESH terminal minted
+    // a new spec id, which made `reviving` false (terminal/ipc.ts) and therefore
+    // minted a fresh `meta.agent_id` — a new AgentInbox identity, stranding the
+    // old one's queued mail, cursors, channel membership and DM history. Worse,
+    // `killTerminalById` does not delete a spec, so the dead one kept its
+    // `meta.agent` + `whisper_purpose` and the AMS grid went on drawing it: one
+    // registered agent, three squares. And nothing rebound
+    // `workspace_agents.terminal_spec_id`, so the registry pointed at the corpse
+    // and the next `start` reattached to it.
+    //
+    // The same spec means all three are impossible rather than repaired: the
+    // identity is inherited, there is no second spec to orphan, and the registry
+    // binding never went stale. It is exactly what `reattachSavedAgent`'s revive
+    // already does; the Genie OSA branch above needs its own path only because a
+    // recovery restart deliberately re-resolves the provider.
     killTerminalById(id);
     const restarted = createAgentTerminal({
+        id: spec.id,
         workspaceId: spec.workspace_id!,
         cwd: spec.cwd,
         label: spec.label,
