@@ -6447,20 +6447,23 @@ body.gutter-dragging .grid-gutter {
 
 /* Hover detail: each agent's active TUI, and whether sidecars are alive. */
 .ws-agent-popover {
-    position: absolute;
-    top: calc(100% + 6px);
-    right: 0;
-    z-index: 60;
+    /* FIXED and portaled to <body>, positioned from the anchor's rect -- the
+       same shape `.runtime-pill-menu` uses on this row. Anchoring it inside the
+       row put it inside a <button> in a scrolling list, where it rendered as
+       loose text across the workspaces underneath. */
+    position: fixed;
+    z-index: 10020;
     min-width: 220px;
     max-width: 320px;
     padding: 8px;
     display: grid;
     gap: 6px;
-    border-radius: var(--radius-lg);
+    border-radius: var(--radius-md, 7px);
     border: 1px solid var(--border-1);
-    background: var(--bg-0);
-    box-shadow: var(--shadow-xl);
+    background: var(--bg-1);
+    box-shadow: 0 16px 38px rgba(0, 0, 0, 0.38);
     cursor: default;
+    pointer-events: none;
 }
 .ws-agent-popover-row {
     display: flex;

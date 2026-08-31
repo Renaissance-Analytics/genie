@@ -17,15 +17,21 @@ import { PROVIDER_IDS, type AgentProviderId } from '../../main/agents/registry';
  *
  * A user-set avatar overrides all of this; these are only the defaults.
  */
-export const PROVIDER_BRAND_MARKS: Record<AgentProviderId, string> = {
+export const PROVIDER_BRAND_MARKS: Record<AgentProviderId, string | null> = {
     claude: 'anthropic',
     codex: 'openai',
-    // Kiwi and a custom CLI have no third-party mark to borrow, and borrowing one
-    // would assert a vendor relationship that does not exist. They fall back to
-    // the agent's initial, which is honest about being unknown.
-    kiwi: 'genie',
+    // Genie's own TUI gets GENIE's mark, never Tynn's — different products, and
+    // the logo is not shared.
     genie: 'genie',
-    custom: 'genie',
+    // Kiwi and a custom CLI have no mark of their own, and borrowing another
+    // vendor's would assert a relationship that does not exist. NULL, so the
+    // caller falls back to the agent's initial — honest about being unknown.
+    //
+    // These three said `'genie'` while the comment above them claimed they fell
+    // back to an initial. The comment was the intent; the code was the bug, and
+    // it put a borrowed logo on two providers that have none.
+    kiwi: null,
+    custom: null,
 };
 
 /**
@@ -38,7 +44,6 @@ export const PROVIDER_BRAND_MARKS: Record<AgentProviderId, string> = {
  */
 export function providerBrandMark(provider: string | null | undefined): string | null {
     if (!provider) return null;
-    return (PROVIDER_IDS as readonly string[]).includes(provider)
-        ? PROVIDER_BRAND_MARKS[provider as AgentProviderId]
-        : null;
+    if (!(PROVIDER_IDS as readonly string[]).includes(provider)) return null;
+    return PROVIDER_BRAND_MARKS[provider as AgentProviderId] ?? null;
 }
