@@ -25,7 +25,6 @@ describe('noteDraft — modelling plain typing', () => {
             text: '',
             confident: true,
             image: false,
-            submitBytes: '\r',
         });
     });
 
@@ -155,15 +154,15 @@ describe('noteDraft — confidence is surrendered the moment Genie is guessing',
         expect(planNudge(shifted)).toEqual({ mode: 'defer' });
     });
 
-    it('remembers the exact enhanced Enter bytes emitted by the live terminal', () => {
+    it('recognizes enhanced Enter without retaining its keyboard encoding for automation', () => {
         const enter = '\x1b[13;1u';
         const s = noteDraft(d({ text: 'submit me' }), enter);
 
-        expect(s).toMatchObject({ text: '', confident: true, image: false, submitBytes: enter });
+        expect(s).toEqual({ text: '', confident: true, image: false });
         // Positive control: Shift+Enter is content, not the submit key to replay.
-        expect(noteDraft(d({ text: 'still here' }), '\x1b[13;2u')).not.toMatchObject({
-            submitBytes: '\x1b[13;2u',
-        });
+        const shifted = noteDraft(d({ text: 'still here' }), '\x1b[13;2u');
+        expect(shifted.text).toBe('still here');
+        expect(planNudge(shifted)).toEqual({ mode: 'defer' });
     });
 });
 
@@ -223,12 +222,17 @@ describe('buildNudgeSequence', () => {
         expect(w[1]!.delayMs).toBeGreaterThan(0);
     });
 
-    it('replays the exact live-terminal submit bytes instead of guessing by provider', () => {
-        const liveEnter = '\x1b[13;1u';
-        const w = buildNudgeSequence({ mode: 'submit' }, NOTICE, liveEnter);
+    it('uses the canonical PTY submit byte even after Codex reported enhanced Enter', () => {
+        const codexKeyboardEnter = '\x1b[13;1u';
+        const afterCodexSubmit = noteDraft(d({ text: 'previous prompt' }), codexKeyboardEnter);
+        const w = buildNudgeSequence(planNudge(afterCodexSubmit), NOTICE);
 
-        expect(w.map((x) => x.bytes)).toEqual([NOTICE, liveEnter]);
-        // Positive control: legacy TUIs still receive carriage return.
+        // CSI-u is xterm's encoding of a HUMAN key while enhanced-keyboard mode
+        // is active. Automated PTY input uses the same canonical CR path as
+        // runAgent send; replaying CSI-u can print "^[13u" into Codex instead.
+        expect(w.map((x) => x.bytes)).toEqual([NOTICE, '\r']);
+
+        // Positive control: Claude continues to submit with CR too.
         expect(buildNudgeSequence({ mode: 'submit' }, NOTICE)[1]!.bytes).toBe('\r');
     });
 
