@@ -925,7 +925,10 @@
     gap: 3px;
     flex: 0 0 auto;
     padding: 3px 6px;
-    border-radius: 999px;
+    /* A SQUARE, not a pill (owner): it sits in a row of boxes now -- sites,
+       processes, agents -- and a lozenge among squares reads as a different
+       KIND of thing rather than a sibling. */
+    border-radius: var(--radius-md);
     background: var(--bg-2);
     border: 1px solid var(--border-1);
     cursor: pointer;
@@ -6393,4 +6396,87 @@ body.gutter-dragging .grid-gutter {
 }
 .ams-tui-pip.is-running {
     background: var(--agent);
+}
+
+/* ── The workspace row's AGENT AVATAR STACK ──────────────────────────────────
+   A row said nothing about WHO was working in that workspace — you had to
+   expand it to find out. Sits left of the IssueWatch square. */
+.ws-agent-stack {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+    /* Overlapped, so several agents cost little width and the IssueWatch square
+       is never pushed off the row. */
+    padding-left: 4px;
+}
+.ws-agent-avatar {
+    width: 18px;
+    height: 18px;
+    margin-left: -4px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-1);
+    background: var(--bg-2);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 9px;
+    color: var(--fg-3);
+    /* The stacking order that makes overlap readable: earlier avatars sit on
+       top, and `agentStack` puts RUNNING agents first. */
+    position: relative;
+}
+.ws-agent-avatar.is-running {
+    border-color: var(--agent-ring, var(--agent));
+}
+.ws-agent-avatar.is-collision {
+    border-color: var(--amber-500, #f59e0b);
+}
+.ws-agent-avatar.is-overflow {
+    font-size: 8px;
+    color: var(--fg-4);
+}
+.ws-agent-initial,
+.ws-agent-emoji {
+    line-height: 1;
+}
+
+/* Hover detail: each agent's active TUI, and whether sidecars are alive. */
+.ws-agent-popover {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 60;
+    min-width: 220px;
+    max-width: 320px;
+    padding: 8px;
+    display: grid;
+    gap: 6px;
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border-1);
+    background: var(--bg-0);
+    box-shadow: var(--shadow-xl);
+    cursor: default;
+}
+.ws-agent-popover-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.ws-agent-popover-face {
+    width: 18px;
+    height: 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+}
+.ws-agent-popover-text {
+    display: grid;
+    min-width: 0;
+}
+.ws-agent-popover-meta,
+.ws-agent-popover-more {
+    font-size: 10px;
+    color: var(--fg-4);
 }
