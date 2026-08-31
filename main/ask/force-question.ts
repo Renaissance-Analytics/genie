@@ -112,10 +112,10 @@ function deferredAgentMessage(decision: AvailabilityDecision): string {
 }
 
 /**
- * A DND-deferred question's late answer, ready to hand back to the asking agent.
+ * An asynchronous agent question's late answer, ready to hand back to the asker.
  * The composition root wires a sink that delivers it through the AgentInbox broker
- * (append → the agent PULLs it; notifyDelivery + wake = the PING) so a deferred
- * ForceTheQuestion behaves exactly like the inbox: ping, poll, pull. Kept as an
+ * (append → the agent PULLs it; notifyDelivery + wake = the PING) so both a
+ * modal answer and a DND-deferred answer use the inbox: ping, poll, pull. Kept as an
  * injected port so `force-question` never imports the broker (testable + no cycle).
  */
 export interface DeferredAnswerDelivery {
@@ -680,7 +680,7 @@ function createAskWindow(): BrowserWindow {
  * path funnel through, so the FIFO queue + single-window invariant hold across
  * both. On a window-open failure the item is dropped and resolved cancelled.
  */
-function enqueue(item: QueueItem): void {
+function enqueue(item: QueueItem): ForceQuestionResult | undefined {
     // Stamp the ARRIVAL here — the single choke point every question funnels
     // through — so the inbox reports when it came in, not when it was read. A
     // forwarded question arrives with the HOST's stamp; keep it.
@@ -701,7 +701,7 @@ function enqueue(item: QueueItem): void {
         // head and discarded what they had typed (genie#156). This item shows when
         // its turn comes; until then the new arrival is visible in the queue strip.
         pushQueue();
-        return;
+        return undefined;
     }
 
     try {
@@ -722,15 +722,16 @@ function enqueue(item: QueueItem): void {
             askerTerminalId: item.askerTerminalId,
         });
         notifyQuestionsChanged();
-        item.resolve({
+        const failure: ForceQuestionResult = {
             cancelled: true,
             answers: [],
             deferred: true,
             questionId: item.id,
             dndMessage:
                 'the question could not be shown right now — it is waiting in the user’s inbox; the answer will be delivered to your AgentInbox',
-        });
-        return;
+        };
+        item.resolve(failure);
+        return failure;
     }
     // Distinct chime so the user can tell ForceTheQuestion from imDone by ear.
     notifyForceQuestion();
@@ -743,6 +744,7 @@ function enqueue(item: QueueItem): void {
     } else {
         showHead();
     }
+    return undefined;
 }
 
 /** The DESKTOP question transport: raise the BrowserWindow modal (the FIFO
@@ -758,7 +760,7 @@ function raiseDesktopModal(
     return new Promise((resolve) => {
         const id = crypto.randomBytes(9).toString('hex');
         const decision = availabilityReader(scope ?? {});
-        if (askerTerminalId || decision.availability === 'dnd') {
+        if (decision.availability === 'dnd') {
             // DND for this scope: NEVER pop the modal or steal focus. Park the question
             // in the top-bar inbox (deferred) to answer at leisure. Record the asking
             // terminal so the eventual flyout answer is delivered back to that agent's
@@ -788,6 +790,46 @@ function raiseDesktopModal(
                 dndMessage: askerTerminalId
                     ? deferredAgentMessage(decision)
                     : decision.dndMessage,
+            });
+            return;
+        }
+        if (askerTerminalId) {
+            // Available agents use the same asynchronous answer transport as DND,
+            // but availability still controls ATTENTION: show the always-on-top
+            // modal now. The tool call returns immediately and the eventual answer
+            // is force-pushed through AgentInbox to the asking terminal.
+            const failure = enqueue({
+                id,
+                questions,
+                workspaceLabel,
+                priority,
+                askerTerminalId,
+                resolve: (lateResult) => {
+                    // enqueue already moved an unshowable question into `deferred`;
+                    // its eventual inbox answer owns delivery in that case.
+                    if (lateResult.deferred || !deferredAnswerSink) return;
+                    try {
+                        deferredAnswerSink({
+                            terminalId: askerTerminalId,
+                            questionId: id,
+                            questions,
+                            answers: lateResult.answers ?? [],
+                        });
+                    } catch {
+                        /* answer delivery must never break the modal queue */
+                    }
+                },
+            });
+            if (failure) {
+                resolve(failure);
+                return;
+            }
+            resolve({
+                cancelled: true,
+                answers: [],
+                deferred: true,
+                questionId: id,
+                dndMessage: deferredAgentMessage(decision),
             });
             return;
         }
