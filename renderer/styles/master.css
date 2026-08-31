@@ -3802,7 +3802,11 @@ body.gutter-dragging .grid-gutter {
     flex: 0 0 auto;
     cursor: pointer;
     border: 1px solid var(--border-1);
-    border-radius: 999px;
+    /* A SQUARE too. The owner calls these the row's "side boxes", and
+       squaring only the IssueWatch control would leave the mismatch that
+       change was made to remove -- a lozenge beside a square reads as a
+       different KIND of thing rather than a sibling. */
+    border-radius: var(--radius-md);
     background: color-mix(in srgb, var(--bg-2) 90%, transparent);
 }
 .tproj-head .runtime-pill:hover,
