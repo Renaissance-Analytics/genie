@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { announceAgentUpgrade } from '../upgrade-announcement';
-import { mcpReconnectCommand } from '../mcp-reconnect';
+import { mcpReconnectCommand, reconnectStrategy } from '../mcp-reconnect';
 
 /**
  * After Genie upgrades, an agent's `genie` MCP connection is STALE.
@@ -14,25 +14,44 @@ import { mcpReconnectCommand } from '../mcp-reconnect';
  * alongside it and not as advice inside it: by the time an agent is reading
  * prose it has already tried and failed.
  *
- * The command is per-TUI. Claude Code takes `/mcp reconnect <server>`. Codex
- * does it differently and its entry is deliberately absent until its own agent
- * confirms the form — guessing a slash command for a harness that may not have
- * one would type junk into somebody's prompt.
+ * The repair is per-TUI, and not a matter of taste. Claude Code takes
+ * `/mcp reconnect genie`, typed. Codex has NO equivalent — verified by the
+ * Codex agent against codex-cli 0.150.1 — and does not discover the
+ * replacement URL either, because Genie passes it in launch config. Its repair
+ * is a managed RESTART, which resumes the session against refreshed config.
+ *
+ * Anything else does nothing: a guessed slash command is typed into a live
+ * prompt that may be a modal, and on Codex's update picker option 1 runs a
+ * global npm install.
  */
 describe('mcpReconnectCommand', () => {
     it('gives Claude Code its slash command', () => {
         expect(mcpReconnectCommand('claude')).toBe('/mcp reconnect genie');
     });
 
-    it('returns null for a TUI whose form is not known', () => {
-        // Null means "send nothing". A guessed command is typed into a live
-        // prompt, so being wrong here is worse than doing nothing.
+    it('gives Codex a RESTART, never typed text', () => {
+        // Verified by the Codex agent against codex-cli 0.150.1: `codex mcp`
+        // exposes only list/get/add/remove/login/logout — there is no
+        // single-server reconnect. And Codex does not discover the replacement
+        // URL, because Genie passes it in launch config, so the running process
+        // keeps the old endpoint. A managed restart resumes the session against
+        // refreshed config.
+        expect(reconnectStrategy('codex')).toEqual({ kind: 'restart' });
         expect(mcpReconnectCommand('codex')).toBeNull();
+    });
+
+    it('does NOTHING for a TUI whose form is unknown', () => {
+        // A guessed command is typed into a live prompt. Codex parks on
+        // key-driven modals — update pickers, approval requests, trust prompts —
+        // where injected text is read as an answer, and on the update picker
+        // option 1 runs a global npm install.
+        expect(reconnectStrategy('kiwi')).toEqual({ kind: 'none' });
+        expect(reconnectStrategy('custom')).toEqual({ kind: 'none' });
         expect(mcpReconnectCommand('kiwi')).toBeNull();
-        expect(mcpReconnectCommand('custom')).toBeNull();
     });
 
     it('returns null for a provider it has never heard of', () => {
+        expect(reconnectStrategy('not-a-tui')).toEqual({ kind: 'none' });
         expect(mcpReconnectCommand('not-a-tui')).toBeNull();
     });
 });

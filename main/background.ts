@@ -118,7 +118,8 @@ import { harnessTransportRegistry } from './agentinbox/harness-transport';
 import { agentShutdownReadiness } from './agents/shutdown-readiness';
 import { setPluginPanelOpenSink } from './plugins/registry';
 import { announceAgentUpgrade } from './agents/upgrade-announcement';
-import { mcpReconnectCommand } from './agents/mcp-reconnect';
+import { reconnectStrategy } from './agents/mcp-reconnect';
+import { terminalIsBlocked } from './agents/injection-guard';
 import { getChangelog } from './updater/changelog';
 import { deliverNudge, type NudgeIO } from './agentinbox/nudge-delivery';
 import { dbAgentInboxStore } from './agentinbox/store';
@@ -1457,6 +1458,18 @@ app.whenReady().then(async () => {
         // draft.ts); this sink performs it. Returns false when it cannot start,
         // so the broker can fall back to the idle-only wake.
         agentInboxBroker.setWakeSink(({ terminalId, text, plan }) => {
+            // NEVER type into a terminal parked on someone else's prompt.
+            // Silence is not idleness: a TUI sitting on its own modal emits
+            // nothing, so the idle checks say it is safe. Codex's update
+            // prompt is the case that proved it -- a stray keystroke there
+            // picks "1. Update now" and runs a global npm install.
+            //
+            // A veto, not a permission: it runs on top of the idle gate. The
+            // cost of being wrong is a deferred nudge; the cost the other way
+            // is answering a modal on the user's behalf.
+            if (terminalIsBlocked(readTerminalOutput(terminalId, { bytes: 2000 }).data)) {
+                return false;
+            }
             // One swap per terminal: a second notice must never cut the same box
             // while the first is still putting the draft back.
             if (!beginInputHold(terminalId)) return false;
@@ -1535,15 +1548,28 @@ app.whenReady().then(async () => {
                     // to call tools that will not answer. Typed straight into
                     // the terminal, because it is a TUI command, not an MCP one.
                     reconnect: (agentId) => {
+                        // ITS OWN SEND, and per-harness. A raw write plus CR does
+                        // not use the terminal's real submit bytes, so the command
+                        // was TYPED and never submitted -- and the upgrade notice
+                        // then landed in the same box, the two sharing one line.
                         const info = agentInboxBroker.getInfo(agentId);
-                        const spec = info?.terminalId ? getTerminalSpec(info.terminalId) : null;
-                        const command = mcpReconnectCommand(spec?.meta?.agent as string | undefined);
-                        if (command && info?.terminalId) {
-                            // CR SUBMITS it. Without the carriage return the
-                            // command is typed into the prompt and just sits
-                            // there -- the exact shape of the nudge bug reported
-                            // earlier: text delivered, never sent.
-                            writeToTerminal(info.terminalId, `${command}\r`);
+                        const terminalId = info?.terminalId;
+                        if (!terminalId) return;
+                        const spec = getTerminalSpec(terminalId);
+                        const strategy = reconnectStrategy(spec?.meta?.agent as string | undefined);
+                        if (strategy.kind === 'command') {
+                            // Through the nudge machinery: it holds the keyboard,
+                            // submits properly, replays anything typed during the
+                            // swap, and refuses when the agent is not provably idle.
+                            agentInboxBroker.wakeTerminalIfIdle(terminalId, strategy.text);
+                        } else if (strategy.kind === 'restart') {
+                            // Codex has no reconnect command and does not discover
+                            // the replacement URL -- Genie passes it in launch
+                            // config, so the running process keeps the old one. A
+                            // managed restart resumes the session against refreshed
+                            // config, OUT OF BAND, with nothing typed at a prompt
+                            // that may be a modal.
+                            restartAgentTerminal(terminalId);
                         }
                     },
                     send: (agentId, text) =>
