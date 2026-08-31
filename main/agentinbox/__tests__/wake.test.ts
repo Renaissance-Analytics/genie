@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { shouldWakeAgent, wakeNudgeText, WAKE_QUIET_MS, type WakeState } from '../wake';
+import {
+    nudgeWarranted,
+    shouldWakeAgent,
+    wakeNudgeText,
+    NUDGE_STACK_COUNT,
+    NUDGE_UNCHECKED_MS,
+    WAKE_QUIET_MS,
+    type WakeState,
+} from '../wake';
 
 /**
  * Wake-on-DM decision (issue #9) — the safety-critical core. The invariant under
@@ -12,7 +20,6 @@ const OLD_TURN = NOW - WAKE_QUIET_MS - 5_000; // ended well past the quiet windo
 
 function state(over: Partial<WakeState> = {}): WakeState {
     return {
-        wakeOnDm: true,
         lastTurnEndAt: OLD_TURN,
         lastOutputAt: OLD_TURN - 1_000, // last output was DURING the ended turn
         lastUserInputAt: null,
@@ -23,7 +30,7 @@ function state(over: Partial<WakeState> = {}): WakeState {
 }
 
 describe('shouldWakeAgent — the happy (idle) path', () => {
-    it('wakes an opted-in agent that has been idle at its prompt past the window', () => {
+    it('wakes an agent that has been idle at its prompt past the window', () => {
         expect(shouldWakeAgent(state())).toBe(true);
     });
 
@@ -33,10 +40,6 @@ describe('shouldWakeAgent — the happy (idle) path', () => {
 });
 
 describe('shouldWakeAgent — fail-closed safety gates (NEVER inject mid-turn)', () => {
-    it('refuses when not opted in (default OFF)', () => {
-        expect(shouldWakeAgent(state({ wakeOnDm: false }))).toBe(false);
-    });
-
     it('refuses when the agent never finished a turn (unknown state)', () => {
         expect(shouldWakeAgent(state({ lastTurnEndAt: null }))).toBe(false);
     });
@@ -68,7 +71,6 @@ describe('shouldWakeAgent — fail-closed safety gates (NEVER inject mid-turn)',
         const recentOut = NOW - 1_000;
         expect(
             shouldWakeAgent({
-                wakeOnDm: true,
                 lastTurnEndAt: recentOut, // turn ended right at that output
                 lastOutputAt: recentOut,
                 lastUserInputAt: null,
@@ -175,5 +177,62 @@ describe('shouldWakeAgent — the turn TAIL must not latch the gate shut', () =>
                 }),
             ),
         ).toBe(true);
+    });
+});
+
+/**
+ * WHEN a nudge is warranted, as distinct from whether one is SAFE.
+ *
+ * These are two different questions and conflating them is what made the old
+ * behaviour wrong. `shouldWakeAgent` answers "can this agent be injected into
+ * without corrupting a turn" — a safety proof. It said nothing about whether the
+ * agent deserved interrupting, so every DM to an idle agent started a turn. An
+ * agent that is idle and being spoken to gets interrupted on arrival, every
+ * time, which is the behaviour the owner asked to stop.
+ *
+ * The policy: nudge only when the inbox has gone UNCHECKED for five minutes
+ * after delivery, or when three or more messages stack up. Both halves are about
+ * the recipient having failed to look — one measured in time, one in volume.
+ *
+ * `wakeOnDm` is deliberately absent. It was an opt-in setting, and a protocol
+ * this one enforces is not something an agent gets to switch off: an agent with
+ * it unset was unreachable while appearing reachable to every sender.
+ */
+describe('nudgeWarranted', () => {
+    const now = 1_000_000;
+
+    it('does not nudge for a single message that just arrived', () => {
+        // The whole point. Delivery is not an interruption.
+        expect(nudgeWarranted({ unread: 1, oldestUnreadAt: now - 1_000, now })).toBe(false);
+    });
+
+    it('nudges once the inbox has gone unchecked for five minutes', () => {
+        expect(
+            nudgeWarranted({ unread: 1, oldestUnreadAt: now - NUDGE_UNCHECKED_MS, now }),
+        ).toBe(true);
+    });
+
+    it('holds until the five minutes are actually up', () => {
+        expect(
+            nudgeWarranted({ unread: 1, oldestUnreadAt: now - NUDGE_UNCHECKED_MS + 1, now }),
+        ).toBe(false);
+    });
+
+    it('nudges immediately once messages stack up, without waiting out the clock', () => {
+        // Volume is its own signal: three senders waiting is not something to sit
+        // on for five minutes because each one arrived recently.
+        expect(
+            nudgeWarranted({ unread: NUDGE_STACK_COUNT, oldestUnreadAt: now - 1, now }),
+        ).toBe(true);
+    });
+
+    it('never nudges an empty inbox', () => {
+        // Positive control for the two rules above: with nothing unread, neither
+        // an old timestamp nor a large count may produce a nudge.
+        expect(nudgeWarranted({ unread: 0, oldestUnreadAt: now - 86_400_000, now })).toBe(false);
+    });
+
+    it('does not nudge when nothing records a delivery time', () => {
+        expect(nudgeWarranted({ unread: 1, oldestUnreadAt: null, now })).toBe(false);
     });
 });

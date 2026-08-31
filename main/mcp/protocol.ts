@@ -1,3 +1,4 @@
+import { guideTopics, guideIndex, guideFor } from './guide-topics';
 /**
  * Minimal MCP (Model Context Protocol) JSON-RPC handler — just enough to host
  * Genie's agent-integration tools over HTTP without pulling the full SDK. Kept
@@ -9,7 +10,7 @@
  * terminal is known from the endpoint. ctx carries that resolved id.
  */
 
-import { GENIE_MCP_GUIDE } from './guide';
+import { GENIE_MCP_GUIDE, GENIE_PROTOCOL_BRIEF } from './guide';
 import { agentProviders } from '../agents/registry';
 import type { AgentProviderId } from '../agents/registry';
 import type { QuestionPriority } from '../ask/question-priority';
@@ -1203,7 +1204,9 @@ export interface RunAgentRequest {
      * - `list`: read-only — the workspace's saved agents.
      * - the rest act on a running agent terminal by `id`.
      */
-    action: 'start' | 'send' | 'read' | 'stop' | 'restart' | 'list';
+    action: 'start' | 'send' | 'read' | 'stop' | 'restart' | 'list' | 'switchTui';
+    /** switchTui: the TUI to make this agent's visible driver. */
+    tui?: string;
     /** Target workspace (own, or a governed child). Same rules as manageTerminals. */
     workspaceId?: string;
     /**
@@ -1396,9 +1399,6 @@ export interface AgentInboxRequest {
     workspaces?: string[];
     /** setAccessibility (optional): change your channel purpose (re-keys the room). */
     purpose?: string;
-    /** setAccessibility (optional): opt in/out of wake-on-DM — a DM to you when idle
-     *  injects a nudge to start a turn (issue #9). Default off. */
-    wakeOnDm?: boolean;
     /** registerSession: the generated Codex session id from SessionStart stdin. */
     sessionId?: string;
     /** registerTransport: Genie-owned harness adapter readiness handshake. */
@@ -1668,10 +1668,17 @@ const CHECK_ENV_TOOL = {
 const GUIDE_TOOL = {
     name: 'genieGuide',
     description:
-        'Return the running Genie version, then the full usage guide for the Genie MCP server (what each tool does, when to use it, and the zero-setup per-terminal contract). Call this to answer "what Genie version am I on", or when you want details beyond the brief in AGENTS.md.',
+        'Genie’s guide, as a CATALOGUE. With NO arguments it returns the running Genie version and a LIST OF TOPICS — one line each, cheap to read. Pass `topic` to read just that guide. Ask for what you need rather than reading everything: the guide is long and more are being added. Use it to answer "what Genie version am I on", to look up how one tool works, or — if you are an agent that predates it — read `topic: "migrating-to-ams"` for what changed in the Agent Management System.',
     inputSchema: {
         type: 'object',
-        properties: { ...TERMINAL_ID_PROP },
+        properties: {
+            ...TERMINAL_ID_PROP,
+            topic: {
+                type: 'string',
+                description:
+                    'The topic id to read, from the listing this returns with NO arguments (e.g. "imdone", "managesite", "migrating-to-ams"). Omit it to get that listing.',
+            },
+        },
         additionalProperties: false,
     },
 };
@@ -1681,9 +1688,30 @@ const GUIDE_TOOL = {
  * prompt UIs and as a normal tool for clients such as Codex that surface MCP
  * tools but do not give the user a prompt picker.
  */
+/**
+ * CONNECTING TO GENIE — the one entry point, under one name.
+ *
+ * Exposed BOTH ways deliberately: as an MCP prompt, so a user can type it as a
+ * slash command in any client with a prompt picker, and as an ordinary tool, so
+ * an agent can call it and so clients such as Codex that surface tools but give
+ * the user no prompt picker still reach it. The SAME name on both — a thing the
+ * user invokes by name and the agent calls by name being two different names is
+ * exactly the confusion this consolidates away.
+ *
+ * `initializeWorkspace` is the name this shipped under and stays a working
+ * alias. It is written into AGENTS.md files across the estate and sits in the
+ * context of agents running right now, so renaming without an alias would turn
+ * every one of those into an unknown-tool error.
+ */
+export const CONNECT_TO_GENIE_PROMPT_NAME = 'connectToGenie';
 export const INITIALIZE_WORKSPACE_PROMPT_NAME = 'initializeWorkspace';
-const INITIALIZE_WORKSPACE_TOOL = {
-    name: INITIALIZE_WORKSPACE_PROMPT_NAME,
+
+/** Both names resolve to the same orientation. */
+export function isConnectToGenieName(name: string | undefined): boolean {
+    return name === CONNECT_TO_GENIE_PROMPT_NAME || name === INITIALIZE_WORKSPACE_PROMPT_NAME;
+}
+const CONNECT_TO_GENIE_TOOL = {
+    name: CONNECT_TO_GENIE_PROMPT_NAME,
     description:
         'Orient yourself in the current Genie workspace. Returns a map of the .agi envelope and every repo (paths, GitHub refs, orientation files), followed by a numbered learning plan. Call this first in a fresh or newly converted workspace.',
     inputSchema: {
@@ -1692,9 +1720,9 @@ const INITIALIZE_WORKSPACE_TOOL = {
         additionalProperties: false,
     },
 };
-const INITIALIZE_WORKSPACE_PROMPT = {
-    name: INITIALIZE_WORKSPACE_PROMPT_NAME,
-    title: 'Initialize workspace',
+const CONNECT_TO_GENIE_PROMPT = {
+    name: CONNECT_TO_GENIE_PROMPT_NAME,
+    title: 'Connect to Genie',
     description:
         'Orient in this Genie workspace: a map of the .agi envelope + every repo (paths, GitHub refs, orientation files) and a numbered plan for learning the project. Run this on first boot of a fresh/converted workspace.',
     // No required arguments; terminal is resolved from the connection.
@@ -2253,8 +2281,13 @@ const RUN_AGENT_TOOL = {
             ...TARGET_WORKSPACE_PROP,
             action: {
                 type: 'string',
-                enum: ['start', 'send', 'read', 'stop', 'restart', 'list'],
+                enum: ['start', 'send', 'read', 'stop', 'restart', 'list', 'switchTui'],
                 description: 'What to do.',
+            },
+            tui: {
+                type: 'string',
+                description:
+                    "switchTui: the TUI to make this agent's VISIBLE driver (claude / codex / kiwi / genie / custom). An agent is not its TUI: switching keeps its identity, inbox and history, and the TUI it leaves keeps its own pty and conversation as a hidden SIDECAR you can flip back to. Nothing is ever stopped by a switch. Needs `name` (or `id`) to say which agent.",
             },
             name: {
                 type: 'string',
@@ -2397,11 +2430,6 @@ const AGENTINBOX_TOOL = {
             limit: {
                 type: 'number',
                 description: 'receipts (optional): how many recent sent DMs to report (default 20, cap 100).',
-            },
-            wakeOnDm: {
-                type: 'boolean',
-                description:
-                    'setAccessibility (optional): opt in/out of wake-on-DM. When ON, a DM that arrives while you are IDLE (turn ended, prompt empty) injects a one-line nudge so you start a turn and see it — instead of the DM sitting unread until you next act. Fail-safe: never fires mid-turn. Default off.',
             },
             sessionId: {
                 type: 'string',
@@ -3220,7 +3248,7 @@ const CORE_TOOLS = [
     SET_ENV_TOOL,
     CHECK_ENV_TOOL,
     SUBMIT_FEEDBACK_TOOL,
-    INITIALIZE_WORKSPACE_TOOL,
+    CONNECT_TO_GENIE_TOOL,
     AGENT_UPGRADE_TOOL,
     GUIDE_TOOL,
 ];
@@ -3250,8 +3278,11 @@ export async function handleMcpMessage(
                     prompts: { listChanged: false },
                 },
                 serverInfo: { name: ctx.serverName, version: ctx.serverVersion },
-                // MCP-native "how to use this server" channel. Mirrors genieGuide.
-                instructions: GENIE_MCP_GUIDE,
+                // MCP-native "how to use this server" channel. The PROTOCOL —
+                // what stops work stalling, and where to get the rest. The full
+                // manual is `genieGuide`, on demand, so an agent that never
+                // needs it never pays for it.
+                instructions: GENIE_PROTOCOL_BRIEF,
             });
 
         case 'notifications/initialized':
@@ -3295,16 +3326,18 @@ export async function handleMcpMessage(
         }
 
         case 'prompts/list':
-            return ok(msg.id, { prompts: [INITIALIZE_WORKSPACE_PROMPT] });
+            return ok(msg.id, { prompts: [
+                CONNECT_TO_GENIE_PROMPT,
+            ] });
 
         case 'prompts/get': {
             const name = (msg.params as { name?: string } | undefined)?.name;
-            if (name !== INITIALIZE_WORKSPACE_PROMPT_NAME) {
+            if (!isConnectToGenieName(name)) {
                 return err(msg.id, -32602, `Unknown prompt: ${String(name)}`);
             }
             const map = await ctx.describeWorkspace(ctx.terminalId);
             return ok(msg.id, {
-                description: INITIALIZE_WORKSPACE_PROMPT.description,
+                description: CONNECT_TO_GENIE_PROMPT.description,
                 messages: workspacePromptMessages(map),
             });
         }
@@ -3385,16 +3418,23 @@ export async function handleMcpMessage(
                 // The version otherwise only reaches an agent through `initialize`'s
                 // serverInfo, which most harnesses swallow. Lead with it so asking
                 // the guide also answers "which Genie build am I on".
+                const head = `Genie version: ${ctx.serverVersion}`;
+                const topics = guideTopics(GENIE_MCP_GUIDE);
+                const requested = (params.arguments as { topic?: unknown } | undefined)?.topic;
+                // No topic means the CATALOGUE, not the whole guide: an agent that
+                // wanted one tool used to pay for every tool's documentation to
+                // find it, which made the guide something to avoid.
+                const body =
+                    typeof requested === 'string' && requested.trim()
+                        ? guideFor(topics, requested).text
+                        : guideIndex(topics);
                 return ok(msg.id, {
-                    content: [
-                        {
-                            type: 'text',
-                            text: `Genie version: ${ctx.serverVersion}\n\n${GENIE_MCP_GUIDE}`,
-                        },
-                    ],
+                    content: [{ type: 'text', text: `${head}
+
+${body}` }],
                 });
             }
-            if (params.name === INITIALIZE_WORKSPACE_PROMPT_NAME) {
+            if (isConnectToGenieName(params.name)) {
                 const map = await ctx.describeWorkspace(ctx.terminalId);
                 const text = workspacePromptMessages(map)
                     .map((message) => message.content.text)
@@ -3853,7 +3893,6 @@ export async function handleMcpMessage(
                     purpose: a.purpose,
                     sessionId: a.sessionId,
                     transport: a.transport,
-                    wakeOnDm: a.wakeOnDm,
                     limit: a.limit,
                     attachments: a.attachments,
                     attachmentId: a.attachmentId,

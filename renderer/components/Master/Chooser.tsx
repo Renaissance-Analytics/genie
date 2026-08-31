@@ -13,9 +13,10 @@ import {
     IconCpu,
     IconGlobe,
     IconHome,
+    IconMonitorCog,
+    IconPanelLeft,
     IconPanelLeftOpen,
     IconPause,
-    IconPin,
     IconPlay,
     IconPlus,
     IconRefresh,
@@ -28,9 +29,18 @@ import {
 } from './icons';
 import { showPrompt } from './Prompt';
 import { terminalTypeForAgent, type TerminalTypeId } from '../../lib/terminal-types';
-import { amsAgentCard, splitAmsSpecs } from '../../lib/ams-grid';
+import {
+    agentGridRows,
+    amsAgentCard,
+    splitAmsSpecs,
+    type AgentGridRow,
+    type AgentRecordSpec,
+    type AgentRuntimeSpec,
+} from '../../lib/ams-grid';
+import { agentStack } from '../../lib/agent-stack';
+import AgentAvatarStack from './AgentAvatarStack';
 import TerminalTypeSplitButton from './TerminalTypeSplitButton';
-import { workspaceNeedsAttention } from '../../lib/attention';
+import { workspaceHasThumb, workspaceNeedsAttention } from '../../lib/attention';
 import { gappLaunchLabel, gappLaunchTarget } from '../../lib/gapp-launch';
 import {
     resolveWorkspaceKind,
@@ -92,6 +102,8 @@ interface Props {
     onOpenContextMenu: (specId: string, position: { x: number; y: number }) => void;
     onOpenProjectMenu: (workspaceId: string, position: { x: number; y: number }) => void;
     onAddWorkspace: () => void;
+    systemRevealed?: boolean;
+    onToggleSystemWorkspace?: () => void;
     /** Persist a new sidebar order (full ordered list of workspace ids). */
     onReorderWorkspaces: (ids: string[]) => void;
     /** Create a Process (background service runner) for a workspace. `cwd`
@@ -174,6 +186,8 @@ export default function Chooser({
     onOpenContextMenu,
     onOpenProjectMenu,
     onAddWorkspace,
+    systemRevealed = false,
+    onToggleSystemWorkspace,
     onReorderWorkspaces,
     onAddProcess,
     onUpdateProcess,
@@ -191,6 +205,33 @@ export default function Chooser({
     onAddPluginPanel,
 }: Props) {
     const [thumbedAgentTerminals, setThumbedAgentTerminals] = useState<Set<string>>(new Set());
+    // THE AGENT RECORD, per workspace. The grid used to be built from terminal
+    // specs carrying `meta.agent`, which meant a leftover spec looked like an
+    // agent and a registered-but-dormant one was invisible. Reloaded whenever
+    // the spec list moves, because starting or stopping an agent is what changes
+    // both.
+    const [agentRecords, setAgentRecords] = useState<
+        Record<string, { agents: AgentRecordSpec[]; runtimes: AgentRuntimeSpec[] }>
+    >({});
+    const workspaceIds = workspaces.map((w) => w.id).join(',');
+    useEffect(() => {
+        let cancelled = false;
+        void Promise.all(
+            workspaces.map((w) =>
+                api()
+                    .agents.list(w.id)
+                    .then((r) => [w.id, r] as const)
+                    .catch(() => [w.id, { agents: [], runtimes: [] }] as const),
+            ),
+        ).then((entries) => {
+            if (!cancelled) setAgentRecords(Object.fromEntries(entries));
+        });
+        return () => {
+            cancelled = true;
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [workspaceIds, specs.length]);
+
     useEffect(() => api().on.agentThumbsUp?.((event) => {
         setThumbedAgentTerminals((current) => new Set(current).add(event.terminalId));
         window.setTimeout(() => {
@@ -927,14 +968,21 @@ export default function Chooser({
     return (
         <>
         <div className={`chooser${pinned ? ' pinned' : ''}`}>
+            {/* The rail IS the sidebar, minimized -- so it renders only while the
+                sidebar is closed. Showing both put the same workspace list on
+                screen twice, once as icons and once as rows, and cost 56px of
+                width to say nothing new. Closed: the rail, with the flyout on
+                hover. Open: the sidebar alone, which carries its own collapse
+                control because the pin toggle lived in the rail. */}
+            {!pinned && (
             <aside className="chooser-rail">
                 <button
                     type="button"
                     className="crail-toggle"
                     onClick={onTogglePin}
-                    title={pinned ? 'Unpin terminals panel' : 'Pin terminals panel'}
+                    title="Pin terminals panel"
                 >
-                    {pinned ? <IconPin size={18} /> : <IconPanelLeftOpen size={18} />}
+                    <IconPanelLeftOpen size={18} />
                 </button>
                 <span className="crail-sep" />
                 {orderedWorkspaces.map((ws) => {
@@ -991,9 +1039,54 @@ export default function Chooser({
                     <IconPlus size={18} />
                 </button>
             </aside>
+            )}
 
             <aside className="chooser-flyout">
+                {/* One line: collapse, the System Workspace chip, add-workspace,
+                    then search. The two workspace-level actions sit together at
+                    the head where they are reachable without scrolling past the
+                    list they act on. */}
                 <div className="rail-head">
+                    <button
+                        type="button"
+                        className="gicon rail-collapse"
+                        onClick={onTogglePin}
+                        title="Collapse to rail"
+                        aria-label="Collapse to rail"
+                    >
+                        <IconPanelLeft size={16} />
+                    </button>
+                    {onToggleSystemWorkspace && (
+                        <button
+                            type="button"
+                            className={`gicon rail-system-toggle${
+                                systemRevealed ? ' on' : ''
+                            }`}
+                            onClick={onToggleSystemWorkspace}
+                            title={
+                                systemRevealed
+                                    ? 'Hide System Workspace'
+                                    : 'Show System Workspace'
+                            }
+                            aria-label={
+                                systemRevealed
+                                    ? 'Hide System Workspace'
+                                    : 'Show System Workspace'
+                            }
+                            aria-pressed={systemRevealed}
+                        >
+                            <IconMonitorCog size={16} />
+                        </button>
+                    )}
+                    <button
+                        type="button"
+                        className="gicon rail-add-workspace"
+                        onClick={onAddWorkspace}
+                        title="Add workspace"
+                        aria-label="Add workspace"
+                    >
+                        <IconPlus size={16} />
+                    </button>
                     <div className="rail-search">
                         <IconSearch />
                         <input
@@ -1006,15 +1099,6 @@ export default function Chooser({
                 </div>
 
                 <div className="rail-scroll">
-                    <button
-                        type="button"
-                        className="tproj-add"
-                        onClick={onAddWorkspace}
-                    >
-                        <IconPlus size={13} />
-                        <span>Add workspace…</span>
-                    </button>
-
                     {workspaces.length === 0 && (
                         <div
                             style={{
@@ -1024,7 +1108,7 @@ export default function Chooser({
                                 lineHeight: 1.5,
                             }}
                         >
-                            No workspaces yet. Click <strong>Add workspace…</strong>{' '}
+                            No workspaces yet. Use the <strong>+</strong> button
                             above to register a project folder.
                         </div>
                     )}
@@ -1039,6 +1123,13 @@ export default function Chooser({
                         // workspace flagged for attention → the ROW glows, so a
                         // COLLAPSED workspace shows it's ready without expanding.
                         const wsAttention = workspaceNeedsAttention(wsAll, attentionIds);
+                        // Readiness has to reach a COLLAPSED row too. The thumb is
+                        // drawn on an agent's SQUARE, and a collapsed workspace
+                        // renders no grid — so without this the agent signals ready
+                        // and the person waiting sees nothing. Same rule the
+                        // attention glow already uses, for the same reason.
+                        const wsThumb =
+                            collapsed && workspaceHasThumb(wsAll, thumbedAgentTerminals);
                         const isActive = ws.id === activeWorkspaceId;
                         const dragging = draggingId.current === ws.id;
                         // Same resolution the rail uses, from Genie's own columns
@@ -1068,7 +1159,8 @@ export default function Chooser({
                                 }${dragging ? ' dragging' : ''}${
                                     ws.shape === 'agi' ? ' agi' : ''
                                 }${wsAttention ? ' attention' : ''}${
-                                    pulsingWs.has(ws.id) ? ' pulsing' : ''
+                                    wsThumb ? ' ws-thumb' : ''
+                                }${pulsingWs.has(ws.id) ? ' pulsing' : ''
                                 }${activeWs.has(ws.id) ? ' agent-active' : ''}${
                                     enteringWs.has(ws.id) ? ' ws-enter' : ''
                                 }${kindClass ? ` ${kindClass}` : ''}`}
@@ -1158,6 +1250,26 @@ export default function Chooser({
                                         affordance. */}
                                     <span className="pname">{ws.project_name}</span>
                                     {ws.shape === 'agi' && <AgiHealth ws={ws} />}
+                                    {/* WHO is working here, on the row itself. Reads
+                                        the same rows the grid does -- a second
+                                        derivation from terminal specs is how the row
+                                        and the grid would come to disagree. */}
+                                    {!system && (() => {
+                                        const record = agentRecords[ws.id];
+                                        if (!record) return null;
+                                        return (
+                                            <AgentAvatarStack
+                                                stack={agentStack({
+                                                    rows: agentGridRows({
+                                                        agents: record.agents,
+                                                        runtimes: record.runtimes,
+                                                        specs: byWorkspace.get(ws.id) ?? [],
+                                                        isLive: (id) => activeIds.has(id),
+                                                    }),
+                                                })}
+                                            />
+                                        );
+                                    })()}
                                     {/* Issue Watch is GitHub-scoped — not for the
                                         synthetic System Workspace. */}
                                     {!system && (
@@ -1259,26 +1371,58 @@ export default function Chooser({
                                         )}
                                 </button>
                                 <div className="tproj-body">
-                                    {splitAmsSpecs(wsSpecs).agents.length > 0 && (
-                                        <div className="ams-agent-grid" aria-label="Workspace agents">
-                                            {splitAmsSpecs(wsSpecs).agents.map((s) => (
-                                                <AgentSquare
-                                                    key={s.id}
-                                                    spec={s}
-                                                    checked={selected.has(s.id)}
-                                                    running={activeIds.has(s.id)}
-                                                    active={streamingTerms.has(s.id)}
-                                                    attention={attentionIds.has(s.id)}
-                                                    thumbed={thumbedAgentTerminals.has(s.id)}
-                                                    onOpen={() => {
-                                                        onActivateWorkspace(ws.id);
-                                                        if (!selected.has(s.id)) onToggleSpec(s.id);
-                                                    }}
-                                                    onContextMenu={(p) => onOpenContextMenu(s.id, p)}
-                                                />
-                                            ))}
-                                        </div>
-                                    )}
+                                    {(() => {
+                                        // Drawn from the RECORD, not from specs:
+                                        // a dormant agent appears, and a spec no
+                                        // runtime owns is shown AS orphaned
+                                        // rather than as a second agent.
+                                        const record = agentRecords[ws.id];
+                                        const rows = record
+                                            ? agentGridRows({
+                                                  agents: record.agents,
+                                                  runtimes: record.runtimes,
+                                                  specs: wsSpecs,
+                                                  isLive: (id) => activeIds.has(id),
+                                              })
+                                            : [];
+                                        if (rows.length === 0) return null;
+                                        return (
+                                            <div className="ams-agent-grid" aria-label="Workspace agents">
+                                                {rows.map((row) => {
+                                                    const specId =
+                                                        row.kind === 'orphan'
+                                                            ? row.specId!
+                                                            : record!.runtimes.find(
+                                                                  (r) => r.agentId === row.id && r.fronted,
+                                                              )?.terminalSpecId ?? null;
+                                                    return (
+                                                        <AgentSquare
+                                                            key={row.id}
+                                                            row={row}
+                                                            checked={!!specId && selected.has(specId)}
+                                                            active={!!specId && streamingTerms.has(specId)}
+                                                            attention={!!specId && attentionIds.has(specId)}
+                                                            thumbed={
+                                                                !!specId && thumbedAgentTerminals.has(specId)
+                                                            }
+                                                            onOpen={() => {
+                                                                onActivateWorkspace(ws.id);
+                                                                // A dormant agent has no panel to
+                                                                // open yet; starting one is a
+                                                                // deliberate action, not a click.
+                                                                if (specId && !selected.has(specId)) {
+                                                                    onToggleSpec(specId);
+                                                                }
+                                                            }}
+                                                            onContextMenu={(p) => {
+                                                                if (specId) onOpenContextMenu(specId, p);
+                                                            }}
+                                                        />
+                                                    );
+                                                })}
+                                            </div>
+                                        );
+                                    })()}
                                     {splitAmsSpecs(wsSpecs).panels.map((s) => (
                                         <SpecRow
                                             key={s.id}
@@ -2067,33 +2211,54 @@ interface SpecRowProps {
     onContextMenu: (position: { x: number; y: number }) => void;
 }
 
+/**
+ * One agent in the grid — or one ORPHAN.
+ *
+ * Takes a row from `agentGridRows`, not a terminal spec. That is the whole
+ * change: a square is now an agent Genie has a record of, so a registered agent
+ * that has never been started is finally visible, and a leftover agent-stamped
+ * spec is drawn as the orphan it is rather than as another agent.
+ *
+ * `running` comes off the row because an agent is running when ANY of its TUIs
+ * is — a fronted one that exited while a sidecar keeps working is still working.
+ */
 function AgentSquare({
-    spec,
+    row,
     checked,
-    running,
     active,
     attention,
     thumbed,
     onOpen,
     onContextMenu,
 }: {
-    spec: TerminalSpec;
+    row: AgentGridRow;
     checked: boolean;
-    running: boolean;
     active: boolean;
     attention: boolean;
     thumbed: boolean;
     onOpen: () => void;
     onContextMenu: (position: { x: number; y: number }) => void;
 }) {
-    const card = amsAgentCard(spec, { running, active });
-    const agentDef = terminalTypeForAgent(card.provider);
+    const running = row.running;
+    const orphan = row.kind === 'orphan';
+    // The record stores a provider string; the icon table is keyed by the union.
+    // An unknown driver falls back to the initial rather than mis-badging itself
+    // as claude, which is what a cast would have done silently.
+    const agentDef = row.provider
+        ? terminalTypeForAgent(row.provider as Parameters<typeof terminalTypeForAgent>[0])
+        : undefined;
     const AgentIcon = agentDef?.icon;
+    const driver = row.provider ? (agentDef?.label ?? row.provider) : 'no TUI yet';
+    const title = orphan
+        ? `${row.name} · orphaned terminal — no agent owns it`
+        : `${row.name} · ${driver} · ${running ? 'running' : 'not running'}` +
+          (row.tuis.length > 1 ? ` · ${row.tuis.length} TUIs` : '') +
+          (row.collisionGroup ? ' · name conflict, needs resolving' : '');
     return (
         <button
             type="button"
-            className={`ams-agent-card${running ? ' is-running' : ''}${active ? ' is-active' : ''}${checked ? ' is-open' : ''}${attention ? ' attention' : ''}`}
-            title={`${card.name} · ${agentDef?.label ?? card.provider} · ${running ? 'running' : 'not running'}${active ? ' · active' : ''}`}
+            className={`ams-agent-card${running ? ' is-running' : ''}${active ? ' is-active' : ''}${checked ? ' is-open' : ''}${attention ? ' attention' : ''}${orphan ? ' is-orphan' : ''}${row.collisionGroup ? ' is-collision' : ''}${!running && !orphan ? ' is-dormant' : ''}`}
+            title={title}
             onClick={onOpen}
             onContextMenu={(event) => {
                 event.preventDefault();
@@ -2101,10 +2266,22 @@ function AgentSquare({
             }}
         >
             <span className="ams-agent-avatar" aria-hidden="true">
-                {AgentIcon ? <AgentIcon size={20} /> : card.name.slice(0, 1).toUpperCase()}
+                {row.avatar
+                    ? row.avatar
+                    : AgentIcon
+                      ? <AgentIcon size={20} />
+                      : row.name.slice(0, 1).toUpperCase()}
             </span>
-            <span className="ams-agent-name">{card.name}</span>
+            <span className="ams-agent-name">{row.name}</span>
             <span className="ams-agent-state" aria-label={running ? 'Running' : 'Not running'} />
+            {/* Sidecars: the TUIs this agent holds beyond the visible one. */}
+            {row.tuis.length > 1 && (
+                <span className="ams-agent-tuis" aria-hidden="true">
+                    {row.tuis.filter((t) => !t.fronted).map((t) => (
+                        <span key={t.runtimeId} className={`ams-tui-pip${t.running ? ' is-running' : ''}`} />
+                    ))}
+                </span>
+            )}
             {thumbed && <span className="ams-agent-thumb" aria-label="Ready">👍</span>}
         </button>
     );

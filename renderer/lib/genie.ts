@@ -1,3 +1,4 @@
+import type { AgentRecordSpec, AgentRuntimeSpec } from './ams-grid';
 import type { BoardRead, ReviewOutcome } from './artboard-model';
 /**
  * Typed handle on the contextBridge surface exposed in main/preload.ts.
@@ -194,6 +195,13 @@ export interface DetectResult {
 }
 
 /** A ForceTheQuestion question pushed to the modal (mirrors the MCP schema). */
+/** A part-typed answer to one ForceTheQuestion request: option labels + a note,
+ *  per question index. Mirrors main's `AskDraftEntry`. */
+export interface AskDraftSpec {
+    selected: Record<number, string[]>;
+    notes: Record<number, string>;
+}
+
 export interface ForceQuestionSpec {
     header: string;
     question: string;
@@ -3913,6 +3921,24 @@ export interface GenieApi {
         clearAttention: (id: string) => Promise<void>;
     };
     /** Agent-integration MCP: the ForceTheQuestion OS-level modal. */
+    /** The AGENT RECORD — what the AMS grid draws, instead of agent-stamped
+     *  terminal specs. See lib/ams-grid.ts for why that distinction matters. */
+    agents: {
+        list: (workspaceId: string) => Promise<{
+            agents: AgentRecordSpec[];
+            runtimes: AgentRuntimeSpec[];
+        }>;
+        /** Make one of an agent's TUIs the visible one. A SWAP, not an add. */
+        /** Create an agent: a record and its AGENT.md, never a terminal. */
+        create: (input: {
+            workspaceId: string;
+            name: string;
+            purpose: string;
+            agent?: string;
+            bootFolder?: string;
+        }) => Promise<{ ok: boolean; error?: string }>;
+        front: (agentId: string, runtimeId: string) => Promise<boolean>;
+    };
     ask: {
         onShow: (
             cb: (payload: {
@@ -3943,6 +3969,11 @@ export interface GenieApi {
         ready: () => Promise<void>;
         /** Close this modal window regardless of state (resolves cancelled). */
         dismiss: () => Promise<void>;
+        /** A part-typed answer, held in MAIN so it survives this window being
+         *  destroyed and the in-app flyout unmounting. Keyed by question id, so
+         *  an answer begun in one surface is finished in the other. */
+        draftGet: (id: string) => Promise<AskDraftSpec | null>;
+        draftSet: (id: string, entry: AskDraftSpec) => Promise<void>;
     };
     on: {
         authChanged: (
@@ -4315,6 +4346,30 @@ export function workspaceSurfaceRows<T extends { path: string }>(
     const normalize = (value: string) => value.replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase();
     const managedPath = normalize(genieOsPath);
     return workspaces.filter((workspace) => normalize(workspace.path) !== managedPath);
+}
+
+/**
+ * The workspace rows the sidebar lists, with the System Workspace composed in.
+ *
+ * The System Workspace is SYNTHETIC — never persisted, never in `workspaces` —
+ * so the sidebar has to add it rather than filter for it, and it is pinned to
+ * the top because it is fixed: never draggable, never reorderable, so a reorder
+ * of the real workspaces can't shuffle it down.
+ *
+ * `workspaceSurfaceRows` runs FIRST and keeps running while the chip is on. A
+ * legacy registered row pointing at the managed OSA directory must stay hidden
+ * whether or not its synthetic replacement is on screen — otherwise revealing
+ * the chip lists the same directory twice under two different ids.
+ */
+export function sidebarWorkspaceRows<T extends { path: string }>(
+    workspaces: readonly T[],
+    systemWorkspace: T | null,
+    revealed: boolean,
+    genieOsPath?: string | null,
+): T[] {
+    const rows = workspaceSurfaceRows(workspaces, genieOsPath);
+    if (!revealed || !systemWorkspace) return rows;
+    return [systemWorkspace, ...rows];
 }
 
 /**

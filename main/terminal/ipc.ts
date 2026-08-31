@@ -511,6 +511,13 @@ export function createAgentTerminal(opts: {
         meta = {
             agent: opts.agentMeta.agent,
             agent_command: opts.agentMeta.command,
+            // PERSISTED so a revive can re-apply it. `maybeRelaunchAgent` has
+            // always read `meta.agent_instructions`, but only the OS agent ever
+            // wrote it -- so a project agent that was revived or restarted came
+            // back with no persona and no workspace framing, silently.
+            ...(opts.agentMeta.instructions?.trim()
+                ? { agent_instructions: opts.agentMeta.instructions.trim() }
+                : {}),
             agent_id: agentId,
             // BACK-COMPAT: stored `whisper_*` meta keys are kept after the
             // WhisperChat → AgentInbox rename (renaming them needs a data migration).

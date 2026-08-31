@@ -412,6 +412,67 @@ function syncCodexServer(
     }
 }
 
+/**
+ * What Genie REGENERATES under `.agents/`, and nothing else.
+ *
+ * `.agents/` is a tracked folder now: an agent's `AGENT.md` is committed, so
+ * agents ship with the project and a change to one is reviewable like any other.
+ * That only works if the folder is not also full of files Genie rewrites on
+ * every sync, which would leave every workspace permanently dirty.
+ *
+ * The precision matters in one direction especially. `.agents/skills/` holds
+ * BOTH Genie's managed skills and skills the USER wrote — this file guards
+ * deletion on the `genie-` prefix for exactly that reason — so ignoring the
+ * folder wholesale would quietly stop tracking their own work. The rule is
+ * scoped to Genie's prefix instead.
+ */
+export const GENIE_AGENTS_IGNORE_RULES = [
+    '.agents/_genie/',
+    '.agents/skills/genie*/',
+] as const;
+
+/**
+ * Add any missing rules to a `.gitignore`, leaving what is there alone.
+ *
+ * Idempotent because sync runs on every workspace open: a rule appended each
+ * time would grow the file without bound and show up as a diff every session.
+ */
+export function gitignoreWithRules(
+    existing: string,
+    rules: readonly string[],
+    comment: string,
+): string {
+    const present = new Set(existing.split(/\r?\n/).map((line) => line.trim()));
+    const missing = rules.filter((rule) => !present.has(rule));
+    if (missing.length === 0) return existing;
+    // A file with no trailing newline would otherwise join its last line to the
+    // first rule, making BOTH wrong -- and a .gitignore that silently stops
+    // ignoring `dist` is not noticed until a build directory lands in a PR.
+    const prefix = existing && !existing.endsWith('\n') ? '\n' : '';
+    return `${existing}${prefix}\n# ${comment}\n${missing.join('\n')}\n`;
+}
+
+/** Apply {@link GENIE_AGENTS_IGNORE_RULES} to the workspace's `.gitignore`. */
+function ensureGenieAgentsGitignored(workspacePath: string): void {
+    const file = path.join(workspacePath, '.gitignore');
+    try {
+        let existing = '';
+        try {
+            existing = fs.readFileSync(file, 'utf8');
+        } catch {
+            /* absent — created below */
+        }
+        const next = gitignoreWithRules(
+            existing,
+            GENIE_AGENTS_IGNORE_RULES,
+            'Genie: regenerated agent scaffolding (the agents themselves are tracked)',
+        );
+        if (next !== existing) fs.writeFileSync(file, next);
+    } catch {
+        /* best-effort — a missing ignore rule is untidy, not broken */
+    }
+}
+
 function ensureCodexConfigGitignored(workspacePath: string): void {
     const file = path.join(workspacePath, '.gitignore');
     const rule = '.codex/config.toml';
@@ -874,7 +935,7 @@ const CLAUDE_SECTION = '## Claude Code';
  * to own outright. Any managed protocol block found in it is REMOVED — that is
  * the migration, and leaving it would leave exactly the staleness being fixed.
  */
-export function claudeMdPointer(existing: string): string {
+export function claudeMdPointer(existing: string, agentsBody?: string): string {
     // Strip a previously-managed protocol block wherever it sits.
     let body = existing;
     const begin = body.indexOf(AGENTS_BEGIN);
@@ -887,6 +948,32 @@ export function claudeMdPointer(existing: string): string {
         .split('\n')
         .filter((line) => line.trim() !== CLAUDE_MD_IMPORT)
         .join('\n');
+
+    // DROP what AGENTS.md already says. The previous design kept the two files
+    // BYTE-IDENTICAL, so on a workspace Genie was already managing, "the rest" is
+    // not a human's Claude-specific content — it is a copy of AGENTS.md. Keeping
+    // it made Claude Code load the same words twice, which is what shipped in
+    // beta.271 (measured here: 168 lines, 98.8% identical).
+    //
+    // Line-wise rather than whole-file, so a human's ONE Claude-specific note
+    // survives inside an otherwise-mirrored file. Without an AGENTS.md to compare
+    // against, nothing is provably duplicated and everything is kept — dropping
+    // would be guessing with someone's file.
+    if (agentsBody) {
+        const theirs = new Set(
+            agentsBody
+                .split('\n')
+                .map((l) => l.trim())
+                .filter((l) => l.length > 0),
+        );
+        body = body
+            .split('\n')
+            .filter((l) => {
+                const t = l.trim();
+                return t.length === 0 || !theirs.has(t);
+            })
+            .join('\n');
+    }
 
     const kept = body.trim();
     return kept
@@ -1060,6 +1147,10 @@ function syncAgentsMd(workspacePath: string, enabled: boolean): void {
             custom: '# Genie for Custom agent\n\nThe custom agent must call `genieGuide` and follow the setup for its harness.\n',
         };
         try {
+            // `.agents/` is TRACKED now -- an agent's AGENT.md ships with the
+            // project -- so what Genie regenerates under it has to be ignored,
+            // or every workspace would sit permanently dirty.
+            ensureGenieAgentsGitignored(workspacePath);
             fs.writeFileSync(path.join(managedRoot, 'shared.md'), shared);
             for (const [provider, content] of Object.entries(providerDocs)) {
                 fs.writeFileSync(path.join(managedRoot, `genie-${provider}.md`), content);
@@ -1093,7 +1184,7 @@ function syncAgentsMd(workspacePath: string, enabled: boolean): void {
         // that is no longer there.
         const next =
             t.harness === 'claude' && enabled
-                ? claudeMdPointer(t.existing)
+                ? claudeMdPointer(t.existing, read.find((r) => r.harness === 'codex')?.existing)
                 : applyAgentsSection(t.existing, enabled, aiSystem, t.harness);
         if (next === t.existing) continue;
         try {
@@ -1132,7 +1223,7 @@ description: Use whenever working inside Genie or when Genie MCP tools are avail
 
 # Genie workspace workflow
 
-1. In a fresh or newly converted workspace, call \`initializeWorkspace\` and follow its repository-orientation plan.
+1. In a fresh or newly converted workspace, call \`connectToGenie\` and follow its repository-orientation plan.
 2. Use the Genie tools for UI-visible coordination:
    - \`imDone\` whenever handing work back.
    - \`ForceTheQuestion\` when only the user can unblock a decision.
@@ -1186,7 +1277,7 @@ ${body}
             'Use when entering, reinitializing, or learning a Genie workspace.',
             `# Genie workspace orientation
 
-Call \`initializeWorkspace\` once for a fresh or newly converted workspace. Follow its numbered plan, treat repos as the primary source, and review the Agent integration health section before starting work. Read the nearest AGENTS.md and repository instructions before changing code.`,
+Call \`connectToGenie\` once for a fresh or newly converted workspace. Follow its numbered plan, treat repos as the primary source, and review the Agent integration health section before starting work. Read the nearest AGENTS.md and repository instructions before changing code.`,
         ),
         'genie-attention': skill(
             'genie-attention',

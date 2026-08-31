@@ -114,7 +114,7 @@ describe('writeWorkspaceAgentMcp — per-target sync gating', () => {
         expect(files.get(codexToml)).toContain('matcher = "startup|resume|clear"');
         expect(files.get(codexToml)).toContain(codexSessionHook.replace(/\\/g, '\\\\'));
         expect(files.get(codexSkill)).toContain('name: genie');
-        expect(files.get(codexSkill)).toContain('initializeWorkspace');
+        expect(files.get(codexSkill)).toContain('connectToGenie');
         expect(files.get(codexSessionHook)).toContain('payload.session_id');
         expect(files.get(codexSessionHook)).toContain("action: 'registerSession'");
         expect(files.get(codexSessionHook)).toContain('process.env.GENIE_MCP_URL');
@@ -129,7 +129,7 @@ describe('writeWorkspaceAgentMcp — per-target sync gating', () => {
         ).toContain('registerSession');
         expect(
             files.get(path.join(WS, '.agents', 'skills', 'genie-orientation', 'SKILL.md')),
-        ).toContain('initializeWorkspace');
+        ).toContain('connectToGenie');
         expect(JSON.parse(files.get(mcpJson)!).mcpServers.genie.url).toBe(URL);
     });
 

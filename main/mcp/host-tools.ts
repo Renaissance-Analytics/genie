@@ -20,6 +20,11 @@ import {
     getTerminalSpec,
     getWorkspace,
     getWorkspaceAgent,
+    getWorkspaceAgentByName,
+    type WorkspaceRow,
+    listAgentRuntimes,
+    createAgentRuntime,
+    frontAgentRuntime,
     createWorkspaceAgent,
     listWorkspaceAgents,
     bindWorkspaceAgentTerminal,
@@ -68,10 +73,16 @@ import {
     agentSessionTranscriptExists,
     isTerminalLive,
 } from '../terminal/ipc';
-import { agentName, agentRef, savedAgentKey } from '../agents/identity';
+import { agentName, agentRef, savedAgentKey, type AgentProvider } from '../agents/identity';
+import { agentAllowedTuis, agentScopeFor, renderAgentFile } from '../agents/agent-file';
+import { decideTuiSwitch } from '../agents/tui-switch';
 import { resolveWorkstationProvider } from '../agents/provider';
 import { restartProviderForSpec } from '../agents/restart';
-import { decideAgentStart, savedAgentsOf, type SavedAgent } from '../agents/saved';
+import {
+    adoptableAgentSpec,
+    savedAgentsOf,
+    type SavedAgent,
+} from '../agents/saved';
 import { resolveAgentRegistration } from '../agents/registration';
 import { providerInstructionFiles, withProviderStartupInstructions } from '../agents/startup';
 import {
@@ -1689,10 +1700,27 @@ export function restartAgentTerminal(id: string): RestartAgentResult {
     const resume = decision.command;
 
     // Tear the old agent down FIRST (releases its pty + MCP endpoint + AgentInbox
-    // presence) so two processes never share the session id, THEN relaunch the
-    // resumed agent in a fresh terminal that picks up the current rig.
+    // presence) so two processes never share the session id, THEN relaunch into
+    // THE SAME SPEC so it picks up the current rig without becoming a new agent.
+    //
+    // Reusing `spec.id` is the whole fix. Restarting into a FRESH terminal minted
+    // a new spec id, which made `reviving` false (terminal/ipc.ts) and therefore
+    // minted a fresh `meta.agent_id` — a new AgentInbox identity, stranding the
+    // old one's queued mail, cursors, channel membership and DM history. Worse,
+    // `killTerminalById` does not delete a spec, so the dead one kept its
+    // `meta.agent` + `whisper_purpose` and the AMS grid went on drawing it: one
+    // registered agent, three squares. And nothing rebound
+    // `workspace_agents.terminal_spec_id`, so the registry pointed at the corpse
+    // and the next `start` reattached to it.
+    //
+    // The same spec means all three are impossible rather than repaired: the
+    // identity is inherited, there is no second spec to orphan, and the registry
+    // binding never went stale. It is exactly what `reattachSavedAgent`'s revive
+    // already does; the Genie OSA branch above needs its own path only because a
+    // recovery restart deliberately re-resolves the provider.
     killTerminalById(id);
     const restarted = createAgentTerminal({
+        id: spec.id,
         workspaceId: spec.workspace_id!,
         cwd: spec.cwd,
         label: spec.label,
@@ -1807,14 +1835,38 @@ export async function registerAgentForMcp(
         osAgentCapability: 'agent-register',
     });
     if (!decision.allowed || !ws) return { ok: false, error: decision.reason };
+    return registerAgentInWorkspace(ws, req);
+}
+
+/**
+ * Register an agent INTO an already-resolved workspace — the shared core.
+ *
+ * Split out so the MCP tool and the UI create agents by exactly ONE path. A
+ * second implementation would be a second place to forget the AGENT.md write,
+ * the by-name uniqueness check, or the containment guards — and the UI is
+ * precisely where a human is most likely to hit each of them.
+ */
+export async function registerAgentInWorkspace(
+    ws: WorkspaceRow,
+    req: RegisterAgentRequest,
+): Promise<RegisterAgentResult> {
 
     const resolved = resolveAgentRegistration(ws.path, req);
     if (!resolved.ok) return resolved;
     const provider = req.agent ?? resolveWorkstationProvider(getAllSettings());
-    if (getWorkspaceAgent(ws.id, provider, resolved.name)) {
+    // By NAME, not by (provider, name). Since v55 a name means ONE agent
+    // whatever TUI drives it, so checking the pair let a second agent through
+    // under a name the workspace already had -- and the insert then died on the
+    // index instead of refusing cleanly. A second TUI is a RUNTIME of the
+    // existing agent, not another agent.
+    const held = getWorkspaceAgentByName(ws.id, resolved.name);
+    if (held) {
         return {
             ok: false,
-            error: `Agent "${savedAgentKey(provider, resolved.name)}" is already registered in this workspace.`,
+            error:
+                `Agent "${resolved.name}" is already registered in this workspace` +
+                (held.provider ? ` (running ${held.provider})` : '') +
+                '. An agent is not its TUI: add a runtime to it rather than registering a second one.',
         };
     }
 
@@ -1826,6 +1878,38 @@ export async function registerAgentForMcp(
             return { ok: false, error: 'The agent avatar must stay inside the workspace.' };
         }
         avatar = candidate;
+    }
+
+    // WRITE the agent's file. The path has been computed and stored since
+    // registerAgent shipped and nothing ever created it, so every registered
+    // agent has booted with no persona -- launch mentions the file only when it
+    // already exists. It is the source of truth for the agent's config and
+    // prompt, and it is tracked in git so an agent ships with the project.
+    //
+    // Never overwrite: the body is the author's system prompt, and re-registering
+    // must not be able to delete what someone wrote.
+    try {
+        if (!fs.existsSync(resolved.personaPath)) {
+            fs.mkdirSync(path.dirname(resolved.personaPath), { recursive: true });
+            fs.writeFileSync(
+                resolved.personaPath,
+                renderAgentFile(
+                    {
+                        name: resolved.name,
+                        purpose: resolved.purpose,
+                        scope: agentScopeFor(ws.path, resolved.bootCwd),
+                        tuis: [provider],
+                        avatar: null,
+                    },
+                    `You are ${resolved.name}. ${resolved.purpose}
+`,
+                ),
+            );
+        }
+    } catch {
+        /* A registered agent with no file still works -- it boots with the
+           workspace framing and no specialization -- so this must not fail the
+           registration and lose the record too. */
     }
 
     const row = createWorkspaceAgent({
@@ -1953,6 +2037,20 @@ export async function runAgentForMcp(
                     );
                     if (saved) return await reattachSavedAgent(ws, saved, saved.live ? 'warm' : 'revive');
                     bindWorkspaceAgentTerminal(config.id, null);
+                }
+                // The registry's binding is not the only way this agent's
+                // terminal can be on screen: an unbound one is still THIS agent
+                // by (provider, name), and creating past it would abandon it as
+                // a phantom square under the same name rather than start
+                // anything new. Adopt it and rebind.
+                const adopted = adoptableAgentSpec(
+                    savedAgentsOfWorkspace(ws.id),
+                    config.provider as AgentProvider,
+                    config.name,
+                );
+                if (adopted) {
+                    bindWorkspaceAgentTerminal(config.id, adopted.specId);
+                    return await reattachSavedAgent(ws, adopted, adopted.live ? 'warm' : 'revive');
                 }
                 // Base command + the agent type's always-on flags (session-id
                 // injected later in createAgentTerminal), then the agent's
@@ -2097,6 +2195,57 @@ export async function runAgentForMcp(
                 if (!r.ok) return { ok: false, error: r.error };
                 return { ok: true, id: r.newId, agent: r.agent, command: r.command };
             }
+            case 'switchTui': {
+                // An agent is not its TUI. Switching keeps its identity, inbox
+                // and history; the TUI it leaves keeps its own pty and
+                // conversation as a hidden SIDECAR to flip back to. Nothing is
+                // ever stopped by a switch -- `decideTuiSwitch` has no outcome
+                // that could stop one.
+                const wanted = String(req.tui ?? '').trim();
+                if (!wanted) {
+                    return { ok: false, error: 'switchTui needs a `tui` to switch to.' };
+                }
+                const target = getWorkspaceAgentByName(ws.id, agentName(req.name ?? 'workspace'));
+                if (!target) {
+                    return {
+                        ok: false,
+                        error: `No registered agent "${agentName(req.name ?? 'workspace')}" in this workspace.`,
+                    };
+                }
+                const decision = decideTuiSwitch({
+                    runtimes: listAgentRuntimes(target.id).map((r) => ({
+                        id: r.id,
+                        provider: r.provider,
+                        terminalSpecId: r.terminal_spec_id,
+                        fronted: r.fronted === 1,
+                    })),
+                    to: wanted,
+                    allowed: agentAllowedTuis(target.persona_path),
+                });
+                if (decision.kind === 'refuse') {
+                    return { ok: false, error: decision.reason };
+                }
+                if (decision.kind === 'already') {
+                    return { ok: true, name: target.name, agent: wanted as AgentType };
+                }
+                if (decision.kind === 'front') {
+                    frontAgentRuntime(target.id, decision.runtimeId);
+                    broadcastTerminalSpecsChanged();
+                    return { ok: true, name: target.name, agent: wanted as AgentType, reattached: true };
+                }
+                // A TUI this agent has never run: record it, fronted. The
+                // terminal is started by `start`, which already owns the
+                // approval gate and the cap -- a switch must not become a
+                // second way to spawn past either.
+                const created = createAgentRuntime({
+                    agentId: target.id,
+                    provider: decision.provider,
+                    fronted: true,
+                });
+                frontAgentRuntime(target.id, created.id);
+                broadcastTerminalSpecsChanged();
+                return { ok: true, name: target.name, agent: wanted as AgentType };
+            }
         }
     } catch (e) {
         return { ok: false, error: e instanceof Error ? e.message : String(e) };
@@ -2165,6 +2314,33 @@ export async function agentInboxForMcp(
                 ? (meta.whisper_workspaces as string[])
                 : [],
             chatSessionId: (meta.chat_session_id as string | undefined) ?? null,
+        });
+    } else if (!agentInboxBroker.getInfo(agentId)) {
+        // SELF-HEAL. `markOnline` is a no-op for an agent the broker does not
+        // know, so an agent whose entry went missing — boot rehydrate skipped or
+        // failed, or its spec appeared after rehydrate ran — could never come
+        // back: every AgentInbox call silently did nothing, `list` returned no
+        // `self`, and the tool it would use to report that is the broken one.
+        // Observed on a live workstation: 49 registered agents, none reachable,
+        // not even to themselves.
+        //
+        // The identity is DURABLE in the spec, so re-joining restores exactly the
+        // same agent rather than minting a second one, and `join` is idempotent
+        // per agentId — which is what makes this safe to attempt on every call.
+        agentInboxBroker.join({
+            agentId,
+            terminalId: spec.id,
+            workspaceId: ws.id,
+            workspaceName: ws.project_name,
+            slug: workspaceSlug(ws),
+            agentType: (spec.meta?.agent as AgentInboxAgentType) ?? 'custom',
+            label: spec.label,
+            purpose: normalizePurpose(spec.meta?.whisper_purpose),
+            scope: (spec.meta?.whisper_scope as AgentInboxScope) ?? 'self',
+            scopeWorkspaces: Array.isArray(spec.meta?.whisper_workspaces)
+                ? (spec.meta.whisper_workspaces as string[])
+                : [],
+            chatSessionId: (spec.meta?.chat_session_id as string | undefined) ?? null,
         });
     } else agentInboxBroker.markOnline(agentId);
 
@@ -2356,7 +2532,6 @@ export async function agentInboxForMcp(
                     scope: req.scope,
                     workspaces,
                     purpose: req.purpose,
-                    wakeOnDm: req.wakeOnDm,
                 });
                 // Persist the durable bits to the spec meta.
                 const cur = getTerminalSpec(spec.id);
@@ -2365,7 +2540,6 @@ export async function agentInboxForMcp(
                     if (req.scope !== undefined) meta.whisper_scope = req.scope;
                     if (workspaces !== undefined) meta.whisper_workspaces = workspaces;
                     if (req.purpose !== undefined) meta.whisper_purpose = normalizePurpose(req.purpose);
-                    if (req.wakeOnDm !== undefined) meta.whisper_wake_on_dm = req.wakeOnDm;
                     updateTerminalSpec(spec.id, { meta });
                 }
                 return { ok: true, self: info ?? undefined };

@@ -242,7 +242,11 @@ describe('registering an agent before start', () => {
         const second = await registerAndStart({ name: 'tynn', agent: 'claude' });
 
         expect(second.ok).toBe(false);
-        expect(second.error).toContain('claude:tynn');
+        // The NAME, not `claude:tynn`: since v55 the TUI is not part of the
+        // identity, so naming it in the refusal would describe a key that no
+        // longer exists and imply a `codex:tynn` were still available.
+        expect(second.error).toContain('tynn');
+        expect(second.error).not.toContain('claude:tynn');
         expect(agentSpecs()).toHaveLength(1);
         // POSITIVE CONTROL — the one that exists is genuinely running.
         expect(terminalManager().isLive(first.id!)).toBe(true);
@@ -342,23 +346,32 @@ describe('runAgent start on a SAVED agent', () => {
         expect(terminalManager().isLive(created.id!)).toBe(true);
     });
 
-    it('keeps two providers under the same name distinct', async () => {
+    it('refuses a second agent under a name the workspace already has, whatever TUI it names', async () => {
+        // The contract this asserted is deliberately reversed by v55. It used to
+        // require that `claude:tynn` and `codex:tynn` be two DISTINCT agents,
+        // because the TUI was part of the identity key -- which is the model the
+        // owner removed: an agent is bigger than the TUI driving it, and a name
+        // it answers to must mean one agent.
+        //
+        // A second TUI for the same agent is now a RUNTIME, not a second agent,
+        // so the way to get one is to add a runtime rather than to register
+        // again under a different provider.
         const claude = await registerAndStart({ name: 'tynn', agent: 'claude' });
-        const codex = await registerAndStart({ name: 'tynn', agent: 'codex' });
-        expect(claude.ok && codex.ok).toBe(true);
-        expect(claude.id).not.toBe(codex.id);
+        expect(claude.ok).toBe(true);
 
-        // A name alone is now ambiguous — answering with either would silently
-        // attach the caller to an agent it did not ask for.
-        const ambiguous = await start({ name: 'tynn' });
-        expect(ambiguous.ok).toBe(false);
-        expect(ambiguous.error).toContain('claude:tynn');
-        expect(ambiguous.error).toContain('codex:tynn');
+        const second = await registerAgentForMcp(CALLER_ID, {
+            name: 'tynn',
+            purpose: 'the same name, a different driver',
+            agent: 'codex',
+        });
 
-        // Named with its provider, each reattaches to its own.
-        expect((await start({ name: 'tynn', agent: 'codex' })).id).toBe(codex.id);
-        expect((await start({ name: 'tynn', agent: 'claude' })).id).toBe(claude.id);
-        expect(agentSpecs()).toHaveLength(2);
+        expect(second.ok).toBe(false);
+        // POSITIVE CONTROL: the refusal left the original alone and running,
+        // rather than being a failure that happened to leave one agent behind.
+        expect(agentSpecs()).toHaveLength(1);
+        expect(terminalManager().isLive(claude.id!)).toBe(true);
+        // And a bare name is no longer ambiguous, because it cannot be.
+        expect((await start({ name: 'tynn' })).id).toBe(claude.id);
     });
 });
 
@@ -377,5 +390,124 @@ describe('listing the workspace roster', () => {
         // A read-only action creates nothing and asks nobody.
         expect(agentSpecs()).toHaveLength(2);
         expect(modalsRaised.filter((m) => m.includes('LAUNCH'))).toHaveLength(2);
+    });
+});
+
+/**
+ * `runAgent restart` must not leave a second agent behind — the reported bug.
+ *
+ * The Tynn workspace held ONE registered `claude:tynn` and THREE terminal specs
+ * rendering "tynn", two of them bound to nothing and created within the same
+ * minute. `restartAgentTerminal` is how they got there: it killed the pty and
+ * then called `createAgentTerminal` with NO `id`, so
+ *
+ *  - a new spec id meant `reviving` was false, minting a fresh `meta.agent_id` —
+ *    a NEW AgentInbox identity, stranding the old one's queued mail and history;
+ *  - `killTerminalById` does not delete the spec, so the dead one kept its
+ *    `meta.agent` and `whisper_purpose` and the AMS grid kept drawing it;
+ *  - nothing rebound `workspace_agents.terminal_spec_id`, so the registry still
+ *    pointed at the corpse and the next start reattached to it.
+ *
+ * The correct shape already existed next door: the Genie OSA branch deletes the
+ * old spec and carries `agent_id` across by hand. A project agent should not need
+ * either — reusing its own spec is what `reattachSavedAgent`'s revive already
+ * does, and it makes all three failures impossible rather than repaired.
+ *
+ * Every "no second agent" assertion below carries a POSITIVE CONTROL that the
+ * survivor is LIVE: absence passes trivially against a restart that simply
+ * failed, which would be a worse bug than the duplicate.
+ */
+describe('runAgent restart', () => {
+    const restart = (id: string) =>
+        runAgentForMcp(CALLER_ID, { action: 'restart', id } as RunAgentRequest);
+
+    it('leaves ONE agent, not two', async () => {
+        const created = await registerAndStart({ name: 'tynn', agent: 'claude' });
+        expect(created.ok).toBe(true);
+        expect(agentSpecs()).toHaveLength(1);
+
+        const again = await restart(created.id!);
+
+        expect(again.ok).toBe(true);
+        expect(agentSpecs()).toHaveLength(1);
+        // POSITIVE CONTROL: the survivor is actually running.
+        expect(terminalManager().isLive(agentSpecs()[0]!.id)).toBe(true);
+    });
+
+    it('keeps the durable AgentInbox identity across the restart', async () => {
+        const created = await registerAndStart({ name: 'tynn', agent: 'claude' });
+        const identityBefore = getTerminalSpec(created.id!)?.meta?.agent_id;
+        expect(identityBefore).toBeTruthy();
+
+        await restart(created.id!);
+
+        // A new agent_id is a NEW AGENT wearing the old one's name: its inbox
+        // cursors, queued mail, channel membership and DM history all hang off
+        // this value, and a restart must not strand them.
+        expect(agentIds()).toEqual([identityBefore]);
+    });
+
+    it('leaves the registry pointing at a spec that still exists', async () => {
+        const created = await registerAndStart({ name: 'tynn', agent: 'claude' });
+
+        await restart(created.id!);
+
+        const registered = listWorkspaceAgents(WS_ID).find((a) => a.name === 'tynn');
+        expect(registered?.terminal_spec_id).toBeTruthy();
+        // Pointing at a deleted or dead spec is how the next `start` reattached
+        // to a corpse instead of the agent that is actually running.
+        expect(getTerminalSpec(registered!.terminal_spec_id!)).toBeTruthy();
+        expect(terminalManager().isLive(registered!.terminal_spec_id!)).toBe(true);
+    });
+
+    it('a restarted agent is still the one a later start reattaches to', async () => {
+        const created = await registerAndStart({ name: 'tynn', agent: 'claude' });
+        await restart(created.id!);
+
+        const again = await start({ name: 'tynn' });
+
+        expect(again.ok).toBe(true);
+        expect(again.reattached).toBe(true);
+        expect(agentSpecs()).toHaveLength(1);
+        expect(agentIds()).toHaveLength(1);
+    });
+});
+
+/**
+ * `start` must not mint a second terminal for an agent that already has one,
+ * even when the spec's meta no longer agrees with the registry.
+ *
+ * Adoption keys on `meta.whisper_purpose` (agents/saved.ts), and the callers that
+ * write it disagree: `runAgent start` stamps `config.name`, the human
+ * Add-Terminal path stamps the purpose the user typed, and a GApp stamps
+ * `panel.agent.name`. Rename an agent, or launch it by a path that stamps
+ * something else, and the string no longer matches the registry row — so a
+ * `start` that should reattach falls all the way through to a fresh spawn under
+ * the same registered agent. That is the second way one agent came to own
+ * several squares.
+ *
+ * The registry binding is the fact; the meta string is a copy of it that can
+ * rot. A start must consult the fact.
+ */
+describe('runAgent start with drifted spec meta', () => {
+    it('reattaches via the registry binding even when whisper_purpose no longer matches', async () => {
+        const created = await registerAndStart({ name: 'tynn', agent: 'claude' });
+        expect(created.ok).toBe(true);
+        const identityBefore = getTerminalSpec(created.id!)?.meta?.agent_id;
+
+        // The drift: the spec now says something else. The registry row still
+        // points at this very spec, which is what makes the reattach knowable.
+        const spec = getTerminalSpec(created.id!)!;
+        updateTerminalSpec(created.id!, {
+            meta: { ...spec.meta, whisper_purpose: 'something-else' },
+        });
+
+        const again = await start({ name: 'tynn' });
+
+        expect(again.ok).toBe(true);
+        expect(agentSpecs()).toHaveLength(1);
+        expect(agentIds()).toEqual([identityBefore]);
+        // POSITIVE CONTROL: it is the live agent that survived, not a husk.
+        expect(terminalManager().isLive(created.id!)).toBe(true);
     });
 });

@@ -83,6 +83,25 @@ test.beforeAll(async () => {
         await expect(whatsNew).toHaveCount(0);
     }
 
+    // A throwaway profile has never completed workstation setup, so
+    // `genieOsStatus()` comes back `setup: false` and the Genie OS layer opens
+    // itself — full-screen, `pointer-events: auto`, with a flyout that is
+    // `min(760px, 100vw - 48px)` wide and therefore over the sidebar at this
+    // window size. It resolves asynchronously, so it lands AFTER the window is
+    // interactive: the tests that only assert (through :209) pass, and 238, the
+    // first one that CLICKS a workspace row, times out with the row visible,
+    // enabled, stable, and covered. Three releases read that as a sidebar
+    // regression. It is first-run onboarding working as designed, so dismiss it
+    // here rather than change it.
+    const genieOs = page.locator('.genie-os-layer.is-open');
+    await genieOs.waitFor({ state: 'visible', timeout: 20_000 }).catch(() => {});
+    if (await genieOs.count()) {
+        // The backdrop's own top-left corner: the flyout is right-anchored and
+        // starts 24px in at its widest, so this is backdrop rather than panel.
+        await page.locator('.genie-os-backdrop').click({ position: { x: 5, y: 5 } });
+        await expect(page.locator('.genie-os-layer.is-open')).toHaveCount(0);
+    }
+
     const seeded = await readMasterSeed(app);
     if (!seeded) {
         throw new Error(
@@ -180,12 +199,21 @@ test('a GApp Development Workspace wears its own chrome; an ordinary one does no
     await expect(plainRow).not.toHaveClass(/\bws-gapp-dev\b/);
 
     // …and the same mark on the 56px rail, which identifies workspaces on its own.
+    // The rail is the sidebar MINIMIZED, so it is only on screen once the sidebar
+    // is collapsed — collapsing here is what proves the mark survives the switch
+    // rather than living in one of the two renderings.
+    await page.locator('.rail-collapse').click();
+    await expect(page.locator('.chooser-rail')).toBeVisible();
     await expect(page.locator(`.crail-btn[title*="${seed.peerName}"]`)).toHaveClass(
         /\bws-gapp-dev\b/,
     );
     await expect(page.locator(`.crail-btn[title*="${seed.workspaceName}"]`)).not.toHaveClass(
         /\bws-gapp-dev\b/,
     );
+    // Back to the sidebar — every test after this one drives workspace ROWS, and
+    // leaving the chooser collapsed would strand them behind a hover flyout.
+    await page.locator('.crail-toggle').click();
+    await expect(page.locator('.chooser-rail')).toHaveCount(0);
 
     // The class is only half of it. A rule has to MATCH, so compare what the two
     // rows actually paint: the GDW's header carries a ring the ordinary one does

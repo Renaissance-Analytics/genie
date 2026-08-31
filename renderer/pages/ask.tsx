@@ -100,6 +100,38 @@ export default function AskPage() {
     const draft = active ? draftFor(drafts, active.id) : { selected: {}, notes: {} };
     const submitting = !!active && submittingId === active.id;
 
+    // A part-typed answer belongs to the QUESTION, not to this window — and main
+    // CLOSES this window whenever the queue drains, which took the answer with
+    // it. Someone who ticked two options, started a note, and stepped away to
+    // check something came back to a blank form. So the draft is mirrored into
+    // main, which outlives the window and is shared with the in-app flyout.
+    //
+    // Hydrate only when nothing has been typed here yet: what is on screen is
+    // newer than what was stored, and re-hydrating over it would undo the
+    // keystroke that triggered the save.
+    const activeId = active?.id ?? null;
+    useEffect(() => {
+        if (!activeId || drafts[activeId]) return;
+        let cancelled = false;
+        void api()
+            .ask.draftGet(activeId)
+            .then((stored) => {
+                if (cancelled || !stored) return;
+                setDrafts((prev) => (prev[activeId] ? prev : { ...prev, [activeId]: stored }));
+            })
+            .catch(() => {});
+        return () => {
+            cancelled = true;
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [activeId]);
+
+    const activeDraft = activeId ? drafts[activeId] : undefined;
+    useEffect(() => {
+        if (!activeId || !activeDraft) return;
+        void api().ask.draftSet(activeId, activeDraft).catch(() => {});
+    }, [activeId, activeDraft]);
+
     const toggle = (qi: number, label: string, multi: boolean) => {
         if (!active) return;
         setDrafts((prev) => toggleDraftOption(prev, active.id, qi, label, multi));

@@ -195,3 +195,26 @@ export function decideAgentStart(
     // stand-in for whatever this machine defaults to today, it is that agent.
     return { kind: 'create', provider: req.provider ?? req.workstationProvider, name };
 }
+
+/**
+ * The terminal in this workspace that already IS the named agent, if any.
+ *
+ * `runAgent start` binds the terminal it creates onto the `workspace_agents`
+ * row, and a bind REPLACES whatever was bound before — so creating while the
+ * agent's previous terminal is still alive abandons that terminal. It keeps its
+ * `meta.agent` and `whisper_purpose`, nothing reaps it, and the AMS grid draws a
+ * square per agent-stamped spec, so it lingers as a second agent under the same
+ * name. That is how one registered `claude:tynn` came to show three squares.
+ *
+ * Identity is (provider, name) — the registry's own unique key, and what the
+ * grid renders — so adopting here cannot disagree with either. Liveness is NOT
+ * part of it: a saved agent that is not running is not gone, and reviving it is
+ * what keeps its conversation attached.
+ */
+export function adoptableAgentSpec(
+    saved: readonly SavedAgent[],
+    provider: AgentProvider,
+    name: string,
+): SavedAgent | undefined {
+    return saved.find((item) => item.provider === provider && item.name === name);
+}

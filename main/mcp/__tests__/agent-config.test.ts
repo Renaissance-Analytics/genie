@@ -330,8 +330,12 @@ describe('applyAgentsSection', () => {
         // Orientation is callable by agents as well as available as an MCP prompt.
         expect(out).toContain('imDone');
         expect(out).toContain('ForceTheQuestion');
-        expect(out).toContain('manageProcess');
-        expect(out).toContain('initializeWorkspace');
+        // NOT `manageProcess`, and not the other nine tools this block used to
+        // name. It is a POINTER now: the protocol reaches an agent as the MCP
+        // server's instructions, and the full reference is `genieGuide`. This
+        // file listing them too is how the two came to disagree.
+        expect(out).not.toContain('manageProcess');
+        expect(out).toContain('connectToGenie');
     });
 
     it('is idempotent — re-running does not duplicate the block', () => {
@@ -410,7 +414,7 @@ describe('genieCodexSkill', () => {
         const out = genieCodexSkill();
         expect(out).toMatch(/^---\nname: genie\n/);
         expect(out).toContain('description:');
-        expect(out).toContain('initializeWorkspace');
+        expect(out).toContain('connectToGenie');
         expect(out).toContain('imDone');
         expect(out).toContain('ForceTheQuestion');
         expect(out).toContain('genieGuide');

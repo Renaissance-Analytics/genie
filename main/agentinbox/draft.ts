@@ -39,13 +39,10 @@ export interface Draft {
     /** An image chip is in the box. It cannot survive a text restore, so this
      *  rules out the swap even when the text is known. */
     image: boolean;
-    /** The exact bytes xterm most recently emitted for a submitting Enter in
-     *  this live terminal. Keyboard-protocol modes decide this, not provider. */
-    submitBytes: string;
 }
 
 /** A box known to be empty — the only state Genie is certain of for free. */
-export const EMPTY_DRAFT: Draft = { text: '', confident: true, image: false, submitBytes: CR };
+export const EMPTY_DRAFT: Draft = { text: '', confident: true, image: false };
 
 /** Bytes that submit or abandon the line, emptying the box: Enter (CR/LF),
  *  Ctrl-C (abort), Ctrl-U (kill line). */
@@ -66,14 +63,14 @@ const IMAGE_TRIGGERS = ['\x16', '\x1bv'];
 export function noteDraft(draft: Draft, data: string): Draft {
     if (!data) return draft;
 
-    let { text, confident, image, submitBytes } = draft;
+    let { text, confident, image } = draft;
 
     // A bracketed paste is literal content, so its body belongs in the text and
     // its markers must not be read as cursor keys. tokenize() hands the markers
     // back as escapes, so reassemble by walking the original chunk instead.
     const parts = splitPaste(data);
     if (parts) {
-        let next: Draft = { text, confident, image, submitBytes };
+        let next: Draft = { text, confident, image };
         for (const p of parts) {
             next = p.pasted
                 ? { ...next, text: next.text + p.body }
@@ -88,9 +85,7 @@ export function noteDraft(draft: Draft, data: string): Draft {
     // semantic guarantee for this model: the prompt was submitted and the box
     // is empty. Normalize only an unmodified press/repeat. Shift+Enter is a
     // newline in Codex and must keep the fail-safe closed.
-    const normalized = normalizeSubmittingEnter(data);
-    data = normalized.data;
-    if (normalized.submitBytes) submitBytes = normalized.submitBytes;
+    data = normalizeSubmittingEnter(data);
     const { literal, escapes } = tokenize(data);
 
     for (const esc of escapes) {
@@ -111,11 +106,6 @@ export function noteDraft(draft: Draft, data: string): Draft {
             text = '';
             confident = true;
             image = false;
-            // A literal CR/LF is itself the observed submit key. Ctrl-C and
-            // Ctrl-U clear the line but do not redefine Enter.
-            if (ch === '\r' || ch === '\n') {
-                submitBytes = normalized.submitBytes ?? CR;
-            }
         } else if (IMAGE_TRIGGERS.includes(ch)) {
             image = true;
             confident = false;
@@ -131,19 +121,14 @@ export function noteDraft(draft: Draft, data: string): Draft {
         }
     }
 
-    return { text, confident, image, submitBytes };
+    return { text, confident, image };
 }
 
-function normalizeSubmittingEnter(data: string): { data: string; submitBytes: string | null } {
-    let submitBytes: string | null = null;
-    const normalized = data.replace(
+function normalizeSubmittingEnter(data: string): string {
+    return data.replace(
         /\x1b\[13(?::13){0,2}(?:;1(?::[12])?)?u/g,
-        (match) => {
-            submitBytes = match;
-            return '\r';
-        },
+        '\r',
     );
-    return { data: normalized, submitBytes };
 }
 
 /** Split a chunk around bracketed-paste markers, or null when it has none. */
@@ -208,15 +193,15 @@ export interface NudgeWrite {
 export function buildNudgeSequence(
     plan: NudgePlan,
     notice: string,
-    submitBytes: string = CR,
 ): NudgeWrite[] {
     if (plan.mode === 'defer') return [];
     const gap = PASTE_SUBMIT_DELAY_MS;
     return [
         { bytes: notice, delayMs: 0 },
-        // Replay what xterm emitted for the last real submitting Enter. The
-        // active keyboard-protocol mode owns this encoding, not the provider.
-        { bytes: submitBytes, delayMs: gap },
+        // Automated PTY input follows the same stable submit contract as
+        // runAgent send. CSI-u is xterm's encoding of a human keypress and is
+        // useful for modelling the draft, but replaying it can print literally.
+        { bytes: CR, delayMs: gap },
     ];
 }
 

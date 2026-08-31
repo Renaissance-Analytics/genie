@@ -387,6 +387,61 @@ export function withoutPersistedEnv(sites: DevSites): DevSites {
     return out;
 }
 
+/**
+ * PURE. What a patch would LOSE to the sanitiser, and why.
+ *
+ * `sanitizeDevSitePatch` builds its result by copying only values that pass a
+ * check, so a value that fails is never assigned — and the caller gets a site
+ * with that field simply absent, no error, nothing to read. A `repo` of
+ * `"repos/thing"` mints a site with NO repo, silently.
+ *
+ * THE RULES ARE CORRECT AND ARE NOT RELAXED HERE. A repo name becomes a path
+ * segment inside the workspace mount, so a separator or `..` climbs out of it;
+ * a `genName` that is not a `*.gen` label would mint a certificate for a name
+ * the browser session must not trust. Those refusals should happen — only the
+ * silence is the defect.
+ *
+ * Reported rather than thrown, and separate from the sanitiser rather than
+ * folded into it: several callers depend on that function's return type, and a
+ * refusal is not always fatal to the wider operation. The caller decides what to
+ * do; this only makes sure it CAN.
+ *
+ * Each message names the field, the offending value, and the REASON — a caller
+ * told only "invalid" tries a different spelling of the same illegal thing.
+ */
+export function describeDroppedSiteFields(
+    patch: Partial<DevSiteConfig> | null | undefined,
+): string[] {
+    const dropped: string[] = [];
+    if (!patch || typeof patch !== 'object') return dropped;
+
+    if (typeof patch.repo === 'string') {
+        const repo = patch.repo.trim().replace(/^\.\//, '');
+        // '' is how a caller says "the workspace root" and the sanitiser accepts
+        // it, so it is a legitimate value rather than a refusal.
+        const ok = repo === '' || (/^[A-Za-z0-9._-]+$/.test(repo) && repo !== '.' && repo !== '..');
+        if (!ok) {
+            dropped.push(
+                `\`repo\` "${patch.repo}" was ignored: it becomes a path segment INSIDE the workspace mount, so it must be a plain folder name — no separators and no "..", which would climb out of the workspace. Use the folder's own name, or "" for the workspace root.`,
+            );
+        }
+    }
+
+    if (typeof patch.genName === 'string') {
+        const genName = patch.genName.trim().toLowerCase();
+        const labels = genName.split('.');
+        const ok =
+            labels.length >= 2 && labels.at(-1) === 'gen' && labels.every((l) => DNS_LABEL.test(l));
+        if (!ok) {
+            dropped.push(
+                `\`genName\` "${patch.genName}" was ignored: it must be a dotted DNS name ending in \`.gen\`. The browser session trusts \`*.gen\` and nothing else, so another name would resolve nowhere and mint a certificate for a name it must not.`,
+            );
+        }
+    }
+
+    return dropped;
+}
+
 export function sanitizeDevSitePatch(
     patch: Partial<DevSiteConfig> | null | undefined,
 ): Partial<DevSiteConfig> {
