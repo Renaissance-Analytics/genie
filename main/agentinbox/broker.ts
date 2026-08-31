@@ -480,7 +480,6 @@ export class AgentInboxBroker {
         try {
             this.wakeSink({
                 terminalId: target.terminalId,
-                submitBytes: target.draft.submitBytes,
                 text: wakeNudgeText(unread),
                 plan: planNudge(target.draft),
             });
