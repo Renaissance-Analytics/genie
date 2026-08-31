@@ -6329,8 +6329,6 @@ body.gutter-dragging .grid-gutter {
 @keyframes genie-os-pulse { 50% { color: #35f2a3; filter: drop-shadow(0 0 5px #35f2a3); } }
 @media (prefers-reduced-motion: reduce) { .genie-os-flyout, .genie-os-backdrop { transition-duration: 1ms; } .genie-os-flyout, .genie-os-button { animation: none !important; } }
 .agent-panel-shell { position: relative; }
-.agent-panel-restart { position: absolute; top: 7px; right: 72px; z-index: 4; width: 26px; height: 24px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-1); color: var(--muted); cursor: pointer; }
-.agent-panel-restart:hover { color: var(--text); border-color: var(--violet-500); }
 .agent-panel-menu { min-width: 180px; padding: 6px; z-index: 1200; background: var(--bg-0); border: 1px solid var(--border); box-shadow: 0 16px 38px rgba(0, 0, 0, .38); }
 .agent-panel-menu button { width: 100%; display: flex; align-items: center; gap: 8px; border: 0; border-radius: 6px; padding: 8px 9px; background: transparent; color: var(--text); text-align: left; cursor: pointer; }
 .agent-panel-menu button:hover { background: var(--hover); }
@@ -6447,20 +6445,19 @@ body.gutter-dragging .grid-gutter {
 
 /* Hover detail: each agent's active TUI, and whether sidecars are alive. */
 .ws-agent-popover {
-    position: absolute;
-    top: calc(100% + 6px);
-    right: 0;
-    z-index: 60;
+    /* Fancy's Popover owns position, portaling and z-index -- it renders into
+       its own layer, so nothing in the row's stacking context can clip it,
+       including the 56px rail when the sidebar is a flyout over it. Only the
+       LOOK belongs here. */
     min-width: 220px;
     max-width: 320px;
     padding: 8px;
     display: grid;
     gap: 6px;
-    border-radius: var(--radius-lg);
+    border-radius: var(--radius-md, 7px);
     border: 1px solid var(--border-1);
-    background: var(--bg-0);
-    box-shadow: var(--shadow-xl);
-    cursor: default;
+    background: var(--bg-1);
+    box-shadow: 0 16px 38px rgba(0, 0, 0, 0.38);
 }
 .ws-agent-popover-row {
     display: flex;
@@ -6483,4 +6480,135 @@ body.gutter-dragging .grid-gutter {
 .ws-agent-popover-more {
     font-size: 10px;
     color: var(--fg-4);
+}
+
+/* ── Workspace avatar (replaces the generic cube) ────────────────────────────
+   Every .agi workspace drew the same box glyph, so a rail of six was six
+   identical marks — an icon that identifies nothing, in the exact spot the
+   identifying mark belongs. Initials are derived from the name, so they differ
+   by construction; a user-set icon overrides them. */
+.ws-avatar {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    font-weight: 650;
+    letter-spacing: -0.02em;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+}
+.ws-avatar-custom {
+    font-size: 15px;
+}
+
+/* A GDW keeps its identity WHILE pulsing. The plain pulse animates `box-shadow`,
+   which overwrote the inset ring that marks a GApp Development Workspace — so
+   the one moment the row is drawing attention to itself was the one moment it
+   stopped saying what kind of workspace it is. The ring is held in every frame
+   and the pulse itself is in the GDW colour. */
+.chooser-rail .crail-btn.ws-gapp-dev.pulsing {
+    animation: ws-pulse-rail-gdw 1.5s ease-out 1;
+}
+@keyframes ws-pulse-rail-gdw {
+    0% {
+        box-shadow: inset 0 0 0 2px var(--gapp-dev-border), 0 0 0 0 var(--gapp-dev);
+    }
+    40% {
+        box-shadow: inset 0 0 0 2px var(--gapp-dev-border), 0 0 0 3px var(--gapp-dev);
+    }
+    100% {
+        box-shadow: inset 0 0 0 2px var(--gapp-dev-border), 0 0 0 0 transparent;
+    }
+}
+
+/* ── Panel driver switcher ───────────────────────────────────────────────────
+   The TUI an agent runs under, and its sidecars, in the panel's own controls —
+   where the agent actually is, rather than two menus away. */
+.agent-tui-trigger {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+}
+/* One number, not a row of pips: the panel header has no room, and the count is
+   what you need before opening the menu. */
+.agent-tui-count {
+    position: absolute;
+    right: -1px;
+    bottom: -1px;
+    min-width: 11px;
+    height: 11px;
+    padding: 0 2px;
+    border-radius: 6px;
+    background: var(--agent, #8b5cf6);
+    color: #fff;
+    font-size: 8px;
+    line-height: 11px;
+    text-align: center;
+}
+.agent-tui-menu {
+    min-width: 230px;
+    padding: 6px;
+    display: grid;
+    gap: 2px;
+    border-radius: var(--radius-md, 7px);
+    border: 1px solid var(--border-1);
+    background: var(--bg-1);
+    box-shadow: 0 16px 38px rgba(0, 0, 0, 0.38);
+}
+.agent-tui-head,
+.agent-tui-note {
+    padding: 4px 8px;
+    font-size: 10px;
+    color: var(--fg-4);
+}
+.agent-tui-note {
+    border-top: 1px solid var(--border-1);
+    margin-top: 4px;
+    line-height: 1.45;
+}
+.agent-tui-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 8px;
+    border: 0;
+    border-radius: var(--radius-sm, 4px);
+    background: transparent;
+    color: var(--text);
+    text-align: left;
+    cursor: pointer;
+}
+.agent-tui-item:hover {
+    background: var(--hover);
+}
+.agent-tui-item.is-fronted {
+    color: var(--agent, #8b5cf6);
+}
+.agent-tui-label {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.agent-tui-state {
+    font-size: 10px;
+    color: var(--fg-4);
+}
+
+/* The RECORD half of Agent settings: which drivers this agent has, and whether
+   it is the workspace's default. The modal used to describe only the terminal —
+   titled `claude · moic`, with the driver in the identity. */
+.agent-settings-record {
+    display: grid;
+    gap: 8px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border-1);
+    margin-bottom: 10px;
+}
+.agent-settings-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
 }

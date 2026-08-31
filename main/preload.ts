@@ -1362,6 +1362,15 @@ const api = {
             agent?: string;
             bootFolder?: string;
         }) => ipcRenderer.invoke('agents:create', input) as Promise<{ ok: boolean; error?: string }>,
+        /** Designate the workspace's default agent (boots from the root). */
+        setDefault: (workspaceId: string, agentId: string | null) =>
+            ipcRenderer.invoke('agents:setDefault', workspaceId, agentId) as Promise<boolean>,
+        /** Add a TUI this agent may run under, and front it. Starts no terminal. */
+        addRuntime: (agentId: string, provider: string) =>
+            ipcRenderer.invoke('agents:addRuntime', agentId, provider) as Promise<{
+                ok: boolean;
+                runtimeId: string;
+            }>,
         front: (agentId: string, runtimeId: string) =>
             ipcRenderer.invoke('agents:front', agentId, runtimeId) as Promise<boolean>,
     },

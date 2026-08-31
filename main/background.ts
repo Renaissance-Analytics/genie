@@ -118,6 +118,7 @@ import { harnessTransportRegistry } from './agentinbox/harness-transport';
 import { agentShutdownReadiness } from './agents/shutdown-readiness';
 import { setPluginPanelOpenSink } from './plugins/registry';
 import { announceAgentUpgrade } from './agents/upgrade-announcement';
+import { mcpReconnectCommand } from './agents/mcp-reconnect';
 import { getChangelog } from './updater/changelog';
 import { deliverNudge, type NudgeIO } from './agentinbox/nudge-delivery';
 import { dbAgentInboxStore } from './agentinbox/store';
@@ -1528,6 +1529,23 @@ app.whenReady().then(async () => {
                         .filter((agent) => agent.status !== 'offline')
                         .map((agent) => agent.agentId),
                     changes: changelog.groups.flatMap((group) => group.changes).slice(0, 8),
+                    // Reconnect the agent's `genie` server BEFORE telling it
+                    // anything: the upgrade replaced the process behind the
+                    // endpoint, so the notice would otherwise arrive telling it
+                    // to call tools that will not answer. Typed straight into
+                    // the terminal, because it is a TUI command, not an MCP one.
+                    reconnect: (agentId) => {
+                        const info = agentInboxBroker.getInfo(agentId);
+                        const spec = info?.terminalId ? getTerminalSpec(info.terminalId) : null;
+                        const command = mcpReconnectCommand(spec?.meta?.agent as string | undefined);
+                        if (command && info?.terminalId) {
+                            // CR SUBMITS it. Without the carriage return the
+                            // command is typed into the prompt and just sits
+                            // there -- the exact shape of the nudge bug reported
+                            // earlier: text delivered, never sent.
+                            writeToTerminal(info.terminalId, `${command}\r`);
+                        }
+                    },
                     send: (agentId, text) =>
                         agentInboxBroker.send({ system: true, toAgentId: agentId, text }).ok,
                     persist: (version) => setSettings({ agent_upgrade_announced_version: version }),

@@ -1,4 +1,5 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import type { AgentRecordSpec } from '../../lib/ams-grid';
 import { Action, Heading, Icon, Input, Modal, Select, Text } from '@particle-academy/react-fancy';
 import TynnProvisionPanel from '../TynnProvisionPanel';
 import type {
@@ -107,6 +108,25 @@ export default function WorkspaceSettingsModal({
     // value: the mode ('inherit' = no override) and the number beside it. Null
     // until the stored cap loads, which disables the controls so a slow read can't
     // be mistaken for "this workspace is set to inherit" and saved as one.
+    // This workspace's agents, for the DEFAULT AGENT selector. The designation
+    // lives on a real agent (role = 'workspace'), so the list is the source of
+    // truth for both the options and the current value.
+    const [wsAgents, setWsAgents] = useState<AgentRecordSpec[]>([]);
+    const defaultAgentId = wsAgents.find((a) => a.role === 'workspace')?.id ?? null;
+    const loadAgents = useCallback(() => {
+        void api()
+            .agents.list(workspace.id)
+            .then((r) => setWsAgents(r.agents))
+            .catch(() => {});
+    }, [workspace.id]);
+    useEffect(loadAgents, [loadAgents]);
+    const changeDefaultAgent = async (agentId: string | null): Promise<void> => {
+        await api().agents.setDefault(workspace.id, agentId).catch(() => false);
+        // Re-read rather than assuming: main refuses an agent from another
+        // workspace, so the UI must reflect what actually happened.
+        loadAgents();
+    };
+
     const [agentCap, setAgentCap] = useState<{ mode: AgentCapMode; limit: string } | null>(
         null,
     );
@@ -366,6 +386,28 @@ export default function WorkspaceSettingsModal({
                 {workspace.path && <OpsWorkspacesPanel workspacePath={workspace.path} />}
 
                 <Section title="Agent behavior">
+                    {/* THE WORKSPACE AGENT. Not an agent named 'workspace' — v50
+                        seeded one of those and it was a phantom in every
+                        workspace. It is whichever REAL agent is designated the
+                        default: it boots from the workspace root and is the
+                        target for actions that do not name an agent. */}
+                    <Row
+                        label="Default agent"
+                        sub="Boots from the workspace root, and is the default target for actions that do not name an agent. One per workspace; leave it unset until you have an agent you want in that position."
+                        vertical
+                    >
+                        <Select
+                            value={defaultAgentId ?? ''}
+                            onValueChange={(v) => void changeDefaultAgent(v || null)}
+                            list={[
+                                { value: '', label: 'None — no default agent' },
+                                ...wsAgents.map((a) => ({
+                                    value: a.id,
+                                    label: a.purpose ? `${a.name} — ${a.purpose}` : a.name,
+                                })),
+                            ]}
+                        />
+                    </Row>
                     <Row
                         label="Agent terminals — limit"
                         sub={`The most agent terminals this workspace may run at once. Agents are refused past this and told to wait; you are not, and they cannot raise it. Leaving the number empty inherits the workstation default — currently ${describeInheritedAgentCap(capDefault)}.`}

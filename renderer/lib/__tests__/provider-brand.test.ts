@@ -25,12 +25,27 @@ describe('provider brand marks', () => {
         expect(providerBrandMark('codex')).toBe('openai');
     });
 
+    it('never gives Genie’s TUI the TYNN mark', () => {
+        // Different products; the logo is not shared. This is the bug the whole
+        // change exists to remove, and it survived the first attempt because the
+        // comment said one thing and the table said another.
+        expect(PROVIDER_BRAND_MARKS.genie).toBe('genie');
+    });
+
+    it('gives kiwi and custom NO borrowed mark', () => {
+        // They have none of their own, and wearing another vendor's asserts a
+        // relationship that does not exist. Null means "fall back to the initial".
+        expect(PROVIDER_BRAND_MARKS.kiwi).toBeNull();
+        expect(PROVIDER_BRAND_MARKS.custom).toBeNull();
+        expect(providerBrandMark('kiwi')).toBeNull();
+    });
+
     it('covers every provider the registry knows', () => {
         // The registry is the source of truth for what a provider IS. A provider
         // added there and missed here would render as a blank avatar in the
         // stack, which reads as "no agent" rather than "unknown TUI".
         for (const id of PROVIDER_IDS) {
-            expect(PROVIDER_BRAND_MARKS[id], id).toBeDefined();
+            expect(id in PROVIDER_BRAND_MARKS, id).toBe(true);
         }
     });
 
@@ -38,7 +53,7 @@ describe('provider brand marks', () => {
         // The exact failure being removed: two providers sharing one logo makes
         // the avatar stack unreadable, which is the whole point of the stack.
         const marks = PROVIDER_IDS.map((id) => PROVIDER_BRAND_MARKS[id]).filter(
-            (m): m is string => !!m && m !== 'genie',
+            (m): m is string => !!m,
         );
         expect(new Set(marks).size).toBe(marks.length);
     });

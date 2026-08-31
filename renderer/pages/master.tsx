@@ -7,6 +7,8 @@ import FeedbackModal from '../components/Master/FeedbackModal';
 import Chooser from '../components/Master/Chooser';
 import ProjectContextMenu from '../components/Master/ProjectContextMenu';
 import NewAgentModal from '../components/Master/NewAgentModal';
+import AgentTuiSwitcher from '../components/Master/AgentTuiSwitcher';
+import type { AgentRecordSpec, AgentRuntimeSpec } from '../lib/ams-grid';
 import WorkspaceSettingsModal from '../components/Master/WorkspaceSettingsModal';
 import WorkspaceSiteManager from '../components/Master/WorkspaceSiteManager';
 import SpecContextMenu from '../components/Master/SpecContextMenu';
@@ -254,6 +256,13 @@ function MasterInner() {
     });
     const [workspaces, setWorkspaces] = useState<WorkspaceRow[]>([]);
     const [specs, setSpecs] = useState<TerminalSpec[]>([]);
+    // The agent RECORD for whichever agent's settings are open. Loaded on
+    // demand rather than kept for every workspace: this is the only surface in
+    // master.tsx that needs it, and the sidebar keeps its own copy.
+    const [agentRecord, setAgentRecord] = useState<{
+        agents: AgentRecordSpec[];
+        runtimes: AgentRuntimeSpec[];
+    } | null>(null);
     const [selected, setSelected] = useState<Set<string>>(() => new Set());
     // The workspace whose views fill the grid. Persisted as the
     // `active_workspace` setting; seeded on launch from that setting (or the
@@ -506,6 +515,16 @@ function MasterInner() {
     // The spec whose AgentInbox purpose/scope is being edited (context menu →
     // "Agent settings…"), or null. Rendered as a modal reusing the create form.
     const [agentEditSpec, setAgentEditSpec] = useState<TerminalSpec | null>(null);
+    // Load it when the settings modal opens on an agent. Cleared on close so a
+    // stale record can never describe the NEXT agent someone opens.
+    const agentEditWorkspace = agentEditSpec?.workspace_id ?? null;
+    useEffect(() => {
+        if (!agentEditWorkspace) {
+            setAgentRecord(null);
+            return;
+        }
+        void api().agents.list(agentEditWorkspace).then(setAgentRecord).catch(() => {});
+    }, [agentEditWorkspace]);
     // GitHub capability gate: which GitHub-powered features are unavailable
     // because the App is missing permissions on the user's installation. Drives
     // a persistent header warning + a resolve flyout (also auto-shown once on
@@ -2178,6 +2197,7 @@ function MasterInner() {
                         genieOsActive={!!genieOsSpec && activeIds.has(genieOsSpec.id)}
                         genieOsOpen={genieOsOpen}
                         onShowGenieOs={() => setGenieOsOpen((open) => !open)}
+                        setupIncomplete={onboardingOpen}
                     />
                     <UpdateReadyBanner />
                     <Toolbar
@@ -2457,15 +2477,6 @@ function MasterInner() {
                 );
             })()}
 
-            {onboardingOpen && !genieOsOpen && (
-                <button
-                    className="gbtn accent genie-osa-onboarding-return"
-                    style={{ position: 'fixed', right: 18, top: 54, zIndex: 80 }}
-                    onClick={() => setGenieOsOpen(true)}
-                >
-                    Continue workstation setup with Genie
-                </button>
-            )}
 
             {/* "Run a recipe" (Toolbar wand). Scoped to the active workspace:
                 the launcher lists every registered recipe (built-in + plugin —
@@ -2545,6 +2556,17 @@ function MasterInner() {
                         // purpose sub-label reflects the edit immediately.
                         void api().terminalSpec.list().then(setSpecs).catch(() => {});
                     }}
+                    record={agentRecord?.agents.find(
+                        (a) =>
+                            agentRecord.runtimes.some(
+                                (r) => r.agentId === a.id && r.terminalSpecId === agentEditSpec.id,
+                            ),
+                    )}
+                    runtimes={agentRecord?.runtimes ?? []}
+                    onRecordChanged={() => {
+                        const ws = agentEditSpec.workspace_id;
+                        if (ws) void api().agents.list(ws).then(setAgentRecord).catch(() => {});
+                    }}
                 />
             )}
         </div>
@@ -2562,11 +2584,20 @@ function AgentSettingsModal({
     workspaces,
     onClose,
     onSaved,
+    record,
+    runtimes,
+    onRecordChanged,
 }: {
     spec: TerminalSpec;
     workspaces: WorkspaceRow[];
     onClose: () => void;
     onSaved: () => void;
+    /** This agent's RECORD, when Genie has one. The modal used to describe the
+     *  terminal only — title `claude · moic`, no drivers, no designation — which
+     *  is the model that no longer exists. */
+    record?: AgentRecordSpec;
+    runtimes?: AgentRuntimeSpec[];
+    onRecordChanged?: () => void;
 }) {
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -2590,8 +2621,57 @@ function AgentSettingsModal({
                 onMouseDown={(e) => e.stopPropagation()}
             >
                 <div className="agent-settings-head">
-                    <span className="agent-settings-title">Agent settings — {spec.label}</span>
+                    {/* The agent's NAME. It used to be `spec.label` --
+                        `claude · moic` -- which puts the driver in the
+                        identity, the exact model this removed. */}
+                    <span className="agent-settings-title">
+                        Agent settings — {record?.name ?? spec.label}
+                    </span>
                 </div>
+                {record && (
+                    <div className="agent-settings-record">
+                        <div className="agent-settings-row">
+                            <span className="agent-form-label">Drivers</span>
+                            <AgentTuiSwitcher
+                                agentId={record.id}
+                                runtimes={runtimes ?? []}
+                                onChanged={() => onRecordChanged?.()}
+                            />
+                        </div>
+                        <span className="agent-form-scope-desc">
+                            An agent is not its TUI. Switching keeps this agent — its inbox,
+                            history and prompt — and the driver it leaves keeps its
+                            conversation as a sidecar. Nothing is stopped by switching.
+                        </span>
+                        <label className="agent-form-wake">
+                            <input
+                                type="checkbox"
+                                checked={record.role === 'workspace'}
+                                onChange={(e) => {
+                                    // The WORKSPACE AGENT is a designation, not an
+                                    // agent named 'workspace'. Unticking clears it
+                                    // rather than moving it to someone else.
+                                    void api()
+                                        .agents.setDefault(
+                                            spec.workspace_id ?? '',
+                                            e.target.checked ? record.id : null,
+                                        )
+                                        .then(() => onRecordChanged?.())
+                                        .catch(() => {});
+                                }}
+                            />
+                            <span className="agent-form-wake-text">
+                                <span className="agent-form-label">
+                                    Default agent for this workspace
+                                </span>
+                                <span className="agent-form-scope-desc">
+                                    Boots from the workspace root and is the default target for
+                                    actions that do not name an agent. One per workspace.
+                                </span>
+                            </span>
+                        </label>
+                    </div>
+                )}
                 <AgentTerminalForm
                     agent={agent}
                     workspaces={workspaces}
@@ -2609,7 +2689,6 @@ function AgentSettingsModal({
                             : [],
                         command: typeof meta.agent_command === 'string' ? meta.agent_command : '',
                         issuewatchHandle: meta.issuewatch_handle === true,
-                        issuewatchAction: meta.issuewatch_action === 'wake' ? 'wake' : 'notify',
                     }}
                     submitLabel="Save"
                     busy={busy}
@@ -2625,7 +2704,6 @@ function AgentSettingsModal({
                                 scope_workspaces:
                                     v.scope === 'specific' ? v.scopeWorkspaces : [],
                                 issuewatch_handle: v.issuewatchHandle,
-                                issuewatch_action: v.issuewatchAction,
                             });
                             if (res.ok) onSaved();
                             else setError(res.error || 'Could not update the agent.');
@@ -3116,6 +3194,7 @@ function TitleBar({
     cornerInRail = false,
     genieOsActive = false,
     genieOsOpen = false,
+    setupIncomplete = false,
     onShowGenieOs,
 }: {
     isStage: boolean;
@@ -3137,6 +3216,7 @@ function TitleBar({
     onShowGithubCaps?: () => void;
     genieOsActive?: boolean;
     genieOsOpen?: boolean;
+    setupIncomplete?: boolean;
     onShowGenieOs?: () => void;
     /**
      * True in the master layout, where this bar is the RIGHT column's header
@@ -3329,6 +3409,16 @@ function TitleBar({
                         <button type="button" role="menuitem" onClick={() => void openWhatsNew()}>
                             What&apos;s new
                         </button>
+                        {/* Workstation setup lives in the MENU, not as a chip
+                            floating over the header. It only appears while setup
+                            is unfinished, so it disappears once it is done
+                            rather than becoming permanent furniture. */}
+                        {setupIncomplete && onShowGenieOs && (
+                            <button type="button" role="menuitem" onClick={() => {
+                                setSystemMenuOpen(false);
+                                onShowGenieOs();
+                            }}>Continue workstation setup</button>
+                        )}
                     </div>
                 )}
             </div>

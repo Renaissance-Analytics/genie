@@ -6,7 +6,8 @@
  * session + an AgentInbox identity).
  */
 import type { ComponentType } from 'react';
-import { IconBox, IconCode, IconTerminal, IconTynn } from '../components/Master/icons';
+import { AnthropicIcon, OpenaiIcon } from '@particle-academy/fancy-brand-icons';
+import { IconBox, IconCode, IconTerminal, IconWand } from '../components/Master/icons';
 import type { AgentType } from './genie';
 import { agentProviders, providerDef } from '../../main/agents/registry';
 
@@ -37,10 +38,19 @@ export interface TerminalTypeDef {
  * placeholder.
  */
 const PROVIDER_ICONS: Record<AgentType, ComponentType<{ size?: number; className?: string }>> = {
-    claude: IconTynn,
-    codex: IconBox,
+    // The REAL vendor marks. These were placeholders -- claude and genie both
+    // rendered the TYNN logo and codex a generic box -- which is wrong twice: it
+    // tells you the wrong vendor, and it makes two different agents look
+    // identical in a grid whose whole job is telling them apart.
+    claude: AnthropicIcon,
+    codex: OpenaiIcon,
+    // Genie's own TUI gets Genie's own mark, NOT Tynn's. They are different
+    // products and the logo is not shared.
+    genie: IconWand,
+    // Kiwi and a custom CLI have no mark of their own here, and borrowing another
+    // vendor's would assert a relationship that does not exist. A neutral glyph
+    // is the honest answer.
     kiwi: IconCode,
-    genie: IconTynn,
     custom: IconCode,
 };
 

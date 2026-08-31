@@ -129,6 +129,9 @@ export interface WorkspaceRow {
     tynn_project_id: string;
     tynn_project_name: string;
     shape: 'agi' | 'simple';
+    /** A user-set workspace icon. NULL/absent falls back to the workspace's
+     *  INITIALS — see lib/workspace-avatar. */
+    icon?: string | null;
     path: string;
     editor: string | null;
     editor_cmd: string | null;
@@ -3937,6 +3940,13 @@ export interface GenieApi {
             agent?: string;
             bootFolder?: string;
         }) => Promise<{ ok: boolean; error?: string }>;
+        /** Designate the workspace's default agent (boots from the root). */
+        setDefault: (workspaceId: string, agentId: string | null) => Promise<boolean>;
+        /** Add a TUI this agent may run under, and front it. Starts no terminal. */
+        addRuntime: (
+            agentId: string,
+            provider: string,
+        ) => Promise<{ ok: boolean; runtimeId: string }>;
         front: (agentId: string, runtimeId: string) => Promise<boolean>;
     };
     ask: {
