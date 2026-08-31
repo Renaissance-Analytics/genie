@@ -1204,7 +1204,9 @@ export interface RunAgentRequest {
      * - `list`: read-only — the workspace's saved agents.
      * - the rest act on a running agent terminal by `id`.
      */
-    action: 'start' | 'send' | 'read' | 'stop' | 'restart' | 'list';
+    action: 'start' | 'send' | 'read' | 'stop' | 'restart' | 'list' | 'switchTui';
+    /** switchTui: the TUI to make this agent's visible driver. */
+    tui?: string;
     /** Target workspace (own, or a governed child). Same rules as manageTerminals. */
     workspaceId?: string;
     /**
@@ -2279,8 +2281,13 @@ const RUN_AGENT_TOOL = {
             ...TARGET_WORKSPACE_PROP,
             action: {
                 type: 'string',
-                enum: ['start', 'send', 'read', 'stop', 'restart', 'list'],
+                enum: ['start', 'send', 'read', 'stop', 'restart', 'list', 'switchTui'],
                 description: 'What to do.',
+            },
+            tui: {
+                type: 'string',
+                description:
+                    "switchTui: the TUI to make this agent's VISIBLE driver (claude / codex / kiwi / genie / custom). An agent is not its TUI: switching keeps its identity, inbox and history, and the TUI it leaves keeps its own pty and conversation as a hidden SIDECAR you can flip back to. Nothing is ever stopped by a switch. Needs `name` (or `id`) to say which agent.",
             },
             name: {
                 type: 'string',

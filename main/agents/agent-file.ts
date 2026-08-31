@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { relative as pathRelative } from 'node:path';
 import { PROVIDER_IDS } from './registry';
 
@@ -20,7 +21,11 @@ import { PROVIDER_IDS } from './registry';
  * The shape mirrors the `SKILL.md` Genie already writes, so authoring an agent
  * and authoring a skill are one convention rather than two.
  *
- * PURE: no fs, no electron. The caller owns reading and writing.
+ * Parsing and rendering are PURE — no fs, no electron — so the caller owns
+ * reading and writing. `agentAllowedTuis` is the one exception, and reads the
+ * file on purpose: the file is the source of truth, and a human who edits
+ * `tuis:` expects it to take effect without a re-registration they have no
+ * reason to know about.
  */
 
 export interface AgentFileConfig {
@@ -133,4 +138,24 @@ export function agentScopeFor(workspaceRoot: string, bootCwd: string): string | 
     const rel = pathRelative(workspaceRoot, bootCwd);
     if (!rel || rel === '.') return null;
     return rel.split(/[\\/]/).join('/');
+}
+
+/**
+ * The TUIs an agent's own file permits, or an empty list when it says nothing.
+ *
+ * Empty is "no opinion", not "none" — see {@link decideTuiSwitch}. Reads the
+ * file rather than the database because the file is the source of truth, and a
+ * human who edits `tuis:` expects that to take effect without a re-registration
+ * they have no reason to know about.
+ */
+export function agentAllowedTuis(personaPath: string | null): string[] {
+    if (!personaPath) return [];
+    try {
+        return parseAgentFile(readFileSync(personaPath, 'utf8')).config.tuis;
+    } catch {
+        // No file, or unreadable. "No opinion" is the safe reading: refusing
+        // every switch because a file is missing would strand agents registered
+        // before AGENT.md was written at all.
+        return [];
+    }
 }

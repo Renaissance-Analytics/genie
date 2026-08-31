@@ -21,6 +21,9 @@ import {
     getWorkspace,
     getWorkspaceAgent,
     getWorkspaceAgentByName,
+    listAgentRuntimes,
+    createAgentRuntime,
+    frontAgentRuntime,
     createWorkspaceAgent,
     listWorkspaceAgents,
     bindWorkspaceAgentTerminal,
@@ -70,7 +73,8 @@ import {
     isTerminalLive,
 } from '../terminal/ipc';
 import { agentName, agentRef, savedAgentKey, type AgentProvider } from '../agents/identity';
-import { agentScopeFor, renderAgentFile } from '../agents/agent-file';
+import { agentAllowedTuis, agentScopeFor, renderAgentFile } from '../agents/agent-file';
+import { decideTuiSwitch } from '../agents/tui-switch';
 import { resolveWorkstationProvider } from '../agents/provider';
 import { restartProviderForSpec } from '../agents/restart';
 import {
@@ -2174,6 +2178,57 @@ export async function runAgentForMcp(
                 const r = restartAgentTerminal(req.id!);
                 if (!r.ok) return { ok: false, error: r.error };
                 return { ok: true, id: r.newId, agent: r.agent, command: r.command };
+            }
+            case 'switchTui': {
+                // An agent is not its TUI. Switching keeps its identity, inbox
+                // and history; the TUI it leaves keeps its own pty and
+                // conversation as a hidden SIDECAR to flip back to. Nothing is
+                // ever stopped by a switch -- `decideTuiSwitch` has no outcome
+                // that could stop one.
+                const wanted = String(req.tui ?? '').trim();
+                if (!wanted) {
+                    return { ok: false, error: 'switchTui needs a `tui` to switch to.' };
+                }
+                const target = getWorkspaceAgentByName(ws.id, agentName(req.name ?? 'workspace'));
+                if (!target) {
+                    return {
+                        ok: false,
+                        error: `No registered agent "${agentName(req.name ?? 'workspace')}" in this workspace.`,
+                    };
+                }
+                const decision = decideTuiSwitch({
+                    runtimes: listAgentRuntimes(target.id).map((r) => ({
+                        id: r.id,
+                        provider: r.provider,
+                        terminalSpecId: r.terminal_spec_id,
+                        fronted: r.fronted === 1,
+                    })),
+                    to: wanted,
+                    allowed: agentAllowedTuis(target.persona_path),
+                });
+                if (decision.kind === 'refuse') {
+                    return { ok: false, error: decision.reason };
+                }
+                if (decision.kind === 'already') {
+                    return { ok: true, name: target.name, agent: wanted as AgentType };
+                }
+                if (decision.kind === 'front') {
+                    frontAgentRuntime(target.id, decision.runtimeId);
+                    broadcastTerminalSpecsChanged();
+                    return { ok: true, name: target.name, agent: wanted as AgentType, reattached: true };
+                }
+                // A TUI this agent has never run: record it, fronted. The
+                // terminal is started by `start`, which already owns the
+                // approval gate and the cap -- a switch must not become a
+                // second way to spawn past either.
+                const created = createAgentRuntime({
+                    agentId: target.id,
+                    provider: decision.provider,
+                    fronted: true,
+                });
+                frontAgentRuntime(target.id, created.id);
+                broadcastTerminalSpecsChanged();
+                return { ok: true, name: target.name, agent: wanted as AgentType };
             }
         }
     } catch (e) {
