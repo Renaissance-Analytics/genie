@@ -60,7 +60,7 @@ import {
     type WorkspaceViewState,
 } from '../lib/view-state';
 import { planCommitStep, shouldDriveRestart } from '../lib/updater-flow';
-import { shouldShowWhatsNew } from '../lib/whats-new';
+import { autoOpenWhatsNew } from '../lib/whats-new';
 import { emitOpenInPanel, openFileInEditor, surfaceMaximized } from '../lib/editor-open';
 import { pluginPanelSpecMeta } from '../lib/panel-routing';
 import {
@@ -95,6 +95,7 @@ import {
     workspaceSurfaceRows,
     makeSystemWorkspace,
     SYSTEM_WORKSPACE_ID,
+    sidebarWorkspaceRows,
     ulid,
     type AgentInboxIncomingNotice,
     type Changelog,
@@ -362,6 +363,9 @@ function MasterInner() {
 
     const [onboardingOpen, setOnboardingOpen] = useState(false);
     const [genieOsOpen, setGenieOsOpen] = useState(false);
+    // The System Workspace row is hidden by default; the sidebar's chip toggles
+    // it. Distinct from `genieOsOpen`, which is the full-screen Genie OS layer.
+    const [systemRevealed, setSystemRevealed] = useState(false);
     useEffect(() => {
         if (isRemoteWindow()) return;
         void api().app.genieOsStatus().then(({ setup }) => {
@@ -751,7 +755,16 @@ function MasterInner() {
     // Workspaces shown in the sidebar: the persisted list, with the System
     // Workspace pinned to the TOP when revealed. It's fixed (never draggable /
     // reorderable) so it always sits first and doesn't shuffle the user's order.
-    const displayWorkspaces = workspaceSurfaceRows(workspaces, genieOsSpec?.cwd);
+    const displayWorkspaces = useMemo(
+        () =>
+            sidebarWorkspaceRows(
+                workspaces,
+                systemWorkspace,
+                systemRevealed,
+                genieOsSpec?.cwd,
+            ),
+        [workspaces, systemWorkspace, systemRevealed, genieOsSpec?.cwd],
+    );
 
     // id → workspace resolver. ALWAYS includes the System Workspace (even when
     // hidden) so handlers can resolve its id for terminals/editors/processes
@@ -1797,7 +1810,7 @@ function MasterInner() {
     // and cannot open it is half a fix.
     const revealTerminal = useCallback((id: string, workspaceId: string | null) => {
         if (workspaceId) {
-            if (workspaceId === SYSTEM_WORKSPACE_ID) setGenieOsOpen(true);
+            if (workspaceId === SYSTEM_WORKSPACE_ID) setSystemRevealed(true);
             activateWorkspaceRef.current(workspaceId);
         }
         setSelected((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
@@ -2072,6 +2085,25 @@ function MasterInner() {
                         activeWorkspaceId={activeWorkspaceId}
                         pinned={chooserPinned}
                         onTogglePin={() => setChooserPinned((p) => !p)}
+                        systemRevealed={systemRevealed}
+                        onToggleSystemWorkspace={() => {
+                            setSystemRevealed((on) => {
+                                const next = !on;
+                                if (next && systemWorkspace) {
+                                    // Revealing → jump straight to it.
+                                    activateWorkspace(SYSTEM_WORKSPACE_ID);
+                                } else if (
+                                    !next &&
+                                    activeWorkspaceId === SYSTEM_WORKSPACE_ID
+                                ) {
+                                    // Hiding while it's active → fall back to the
+                                    // first real workspace so the toolbar/grid
+                                    // don't keep pointing at a now-hidden row.
+                                    activateWorkspace(workspaces[0]?.id ?? null);
+                                }
+                                return next;
+                            });
+                        }}
                         onActivateWorkspace={activateWorkspace}
                         onToggleSpec={toggleSpec}
                         onAddSpec={(wsId, type) => void addSpec(wsId, type)}
@@ -2559,7 +2591,6 @@ function AgentSettingsModal({
                             ? (meta.whisper_workspaces as string[])
                             : [],
                         command: typeof meta.agent_command === 'string' ? meta.agent_command : '',
-                        wakeOnDm: meta.whisper_wake_on_dm === true,
                         issuewatchHandle: meta.issuewatch_handle === true,
                         issuewatchAction: meta.issuewatch_action === 'wake' ? 'wake' : 'notify',
                     }}
@@ -2576,7 +2607,6 @@ function AgentSettingsModal({
                                 scope: v.scope,
                                 scope_workspaces:
                                     v.scope === 'specific' ? v.scopeWorkspaces : [],
-                                wake_on_dm: v.wakeOnDm,
                                 issuewatch_handle: v.issuewatchHandle,
                                 issuewatch_action: v.issuewatchAction,
                             });
@@ -3107,6 +3137,7 @@ function TitleBar({
     const [whatsNewChangelog, setWhatsNewChangelog] = useState<Changelog | null>(null);
 
     const openWhatsNew = useCallback(async (automatic = false) => {
+        const askedAt = Date.now();
         const [status, settings] = await Promise.all([
             api().updater.status(),
             api().settings.get(),
@@ -3114,7 +3145,16 @@ function TitleBar({
         const current = status.currentVersion;
         const previous = (settings as Record<string, string | undefined>)
             .whats_new_seen_version;
-        if (automatic && !shouldShowWhatsNew(previous, current)) return;
+        // An automatic announcement may only open while the window is still
+        // settling. These two round-trips are unbounded, and a full-screen
+        // backdrop that arrives afterwards lands on top of whatever the user is
+        // doing and eats the click they were making. Past the budget we skip it
+        // for this session -- the header menu still opens it on demand.
+        if (
+            automatic &&
+            !autoOpenWhatsNew({ previous, current, elapsedMs: Date.now() - askedAt })
+        )
+            return;
         setWhatsNewVersion(current);
         setWhatsNewPrevious(previous);
         setWhatsNewOpen(true);

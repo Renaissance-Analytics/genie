@@ -1132,7 +1132,7 @@ description: Use whenever working inside Genie or when Genie MCP tools are avail
 
 # Genie workspace workflow
 
-1. In a fresh or newly converted workspace, call \`initializeWorkspace\` and follow its repository-orientation plan.
+1. In a fresh or newly converted workspace, call \`connectToGenie\` and follow its repository-orientation plan.
 2. Use the Genie tools for UI-visible coordination:
    - \`imDone\` whenever handing work back.
    - \`ForceTheQuestion\` when only the user can unblock a decision.
@@ -1186,7 +1186,7 @@ ${body}
             'Use when entering, reinitializing, or learning a Genie workspace.',
             `# Genie workspace orientation
 
-Call \`initializeWorkspace\` once for a fresh or newly converted workspace. Follow its numbered plan, treat repos as the primary source, and review the Agent integration health section before starting work. Read the nearest AGENTS.md and repository instructions before changing code.`,
+Call \`connectToGenie\` once for a fresh or newly converted workspace. Follow its numbered plan, treat repos as the primary source, and review the Agent integration health section before starting work. Read the nearest AGENTS.md and repository instructions before changing code.`,
         ),
         'genie-attention': skill(
             'genie-attention',

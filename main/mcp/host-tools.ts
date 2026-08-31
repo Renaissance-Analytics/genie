@@ -68,10 +68,14 @@ import {
     agentSessionTranscriptExists,
     isTerminalLive,
 } from '../terminal/ipc';
-import { agentName, agentRef, savedAgentKey } from '../agents/identity';
+import { agentName, agentRef, savedAgentKey, type AgentProvider } from '../agents/identity';
 import { resolveWorkstationProvider } from '../agents/provider';
 import { restartProviderForSpec } from '../agents/restart';
-import { decideAgentStart, savedAgentsOf, type SavedAgent } from '../agents/saved';
+import {
+    adoptableAgentSpec,
+    savedAgentsOf,
+    type SavedAgent,
+} from '../agents/saved';
 import { resolveAgentRegistration } from '../agents/registration';
 import { providerInstructionFiles, withProviderStartupInstructions } from '../agents/startup';
 import {
@@ -1954,6 +1958,20 @@ export async function runAgentForMcp(
                     if (saved) return await reattachSavedAgent(ws, saved, saved.live ? 'warm' : 'revive');
                     bindWorkspaceAgentTerminal(config.id, null);
                 }
+                // The registry's binding is not the only way this agent's
+                // terminal can be on screen: an unbound one is still THIS agent
+                // by (provider, name), and creating past it would abandon it as
+                // a phantom square under the same name rather than start
+                // anything new. Adopt it and rebind.
+                const adopted = adoptableAgentSpec(
+                    savedAgentsOfWorkspace(ws.id),
+                    config.provider as AgentProvider,
+                    config.name,
+                );
+                if (adopted) {
+                    bindWorkspaceAgentTerminal(config.id, adopted.specId);
+                    return await reattachSavedAgent(ws, adopted, adopted.live ? 'warm' : 'revive');
+                }
                 // Base command + the agent type's always-on flags (session-id
                 // injected later in createAgentTerminal), then the agent's
                 // PRE-LOADED INSTRUCTIONS as an opening prompt — the same
@@ -2166,6 +2184,33 @@ export async function agentInboxForMcp(
                 : [],
             chatSessionId: (meta.chat_session_id as string | undefined) ?? null,
         });
+    } else if (!agentInboxBroker.getInfo(agentId)) {
+        // SELF-HEAL. `markOnline` is a no-op for an agent the broker does not
+        // know, so an agent whose entry went missing — boot rehydrate skipped or
+        // failed, or its spec appeared after rehydrate ran — could never come
+        // back: every AgentInbox call silently did nothing, `list` returned no
+        // `self`, and the tool it would use to report that is the broken one.
+        // Observed on a live workstation: 49 registered agents, none reachable,
+        // not even to themselves.
+        //
+        // The identity is DURABLE in the spec, so re-joining restores exactly the
+        // same agent rather than minting a second one, and `join` is idempotent
+        // per agentId — which is what makes this safe to attempt on every call.
+        agentInboxBroker.join({
+            agentId,
+            terminalId: spec.id,
+            workspaceId: ws.id,
+            workspaceName: ws.project_name,
+            slug: workspaceSlug(ws),
+            agentType: (spec.meta?.agent as AgentInboxAgentType) ?? 'custom',
+            label: spec.label,
+            purpose: normalizePurpose(spec.meta?.whisper_purpose),
+            scope: (spec.meta?.whisper_scope as AgentInboxScope) ?? 'self',
+            scopeWorkspaces: Array.isArray(spec.meta?.whisper_workspaces)
+                ? (spec.meta.whisper_workspaces as string[])
+                : [],
+            chatSessionId: (spec.meta?.chat_session_id as string | undefined) ?? null,
+        });
     } else agentInboxBroker.markOnline(agentId);
 
     try {
@@ -2356,7 +2401,6 @@ export async function agentInboxForMcp(
                     scope: req.scope,
                     workspaces,
                     purpose: req.purpose,
-                    wakeOnDm: req.wakeOnDm,
                 });
                 // Persist the durable bits to the spec meta.
                 const cur = getTerminalSpec(spec.id);
@@ -2365,7 +2409,6 @@ export async function agentInboxForMcp(
                     if (req.scope !== undefined) meta.whisper_scope = req.scope;
                     if (workspaces !== undefined) meta.whisper_workspaces = workspaces;
                     if (req.purpose !== undefined) meta.whisper_purpose = normalizePurpose(req.purpose);
-                    if (req.wakeOnDm !== undefined) meta.whisper_wake_on_dm = req.wakeOnDm;
                     updateTerminalSpec(spec.id, { meta });
                 }
                 return { ok: true, self: info ?? undefined };

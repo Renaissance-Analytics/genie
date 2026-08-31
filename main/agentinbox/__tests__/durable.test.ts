@@ -236,7 +236,16 @@ describe('AgentInbox durable inbox (Track B)', () => {
         expect(woken).toHaveLength(0);
     });
 
-    it('a failed native delivery remains durable and never falls back to PTY wake', async () => {
+    it('a DECLINED native delivery stays durable AND announces on the PTY', async () => {
+        // The contract this asserted has been deliberately reversed. It used to
+        // require that a declined delivery never reach the PTY, which left an
+        // agent that is running but not attached to Genie's services silently
+        // unreachable: the mail sat durable and the sender saw nothing but a
+        // stale read-receipt. The owner's rule now is that nothing posts to chat
+        // WHILE the internal hooks are engaged -- and `false` is the harness
+        // saying they are not.
+        //
+        // The message stays durable either way; that half never changed.
         const b = new AgentInboxBroker();
         b.setStore(store);
         const woken: string[] = [];
@@ -244,10 +253,14 @@ describe('AgentInbox durable inbox (Track B)', () => {
         b.setWakeSink((d) => { woken.push(d.text); });
 
         join(b, 'a');
-        join(b, 'b', { wakeOnDm: true });
+        join(b, 'b');
 
         b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'ping' });
-        expect(woken).toEqual([]);
+        // The ANNOUNCEMENT, immediately -- naming the sender, not a count. The
+        // "you have N unread" wake is the rate-limited backstop and must NOT be
+        // what lands here.
+        expect(woken).toHaveLength(1);
+        expect(woken[0]).not.toMatch(/unread/i);
         await expect(b.receive('b')).resolves.toMatchObject({
             messages: [expect.objectContaining({ text: 'ping' })],
         });

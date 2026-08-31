@@ -23,7 +23,6 @@ export interface AgentFormValues {
     command: string;
     /** Opt-in: a direct message to this agent while it's idle injects a nudge so it
      *  starts a turn and reads the message (issue #9). Default off. */
-    wakeOnDm: boolean;
     /** Opt-in: this agent participates in its workspace's IssueWatch pings. Off by
      *  default — no ping is delivered. */
     issuewatchHandle: boolean;
@@ -110,7 +109,6 @@ export default function AgentTerminalForm({
     const [command, setCommand] = useState(() => initial?.command ?? '');
     // Default ON (owner, beta.248) — an agent is told about its mail unless
     // someone deliberately silences it.
-    const [wakeOnDm, setWakeOnDm] = useState(() => initial?.wakeOnDm ?? true);
     const [issuewatchHandle, setIssuewatchHandle] = useState(
         () => initial?.issuewatchHandle ?? false,
     );
@@ -155,7 +153,6 @@ export default function AgentTerminalForm({
             scope,
             scopeWorkspaces: scope === 'specific' ? scopeWorkspaces : [],
             command: command.trim(),
-            wakeOnDm,
             issuewatchHandle,
             issuewatchAction,
         });
@@ -239,24 +236,6 @@ export default function AgentTerminalForm({
                     />
                 </label>
             )}
-
-            <label className="agent-form-wake">
-                <input
-                    type="checkbox"
-                    checked={wakeOnDm}
-                    onChange={(e) => setWakeOnDm(e.target.checked)}
-                />
-                <span className="agent-form-wake-text">
-                    <span className="agent-form-label">Announce inbox messages</span>
-                    <span className="agent-form-scope-desc">
-                        On by default. A DM or channel message is announced in this agent&apos;s
-                        chat as soon as it arrives — with its urgency, so the agent can decide
-                        whether to break off what it&apos;s doing. It waits if YOU are typing at
-                        that terminal or have a draft in the box, so it never lands mid-sentence.
-                        Turn it off to keep this agent silent until it checks its inbox itself.
-                    </span>
-                </span>
-            </label>
 
             <label className="agent-form-wake">
                 <input

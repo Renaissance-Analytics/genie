@@ -1,5 +1,10 @@
 /**
- * Opt-in WAKE-ON-DM decision (issue #9) — the FAIL-SAFE core.
+ * The AgentInbox nudge's FAIL-SAFE core: is this agent SAFE to inject into?
+ *
+ * WHETHER it should be nudged at all is {@link nudgeWarranted}, and the broker
+ * requires both. There is no opt-in here on purpose: reachability is protocol,
+ * not preference. An agent with the old `wakeOnDm` unset was unreachable while
+ * appearing reachable to every sender, which is a worse failure than a nudge.
  *
  * AgentInbox delivery is pull-based: nothing is ever injected into a running
  * agent, so an in-flight turn can't be corrupted. The gap: an IDLE agent never
@@ -47,8 +52,6 @@
 export const WAKE_QUIET_MS = 15_000;
 
 export interface WakeState {
-    /** The agent opted in (default OFF — no surprise turns). */
-    wakeOnDm: boolean;
     /** Epoch ms the agent's last turn ended (imDone). null = never finished a turn. */
     lastTurnEndAt: number | null;
     /** Epoch ms of the agent terminal's last output byte. null = no output seen. */
@@ -68,8 +71,6 @@ export interface WakeState {
  * ambiguous signal.
  */
 export function shouldWakeAgent(s: WakeState): boolean {
-    // Opt-in only.
-    if (!s.wakeOnDm) return false;
     // Never finished a turn → we don't know it's at a prompt. Don't touch it.
     if (s.lastTurnEndAt == null) return false;
     // The turn must have ended at least the quiet window ago (skip the imDone
@@ -99,4 +100,37 @@ export function wakeNudgeText(unread: number): string {
     return `You have ${n} unread AgentInbox message${n === 1 ? '' : 's'}; read ${
         n === 1 ? 'it' : 'them'
     } with the agentinbox tool (action: "receive").`;
+}
+
+/** Unchecked this long after delivery and the recipient has failed to look. */
+export const NUDGE_UNCHECKED_MS = 5 * 60_000;
+
+/** This many unread and the backlog is its own signal, whatever the clock says. */
+export const NUDGE_STACK_COUNT = 3;
+
+export interface NudgeTrigger {
+    /** Messages past the agent's cursor. */
+    unread: number;
+    /** Epoch ms the OLDEST unread message was delivered. null = nothing unread. */
+    oldestUnreadAt: number | null;
+    /** Now (epoch ms). */
+    now: number;
+}
+
+/**
+ * WHETHER a nudge is warranted — a separate question from whether one is SAFE.
+ *
+ * {@link shouldWakeAgent} proves the agent can be injected into without
+ * corrupting a turn. It never asked whether the agent deserved interrupting, so
+ * every DM to an idle agent started a turn: being spoken to WAS being
+ * interrupted. This is the policy half, and the broker requires both.
+ *
+ * Two rules, both meaning "the recipient has failed to look" — one measured in
+ * time, one in volume. Delivery on its own is not an interruption.
+ */
+export function nudgeWarranted(t: NudgeTrigger): boolean {
+    if (t.unread <= 0) return false;
+    if (t.unread >= NUDGE_STACK_COUNT) return true;
+    if (t.oldestUnreadAt == null) return false;
+    return t.now - t.oldestUnreadAt >= NUDGE_UNCHECKED_MS;
 }

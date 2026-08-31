@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { GENIE_MCP_GUIDE } from '../guide';
+import { GENIE_AGENTS_BRIEF, GENIE_MCP_GUIDE } from '../guide';
 import { handleMcpMessage, type McpContext } from '../protocol';
 
 /**
@@ -365,5 +365,116 @@ describe('the guide states how a refusal is signalled', () => {
         // A convention stated without its consequence gets skimmed. The one that
         // matters is a channel send reaching nobody being read as delivered.
         expect(GENIE_MCP_GUIDE.toLowerCase()).toContain('refus');
+    });
+});
+
+/**
+ * ONE way in, under one name, on whichever surface the TUI gives the user.
+ *
+ * Connecting to Genie was spread across five places that each restated it:
+ * the 43KB `GENIE_MCP_GUIDE` (sent as the MCP server's `instructions`, so every
+ * agent pays for it at connect whether or not it ever needed it), the same 43KB
+ * returned AGAIN by the `genieGuide` tool, the 6KB `GENIE_AGENTS_BRIEF` written
+ * into AGENTS.md and CLAUDE.md, the per-harness `genie-{harness}.md`, and the
+ * `initializeWorkspace` tool/prompt pair. Twelve of fifteen tools were
+ * documented in two of them at once, so they could — and did — drift.
+ *
+ * `connectToGenie` is the single entry point. It is a TOOL, so an agent can
+ * call it, and a PROMPT under the same name, so a user can type it as a slash
+ * command in any client with a prompt picker. Same name on both, because a
+ * thing the user invokes by name and the agent calls by name being two
+ * different names is the confusion this consolidation exists to remove.
+ */
+const listTools = async () => {
+    const res = await handleMcpMessage({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, makeCtx());
+    return (res?.result as { tools: { name: string }[] }).tools;
+};
+const handle = (msg: Parameters<typeof handleMcpMessage>[0]) => handleMcpMessage(msg, makeCtx());
+
+describe('connectToGenie is the one entry point', () => {
+    it('is offered as a tool', async () => {
+        const listed = await listTools();
+        expect(listed.map((t: { name: string }) => t.name)).toContain('connectToGenie');
+    });
+
+    it('is offered as a prompt under the SAME name, so /connectToGenie works', async () => {
+        const res = await handle({ jsonrpc: '2.0', id: 1, method: 'prompts/list' });
+        const names = (res?.result as { prompts: { name: string }[] }).prompts.map((p) => p.name);
+        expect(names).toContain('connectToGenie');
+    });
+
+    it('advertises ONE name, so the tool list is not itself duplicative', async () => {
+        // The old name is ACCEPTED, not ADVERTISED. Listing both would put two
+        // entries for one thing in front of every agent -- the same duplication
+        // this consolidation exists to remove, just relocated.
+        const listed = await listTools();
+        expect(listed.map((t: { name: string }) => t.name)).not.toContain('initializeWorkspace');
+    });
+
+    it('resolves the old prompt name to the same orientation', async () => {
+        const res = await handle({
+            jsonrpc: '2.0',
+            id: 2,
+            method: 'prompts/get',
+            params: { name: 'initializeWorkspace' },
+        });
+        expect(res?.error).toBeUndefined();
+    });
+});
+
+/**
+ * ONE full statement of the protocol, not three.
+ *
+ * The same orientation was being delivered three times to every agent:
+ *
+ *  1. `GENIE_MCP_GUIDE`, 43KB, as the MCP server's `instructions` — pushed at
+ *     connect, unconditionally, whether or not the agent ever needed it;
+ *  2. the SAME 43KB again as the `genieGuide` tool result;
+ *  3. `GENIE_AGENTS_BRIEF`, 6KB, written into AGENTS.md and CLAUDE.md.
+ *
+ * Twelve of fifteen tools appeared in two of them at once, which is drift
+ * waiting to happen — and it had already happened, which is why the rest of
+ * this file exists.
+ *
+ * The split now: `instructions` carries the PROTOCOL — small, always delivered,
+ * enough to work — and `genieGuide` is the deep reference an agent asks for when
+ * it wants more. The AGENTS.md brief points at both instead of restating them.
+ */
+describe('the protocol is stated once', () => {
+    it('does not push the full 43KB manual at every agent on connect', async () => {
+        const res = await handle({ jsonrpc: '2.0', id: 1, method: 'initialize' });
+        const instructions = (res?.result as { instructions: string }).instructions;
+        expect(instructions.length).toBeLessThan(GENIE_MCP_GUIDE.length / 2);
+    });
+
+    it('still hands every agent the protocol it needs to work', async () => {
+        // Positive control for the size assertion above: smaller must not mean
+        // empty. An agent that never calls genieGuide still has to know the two
+        // tools that stop work stalling, and where to get the rest.
+        const res = await handle({ jsonrpc: '2.0', id: 1, method: 'initialize' });
+        const instructions = (res?.result as { instructions: string }).instructions;
+        for (const must of ['imDone', 'ForceTheQuestion', 'connectToGenie', 'genieGuide']) {
+            expect(instructions).toContain(must);
+        }
+    });
+
+    it('keeps the full manual reachable on demand', () => {
+        expect(GENIE_MCP_GUIDE.length).toBeGreaterThan(20_000);
+    });
+
+    it('makes the AGENTS.md brief a POINTER, not a third copy of the tool list', () => {
+        // It used to name twelve tools the guide also named. Whichever one an
+        // agent read, it believed — so the two disagreeing was a correctness
+        // problem, not a tidiness one.
+        const named = [
+            'manageSite', 'manageService', 'manageProcess', 'manageGappDev',
+            'manageTerminals', 'manageWorkspaces', 'checkIssues',
+        ].filter((t) => GENIE_AGENTS_BRIEF.includes(t));
+        expect(named).toEqual([]);
+    });
+
+    it('still points the agent at the entry point and the reference', () => {
+        expect(GENIE_AGENTS_BRIEF).toContain('connectToGenie');
+        expect(GENIE_AGENTS_BRIEF).toContain('genieGuide');
     });
 });

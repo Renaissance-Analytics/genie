@@ -142,3 +142,53 @@ export function agentDisplay(identity: AgentIdentity): {
 } {
     return { provider: identity.provider, name: agentName(identity.name) };
 }
+
+/* ── AMS ↔ AgentInbox: one agent, one id ─────────────────────────────────── */
+
+/**
+ * AMS and AgentInbox each invented an identity for the same agent:
+ *
+ *     AgentInbox   `terminal_specs.meta.agent_id`   a uuid  (c024b80b…)
+ *     AMS          `workspace_agents.id`            `agent:<terminalSpecId>`
+ *
+ * Nothing reconciled them, so an agent could be READY in one and INVISIBLE in
+ * the other at the same time. Measured on a live workstation: `thumbsUp` set
+ * `ready_at` on `agent:f633f4ed…` while `agentinbox list` returned no `self`,
+ * because the broker was looking for `c024b80b…`. Both calls returned ok.
+ * Neither helped.
+ *
+ * THE INBOX ID WINS, and the direction is not a preference: that id already keys
+ * durable messages, read receipts and peer addressing, so renaming it would break
+ * message history and every saved reference. The AMS row is the newer record and
+ * nothing outside AMS points at its id yet, so it is the one that moves.
+ */
+export interface AgentIdentityInputs {
+    /** `terminal_specs.meta.agent_id` of the bound terminal, when there is one. */
+    inboxAgentId: string | null | undefined;
+    /** The current `workspace_agents.id`. */
+    amsId: string;
+}
+
+/** PURE. The id BOTH systems should use for this agent. */
+export function unifiedAgentId(input: AgentIdentityInputs): string {
+    const inbox = String(input.inboxAgentId ?? '').trim();
+    // A registered agent that has never been started has no terminal and so no
+    // inbox identity. Minting one here would invent an id nothing has agreed to;
+    // the AMS id is already durable in its own table, so it stands.
+    return inbox.length > 0 ? inbox : input.amsId;
+}
+
+/**
+ * PURE. Should this row's id be rewritten?
+ *
+ * False when they already agree, so the migration is safe to re-run and a no-op
+ * launch does not churn `updated_at` — a row rewritten to itself makes every
+ * start look like a change.
+ *
+ * False for a workspace-level row (`workspace:<id>`), which is not terminal-backed
+ * and has no inbox identity to adopt. Those ids are pointed at by
+ * `parent_agent_id` and must not move.
+ */
+export function needsIdentityRewrite(input: AgentIdentityInputs): boolean {
+    return unifiedAgentId(input) !== input.amsId;
+}

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
     agentDisplay,
+    unifiedAgentId,
+    needsIdentityRewrite,
     agentName,
     agentRef,
     isAgentProvider,
@@ -115,5 +117,57 @@ describe('the human-facing display', () => {
         const b = agentDisplay({ provider: 'codex', name: 'tynn' });
         expect(a.name).toBe(b.name);
         expect(a.provider).not.toBe(b.provider);
+    });
+});
+
+/**
+ * ONE agent, ONE id.
+ *
+ * AMS and AgentInbox each invented an identity for the same agent:
+ *
+ *     AgentInbox   terminal_specs.meta.agent_id   a uuid  (c024b80b…)
+ *     AMS          workspace_agents.id            agent:<terminalSpecId>
+ *
+ * Nothing reconciled them, so an agent could be READY in one and INVISIBLE in
+ * the other at once. Measured live: `thumbsUp` set `ready_at` on
+ * `agent:f633f4ed…` while `agentinbox list` returned no `self`, because the
+ * broker was looking for `c024b80b…`. Both calls returned ok. Neither helped.
+ *
+ * THE INBOX ID WINS, and the direction is not a preference: it already keys
+ * durable messages, read receipts and peer addressing, so renaming it would
+ * break message history and every saved reference. The AMS row is newer and
+ * nothing outside AMS points at its id, so it is the one that moves.
+ */
+describe('unifiedAgentId', () => {
+    it('adopts the inbox id when the terminal already has one', () => {
+        expect(unifiedAgentId({ inboxAgentId: 'c024b80b', amsId: 'agent:term-1' })).toBe('c024b80b');
+    });
+
+    it('keeps the AMS id when the terminal has no inbox identity yet', () => {
+        // A registered agent that has never been started has no terminal and no
+        // inbox id. Minting one here would invent an identity nothing agreed to.
+        expect(unifiedAgentId({ inboxAgentId: null, amsId: 'uuid-fresh' })).toBe('uuid-fresh');
+    });
+
+    it('ignores a blank inbox id rather than adopting an empty identity', () => {
+        expect(unifiedAgentId({ inboxAgentId: '   ', amsId: 'agent:term-1' })).toBe('agent:term-1');
+    });
+});
+
+describe('needsIdentityRewrite', () => {
+    it('flags a legacy agent:<specId> row that has an inbox id to adopt', () => {
+        expect(needsIdentityRewrite({ inboxAgentId: 'c024b80b', amsId: 'agent:term-1' })).toBe(true);
+    });
+
+    it('does NOT rewrite a row that already agrees', () => {
+        // Idempotence: the migration must be safe to re-run, and a row rewritten
+        // to itself would churn updated_at and make every launch look like a change.
+        expect(needsIdentityRewrite({ inboxAgentId: 'c024b80b', amsId: 'c024b80b' })).toBe(false);
+    });
+
+    it('does NOT rewrite a workspace-level row, which has no terminal', () => {
+        // The TWA rows are not terminal-backed, have no inbox identity to adopt,
+        // and are the target of `parent_agent_id` — their ids must not move.
+        expect(needsIdentityRewrite({ inboxAgentId: null, amsId: 'workspace:ws-1' })).toBe(false);
     });
 });

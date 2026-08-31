@@ -36,7 +36,8 @@ wait.** Assume they can't see your terminal until you pull them to it.
 
 ## Orientation prompt (user-run, not a tool)
 
-**\`initializeWorkspace\`** is both an agent-callable MCP tool and an MCP prompt.
+**\`connectToGenie\`** (the name it shipped under, \`initializeWorkspace\`, still works)
+is both an agent-callable MCP tool and an MCP prompt.
 Call the tool on first boot of a fresh or newly-converted Genie workspace.
 Clients with prompt/slash-command UIs may invoke the prompt instead. It hands
 you a MAP of the workspace — the \`.agi\` envelope, its \`.ai/knowledge\`, and
@@ -417,11 +418,16 @@ For Codex, Genie automatically installs a SessionStart hook that sends Codex's g
   you completely.
   A private agent may initiate a DM to a visible agent; that recipient can reply
   in the durable thread without making the private sender externally discoverable.
-  Optional \`wakeOnDm\` (default ON): when ON, a DM is ANNOUNCED in your chat as soon as it arrives —
-  mid-turn is fine, your TUI queues it — carrying its urgency so you can decide
-  whether to break off. It is held back only while the HUMAN is typing at your
-  terminal or has a draft in the box. Turn it OFF to stay silent until you check
-  your inbox yourself.
+  Being reachable is PROTOCOL, not a preference — there is no opt-out, because an
+  agent that had silenced itself still looked reachable to everyone writing to it.
+  While your hooks are engaged, mail reaches you natively and NOTHING is ever put
+  in your chat — you are expected to read it. If you are running in a terminal
+  that is NOT attached to Genie's services, Genie falls back to your input box:
+  a new message is ANNOUNCED there immediately, carrying its urgency so you can
+  decide whether to break off, and it waits only while the HUMAN is typing or has
+  a draft. A second, separate reminder of how many messages are unread follows
+  ONLY if you were told and still have not looked — five minutes after delivery,
+  or once three or more stack up — and never mid-turn.
 Your identity + accessibility persist across restarts. Local-only — no relay, no
 cross-host. Use it to hand a peer context, ask another agent to take a task, or
 continue a durable direct conversation while you work.
@@ -667,7 +673,7 @@ multi-project workspace, an agent that waits silently is an agent that's stuck.
   Call it whenever you need to know which version you're on.
 - The server is reached at a fixed local URL written into this workspace's
   \`.mcp.json\`. Pass \`GENIE_TERMINAL_ID\` as \`terminalId\` for exact targeting.
-- \`initializeWorkspace\` is available through both \`tools/call\` and MCP prompts
+- \`connectToGenie\` (and its old name \`initializeWorkspace\`) is available through both
   (\`prompts/list\` / \`prompts/get\`) for client compatibility.
 - Enabled **plugins** contribute additional, namespaced tools that ride the same
   \`tools/list\` after the core set (e.g. \`presentation.createDeck\`,
@@ -677,21 +683,85 @@ multi-project workspace, an agent that waits silently is an agent that's stuck.
   guide (or \`tools/list\`) if you need the current set.
 `;
 
-/** Brief body synced into a workspace's AGENTS.md (points back to the full guide). */
-export const GENIE_AGENTS_BRIEF = `You are running inside **Genie** — a desktop UX that hosts many projects at once, each with its own terminals, editors, and background processes. You are **one of several agents in different terminals, and the user is NOT watching this one.** Anything you print here — "done", a question, "I'm blocked" — goes **UNSEEN** and silently stalls the work. The local \`genie\` MCP server (a fixed URL in this workspace's \`.mcp.json\`) is your ONLY channel to the user. This protocol is **which tool to use, WHEN to reach for it, and HOW** — follow it:
+/**
+ * THE PROTOCOL, stated once — the MCP server's `instructions`.
+ *
+ * This is pushed into every agent's context at connect, by the client, whether
+ * or not the agent ever asks for it. `GENIE_MCP_GUIDE` used to be what went
+ * here: 43KB of manual, on every connection, for every agent. It is now the
+ * on-demand reference behind `genieGuide`, and this is what arrives
+ * automatically — small enough to be worth pushing, complete enough to work
+ * from without calling anything.
+ *
+ * Keep it that way. Anything that is reference rather than protocol belongs in
+ * `GENIE_MCP_GUIDE`; a guide-sync test holds this under half its size.
+ */
+export const GENIE_PROTOCOL_BRIEF = `# Genie
 
-- **Fresh or newly converted workspace? → \`initializeWorkspace\`.** Call it once to receive the envelope/repo map and a numbered orientation plan. It is also available as an MCP prompt in clients that expose prompt pickers.
-- **Finished, or handing back? → \`imDone\` — ALWAYS, every time.** The instant you stop (done, blocked-and-waiting, or handing off), call it — otherwise your result sits unseen and the work stalls. Genie glows this terminal across the whole UI until the user looks. HOW: pass \`terminalId\` = your \`GENIE_TERMINAL_ID\` for exact targeting (required once the workspace has more than one terminal — Genie refuses to guess rather than glow the wrong one). NEVER end a turn by just printing "done".
-- **Need a decision, or blocked? → \`ForceTheQuestion\` — NEVER ask in plaintext and wait.** A plaintext question is invisible to the user. HOW: ONE call with 1–4 questions, each offering 2–4 options plus free text — **batch every open question together.** It returns immediately with active/away status; the answer arrives later through AgentInbox. Pass your \`terminalId\`.
-  - **WRITE the question as MARKDOWN, structured.** The modal renders markdown: a short lead sentence, then blank-line paragraphs / bullet lists / **bold** for the key facts. Never one run-on paragraph.
-  - **NAME THE ACTOR in every option.** The modal is read by the USER, so bare "I"/"you" invert and confuse. Convention: the agent = "Agent:"/"the agent", the user = "You:"/"you" — lead each option label with the actor (e.g. \`Agent: I create the repo and push\` vs \`You: you create the repo\`).
-- **Need to HOST a repo as a real site at \`<name>.gen\`, or give it a database/cache? → \`manageSite\` / \`manageService\` (the Hosting Manager).** \`manageSite\` runs the repo's dev server on the host against the live source and fronts it at \`https://<name>.gen\` over https (or serves a built directory / PHP app itself via \`hostServe\`). To host an app, use this — not a hand-rolled \`manageProcess\` process. \`manageService\` backs it with workstation-managed engines and injects the connection env (Docker/Podman needed for services); Redis is dedicated per workspace, while engines with safe native tenancy remain shared.
-- **Need a supervised background COMMAND (dev server, worker, SSR) or a cron job? → \`manageProcess\`.** Don't \`&\`-background it in a terminal — Genie's Processes feature owns these so they survive and stay controllable. HOW: \`list\` / \`create\` (label + command, optional repo + autostart; add a 5-field \`schedule\` to make it a cron task) / \`start\` / \`stop\` / \`restart\` / \`enable\` / \`disable\` / \`delete\` / \`run-now\`. To actually HOST an app, reach for \`manageSite\`, not this.
-- **Building a Genie App? → \`manageGappDev\`, and ASK it first.** A **GApp Development Workspace (GDW)** is a workspace whose linked Tynn project is marked \`is_gapp\` — where an app is BUILT, as opposed to where an installed one RUNS. **You cannot tell from the folder**, which looks like any other project; the user sees it in the workspace chrome and you do not. So call \`manageGappDev\` with \`action:'status'\` — it answers whether you are in one, names the source folder and the app's manifest, and every other action reports it too. Then \`check\` (the full suite over this folder — stricter than the installer, because an app that installs cleanly and opens on an empty window is what it exists to catch) and \`preview\` (a real GApp window on the LIVE source at \`<slug>.preview\`, so it cannot collide with an installed copy). The \`is_gapp\` flag is set by a human in Tynn; there is nothing to toggle in Genie.
-- **Need to run commands, read terminal output, or start/drive another coding agent? → \`manageTerminals\` / \`runAgent\`.** \`manageTerminals\` spawns + drives real terminals (\`create\` / \`write\` / \`read\` / \`list\` / \`kill\`); \`runAgent\` starts + steers a coding agent (claude / codex / custom) — here or in a workspace this Ops project governs. An agent is **SAVED workspace configuration**, addressed as \`{provider}:{name}\` (\`claude:tynn\`): \`runAgent list\` shows them, and \`start\` **REATTACHES** to one rather than spawning another — creating a new agent needs \`create: true\`. These are **HIGH-POWER** (arbitrary code + autonomous agents): \`create\` / \`write\` / creating an agent / \`send\` are approval-gated by default. Use \`manageWorkspaces\` to list / open / activate / remove the workspaces you can act on.
+You are running inside **Genie** — a desktop UX hosting many projects at once,
+each with its own terminals, editors and background processes. You are **one of
+several agents in different terminals, and the user is NOT watching this one.**
+Anything you print here — "done", a question, "I'm blocked" — goes **UNSEEN**
+and silently stalls the work. This \`genie\` MCP server is your ONLY channel to
+the user.
 
-**Harness-specific setup lives in \`genieGuide\`, not here.** Wiring your on-finish hook so \`imDone\` fires automatically, and anything else that differs between Claude Code and Codex, is in the guide — call it once and follow the snippet for YOUR harness. Genie won't configure it for you.
+**Start here → \`connectToGenie\`.** One call orients you: the workspace map (the
+\`.agi\` envelope and every repo), how your harness is wired to Genie, and what
+is still missing. It is also an MCP prompt, so the user can invoke it by name in
+any client with a prompt picker. (\`initializeWorkspace\` is the old name for it
+and still works.)
 
-**Engineering standard — NO BANDAIDS, EVER.** Fix the ROOT CAUSE, never paper over a symptom. Don't mask a vulnerable transitive dependency with an overrides pin when the real fix is updating the dependency that pulls it; don't swallow an error, hardcode around a bug, or weaken a test to make something pass. A bandaid is just a hidden bug — it WILL resurface. The moment a Dependabot / security alert (the sec count from checkIssues / imDone) shows up and no other work is in progress, fix it properly and ship it right away.
+**Two tools stop work from stalling. Reach for them instead of printing:**
 
-**The rule:** any time you'd otherwise stop, print, and wait — reach for the matching tool above instead. For full usage — and the running Genie version, which it reports first — call \`genieGuide\`.`;
+- **Finished, or handing back? → \`imDone\`, ALWAYS.** The instant you stop —
+  done, blocked, or handing off — call it, or your result sits unseen. Pass
+  \`terminalId\` = your \`GENIE_TERMINAL_ID\` (required once the workspace has more
+  than one terminal — Genie refuses to guess rather than glow the wrong one).
+  NEVER end a turn by just printing "done".
+- **Need a decision, or blocked? → \`ForceTheQuestion\`, NEVER a plaintext
+  question.** A printed question is invisible. ONE call carries 1–4 questions,
+  each with 2–4 options plus free text, so batch every open question together.
+  It returns immediately; the answer arrives later through AgentInbox. Write the
+  question as structured markdown, and NAME THE ACTOR in every option — the
+  modal is read by the USER, so bare "I"/"you" invert ("Agent: …" vs "You: …").
+
+**Everything else — hosting a site, background processes and cron, services,
+Genie Apps, driving terminals and other agents, workspaces, the knowledge graph
+— is in \`genieGuide\`.** Call it for the full usage of any of them; it reports
+the running Genie version first. Harness-specific setup (your on-finish hook)
+is there too, not here.
+
+**Engineering standard — NO BANDAIDS, EVER.** Fix the ROOT CAUSE, never paper
+over a symptom. Don't mask a vulnerable transitive dependency with an overrides
+pin when the real fix is updating the dependency that pulls it; don't swallow an
+error, hardcode around a bug, or weaken a test to make something pass. A bandaid
+is a hidden bug, and it WILL resurface.
+
+**The rule:** any time you'd otherwise stop, print, and wait — reach for the
+matching tool instead.`;
+
+/**
+ * The AGENTS.md / CLAUDE.md block: a POINTER, never a third copy.
+ *
+ * It used to restate the protocol, naming twelve of the fifteen tools the guide
+ * also named. Whichever one an agent happened to read it believed, so the two
+ * disagreeing was a correctness problem rather than an untidy one — and they
+ * did disagree. The protocol arrives over MCP; this file's job is to say so, and
+ * to survive being read by an agent whose MCP server has not come up yet.
+ */
+export const GENIE_AGENTS_BRIEF = `You are running inside **Genie**, and you are
+**one of several agents in different terminals — the user is NOT watching this
+one.** Anything you print here goes UNSEEN and silently stalls the work. The
+local \`genie\` MCP server (a fixed URL in this workspace's \`.mcp.json\`) is your
+ONLY channel to the user.
+
+- **Start with \`connectToGenie\`** — the workspace map, how your harness is
+  wired, and what is missing. The user can invoke it by name too.
+- **Never end a turn by printing "done" — call \`imDone\`.**
+- **Never ask a question in plaintext and wait — call \`ForceTheQuestion\`.**
+- **For anything else, call \`genieGuide\`** — the full reference, and the
+  running Genie version.
+
+The protocol itself reaches you as the genie MCP server's instructions when it
+connects, so it is not repeated here: this file and that one cannot disagree
+because only one of them states it.`;

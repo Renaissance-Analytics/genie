@@ -17,7 +17,12 @@ import {
 } from './types';
 import { agentRef } from '../agents/identity';
 import { noopAgentInboxStore, type AgentInboxStore, type StoredAttachment } from './store';
-import { shouldWakeAgent, wakeNudgeText } from './wake';
+import {
+    nudgeWarranted,
+    shouldWakeAgent,
+    wakeNudgeText,
+    NUDGE_UNCHECKED_MS,
+} from './wake';
 import { containsHumanInput, inboxNoticeText } from './notify';
 import { EMPTY_DRAFT, noteDraft, planNudge, type Draft, type NudgePlan } from './draft';
 
@@ -88,8 +93,15 @@ interface AgentInboxAgent extends Omit<AgentInboxAgentInfo, 'reachable' | 'ref'>
      *  store so restart-survival + unACKed-urgent escalation (Track C) work. */
     cursor: number;
     /** Opt-in wake-on-DM (issue #9): a DM to an IDLE agent may inject a nudge to
-     *  start a turn. Default OFF — a persisted preference (spec meta). */
+     *  start a turn. Default OFF — a persisted preference (spec meta).
+     *  @deprecated Reachability is protocol, not preference — see ./wake. Kept
+     *  only because it is persisted in spec meta; nothing reads it to decide.
+     */
     wakeOnDm: boolean;
+    /** The armed 5-minute unchecked-inbox deadline, or null. Not a poll: one
+     *  timer per agent, armed on a delivery the harness did not take and
+     *  cleared the moment the agent's cursor moves. */
+    nudgeTimer: ReturnType<typeof setTimeout> | null;
     /** Epoch ms the agent's last turn ended (imDone), or null. Wake-on-DM idle signal. */
     lastTurnEndAt: number | null;
     /** Epoch ms of the agent terminal's last output byte, or null. Wake-on-DM idle signal. */
@@ -264,7 +276,13 @@ export class AgentInboxBroker {
      *  wake-on-DM idle signal. No-op for a terminal with no agent. */
     markTurnEnd(terminalId: string): void {
         const a = this.agentForTerminal(terminalId);
-        if (a) a.lastTurnEndAt = this.now();
+        if (!a) return;
+        a.lastTurnEndAt = this.now();
+        // The agent just became idle, which is the OTHER half of the nudge
+        // decision. A deadline that expired while it was mid-turn found it
+        // unsafe to inject and correctly did nothing; without this the mail
+        // would then sit unread forever, because nothing else would ask again.
+        this.scheduleNudge(a);
     }
 
     /** Record that an agent terminal produced OUTPUT — any output SINCE a turn end
@@ -301,37 +319,54 @@ export class AgentInboxBroker {
     }
 
     /**
+     * The agent's internal hooks are NOT engaged — it is running in a terminal
+     * but not attached to Genie's services, so the durable message would sit
+     * unread with the sender seeing nothing but a stale read-receipt.
+     *
+     * Two things, deliberately rate-limited differently:
+     *
+     *  - the ANNOUNCEMENT, immediately. It is the only thing that tells this
+     *    agent something arrived.
+     *  - the WAKE, as a backstop, if it was told and STILL has not looked. That
+     *    one waits out {@link nudgeWarranted}, and the one-wake-per-idle-period
+     *    gate stops it landing a second prompt on top of the announcement it
+     *    just made.
+     */
+    private notAttached(agent: AgentInboxAgent, msg: AgentInboxMessage): void {
+        this.notifyNow(agent, msg);
+        this.scheduleNudge(agent);
+    }
+
+    /**
      * Announce a just-delivered message in the agent's own chat, IMMEDIATELY —
-     * the owner's beta.248 change, now with PRESERVE-AND-RESTORE (JOB 2).
+     * the owner's beta.248 behaviour, now scoped to agents that need it.
      *
-     * A busy agent used to hear nothing until its turn ended. A TUI queues text
-     * that arrives mid-turn (it is how a human interjects), so the message is
-     * simply announced when it lands, with its urgency, and the agent decides
-     * whether to break flow.
+     * ONLY reached when the agent's internal hooks are not engaged: the harness
+     * declined delivery, threw, or there is no transport at all. An ATTACHED
+     * agent already has the message natively, and injecting a notice on top of
+     * that would be a second copy of something it is already holding.
      *
-     * What used to stop it was the HUMAN's draft: a half-written prompt in the
-     * box meant the notice was dropped entirely. It no longer is. Instead
-     * {@link planNudge} decides how it can land without costing them anything:
-     * an empty box takes it and submits; a draft Genie is CERTAIN of is cut out,
-     * the notice submitted, and the draft pasted back; and when Genie is not
-     * certain the notice is appended WITHOUT being submitted, so nothing of
-     * theirs is cut, and the host raises a toast telling them it is there.
+     * For an unattached agent this stays immediate on purpose. It is the only
+     * thing that tells it something arrived, so delaying it behind the wake's
+     * five-minute rule would leave it blind for five minutes. Mid-turn is fine —
+     * a TUI queues text, which is how a human interjects — and it carries the
+     * urgency so the agent decides whether to break off.
+     *
+     * What holds it back is the HUMAN's draft, and only as far as it must:
+     * {@link planNudge} takes an empty box and submits; cuts out a draft Genie is
+     * CERTAIN of, submits, and pastes it back; and when Genie is not certain,
+     * appends WITHOUT submitting so nothing of theirs is cut, raising a toast
+     * instead. Returns whether the notice actually landed.
      */
     private notifyNow(target: AgentInboxAgent, msg: AgentInboxMessage): boolean {
         if (!this.wakeSink || !target.terminalId) return false;
-        // The per-agent toggle governs THIS too, and defaults ON (owner). Someone
-        // who deliberately silenced an agent keeps that silence — a setting that
-        // stops being honoured is worse than no setting.
-        if (!target.wakeOnDm) return false;
         const text = inboxNoticeText({
             from: msg.fromLabel,
             priority: msg.interrupt ? 'high' : 'normal',
         });
         const plan = planNudge(target.draft);
         if (plan.mode === 'defer') {
-            this.pendingNudges.set(target.terminalId, {
-                text,
-            });
+            this.pendingNudges.set(target.terminalId, { text });
             this.pendingNudgeSink?.({ terminalId: target.terminalId, pending: true });
             return true;
         }
@@ -348,13 +383,108 @@ export class AgentInboxBroker {
                 return false;
             }
             // Submitting text to an idle TUI IS what starts a turn, so a delivered
-            // notice is also the wake — the caller skips maybeWake and the agent
-            // gets ONE injection, not two competing prompts.
+            // notice is also a wake: record it, and the one-wake-per-idle-period
+            // gate keeps the backstop from firing a second prompt on top of it.
             target.lastWokenAt = this.now();
             return true;
         } catch {
             /* a failed notice still leaves the message in the inbox to be pulled */
             return false;
+        }
+    }
+
+    /**
+     * The PTY-nudge FALLBACK, and when it is allowed to fire.
+     *
+     * `deliverToHarness` owns live delivery: an agent attached to Genie's
+     * services gets its mail natively and its cursor moves, so none of this
+     * runs. What this covers is the case the owner named — an agent RUNNING in a
+     * terminal but not attached, where the durable message would otherwise sit
+     * unread with the sender seeing nothing but a stale read-receipt.
+     *
+     * Two gates, and both must pass:
+     *
+     *  - {@link nudgeWarranted} — WHETHER. Unchecked for five minutes after
+     *    delivery, or three or more stacked. Delivery on its own is not an
+     *    interruption; this is what stopped every DM to an idle agent from
+     *    starting a turn on arrival.
+     *  - {@link shouldWakeAgent} — WHETHER IT IS SAFE. Unchanged, and still
+     *    fail-closed: injecting into an agent that is mid-turn corrupts it.
+     *
+     * The five-minute rule needs something to happen at five minutes, which a
+     * delivery event cannot provide. That is ONE timer per agent, armed here and
+     * cleared the moment the cursor moves — a deadline, not a poll.
+     */
+    private scheduleNudge(target: AgentInboxAgent): void {
+        if (!this.wakeSink || !target.terminalId) return;
+        const unread = target.inbox.filter((m) => m.seq > target.cursor);
+        if (unread.length === 0) {
+            this.clearNudge(target);
+            return;
+        }
+        const oldestUnreadAt = unread[0]!.ts;
+        if (nudgeWarranted({ unread: unread.length, oldestUnreadAt, now: this.now() })) {
+            this.fireNudge(target);
+            return;
+        }
+        // Not yet warranted: come back when the unchecked window is up. Re-arming
+        // on every delivery would push the deadline out forever on a busy inbox,
+        // so an armed timer is left alone — it is already counting from the
+        // OLDEST unread, which is the message that has waited longest.
+        if (target.nudgeTimer) return;
+        const due = oldestUnreadAt + NUDGE_UNCHECKED_MS - this.now();
+        // Evaluate ONCE when it expires and never re-arm from inside itself.
+        // A callback that re-schedules whenever the answer is still 'not yet'
+        // spins forever against a clock that has not moved -- which is not
+        // hypothetical: it is what a fake-timer test does, and `runAllTimers`
+        // hung on it. Nothing is lost by stopping, because the two things that
+        // can change the answer -- another message, or the agent going idle --
+        // both call back in here on their own.
+        target.nudgeTimer = setTimeout(() => {
+            target.nudgeTimer = null;
+            const still = target.inbox.filter((m) => m.seq > target.cursor);
+            if (still.length === 0) return;
+            if (
+                nudgeWarranted({
+                    unread: still.length,
+                    oldestUnreadAt: still[0]!.ts,
+                    now: this.now(),
+                })
+            ) {
+                this.fireNudge(target);
+            }
+        }, Math.max(0, due));
+    }
+
+    /** Drop an armed deadline — the agent read its mail, or has none left. */
+    private clearNudge(target: AgentInboxAgent): void {
+        if (!target.nudgeTimer) return;
+        clearTimeout(target.nudgeTimer);
+        target.nudgeTimer = null;
+    }
+
+    /** Warranted AND safe: put the nudge in the box. Best-effort by design — a
+     *  failed inject leaves the mail queued for the next deadline. */
+    private fireNudge(target: AgentInboxAgent): void {
+        if (!this.wakeSink || !target.terminalId) return;
+        const safe = shouldWakeAgent({
+            lastTurnEndAt: target.lastTurnEndAt,
+            lastOutputAt: target.lastOutputAt,
+            lastUserInputAt: target.lastUserInputAt,
+            lastWokenAt: target.lastWokenAt,
+            now: this.now(),
+        });
+        if (!safe) return;
+        const unread = target.inbox.filter((m) => m.seq > target.cursor).length;
+        target.lastWokenAt = this.now();
+        try {
+            this.wakeSink({
+                terminalId: target.terminalId,
+                text: wakeNudgeText(unread),
+                plan: planNudge(target.draft),
+            });
+        } catch {
+            /* a failed nudge just leaves the mail for read-receipts + the next deadline */
         }
     }
 
@@ -374,7 +504,6 @@ export class AgentInboxBroker {
     private maybeWake(target: AgentInboxAgent): void {
         if (!this.wakeSink || !target.terminalId) return;
         const wake = shouldWakeAgent({
-            wakeOnDm: target.wakeOnDm,
             lastTurnEndAt: target.lastTurnEndAt,
             lastOutputAt: target.lastOutputAt,
             lastUserInputAt: target.lastUserInputAt,
@@ -412,7 +541,6 @@ export class AgentInboxBroker {
         const a = this.agentForTerminal(terminalId);
         if (!a) return false;
         const wake = shouldWakeAgent({
-            wakeOnDm: true,
             lastTurnEndAt: a.lastTurnEndAt,
             lastOutputAt: a.lastOutputAt,
             lastUserInputAt: a.lastUserInputAt,
@@ -533,6 +661,9 @@ export class AgentInboxBroker {
     private ackCursor(agent: AgentInboxAgent, cursor: number): void {
         if (cursor > agent.cursor) {
             agent.cursor = cursor;
+            // It looked. Whatever deadline was counting is moot -- and leaving it
+            // armed would nudge an agent that is up to date.
+            this.clearNudge(agent);
             this.store.setCursor(agent.agentId, cursor);
             this.resolveEscalations(agent.agentId, cursor);
             // The agent just caught up — the header's agent-lag level dropped.
@@ -670,6 +801,7 @@ export class AgentInboxBroker {
             // (owner, beta.248) — an agent is told about its mail unless someone
             // explicitly turned it off.
             wakeOnDm: input.wakeOnDm ?? existing?.wakeOnDm ?? true,
+            nudgeTimer: existing?.nudgeTimer ?? null,
             lastTurnEndAt: existing?.lastTurnEndAt ?? null,
             lastOutputAt: existing?.lastOutputAt ?? null,
             lastWokenAt: existing?.lastWokenAt ?? null,
@@ -722,6 +854,7 @@ export class AgentInboxBroker {
         const a = this.agents.get(agentId);
         if (!a) return;
         this.settleWaiter(a);
+        this.clearNudge(a);
         this.agents.delete(agentId);
         this.byTerminal.delete(a.terminalId);
         if (this.pendingNudges.delete(a.terminalId)) {
@@ -829,7 +962,12 @@ export class AgentInboxBroker {
     }
 
     private deliverToHarness(agent: AgentInboxAgent, msg: AgentInboxMessage): void {
-        if (!this.transportSink) return;
+        if (!this.transportSink) {
+            // No native transport at all: this agent is not attached to Genie's
+            // services, which is precisely the case the PTY fallback exists for.
+            this.notAttached(agent, msg);
+            return;
+        }
         try {
             const accepted = this.transportSink(
                 {
@@ -842,12 +980,21 @@ export class AgentInboxBroker {
             if (accepted && typeof (accepted as Promise<boolean>).then === 'function') {
                 void Promise.resolve(accepted).then((ok) => {
                     if (ok) this.acknowledge(agent.agentId, msg.seq);
-                }).catch(() => {});
+                    else this.notAttached(agent, msg);
+                }).catch(() => this.notAttached(agent, msg));
             } else if (accepted === true) {
                 this.acknowledge(agent.agentId, msg.seq);
+            } else if (accepted === false) {
+                // Declined outright: the harness is there and said no. Only
+                // `false` means that. Returning NOTHING is an adapter that took
+                // the message and leaves the ACK to the agent's own fetch — it
+                // is attached, and treating that as a refusal would inject a
+                // PTY notice for mail the agent already has.
+                this.notAttached(agent, msg);
             }
         } catch {
-            /* durable inbox remains queued; there is never a PTY fallback */
+            /* durable inbox remains queued; the PTY is the only way to say so */
+            this.notAttached(agent, msg);
         }
     }
 

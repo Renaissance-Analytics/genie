@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decideAgentStart, savedAgentsOf, type SavedAgent } from '../saved';
+import { adoptableAgentSpec, decideAgentStart, savedAgentsOf, type SavedAgent } from '../saved';
 
 /**
  * The `runAgent start` decision (Tynn #254) — reattach, create, or refuse.
@@ -224,5 +224,61 @@ describe('a start that names nothing', () => {
     it('still refuses to create one implicitly', () => {
         const d = decideAgentStart([], REQ);
         expect(d.kind).toBe('refuse');
+    });
+});
+
+/**
+ * A registered agent has ONE terminal. `runAgent start` binds the terminal it
+ * creates onto the `workspace_agents` row, and a bind REPLACES whatever was
+ * there — so a start that reaches the create path while the agent's previous
+ * terminal is still alive leaves that terminal behind, still carrying
+ * `meta.agent` and the same `whisper_purpose`.
+ *
+ * Nothing reaps it, and the AMS grid draws a square per agent-stamped spec, so
+ * the abandoned terminal keeps rendering as a second agent under the same name.
+ * Observed in the wild: the Tynn workspace held ONE registered `claude:tynn` and
+ * THREE specs rendering "tynn", two of them bound to nothing.
+ *
+ * So before creating, look for a terminal that already IS this agent. Matching
+ * on provider AND name is the same identity the grid renders and the registry
+ * keys on, which is what makes adopting it correct rather than a guess.
+ */
+describe('adopting an agent terminal that is already there', () => {
+    const spec = (id: string, agent: string, purpose: string) => ({
+        id,
+        workspace_id: 'ws',
+        meta: { agent, whisper_purpose: purpose },
+    });
+
+    it('adopts the live terminal instead of minting a second one', () => {
+        const saved = savedAgentsOf(
+            [spec('t1', 'claude', 'tynn')],
+            'ws',
+            () => true,
+        );
+        expect(adoptableAgentSpec(saved, 'claude', 'tynn')?.specId).toBe('t1');
+    });
+
+    it('adopts a terminal that is saved but not running', () => {
+        // "Not live" is not "not there" — reviving it is the whole point of a
+        // saved agent, and creating instead would strand its conversation.
+        const saved = savedAgentsOf([spec('t1', 'claude', 'tynn')], 'ws', () => false);
+        expect(adoptableAgentSpec(saved, 'claude', 'tynn')?.specId).toBe('t1');
+    });
+
+    it('does not adopt the same name under a DIFFERENT provider', () => {
+        // `codex:tynn` and `claude:tynn` are two agents. The registry's unique
+        // key is (workspace, provider, name), and this must agree with it.
+        const saved = savedAgentsOf([spec('t1', 'codex', 'tynn')], 'ws', () => true);
+        expect(adoptableAgentSpec(saved, 'claude', 'tynn')).toBeUndefined();
+    });
+
+    it('does not adopt a different agent of the same provider', () => {
+        const saved = savedAgentsOf([spec('t1', 'claude', 'other')], 'ws', () => true);
+        expect(adoptableAgentSpec(saved, 'claude', 'tynn')).toBeUndefined();
+    });
+
+    it('has nothing to adopt in an empty workspace', () => {
+        expect(adoptableAgentSpec([], 'claude', 'tynn')).toBeUndefined();
     });
 });
