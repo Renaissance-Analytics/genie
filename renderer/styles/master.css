@@ -920,15 +920,22 @@
    Security · Feedback), grey when nothing to act on, lit when there's something
    open. */
 .iw-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
+    /* A SQUARE, not a pill (owner). The first pass at this rounded the CORNERS
+       and left the box content-sized, so four dots in a row kept it a 40x13
+       lozenge sitting beside 18x18 avatars -- square-cornered and still
+       visibly a different KIND of control. The dots WRAP now; the wrap is what
+       makes the shape, rather than a radius laid over a strip. */
+    display: inline-grid;
+    grid-template-columns: 1fr 1fr;
+    place-items: center;
+    gap: 2px;
     flex: 0 0 auto;
-    padding: 3px 6px;
-    /* A SQUARE, not a pill (owner): it sits in a row of boxes now -- sites,
-       processes, agents -- and a lozenge among squares reads as a different
-       KIND of thing rather than a sibling. */
-    border-radius: var(--radius-md);
+    /* One edge for the whole row -- see .ws-agent-avatar, which sets it. */
+    width: 18px;
+    height: 18px;
+    padding: 2px;
+    position: relative;
+    border-radius: var(--radius-sm);
     background: var(--bg-2);
     border: 1px solid var(--border-1);
     cursor: pointer;
@@ -939,16 +946,26 @@
 .iw-pill.unknown {
     border-style: dashed;
 }
+/* In a 2x2 the `?` would land as a FIFTH cell and push the grid back out into
+   a strip, so it overlays instead -- and the dots stand down while it shows,
+   because "unknown" is not four counts of zero. */
+.iw-pill.unknown .iw-dot {
+    visibility: hidden;
+}
 .iw-pill.unknown::after {
     content: '?';
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
     color: var(--fg-3);
-    font-size: 9px;
+    font-size: 10px;
     font-weight: 700;
-    line-height: 7px;
+    line-height: 1;
 }
 .iw-pill .iw-dot {
-    width: 7px;
-    height: 7px;
+    width: 5px;
+    height: 5px;
     border-radius: 50%;
     background: var(--fg-4);
     opacity: 0.45;
@@ -3795,18 +3812,18 @@ body.gutter-dragging .grid-gutter {
 .tproj-head .runtime-pill {
     display: inline-grid;
     grid-template-columns: 1fr 1fr;
-    width: 30px;
-    height: 14px;
+    width: 18px;
+    height: 18px;
     padding: 2px;
     gap: 2px;
     flex: 0 0 auto;
     cursor: pointer;
     border: 1px solid var(--border-1);
-    /* A SQUARE too. The owner calls these the row's "side boxes", and
-       squaring only the IssueWatch control would leave the mismatch that
-       change was made to remove -- a lozenge beside a square reads as a
-       different KIND of thing rather than a sibling. */
-    border-radius: var(--radius-md);
+    /* A SQUARE too, on the same 18px edge. The owner calls these the row's
+       "side boxes", and squaring only the IssueWatch control would leave the
+       mismatch that change was made to remove. Two halves still: left is
+       background processes, right is hosted sites. */
+    border-radius: var(--radius-sm);
     background: color-mix(in srgb, var(--bg-2) 90%, transparent);
 }
 .tproj-head .runtime-pill:hover,

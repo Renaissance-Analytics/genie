@@ -383,15 +383,38 @@ Some shapes it takes:
   to get from an agent that already holds the context.
 - **Review from another perspective.** Have one driver write and another read --
   the reviewer has the same repo and the same history, and no handover is needed.
+- **A COLD read.** The opposite case: a fresh driver has none of this
+  conversation's history, so it reads a file, a diff or a spec without being
+  shaped by the argument you have been having. Sometimes that is the only way to
+  find out that the premise was wrong.
+- **Reaching a tool the other driver does not have.** Harnesses differ in their
+  MCP servers, skills, sandboxing and file access. A sidecar is how one agent
+  uses a capability that only one of its drivers ships.
 - **Shuttling data.** Long, mechanical fetch-and-transform work parked on a
   sidecar leaves the visible driver free for the conversation you are actually
   having.
 - **Administrative work.** Housekeeping, migrations, batch edits: real work that
   does not need to occupy the driver you are talking to.
+- **Watching something slow.** A build, a deploy, a log tail, a queue. The
+  sidecar sits on it and reports; you are not blocked and neither is the driver
+  you are talking to.
+- **Rehearsing something risky.** Run it on the sidecar first and look at what
+  happened, rather than finding out in the conversation that matters.
+- **Shaping cost or latency.** Put wide, cheap, mechanical passes on one driver
+  and the reasoning on another. They are the same agent, so nothing is handed
+  over.
+- **Parking a thread.** An unfinished line of work gets its own driver and stops
+  weighing on the main conversation -- still there, still warm, not in the way.
+- **Handling traffic from elsewhere.** Inbox mail, questions from other
+  workspaces, an Ops parent checking in: a sidecar can carry that while the
+  fronted driver stays on the task.
+- **Whatever the work actually needs.** This list is examples, not a menu.
 
 None of those is a separate feature to switch on -- they are things the same
-capability is put to. Reach for whichever fits the work in front of you, or
-something not listed here.
+capability is put to, and the list is deliberately not a taxonomy. Reach for
+whichever fits the work in front of you, or for something nobody has written
+down yet. If you find yourself asking whether a purpose is "supported", it is:
+Genie builds the driver, and what it is for is not Genie's call.
 
 **Costs, so they are chosen and not discovered.** Every live sidecar is a real
 process holding a real conversation, and it spends tokens when it works. Genie
