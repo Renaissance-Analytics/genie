@@ -120,7 +120,7 @@ import { decideAppTarget } from '../apps/scope';
 // WHO is calling (Tynn #250) now lives in `caller-workspace.ts`, so the GApp
 // development tools can share it without importing this module back.
 export { callerWorkspaceIdFor, resolveCallerFor } from './caller-workspace';
-import { callerWorkspaceIdFor, resolveCallerFor } from './caller-workspace';
+import { callerWorkspaceIdFor, callerWorkspaceDescriptor, resolveCallerFor } from './caller-workspace';
 import { gappDevStatusFor } from './gapp-dev-tools';
 import { readTynnLink } from '../tynn/provision';
 import {
@@ -2207,11 +2207,17 @@ export async function agentInboxForMcp(
     req: AgentInboxRequest,
 ): Promise<AgentInboxResult> {
     const spec = callerTerminalId ? getTerminalSpec(callerTerminalId) : null;
-    if (!spec || !spec.workspace_id) {
+    // genie#321 — resolved through `callerWorkspaceDescriptor`, not by reading
+    // `spec.workspace_id` raw. The System Workspace has no `workspaces` row by
+    // design; its specs carry `workspace_id: null` + `meta.system === true`.
+    // Reading the column directly made the Genie OS agent — the one agent that
+    // is always a System spec — "not in a workspace", so it could not use the
+    // inbox, could not register a transport, and therefore could never signal
+    // boot complete. A terminal genuinely in no workspace is still refused.
+    const ws = spec ? callerWorkspaceDescriptor(spec, (id) => getWorkspace(id)) : null;
+    if (!spec || !ws) {
         return { ok: false, error: 'This terminal is not in a workspace, so it can’t use agentinbox.' };
     }
-    const ws = getWorkspace(spec.workspace_id);
-    if (!ws) return { ok: false, error: 'Workspace not found.' };
 
     // Resolve — or lazily create — the caller's AgentInbox identity.
     let agentId = spec.meta?.agent_id;
@@ -2229,8 +2235,8 @@ export async function agentInboxForMcp(
             agentId,
             terminalId: spec.id,
             workspaceId: ws.id,
-            workspaceName: ws.project_name,
-            slug: workspaceSlug(ws),
+            workspaceName: ws.name,
+            slug: ws.slug,
             agentType: meta.agent as AgentInboxAgentType,
             label: spec.label,
             purpose: meta.whisper_purpose!,
@@ -2256,8 +2262,8 @@ export async function agentInboxForMcp(
             agentId,
             terminalId: spec.id,
             workspaceId: ws.id,
-            workspaceName: ws.project_name,
-            slug: workspaceSlug(ws),
+            workspaceName: ws.name,
+            slug: ws.slug,
             agentType: (spec.meta?.agent as AgentInboxAgentType) ?? 'custom',
             label: spec.label,
             purpose: normalizePurpose(spec.meta?.whisper_purpose),
