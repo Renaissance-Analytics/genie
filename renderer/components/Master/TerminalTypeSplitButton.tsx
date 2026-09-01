@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useOverlayRoot } from '../../lib/use-overlay-root';
-import { IconChevronDown, IconCode } from './icons';
+import { IconChevronDown, IconCode, IconPlus } from './icons';
 import AgentTerminalForm, { type AgentFormValues } from './AgentTerminalForm';
 import {
     api,
@@ -19,6 +19,7 @@ import {
     type TerminalTypeId,
 } from '../../lib/terminal-types';
 import { anchoredPopoverTop } from '../../lib/anchored-popover';
+import { addPanelMainButton } from '../../lib/add-panel-button';
 
 /**
  * The split "Add Terminal" button — generalizes the old AddViewButton. The MAIN
@@ -47,6 +48,7 @@ export default function TerminalTypeSplitButton({
     agentOnly = false,
     panelLauncher = false,
     allowAgents = true,
+    iconOnly = false,
 }: {
     disabled: boolean;
     disabledReason?: string;
@@ -77,6 +79,13 @@ export default function TerminalTypeSplitButton({
     panelLauncher?: boolean;
     /** System workspace uses Add Panel too, but cannot create project agents. */
     allowAgents?: boolean;
+    /**
+     * Render the main button as a compact plus icon instead of a labelled pill —
+     * the workspace header, where it sits in a row of `.gicon` buttons and a
+     * bright accent pill reads as noise. The name moves to `aria-label`/`title`;
+     * see `addPanelMainButton`.
+     */
+    iconOnly?: boolean;
 }) {
     // Portal target: NEVER document.body -- Genie's surface tokens live on
     // .gwrap/.genie-overlay-root, and a portal outside that subtree resolves
@@ -253,6 +262,15 @@ export default function TerminalTypeSplitButton({
             ? panelLauncherTypes().filter((type) => allowAgents || !type.specialized)
             : TERMINAL_TYPES;
     const menuOnly = agentOnly || panelLauncher;
+    const mainBtn = addPanelMainButton({
+        panelLauncher,
+        agentOnly,
+        lastTypeLabel: lastDef.label,
+        iconOnly,
+        disabled,
+        disabledReason,
+    });
+    const openMain = () => (menuOnly ? setMenuOpen((o) => !o) : pickType(lastDef.id));
 
     return (
         <div
@@ -260,22 +278,31 @@ export default function TerminalTypeSplitButton({
             ref={ref}
             title={disabled ? disabledReason : undefined}
         >
-            <button
-                type="button"
-                className="gbtn accent addview-main"
-                onClick={() => menuOnly ? setMenuOpen((open) => !open) : pickType(lastDef.id)}
-                disabled={disabled}
-                title={disabled
-                    ? disabledReason
-                    : panelLauncher
-                        ? 'Add a panel'
-                        : agentOnly
-                            ? 'Create a workspace agent'
-                            : `Add ${lastDef.label}`}
-            >
-                {menuOnly ? <IconCode size={14} /> : <LastIcon size={14} />}
-                {panelLauncher ? 'Add Panel…' : agentOnly ? 'New Agent…' : `Add ${lastDef.label}`}
-            </button>
+            {mainBtn.iconOnly ? (
+                <button
+                    type="button"
+                    className="gicon"
+                    onClick={openMain}
+                    disabled={disabled}
+                    title={mainBtn.title}
+                    aria-label={mainBtn.accessibleName}
+                    aria-haspopup={menuOnly ? 'menu' : undefined}
+                    aria-expanded={menuOnly ? menuOpen : undefined}
+                >
+                    <IconPlus size={16} />
+                </button>
+            ) : (
+                <button
+                    type="button"
+                    className="gbtn accent addview-main"
+                    onClick={openMain}
+                    disabled={disabled}
+                    title={mainBtn.title}
+                >
+                    {menuOnly ? <IconCode size={14} /> : <LastIcon size={14} />}
+                    {mainBtn.label}
+                </button>
+            )}
             {!menuOnly && <button
                 type="button"
                 className="gbtn accent addview-caret"
