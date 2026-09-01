@@ -43,7 +43,7 @@ describe('the AgentInbox channel flag checks its preconditions (#319)', () => {
         });
 
         expect(cmd).toBe('claude');
-        expect(cmd).not.toContain('--dangerously-load-development-channels');
+        expect(cmd).not.toContain('--channels');
     });
 
     it('adds the flag when the adapter is actually there', () => {
@@ -55,9 +55,9 @@ describe('the AgentInbox channel flag checks its preconditions (#319)', () => {
             workspacePath: workspace(true),
         });
 
-        expect(cmd).toContain(
-            '--dangerously-load-development-channels server:genie-agentinbox-channel',
-        );
+        // Since #324 this is the APPROVED-channel flag, not the interactive
+        // development one — see approved-channels-flag.test.ts.
+        expect(cmd).toContain('--channels server:genie-agentinbox-channel');
     });
 
     it('still refuses a non-claude agent even with the adapter present', () => {

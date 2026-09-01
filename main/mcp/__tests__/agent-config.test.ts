@@ -50,7 +50,7 @@ describe('withClaudeAgentInboxChannelLaunch', () => {
             workspacePath,
         });
         expect(once).toBe(
-            'claude --model opus --dangerously-load-development-channels server:genie-agentinbox-channel',
+            'claude --model opus --channels server:genie-agentinbox-channel',
         );
         expect(withClaudeAgentInboxChannelLaunch(once, {
             agent: 'claude',
