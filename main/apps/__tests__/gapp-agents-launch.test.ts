@@ -309,7 +309,7 @@ describe('a GApp that declares an agent', () => {
             'reviewer',
             'strategist',
         ]);
-        expect(saved.every((a) => a.provider === 'claude')).toBe(true);
+        expect(saved.every((a) => a.tui === 'claude')).toBe(true);
         // POSITIVE CONTROL — these are live agents with durable identities, not
         // rows that merely parse. "Two names came back" would also be true of two
         // empty shells, which is the bug this whole area keeps producing.

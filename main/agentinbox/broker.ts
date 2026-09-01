@@ -768,7 +768,7 @@ export class AgentInboxBroker {
             // every consumer assembling its own and one of them getting the order
             // or the separator wrong.
             ref: agentRef({
-                provider: a.agentType,
+                tui: a.agentType,
                 name: a.purpose,
                 chatSessionId: a.chatSessionId,
             }),

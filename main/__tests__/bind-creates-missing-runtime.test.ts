@@ -62,14 +62,14 @@ addWorkspace({
 });
 
 let seq = 0;
-/** A freshly REGISTERED agent: provider chosen, no runtime — what the New
+/** A freshly REGISTERED agent: tui chosen, no runtime — what the New
  *  Agent form produces. */
-function registeredAgent(name: string, provider = 'claude'): string {
+function registeredAgent(name: string, tui = 'claude'): string {
     const id = `bindnew-${++seq}`;
     createWorkspaceAgent({
         id,
         workspace_id: WS,
-        provider,
+        tui,
         name,
         purpose: '',
         avatar: null,
@@ -115,11 +115,11 @@ describe('binding an agent that has never run', () => {
         expect(frontedAgentRuntime(id)?.terminal_spec_id).toBe(term);
     });
 
-    it('records the agent’s provider on the runtime it creates', () => {
+    it('records the agent’s tui on the runtime it creates', () => {
         const id = registeredAgent('fresh-codex', 'codex');
         bindWorkspaceAgentTerminal(id, terminal('term-new-2'));
 
-        expect(frontedAgentRuntime(id)?.provider).toBe('codex');
+        expect(frontedAgentRuntime(id)?.tui).toBe('codex');
     });
 
     it('creates exactly ONE runtime, and re-binding does not add another', () => {
@@ -135,7 +135,7 @@ describe('binding an agent that has never run', () => {
         // POSITIVE CONTROL for the create path: the existing-runtime case that
         // #310 fixed must keep working, not gain a second row.
         const id = registeredAgent('already-running');
-        const existing = createAgentRuntime({ agentId: id, provider: 'claude', fronted: true });
+        const existing = createAgentRuntime({ agentId: id, tui: 'claude', fronted: true });
         const term = terminal('term-new-5');
 
         bindWorkspaceAgentTerminal(id, term);

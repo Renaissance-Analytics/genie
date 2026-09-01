@@ -12,7 +12,7 @@ import path from 'path';
 import { createTray, rebuildMenu } from './tray';
 import { registerShortcuts, unregisterShortcuts } from './shortcuts';
 import { launchedFromAutostart } from './autostart';
-import { resolveWorkstationTui } from './agents/provider';
+import { resolveWorkstationTui } from './agents/tui';
 import { ensureGenieOsWorkspace, wireGenieOsWorkspace } from './agents/os-workspace';
 import { GENIE_OS_TERMINAL_ID, obsoleteOsAgentSpecIds, osAgentLaunchCommand } from './agents/os-agent';
 import { osAgentBootInstructions, osAgentBootMode } from './agents/os-lifecycle';

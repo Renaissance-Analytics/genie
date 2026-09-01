@@ -18,9 +18,9 @@ import { decideTuiSwitch, type SwitchRuntime } from '../tui-switch';
  * than a sequence of side effects someone has to read to audit.
  */
 describe('decideTuiSwitch', () => {
-    const runtime = (provider: string, fronted = false, spec: string | null = 't1'): SwitchRuntime => ({
-        id: `r-${provider}`,
-        provider,
+    const runtime = (tui: string, fronted = false, spec: string | null = 't1'): SwitchRuntime => ({
+        id: `r-${tui}`,
+        tui,
         terminalSpecId: spec,
         fronted,
     });
@@ -41,7 +41,7 @@ describe('decideTuiSwitch', () => {
             to: 'codex',
             allowed: ['claude', 'codex'],
         });
-        expect(decision).toEqual({ kind: 'create', provider: 'codex' });
+        expect(decision).toEqual({ kind: 'create', tui: 'codex' });
     });
 
     it('is a no-op when the requested TUI is already the visible one', () => {
@@ -78,7 +78,7 @@ describe('decideTuiSwitch', () => {
                 to: 'codex',
                 allowed: [],
             }),
-        ).toEqual({ kind: 'create', provider: 'codex' });
+        ).toEqual({ kind: 'create', tui: 'codex' });
     });
 
     it('NEVER decides to stop the runtime it is leaving', () => {
@@ -99,7 +99,7 @@ describe('decideTuiSwitch', () => {
         // A dormant agent being started IS a switch to its first driver.
         expect(
             decideTuiSwitch({ runtimes: [], to: 'claude', allowed: ['claude'] }),
-        ).toEqual({ kind: 'create', provider: 'claude' });
+        ).toEqual({ kind: 'create', tui: 'claude' });
     });
 
     it('adopts an existing runtime even when its terminal is gone', () => {

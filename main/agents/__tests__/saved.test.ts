@@ -8,12 +8,12 @@ import { adoptableAgentSpec, decideAgentStart, savedAgentsOf, type SavedAgent } 
  * `main/mcp/__tests__/run-agent-saved.test.ts`, where the world after the call is
  * what gets asserted. THIS file pins the branches that are hard to reach from
  * there: an ambiguity that needs two providers, a refusal's wording, and the
- * provider-inheritance rule.
+ * tui-inheritance rule.
  */
 
 const AGENT = (over: Partial<SavedAgent> = {}): SavedAgent => ({
     specId: 'spec-1',
-    provider: 'claude',
+    tui: 'claude',
     name: 'tynn',
     agentId: 'agent-1',
     chatSessionId: 'chat-1',
@@ -21,7 +21,7 @@ const AGENT = (over: Partial<SavedAgent> = {}): SavedAgent => ({
     ...over,
 });
 
-const REQ = { workstationProvider: 'claude' as const };
+const REQ = { workstationTui: 'claude' as const };
 
 describe('reading saved agents off terminal specs', () => {
     it('takes every spec carrying meta.agent — a saved agent IS a terminal spec', () => {
@@ -49,7 +49,7 @@ describe('reading saved agents off terminal specs', () => {
         expect(saved).toEqual([
             {
                 specId: 's1',
-                provider: 'claude',
+                tui: 'claude',
                 name: 'tynn',
                 agentId: 'a1',
                 chatSessionId: 'c1',
@@ -72,7 +72,7 @@ describe('reading saved agents off terminal specs', () => {
         expect(saved[0]!.name).toBe('slave');
     });
 
-    it('ignores a spec whose provider is not one Genie runs', () => {
+    it('ignores a spec whose tui is not one Genie runs', () => {
         const saved = savedAgentsOf(
             [{ id: 's1', workspace_id: 'ws', meta: { agent: 'gemini' } }],
             'ws',
@@ -113,28 +113,28 @@ describe('starting a saved agent', () => {
     });
 
     it('reattaches a Codex agent that has not bound its chat-id yet', () => {
-        const agent = AGENT({ provider: 'codex', chatSessionId: null });
+        const agent = AGENT({ tui: 'codex', chatSessionId: null });
         const d = decideAgentStart([agent], { ...REQ, name: 'tynn' });
         expect(d.kind).toBe('reattach');
     });
 
-    it('takes the provider from the RECORD, not from the workstation', () => {
+    it('takes the tui from the RECORD, not from the workstation', () => {
         // `codex:tynn-slave` is a specific agent holding a specific Codex
-        // conversation. Re-resolving the provider on reattach would hand back a
+        // conversation. Re-resolving the tui on reattach would hand back a
         // different agent that happens to share a name.
-        const agent = AGENT({ provider: 'codex', name: 'tynn-slave' });
+        const agent = AGENT({ tui: 'codex', name: 'tynn-slave' });
         const d = decideAgentStart([agent], {
             name: 'tynn-slave',
-            workstationProvider: 'claude',
+            workstationTui: 'claude',
         });
-        expect(d.kind === 'reattach' && d.agent.provider).toBe('codex');
+        expect(d.kind === 'reattach' && d.agent.tui).toBe('codex');
     });
 });
 
 describe('an ambiguous name', () => {
     it('REFUSES rather than picking one, and names both refs', () => {
         const d = decideAgentStart(
-            [AGENT({ specId: 's1', provider: 'claude' }), AGENT({ specId: 's2', provider: 'codex' })],
+            [AGENT({ specId: 's1', tui: 'claude' }), AGENT({ specId: 's2', tui: 'codex' })],
             { ...REQ, name: 'tynn' },
         );
         expect(d.kind).toBe('refuse');
@@ -142,10 +142,10 @@ describe('an ambiguous name', () => {
         expect(d.kind === 'refuse' && d.error).toContain('tynn (codex)');
     });
 
-    it('resolves once the provider is given', () => {
-        const claude = AGENT({ specId: 's1', provider: 'claude' });
-        const codex = AGENT({ specId: 's2', provider: 'codex' });
-        const d = decideAgentStart([claude, codex], { ...REQ, name: 'tynn', provider: 'codex' });
+    it('resolves once the tui is given', () => {
+        const claude = AGENT({ specId: 's1', tui: 'claude' });
+        const codex = AGENT({ specId: 's2', tui: 'codex' });
+        const d = decideAgentStart([claude, codex], { ...REQ, name: 'tynn', tui: 'codex' });
         expect(d.kind === 'reattach' && d.agent.specId).toBe('s2');
     });
 });
@@ -165,23 +165,23 @@ describe('creating a new agent', () => {
         expect(d.kind === 'refuse' && d.error).toContain('no saved agents yet');
     });
 
-    it('creates with `create`, taking the WORKSTATION provider when none is named', () => {
+    it('creates with `create`, taking the WORKSTATION tui when none is named', () => {
         // The person paying for the subscription picks the TUI — the same rule
         // GApp agents follow. It is pinned onto the record from here.
         expect(
-            decideAgentStart([], { name: 'tynn', create: true, workstationProvider: 'codex' }),
-        ).toEqual({ kind: 'create', provider: 'codex', name: 'tynn' });
+            decideAgentStart([], { name: 'tynn', create: true, workstationTui: 'codex' }),
+        ).toEqual({ kind: 'create', tui: 'codex', name: 'tynn' });
     });
 
-    it('honours an explicitly named provider over the workstation default', () => {
+    it('honours an explicitly named tui over the workstation default', () => {
         expect(
             decideAgentStart([], {
                 name: 'tynn-slave',
-                provider: 'codex',
+                tui: 'codex',
                 create: true,
-                workstationProvider: 'claude',
+                workstationTui: 'claude',
             }),
-        ).toEqual({ kind: 'create', provider: 'codex', name: 'tynn-slave' });
+        ).toEqual({ kind: 'create', tui: 'codex', name: 'tynn-slave' });
     });
 
     it('normalises the name it creates under', () => {
@@ -198,14 +198,14 @@ describe('creating a new agent', () => {
         expect(d.kind === 'refuse' && d.error).toMatch(/reattach/);
     });
 
-    it('lets the same name exist under a DIFFERENT provider', () => {
-        const d = decideAgentStart([AGENT({ provider: 'claude' })], {
+    it('lets the same name exist under a DIFFERENT tui', () => {
+        const d = decideAgentStart([AGENT({ tui: 'claude' })], {
             ...REQ,
             name: 'tynn',
-            provider: 'codex',
+            tui: 'codex',
             create: true,
         });
-        expect(d).toEqual({ kind: 'create', provider: 'codex', name: 'tynn' });
+        expect(d).toEqual({ kind: 'create', tui: 'codex', name: 'tynn' });
     });
 });
 
@@ -240,7 +240,7 @@ describe('a start that names nothing', () => {
  * THREE specs rendering "tynn", two of them bound to nothing.
  *
  * So before creating, look for a terminal that already IS this agent. Matching
- * on provider AND name is the same identity the grid renders and the registry
+ * on tui AND name is the same identity the grid renders and the registry
  * keys on, which is what makes adopting it correct rather than a guess.
  */
 describe('adopting an agent terminal that is already there', () => {
@@ -266,14 +266,14 @@ describe('adopting an agent terminal that is already there', () => {
         expect(adoptableAgentSpec(saved, 'claude', 'tynn')?.specId).toBe('t1');
     });
 
-    it('does not adopt the same name under a DIFFERENT provider', () => {
+    it('does not adopt the same name under a DIFFERENT tui', () => {
         // `codex:tynn` and `claude:tynn` are two agents. The registry's unique
-        // key is (workspace, provider, name), and this must agree with it.
+        // key is (workspace, tui, name), and this must agree with it.
         const saved = savedAgentsOf([spec('t1', 'codex', 'tynn')], 'ws', () => true);
         expect(adoptableAgentSpec(saved, 'claude', 'tynn')).toBeUndefined();
     });
 
-    it('does not adopt a different agent of the same provider', () => {
+    it('does not adopt a different agent of the same tui', () => {
         const saved = savedAgentsOf([spec('t1', 'claude', 'other')], 'ws', () => true);
         expect(adoptableAgentSpec(saved, 'claude', 'tynn')).toBeUndefined();
     });

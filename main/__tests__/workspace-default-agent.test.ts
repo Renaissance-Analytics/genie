@@ -6,7 +6,7 @@ import { runMigrations } from '../db';
  * The WORKSPACE AGENT is a DESIGNATION, not an agent called "workspace".
  *
  * v50 seeded one row per workspace with `name = 'workspace'` and
- * `provider = NULL`, and nothing ever gave it a driver, a terminal or a purpose.
+ * `tui = NULL`, and nothing ever gave it a driver, a terminal or a purpose.
  * Once the renderer started drawing registered agents, those inert rows became
  * squares labelled "works…" that click into nothing — a phantom agent in every
  * workspace on the estate.
@@ -40,13 +40,13 @@ function seedWorkspace(db: Database.Database, id: string): void {
 
 function addAgent(
     db: Database.Database,
-    row: { id: string; ws: string; name: string; provider?: string | null; role?: string },
+    row: { id: string; ws: string; name: string; tui?: string | null; role?: string },
 ): void {
     db.prepare(
         `INSERT INTO workspace_agents
-           (id, workspace_id, provider, name, purpose, role, created_at, updated_at)
+           (id, workspace_id, tui, name, purpose, role, created_at, updated_at)
          VALUES (?, ?, ?, ?, '', ?, 1, 1)`,
-    ).run(row.id, row.ws, row.provider ?? null, row.name, row.role ?? 'specialized');
+    ).run(row.id, row.ws, row.tui ?? null, row.name, row.role ?? 'specialized');
 }
 
 const roles = (db: Database.Database, ws: string) =>
@@ -74,7 +74,7 @@ describe('v57 — the phantom workspace agent is removed', () => {
         // placeholder goes — an agent someone actually made keeps its role.
         const db = fresh();
         seedWorkspace(db, 'ws-1');
-        addAgent(db, { id: 'a1', ws: 'ws-1', name: 'tynn', provider: 'claude', role: 'workspace' });
+        addAgent(db, { id: 'a1', ws: 'ws-1', name: 'tynn', tui: 'claude', role: 'workspace' });
 
         db.prepare("DELETE FROM schema_version WHERE version >= 57").run();
         runMigrations(db);
@@ -87,10 +87,10 @@ describe('v57 — the phantom workspace agent is removed', () => {
         // it, since a migration that promoted anything could violate it.
         const db = fresh();
         seedWorkspace(db, 'ws-1');
-        addAgent(db, { id: 'a1', ws: 'ws-1', name: 'one', provider: 'claude', role: 'workspace' });
+        addAgent(db, { id: 'a1', ws: 'ws-1', name: 'one', tui: 'claude', role: 'workspace' });
 
         expect(() =>
-            addAgent(db, { id: 'a2', ws: 'ws-1', name: 'two', provider: 'codex', role: 'workspace' }),
+            addAgent(db, { id: 'a2', ws: 'ws-1', name: 'two', tui: 'codex', role: 'workspace' }),
         ).toThrow();
     });
 
@@ -102,7 +102,7 @@ describe('v57 — the phantom workspace agent is removed', () => {
         const db = fresh();
         seedWorkspace(db, 'ws-1');
         addAgent(db, { id: 'workspace:ws-1', ws: 'ws-1', name: 'workspace', role: 'workspace' });
-        addAgent(db, { id: 'a1', ws: 'ws-1', name: 'tynn', provider: 'claude' });
+        addAgent(db, { id: 'a1', ws: 'ws-1', name: 'tynn', tui: 'claude' });
 
         db.prepare("DELETE FROM schema_version WHERE version >= 57").run();
         runMigrations(db);
@@ -122,7 +122,7 @@ describe('v57 — the phantom workspace agent is removed', () => {
         ).run();
         db.prepare(
             `INSERT INTO workspace_agents
-               (id, workspace_id, provider, name, purpose, role, terminal_spec_id, created_at, updated_at)
+               (id, workspace_id, tui, name, purpose, role, terminal_spec_id, created_at, updated_at)
              VALUES ('workspace:ws-1', 'ws-1', NULL, 'workspace', '', 'workspace', 't1', 1, 1)`,
         ).run();
 

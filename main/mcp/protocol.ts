@@ -1214,7 +1214,7 @@ export interface SavedAgentInfo {
     /** The canonical machine-facing id — `{provider}:{name}:{chat-id}`, or
      *  `{provider}:{name}` while the chat-id is not bound yet (Codex, pre-hook). */
     ref: string;
-    provider: AgentType;
+    tui: AgentType;
     /** The name this agent is reopened by. Human-facing surfaces show the
      *  provider's LOGO and this — never the chat-id. */
     name: string;
@@ -1316,7 +1316,7 @@ export interface RegisterAgentResult {
     agent?: {
         id: string;
         workspaceId: string;
-        provider: AgentType;
+        tui: AgentType;
         name: string;
         purpose: string;
         avatar?: string;
@@ -3829,7 +3829,7 @@ ${body}` }],
                     bootFolder: a.bootFolder,
                 });
                 const summary = result.ok
-                    ? `Registered ${result.agent?.provider ?? ''}:${result.agent?.name ?? ''}. Use runAgent start to launch it.`
+                    ? `Registered ${result.agent?.tui ?? ''}:${result.agent?.name ?? ''}. Use runAgent start to launch it.`
                     : `registerAgent failed: ${result.error ?? 'unknown error'}`;
                 return ok(msg.id, {
                     content: [{ type: 'text', text: `${summary}\n\n${JSON.stringify(result, null, 2)}` }],

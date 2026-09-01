@@ -80,7 +80,7 @@ function registerAgent(
     createWorkspaceAgent({
         id,
         workspace_id: workspaceId,
-        provider: null,
+        tui: null,
         name,
         purpose: 'test agent',
         avatar: null,
@@ -158,7 +158,7 @@ describe('deleteRegisteredAgent', () => {
         createWorkspaceAgent({
             id: wsAgentId,
             workspace_id: PLAIN_WS,
-            provider: null,
+            tui: null,
             name: `workspace-role-${seq}`,
             purpose: 'drive this workspace',
             avatar: null,

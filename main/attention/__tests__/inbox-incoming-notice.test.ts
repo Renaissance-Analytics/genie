@@ -17,18 +17,18 @@ import { planInboxIncomingNotice } from '../inbox-incoming-notice';
  * went into a genuinely empty box.
  *
  * So the toast must name the SAME two things the `imDone` toast names — the
- * workspace, and the agent as provider + NAME (#258, never the chat id) — and it
+ * workspace, and the agent as tui + NAME (#258, never the chat id) — and it
  * must only say "press Enter" when there is actually something there to submit.
  */
 describe('planInboxIncomingNotice', () => {
-    const agent = { provider: 'claude', name: 'reviewer' } as const;
+    const agent = { tui: 'claude', name: 'reviewer' } as const;
 
     it('names the WORKSPACE, so the toast is not about "wherever you are looking"', () => {
         const n = planInboxIncomingNotice({ workspace: 'tynn.ai', agent, landed: true });
         expect(`${n.title} ${n.body}`).toContain('tynn.ai');
     });
 
-    it('names the AGENT by provider and name — the fact "this agent" replaced', () => {
+    it('names the AGENT by tui and name — the fact "this agent" replaced', () => {
         const n = planInboxIncomingNotice({ workspace: 'tynn.ai', agent, landed: true });
         const all = `${n.title} ${n.body}`;
         expect(all).toContain('Claude Code');
@@ -48,19 +48,19 @@ describe('planInboxIncomingNotice', () => {
     it('distinguishes two agents that share a NAME across providers', () => {
         const claude = planInboxIncomingNotice({
             workspace: 'tynn.ai',
-            agent: { provider: 'claude', name: 'tynn' },
+            agent: { tui: 'claude', name: 'tynn' },
             landed: true,
         });
         const codex = planInboxIncomingNotice({
             workspace: 'tynn.ai',
-            agent: { provider: 'codex', name: 'tynn' },
+            agent: { tui: 'codex', name: 'tynn' },
             landed: true,
         });
         expect(claude.title).not.toBe(codex.title);
         expect(codex.title).toContain('Codex');
     });
 
-    it('NEVER shows a chat id — identity is provider + name (#258)', () => {
+    it('NEVER shows a chat id — identity is tui + name (#258)', () => {
         const n = planInboxIncomingNotice({
             workspace: 'tynn.ai',
             agent,

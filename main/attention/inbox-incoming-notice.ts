@@ -33,7 +33,7 @@ export interface InboxIncomingFacts {
     /** The workspace's display name, or the System Workspace. */
     workspace?: string | null;
     /** The agent the message was addressed to. */
-    agent?: { provider: AgentTui; name: string } | null;
+    agent?: { tui: AgentTui; name: string } | null;
     /** The terminal spec's own label. */
     terminal?: string | null;
     /**

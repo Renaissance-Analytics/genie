@@ -470,7 +470,7 @@ export function agentRecordsList(workspaceId: string) {
             listAgentRuntimes(a.id).map((r) => ({
                 id: r.id,
                 agentId: r.agent_id,
-                provider: r.provider,
+                tui: r.tui,
                 terminalSpecId: r.terminal_spec_id,
                 fronted: r.fronted === 1,
             })),
@@ -537,10 +537,10 @@ export function agentRecordSetDefault(workspaceId: string, agentId: string | nul
     return setWorkspaceDefaultAgent(String(workspaceId ?? ''), agentId ? String(agentId) : null);
 }
 
-export function agentRecordAddRuntime(agentId: string, provider: string) {
+export function agentRecordAddRuntime(agentId: string, tui: string) {
     const id = String(agentId ?? '');
-    const existing = listAgentRuntimes(id).find((r) => r.provider === provider);
-    const runtime = existing ?? createAgentRuntime({ agentId: id, provider: String(provider) });
+    const existing = listAgentRuntimes(id).find((r) => r.tui === tui);
+    const runtime = existing ?? createAgentRuntime({ agentId: id, tui: String(tui) });
     frontAgentRuntime(id, runtime.id);
     return { ok: true, runtimeId: runtime.id };
 }

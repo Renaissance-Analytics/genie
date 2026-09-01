@@ -638,7 +638,7 @@ describe('handleMcpMessage', () => {
             agent: {
                 id: 'cfg-1',
                 workspaceId: 'ws-1',
-                provider: 'codex',
+                tui: 'codex',
                 name: 'reviewer',
                 purpose: 'Review releases',
             },
@@ -758,8 +758,8 @@ describe('handleMcpMessage', () => {
         const runAgent = vi.fn().mockResolvedValue({
             ok: true,
             agents: [
-                { ref: 'claude:tynn', provider: 'claude', name: 'tynn', id: 'a-1', live: true },
-                { ref: 'codex:tynn', provider: 'codex', name: 'tynn', id: 'a-2', live: false },
+                { ref: 'claude:tynn', tui: 'claude', name: 'tynn', id: 'a-1', live: true },
+                { ref: 'codex:tynn', tui: 'codex', name: 'tynn', id: 'a-2', live: false },
             ],
         });
         const res = await handleMcpMessage(

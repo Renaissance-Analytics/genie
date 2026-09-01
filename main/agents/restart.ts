@@ -1,4 +1,4 @@
-import { resolveWorkstationTui } from './provider';
+import { resolveWorkstationTui } from './tui';
 import type { AgentTui } from './identity';
 
 export function restartProviderForSpec(

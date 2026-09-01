@@ -55,7 +55,7 @@ function addAgent(
 ): void {
     db.prepare(
         `INSERT INTO workspace_agents
-           (id, workspace_id, provider, name, purpose, role, terminal_spec_id, created_at, updated_at)
+           (id, workspace_id, tui, name, purpose, role, terminal_spec_id, created_at, updated_at)
          VALUES (?, ?, 'claude', ?, '', 'specialized', ?, 1, 1)`,
     ).run(row.id, row.ws, row.name, row.spec ?? null);
 }
@@ -65,7 +65,7 @@ function addRuntime(
     row: { id: string; agent: string; spec?: string | null },
 ): void {
     db.prepare(
-        `INSERT INTO agent_runtimes (id, agent_id, provider, terminal_spec_id, fronted, created_at, updated_at)
+        `INSERT INTO agent_runtimes (id, agent_id, tui, terminal_spec_id, fronted, created_at, updated_at)
          VALUES (?, ?, 'claude', ?, 1, 1, 1)`,
     ).run(row.id, row.agent, row.spec ?? null);
 }
@@ -161,8 +161,8 @@ describe('v62 — the dormant `general` agents are removed', () => {
     });
 
     it('is idempotent — re-running converges', () => {
-        // TWO workspaces, because v60's UNIQUE (workspace_id, provider, name)
-        // forbids two `general` agents on one provider in one workspace — which
+        // TWO workspaces, because v60's UNIQUE (workspace_id, tui, name)
+        // forbids two `general` agents on one tui in one workspace — which
         // is also why the live estate has exactly one per workspace.
         const db = fresh();
         seedWorkspace(db, 'ws-live');

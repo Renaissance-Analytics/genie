@@ -10,7 +10,7 @@
  * A SAVED AGENT IS A TERMINAL SPEC. Not a new record type — `terminal_specs`
  * already belongs to a workspace, already survives its pty (that is what makes a
  * dead agent revivable rather than gone), and already carries every field this
- * needs: `meta.agent` (provider), `meta.whisper_purpose` (name), `meta.agent_id`
+ * needs: `meta.agent` (tui), `meta.whisper_purpose` (name), `meta.agent_id`
  * (the durable AgentInbox identity), `meta.agent_command`, `meta.chat_session_id`.
  * So a saved agent is a VIEW over the specs a workspace already has, and this
  * module is the reading of it — no migration, no second store to keep in sync,
@@ -28,7 +28,7 @@ import { agentName, isAgentTui, savedAgentKey, type AgentTui } from './identity'
 export interface SavedAgent {
     /** The terminal spec id. A saved agent IS that spec — this is not a join key. */
     specId: string;
-    provider: AgentTui;
+    tui: AgentTui;
     /** The agent's NAME — the saved-config half of its identity. */
     name: string;
     /**
@@ -78,13 +78,13 @@ export function savedAgentsOf(
     const out: SavedAgent[] = [];
     for (const spec of specs) {
         if (spec.workspace_id !== workspaceId) continue;
-        const provider = spec.meta?.agent;
-        if (!isAgentTui(provider)) continue;
+        const tui = spec.meta?.agent;
+        if (!isAgentTui(tui)) continue;
         const chat = spec.meta?.chat_session_id;
         const agentId = spec.meta?.agent_id;
         out.push({
             specId: spec.id,
-            provider,
+            tui,
             name: agentName(spec.meta?.whisper_purpose as string | undefined),
             agentId: typeof agentId === 'string' && agentId ? agentId : null,
             chatSessionId: typeof chat === 'string' && chat ? chat : null,
@@ -99,15 +99,15 @@ export interface AgentStartRequest {
     /** The saved agent's name. Absent ⇒ the workspace's default (`general`). */
     name?: string;
     /**
-     * The provider. Absent means "whichever provider this name is saved under" —
+     * The tui. Absent means "whichever tui this name is saved under" —
      * resolved from the record on a reattach, and from the WORKSTATION default
-     * when creating (the caller passes that in as `workstationProvider`).
+     * when creating (the caller passes that in as `workstationTui`).
      */
-    provider?: AgentTui;
+    tui?: AgentTui;
     /** Bring a NEW saved agent into existence. Creation is deliberate. */
     create?: boolean;
-    /** The workstation's default provider, for a create that named none. */
-    workstationProvider: AgentTui;
+    /** The workstation's default tui, for a create that named none. */
+    workstationTui: AgentTui;
 }
 
 export type AgentStartDecision =
@@ -117,14 +117,14 @@ export type AgentStartDecision =
           /** `warm` — its pty is running; `revive` — the spec outlived its pty. */
           how: 'warm' | 'revive';
       }
-    | { kind: 'create'; provider: AgentTui; name: string }
+    | { kind: 'create'; tui: AgentTui; name: string }
     | { kind: 'refuse'; error: string };
 
 /** Every candidate's name, for an error a caller can act on. The driver is
  *  named alongside rather than inside the key -- it is which TUI is fronted,
  *  not part of what the agent IS. */
 function refsOf(agents: readonly SavedAgent[]): string {
-    return agents.map((a) => `${savedAgentKey(a.name)} (${a.provider})`).join(', ');
+    return agents.map((a) => `${savedAgentKey(a.name)} (${a.tui})`).join(', ');
 }
 
 /**
@@ -159,14 +159,14 @@ export function decideAgentStart(
 ): AgentStartDecision {
     const name = agentName(req.name);
     const byName = saved.filter((a) => a.name === name);
-    const matches = req.provider ? byName.filter((a) => a.provider === req.provider) : byName;
+    const matches = req.tui ? byName.filter((a) => a.tui === req.tui) : byName;
 
     if (matches.length > 1) {
         return {
             kind: 'refuse',
             error:
                 `"${name}" names more than one saved agent in this workspace (${refsOf(matches)}). ` +
-                'Pass `agent` with the provider you mean — two providers under one name are two ' +
+                'Pass `agent` with the tui you mean — two providers under one name are two ' +
                 'different agents with two different conversations.',
         };
     }
@@ -198,12 +198,12 @@ export function decideAgentStart(
         };
     }
 
-    // A create that named no provider takes the WORKSTATION's. The person paying
+    // A create that named no tui takes the WORKSTATION's. The person paying
     // for the subscription decides which TUI their compute is spent on — the
     // same rule GApp agents follow. From here on the record PINS it: reattaching
-    // never re-resolves the provider, because `codex:tynn-slave` is not a
+    // never re-resolves the tui, because `codex:tynn-slave` is not a
     // stand-in for whatever this machine defaults to today, it is that agent.
-    return { kind: 'create', provider: req.provider ?? req.workstationProvider, name };
+    return { kind: 'create', tui: req.tui ?? req.workstationTui, name };
 }
 
 /**
@@ -216,15 +216,15 @@ export function decideAgentStart(
  * square per agent-stamped spec, so it lingers as a second agent under the same
  * name. That is how one registered `claude:tynn` came to show three squares.
  *
- * Identity is (provider, name) — the registry's own unique key, and what the
+ * Identity is (tui, name) — the registry's own unique key, and what the
  * grid renders — so adopting here cannot disagree with either. Liveness is NOT
  * part of it: a saved agent that is not running is not gone, and reviving it is
  * what keeps its conversation attached.
  */
 export function adoptableAgentSpec(
     saved: readonly SavedAgent[],
-    provider: AgentTui,
+    tui: AgentTui,
     name: string,
 ): SavedAgent | undefined {
-    return saved.find((item) => item.provider === provider && item.name === name);
+    return saved.find((item) => item.tui === tui && item.name === name);
 }

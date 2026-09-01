@@ -9,21 +9,21 @@ import {
     providerSettingKeys,
 } from '../registry';
 import { agentName, isAgentTui } from '../identity';
-import { AGENT_TUIS } from '../provider';
+import { AGENT_TUIS } from '../tui';
 import { savedAgentsOf } from '../saved';
 import { resolveAgentCommand } from '../command';
 import { handleMcpMessage, type McpContext } from '../../mcp/protocol';
 
 /**
- * ONE place defines a provider (genie#261).
+ * ONE place defines a tui (genie#261).
  *
- * Before this, the provider set was a string-literal union restated in ~37
+ * Before this, the tui set was a string-literal union restated in ~37
  * places, of which only ~11 were compiler-enforced. The unenforced ones are the
  * reason this exists: they do not fail to build, they fail to WORK, silently.
  *
  * These tests are all the same shape on purpose — every surface that names the
  * providers must equal `Object.keys(TUI_REGISTRY)`. That is the property
- * that makes adding a provider DATA rather than a sweep: any surface still
+ * that makes adding a tui DATA rather than a sweep: any surface still
  * carrying its own literal diverges from the registry the moment one is added,
  * and says so here.
  */
@@ -64,7 +64,7 @@ describe('the registry is the source of truth', () => {
         expect(REGISTRY_IDS).toEqual(['claude', 'codex', 'custom', 'genie', 'kiwi']);
     });
 
-    it('gives every provider a complete definition', () => {
+    it('gives every tui a complete definition', () => {
         for (const id of agentTuis()) {
             const def = providerDef(id);
             expect(def.id, `${id}.id`).toBe(id);
@@ -80,7 +80,7 @@ describe('the registry is the source of truth', () => {
     });
 });
 
-describe('every provider list is DERIVED, not restated', () => {
+describe('every tui list is DERIVED, not restated', () => {
     it('advertises registration separately and keeps runAgent start-only for creation', async () => {
         const tools = await advertisedAgentTools();
         const register = tools.find((tool) => tool.name === 'registerAgent');
@@ -107,23 +107,23 @@ describe('every provider list is DERIVED, not restated', () => {
         }
     });
 
-    it('provider.AGENT_TUIS is the registry', () => {
+    it('tui.AGENT_TUIS is the registry', () => {
         expect([...AGENT_TUIS].sort()).toEqual(REGISTRY_IDS);
     });
 
     /**
      * The MCP JSON-Schema `enum`. Miss this one and an agent cannot NAME the
-     * provider over the wire, whatever the TypeScript says.
+     * tui over the wire, whatever the TypeScript says.
      */
     it('the runAgent tool schema enum is the registry', async () => {
         expect((await advertisedAgentEnum()).sort()).toEqual(REGISTRY_IDS);
     });
 
     /**
-     * The DEFAULTS block in `db.ts` listed all six keys by hand. A provider added
+     * The DEFAULTS block in `db.ts` listed all six keys by hand. A tui added
      * without its two lines gets `undefined` where a string is expected.
      */
-    it('the settings defaults cover every provider, with the registry command', () => {
+    it('the settings defaults cover every tui, with the registry command', () => {
         const defaults = tuiSettingDefaults();
         for (const id of agentTuis()) {
             const def = providerDef(id);
@@ -150,10 +150,10 @@ describe('the default command comes from the registry', () => {
     /**
      * `resolveAgentCommand` was an if/else ladder with `'claude'` and `'codex'`
      * spelled out twice each — once as the settings key and once as the fallback.
-     * A provider added without a rung here resolves to null and simply does not
+     * A tui added without a rung here resolves to null and simply does not
      * launch.
      */
-    it('resolves every provider to its registry default when nothing is configured', () => {
+    it('resolves every tui to its registry default when nothing is configured', () => {
         for (const id of agentTuis()) {
             const def = providerDef(id);
             const resolved = resolveAgentCommand(id, undefined, {});
@@ -187,27 +187,27 @@ describe('the silent skip this refactor exists to close', () => {
      * The worked example from genie#261.
      *
      * `savedAgentsOf` gates on `isAgentTui(spec.meta.agent)`. When that read
-     * its own literal, a provider added everywhere ELSE — union widened, launch
+     * its own literal, a tui added everywhere ELSE — union widened, launch
      * profile added, settings added, UI added — would still be dropped here, with
      * **no error anywhere**: the agent simply never appeared in the roster.
      *
      * Deriving the guard from the registry makes that unreachable: if it is in
-     * the registry it is a provider, by construction.
+     * the registry it is a tui, by construction.
      */
-    it('lists a saved agent for EVERY provider in the registry', () => {
-        const specs = agentTuis().map((provider, i) => ({
+    it('lists a saved agent for EVERY tui in the registry', () => {
+        const specs = agentTuis().map((tui, i) => ({
             id: `spec-${i}`,
             workspace_id: 'ws-1',
-            meta: { agent: provider, whisper_purpose: 'tynn', agent_id: `agent-${i}` },
+            meta: { agent: tui, whisper_purpose: 'tynn', agent_id: `agent-${i}` },
         }));
 
         const found = savedAgentsOf(specs, 'ws-1', () => false);
 
-        expect(found.map((a) => a.provider)).toEqual(agentTuis());
+        expect(found.map((a) => a.tui)).toEqual(agentTuis());
         expect(found).toHaveLength(Object.keys(TUI_REGISTRY).length);
     });
 
-    it('still drops a spec whose agent is not a provider at all', () => {
+    it('still drops a spec whose agent is not a tui at all', () => {
         const found = savedAgentsOf(
             [{ id: 's1', workspace_id: 'ws-1', meta: { agent: 'gemini' } }],
             'ws-1',
@@ -218,10 +218,10 @@ describe('the silent skip this refactor exists to close', () => {
 
     /**
      * A positive control for the negative above: the same call shape, with a real
-     * provider, must still return something. Otherwise "returns []" would also
+     * tui, must still return something. Otherwise "returns []" would also
      * pass if `savedAgentsOf` were broken outright.
      */
-    it('positive control — the same shape with a real provider is kept', () => {
+    it('positive control — the same shape with a real tui is kept', () => {
         const found = savedAgentsOf(
             [{ id: 's1', workspace_id: 'ws-1', meta: { agent: 'claude' } }],
             'ws-1',
@@ -233,10 +233,10 @@ describe('the silent skip this refactor exists to close', () => {
 });
 
 /**
- * A provider's `defaultCommand` is the BINARY Genie will actually exec.
+ * A tui's `defaultCommand` is the BINARY Genie will actually exec.
  *
  * `genie` shipped as `genie-tui`, which does not exist — selecting the Genie TUI
- * produced `bash: genie-tui: command not found`, so the provider was unusable
+ * produced `bash: genie-tui: command not found`, so the tui was unusable
  * from the moment it appeared in the picker. Nothing caught it because nothing
  * asserted the names: a command string is only wrong at spawn time, on someone
  * else's machine.
@@ -244,8 +244,8 @@ describe('the silent skip this refactor exists to close', () => {
  * These pin the exact names rather than merely "non-empty", because non-empty is
  * exactly what `genie-tui` was.
  */
-describe('provider default commands', () => {
-    it('names the real binary for each provider', () => {
+describe('tui default commands', () => {
+    it('names the real binary for each tui', () => {
         expect(TUI_REGISTRY.claude.defaultCommand).toBe('claude');
         expect(TUI_REGISTRY.codex.defaultCommand).toBe('codex');
         expect(TUI_REGISTRY.kiwi.defaultCommand).toBe('kiwi');
@@ -253,7 +253,7 @@ describe('provider default commands', () => {
     });
 
     it('leaves `custom` empty — it has no binary of its own', () => {
-        // Positive control on the rule above: "every provider names a command"
+        // Positive control on the rule above: "every tui names a command"
         // would be wrong here, and `custom` deliberately requires the caller to
         // supply one.
         expect(TUI_REGISTRY.custom.defaultCommand).toBe('');
@@ -261,7 +261,7 @@ describe('provider default commands', () => {
 
     it('never names a command with a `-tui` suffix', () => {
         // The specific mistake: a plausible-looking name nobody ships. Worth its
-        // own assertion because the next provider added is the next chance to
+        // own assertion because the next tui added is the next chance to
         // invent one.
         for (const id of PROVIDER_IDS) {
             expect(TUI_REGISTRY[id].defaultCommand, id).not.toMatch(/-tui$/);
@@ -271,13 +271,13 @@ describe('provider default commands', () => {
 
 /**
  * genie#313 — "Genie's boot should detect whether the TUI is installed, and
- * install it if it is not." Only true for a provider GENIE ITSELF ships —
+ * install it if it is not." Only true for a tui GENIE ITSELF ships —
  * `claude` and `codex` are the owner's own installs (Genie must never try to
  * `npm install` someone else's CLI over their existing one), and `custom` has
  * no fixed binary to detect at all. `ownedBinary` is the flag the boot-time
  * detect-and-install pass (`agents/availability.ts`) gates on.
  */
-describe('provider ownership — genie#313', () => {
+describe('tui ownership — genie#313', () => {
     it('marks only the providers Genie ships as owned', () => {
         expect(TUI_REGISTRY.claude.ownedBinary).toBe(false);
         expect(TUI_REGISTRY.codex.ownedBinary).toBe(false);
@@ -286,9 +286,9 @@ describe('provider ownership — genie#313', () => {
         expect(TUI_REGISTRY.custom.ownedBinary).toBe(false);
     });
 
-    it('gives every provider an ownedBinary flag — not just the ones above', () => {
+    it('gives every tui an ownedBinary flag — not just the ones above', () => {
         // The Record<AgentTuiId, TuiDef> type already forces this at
-        // compile time; this is the runtime witness so a provider added with an
+        // compile time; this is the runtime witness so a tui added with an
         // `ownedBinary` left `undefined` fails LOUDLY here rather than only
         // silently skipping the boot check.
         for (const id of agentTuis()) {
@@ -297,7 +297,7 @@ describe('provider ownership — genie#313', () => {
     });
 
     /**
-     * Neither owned provider has a WORKING installer today: `genie`'s upstream
+     * Neither owned tui has a WORKING installer today: `genie`'s upstream
      * package (`@genie/tui`) is private and unpublished, and its shipped `bin`
      * name is still `genie-tui` — installing it as-is would silently reproduce
      * the exact naming bug this ticket's sibling already fixed, just one layer
@@ -311,7 +311,7 @@ describe('provider ownership — genie#313', () => {
         expect(TUI_REGISTRY.kiwi.install).toBeUndefined();
     });
 
-    it('never sets `install` on a provider Genie does not own', () => {
+    it('never sets `install` on a tui Genie does not own', () => {
         for (const id of agentTuis()) {
             if (!TUI_REGISTRY[id].ownedBinary) {
                 expect(TUI_REGISTRY[id].install, id).toBeUndefined();

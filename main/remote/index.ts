@@ -588,7 +588,26 @@ export function forwardedAnswerFailureMessage(err: unknown): string {
 interface ImDoneWirePayload {
     label?: string;
     workspace?: string | null;
-    agent?: { provider: AgentTui; name: string } | null;
+    /**
+     * BOTH SPELLINGS ARE READ. The field was `provider` until it was renamed to
+     * `tui` (Tynn story #262), and a driver does not upgrade in lockstep with the
+     * host it drives — a current client routinely talks to a host still on the
+     * old build, which sends `provider` and always will.
+     *
+     * Not a transitional shim to delete on a timer: the wire here is versionless
+     * by design (see above), so tolerating the older spelling IS the
+     * compatibility mechanism. Genie SENDS `tui`.
+     */
+    agent?: { tui?: AgentTui; provider?: AgentTui; name: string } | null;
+}
+
+/** The agent facts off an imDone payload, whichever spelling the host used. */
+function wireAgent(
+    agent: ImDoneWirePayload['agent'],
+): { tui: AgentTui; name: string } | null {
+    if (!agent) return null;
+    const tui = agent.tui ?? agent.provider;
+    return tui ? { tui, name: agent.name } : null;
 }
 
 function notifyForwardedAnswerFailed(conn: RemoteConnection, err: unknown): void {
@@ -738,7 +757,7 @@ function forwardImDoneToDriver(conn: RemoteConnection, payload: ImDoneWirePayloa
         // the notice degrades to it rather than inventing facts.
         const notice = planImDoneNotice({
             workspace: payload?.workspace ?? null,
-            agent: payload?.agent ?? null,
+            agent: wireAgent(payload?.agent),
             terminal: payload?.label ?? null,
             host: conn.host.hostname,
         });

@@ -398,7 +398,7 @@ describe('listing the workspace roster', () => {
         const listed = await runAgentForMcp(CALLER_ID, { action: 'list' });
 
         expect(listed.ok).toBe(true);
-        expect(listed.agents?.map((a) => `${a.provider}:${a.name}`).sort()).toEqual([
+        expect(listed.agents?.map((a) => `${a.tui}:${a.name}`).sort()).toEqual([
             'claude:tynn-builder',
             'codex:tynn-slave',
         ]);

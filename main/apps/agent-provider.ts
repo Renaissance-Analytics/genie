@@ -20,7 +20,7 @@
 import path from 'path';
 import { APP_AGENTS_DIR } from './manifest';
 import { isAgentTui, type AgentTui } from '../agents/identity';
-import { AGENT_TUIS, resolveWorkstationTui } from '../agents/provider';
+import { AGENT_TUIS, resolveWorkstationTui } from '../agents/tui';
 
 /** The AI TUIs Genie can launch. Mirrors the agent types the rest of Genie knows. */
 export const GAPP_PROVIDERS = AGENT_TUIS;

@@ -17,7 +17,7 @@ export interface TerminalNoticeFacts {
     /** The workspace's display name (`project_name`), or the System Workspace. */
     workspace: string | null;
     /** The agent running in this terminal, when it is one. */
-    agent: { provider: AgentTui; name: string } | null;
+    agent: { tui: AgentTui; name: string } | null;
     /** The terminal spec's own label. */
     terminal: string | null;
     /** The workspace id a reveal must activate (the sentinel for a System
@@ -43,12 +43,12 @@ export function terminalNoticeFacts(terminalId: string): TerminalNoticeFacts {
                 : wsId
                   ? getWorkspace(wsId)?.project_name ?? null
                   : null;
-        // The identity convention (#258): provider + NAME, never the chat id.
+        // The identity convention (#258): tui + NAME, never the chat id.
         // `whisper_purpose` IS the agent's name — see agents/identity.ts, which
         // deliberately makes them the same field so the two can't drift.
-        const provider = spec.meta?.agent;
-        const agent = provider
-            ? agentDisplay({ provider, name: spec.meta?.whisper_purpose ?? '' })
+        const tui = spec.meta?.agent;
+        const agent = tui
+            ? agentDisplay({ tui, name: spec.meta?.whisper_purpose ?? '' })
             : null;
         return { workspace, agent, terminal: spec.label, workspaceId: wsId };
     } catch {

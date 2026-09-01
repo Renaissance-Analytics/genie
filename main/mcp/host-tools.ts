@@ -80,7 +80,7 @@ import { agentBootPrompt } from '../agents/boot-prompt';
 import { handoffPath } from '../agents/handoff';
 import { firstAgentRole } from '../agents/first-agent-role';
 import { decideTuiSwitch } from '../agents/tui-switch';
-import { resolveWorkstationTui } from '../agents/provider';
+import { resolveWorkstationTui } from '../agents/tui';
 import { restartProviderForSpec } from '../agents/restart';
 import {
     adoptableAgentSpec,
@@ -1798,12 +1798,12 @@ async function reattachSavedAgent(
     const result = {
         ok: true as const,
         id: spec.id,
-        agent: agent.provider,
+        agent: agent.tui,
         name: agent.name,
         reattached: true,
         sessionBinding: agent.chatSessionId ? ('bound' as const) : ('pending' as const),
         ref: agentRef({
-            provider: agent.provider,
+            tui: agent.tui,
             name: agent.name,
             chatSessionId: agent.chatSessionId,
         }),
@@ -1829,12 +1829,12 @@ async function reattachSavedAgent(
         // The stored BASE command. `createAgentTerminal`'s revive path decides
         // what actually gets run from the spec (resume / continue / fresh), so
         // passing the base here never overrides that decision.
-        agentMeta: { agent: agent.provider, command: spec.meta?.agent_command ?? '' },
+        agentMeta: { agent: agent.tui, command: spec.meta?.agent_command ?? '' },
     });
     return {
         ...result,
         ref: agentRef({
-            provider: agent.provider,
+            tui: agent.tui,
             name: agent.name,
             chatSessionId: revived.chatSessionId,
         }),
@@ -1901,7 +1901,7 @@ export async function registerAgentInWorkspace(
     const reserved = reservedNameRefusal({ name: resolved.name, sacredName: ws.sacred_name });
     if (reserved) return { ok: false, error: reserved };
 
-    const provider = req.agent ?? resolveWorkstationTui(getAllSettings());
+    const tui = req.agent ?? resolveWorkstationTui(getAllSettings());
     // By NAME, not by (provider, name). Since v55 a name means ONE agent
     // whatever TUI drives it, so checking the pair let a second agent through
     // under a name the workspace already had -- and the insert then died on the
@@ -1913,7 +1913,7 @@ export async function registerAgentInWorkspace(
             ok: false,
             error:
                 `Agent "${resolved.name}" is already registered in this workspace` +
-                (held.provider ? ` (running ${held.provider})` : '') +
+                (held.tui ? ` (running ${held.tui})` : '') +
                 '. An agent is not its TUI: add a runtime to it rather than registering a second one.',
         };
     }
@@ -1946,7 +1946,7 @@ export async function registerAgentInWorkspace(
                         name: resolved.name,
                         purpose: resolved.purpose,
                         scope: agentScopeFor(ws.path, resolved.bootCwd),
-                        tuis: [provider],
+                        tuis: [tui],
                         avatar: null,
                     },
                     `You are ${resolved.name}. ${resolved.purpose}
@@ -1963,7 +1963,7 @@ export async function registerAgentInWorkspace(
     const row = createWorkspaceAgent({
         id: crypto.randomUUID(),
         workspace_id: ws.id,
-        provider,
+        tui,
         name: resolved.name,
         purpose: resolved.purpose,
         avatar,
@@ -2002,7 +2002,7 @@ export async function registerAgentInWorkspace(
         agent: {
             id: row.id,
             workspaceId: row.workspace_id,
-            provider,
+            tui,
             name: row.name,
             purpose: row.purpose,
             ...(row.avatar ? { avatar: row.avatar } : {}),
@@ -2014,11 +2014,11 @@ export async function registerAgentInWorkspace(
 function savedAgentInfo(agent: SavedAgent): SavedAgentInfo {
     return {
         ref: agentRef({
-            provider: agent.provider,
+            tui: agent.tui,
             name: agent.name,
             chatSessionId: agent.chatSessionId,
         }),
-        provider: agent.provider,
+        tui: agent.tui,
         name: agent.name,
         id: agent.specId,
         live: agent.live,
@@ -2066,12 +2066,12 @@ export async function runAgentForMcp(
     try {
         switch (req.action) {
             case 'list': {
-                const configs = listWorkspaceAgents(ws.id).filter((agent) => !!agent.provider);
+                const configs = listWorkspaceAgents(ws.id).filter((agent) => !!agent.tui);
                 return {
                     ok: true,
                     agents: configs.map((agent) => ({
                         ref: savedAgentKey(agent.name),
-                        provider: agent.provider as AgentType,
+                        tui: agent.tui as AgentType,
                         name: agent.name,
                         id: agent.id,
                         ...(agent.terminal_spec_id ? { terminalId: agent.terminal_spec_id } : {}),
@@ -2172,7 +2172,7 @@ export async function runAgentForMcp(
                 const decision = decideTuiSwitch({
                     runtimes: listAgentRuntimes(target.id).map((r) => ({
                         id: r.id,
-                        provider: r.provider,
+                        tui: r.tui,
                         terminalSpecId: r.terminal_spec_id,
                         fronted: r.fronted === 1,
                     })),
@@ -2196,7 +2196,7 @@ export async function runAgentForMcp(
                 // second way to spawn past either.
                 const created = createAgentRuntime({
                     agentId: target.id,
-                    provider: decision.provider,
+                    tui: decision.tui,
                     fronted: true,
                 });
                 frontAgentRuntime(target.id, created.id);
@@ -2816,7 +2816,7 @@ export async function startRegisteredAgent(
                 // record's own provider. An agent registered but never run has
                 // none of the three, and saying so beats launching a guess.
                 const frontedRuntime = listAgentRuntimes(config.id).find((r) => r.fronted);
-                const agent = (req.agent ?? frontedRuntime?.provider ?? config.provider) as
+                const agent = (req.agent ?? frontedRuntime?.tui ?? config.tui) as
                     | AgentType
                     | null;
                 if (!agent) {
@@ -2841,7 +2841,7 @@ export async function startRegisteredAgent(
                 // anything new. Adopt it and rebind.
                 const adopted = adoptableAgentSpec(
                     savedAgentsOfWorkspace(ws.id),
-                    config.provider as AgentTui,
+                    config.tui as AgentTui,
                     config.name,
                 );
                 if (adopted) {
@@ -2939,6 +2939,6 @@ export async function startRegisteredAgent(
                     sessionBinding: chatSessionId ? 'bound' : 'pending',
                     // Null chat-id for Codex is correct, not a failure: it binds
                     // at SessionStart, onto this record.
-                    ref: agentRef({ provider: agent, name: config.name, chatSessionId }),
+                    ref: agentRef({ tui: agent, name: config.name, chatSessionId }),
                 };
 }

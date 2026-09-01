@@ -1359,6 +1359,12 @@ export function runMigrations(d: Database.Database): void {
             // and preserves identity/readiness while a terminal is restarted.
             version: 50,
             runner: (db) => {
+                // The table this creates names the driver `provider`. On a
+                // REPLAY against a current database it already exists as `tui`
+                // (v63), and CREATE TABLE IF NOT EXISTS is then a no-op -- so
+                // the INSERTs below have to name whichever one is actually
+                // there. On a real upgrade that is `provider`, every time.
+                const drv = driverColumn(db, 'workspace_agents');
                 db.exec(`
                     CREATE TABLE IF NOT EXISTS workspace_agents (
                         id               TEXT PRIMARY KEY,
@@ -1384,7 +1390,7 @@ export function runMigrations(d: Database.Database): void {
                         FOREIGN KEY (terminal_spec_id) REFERENCES terminal_specs(id) ON DELETE SET NULL
                     );
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_agents_key
-                        ON workspace_agents(workspace_id, provider, name);
+                        ON workspace_agents(workspace_id, ${drv}, name);
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_agents_terminal
                         ON workspace_agents(terminal_spec_id) WHERE terminal_spec_id IS NOT NULL;
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_agents_master
@@ -1393,7 +1399,7 @@ export function runMigrations(d: Database.Database): void {
                         ON workspace_agents(parent_agent_id);
 
                     INSERT OR IGNORE INTO workspace_agents
-                        (id, workspace_id, provider, name, purpose, role, reachability,
+                        (id, workspace_id, ${drv}, name, purpose, role, reachability,
                          wake_on_dm, created_at, updated_at)
                     SELECT 'workspace:' || id, id, NULL, 'workspace',
                            'Drive this workspace and coordinate its agents.',
@@ -1403,7 +1409,7 @@ export function runMigrations(d: Database.Database): void {
                     FROM workspaces;
 
                     INSERT OR IGNORE INTO workspace_agents
-                        (id, workspace_id, provider, name, purpose, boot_cwd,
+                        (id, workspace_id, ${drv}, name, purpose, boot_cwd,
                          persona_path, role, parent_agent_id, terminal_spec_id,
                          reachability, wake_on_dm, created_at, updated_at)
                     SELECT
@@ -1660,10 +1666,11 @@ export function runMigrations(d: Database.Database): void {
             // ON DELETE SET NULL, so the children survive un-parented.
             version: 57,
             runner: (db) => {
+                const drv = driverColumn(db, 'workspace_agents');
                 db.prepare(
                     `DELETE FROM workspace_agents
                       WHERE role = 'workspace'
-                        AND provider IS NULL
+                        AND ${drv} IS NULL
                         AND terminal_spec_id IS NULL
                         AND id NOT IN (SELECT agent_id FROM agent_runtimes)`,
                 ).run();
@@ -1774,18 +1781,19 @@ export function runMigrations(d: Database.Database): void {
                 // distinct in a unique index, so they neither collide nor need
                 // an exemption -- but they must not keep a mark either.
                 db.prepare('UPDATE workspace_agents SET collision_group = NULL').run();
+                const drv = driverColumn(db, 'workspace_agents');
                 db.prepare(
                     `UPDATE workspace_agents
-                        SET collision_group = workspace_id || ':' || COALESCE(provider, '') || ':' || name
-                      WHERE (workspace_id, provider, name) IN (
-                            SELECT workspace_id, provider, name FROM workspace_agents
-                             WHERE provider IS NOT NULL
-                             GROUP BY workspace_id, provider, name HAVING COUNT(*) > 1)`,
+                        SET collision_group = workspace_id || ':' || COALESCE(${drv}, '') || ':' || name
+                      WHERE (workspace_id, ${drv}, name) IN (
+                            SELECT workspace_id, ${drv}, name FROM workspace_agents
+                             WHERE ${drv} IS NOT NULL
+                             GROUP BY workspace_id, ${drv}, name HAVING COUNT(*) > 1)`,
                 ).run();
                 db.exec(`
                     DROP INDEX IF EXISTS idx_workspace_agents_name;
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_agents_tui_name
-                        ON workspace_agents(workspace_id, provider, name)
+                        ON workspace_agents(workspace_id, ${drv}, name)
                         WHERE collision_group IS NULL;
                 `);
             },
@@ -1867,6 +1875,40 @@ export function runMigrations(d: Database.Database): void {
                 ).run();
             },
         },
+        {
+            // v63 -- THE `provider` COLUMN IS `tui`.
+            //
+            // The owner's rule, already quoted in v60: *"provider should be tui
+            // because the tui is what determines the provider and supports TUIs
+            // that can use any provider, so provider itself is not important for
+            // agent identity."*
+            //
+            // v60 did the part that mattered -- identity became
+            // (workspace, tui, name) -- but left the column called `provider`, so
+            // the schema said one thing and the rule said another. This is the
+            // naming catching up.
+            //
+            // A RENAME, not a new column plus a backfill: the values are already
+            // right, and a copy leaves two columns that can disagree. SQLite
+            // rewrites the dependent INDEX definitions as part of RENAME COLUMN,
+            // which is what makes this safe on `idx_workspace_agents_tui_name`
+            // and `idx_agent_runtimes_provider` -- both key on this column, and a
+            // key silently lost is how v60's collision settlement would come
+            // undone.
+            //
+            // Guarded per table so the ladder can be replayed: RENAME COLUMN
+            // throws if the old name is gone, and that would take the whole
+            // upgrade transaction with it.
+            version: 63,
+            runner: (db) => {
+                if (tableColumns(db, 'workspace_agents').has('provider')) {
+                    db.exec('ALTER TABLE workspace_agents RENAME COLUMN provider TO tui');
+                }
+                if (tableColumns(db, 'agent_runtimes').has('provider')) {
+                    db.exec('ALTER TABLE agent_runtimes RENAME COLUMN provider TO tui');
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -1913,13 +1955,19 @@ function workspaceColumns(d: Database.Database): Set<string> {
 export function backfillRuntimes(d: Database.Database): void {
     const now = Date.now();
 
+    // The driver column is `provider` up to v62 and `tui` from v63; this runs
+    // from v55, so on a real upgrade it meets `provider` -- but the ladder is
+    // also replayed against a current database, where it meets `tui`.
+    const srcCol = driverColumn(d, 'workspace_agents');
+    const dstCol = driverColumn(d, 'agent_runtimes');
+
     // One fronted runtime per agent that names a TUI. `role='workspace'` rows
-    // carry provider NULL by design -- they are the workspace's own agent and
-    // have never had a driver -- so they get no runtime until one is chosen.
+    // carry a NULL driver by design -- they are the workspace's own agent and
+    // have never had one -- so they get no runtime until one is chosen.
     const agents = d
         .prepare<[], {
             id: string;
-            provider: string | null;
+            driver: string | null;
             terminal_spec_id: string | null;
             transport: string | null;
             native_transport: string | null;
@@ -1927,16 +1975,16 @@ export function backfillRuntimes(d: Database.Database): void {
             transport_error: string | null;
             ready_at: number | null;
         }>(
-            `SELECT id, provider, terminal_spec_id, transport, native_transport,
+            `SELECT id, ${srcCol} AS driver, terminal_spec_id, transport, native_transport,
                     transport_verified_at, transport_error, ready_at
                FROM workspace_agents
-              WHERE provider IS NOT NULL
+              WHERE ${srcCol} IS NOT NULL
                 AND id NOT IN (SELECT agent_id FROM agent_runtimes)`,
         )
         .all();
     const insert = d.prepare(
         `INSERT INTO agent_runtimes
-           (id, agent_id, provider, terminal_spec_id, transport, native_transport,
+           (id, agent_id, ${dstCol}, terminal_spec_id, transport, native_transport,
             transport_verified_at, transport_error, ready_at, fronted, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
     );
@@ -1944,7 +1992,7 @@ export function backfillRuntimes(d: Database.Database): void {
         insert.run(
             `runtime:${a.id}`,
             a.id,
-            a.provider,
+            a.driver,
             a.terminal_spec_id,
             a.transport,
             a.native_transport,
@@ -1979,6 +2027,26 @@ function tableColumns(d: Database.Database, table: string): Set<string> {
         .prepare<[], { name: string }>(`PRAGMA table_info(${table})`)
         .all();
     return new Set(rows.map((r) => r.name));
+}
+
+
+/**
+ * The name of the agent DRIVER column on `table`, as it stands right now.
+ *
+ * It is `provider` up to v62 and `tui` from v63 (Tynn story #262). Migrations
+ * WRITTEN before the rename still have to name it, and on a real upgrade they
+ * run while it is still `provider` -- but the ladder is also REPLAYED (the
+ * migration suite re-runs it from an earlier version against a current
+ * database), and there the same statement meets `tui`.
+ *
+ * Resolving the name instead of hard-coding it keeps each migration doing
+ * exactly what it always did, whenever it runs. The alternative -- freezing
+ * `provider` into statements that a later migration renames out from under --
+ * makes those migrations non-replayable, and a migration you cannot re-run is
+ * one nobody can test.
+ */
+function driverColumn(d: Database.Database, table: string): 'provider' | 'tui' {
+    return tableColumns(d, table).has('tui') ? 'tui' : 'provider';
 }
 
 function terminalSpecColumns(d: Database.Database): Set<string> {
@@ -2487,7 +2555,7 @@ export type WorkspaceAgentTransport =
 export interface AgentRuntimeRow {
     id: string;
     agent_id: string;
-    provider: string;
+    tui: string;
     terminal_spec_id: string | null;
     chat_session_id: string | null;
     transport: string | null;
@@ -2517,7 +2585,7 @@ export function frontedAgentRuntime(agentId: string): AgentRuntimeRow | undefine
 
 export function createAgentRuntime(input: {
     agentId: string;
-    provider: string;
+    tui: string;
     terminalSpecId?: string | null;
     chatSessionId?: string | null;
     fronted?: boolean;
@@ -2527,13 +2595,13 @@ export function createAgentRuntime(input: {
     getDb()
         .prepare(
             `INSERT INTO agent_runtimes
-               (id, agent_id, provider, terminal_spec_id, chat_session_id, fronted, created_at, updated_at)
+               (id, agent_id, tui, terminal_spec_id, chat_session_id, fronted, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
             id,
             input.agentId,
-            input.provider,
+            input.tui,
             input.terminalSpecId ?? null,
             input.chatSessionId ?? null,
             input.fronted ? 1 : 0,
@@ -2589,7 +2657,7 @@ export function bindAgentRuntimeTerminal(
 export interface WorkspaceAgentRow {
     id: string;
     workspace_id: string;
-    provider: string | null;
+    tui: string | null;
     name: string;
     purpose: string;
     avatar: string | null;
@@ -2735,9 +2803,9 @@ export function listWorkspaceAgents(workspaceId: string): WorkspaceAgentRow[] {
  * The agent a workspace knows by NAME.
  *
  * The lookup that matters since v55: a name means ONE agent, whatever TUI is
- * driving it. `getWorkspaceAgent` still takes a provider for the callers that
+ * driving it. `getWorkspaceAgent` still takes a tui for the callers that
  * have one in hand, but a uniqueness check must use this -- checking
- * (provider, name) let a second agent be registered under a name the workspace
+ * (tui, name) let a second agent be registered under a name the workspace
  * already had, and the insert then died on the index instead of refusing
  * cleanly.
  */
@@ -2755,15 +2823,15 @@ export function getWorkspaceAgentByName(
 
 export function getWorkspaceAgent(
     workspaceId: string,
-    provider: string,
+    tui: string,
     name: string,
 ): WorkspaceAgentRow | undefined {
     return getDb()
         .prepare<[string, string, string], WorkspaceAgentRow>(
             `SELECT *, COALESCE(native_transport, transport) AS transport FROM workspace_agents
-             WHERE workspace_id = ? AND provider = ? AND name = ?`,
+             WHERE workspace_id = ? AND tui = ? AND name = ?`,
         )
-        .get(workspaceId, provider, name);
+        .get(workspaceId, tui, name);
 }
 
 export function createWorkspaceAgent(
@@ -2776,10 +2844,10 @@ export function createWorkspaceAgent(
     getDb()
         .prepare(
             `INSERT INTO workspace_agents
-                (id, workspace_id, provider, name, purpose, avatar, boot_cwd,
+                (id, workspace_id, tui, name, purpose, avatar, boot_cwd,
                  persona_path, role, parent_agent_id, terminal_spec_id,
                  reachability, wake_on_dm, ready_at, created_at, updated_at)
-             VALUES (@id, @workspace_id, @provider, @name, @purpose, @avatar, @boot_cwd,
+             VALUES (@id, @workspace_id, @tui, @name, @purpose, @avatar, @boot_cwd,
                      @persona_path, @role, @parent_agent_id, @terminal_spec_id,
                      @reachability, @wake_on_dm, @ready_at, @created_at, @updated_at)`,
         )
@@ -2835,19 +2903,19 @@ export function bindWorkspaceAgentTerminalInDb(
     // agent must stay a no-op rather than inventing a runtime for something that
     // never ran.
     if (moved === 0 && terminalSpecId) {
-        const provider = database
-            .prepare<[string], { provider: string | null }>(
-                'SELECT provider FROM workspace_agents WHERE id = ?',
+        const tui = database
+            .prepare<[string], { tui: string | null }>(
+                'SELECT tui FROM workspace_agents WHERE id = ?',
             )
-            .get(agentId)?.provider;
-        if (provider) {
+            .get(agentId)?.tui;
+        if (tui) {
             database
                 .prepare(
                     `INSERT INTO agent_runtimes
-                       (id, agent_id, provider, terminal_spec_id, fronted, created_at, updated_at)
+                       (id, agent_id, tui, terminal_spec_id, fronted, created_at, updated_at)
                      VALUES (?, ?, ?, ?, 1, ?, ?)`,
                 )
-                .run(`runtime:${crypto.randomUUID()}`, agentId, provider, terminalSpecId, now, now);
+                .run(`runtime:${crypto.randomUUID()}`, agentId, tui, terminalSpecId, now, now);
         }
     }
     database
