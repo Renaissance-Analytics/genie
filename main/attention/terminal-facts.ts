@@ -1,6 +1,6 @@
 import { getTerminalSpec, getWorkspace } from '../db';
 import { workspaceIdOfSpec, SYSTEM_WORKSPACE_ID } from '../terminal/workspace-of-terminal';
-import { agentDisplay, type AgentProvider } from '../agents/identity';
+import { agentDisplay, type AgentTui } from '../agents/identity';
 
 /**
  * WHO and WHERE a terminal is, for the attention notices that have to name it.
@@ -17,7 +17,7 @@ export interface TerminalNoticeFacts {
     /** The workspace's display name (`project_name`), or the System Workspace. */
     workspace: string | null;
     /** The agent running in this terminal, when it is one. */
-    agent: { provider: AgentProvider; name: string } | null;
+    agent: { provider: AgentTui; name: string } | null;
     /** The terminal spec's own label. */
     terminal: string | null;
     /** The workspace id a reveal must activate (the sentinel for a System

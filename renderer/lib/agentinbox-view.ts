@@ -240,12 +240,12 @@ export function forgetSeen(
 // --- agent identity, as a PERSON reads it (Tynn #254) ------------------------
 
 /** The AI TUI an agent runs, as the directory reports it. */
-export type AgentProviderId = AgentType;
+export type AgentTuiId = AgentType;
 
 /** The two pieces a human-facing agent row renders. */
 export interface AgentDisplay {
     /** Which provider LOGO to draw, or null for the human / a departed agent. */
-    provider: AgentProviderId | null;
+    provider: AgentTuiId | null;
     /** The agent's NAME. Never a ref, never a chat-id. */
     name: string;
 }
@@ -257,7 +257,7 @@ interface AgentLike {
     purpose?: string;
 }
 
-function knownProvider(value: unknown): value is AgentProviderId {
+function knownProvider(value: unknown): value is AgentTuiId {
     return value === 'claude' || value === 'codex' || value === 'custom';
 }
 

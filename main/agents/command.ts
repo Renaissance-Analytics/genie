@@ -12,8 +12,8 @@
  * IO-bound wrapper.
  */
 
-import { PROVIDER_REGISTRY } from './registry';
-import type { AgentProviderId, ProviderSettingKeys } from './registry';
+import { TUI_REGISTRY } from './registry';
+import type { AgentTuiId, ProviderSettingKeys } from './registry';
 
 /**
  * The settings this module reads — exactly the provider keys, so it stays free
@@ -33,14 +33,14 @@ export type ProviderSettings = ProviderSettingKeys;
  * guessing one would launch the wrong thing.
  */
 export function resolveAgentCommand(
-    agent: AgentProviderId,
+    agent: AgentTuiId,
     override: string | undefined,
     settings: ProviderSettings,
 ): string | null {
     const explicit = override?.trim();
     if (explicit) return explicit;
 
-    const def = PROVIDER_REGISTRY[agent];
+    const def = TUI_REGISTRY[agent];
     const configured = settings[def.commandSettingKey]?.trim();
     if (configured) return configured;
 
@@ -49,8 +49,8 @@ export function resolveAgentCommand(
 
 /** The owner's always-on flags for a provider, or '' when none are set. */
 export function resolveAgentFlags(
-    agent: AgentProviderId,
+    agent: AgentTuiId,
     settings: ProviderSettings,
 ): string {
-    return settings[PROVIDER_REGISTRY[agent].flagsSettingKey] ?? '';
+    return settings[TUI_REGISTRY[agent].flagsSettingKey] ?? '';
 }

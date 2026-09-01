@@ -8,7 +8,7 @@ import type { BoardRead, ReviewOutcome } from './artboard-model';
 
 import { makeRemoteBridge } from './remote-bridge';
 import type { TynnHealth } from '../../main/mcp/tynn-health';
-import type { AgentProviderId } from '../../main/agents/registry';
+import type { AgentTuiId } from '../../main/agents/registry';
 
 export type { TynnHealth };
 
@@ -1769,9 +1769,9 @@ export interface ViewMeta {
 }
 
 /** The AI-TUI kind a specialized terminal launches. DERIVED from
- *  `PROVIDER_REGISTRY` (genie#261), so the renderer's idea of the provider set
+ *  `TUI_REGISTRY` (genie#261), so the renderer's idea of the provider set
  *  cannot drift from the main process's. */
-export type AgentType = AgentProviderId;
+export type AgentType = AgentTuiId;
 
 /**
  * AgentInbox accessibility scope (INNER tier) — who may DM this agent:

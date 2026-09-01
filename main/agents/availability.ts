@@ -40,8 +40,8 @@
  * that second probe actually resolves.
  */
 
-import type { AgentProviderId, ProviderDef, ProviderInstallSpec } from './registry';
-import { agentProviders, PROVIDER_REGISTRY } from './registry';
+import type { AgentTuiId, TuiDef, ProviderInstallSpec } from './registry';
+import { agentTuis, TUI_REGISTRY } from './registry';
 
 /** What the boot pass needs to know to decide whether a provider is wanted. */
 export interface AvailabilityContext {
@@ -49,8 +49,8 @@ export interface AvailabilityContext {
      *  agent in ANY of them could pick this provider. */
     hasWorkspace: boolean;
     /** The provider the Genie OS Agent is currently configured to launch as
-     *  (`resolveWorkstationProvider`'s answer — `agent_default`, or `claude`). */
-    osaProvider: AgentProviderId;
+     *  (`resolveWorkstationTui`'s answer — `agent_default`, or `claude`). */
+    osaProvider: AgentTuiId;
 }
 
 /**
@@ -61,8 +61,8 @@ export interface AvailabilityContext {
  * launch `genie` or `kiwi`, so nothing here should try to install them —
  * exactly the case genie#313 calls out by name.
  */
-export function providerWanted(id: AgentProviderId, ctx: AvailabilityContext): boolean {
-    if (!PROVIDER_REGISTRY[id].ownedBinary) return false;
+export function providerWanted(id: AgentTuiId, ctx: AvailabilityContext): boolean {
+    if (!TUI_REGISTRY[id].ownedBinary) return false;
     return ctx.hasWorkspace || ctx.osaProvider === id;
 }
 
@@ -89,10 +89,10 @@ export interface AvailabilityDeps {
 
 /** What the boot pass learned about one provider. */
 export type ProviderAvailability =
-    | { id: AgentProviderId; status: 'not-wanted' }
-    | { id: AgentProviderId; status: 'available'; command: string }
-    | { id: AgentProviderId; status: 'installed'; command: string }
-    | { id: AgentProviderId; status: 'unavailable'; reason: string };
+    | { id: AgentTuiId; status: 'not-wanted' }
+    | { id: AgentTuiId; status: 'available'; command: string }
+    | { id: AgentTuiId; status: 'installed'; command: string }
+    | { id: AgentTuiId; status: 'unavailable'; reason: string };
 
 /**
  * Detect `id`'s binary, and install it if it is missing, owned, wanted, AND
@@ -101,12 +101,12 @@ export type ProviderAvailability =
  * `main/dev-server/seams.ts` uses for its own probes.
  */
 export async function ensureProviderInstalled(
-    id: AgentProviderId,
+    id: AgentTuiId,
     ctx: AvailabilityContext,
     deps: AvailabilityDeps,
 ): Promise<ProviderAvailability> {
     if (!providerWanted(id, ctx)) return { id, status: 'not-wanted' };
-    return evaluateProviderInstall(PROVIDER_REGISTRY[id], deps);
+    return evaluateProviderInstall(TUI_REGISTRY[id], deps);
 }
 
 /**
@@ -115,12 +115,12 @@ export async function ensureProviderInstalled(
  * testable on their own terms rather than only through whichever registry
  * entries happen to carry an `install` spec today — which, as of genie#313, is
  * none of them (see the comments on `genie` and `kiwi` in `registry.ts`). A
- * caller with a real `AgentProviderId` should go through
+ * caller with a real `AgentTuiId` should go through
  * {@link ensureProviderInstalled}; this is the part worth calling directly
  * from a test.
  */
 export async function evaluateProviderInstall(
-    def: ProviderDef,
+    def: TuiDef,
     deps: AvailabilityDeps,
 ): Promise<ProviderAvailability> {
     const id = def.id;
@@ -166,7 +166,7 @@ export async function evaluateProviderInstall(
 export async function ensureOwnedProvidersInstalled(
     ctx: AvailabilityContext,
     deps: AvailabilityDeps,
-    ids: readonly AgentProviderId[] = agentProviders(),
+    ids: readonly AgentTuiId[] = agentTuis(),
 ): Promise<ProviderAvailability[]> {
     const results: ProviderAvailability[] = [];
     for (const id of ids) {
@@ -179,7 +179,7 @@ export async function ensureOwnedProvidersInstalled(
 
 // --- the boot result, consulted synchronously at launch time ---------------
 
-const lastKnown = new Map<AgentProviderId, ProviderAvailability>();
+const lastKnown = new Map<AgentTuiId, ProviderAvailability>();
 
 /** Record what the boot pass learned, so a later launch attempt can consult it
  *  without any new IO. */
@@ -188,7 +188,7 @@ export function recordProviderAvailability(result: ProviderAvailability): void {
 }
 
 /** What the boot pass last recorded for `id`, if anything. */
-export function getKnownProviderAvailability(id: AgentProviderId): ProviderAvailability | undefined {
+export function getKnownProviderAvailability(id: AgentTuiId): ProviderAvailability | undefined {
     return lastKnown.get(id);
 }
 
@@ -209,7 +209,7 @@ export function resetProviderAvailabilityCache(): void {
  * never a new way to refuse a launch that might have worked. Only a provider
  * the boot pass ACTIVELY marked `unavailable` is blocked.
  */
-export function launchBlockReason(id: AgentProviderId): string | undefined {
+export function launchBlockReason(id: AgentTuiId): string | undefined {
     const known = lastKnown.get(id);
     return known?.status === 'unavailable' ? known.reason : undefined;
 }

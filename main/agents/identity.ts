@@ -28,14 +28,14 @@
 
 import type { AgentType } from '../mcp/protocol';
 import { normalizePurpose } from '../agentinbox/types';
-import { isProviderId } from './registry';
+import { isTuiId } from './registry';
 
 /** The AI TUI an agent runs. Mirrors `AgentType` / `AgentInboxAgentType`. */
-export type AgentProvider = AgentType;
+export type AgentTui = AgentType;
 
 /** The parts of an agent's identity, as every surface needs them. */
 export interface AgentIdentity {
-    provider: AgentProvider;
+    provider: AgentTui;
     /** The saved agent's NAME — stable, human-chosen, kebab. */
     name: string;
     /** The harness's chat session, when it is known yet. Null before Codex's
@@ -98,14 +98,14 @@ export function agentRef(identity: AgentIdentity): string {
 /**
  * The providers a ref may name. Anything else is not one of ours.
  *
- * DERIVED from `PROVIDER_REGISTRY` (genie#261). This used to be its own
+ * DERIVED from `TUI_REGISTRY` (genie#261). This used to be its own
  * `readonly string[]` — deliberately outside the union, so no compiler checked
  * it — and a provider missing from it was silently dropped by `savedAgentsOf`:
  * the agent launched, ran, and never appeared in the roster, with no error
  * anywhere. Membership is now the registry's answer, by construction.
  */
-export function isAgentProvider(value: unknown): value is AgentProvider {
-    return isProviderId(value);
+export function isAgentTui(value: unknown): value is AgentTui {
+    return isTuiId(value);
 }
 
 /**
@@ -128,11 +128,11 @@ export function parseAgentRef(ref: string): AgentIdentity | null {
     // there is something AFTER the provider. A bare `codex` is an agent NAMED
     // codex, which is legal, and reading it as a provider with no name would
     // turn a valid ref into null.
-    if (parts.length >= 2 && isAgentProvider(parts[0]!)) {
+    if (parts.length >= 2 && isAgentTui(parts[0]!)) {
         const name = parts[1]!;
         if (!name) return null;
         return {
-            provider: parts[0] as AgentProvider,
+            provider: parts[0] as AgentTui,
             name: agentName(name),
             chatSessionId: parts.slice(2).join(SEP).trim() || null,
         };
@@ -143,7 +143,7 @@ export function parseAgentRef(ref: string): AgentIdentity | null {
     return {
         // The ref no longer carries a driver, because the driver is not the
         // agent. Callers that need one read it off the fronted runtime.
-        provider: undefined as unknown as AgentProvider,
+        provider: undefined as unknown as AgentTui,
         name: agentName(name),
         chatSessionId: parts.slice(1).join(SEP).trim() || null,
     };
@@ -160,7 +160,7 @@ export function parseAgentRef(ref: string): AgentIdentity | null {
  * providers therefore differ by logo alone, as required.
  */
 export function agentDisplay(identity: AgentIdentity): {
-    provider: AgentProvider;
+    provider: AgentTui;
     name: string;
 } {
     return { provider: identity.provider, name: agentName(identity.name) };

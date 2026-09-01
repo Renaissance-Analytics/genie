@@ -74,13 +74,13 @@ import {
     agentSessionTranscriptExists,
     isTerminalLive,
 } from '../terminal/ipc';
-import { agentName, agentRef, savedAgentKey, type AgentProvider } from '../agents/identity';
+import { agentName, agentRef, savedAgentKey, type AgentTui } from '../agents/identity';
 import { agentAllowedTuis, agentScopeFor, renderAgentFile } from '../agents/agent-file';
 import { agentBootPrompt } from '../agents/boot-prompt';
 import { handoffPath } from '../agents/handoff';
 import { firstAgentRole } from '../agents/first-agent-role';
 import { decideTuiSwitch } from '../agents/tui-switch';
-import { resolveWorkstationProvider } from '../agents/provider';
+import { resolveWorkstationTui } from '../agents/provider';
 import { restartProviderForSpec } from '../agents/restart';
 import {
     adoptableAgentSpec,
@@ -1487,7 +1487,7 @@ export async function manageTerminalsForMcp(
  * (here or in Settings). Returns null when nothing resolves.
  */
 export function resolveAgentCommand(agent: AgentType, override?: string): string | null {
-    // The DECISION lives in `agents/command.ts`, driven by PROVIDER_REGISTRY
+    // The DECISION lives in `agents/command.ts`, driven by TUI_REGISTRY
     // (genie#261). This is only the settings read.
     return resolveProviderCommand(agent, override, getAllSettings());
 }
@@ -1901,7 +1901,7 @@ export async function registerAgentInWorkspace(
     const reserved = reservedNameRefusal({ name: resolved.name, sacredName: ws.sacred_name });
     if (reserved) return { ok: false, error: reserved };
 
-    const provider = req.agent ?? resolveWorkstationProvider(getAllSettings());
+    const provider = req.agent ?? resolveWorkstationTui(getAllSettings());
     // By NAME, not by (provider, name). Since v55 a name means ONE agent
     // whatever TUI drives it, so checking the pair let a second agent through
     // under a name the workspace already had -- and the insert then died on the
@@ -2841,7 +2841,7 @@ export async function startRegisteredAgent(
                 // anything new. Adopt it and rebind.
                 const adopted = adoptableAgentSpec(
                     savedAgentsOfWorkspace(ws.id),
-                    config.provider as AgentProvider,
+                    config.provider as AgentTui,
                     config.name,
                 );
                 if (adopted) {

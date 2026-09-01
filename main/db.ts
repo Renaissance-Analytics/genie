@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { providerSettingDefaults } from './agents/registry';
+import { tuiSettingDefaults } from './agents/registry';
 import type { ProviderSettingKeys } from './agents/registry';
 import path from 'path';
 import fs from 'fs';
@@ -2426,10 +2426,10 @@ export function getAllSettings(): Settings {
             (out['terminal_copy_paste'] as 'contextmenu' | 'linux' | 'winmac') ?? 'contextmenu',
         ai_system: out['ai_system'] ?? '',
         collapsed_workspaces: out['collapsed_workspaces'] ?? '[]',
-        // Every provider's command + flags, defaulted from PROVIDER_REGISTRY
+        // Every provider's command + flags, defaulted from TUI_REGISTRY
         // (genie#261) with the stored value winning where one exists.
         ...Object.fromEntries(
-            Object.entries(providerSettingDefaults()).map(([k, fallback]) => [
+            Object.entries(tuiSettingDefaults()).map(([k, fallback]) => [
                 k,
                 out[k] ?? fallback,
             ]),

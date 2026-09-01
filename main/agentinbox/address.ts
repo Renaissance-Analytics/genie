@@ -1,4 +1,4 @@
-import { isAgentProvider } from '../agents/identity';
+import { isAgentTui } from '../agents/identity';
 
 /**
  * Turn a peer TAG into the address the broker routes on.
@@ -50,10 +50,10 @@ function durableRef(ref: string): string {
  *  for a malformed tag and refused. */
 function tagParts(to: string): { slug: string | null; durable: string } | null {
     const parts = to.split(':');
-    if (parts.length >= 2 && isAgentProvider(parts[0])) {
+    if (parts.length >= 2 && isAgentTui(parts[0])) {
         return { slug: null, durable: `${parts[0]}:${parts[1]}` };
     }
-    if (parts.length >= 3 && isAgentProvider(parts[1])) {
+    if (parts.length >= 3 && isAgentTui(parts[1])) {
         return { slug: parts[0]!, durable: `${parts[1]}:${parts[2]}` };
     }
     return null;

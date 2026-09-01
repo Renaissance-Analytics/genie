@@ -5,7 +5,7 @@ import {
     needsIdentityRewrite,
     agentName,
     agentRef,
-    isAgentProvider,
+    isAgentTui,
     parseAgentRef,
     savedAgentKey,
 } from '../identity';
@@ -123,13 +123,13 @@ describe('the canonical ref', () => {
     });
 
     it('knows which providers are ours', () => {
-        expect(isAgentProvider('claude')).toBe(true);
-        expect(isAgentProvider('codex')).toBe(true);
-        expect(isAgentProvider('kiwi')).toBe(true);
-        expect(isAgentProvider('genie')).toBe(true);
-        expect(isAgentProvider('custom')).toBe(true);
-        expect(isAgentProvider('CLAUDE')).toBe(false);
-        expect(isAgentProvider(undefined)).toBe(false);
+        expect(isAgentTui('claude')).toBe(true);
+        expect(isAgentTui('codex')).toBe(true);
+        expect(isAgentTui('kiwi')).toBe(true);
+        expect(isAgentTui('genie')).toBe(true);
+        expect(isAgentTui('custom')).toBe(true);
+        expect(isAgentTui('CLAUDE')).toBe(false);
+        expect(isAgentTui(undefined)).toBe(false);
     });
 });
 

@@ -11,8 +11,8 @@ import { guideTopics, guideIndex, guideFor } from './guide-topics';
  */
 
 import { GENIE_MCP_GUIDE, GENIE_PROTOCOL_BRIEF } from './guide';
-import { agentProviders } from '../agents/registry';
-import type { AgentProviderId } from '../agents/registry';
+import { agentTuis } from '../agents/registry';
+import type { AgentTuiId } from '../agents/registry';
 import type { QuestionPriority } from '../ask/question-priority';
 import type { TerminalReadState } from '../terminal/read-buffer';
 import type {
@@ -1207,7 +1207,7 @@ export interface ManageTerminalsResult {
 
 // --- runAgent ----------------------------------------------------------------
 
-export type AgentType = AgentProviderId;
+export type AgentType = AgentTuiId;
 
 /** One saved agent as the runAgent tool reports it (Tynn #254). */
 export interface SavedAgentInfo {
@@ -2253,7 +2253,7 @@ const REGISTER_AGENT_TOOL = {
             purpose: { type: 'string', description: 'What this agent is responsible for.' },
             agent: {
                 type: 'string',
-                enum: agentProviders(),
+                enum: agentTuis(),
                 description: 'The TUI provider. Defaults to the workstation provider.',
             },
             avatar: {
@@ -2346,9 +2346,9 @@ const RUN_AGENT_TOOL = {
             },
             agent: {
                 type: 'string',
-                // DERIVED from PROVIDER_REGISTRY (genie#261) — a provider absent
+                // DERIVED from TUI_REGISTRY (genie#261) — a provider absent
                 // from this enum cannot be NAMED over MCP, whatever the types say.
-                enum: agentProviders(),
+                enum: agentTuis(),
                 description:
                     "start: only disambiguates registered agents with the same name under different providers. The registered record decides what launches.",
             },

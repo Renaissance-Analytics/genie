@@ -15,11 +15,11 @@
  *     launched, ran, and simply never appeared in the roster. No error.
  *   - `protocol.ts` carried the `runAgent.agent` JSON-Schema `enum`. A provider
  *     missing from it could not be NAMED over MCP, whatever the types said.
- *   - `provider.ts` carried `AGENT_PROVIDERS`, re-exported as `GAPP_PROVIDERS`.
+ *   - `provider.ts` carried `AGENT_TUIS`, re-exported as `GAPP_PROVIDERS`.
  *
  * Everything that names the providers now derives from this table, so adding one
  * is a DATA change and an incomplete one is a compile error rather than a
- * silence. `Record<AgentProvider, ProviderDef>` is what buys that.
+ * silence. `Record<AgentTui, TuiDef>` is what buys that.
  *
  * ## Why it imports nothing
  *
@@ -37,7 +37,7 @@
  * since merged (`099fd30`), so folding them in is now the natural SECOND pass
  * rather than a collision. The fields it wants — `sessionStrategy`,
  * `flagTemplate`, `resumeTemplate`, `continueTemplate`, `lateBindAllowed`,
- * `launchGrammar` — belong on `ProviderDef`.
+ * `launchGrammar` — belong on `TuiDef`.
  *
  * That second pass is where a third provider stops being second-class:
  * `renderAgentResume` / `renderAgentContinue` still hardcode `agent === 'claude'`,
@@ -48,7 +48,7 @@
 /** The AI TUIs Genie can launch. Adding one starts here and nowhere else. */
 export const PROVIDER_IDS = ['claude', 'codex', 'kiwi', 'genie', 'custom'] as const;
 
-export type AgentProviderId = (typeof PROVIDER_IDS)[number];
+export type AgentTuiId = (typeof PROVIDER_IDS)[number];
 
 /**
  * How Genie installs an OWNED provider's binary when it is missing (genie#313).
@@ -61,9 +61,9 @@ export interface ProviderInstallSpec {
     package: string;
 }
 
-export interface ProviderDef {
+export interface TuiDef {
     /** Must equal the table key. Asserted, so a copy-paste slip cannot survive. */
-    id: AgentProviderId;
+    id: AgentTuiId;
     /** Human-facing name. The rail, the panel header, the settings row. */
     label: string;
     /** One line, shown where a person is choosing between providers. */
@@ -75,9 +75,9 @@ export interface ProviderDef {
      */
     defaultCommand: string;
     /** Settings key holding the owner's command override. */
-    commandSettingKey: `agent_command_${AgentProviderId}`;
+    commandSettingKey: `agent_command_${AgentTuiId}`;
     /** Settings key holding the owner's extra launch flags. */
-    flagsSettingKey: `agent_flags_${AgentProviderId}`;
+    flagsSettingKey: `agent_flags_${AgentTuiId}`;
     /**
      * True when GENIE ITSELF ships or owns this provider's binary, as opposed
      * to `claude`/`codex` — the owner's own installs, which Genie must never
@@ -99,11 +99,11 @@ export interface ProviderDef {
 }
 
 /**
- * `Record<AgentProviderId, ProviderDef>` is the load-bearing part: add an id to
+ * `Record<AgentTuiId, TuiDef>` is the load-bearing part: add an id to
  * `PROVIDER_IDS` and this stops compiling until the entry exists. That is the
  * property the ~26 unenforced sites lacked.
  */
-export const PROVIDER_REGISTRY: Record<AgentProviderId, ProviderDef> = {
+export const TUI_REGISTRY: Record<AgentTuiId, TuiDef> = {
     claude: {
         id: 'claude',
         label: 'Claude Code',
@@ -170,18 +170,18 @@ export const PROVIDER_REGISTRY: Record<AgentProviderId, ProviderDef> = {
 };
 
 /** The providers, in a stable order every derived surface shares. */
-export function agentProviders(): AgentProviderId[] {
+export function agentTuis(): AgentTuiId[] {
     return [...PROVIDER_IDS];
 }
 
 /** True when `value` names a provider. The one membership test. */
-export function isProviderId(value: unknown): value is AgentProviderId {
-    return typeof value === 'string' && Object.hasOwn(PROVIDER_REGISTRY, value);
+export function isTuiId(value: unknown): value is AgentTuiId {
+    return typeof value === 'string' && Object.hasOwn(TUI_REGISTRY, value);
 }
 
-/** A provider's definition. Callers hold an `AgentProviderId`, so it exists. */
-export function providerDef(id: AgentProviderId): ProviderDef {
-    return PROVIDER_REGISTRY[id];
+/** A provider's definition. Callers hold an `AgentTuiId`, so it exists. */
+export function providerDef(id: AgentTuiId): TuiDef {
+    return TUI_REGISTRY[id];
 }
 
 /**
@@ -189,7 +189,7 @@ export function providerDef(id: AgentProviderId): ProviderDef {
  * `db.ts`, so adding a provider adds its two keys with no edit there.
  */
 export type ProviderSettingKeys = {
-    [K in `agent_command_${AgentProviderId}` | `agent_flags_${AgentProviderId}`]?: string;
+    [K in `agent_command_${AgentTuiId}` | `agent_flags_${AgentTuiId}`]?: string;
 };
 
 /**
@@ -199,10 +199,10 @@ export type ProviderSettingKeys = {
  * `undefined` where a string was expected. Commands default to the registry's
  * `defaultCommand` (empty for `custom`, deliberately), flags to ''.
  */
-export function providerSettingDefaults(): Record<string, string> {
+export function tuiSettingDefaults(): Record<string, string> {
     const out: Record<string, string> = {};
-    for (const id of agentProviders()) {
-        const def = PROVIDER_REGISTRY[id];
+    for (const id of agentTuis()) {
+        const def = TUI_REGISTRY[id];
         out[def.commandSettingKey] = def.defaultCommand;
         out[def.flagsSettingKey] = '';
     }
@@ -214,13 +214,13 @@ export function providerSettingDefaults(): Record<string, string> {
  * the defaults in `db.ts`, the mobile allow-list, the settings search index.
  */
 export function providerSettingKeys(): {
-    id: AgentProviderId;
+    id: AgentTuiId;
     command: string;
     flags: string;
 }[] {
-    return agentProviders().map((id) => ({
+    return agentTuis().map((id) => ({
         id,
-        command: PROVIDER_REGISTRY[id].commandSettingKey,
-        flags: PROVIDER_REGISTRY[id].flagsSettingKey,
+        command: TUI_REGISTRY[id].commandSettingKey,
+        flags: TUI_REGISTRY[id].flagsSettingKey,
     }));
 }

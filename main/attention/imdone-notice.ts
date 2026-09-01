@@ -1,4 +1,4 @@
-import type { AgentProvider } from '../agents/identity';
+import type { AgentTui } from '../agents/identity';
 
 /**
  * PURE. What the `imDone` OS toast SAYS.
@@ -21,7 +21,7 @@ export interface ImDoneNoticeFacts {
     /** The workspace's display name (`project_name`), or the System Workspace. */
     workspace?: string | null;
     /** The agent running in this terminal, when it is one. */
-    agent?: { provider: AgentProvider; name: string } | null;
+    agent?: { provider: AgentTui; name: string } | null;
     /** The terminal spec's own label. */
     terminal?: string | null;
     /**
@@ -50,7 +50,7 @@ export function clean(v: string | null | undefined): string | null {
  * that would be a LOGO in the UI is spelled out here instead. Same information,
  * same convention: provider + name, never the chat id.
  */
-const PROVIDER_LABEL: Record<AgentProvider, string> = {
+const PROVIDER_LABEL: Record<AgentTui, string> = {
     claude: 'Claude Code',
     codex: 'Codex',
     kiwi: 'Kiwi Code',
@@ -66,7 +66,7 @@ const PROVIDER_LABEL: Record<AgentProvider, string> = {
 export interface NoticeSubject {
     workspace: string | null;
     terminal: string | null;
-    agent: { provider: AgentProvider; name: string } | null;
+    agent: { provider: AgentTui; name: string } | null;
     /** WHO the notice is about: an agent is provider + name; anything else is
      *  named by its own label, and only a terminal with neither is anonymous. */
     who: string;
@@ -80,7 +80,7 @@ export interface NoticeSubject {
 export function noticeSubject(facts: {
     workspace?: string | null;
     terminal?: string | null;
-    agent?: { provider: AgentProvider; name: string } | null;
+    agent?: { provider: AgentTui; name: string } | null;
 }): NoticeSubject {
     const workspace = clean(facts.workspace);
     const terminal = clean(facts.terminal);

@@ -2,14 +2,14 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
     PROVIDER_IDS,
-    PROVIDER_REGISTRY,
-    agentProviders,
+    TUI_REGISTRY,
+    agentTuis,
     providerDef,
-    providerSettingDefaults,
+    tuiSettingDefaults,
     providerSettingKeys,
 } from '../registry';
-import { agentName, isAgentProvider } from '../identity';
-import { AGENT_PROVIDERS } from '../provider';
+import { agentName, isAgentTui } from '../identity';
+import { AGENT_TUIS } from '../provider';
 import { savedAgentsOf } from '../saved';
 import { resolveAgentCommand } from '../command';
 import { handleMcpMessage, type McpContext } from '../../mcp/protocol';
@@ -22,13 +22,13 @@ import { handleMcpMessage, type McpContext } from '../../mcp/protocol';
  * reason this exists: they do not fail to build, they fail to WORK, silently.
  *
  * These tests are all the same shape on purpose — every surface that names the
- * providers must equal `Object.keys(PROVIDER_REGISTRY)`. That is the property
+ * providers must equal `Object.keys(TUI_REGISTRY)`. That is the property
  * that makes adding a provider DATA rather than a sweep: any surface still
  * carrying its own literal diverges from the registry the moment one is added,
  * and says so here.
  */
 
-const REGISTRY_IDS = Object.keys(PROVIDER_REGISTRY).sort();
+const REGISTRY_IDS = Object.keys(TUI_REGISTRY).sort();
 
 /**
  * Read the REAL advertised `runAgent` schema through `tools/list`, the way
@@ -65,7 +65,7 @@ describe('the registry is the source of truth', () => {
     });
 
     it('gives every provider a complete definition', () => {
-        for (const id of agentProviders()) {
+        for (const id of agentTuis()) {
             const def = providerDef(id);
             expect(def.id, `${id}.id`).toBe(id);
             expect(def.label.trim(), `${id}.label`).not.toBe('');
@@ -75,8 +75,8 @@ describe('the registry is the source of truth', () => {
     });
 
     it('lists providers in a stable order, so every derived UI agrees', () => {
-        expect(agentProviders()).toEqual(['claude', 'codex', 'kiwi', 'genie', 'custom']);
-        expect(agentProviders()).toEqual(Object.keys(PROVIDER_REGISTRY));
+        expect(agentTuis()).toEqual(['claude', 'codex', 'kiwi', 'genie', 'custom']);
+        expect(agentTuis()).toEqual(Object.keys(TUI_REGISTRY));
     });
 });
 
@@ -98,17 +98,17 @@ describe('every provider list is DERIVED, not restated', () => {
      * deliberately outside the union so the compiler could not check it. That is
      * the single worst site in genie#261 — see the regression below.
      */
-    it('identity.isAgentProvider accepts exactly the registry', () => {
-        for (const id of agentProviders()) {
-            expect(isAgentProvider(id), `isAgentProvider(${id})`).toBe(true);
+    it('identity.isAgentTui accepts exactly the registry', () => {
+        for (const id of agentTuis()) {
+            expect(isAgentTui(id), `isAgentTui(${id})`).toBe(true);
         }
         for (const notOne of ['gemini', 'cursor', 'aider', '', 'CLAUDE']) {
-            expect(isAgentProvider(notOne), `isAgentProvider(${notOne})`).toBe(false);
+            expect(isAgentTui(notOne), `isAgentTui(${notOne})`).toBe(false);
         }
     });
 
-    it('provider.AGENT_PROVIDERS is the registry', () => {
-        expect([...AGENT_PROVIDERS].sort()).toEqual(REGISTRY_IDS);
+    it('provider.AGENT_TUIS is the registry', () => {
+        expect([...AGENT_TUIS].sort()).toEqual(REGISTRY_IDS);
     });
 
     /**
@@ -124,15 +124,15 @@ describe('every provider list is DERIVED, not restated', () => {
      * without its two lines gets `undefined` where a string is expected.
      */
     it('the settings defaults cover every provider, with the registry command', () => {
-        const defaults = providerSettingDefaults();
-        for (const id of agentProviders()) {
+        const defaults = tuiSettingDefaults();
+        for (const id of agentTuis()) {
             const def = providerDef(id);
             expect(defaults[def.commandSettingKey], `${id} command default`).toBe(
                 def.defaultCommand,
             );
             expect(defaults[def.flagsSettingKey], `${id} flags default`).toBe('');
         }
-        expect(Object.keys(defaults)).toHaveLength(agentProviders().length * 2);
+        expect(Object.keys(defaults)).toHaveLength(agentTuis().length * 2);
     });
 
     it('the settings keys are the registry', () => {
@@ -154,7 +154,7 @@ describe('the default command comes from the registry', () => {
      * launch.
      */
     it('resolves every provider to its registry default when nothing is configured', () => {
-        for (const id of agentProviders()) {
+        for (const id of agentTuis()) {
             const def = providerDef(id);
             const resolved = resolveAgentCommand(id, undefined, {});
             if (def.defaultCommand) {
@@ -186,7 +186,7 @@ describe('the silent skip this refactor exists to close', () => {
     /**
      * The worked example from genie#261.
      *
-     * `savedAgentsOf` gates on `isAgentProvider(spec.meta.agent)`. When that read
+     * `savedAgentsOf` gates on `isAgentTui(spec.meta.agent)`. When that read
      * its own literal, a provider added everywhere ELSE — union widened, launch
      * profile added, settings added, UI added — would still be dropped here, with
      * **no error anywhere**: the agent simply never appeared in the roster.
@@ -195,7 +195,7 @@ describe('the silent skip this refactor exists to close', () => {
      * the registry it is a provider, by construction.
      */
     it('lists a saved agent for EVERY provider in the registry', () => {
-        const specs = agentProviders().map((provider, i) => ({
+        const specs = agentTuis().map((provider, i) => ({
             id: `spec-${i}`,
             workspace_id: 'ws-1',
             meta: { agent: provider, whisper_purpose: 'tynn', agent_id: `agent-${i}` },
@@ -203,8 +203,8 @@ describe('the silent skip this refactor exists to close', () => {
 
         const found = savedAgentsOf(specs, 'ws-1', () => false);
 
-        expect(found.map((a) => a.provider)).toEqual(agentProviders());
-        expect(found).toHaveLength(Object.keys(PROVIDER_REGISTRY).length);
+        expect(found.map((a) => a.provider)).toEqual(agentTuis());
+        expect(found).toHaveLength(Object.keys(TUI_REGISTRY).length);
     });
 
     it('still drops a spec whose agent is not a provider at all', () => {
@@ -246,17 +246,17 @@ describe('the silent skip this refactor exists to close', () => {
  */
 describe('provider default commands', () => {
     it('names the real binary for each provider', () => {
-        expect(PROVIDER_REGISTRY.claude.defaultCommand).toBe('claude');
-        expect(PROVIDER_REGISTRY.codex.defaultCommand).toBe('codex');
-        expect(PROVIDER_REGISTRY.kiwi.defaultCommand).toBe('kiwi');
-        expect(PROVIDER_REGISTRY.genie.defaultCommand).toBe('genie');
+        expect(TUI_REGISTRY.claude.defaultCommand).toBe('claude');
+        expect(TUI_REGISTRY.codex.defaultCommand).toBe('codex');
+        expect(TUI_REGISTRY.kiwi.defaultCommand).toBe('kiwi');
+        expect(TUI_REGISTRY.genie.defaultCommand).toBe('genie');
     });
 
     it('leaves `custom` empty — it has no binary of its own', () => {
         // Positive control on the rule above: "every provider names a command"
         // would be wrong here, and `custom` deliberately requires the caller to
         // supply one.
-        expect(PROVIDER_REGISTRY.custom.defaultCommand).toBe('');
+        expect(TUI_REGISTRY.custom.defaultCommand).toBe('');
     });
 
     it('never names a command with a `-tui` suffix', () => {
@@ -264,7 +264,7 @@ describe('provider default commands', () => {
         // own assertion because the next provider added is the next chance to
         // invent one.
         for (const id of PROVIDER_IDS) {
-            expect(PROVIDER_REGISTRY[id].defaultCommand, id).not.toMatch(/-tui$/);
+            expect(TUI_REGISTRY[id].defaultCommand, id).not.toMatch(/-tui$/);
         }
     });
 });
@@ -279,20 +279,20 @@ describe('provider default commands', () => {
  */
 describe('provider ownership — genie#313', () => {
     it('marks only the providers Genie ships as owned', () => {
-        expect(PROVIDER_REGISTRY.claude.ownedBinary).toBe(false);
-        expect(PROVIDER_REGISTRY.codex.ownedBinary).toBe(false);
-        expect(PROVIDER_REGISTRY.kiwi.ownedBinary).toBe(true);
-        expect(PROVIDER_REGISTRY.genie.ownedBinary).toBe(true);
-        expect(PROVIDER_REGISTRY.custom.ownedBinary).toBe(false);
+        expect(TUI_REGISTRY.claude.ownedBinary).toBe(false);
+        expect(TUI_REGISTRY.codex.ownedBinary).toBe(false);
+        expect(TUI_REGISTRY.kiwi.ownedBinary).toBe(true);
+        expect(TUI_REGISTRY.genie.ownedBinary).toBe(true);
+        expect(TUI_REGISTRY.custom.ownedBinary).toBe(false);
     });
 
     it('gives every provider an ownedBinary flag — not just the ones above', () => {
-        // The Record<AgentProviderId, ProviderDef> type already forces this at
+        // The Record<AgentTuiId, TuiDef> type already forces this at
         // compile time; this is the runtime witness so a provider added with an
         // `ownedBinary` left `undefined` fails LOUDLY here rather than only
         // silently skipping the boot check.
-        for (const id of agentProviders()) {
-            expect(typeof PROVIDER_REGISTRY[id].ownedBinary, id).toBe('boolean');
+        for (const id of agentTuis()) {
+            expect(typeof TUI_REGISTRY[id].ownedBinary, id).toBe('boolean');
         }
     });
 
@@ -307,14 +307,14 @@ describe('provider ownership — genie#313', () => {
      * edit has to make that choice consciously rather than by accident.
      */
     it('leaves `install` unset for both owned providers until a real source exists', () => {
-        expect(PROVIDER_REGISTRY.genie.install).toBeUndefined();
-        expect(PROVIDER_REGISTRY.kiwi.install).toBeUndefined();
+        expect(TUI_REGISTRY.genie.install).toBeUndefined();
+        expect(TUI_REGISTRY.kiwi.install).toBeUndefined();
     });
 
     it('never sets `install` on a provider Genie does not own', () => {
-        for (const id of agentProviders()) {
-            if (!PROVIDER_REGISTRY[id].ownedBinary) {
-                expect(PROVIDER_REGISTRY[id].install, id).toBeUndefined();
+        for (const id of agentTuis()) {
+            if (!TUI_REGISTRY[id].ownedBinary) {
+                expect(TUI_REGISTRY[id].install, id).toBeUndefined();
             }
         }
     });

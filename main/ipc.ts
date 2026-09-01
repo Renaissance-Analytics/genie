@@ -84,7 +84,7 @@ import {
     createKnowledgeFolder,
 } from './workspace/envelope';
 import { stopProcess, forgetProcess } from './terminal/process-supervisor';
-import { isProviderId, providerDef } from './agents/registry';
+import { isTuiId, providerDef } from './agents/registry';
 import { osAgentLaunchCommand, osAgentMetaForProvider } from './agents/os-agent';
 import { requestWorkstationReset } from './workstation/reset';
 import { osAgentBootMode } from './agents/os-lifecycle';
@@ -612,7 +612,7 @@ export function registerIpcHandlers(): void {
             patch = { ...patch, ai_system: patch.ai_system.slice(0, AI_SYSTEM_MAX) };
         }
         const next = setSettings(patch as Record<string, string>);
-        if (isProviderId(next.agent_default)) {
+        if (isTuiId(next.agent_default)) {
             const spec = getTerminalSpec('genie-workstation-agent');
             const def = providerDef(next.agent_default);
             if (spec && (

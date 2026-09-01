@@ -8,7 +8,7 @@ import { encryptSecret, decryptSecret } from '../secrets/store';
 import { getAllSettings } from '../db';
 import { resolveAlertSound } from '../notify-sound';
 import { planImDoneNotice } from '../attention/imdone-notice';
-import type { AgentProvider } from '../agents/identity';
+import type { AgentTui } from '../agents/identity';
 import { shouldForwardToDriver } from './forward-decision';
 import { isUsableGrid } from '../terminal/size-tracker';
 import { MOUSE_REPORTING_OFF } from '../terminal/replay';
@@ -588,7 +588,7 @@ export function forwardedAnswerFailureMessage(err: unknown): string {
 interface ImDoneWirePayload {
     label?: string;
     workspace?: string | null;
-    agent?: { provider: AgentProvider; name: string } | null;
+    agent?: { provider: AgentTui; name: string } | null;
 }
 
 function notifyForwardedAnswerFailed(conn: RemoteConnection, err: unknown): void {

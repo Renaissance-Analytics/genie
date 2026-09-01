@@ -22,13 +22,13 @@
  * and that a refusal happens BEFORE anything exists.
  */
 
-import { agentName, isAgentProvider, savedAgentKey, type AgentProvider } from './identity';
+import { agentName, isAgentTui, savedAgentKey, type AgentTui } from './identity';
 
 /** A saved agent, as read off the workspace's terminal specs. */
 export interface SavedAgent {
     /** The terminal spec id. A saved agent IS that spec — this is not a join key. */
     specId: string;
-    provider: AgentProvider;
+    provider: AgentTui;
     /** The agent's NAME — the saved-config half of its identity. */
     name: string;
     /**
@@ -79,7 +79,7 @@ export function savedAgentsOf(
     for (const spec of specs) {
         if (spec.workspace_id !== workspaceId) continue;
         const provider = spec.meta?.agent;
-        if (!isAgentProvider(provider)) continue;
+        if (!isAgentTui(provider)) continue;
         const chat = spec.meta?.chat_session_id;
         const agentId = spec.meta?.agent_id;
         out.push({
@@ -103,11 +103,11 @@ export interface AgentStartRequest {
      * resolved from the record on a reattach, and from the WORKSTATION default
      * when creating (the caller passes that in as `workstationProvider`).
      */
-    provider?: AgentProvider;
+    provider?: AgentTui;
     /** Bring a NEW saved agent into existence. Creation is deliberate. */
     create?: boolean;
     /** The workstation's default provider, for a create that named none. */
-    workstationProvider: AgentProvider;
+    workstationProvider: AgentTui;
 }
 
 export type AgentStartDecision =
@@ -117,7 +117,7 @@ export type AgentStartDecision =
           /** `warm` — its pty is running; `revive` — the spec outlived its pty. */
           how: 'warm' | 'revive';
       }
-    | { kind: 'create'; provider: AgentProvider; name: string }
+    | { kind: 'create'; provider: AgentTui; name: string }
     | { kind: 'refuse'; error: string };
 
 /** Every candidate's name, for an error a caller can act on. The driver is
@@ -223,7 +223,7 @@ export function decideAgentStart(
  */
 export function adoptableAgentSpec(
     saved: readonly SavedAgent[],
-    provider: AgentProvider,
+    provider: AgentTui,
     name: string,
 ): SavedAgent | undefined {
     return saved.find((item) => item.provider === provider && item.name === name);

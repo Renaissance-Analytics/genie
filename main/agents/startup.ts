@@ -42,7 +42,7 @@
  */
 
 import { LAUNCH_PROFILES } from '../agentinbox/session-capture';
-import type { AgentProvider } from './identity';
+import type { AgentTui } from './identity';
 
 /**
  * WHEN a harness's chat-id becomes knowable.
@@ -59,7 +59,7 @@ export type ChatIdBinding = 'at-launch' | 'after-launch';
  * Codex and Claude expand their managed root routers themselves. Providers
  * without a native root-file contract receive every relevant file explicitly.
  */
-export function providerInstructionFiles(provider: AgentProvider, workspacePath: string): string[] {
+export function providerInstructionFiles(provider: AgentTui, workspacePath: string): string[] {
     const root = String(workspacePath ?? '').replace(/\\/g, '/').replace(/\/$/, '');
     if (provider === 'codex') return [`${root}/AGENTS.md`];
     if (provider === 'claude') return [`${root}/CLAUDE.md`];
@@ -71,7 +71,7 @@ export function providerInstructionFiles(provider: AgentProvider, workspacePath:
     ];
 }
 
-export function chatIdBinding(provider: AgentProvider): ChatIdBinding {
+export function chatIdBinding(provider: AgentTui): ChatIdBinding {
     return LAUNCH_PROFILES[provider]?.strategy === 'flag' ? 'at-launch' : 'after-launch';
 }
 
@@ -153,7 +153,7 @@ export function withStartupInstructions(command: string, instructions: string): 
 
 /** Apply the harness's argv grammar after every launch option has been composed. */
 export function withProviderStartupInstructions(
-    provider: AgentProvider,
+    provider: AgentTui,
     command: string,
     instructions: string,
 ): string {

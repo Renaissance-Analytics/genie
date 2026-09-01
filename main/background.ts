@@ -12,7 +12,7 @@ import path from 'path';
 import { createTray, rebuildMenu } from './tray';
 import { registerShortcuts, unregisterShortcuts } from './shortcuts';
 import { launchedFromAutostart } from './autostart';
-import { resolveWorkstationProvider } from './agents/provider';
+import { resolveWorkstationTui } from './agents/provider';
 import { ensureGenieOsWorkspace, wireGenieOsWorkspace } from './agents/os-workspace';
 import { GENIE_OS_TERMINAL_ID, obsoleteOsAgentSpecIds, osAgentLaunchCommand } from './agents/os-agent';
 import { osAgentBootInstructions, osAgentBootMode } from './agents/os-lifecycle';
@@ -1128,7 +1128,7 @@ app.whenReady().then(async () => {
         osAgentBootMode(app.getPath('userData')),
     );
     const osSettings = getAllSettings();
-    const osProvider = resolveWorkstationProvider(osSettings);
+    const osProvider = resolveWorkstationTui(osSettings);
     const osDef = providerDef(osProvider);
     const osBase = osSettings[osDef.commandSettingKey] || osDef.defaultCommand;
     const osCommand = osAgentLaunchCommand(

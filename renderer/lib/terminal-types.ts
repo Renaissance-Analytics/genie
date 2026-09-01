@@ -9,7 +9,7 @@ import type { ComponentType } from 'react';
 import { AnthropicIcon, OpenaiIcon } from '@particle-academy/fancy-brand-icons';
 import { IconBox, IconCode, IconTerminal, IconWand } from '../components/Master/icons';
 import type { AgentType } from './genie';
-import { agentProviders, providerDef } from '../../main/agents/registry';
+import { agentTuis, providerDef } from '../../main/agents/registry';
 
 /** The registry key: `regular` for a plain shell, else the agent kind. */
 export type TerminalTypeId = 'regular' | AgentType;
@@ -28,7 +28,7 @@ export interface TerminalTypeDef {
 
 /**
  * The provider MARK. The only per-provider fact that cannot live in
- * `PROVIDER_REGISTRY`, because the registry is dependency-free by contract and
+ * `TUI_REGISTRY`, because the registry is dependency-free by contract and
  * these are React components.
  *
  * `Record<AgentType, …>` is what keeps it honest: add a provider to the registry
@@ -55,7 +55,7 @@ const PROVIDER_ICONS: Record<AgentType, ComponentType<{ size?: number; className
 };
 
 /**
- * Regular first, then one entry per provider, DERIVED from `PROVIDER_REGISTRY`
+ * Regular first, then one entry per provider, DERIVED from `TUI_REGISTRY`
  * (genie#261) — so a provider added to the registry appears in the split button,
  * its dropdown and the last-used-type persistence with no edit here, carrying the
  * same label and hint the Settings rows show.
@@ -68,7 +68,7 @@ export const TERMINAL_TYPES: TerminalTypeDef[] = [
         specialized: false,
         hint: 'A plain shell',
     },
-    ...agentProviders().map((id): TerminalTypeDef => {
+    ...agentTuis().map((id): TerminalTypeDef => {
         const def = providerDef(id);
         return {
             id,
