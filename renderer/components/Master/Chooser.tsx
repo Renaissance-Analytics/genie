@@ -2006,8 +2006,6 @@ export default function Chooser({
                             // removing it cannot orphan an agent -- which is
                             // why this one does not ask twice.
                             if (row.specId) onDestroySpec(row.specId);
-                        } else if (id === 'resolve-collision') {
-                            onActivateWorkspace(ws);
                         } else if (id === 'delete') {
                             openDeletePrompt(ws, { id: row.id, name: row.name });
                         }

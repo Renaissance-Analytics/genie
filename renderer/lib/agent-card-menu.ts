@@ -24,7 +24,6 @@ export interface AgentCardMenuItem {
         | 'start'
         | 'make-default'
         | 'clear-default'
-        | 'resolve-collision'
         | 'remove-orphan'
         | 'delete';
     label: string;
@@ -56,14 +55,28 @@ export function agentCardMenuItems(row: AgentGridRow): AgentCardMenuItem[] {
     }
 
     // A name conflict means two agents answer to this name and nobody has said
-    // which survives. Acting on "the" agent is ambiguous until they do, so the
-    // only thing offered is the resolution.
+    // which survives. Starting or designating one IS ambiguous until they do, so
+    // those stay out.
+    //
+    // But DELETE belongs here. Deleting one of the two is how a person resolves
+    // the conflict, and returning only "Resolve name conflict…" left the owner
+    // with a menu whose single item did nothing — the dead end this file's own
+    // orphan branch exists to prevent. A colliding agent was the one row that
+    // could never be deleted, which is also why the conflict could never be
+    // cleared by hand.
+    //
+    // "Resolve name conflict…" is NOT offered, because nothing implements it:
+    // it called `onActivateWorkspace` and simply activated the workspace, so the
+    // owner clicked a item promising "pick which one to keep" and got nothing.
+    // A menu item that does not do what it says is worse than an absent one —
+    // it costs a click and a wrong belief. Deleting one of the two really does
+    // settle it, so that is what is offered, and the hint says so.
     if (row.collisionGroup) {
         return [
             {
-                id: 'resolve-collision',
-                label: 'Resolve name conflict…',
-                hint: 'Two agents share this name. Pick which one to keep.',
+                id: 'delete',
+                label: 'Delete…',
+                hint: 'Two agents share this name. Removing one settles it — unmount keeps its files.',
                 primary: true,
             },
         ];

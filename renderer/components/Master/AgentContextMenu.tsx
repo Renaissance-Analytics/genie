@@ -70,8 +70,6 @@ export default function AgentContextMenu({
     const iconFor = (id: AgentCardMenuItem['id']) =>
         id === 'start' ? (
             <IconPlay size={14} />
-        ) : id === 'resolve-collision' ? (
-            <IconAlert size={14} />
         ) : id === 'delete' || id === 'remove-orphan' ? (
             <IconTrash size={14} />
         ) : (
