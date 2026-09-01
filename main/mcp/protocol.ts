@@ -2404,7 +2404,7 @@ const RUN_AGENT_TOOL = {
     },
 };
 
-const MANAGE_WORKSPACES_TOOL = {
+export const MANAGE_WORKSPACES_TOOL = {
     name: 'manageWorkspaces',
     description:
         "Manage Genie WORKSPACES you can act on — your own and (for an Ops agent) the ones you govern. Actions: `list` / `status` (read-only — every workspace you may act on, with its id, name, path, and whether it's your own or a governed child); `open` (open/focus a workspace's window); `activate` (make a workspace the active one in Genie); `remove` (UNREGISTER a workspace from Genie — this only removes it from Genie's list, it NEVER deletes anything on disk); `add` (REGISTER an existing folder as a workspace — pass `path`, the ABSOLUTE path of the folder. WORKSTATION OPERATOR only: it introduces a folder Genie did not know about to every surface that lists workspaces. This is the counterpart to `remove`. An `.agi` envelope (a folder with `project.json`) registers as one; anything else registers as a simple folder). Targets are limited to your own workspace or one you govern; any other is rejected. To CREATE/clone missing child workspaces for an Ops project, use `provisionWorkspaces` instead.",
@@ -2415,7 +2415,12 @@ const MANAGE_WORKSPACES_TOOL = {
             ...TARGET_WORKSPACE_PROP,
             action: {
                 type: 'string',
-                enum: ['list', 'status', 'open', 'activate', 'remove'],
+                // `add` is the counterpart to `remove` and has been
+                // implemented and documented all along -- it was missing from
+                // THIS enum only, so every call was rejected at validation
+                // before reaching the handler (genie #322). An agent could
+                // unregister a workspace and not put it back.
+                enum: ['list', 'status', 'open', 'activate', 'remove', 'add'],
                 description: 'What to do.',
             },
         },
