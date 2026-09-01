@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useOverlayRoot } from '../../lib/use-overlay-root';
 import { IconChevronDown, IconCode } from './icons';
 import AgentTerminalForm, { type AgentFormValues } from './AgentTerminalForm';
 import {
@@ -77,12 +78,17 @@ export default function TerminalTypeSplitButton({
     /** System workspace uses Add Panel too, but cannot create project agents. */
     allowAgents?: boolean;
 }) {
+    // Portal target: NEVER document.body -- Genie's surface tokens live on
+    // .gwrap/.genie-overlay-root, and a portal outside that subtree resolves
+    // them to nothing and paints transparent (genie #114).
+    const overlayRoot = useOverlayRoot();
     const [menuOpen, setMenuOpen] = useState(false);
     const [formAgent, setFormAgent] = useState<AgentType | null>(null);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const ref = useRef<HTMLDivElement>(null);
-    // The dropdown/form popover is portaled to <body> + `position: fixed` (top/
+    // The dropdown/form popover is portaled to the OVERLAY ROOT (a body child
+    // that carries the token scope — never <body> itself) + `position: fixed` (top/
     // left|right set inline from the button's rect below) instead of living
     // inline under `ref`. In the `variant="row"` (Chooser sidebar) usage the
     // button sits inside a scrollable, per-row `isolation: isolate` stacking
@@ -286,6 +292,7 @@ export default function TerminalTypeSplitButton({
 
             {menuOpen &&
                 coords &&
+                overlayRoot &&
                 createPortal(
                     <div
                         ref={popRef}
@@ -357,11 +364,12 @@ export default function TerminalTypeSplitButton({
                             </>
                         )}
                     </div>,
-                    document.body,
+                    overlayRoot,
                 )}
 
             {formAgent &&
                 coords &&
+                overlayRoot &&
                 createPortal(
                     <div
                         ref={popRef}
@@ -385,7 +393,7 @@ export default function TerminalTypeSplitButton({
                             onCancel={() => setFormAgent(null)}
                         />
                     </div>,
-                    document.body,
+                    overlayRoot,
                 )}
         </div>
     );

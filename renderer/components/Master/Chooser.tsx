@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
+import { useOverlayRoot } from '../../lib/use-overlay-root';
 import { pickPath } from '../FilePickerModal';
 import { Input, Select } from '@particle-academy/react-fancy';
 import {
@@ -214,6 +215,10 @@ export default function Chooser({
     pluginPanels = [],
     onAddPluginPanel,
 }: Props) {
+    // Portal target: NEVER document.body -- Genie's surface tokens live on
+    // .gwrap/.genie-overlay-root, and a portal outside that subtree resolves
+    // them to nothing and paints transparent (genie #114).
+    const overlayRoot = useOverlayRoot();
     const [thumbedAgentTerminals, setThumbedAgentTerminals] = useState<Set<string>>(new Set());
     // THE AGENT RECORD, per workspace. The grid used to be built from terminal
     // specs carrying `meta.agent`, which meant a leftover spec looked like an
@@ -1960,7 +1965,7 @@ export default function Chooser({
             </aside>
         </div>
         {procLog &&
-            typeof document !== 'undefined' &&
+            overlayRoot &&
             createPortal(
                 <div
                     className="proc-log-pop"
@@ -2004,10 +2009,10 @@ export default function Chooser({
                         </button>
                     </div>
                 </div>,
-                document.body,
+                overlayRoot,
             )}
         {agentMenu &&
-            typeof document !== 'undefined' &&
+            overlayRoot &&
             createPortal(
                 <AgentContextMenu
                     position={agentMenu.at}
@@ -2072,10 +2077,10 @@ export default function Chooser({
                         }
                     }}
                 />,
-                document.body,
+                overlayRoot,
             )}
         {deletePrompt &&
-            typeof document !== 'undefined' &&
+            overlayRoot &&
             createPortal(
                 <AgentDeleteModal
                     agent={deletePrompt.agent}
@@ -2115,10 +2120,10 @@ export default function Chooser({
                         }
                     }}
                 />,
-                document.body,
+                overlayRoot,
             )}
         {procMenu &&
-            typeof document !== 'undefined' &&
+            overlayRoot &&
             createPortal(
                 <>
                     <div
@@ -2163,7 +2168,7 @@ export default function Chooser({
                         </button>
                     </div>
                 </>,
-                document.body,
+                overlayRoot,
             )}
         </>
     );
@@ -2200,6 +2205,10 @@ function envelopeSlug(ws: WorkspaceRow): string {
  */
 function AgiHealth({ ws }: { ws: WorkspaceRow }) {
     const [status, setStatus] = useState<StructureDocStatus | null>(null);
+    // Portal target: NEVER document.body -- Genie's surface tokens live on
+    // .gwrap/.genie-overlay-root, and a portal outside that subtree resolves
+    // them to nothing and paints transparent (genie #114).
+    const overlayRoot = useOverlayRoot();
     const [mcp, setMcp] = useState<McpStatus | null>(null);
     const [open, setOpen] = useState(false);
     const [docsBusy, setDocsBusy] = useState(false);
@@ -2329,6 +2338,7 @@ function AgiHealth({ ws }: { ws: WorkspaceRow }) {
             </span>
             {open &&
                 coords &&
+                overlayRoot &&
                 createPortal(
                     <div
                         ref={popRef}
@@ -2413,7 +2423,7 @@ function AgiHealth({ ws }: { ws: WorkspaceRow }) {
                             </div>
                         )}
                     </div>,
-                    document.body,
+                    overlayRoot,
                 )}
         </span>
     );
@@ -2729,6 +2739,10 @@ function WorkspaceRuntimePill({
     onProcesses: () => void;
     onSites: () => void;
 }) {
+    // Portal target: NEVER document.body -- Genie's surface tokens live on
+    // .gwrap/.genie-overlay-root, and a portal outside that subtree resolves
+    // them to nothing and paints transparent (genie #114).
+    const overlayRoot = useOverlayRoot();
     const anchor = useRef<HTMLSpanElement>(null);
     const menu = useRef<HTMLDivElement>(null);
     const [open, setOpen] = useState(false);
@@ -2787,7 +2801,7 @@ function WorkspaceRuntimePill({
                 <i className={`runtime-half runtime-process proc-${processTone}`} />
                 <i className={`runtime-half runtime-site sites-${siteAvailable ? siteTone : 'none'}`} />
             </span>
-            {open && position && createPortal(
+            {open && position && overlayRoot && createPortal(
                 <div
                     ref={menu}
                     className="runtime-pill-menu"
@@ -2808,7 +2822,7 @@ function WorkspaceRuntimePill({
                         <span>Site Manager</span>
                     </button>
                 </div>,
-                document.body,
+                overlayRoot,
             )}
         </>
     );

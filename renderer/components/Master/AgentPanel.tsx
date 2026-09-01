@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ComponentProps, type MouseEvent } from 'react';
 import { createPortal } from 'react-dom';
+import { useOverlayRoot } from '../../lib/use-overlay-root';
 import TerminalPanel from './TerminalPanel';
 import { IconRefresh, IconSettings } from './icons';
 import AgentTuiSwitcher from './AgentTuiSwitcher';
@@ -24,6 +25,10 @@ type Props = ComponentProps<typeof TerminalPanel> & {
  * turn the saved agent into an ordinary terminal.
  */
 export default function AgentPanel(props: Props) {
+    // Portal target: NEVER document.body -- Genie's surface tokens live on
+    // .gwrap/.genie-overlay-root, and a portal outside that subtree resolves
+    // them to nothing and paints transparent (genie #114).
+    const overlayRoot = useOverlayRoot();
     const provider = String(props.spec.meta.agent ?? 'custom');
     const { style, onAgentSettings, onRestartAgent, agentId, agentAvatar, runtimes, onRuntimesChanged,
         ...terminalProps } = props;
@@ -80,12 +85,12 @@ export default function AgentPanel(props: Props) {
                     </>
                 }
             />
-            {menu && createPortal(
+            {menu && overlayRoot && createPortal(
                 <div ref={menuRef} className="proj-popover ctx-menu agent-panel-menu" role="menu" style={{ position: 'fixed', left: menu.x, top: menu.y }}>
                     {onAgentSettings && <button type="button" role="menuitem" onClick={() => { setMenu(null); onAgentSettings(); }}><IconSettings size={14} /> Agent settings…</button>}
                     {onRestartAgent && <button type="button" role="menuitem" onClick={() => { setMenu(null); onRestartAgent(); }}><IconRefresh size={14} /> Restart agent</button>}
                 </div>,
-                document.body,
+                overlayRoot,
             )}
         </div>
     );
