@@ -62,61 +62,69 @@ export default function FeedbackModal({
     };
 
     return (
-        <Modal open={open} onClose={close} title="Send feedback">
-            {!projectId ? (
-                <Text size="sm">
-                    This workspace isn&rsquo;t connected to a Tynn project, so there&rsquo;s nowhere
-                    to send feedback yet. Connect it in Workspace settings.
-                </Text>
-            ) : sentId ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <Modal open={open} onClose={close}>
+            <Modal.Header>Send feedback</Modal.Header>
+            <Modal.Body>
+                {!projectId ? (
+                    <Text size="sm">
+                        This workspace isn&rsquo;t connected to a Tynn project, so there&rsquo;s nowhere
+                        to send feedback yet. Connect it in Workspace settings.
+                    </Text>
+                ) : sentId ? (
                     <Text size="sm">
                         Sent. It&rsquo;s in <strong>{workspace.project_name}</strong>&rsquo;s feedback
                         list in Tynn, where it can be triaged or turned into a wish.
                     </Text>
-                    <div style={{ display: 'flex', gap: 8 }}>
-                        <Action size="sm" onClick={() => setSentId(null)}>
-                            Send another
-                        </Action>
-                        <Action size="sm" variant="ghost" onClick={close}>
-                            Done
-                        </Action>
-                    </div>
-                </div>
-            ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                    <Text size="sm" className="text-zinc-500">
-                        About Genie itself — something confusing, something that behaved
-                        unexpectedly, something missing. Goes to{' '}
-                        <strong>{workspace.project_name}</strong> in Tynn. Your Genie version and
-                        workspace are attached automatically.
-                    </Text>
-                    <Textarea
-                        value={message}
-                        onValueChange={setMessage}
-                        rows={5}
-                        autoFocus
-                        placeholder="What happened? What did you expect instead?"
-                    />
-                    {error && (
-                        <Text size="xs" style={{ color: 'var(--rose-500)' }}>
-                            {error}
+                ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                        <Text size="sm" className="text-zinc-500">
+                            About Genie itself — something confusing, something that behaved
+                            unexpectedly, something missing. Goes to{' '}
+                            <strong>{workspace.project_name}</strong> in Tynn. Your Genie version and
+                            workspace are attached automatically.
                         </Text>
-                    )}
-                    <div style={{ display: 'flex', gap: 8 }}>
-                        <Action
-                            size="sm"
-                            color="blue"
-                            disabled={sending || message.trim().length === 0}
-                            onClick={() => void send()}
-                        >
-                            {sending ? 'Sending…' : 'Send feedback'}
-                        </Action>
-                        <Action size="sm" variant="ghost" onClick={close}>
-                            Cancel
-                        </Action>
+                        <Textarea
+                            value={message}
+                            onValueChange={setMessage}
+                            rows={5}
+                            autoFocus
+                            placeholder="What happened? What did you expect instead?"
+                        />
+                        {error && (
+                            <Text size="xs" style={{ color: 'var(--rose-500)' }}>
+                                {error}
+                            </Text>
+                        )}
                     </div>
-                </div>
+                )}
+            </Modal.Body>
+            {projectId && (
+                <Modal.Footer>
+                    {sentId ? (
+                        <>
+                            <Action size="sm" onClick={() => setSentId(null)}>
+                                Send another
+                            </Action>
+                            <Action size="sm" variant="ghost" onClick={close}>
+                                Done
+                            </Action>
+                        </>
+                    ) : (
+                        <>
+                            <Action
+                                size="sm"
+                                color="blue"
+                                disabled={sending || message.trim().length === 0}
+                                onClick={() => void send()}
+                            >
+                                {sending ? 'Sending…' : 'Send feedback'}
+                            </Action>
+                            <Action size="sm" variant="ghost" onClick={close}>
+                                Cancel
+                            </Action>
+                        </>
+                    )}
+                </Modal.Footer>
             )}
         </Modal>
     );
