@@ -31,6 +31,7 @@ import { writeWorkspaceAgentMcp, writeWorkspaceTynnMcp } from '../agent-config';
 const WS = path.join('/ws', 'demo');
 const mcpJson = path.join(WS, '.mcp.json');
 const cursorJson = path.join(WS, '.cursor', 'mcp.json');
+const claudeSettingsLocal = path.join(WS, '.claude', 'settings.local.json');
 const codexToml = path.join(WS, '.codex', 'config.toml');
 const agentsMd = path.join(WS, 'AGENTS.md');
 const claudeMd = path.join(WS, 'CLAUDE.md');
@@ -175,6 +176,20 @@ describe('writeWorkspaceAgentMcp — per-target sync gating', () => {
         writeWorkspaceAgentMcp(WS, true, URL);
         expect(files.has(mcpJson)).toBe(false);
         expect(files.has(cursorJson)).toBe(true); // Cursor default-on
+    });
+
+    it('seeds the imDone Stop hook in .claude/settings.local.json when Claude sync is on (genie#318)', () => {
+        settings = { mcp_sync_claude: 'on' };
+        writeWorkspaceAgentMcp(WS, true, URL);
+        const config = JSON.parse(files.get(claudeSettingsLocal)!);
+        expect(config.hooks.Stop[0].hooks[0].type).toBe('command');
+        expect(config.hooks.Stop[0].hooks[0].command).toContain('imDone');
+    });
+
+    it('leaves .claude/settings.local.json untouched when mcp_sync_claude is off (genie#318)', () => {
+        settings = { mcp_sync_claude: 'off' };
+        writeWorkspaceAgentMcp(WS, true, URL);
+        expect(files.has(claudeSettingsLocal)).toBe(false);
     });
 
     it('leaves project Codex config untouched when mcp_sync_codex is off', () => {

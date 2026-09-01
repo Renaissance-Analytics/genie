@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { GENIE_AGENTS_BRIEF } from './guide';
+import { GENIE_AGENTS_BRIEF, IMDONE_HOOK_COMMAND } from './guide';
 import { getAllSettings } from '../db';
 import { upsertEnvLine } from '../env-file';
 import { ensureEnvGitignored, loadWorkspaceEnvVars } from '../env-store';
@@ -701,6 +701,76 @@ export function ensureClaudeProjectMcpEnabled(workspacePath: string): void {
             file,
             JSON.stringify({ ...existing, enableAllProjectMcpServers: true }, null, 2) + '\n',
         );
+    } catch {
+        /* best-effort — a read-only/locked settings file must not break provisioning */
+    }
+}
+
+/** Any hook `command` string containing this is treated as already wiring up
+ *  `imDone` — the idempotency check for {@link ensureClaudeImDoneStopHook}. */
+const IMDONE_HOOK_MARKER = 'imDone';
+
+/** True for a hook item whose `command` mentions imDone — matches BOTH the
+ *  real schema (`{ hooks: [{ type, command }] }`) and the flatter
+ *  `{ type, command }` shape earlier guide prose described (so a hook an
+ *  agent already hand-wired off that wording still counts as "already
+ *  wired," even though Claude Code itself never executes that shape). */
+function mentionsImDone(item: unknown): boolean {
+    const obj = item as JsonObj | undefined;
+    return typeof obj?.command === 'string' && (obj.command as string).includes(IMDONE_HOOK_MARKER);
+}
+
+/** True when `settings`'s `hooks.Stop` array already has an entry that calls
+ *  `imDone` — home-grown or Genie-seeded, either way nothing to add. */
+function hasImDoneStopHook(settings: JsonObj): boolean {
+    const stopEntries = (settings.hooks as JsonObj | undefined)?.Stop;
+    if (!Array.isArray(stopEntries)) return false;
+    return stopEntries.some((entry) => {
+        if (mentionsImDone(entry)) return true;
+        const inner = (entry as JsonObj | undefined)?.hooks;
+        return Array.isArray(inner) && inner.some(mentionsImDone);
+    });
+}
+
+/**
+ * Seed the "finished" hook Genie's own guide tells every agent to hand-wire
+ * (`genieGuide { topic: "automate-imdone" }`) — automatically, for Claude Code,
+ * at workspace-wiring time (genie#318).
+ *
+ * The gap this closes: the guide's step 5 is easy to skip under the pressure to
+ * start real work, and a skipped hook means a finished terminal never glows —
+ * exactly the "don't stall the work" signal `imDone` exists to guarantee. Genie
+ * already detects the Claude harness and installs skills into the workspace
+ * unprompted (see `syncAgentSkills`); this does the same for the hook instead of
+ * leaving it to an agent's memory.
+ *
+ * Written to `.claude/settings.local.json` — gitignored/local, so seeding it
+ * needs no approval (the guide itself says a local-only hook file is fine to
+ * add on your own) and it never lands in a commit. MERGES into any existing
+ * `hooks` block — other events (`PreToolUse`, …) and other `Stop` entries are
+ * left exactly as they were, appended after. IDEMPOTENT: if a `Stop` hook
+ * already calls `imDone` — Genie's own past run, or one an agent hand-wired
+ * itself — this is a no-op, so re-running workspace sync never duplicates it.
+ *
+ * The seeded command is `IMDONE_HOOK_COMMAND` from `./guide` — the SAME text
+ * the guide teaches an agent to type by hand, so there is exactly one copy of
+ * the curl to keep correct, not a second one that could drift.
+ */
+export function ensureClaudeImDoneStopHook(workspacePath: string): void {
+    if (!workspacePath) return;
+    const file = path.join(workspacePath, '.claude', 'settings.local.json');
+    try {
+        const existing = (fs.existsSync(file) ? readJson(file) : null) ?? {};
+        if (hasImDoneStopHook(existing)) return; // already wired — nothing to add
+        const hooks: JsonObj =
+            existing.hooks && typeof existing.hooks === 'object'
+                ? { ...(existing.hooks as JsonObj) }
+                : {};
+        const stop = Array.isArray(hooks.Stop) ? [...(hooks.Stop as unknown[])] : [];
+        stop.push({ hooks: [{ type: 'command', command: IMDONE_HOOK_COMMAND }] });
+        hooks.Stop = stop;
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, JSON.stringify({ ...existing, hooks }, null, 2) + '\n');
     } catch {
         /* best-effort — a read-only/locked settings file must not break provisioning */
     }
@@ -1554,6 +1624,9 @@ export function writeWorkspaceAgentMcp(
     // independent of whether the endpoint resolved right now, since the tynn server
     // (and a later genie re-sync) still need to come up available.
     if (enabled && sync.claude) ensureClaudeProjectMcpEnabled(workspacePath);
+    // Seed the "finished" hook (genie#318) the same way — Claude only, at
+    // workspace-wiring time, independent of whether the endpoint resolved.
+    if (enabled && sync.claude) ensureClaudeImDoneStopHook(workspacePath);
     // Enabling without a resolved URL (the server isn't listening / a stale box
     // can't resolve the endpoint). Writing the entry would be a broken stub, and
     // LEAVING a previously-written one makes the agent's client fail to connect

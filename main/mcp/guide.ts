@@ -9,6 +9,16 @@
  * actionable: what each tool does, when to use it, and the zero-setup contract.
  */
 
+/**
+ * The one-line curl that posts `imDone` to this server, exactly as the guide's
+ * "Automate imDone" section documents it below (genie#318). ONE constant, so a
+ * Claude Code hook seeder (`agent-config.ts`'s `ensureClaudeImDoneStopHook`) can
+ * reuse the SAME command the guide teaches an agent to hand-wire, instead of a
+ * second hand-typed copy that could quietly drift from what the guide says.
+ */
+export const IMDONE_HOOK_COMMAND = `curl -s -X POST "$GENIE_MCP_URL" -H 'Content-Type: application/json' \\
+  -d "{\\"jsonrpc\\":\\"2.0\\",\\"id\\":1,\\"method\\":\\"tools/call\\",\\"params\\":{\\"name\\":\\"imDone\\",\\"arguments\\":{\\"terminalId\\":\\"$GENIE_TERMINAL_ID\\"}}}" >/dev/null 2>&1 || true`;
+
 /** Full reference — served by the MCP itself (instructions + `genieGuide`). */
 export const GENIE_MCP_GUIDE = `# Genie MCP
 
@@ -660,25 +670,29 @@ the decision is a true blocker — never poll ForceTheQuestion.
 Calling \`imDone\` by hand is easy to forget. If your harness can run a command
 when a run/turn finishes, wire it up ONCE so the glow fires automatically every
 time you hand back — then you never leave a finished terminal sitting unseen.
-**Set this up yourself in YOUR harness's own config; Genie deliberately does NOT
-edit your harness files.** Do it only if such a hook feature exists in your
-harness — if you're unsure whether it's supported, skip it rather than guess.
+**Claude Code gets this seeded for you automatically (genie#318)** — see below.
+For every other harness, **set it up yourself in YOUR harness's own config;
+Genie deliberately does NOT edit those harness files.** Do it only if such a
+hook feature exists in your harness — if you're unsure whether it's supported,
+skip it rather than guess.
 
 The hook just needs to POST a JSON-RPC \`tools/call\` for \`imDone\` to this
 server. The endpoint + this terminal's id are in your environment as
 \`GENIE_MCP_URL\` and \`GENIE_TERMINAL_ID\`, so a one-line curl works:
 
 \`\`\`bash
-curl -s -X POST "$GENIE_MCP_URL" -H 'Content-Type: application/json' \\
-  -d "{\\"jsonrpc\\":\\"2.0\\",\\"id\\":1,\\"method\\":\\"tools/call\\",\\"params\\":{\\"name\\":\\"imDone\\",\\"arguments\\":{\\"terminalId\\":\\"$GENIE_TERMINAL_ID\\"}}}" >/dev/null 2>&1 || true
+${IMDONE_HOOK_COMMAND}
 \`\`\`
 
-- **Claude Code:** add a \`Stop\` hook (fires when you finish responding) in the
-  project's \`.claude/settings.json\` (or \`.claude/settings.local.json\` to keep it
-  local/uncommitted) under \`"hooks" → "Stop" → [{ "type": "command", "command":
-  "<the curl above>" }]\`. The hook inherits this terminal's environment, so
-  \`$GENIE_MCP_URL\` / \`$GENIE_TERMINAL_ID\` resolve. Exit 0 (don't block) so you
-  never loop. (\`SubagentStop\` is the equivalent for sub-agents.)
+- **Claude Code:** Genie already seeds this for you — the workspace's
+  \`.claude/settings.local.json\` gets a \`"hooks" → "Stop" → [{ "hooks": [{ "type":
+  "command", "command": "<the curl above>" }] }]\` entry merged in the first time
+  the workspace is wired up, without touching any hook you already had (genie#318).
+  Nothing to do unless you want to confirm it: check that file, or add the same
+  shape yourself in \`.claude/settings.json\` for a shared/committed version. The
+  hook inherits this terminal's environment, so \`$GENIE_MCP_URL\` /
+  \`$GENIE_TERMINAL_ID\` resolve. Exit 0 (don't block) so you never loop.
+  (\`SubagentStop\` is the equivalent for sub-agents.)
 - **Codex:** set \`notify\` in \`~/.codex/config.toml\` to a small script that does
   the same POST on the \`agent-turn-complete\` event.
 - **Other harnesses:** use whatever "on finish / on stop" hook they expose; the
