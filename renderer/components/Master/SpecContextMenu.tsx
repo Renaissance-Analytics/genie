@@ -149,14 +149,9 @@ export default function SpecContextMenu({
                         onClose();
                     }}
                 />
-                <CtxItem
-                    icon={<IconPlus size={14} />}
-                    label="Duplicate"
-                    onClick={() => {
-                        onDuplicate();
-                        onClose();
-                    }}
-                />
+                {/* NO "Duplicate". This product does not duplicate terminals or
+                    agents — the item offered an operation that has no meaning
+                    here, and on a running agent it sat one row above Delete. */}
                 {isAgent && onAgentSettings && (
                     <CtxItem
                         icon={<IconSettings size={14} />}
@@ -179,35 +174,10 @@ export default function SpecContextMenu({
                 )}
             </div>
 
-            {workspaces.length > 0 && (
-                <>
-                    <div className="proj-popover-divider" />
-                    <div className="proj-popover-section">
-                        <div className="proj-popover-header">Move to project</div>
-                        {otherWorkspaces.map((w) => (
-                            <CtxItem
-                                key={w.id}
-                                icon={workspaceIcon(w, 14)}
-                                label={w.project_name}
-                                onClick={() => {
-                                    onMoveToWorkspace(w.id);
-                                    onClose();
-                                }}
-                            />
-                        ))}
-                        {spec.workspace_id && (
-                            <CtxItem
-                                icon={<IconBox size={14} />}
-                                label="Detach (no project)"
-                                onClick={() => {
-                                    onMoveToWorkspace(null);
-                                    onClose();
-                                }}
-                            />
-                        )}
-                    </div>
-                </>
-            )}
+            {/* NO "Move to project" and no "Detach (no project)". Agents are
+                not moved between projects, and terminals are not detached from
+                them — the entire section described operations this product does
+                not do. */}
 
             <div className="proj-popover-divider" />
 

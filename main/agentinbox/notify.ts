@@ -135,6 +135,15 @@ export interface InboxNotice {
     channel?: string;
     /** `high` = the sender marked it urgent (an `interrupt` DM). */
     priority: 'normal' | 'high';
+    /**
+     * `ftq-answer` = the human answering a question THIS agent asked.
+     *
+     * It used to arrive as an ordinary DM notice — "You just received a message
+     * from You as a DM" — which reads as a note the agent sent ITSELF, and is
+     * indistinguishable from any other message. An agent could not tell "someone
+     * said hello" from "the decision you are blocked on has arrived".
+     */
+    kind?: 'dm' | 'ftq-answer';
 }
 
 /**
@@ -147,9 +156,18 @@ export interface InboxNotice {
  * URGENT it is, so a working agent can decide whether to break its flow.
  */
 export function inboxNoticeText(n: InboxNotice): string {
+    const read = 'read it with the agentinbox tool (action: "receive")';
+    // An answer to YOUR question is not "a message from you". It is the user
+    // unblocking a decision you asked for and are waiting on, and it must be
+    // distinguishable at a glance from ordinary mail.
+    if (n.kind === 'ftq-answer') {
+        const what = 'The user answered a question you asked';
+        return n.priority === 'high'
+            ? `[Genie] ${what} — it was marked urgent, so read it now: ${read}.`
+            : `[Genie] ${what}: ${read}.`;
+    }
     const source = n.channel ? `in the #${n.channel} channel` : 'as a DM';
     const what = `You just received a message from ${n.from} ${source}`;
-    const read = 'read it with the agentinbox tool (action: "receive")';
     return n.priority === 'high'
         ? `[Genie] ${what}, marked HIGH PRIORITY — check it immediately: ${read}.`
         : `[Genie] ${what}. It is not urgent — check it when you are not busy: ${read}.`;

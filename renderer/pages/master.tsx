@@ -2149,6 +2149,23 @@ function MasterInner() {
                         onToggleSpec={toggleSpec}
                         onAddSpec={(wsId, type) => void addSpec(wsId, type)}
                         onDestroySpec={(id) => void destroySpec(id)}
+                        onRestartAgentSpec={(id) => {
+                            const sp = specs.find((x) => x.id === id);
+                            if (!sp) return;
+                            void api()
+                                .terminalSpec.restartAgent(sp.id)
+                                .then((r) =>
+                                    setToast(
+                                        r.ok
+                                            ? 'Agent restarted.'
+                                            : r.error || 'Could not restart the agent.',
+                                    ),
+                                );
+                        }}
+                        onEditAgentSpec={(id) => {
+                            const sp = specs.find((x) => x.id === id);
+                            if (sp) setAgentEditSpec(sp);
+                        }}
                         onDisableSpec={(id) => void disableSpec(id)}
                         onEnableSpec={(id) => void enableSpec(id)}
                         onOpenContextMenu={(specId, p) =>
