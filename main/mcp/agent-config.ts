@@ -59,7 +59,20 @@ export function claudeChannelEntry(workspacePath: string, url: string): JsonObj 
     };
 }
 
-const CLAUDE_CHANNEL_OPT_IN =
+/**
+ * The APPROVED-channel flag. `--dangerously-load-development-channels` is
+ * interactive by design — Claude Code stops on "1. I am using this for local
+ * development / 2. Exit" and waits, on EVERY launch. For the Genie OS agent,
+ * which Genie starts itself, that is a wall it can never get past unaided; it
+ * relaunches and prompts again. Claude Code's own warning names this
+ * alternative ("Please use --channels to run a list of approved channels"), and
+ * `claude --channels` confirms it takes `<servers...>` (genie#324).
+ */
+const CLAUDE_CHANNEL_OPT_IN = `--channels server:${AGENTINBOX_CLAUDE_CHANNEL_NAME}`;
+
+/** The interactive flag this replaced. Stripped from any command that still
+ *  carries it — leaving it alongside the new one would keep prompting. */
+const CLAUDE_CHANNEL_DEV_FLAG =
     `--dangerously-load-development-channels server:${AGENTINBOX_CLAUDE_CHANNEL_NAME}`;
 
 export function withClaudeAgentInboxChannelLaunch(
@@ -67,6 +80,12 @@ export function withClaudeAgentInboxChannelLaunch(
     input: { agent: string; mcpSyncClaudeOff: boolean; workspacePath: string },
 ): string {
     if (input.agent !== 'claude' || input.mcpSyncClaudeOff) return command;
+    // A spec written before #324 has the interactive flag baked into its stored
+    // command. Skipping or appending would both leave it in place, and it
+    // prompts wherever it appears — so remove it before deciding.
+    if (command.includes(CLAUDE_CHANNEL_DEV_FLAG)) {
+        command = command.replace(CLAUDE_CHANNEL_DEV_FLAG, '').replace(/\s{2,}/g, ' ').trim();
+    }
     if (command.includes(CLAUDE_CHANNEL_OPT_IN)) return command;
     // genie#319 — the flag names an MCP server the workspace has to actually
     // define, backed by the adapter file below. Appending it on "is claude" and
