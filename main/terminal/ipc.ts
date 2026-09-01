@@ -52,6 +52,7 @@ import {
     transcriptDirFor,
 } from '../agentinbox/session-capture';
 import { withProviderStartupInstructions } from '../agents/startup';
+import { launchBlockReason } from '../agents/availability';
 import { buildSubmitBytes } from './keystrokes';
 import {
     normalizePurpose,
@@ -482,6 +483,21 @@ export function createAgentTerminal(opts: {
     // this function did for every re-create, and it is why reattaching had to be
     // built rather than just called.
     const priorSpec = getTerminalSpec(id);
+
+    // genie#313 — a FRESH agent-terminal (no saved spec yet, so nothing is lost
+    // by refusing) for a provider the boot-time detect pass already found
+    // missing-and-uninstallable must not open a pty at all: that pty would
+    // spawn a shell, type the launch command, and produce exactly the
+    // `command not found` the ticket describes — just with an extra dead
+    // terminal left behind. A REVIVE of an existing spec is deliberately left
+    // alone: it is the same failure mode as today (unchanged behaviour), and
+    // never worse, but refusing it would risk blocking a saved conversation on
+    // a stale or wrong cache entry.
+    if (opts.agentMeta && !priorSpec) {
+        const reason = launchBlockReason(opts.agentMeta.agent);
+        if (reason) throw new Error(reason);
+    }
+
     const reviving = !!(opts.agentMeta && priorSpec?.meta?.agent);
 
     // Agent terminals capture their chat-session id at launch + get an AgentInbox

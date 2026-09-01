@@ -50,6 +50,17 @@ export const PROVIDER_IDS = ['claude', 'codex', 'kiwi', 'genie', 'custom'] as co
 
 export type AgentProviderId = (typeof PROVIDER_IDS)[number];
 
+/**
+ * How Genie installs an OWNED provider's binary when it is missing (genie#313).
+ * Only `npm` today; a future provider may need another kind, at which point
+ * this becomes a union rather than growing optional fields on one shape.
+ */
+export interface ProviderInstallSpec {
+    manager: 'npm';
+    /** The npm package that provides the binary. */
+    package: string;
+}
+
 export interface ProviderDef {
     /** Must equal the table key. Asserted, so a copy-paste slip cannot survive. */
     id: AgentProviderId;
@@ -67,6 +78,24 @@ export interface ProviderDef {
     commandSettingKey: `agent_command_${AgentProviderId}`;
     /** Settings key holding the owner's extra launch flags. */
     flagsSettingKey: `agent_flags_${AgentProviderId}`;
+    /**
+     * True when GENIE ITSELF ships or owns this provider's binary, as opposed
+     * to `claude`/`codex` — the owner's own installs, which Genie must never
+     * try to `npm install` over — or `custom`, which names no fixed binary at
+     * all (genie#313). Only an owned provider is a candidate for the boot-time
+     * detect-and-install pass in `agents/availability.ts`.
+     */
+    ownedBinary: boolean;
+    /**
+     * How to install this provider automatically when `ownedBinary` is true and
+     * the binary is missing. Left `undefined` — even for an owned provider —
+     * when Genie has no WORKING installer for it yet: that still runs the
+     * detect pass and surfaces the gap (grey the provider out with a reason)
+     * rather than opening a terminal that fails, it just cannot close the gap
+     * automatically. See the per-provider comments below for why `genie` and
+     * `kiwi` are in exactly that state today.
+     */
+    install?: ProviderInstallSpec;
 }
 
 /**
@@ -82,6 +111,8 @@ export const PROVIDER_REGISTRY: Record<AgentProviderId, ProviderDef> = {
         defaultCommand: 'claude',
         commandSettingKey: 'agent_command_claude',
         flagsSettingKey: 'agent_flags_claude',
+        // The owner's own install — Genie must never touch it.
+        ownedBinary: false,
     },
     codex: {
         id: 'codex',
@@ -90,6 +121,7 @@ export const PROVIDER_REGISTRY: Record<AgentProviderId, ProviderDef> = {
         defaultCommand: 'codex',
         commandSettingKey: 'agent_command_codex',
         flagsSettingKey: 'agent_flags_codex',
+        ownedBinary: false,
     },
     kiwi: {
         id: 'kiwi',
@@ -98,6 +130,11 @@ export const PROVIDER_REGISTRY: Record<AgentProviderId, ProviderDef> = {
         defaultCommand: 'kiwi',
         commandSettingKey: 'agent_command_kiwi',
         flagsSettingKey: 'agent_flags_kiwi',
+        // Genie ships this one (genie#313) — same "command not found" gap the
+        // `genie` provider had. No `install`: there is no known public source
+        // for the `kiwi` binary this codebase can point npm (or anything else)
+        // at, so the detect pass can only surface the gap, not close it.
+        ownedBinary: true,
     },
     genie: {
         id: 'genie',
@@ -109,6 +146,16 @@ export const PROVIDER_REGISTRY: Record<AgentProviderId, ProviderDef> = {
         defaultCommand: 'genie',
         commandSettingKey: 'agent_command_genie',
         flagsSettingKey: 'agent_flags_genie',
+        // Genie ships this one (genie#313) — it is the SAME "command not found"
+        // gap as above, just moved from a wrong name to a missing binary. No
+        // `install`, deliberately: the upstream package (`@genie/tui`, at
+        // github.com/Renaissance-Analytics/genie-tui) is `private: true` and has
+        // never been published, and its shipped `bin` is still named
+        // `genie-tui` — an `npm install -g` today would put `genie-tui` on
+        // PATH, not `genie`, silently reproducing the exact naming bug this
+        // ticket's sibling already fixed, one layer later. Wire `install` up
+        // once that package is public AND its bin matches `defaultCommand`.
+        ownedBinary: true,
     },
     custom: {
         id: 'custom',
@@ -117,6 +164,8 @@ export const PROVIDER_REGISTRY: Record<AgentProviderId, ProviderDef> = {
         defaultCommand: '',
         commandSettingKey: 'agent_command_custom',
         flagsSettingKey: 'agent_flags_custom',
+        // No fixed binary to detect or install — the owner IS the installer.
+        ownedBinary: false,
     },
 };
 

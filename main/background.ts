@@ -18,6 +18,8 @@ import { GENIE_OS_TERMINAL_ID, obsoleteOsAgentSpecIds, osAgentLaunchCommand } fr
 import { osAgentBootInstructions, osAgentBootMode } from './agents/os-lifecycle';
 import { applyPendingWorkstationReset, isWorkstationResetPending } from './workstation/reset';
 import { providerDef } from './agents/registry';
+import { ensureOwnedProvidersInstalled } from './agents/availability';
+import { liveAvailabilityDeps } from './agents/availability-effects';
 import { appendLaunchFlags } from './agentinbox/session-capture';
 import { registerIpcHandlers, applyStartupToolchainPrecedence, addWorkspaceFromFolder } from './ipc';
 import { writeClipboardImagePng } from './clipboard-image';
@@ -1148,6 +1150,25 @@ app.whenReady().then(async () => {
         osProvider,
         appendLaunchFlags(osBase, osSettings[osDef.flagsSettingKey] || ''),
     );
+    // Detect-and-install pass for provider binaries GENIE OWNS — `genie`, the
+    // TUI, and `kiwi` (genie#313). Only when it is actually WANTED: a
+    // workspace exists (a saved agent there might pick it), or the OSA above
+    // is itself configured to use it — never on a host that will never launch
+    // either one. Fire-and-forget from boot's perspective, the same as the
+    // hosting managers below ("creating the managers starts NOTHING") — an
+    // install must never hold up app startup, however long it takes. A launch
+    // attempted before this resolves fails OPEN (`launchBlockReason` only
+    // blocks a provider the pass already recorded `unavailable`), so nothing
+    // regresses; `ensureProviderInstalled` also resolves rather than rejects
+    // for every real failure mode, so this catch is only for a defect in the
+    // pass itself.
+    ensureOwnedProvidersInstalled(
+        { hasWorkspace: listWorkspaces().length > 0, osaProvider: osProvider },
+        liveAvailabilityDeps,
+    ).catch((e) => {
+        // eslint-disable-next-line no-console
+        console.warn('[agents] provider availability check failed', e);
+    });
     if (!existingOsAgent) {
         createTerminalSpec({
             id: GENIE_OS_TERMINAL_ID,

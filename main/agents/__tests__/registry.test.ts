@@ -268,3 +268,54 @@ describe('provider default commands', () => {
         }
     });
 });
+
+/**
+ * genie#313 — "Genie's boot should detect whether the TUI is installed, and
+ * install it if it is not." Only true for a provider GENIE ITSELF ships —
+ * `claude` and `codex` are the owner's own installs (Genie must never try to
+ * `npm install` someone else's CLI over their existing one), and `custom` has
+ * no fixed binary to detect at all. `ownedBinary` is the flag the boot-time
+ * detect-and-install pass (`agents/availability.ts`) gates on.
+ */
+describe('provider ownership — genie#313', () => {
+    it('marks only the providers Genie ships as owned', () => {
+        expect(PROVIDER_REGISTRY.claude.ownedBinary).toBe(false);
+        expect(PROVIDER_REGISTRY.codex.ownedBinary).toBe(false);
+        expect(PROVIDER_REGISTRY.kiwi.ownedBinary).toBe(true);
+        expect(PROVIDER_REGISTRY.genie.ownedBinary).toBe(true);
+        expect(PROVIDER_REGISTRY.custom.ownedBinary).toBe(false);
+    });
+
+    it('gives every provider an ownedBinary flag — not just the ones above', () => {
+        // The Record<AgentProviderId, ProviderDef> type already forces this at
+        // compile time; this is the runtime witness so a provider added with an
+        // `ownedBinary` left `undefined` fails LOUDLY here rather than only
+        // silently skipping the boot check.
+        for (const id of agentProviders()) {
+            expect(typeof PROVIDER_REGISTRY[id].ownedBinary, id).toBe('boolean');
+        }
+    });
+
+    /**
+     * Neither owned provider has a WORKING installer today: `genie`'s upstream
+     * package (`@genie/tui`) is private and unpublished, and its shipped `bin`
+     * name is still `genie-tui` — installing it as-is would silently reproduce
+     * the exact naming bug this ticket's sibling already fixed, just one layer
+     * later (npm would put `genie-tui` on PATH, not `genie`). `kiwi` has no
+     * known public install source at all. Leaving `install` unset for both is a
+     * deliberate, documented choice, not an oversight — this pins it so a future
+     * edit has to make that choice consciously rather than by accident.
+     */
+    it('leaves `install` unset for both owned providers until a real source exists', () => {
+        expect(PROVIDER_REGISTRY.genie.install).toBeUndefined();
+        expect(PROVIDER_REGISTRY.kiwi.install).toBeUndefined();
+    });
+
+    it('never sets `install` on a provider Genie does not own', () => {
+        for (const id of agentProviders()) {
+            if (!PROVIDER_REGISTRY[id].ownedBinary) {
+                expect(PROVIDER_REGISTRY[id].install, id).toBeUndefined();
+            }
+        }
+    });
+});
