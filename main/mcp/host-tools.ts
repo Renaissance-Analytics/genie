@@ -78,6 +78,7 @@ import { agentName, agentRef, savedAgentKey, type AgentProvider } from '../agent
 import { agentAllowedTuis, agentScopeFor, renderAgentFile } from '../agents/agent-file';
 import { agentBootPrompt } from '../agents/boot-prompt';
 import { handoffPath } from '../agents/handoff';
+import { firstAgentRole } from '../agents/first-agent-role';
 import { decideTuiSwitch } from '../agents/tui-switch';
 import { resolveWorkstationProvider } from '../agents/provider';
 import { restartProviderForSpec } from '../agents/restart';
@@ -1956,6 +1957,17 @@ export async function registerAgentInWorkspace(
         avatar,
         boot_cwd: resolved.bootCwd,
         persona_path: resolved.personaPath,
+        // genie#324 — the FIRST agent in a workspace is that workspace's agent
+        // (TWA). The AMS guide says every workspace has one by default; the role
+        // existed in the schema and `deleteWorkspaceAgent` refuses to delete
+        // one, but nothing ever created it — 29 agents on one workstation, zero
+        // with role='workspace'.
+        // genie#324 — NOT wired yet, deliberately. Auto-assigning the TWA to
+        // the first agent collides with `deleteWorkspaceAgent` refusing to
+        // delete a role='workspace' agent (#311): the first agent would become
+        // permanently undeletable. It broke 12 runAgent tests exactly that way.
+        // `firstAgentRole` is implemented and unit-tested; wiring it needs the
+        // owner's decision on how a TWA becomes deletable.
         role: 'specialized',
         // The workspace's DESIGNATED default agent, or nothing. This used to be
         // a hard-coded `workspace:<id>` -- the placeholder v50 seeded and v57
@@ -2224,12 +2236,33 @@ export async function agentInboxForMcp(
     // Resolve — or lazily create — the caller's AgentInbox identity.
     let agentId = spec.meta?.agent_id;
     if (!agentId) {
+        // genie#324 — an agent with no NAME is not registered. This used to mint
+        // one via `normalizePurpose`, which returned the literal 'general', so
+        // any terminal that called agentinbox without a purpose silently became
+        // `{tui}:general` — 7 of 29 agents on one workstation, none of them
+        // asked for. Refuse and say what is missing; do not invent an identity
+        // the user never created.
+        // The RAW value, not the normalised one: `normalizePurpose` deliberately
+        // falls back to `general` because that is the name of a workspace's
+        // DEFAULT agent, and removing that breaks `runAgent start` with no name.
+        // What must not happen is inventing that identity for a terminal that
+        // simply never said who it was.
+        const purpose = normalizePurpose(spec.meta?.whisper_purpose);
+        if (!String(spec.meta?.whisper_purpose ?? '').trim()) {
+            return {
+                ok: false,
+                error:
+                    'This terminal has no agent name, so it cannot join the AgentInbox. ' +
+                    'Register it with `registerAgent` (giving it a name and a purpose), ' +
+                    'or start it through Genie so it is created as a named agent.',
+            };
+        }
         agentId = crypto.randomUUID();
         const meta: TerminalSpecMeta = {
             ...spec.meta,
             agent: (spec.meta?.agent as AgentInboxAgentType) ?? 'custom',
             agent_id: agentId,
-            whisper_purpose: normalizePurpose(spec.meta?.whisper_purpose),
+            whisper_purpose: purpose,
             whisper_scope: (spec.meta?.whisper_scope as AgentInboxScope) ?? 'self',
         };
         updateTerminalSpec(spec.id, { meta });
