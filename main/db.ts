@@ -2645,7 +2645,7 @@ export function bindWorkspaceAgentTerminalInDb(
     //
     // Only the fronted runtime moves: a sidecar keeping its conversation warm is
     // not backed by this terminal and must not be repointed at it.
-    database
+    const moved = database
         .prepare(
             `UPDATE agent_runtimes
              SET terminal_spec_id = ?, ready_at = NULL,
@@ -2653,7 +2653,35 @@ export function bindWorkspaceAgentTerminalInDb(
                  updated_at = ?
              WHERE agent_id = ? AND fronted = 1`,
         )
-        .run(terminalSpecId, now, agentId);
+        .run(terminalSpecId, now, agentId).changes;
+
+    // An agent REGISTERED but never started has no runtime at all — the
+    // documented dormant state. An UPDATE against no row touches nothing, so the
+    // first bind left the authority empty while the mirror below was written,
+    // and `frontedAgentRuntime` then reported the running agent as stopped. That
+    // is the regression the UPDATE-only form of this fix introduced: before it,
+    // only the mirror was written and only the mirror was read, so a missing
+    // runtime cost nothing.
+    //
+    // Create it here instead. Only when binding a terminal — unbinding a dormant
+    // agent must stay a no-op rather than inventing a runtime for something that
+    // never ran.
+    if (moved === 0 && terminalSpecId) {
+        const provider = database
+            .prepare<[string], { provider: string | null }>(
+                'SELECT provider FROM workspace_agents WHERE id = ?',
+            )
+            .get(agentId)?.provider;
+        if (provider) {
+            database
+                .prepare(
+                    `INSERT INTO agent_runtimes
+                       (id, agent_id, provider, terminal_spec_id, fronted, created_at, updated_at)
+                     VALUES (?, ?, ?, ?, 1, ?, ?)`,
+                )
+                .run(`runtime:${crypto.randomUUID()}`, agentId, provider, terminalSpecId, now, now);
+        }
+    }
     database
         .prepare(
             `UPDATE workspace_agents

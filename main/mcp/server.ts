@@ -12,6 +12,7 @@ import {
     type ServerPushStats,
 } from './server-push';
 import type { QuestionPriority } from '../ask/question-priority';
+import type { AskDeliverability } from '../ask/force-question';
 import {
     handleMcpMessage,
     type ForceQuestion,
@@ -110,6 +111,9 @@ export interface ServerDeps {
         questions: ForceQuestion[],
         priority?: QuestionPriority,
     ) => Promise<ForceQuestionResult>;
+    /** Whether an answer could be delivered back to this caller (genie#321).
+     *  Needs DB access, so the host supplies it. */
+    askDeliverability?: (terminalId: string) => AskDeliverability;
     /** Map the caller's workspace for the initializeWorkspace prompt. */
     describeWorkspace: (terminalId: string) => Promise<WorkspaceMap | null>;
     /** Manage the caller's workspace background processes (manageProcess tool). */
@@ -671,6 +675,11 @@ async function handle(
         checkIssues: deps.checkIssues,
         agentInboxMailLine: deps.agentInboxMailLine,
         onForceQuestion: deps.onForceQuestion,
+        // genie#321 — resolved HERE rather than in the pure protocol module,
+        // which does no DB access. A caller with no workspace, or with no agent
+        // row to deliver to, must be refused at ask time instead of having the
+        // user's answer accepted and then dropped.
+        askDeliverability: deps.askDeliverability,
         describeWorkspace: deps.describeWorkspace,
         manageProcess: deps.manageProcess,
         manageSite: deps.manageSite,

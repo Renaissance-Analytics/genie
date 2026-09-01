@@ -38,6 +38,8 @@ import type {
 import { MEMORY_CLASSES } from '../knowledge/types';
 import { formatGappDevStatus, gappDevBrief } from '../workspace/gapp-dev-status';
 import type { GappDevStatus } from '../workspace/gapp-dev-status';
+import { forceQuestionRefusal } from '../ask/force-question';
+import type { AskDeliverability } from '../ask/force-question';
 import { formatRepoCheckoutLine } from '../workspace/repo-checkout';
 import type { RepoCheckoutInfo } from '../workspace/repo-checkout';
 import type { AppCheckReport } from '../apps/checkup';
@@ -388,6 +390,12 @@ export interface McpContext {
         questions: ForceQuestion[],
         priority?: QuestionPriority,
     ) => Promise<ForceQuestionResult>;
+    /**
+     * Whether an answer could actually be delivered back to this caller —
+     * checked BEFORE a question is accepted (genie#321). Optional so a host that
+     * has not wired it yet behaves as before rather than refusing everything.
+     */
+    askDeliverability?: (terminalId: string) => AskDeliverability;
     /**
      * Map the caller's workspace (root + repos + orientation files) so the
      * `initializeWorkspace` tool can hand a fresh agent a learning plan. Does
@@ -4165,6 +4173,19 @@ ${body}` }],
                         'ForceTheQuestion requires a non-empty `questions` array.',
                     );
                 }
+                // genie#321 — refuse when the answer could not be delivered back.
+                // This used to accept from any caller and promise "the answer
+                // will be delivered to your AgentInbox", including from terminals
+                // with no inbox at all. The user answered, the question cleared,
+                // and the answer was DISCARDED — which from their side is
+                // indistinguishable from the agent ignoring them. `agentinbox`
+                // and `submitFeedback` already refuse an unbound terminal; the
+                // one surface that did not is the one that lost data.
+                const refusal = ctx.askDeliverability
+                    ? forceQuestionRefusal(ctx.askDeliverability(ctx.terminalId))
+                    : undefined;
+                if (refusal) return err(msg.id, -32602, refusal);
+
                 const rawPriority = params.arguments?.priority;
                 const priority: QuestionPriority | undefined =
                     rawPriority === 'low' ||

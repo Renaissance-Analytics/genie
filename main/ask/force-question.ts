@@ -153,6 +153,45 @@ export interface DeferredAnswerDelivery {
  * answer is arriving this way — a plain modal answer must never be mislabeled a
  * DND deferral just because delivery is (always, by design) asynchronous.
  */
+/** What a caller must have for an answer to reach it. */
+export interface AskDeliverability {
+    /** The asking terminal's workspace, or null when it has none. */
+    workspaceId: string | null;
+    /** Whether an AgentInbox identity exists to deliver the answer to. */
+    hasInboxIdentity: boolean;
+}
+
+/**
+ * Why this caller must NOT be allowed to ask — or undefined when it may.
+ *
+ * `ForceTheQuestion` used to accept from anyone and promise "the answer will be
+ * delivered to your AgentInbox", including from callers with no inbox at all.
+ * The user answered, the question cleared, and the answer was DISCARDED with no
+ * message ever created (genie#321). From the human's side that is
+ * indistinguishable from the agent ignoring them.
+ *
+ * `agentinbox` and `submitFeedback` already refuse an unbound terminal plainly.
+ * This applies the same rule at ask time, where it costs the agent an error
+ * instead of costing the human their answer.
+ */
+export function forceQuestionRefusal(d: AskDeliverability): string | undefined {
+    if (!d.workspaceId) {
+        return (
+            'This terminal is not in a workspace, so an answer could not be delivered back to it. ' +
+            'Ask the user directly in your own terminal instead, or have Genie attach this ' +
+            'terminal to a workspace first.'
+        );
+    }
+    if (!d.hasInboxIdentity) {
+        return (
+            'This terminal has no AgentInbox identity, so there is nowhere to deliver an answer. ' +
+            'This happens when an agent was started by hand rather than launched by Genie. ' +
+            'Ask the user directly in your own terminal instead.'
+        );
+    }
+    return undefined;
+}
+
 export function formatDeferredAnswer(d: DeferredAnswerDelivery): string {
     const lines = d.answers.map((a, i) => {
         const q = d.questions[i]?.question ?? d.questions[i]?.header ?? `Q${i + 1}`;
