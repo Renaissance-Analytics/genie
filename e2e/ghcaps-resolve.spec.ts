@@ -1,4 +1,5 @@
 import { test, expect, type ElectronApplication, type Page } from '@playwright/test';
+import { GENIE_GITHUB_APP_SLUG } from '../main/config';
 import { launchGenieE2E, readMockState } from './helpers/launch';
 
 /**
@@ -72,10 +73,16 @@ test('resolve flow lists the non-granting install + the App-settings deep-link',
         );
 
     // Clicking "Open App permission settings…" opens the App's permission page.
+    //
+    // Built from GENIE_GITHUB_APP_SLUG rather than hard-coded. This assertion
+    // was pinned to the literal `genie-ide` and outlived the App's rename to
+    // `genie-aos`: config, the mock and the unit test all moved, this spec did
+    // not, and it took the E2E gate red on all three OSes. Deriving it means the
+    // next rename cannot leave the spec asserting a slug that 404s.
     await appSettingsBtn.click();
     await expect
         .poll(async () => (await readMockState(app)).openedUrls)
-        .toContain('https://github.com/settings/apps/genie-ide/permissions');
+        .toContain(`https://github.com/settings/apps/${GENIE_GITHUB_APP_SLUG}/permissions`);
 
     // The Reconnect + Re-check actions are still offered (not regressed).
     await expect(
