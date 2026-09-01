@@ -88,6 +88,7 @@ import {
     type SavedAgent,
 } from '../agents/saved';
 import { resolveAgentRegistration } from '../agents/registration';
+import { reservedNameRefusal } from '../agents/reserved-names';
 import { providerInstructionFiles, withProviderStartupInstructions } from '../agents/startup';
 import {
     PASTE_SUBMIT_DELAY_MS,
@@ -1889,6 +1890,17 @@ export async function registerAgentInWorkspace(
 
     const resolved = resolveAgentRegistration(ws.path, req);
     if (!resolved.ok) return resolved;
+
+    // RESERVED NAMES (#324 follow-on). `general`, `genie` and `tynn` are refused
+    // unless this workspace was granted that one term (`workspaces.sacred_name`).
+    //
+    // Checked HERE -- before the persona file is written and before any row is
+    // created -- so a refusal leaves nothing behind. A check placed after the
+    // write would litter `.agents/general/AGENT.md` into workspaces, which is
+    // the exact name we are trying to stop appearing anywhere.
+    const reserved = reservedNameRefusal({ name: resolved.name, sacredName: ws.sacred_name });
+    if (reserved) return { ok: false, error: reserved };
+
     const provider = req.agent ?? resolveWorkstationProvider(getAllSettings());
     // By NAME, not by (provider, name). Since v55 a name means ONE agent
     // whatever TUI drives it, so checking the pair let a second agent through

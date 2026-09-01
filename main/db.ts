@@ -1790,6 +1790,42 @@ export function runMigrations(d: Database.Database): void {
                 `);
             },
         },
+        {
+            // v61 -- A SACRED WORKSPACE'S ONE RESERVED NAME.
+            //
+            // `general`, `genie` and `tynn` are refused as agent names
+            // (`agents/reserved-names.ts`). The owner's rule: *"NO GENERAL. WE
+            // need a term block list. so no genie or tynn either (except tynn is
+            // allowed in this specific workspace of course)"*.
+            //
+            // `sacred_name` is that exception, expressed as a GRANT of ONE term
+            // rather than a boolean, so being sacred as `tynn` does not also
+            // unlock `genie`. NULL -- every workspace, until something grants it
+            // -- means the block list applies in full.
+            //
+            // It is deliberately NOT seeded here. Tynn is the source of truth for
+            // which project is sacred (the owner asked for it to be marked "in
+            // tynn and when in genie"), so the grant ARRIVES from Tynn rather
+            // than being guessed locally. Hard-coding a ULID or a project name
+            // would mark one workstation's row and no one else's, and would be a
+            // lie on every other machine.
+            //
+            // Existing agents are unaffected: the block list is checked when an
+            // agent is REGISTERED or RENAMED, never on the way in from the
+            // database, so no already-registered agent stops working while the
+            // grant is in flight.
+            // Idempotent ADD COLUMN like v2/v4/v5/v6/v7/v8 — the migration
+            // replay tests run the ladder against a database that already holds
+            // the column, and a bare ALTER throws `duplicate column name` and
+            // takes the whole upgrade transaction down with it.
+            version: 61,
+            runner: (db) => {
+                const cols = workspaceColumns(db);
+                if (!cols.has('sacred_name')) {
+                    db.exec(`ALTER TABLE workspaces ADD COLUMN sacred_name TEXT`);
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -2559,6 +2595,16 @@ export interface WorkspaceRow {
      *  rows with this set — ops-provisioned / user-local rows (same backend +
      *  created_by_genie) stay 0 and are never torn down. Default 0. */
     assignment_managed: number;
+    /**
+     * The ONE reserved agent name this workspace is permitted to use, or NULL.
+     *
+     * `general`, `genie` and `tynn` are refused as agent names everywhere
+     * (`agents/reserved-names.ts`); a SACRED workspace is granted exactly one of
+     * them back — the Tynn workspace gets `tynn`. A grant, not a boolean, so it
+     * cannot become a skeleton key over the whole list. Sacred is otherwise
+     * PURELY COSMETIC in Genie: same tools, same permissions, same guides.
+     */
+    sacred_name: string | null;
     /** User-defined sidebar order (lower = higher). New rows append to the bottom. */
     sort_order: number;
     /** Agent-integration MCP enabled for this workspace's terminals. 0=off (default). */
@@ -2994,6 +3040,7 @@ export function addWorkspace(
         | 'schedule_approval'
         | 'assignment_managed'
         | 'agent_access'
+        | 'sacred_name'
     > & {
         sort_order?: number;
         mcp_enabled?: number;
@@ -3002,6 +3049,7 @@ export function addWorkspace(
         schedule_approval?: number;
         assignment_managed?: number;
         agent_access?: WorkspaceAgentAccess;
+        sacred_name?: string | null;
     },
 ): WorkspaceRow {
     // Mirror project_id / project_name into the legacy tynn_* columns
@@ -3022,13 +3070,18 @@ export function addWorkspace(
         // provisionAssignedWorkspace); everything else stays 0 so the convergent
         // reconcile never tears it down.
         assignment_managed: row.assignment_managed ?? 0,
+        // No workspace is sacred until something GRANTS it a reserved name --
+        // Tynn is the source of truth for which project that is. NULL means the
+        // reserved-name block list applies in full, which is the right default
+        // for every workspace anyone creates.
+        sacred_name: row.sacred_name ?? null,
     };
     const database = getDb();
     const insert = database.transaction(() => {
         database.prepare(
             `INSERT INTO workspaces
-             (id, backend, project_id, project_name, tynn_project_id, tynn_project_name, shape, path, editor, editor_cmd, start_cmd, env_file, last_opened_at, created_by_genie, sort_order, mcp_enabled, assignment_managed)
-             VALUES (@id, @backend, @project_id, @project_name, @tynn_project_id, @tynn_project_name, @shape, @path, @editor, @editor_cmd, @start_cmd, @env_file, @last_opened_at, @created_by_genie, @sort_order, @mcp_enabled, @assignment_managed)`,
+             (id, backend, project_id, project_name, tynn_project_id, tynn_project_name, shape, path, editor, editor_cmd, start_cmd, env_file, last_opened_at, created_by_genie, sort_order, mcp_enabled, assignment_managed, sacred_name)
+             VALUES (@id, @backend, @project_id, @project_name, @tynn_project_id, @tynn_project_name, @shape, @path, @editor, @editor_cmd, @start_cmd, @env_file, @last_opened_at, @created_by_genie, @sort_order, @mcp_enabled, @assignment_managed, @sacred_name)`,
         )
         .run(full);
         // No placeholder agent. A new workspace has NO default until someone
@@ -3069,7 +3122,8 @@ export function updateWorkspace(
                 start_cmd         = @start_cmd,
                 env_file          = @env_file,
                 last_opened_at    = @last_opened_at,
-                created_by_genie  = @created_by_genie
+                created_by_genie  = @created_by_genie,
+                sacred_name       = @sacred_name
              WHERE id = @id`,
         )
         .run(next);
