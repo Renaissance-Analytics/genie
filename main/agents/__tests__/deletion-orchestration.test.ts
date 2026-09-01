@@ -137,23 +137,17 @@ describe('deleteRegisteredAgent', () => {
         expect(deleteRegisteredAgent(plain, 'unmount').workspaceTynnLinked).toBe(false);
     });
 
-    it('asking to remove from Tynn never silently no-ops — it always says what happened', () => {
-        // The issue's bar is "never a silent side effect." Genie has no
-        // per-agent Tynn record to remove yet, so the honest behaviour is
-        // saying so plainly rather than pretending the checkbox did nothing
-        // at all.
+    it('never carries a tynnNote or a removeFromTynn option — there is no per-agent Tynn link to act on', () => {
+        // A checkbox offering to "remove it from Tynn" was tried here and
+        // pulled: Genie has no per-agent Tynn record, so the control promised
+        // an action the code could not perform. This guards against that
+        // reappearing on the result shape, whether or not the workspace
+        // itself is Tynn-linked.
         const linked = registerAgent(LINKED_WS, linkedWsPath, {});
         const plain = registerAgent(PLAIN_WS, plainWsPath, {});
 
-        const linkedResult = deleteRegisteredAgent(linked, 'delete', { removeFromTynn: true });
-        expect(linkedResult.tynnNote).toMatch(/tynn/i);
-
-        const plainResult = deleteRegisteredAgent(plain, 'delete', { removeFromTynn: true });
-        expect(plainResult.tynnNote).toMatch(/tynn/i);
-
-        // Not asked for → no note at all, not an empty one.
-        const another = registerAgent(PLAIN_WS, plainWsPath, {});
-        expect(deleteRegisteredAgent(another, 'delete').tynnNote).toBeUndefined();
+        expect(deleteRegisteredAgent(linked, 'delete')).not.toHaveProperty('tynnNote');
+        expect(deleteRegisteredAgent(plain, 'delete')).not.toHaveProperty('tynnNote');
     });
 
     it('refuses to delete the WORKSPACE agent', () => {

@@ -3975,22 +3975,17 @@ export interface GenieApi {
             agentId: string,
             avatar: string | null,
         ) => Promise<{ ok: boolean; error?: string }>;
-        /** Whether this workspace carries a live Tynn project link — gates
-         *  the delete prompt's "also remove from Tynn" opt-in (#311). */
-        tynnLinked: (workspaceId: string) => Promise<boolean>;
         /** UNMOUNT (keep `.agents/*`) or DELETE (remove them too). Both shut
          *  down every TUI this agent may run under and kill its terminal
          *  (#311). */
         delete: (
             agentId: string,
             mode: 'unmount' | 'delete',
-            opts?: { removeFromTynn?: boolean },
         ) => Promise<{
             ok: boolean;
             error?: string;
             filesRemoved: boolean;
             workspaceTynnLinked: boolean;
-            tynnNote?: string;
         }>;
     };
     ask: {

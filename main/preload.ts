@@ -1405,25 +1405,15 @@ const api = {
                 ok: boolean;
                 error?: string;
             }>,
-        /** Whether this workspace carries a live Tynn project link — gates
-         *  the delete prompt's "also remove from Tynn" opt-in (#311). */
-        tynnLinked: (workspaceId: string) =>
-            ipcRenderer.invoke('agents:tynnLinked', workspaceId) as Promise<boolean>,
         /** UNMOUNT (keep `.agents/*`) or DELETE (remove them too). Both shut
-         *  down every TUI this agent may run under and kill its terminal;
-         *  `removeFromTynn` is an explicit opt-in, never inferred from mode
-         *  alone (#311). */
-        delete: (
-            agentId: string,
-            mode: 'unmount' | 'delete',
-            opts?: { removeFromTynn?: boolean },
-        ) =>
-            ipcRenderer.invoke('agents:delete', agentId, mode, opts) as Promise<{
+         *  down every TUI this agent may run under and kill its terminal
+         *  (#311). */
+        delete: (agentId: string, mode: 'unmount' | 'delete') =>
+            ipcRenderer.invoke('agents:delete', agentId, mode) as Promise<{
                 ok: boolean;
                 error?: string;
                 filesRemoved: boolean;
                 workspaceTynnLinked: boolean;
-                tynnNote?: string;
             }>,
     },
     ask: {

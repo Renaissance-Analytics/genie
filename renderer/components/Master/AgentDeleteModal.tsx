@@ -8,7 +8,6 @@ import {
 
 export interface AgentDeleteDecision {
     mode: AgentDeleteMode;
-    removeFromTynn: boolean;
 }
 
 /**
@@ -25,67 +24,35 @@ export interface AgentDeleteDecision {
  * IPC call and passes back `busy`/`error`. Reuses the shared
  * `prompt-scrim` / `prompt-card` / `prompt-btn` chrome rather than hand-rolling
  * another modal shell.
+ *
+ * Says nothing about Tynn. Genie has no per-agent Tynn record to act on, and a
+ * control that cannot do what its label says is worse than no control at all
+ * — a checkbox offering to "remove it from Tynn" was tried here and pulled
+ * for exactly that reason (genie#311). A future issue can add it back once a
+ * real per-agent Tynn link exists to act on.
  */
 export default function AgentDeleteModal({
     agent,
-    tynnLinked,
     busy = false,
     error = null,
-    note = null,
     onCancel,
     onConfirm,
-    onDone,
 }: {
     agent: { name: string };
-    /** Whether this agent's workspace carries a live Tynn link — the opt-in
-     *  to remove it there is offered only when there is something for it to
-     *  plausibly mean. */
-    tynnLinked: boolean;
     busy?: boolean;
     error?: string | null;
-    /** Set once the delete has actually happened and there is something left
-     *  to tell the human (e.g. the Tynn opt-in did not do anything). Showing
-     *  it keeps this modal open one more beat instead of closing silently. */
-    note?: string | null;
     onCancel: () => void;
     onConfirm: (decision: AgentDeleteDecision) => void;
-    onDone: () => void;
 }) {
     const [mode, setMode] = useState<AgentDeleteMode>('unmount');
-    const [removeFromTynn, setRemoveFromTynn] = useState(false);
 
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') (note ? onDone : onCancel)();
+            if (e.key === 'Escape') onCancel();
         };
         document.addEventListener('keydown', onKey);
         return () => document.removeEventListener('keydown', onKey);
-    }, [onCancel, onDone, note]);
-
-    // The action already happened — this is just telling the human the one
-    // thing the confirm couldn't have known yet (whether Tynn had anything to
-    // remove). Never a silent close: see the module comment.
-    if (note) {
-        return (
-            <div className="prompt-scrim" onMouseDown={onDone}>
-                <div
-                    className="prompt-card agent-delete-card"
-                    role="dialog"
-                    aria-modal="true"
-                    aria-label={`${agent.name} deleted`}
-                    onMouseDown={(e) => e.stopPropagation()}
-                >
-                    <div className="prompt-title">{agent.name} — done</div>
-                    <div className="prompt-body">{note}</div>
-                    <div className="prompt-actions">
-                        <button type="button" className="prompt-btn prompt-btn-primary" onClick={onDone}>
-                            OK
-                        </button>
-                    </div>
-                </div>
-            </div>
-        );
-    }
+    }, [onCancel]);
 
     return (
         <div className="prompt-scrim" onMouseDown={onCancel}>
@@ -127,24 +94,6 @@ export default function AgentDeleteModal({
                     ))}
                 </div>
 
-                {mode === 'delete' && tynnLinked && (
-                    <label className="agent-form-wake">
-                        <input
-                            type="checkbox"
-                            checked={removeFromTynn}
-                            disabled={busy}
-                            onChange={(e) => setRemoveFromTynn(e.target.checked)}
-                        />
-                        <span className="agent-form-wake-text">
-                            <span className="agent-form-label">Also remove it from Tynn</span>
-                            <span className="agent-form-scope-desc">
-                                This workspace is linked to Tynn. Left unchecked, nothing
-                                changes there.
-                            </span>
-                        </span>
-                    </label>
-                )}
-
                 {error && <div className="agent-form-error">{error}</div>}
 
                 <div className="prompt-actions">
@@ -162,9 +111,7 @@ export default function AgentDeleteModal({
                             mode === 'delete' ? 'prompt-btn-destructive' : 'prompt-btn-primary'
                         }`}
                         disabled={busy}
-                        onClick={() =>
-                            onConfirm({ mode, removeFromTynn: mode === 'delete' && removeFromTynn })
-                        }
+                        onClick={() => onConfirm({ mode })}
                     >
                         {busy ? 'Working…' : agentDeleteConfirmLabel(mode)}
                     </button>

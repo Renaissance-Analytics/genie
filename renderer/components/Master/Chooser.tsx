@@ -260,25 +260,16 @@ export default function Chooser({
     } | null>(null);
     // The DELETE confirm dialog (genie#311) — reached from both the expanded
     // grid's context menu and the collapsed sidebar's avatar-stack popover, so
-    // it lives at this level rather than inside either one. `tynnLinked` is
-    // resolved BEFORE the dialog opens, so the Tynn opt-in only ever appears
-    // when there is something for it to plausibly mean.
+    // it lives at this level rather than inside either one.
     const [deletePrompt, setDeletePrompt] = useState<{
         ws: string;
         agent: { id: string; name: string };
-        tynnLinked: boolean;
     } | null>(null);
     const [deleteBusy, setDeleteBusy] = useState(false);
     const [deleteError, setDeleteError] = useState<string | null>(null);
-    const [deleteNote, setDeleteNote] = useState<string | null>(null);
     const openDeletePrompt = (ws: string, agent: { id: string; name: string }) => {
         setDeleteError(null);
-        setDeleteNote(null);
-        setDeletePrompt({ ws, agent, tynnLinked: false });
-        void api()
-            .agents.tynnLinked(ws)
-            .then((linked) => setDeletePrompt((cur) => (cur ? { ...cur, tynnLinked: linked } : cur)))
-            .catch(() => {});
+        setDeletePrompt({ ws, agent });
     };
     // Right-click context menu for a process row.
     const [procMenu, setProcMenu] = useState<{
@@ -2029,19 +2020,14 @@ export default function Chooser({
             createPortal(
                 <AgentDeleteModal
                     agent={deletePrompt.agent}
-                    tynnLinked={deletePrompt.tynnLinked}
                     busy={deleteBusy}
                     error={deleteError}
-                    note={deleteNote}
                     onCancel={() => setDeletePrompt(null)}
-                    onDone={() => setDeletePrompt(null)}
-                    onConfirm={async ({ mode, removeFromTynn }) => {
+                    onConfirm={async ({ mode }) => {
                         setDeleteBusy(true);
                         setDeleteError(null);
                         try {
-                            const res = await api().agents.delete(deletePrompt.agent.id, mode, {
-                                removeFromTynn,
-                            });
+                            const res = await api().agents.delete(deletePrompt.agent.id, mode);
                             if (!res.ok) {
                                 setDeleteError(res.error || 'Could not delete the agent.');
                                 return;
@@ -2056,11 +2042,7 @@ export default function Chooser({
                                 .agents.list(ws)
                                 .then((r) => setAgentRecords((cur) => ({ ...cur, [ws]: r })))
                                 .catch(() => {});
-                            if (res.tynnNote) {
-                                setDeleteNote(res.tynnNote);
-                            } else {
-                                setDeletePrompt(null);
-                            }
+                            setDeletePrompt(null);
                         } catch {
                             setDeleteError('Could not delete the agent.');
                         } finally {

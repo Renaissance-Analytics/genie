@@ -95,26 +95,15 @@ export function resolveAgentDeletion(
     return { ok: true, plan: { agentId: agent.id, removeFiles: true, agentDir } };
 }
 
-export interface DeleteAgentOptions {
-    /** Explicit opt-in from the confirm prompt — never inferred, never a
-     *  silent side effect of choosing DELETE. */
-    removeFromTynn?: boolean;
-}
-
 export interface DeleteAgentResult {
     ok: boolean;
     error?: string;
     /** Whether `.agents/<name>/` was actually removed from disk. */
     filesRemoved: boolean;
-    /** Whether this agent's WORKSPACE carries a live Tynn project link —
-     *  the closest real signal to "this agent is synced with Tynn" that
-     *  exists today (there is no per-agent link; only a workspace can be
-     *  Tynn-linked, via `project.json`'s `tynn` block). */
+    /** Whether this agent's WORKSPACE carries a live Tynn project link (via
+     *  `project.json`'s `tynn` block). Informational only — there is no
+     *  per-agent Tynn record, and nothing here acts on this. */
     workspaceTynnLinked: boolean;
-    /** Set only when `removeFromTynn` was asked for. Genie has no per-agent
-     *  Tynn record to remove yet, so this says so plainly rather than the
-     *  checkbox silently doing nothing — see the module comment. */
-    tynnNote?: string;
 }
 
 /**
@@ -125,17 +114,16 @@ export interface DeleteAgentResult {
  * de-duplicated, since the two can point at the same terminal. Then applies
  * `resolveAgentDeletion`'s plan and drops the database row.
  *
- * `removeFromTynn` is accepted but not acted on: there is no per-agent Tynn
- * record to remove today, only a workspace-level link. Rather than silently
- * doing nothing when it is checked — which is exactly the "silent side
- * effect" the issue warns against, just inverted — the result carries a plain
- * `tynnNote` the caller can surface, so the human is never left assuming Tynn
- * was touched when it wasn't.
+ * Touches nothing in Tynn. An earlier version of this took a `removeFromTynn`
+ * opt-in and returned a note explaining it did nothing — which still leaves a
+ * control in the UI promising an action the code cannot perform, just with a
+ * caveat attached instead of doing it silently. Per the workspace UX spec (a
+ * surface must not depend on something it does not own), the honest fix is to
+ * not offer it at all until a real per-agent Tynn link exists to act on.
  */
 export function deleteRegisteredAgent(
     agentId: string,
     mode: AgentDeleteMode,
-    opts: DeleteAgentOptions = {},
 ): DeleteAgentResult {
     const agent = getWorkspaceAgentById(agentId);
     if (!agent) {
@@ -181,16 +169,5 @@ export function deleteRegisteredAgent(
 
     deleteWorkspaceAgent(agent.id);
 
-    const tynnNote = opts.removeFromTynn
-        ? workspaceTynnLinked
-            ? "Genie doesn't yet support removing an individual agent from Tynn — nothing changed there."
-            : "This workspace isn't linked to Tynn, so there was nothing to remove there."
-        : undefined;
-
-    return {
-        ok: true,
-        filesRemoved,
-        workspaceTynnLinked,
-        ...(tynnNote ? { tynnNote } : {}),
-    };
+    return { ok: true, filesRemoved, workspaceTynnLinked };
 }
