@@ -85,11 +85,20 @@ export async function ensureGenieOsWorkspace(userDataDir: string): Promise<strin
  * A workspace-shaped folder needs workspace-shaped wiring, whether or not it has
  * a row in the database.
  */
-export function wireGenieOsWorkspace(workspacePath: string, mcpUrl: string | null): void {
+export function wireGenieOsWorkspace(workspacePath: string, mcpUrl: string | null): boolean {
     // No endpoint means the MCP server has no port yet. Writing a config with a
     // null URL leaves a BROKEN `.mcp.json` on disk that looks configured, which
     // is worse than an absent one because nothing would retry it.
-    if (!mcpUrl) return;
+    //
+    // genie#319 — that reasoning holds, but the early return had nothing
+    // retrying it EITHER, and the call sat ~700 lines ahead of `startMcpServer`
+    // in boot. `registerTerminalEndpoint` returns null until the server has a
+    // port, so this fired on every boot of every machine and the OSA was left
+    // with no `.mcp.json` and no `.agents/` — while the agent was still launched
+    // with `--dangerously-load-development-channels server:genie-agentinbox-channel`,
+    // which then could not resolve. Hence the boolean: a caller must be able to
+    // tell "did nothing" from "wired", instead of reading void as success.
+    if (!mcpUrl) return false;
 
     // `writeWorkspaceAgentMcp` returns early unless an agents doc already
     // exists — it deliberately does not litter one into projects that do not use
@@ -101,7 +110,7 @@ export function wireGenieOsWorkspace(workspacePath: string, mcpUrl: string | nul
         try {
             fs.writeFileSync(agentsDoc, '# Genie OS\n');
         } catch {
-            return; // nothing to sync into
+            return false; // nothing to sync into
         }
     }
     writeWorkspaceAgentMcp(workspacePath, true, mcpUrl);
@@ -127,4 +136,5 @@ export function wireGenieOsWorkspace(workspacePath: string, mcpUrl: string | nul
                stop it booting */
         }
     }
+    return true;
 }

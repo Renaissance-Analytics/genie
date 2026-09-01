@@ -1119,13 +1119,7 @@ app.whenReady().then(async () => {
     applyPendingWorkstationReset(app.getPath('userData'));
     initDatabase(app.getPath('userData'));
     const genieOsWorkspace = await ensureGenieOsWorkspace(app.getPath('userData'));
-    // Wire the operator's OWN workspace the way every other workspace is wired.
-    // Without this it had no `.mcp.json`, no `.agents/skills/` and no Codex
-    // config, because every sync call site is keyed on a registered workspace
-    // row and the OSA deliberately has none. Its endpoint is stable: the
-    // terminal id is fixed and the token is persisted, so this is idempotent
-    // across restarts and can safely run before the terminal exists.
-    wireGenieOsWorkspace(genieOsWorkspace, registerTerminalEndpoint(GENIE_OS_TERMINAL_ID));
+    // The OSA is wired further down, AFTER `startMcpServer` — see genie#319.
     for (const obsoleteId of obsoleteOsAgentSpecIds(listTerminalSpecs())) {
         deleteTerminalSpec(obsoleteId);
     }
@@ -1809,6 +1803,24 @@ app.whenReady().then(async () => {
     // cannot be established by reading code. Inert in a normal run.
     if (isE2E()) registerAppsE2E();
     await startMcpServer(mcpDeps).catch((e) => console.error('[mcp] failed to start', e));
+
+    // Wire the operator's OWN workspace the way every other workspace is wired.
+    // Without this it had no `.mcp.json`, no `.agents/skills/` and no Codex
+    // config, because every sync call site is keyed on a registered workspace
+    // row and the OSA deliberately has none.
+    //
+    // genie#319 — this MUST come after `startMcpServer`, for the same reason the
+    // E2E seam below does: `registerTerminalEndpoint` returns null until the
+    // server has a port. Run earlier in boot it handed `wireGenieOsWorkspace` a
+    // null endpoint on every machine, every boot, so the OSA was never wired at
+    // all — while its agent was still launched with a channel flag that then had
+    // no server to resolve. The endpoint itself is stable (fixed terminal id,
+    // persisted token), so this stays idempotent across restarts.
+    if (!wireGenieOsWorkspace(genieOsWorkspace, registerTerminalEndpoint(GENIE_OS_TERMINAL_ID))) {
+        console.error(
+            '[osa] workspace not wired — no MCP endpoint; the operator will boot without its tools',
+        );
+    }
     // E2E seam (GENIE_E2E=1 only): publish the LIVE MCP endpoint plus hooks to
     // drive a REAL broker delivery, so a Playwright spec can prove the whole
     // server-push chain in the compiled app — including that the boot above
