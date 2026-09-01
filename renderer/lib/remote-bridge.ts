@@ -991,8 +991,81 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
         createBranch: repoUnavailable,
     };
 
+    // AMS agent RECORDS belong to the machine that RUNS them -- the HOST -- so
+    // every one of these routes over the bridge (genie #327).
+    //
+    // This namespace was missing from the returned object, so `api().agents.*`
+    // in a remote window fell through to `...local` and ran against the CLIENT's
+    // database: `create` looked up the host's workspace id in the client's rows
+    // and answered "That workspace is no longer registered", and `delete`
+    // removed a row on the client while the host kept the agent -- a delete that
+    // reported success and did nothing, which is worse than an error.
+    //
+    // `terminalSpec.createAgent` was already bridged, which is why spawning an
+    // agent TERMINAL worked while managing the agent RECORD did not.
+    const agents: GenieApi['agents'] = {
+        ...local.agents,
+        list: async (workspaceId) =>
+            (
+                (await req('/api/desktop/agents/list', {
+                    method: 'POST',
+                    json: { workspaceId },
+                })) as { result: Awaited<ReturnType<GenieApi['agents']['list']>> }
+            ).result,
+        create: async (input) =>
+            (
+                (await req('/api/desktop/agents/create', {
+                    method: 'POST',
+                    json: { input },
+                })) as { result: Awaited<ReturnType<GenieApi['agents']['create']>> }
+            ).result,
+        start: async (workspaceId, name) =>
+            (
+                (await req('/api/desktop/agents/start', {
+                    method: 'POST',
+                    json: { workspaceId, name },
+                })) as { result: Awaited<ReturnType<GenieApi['agents']['start']>> }
+            ).result,
+        delete: async (agentId, mode, handoff) =>
+            (
+                (await req('/api/desktop/agents/delete', {
+                    method: 'POST',
+                    json: { agentId, mode, handoff },
+                })) as { result: Awaited<ReturnType<GenieApi['agents']['delete']>> }
+            ).result,
+        setDefault: async (workspaceId, agentId) =>
+            (
+                (await req('/api/desktop/agents/set-default', {
+                    method: 'POST',
+                    json: { workspaceId, agentId },
+                })) as { result: Awaited<ReturnType<GenieApi['agents']['setDefault']>> }
+            ).result,
+        addRuntime: async (agentId, provider) =>
+            (
+                (await req('/api/desktop/agents/add-runtime', {
+                    method: 'POST',
+                    json: { agentId, provider },
+                })) as { result: Awaited<ReturnType<GenieApi['agents']['addRuntime']>> }
+            ).result,
+        front: async (agentId, runtimeId) =>
+            (
+                (await req('/api/desktop/agents/front', {
+                    method: 'POST',
+                    json: { agentId, runtimeId },
+                })) as { result: Awaited<ReturnType<GenieApi['agents']['front']>> }
+            ).result,
+        setAvatar: async (agentId, avatar) =>
+            (
+                (await req('/api/desktop/agents/set-avatar', {
+                    method: 'POST',
+                    json: { agentId, avatar },
+                })) as { result: Awaited<ReturnType<GenieApi['agents']['setAvatar']>> }
+            ).result,
+    };
+
     return {
         ...local,
+        agents,
         workspaces,
         terminalSpec,
         files,

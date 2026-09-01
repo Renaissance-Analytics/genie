@@ -22,6 +22,16 @@ import { ensureOwnedProvidersInstalled } from './agents/availability';
 import { liveAvailabilityDeps } from './agents/availability-effects';
 import { appendLaunchFlags } from './agentinbox/session-capture';
 import { registerIpcHandlers, applyStartupToolchainPrecedence, addWorkspaceFromFolder } from './ipc';
+import {
+    agentRecordsList,
+    agentRecordCreate,
+    agentRecordStart,
+    agentRecordDelete,
+    agentRecordSetDefault,
+    agentRecordAddRuntime,
+    agentRecordFront,
+    agentRecordSetAvatar,
+} from './ipc';
 import { writeClipboardImagePng } from './clipboard-image';
 import crypto from 'node:crypto';
 import os from 'node:os';
@@ -2073,6 +2083,19 @@ app.whenReady().then(async () => {
             scheduleInfo: () => getScheduleInfo(),
             runScheduleNow: (id) => runScheduleNow(id),
             createAgentTerminal: (opts) => createAgentTerminal(opts),
+            // AMS agent RECORDS, so a REMOTE window manages the HOST's agents
+            // rather than its own (genie #327). Same functions the IPC handlers
+            // call -- one implementation, two transports.
+            agentRecords: {
+                list: (workspaceId) => agentRecordsList(workspaceId),
+                create: (input) => agentRecordCreate(input),
+                start: (workspaceId, name) => agentRecordStart(workspaceId, name),
+                remove: (agentId, mode, handoff) => agentRecordDelete(agentId, mode, handoff),
+                setDefault: (workspaceId, agentId) => agentRecordSetDefault(workspaceId, agentId),
+                addRuntime: (agentId, provider) => agentRecordAddRuntime(agentId, provider),
+                front: (agentId, runtimeId) => agentRecordFront(agentId, runtimeId),
+                setAvatar: (agentId, avatar) => agentRecordSetAvatar(agentId, avatar),
+            },
             createSpecializedAgentTerminal: (input) => createSpecializedAgentTerminal(input),
             restartAgentTerminal: (id) => restartAgentTerminal(id),
             updateAgentInboxChannel: (specId, patch) => updateAgentInboxChannel(specId, patch),
