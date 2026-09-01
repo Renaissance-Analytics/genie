@@ -65,6 +65,37 @@ describe('agentCardMenuItems', () => {
         expect(ids(items)).toContain('make-default');
     });
 
+    it('offers to DELETE the agent — the whole reason genie#311 exists', () => {
+        // The header comment above used to justify the gap: "items (rename,
+        // restart, delete the terminal) act on a terminal that exists." Since
+        // AMS split an agent from its terminal, deleting the AGENT had no path
+        // in the UI — only an orphan (a leftover nothing owns) could be
+        // removed. This is the fix: a real, non-orphan agent gets a delete
+        // item too.
+        const items = agentCardMenuItems(row());
+        expect(ids(items)).toContain('delete');
+    });
+
+    it('offers delete on a RUNNING agent too — it still has files to remove', () => {
+        const items = agentCardMenuItems(row({ running: true, provider: 'claude' }));
+        expect(ids(items)).toContain('delete');
+    });
+
+    it('does not offer delete for an ORPHAN — remove-orphan already covers it', () => {
+        // An orphan has no agent record and no `.agents/*` files of its own to
+        // decide between unmounting and deleting — remove-orphan is already the
+        // whole answer for it.
+        const items = agentCardMenuItems(row({ kind: 'orphan' }));
+        expect(ids(items)).not.toContain('delete');
+    });
+
+    it('does not offer delete during an unresolved name collision', () => {
+        // Acting on "the" agent is ambiguous until the collision is resolved —
+        // same reasoning as every other agent-level action being withheld here.
+        const items = agentCardMenuItems(row({ collisionGroup: 'g1' }));
+        expect(ids(items)).not.toContain('delete');
+    });
+
     it('gives an ORPHAN a way to CLEAR ITSELF, never an empty menu', () => {
         // I shipped this returning [] — so a leftover square had no menu at all,
         // which is the dead end the owner had just told me to stop creating.

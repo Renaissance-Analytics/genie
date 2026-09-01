@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { IconPlay, IconPin, IconAlert } from './icons';
+import { IconPlay, IconPin, IconAlert, IconTrash } from './icons';
 import { agentCardMenuItems, type AgentCardMenuItem } from '../../lib/agent-card-menu';
 import type { AgentGridRow } from '../../lib/ams-grid';
 
@@ -72,6 +72,8 @@ export default function AgentContextMenu({
             <IconPlay size={14} />
         ) : id === 'resolve-collision' ? (
             <IconAlert size={14} />
+        ) : id === 'delete' || id === 'remove-orphan' ? (
+            <IconTrash size={14} />
         ) : (
             <IconPin size={14} />
         );
@@ -99,7 +101,11 @@ export default function AgentContextMenu({
                         key={item.id}
                         type="button"
                         role="menuitem"
-                        className={`ctx-item${item.primary ? ' is-primary' : ''}`}
+                        className={`ctx-item${item.primary ? ' is-primary' : ''}${
+                            item.id === 'delete' || item.id === 'remove-orphan'
+                                ? ' is-destructive'
+                                : ''
+                        }`}
                         onClick={() => {
                             onClose();
                             onAct(item.id);

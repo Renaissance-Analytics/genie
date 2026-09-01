@@ -9,8 +9,11 @@ import type { AgentGridRow } from './ams-grid';
  * terminal-is-the-agent assumption the redesign exists to remove: the actions
  * that matter most while an agent is stopped need no terminal to act on.
  *
- * A RUNNING agent still gets the terminal menu on top of these, because those
- * items (rename, restart, delete the terminal) act on a terminal that exists.
+ * A RUNNING agent still gets the terminal menu on top of these, because items
+ * like rename and restart act on a terminal that exists. Delete does NOT move
+ * to that menu, though: an agent is not its terminal (genie#311) — its
+ * `.agents/*` files outlive any terminal, so deleting it stays here, on the
+ * agent, whether or not one is currently running.
  *
  * PURE — the model is testable without a window, which is where the guards
  * below are worth pinning.
@@ -22,7 +25,8 @@ export interface AgentCardMenuItem {
         | 'make-default'
         | 'clear-default'
         | 'resolve-collision'
-        | 'remove-orphan';
+        | 'remove-orphan'
+        | 'delete';
     label: string;
     /** Longer copy for a menu that explains rather than just naming. */
     hint?: string;
@@ -87,5 +91,16 @@ export function agentCardMenuItems(row: AgentGridRow): AgentCardMenuItem[] {
                   hint: 'Boots from the workspace root, and takes actions that name no agent.',
               },
     );
+    // DELETE — the gap genie#311 exists to close. A real, non-orphan, non-
+    // colliding agent always gets it, running or not: even a dormant agent has
+    // `.agents/*` files that unmounting keeps and deleting removes. The item
+    // itself never destroys anything — it opens the choice between the two, so
+    // this menu can offer it without becoming a second dead end for a guess
+    // made wrong.
+    items.push({
+        id: 'delete',
+        label: 'Delete…',
+        hint: 'Unmount to keep its files, or delete them for good.',
+    });
     return items;
 }
