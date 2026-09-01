@@ -68,64 +68,66 @@ export default function NewAgentModal({
     };
 
     return (
-        <Modal open onClose={onClose} title={`New agent in ${workspaceName}`}>
-            <div style={{ display: 'grid', gap: 12, minWidth: 380 }}>
-                <label style={{ display: 'grid', gap: 4 }}>
-                    <Text size="sm">Name</Text>
-                    <Input
-                        value={name}
-                        onChange={(e) => setName(e.target.value)}
-                        placeholder="tynn"
-                        autoFocus
-                    />
-                    {slug && slug !== name.trim() && (
+        <Modal open onClose={onClose}>
+            <Modal.Header>New agent in {workspaceName}</Modal.Header>
+            <Modal.Body>
+                <div style={{ display: 'grid', gap: 12, minWidth: 380 }}>
+                    <label style={{ display: 'grid', gap: 4 }}>
+                        <Text size="sm">Name</Text>
+                        <Input
+                            value={name}
+                            onChange={(e) => setName(e.target.value)}
+                            placeholder="tynn"
+                            autoFocus
+                        />
+                        {slug && slug !== name.trim() && (
+                            <Text size="xs" color="muted">
+                                Created as <strong>{slug}</strong> — the folder name under .agents/
+                            </Text>
+                        )}
+                    </label>
+
+                    <label style={{ display: 'grid', gap: 4 }}>
+                        <Text size="sm">Purpose</Text>
+                        <Input
+                            value={purpose}
+                            onChange={(e) => setPurpose(e.target.value)}
+                            placeholder="Laravel app work"
+                        />
                         <Text size="xs" color="muted">
-                            Created as <strong>{slug}</strong> — the folder name under .agents/
+                            What this agent is for. It goes into its AGENT.md, which is committed
+                            with the project.
+                        </Text>
+                    </label>
+
+                    <label style={{ display: 'grid', gap: 4 }}>
+                        <Text size="sm">Starting TUI</Text>
+                        <Select
+                            value={tui}
+                            onValueChange={setTui}
+                            list={tuis.map((t) => ({ value: t.agent as string, label: t.label }))}
+                        />
+                        <Text size="xs" color="muted">
+                            An agent is not its TUI — you can switch it later, and the one it
+                            leaves keeps its conversation as a sidecar.
+                        </Text>
+                    </label>
+
+                    {error && (
+                        <Text size="sm" color="danger">
+                            {error}
                         </Text>
                     )}
-                </label>
-
-                <label style={{ display: 'grid', gap: 4 }}>
-                    <Text size="sm">Purpose</Text>
-                    <Input
-                        value={purpose}
-                        onChange={(e) => setPurpose(e.target.value)}
-                        placeholder="Laravel app work"
-                    />
-                    <Text size="xs" color="muted">
-                        What this agent is for. It goes into its AGENT.md, which is committed
-                        with the project.
-                    </Text>
-                </label>
-
-                <label style={{ display: 'grid', gap: 4 }}>
-                    <Text size="sm">Starting TUI</Text>
-                    <Select
-                        value={tui}
-                        onValueChange={setTui}
-                        list={tuis.map((t) => ({ value: t.agent as string, label: t.label }))}
-                    />
-                    <Text size="xs" color="muted">
-                        An agent is not its TUI — you can switch it later, and the one it
-                        leaves keeps its conversation as a sidecar.
-                    </Text>
-                </label>
-
-                {error && (
-                    <Text size="sm" color="danger">
-                        {error}
-                    </Text>
-                )}
-
-                <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                    <Button variant="ghost" onClick={onClose} disabled={busy}>
-                        Cancel
-                    </Button>
-                    <Button onClick={() => void submit()} disabled={!ready}>
-                        {busy ? 'Creating…' : 'Create agent'}
-                    </Button>
                 </div>
-            </div>
+            </Modal.Body>
+            <Modal.Footer>
+                <Button variant="ghost" onClick={onClose} disabled={busy}>
+                    Cancel
+                </Button>
+                <Button onClick={() => void submit()} disabled={!ready}>
+                    {busy ? 'Creating…' : 'Create agent'}
+                </Button>
+            </Modal.Footer>
         </Modal>
     );
 }
