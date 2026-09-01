@@ -6,9 +6,11 @@ import {
     deleteWorkspaceAgent,
     getWorkspace,
     listAgentRuntimes,
+    listWorkspaceAgents,
 } from '../db';
 import { killTerminalById } from '../terminal/ipc';
 import { getWorkspaceAgentById } from './lookup';
+import { sidecarNamesOf } from './sidecar';
 
 /**
  * UNMOUNT or DELETE a registered agent — genie#311.
@@ -95,6 +97,53 @@ export function resolveAgentDeletion(
     return { ok: true, plan: { agentId: agent.id, removeFiles: true, agentDir } };
 }
 
+/** The minimal shapes `terminalsToStopFor` needs, so it stays testable
+ *  without a database — the same split `resolveAgentDeletion` uses above. */
+export interface TerminalsToStopSubject {
+    id: string;
+    name: string;
+    workspace_id: string;
+    terminal_spec_id: string | null;
+}
+
+export interface TerminalsToStopDeps {
+    runtimes: (agentId: string) => ReadonlyArray<{ terminal_spec_id: string | null }>;
+    roster: (workspaceId: string) => ReadonlyArray<{ name: string; id: string; terminal_spec_id: string | null }>;
+}
+
+/**
+ * Every terminal stopping this agent is about to kill.
+ *
+ * Its own legacy `terminal_spec_id` binding, every `agent_runtimes` row it
+ * fronts, AND its SIDECARS — a sidecar is a separate `workspace_agents` row
+ * named `<driver>-slave`, so killing only this agent’s own terminals left
+ * `moic-slave` running against work whose driver no longer exists.
+ *
+ * De-duplicated, because `workspace_agents.terminal_spec_id` and an
+ * `agent_runtimes` binding can be the SAME terminal.
+ *
+ * Exported because two callers must not answer this differently: the delete
+ * KILLS these, and the handoff request ASKS these. Asking a terminal that is
+ * not about to be killed wastes an agent’s turn; killing one that was never
+ * asked loses the note the human ticked the box for.
+ */
+export function terminalsToStopFor(
+    agent: TerminalsToStopSubject,
+    deps: TerminalsToStopDeps = { runtimes: listAgentRuntimes, roster: listWorkspaceAgents },
+): string[] {
+    const terminalIds = new Set<string>();
+    if (agent.terminal_spec_id) terminalIds.add(agent.terminal_spec_id);
+    for (const runtime of deps.runtimes(agent.id)) {
+        if (runtime.terminal_spec_id) terminalIds.add(runtime.terminal_spec_id);
+    }
+    for (const sidecar of sidecarNamesOf(agent.name, deps.roster(agent.workspace_id))) {
+        if (sidecar.terminal_spec_id) terminalIds.add(sidecar.terminal_spec_id);
+        for (const runtime of deps.runtimes(sidecar.id)) {
+            if (runtime.terminal_spec_id) terminalIds.add(runtime.terminal_spec_id);
+        }
+    }
+    return [...terminalIds];
+}
 export interface DeleteAgentResult {
     ok: boolean;
     error?: string;
@@ -143,14 +192,11 @@ export function deleteRegisteredAgent(
         return { ok: false, error: resolved.error, filesRemoved: false, workspaceTynnLinked };
     }
 
-    // Every TUI this agent may run under, plus its own legacy binding —
-    // de-duplicated, because `workspace_agents.terminal_spec_id` and an
-    // `agent_runtimes` row's binding can be the SAME terminal.
-    const terminalIds = new Set<string>();
-    if (agent.terminal_spec_id) terminalIds.add(agent.terminal_spec_id);
-    for (const runtime of listAgentRuntimes(agent.id)) {
-        if (runtime.terminal_spec_id) terminalIds.add(runtime.terminal_spec_id);
-    }
+    // Every terminal this stop kills — its own, its runtimes’, and its
+    // SIDECARS’. Unmounting and deleting both STOP the sidecars; neither
+    // deletes their records, because removing an agent the person did not name
+    // is not something to infer from an instruction to remove this one.
+    const terminalIds = terminalsToStopFor(agent);
     for (const id of terminalIds) {
         killTerminalById(id);
         deleteTerminalSpec(id);

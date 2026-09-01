@@ -49,10 +49,22 @@ export function agentBootPrompt(ctx: AgentBootContext): string {
         );
     }
 
+    // ALWAYS ask for one; only mention READING one when there is one to read.
+    // Until this split, only an agent that already received a handoff was told
+    // to leave one — so the first run of every agent learned nothing and left
+    // nothing, and the next run again found nothing. The protocol never got off
+    // the ground on its own.
     if (ctx.handoffPath) {
         lines.push(
             `A previous run of this agent left a handoff at ${ctx.handoffPath} — read it before starting anything, ` +
                 'and leave your own by passing `handoff` to `imDone` when you stop.',
+        );
+    } else if (ctx.genieAvailable) {
+        // `imDone` is a genie MCP tool. With no Genie there is nothing to call,
+        // and asking would send the agent after a tool it does not have.
+        lines.push(
+            'When you stop, leave a handoff for whoever picks this agent up next by passing `handoff` to `imDone` — ' +
+                'what you were in the middle of, and anything the next run cannot work out from the repo on its own.',
         );
     }
 

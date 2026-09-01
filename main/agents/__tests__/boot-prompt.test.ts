@@ -54,14 +54,22 @@ describe('the agent boot prompt', () => {
         // POSITIVE CONTROL against the whole point of this module: a prompt that
         // names a handoff never written, or a Tynn project the workspace is not
         // linked to, is the same lie as a menu item that does nothing.
+        //
+        // The handoff is now TWO claims, not one, and only the first is
+        // conditional: pointing at a note that exists (must not appear here),
+        // and asking for one on the way out (must, or the protocol never
+        // starts — see the `LEAVE one` block below).
         const out = agentBootPrompt({ genieAvailable: true });
 
         expect(out).toContain('connectToGenie');
-        expect(out).not.toMatch(/handoff/i);
+        expect(out).not.toMatch(/left a handoff|read it before/i);
         expect(out).not.toMatch(/tynn/i);
     });
 
     it('is empty when there is genuinely nothing to say', () => {
+        // Including the ask for a handoff: `imDone` is a genie MCP tool, so
+        // with no Genie there is nothing to call and asking would send the
+        // agent after a tool it does not have.
         expect(agentBootPrompt({ genieAvailable: false })).toBe('');
     });
 
@@ -74,5 +82,36 @@ describe('the agent boot prompt', () => {
 
         expect(out).toContain('/ws/.agents/tynn/AGENT.md');
         expect(out).toContain('Fix the migration.');
+    });
+});
+
+describe('telling an agent to LEAVE one', () => {
+    it('asks for a handoff even when there is none to read', () => {
+        // The protocol only works if agents write them, and until now only an
+        // agent that already RECEIVED one was told to leave one — so the very
+        // first run of every agent learned nothing, and left nothing, and the
+        // next run again found nothing. A chicken-and-egg that never hatches.
+        const prompt = agentBootPrompt({ genieAvailable: true, handoffPath: null });
+
+        expect(prompt).toMatch(/imDone/);
+        expect(prompt).toMatch(/handoff/i);
+    });
+
+    it('does not claim a note is waiting when none is', () => {
+        // POSITIVE CONTROL for the test above: asking it to LEAVE one must not
+        // become telling it to READ one that does not exist.
+        const prompt = agentBootPrompt({ genieAvailable: true, handoffPath: null });
+
+        expect(prompt).not.toMatch(/left a handoff|read it before/i);
+    });
+
+    it('still says where to read one when there is one', () => {
+        const prompt = agentBootPrompt({
+            genieAvailable: true,
+            handoffPath: '/ws/.ai/handoff/tynn.md',
+        });
+
+        expect(prompt).toMatch(/\/ws\/\.ai\/handoff\/tynn\.md/);
+        expect(prompt).toMatch(/read it before/i);
     });
 });

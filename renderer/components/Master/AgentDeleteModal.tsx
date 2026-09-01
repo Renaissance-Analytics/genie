@@ -2,12 +2,16 @@ import { useEffect, useState } from 'react';
 import { IconAlert } from './icons';
 import {
     AGENT_DELETE_CHOICES,
+    agentDeleteBusyLabel,
     agentDeleteConfirmLabel,
+    handoffOfferFor,
     type AgentDeleteMode,
 } from '../../lib/agent-delete-prompt';
 
 export interface AgentDeleteDecision {
     mode: AgentDeleteMode;
+    /** Ask the agent to write a handoff before it is stopped. */
+    handoff: boolean;
 }
 
 /**
@@ -33,18 +37,29 @@ export interface AgentDeleteDecision {
  */
 export default function AgentDeleteModal({
     agent,
+    running,
+    initialMode,
     busy = false,
     error = null,
     onCancel,
     onConfirm,
 }: {
     agent: { name: string };
+    /** Whether it is running — a handoff can only be asked of a live agent. */
+    running?: boolean;
+    /** Which the menu asked for; Unmount and Delete are separate items now. */
+    initialMode?: AgentDeleteMode;
     busy?: boolean;
     error?: string | null;
     onCancel: () => void;
     onConfirm: (decision: AgentDeleteDecision) => void;
 }) {
-    const [mode, setMode] = useState<AgentDeleteMode>('unmount');
+    const [mode, setMode] = useState<AgentDeleteMode>(initialMode ?? 'unmount');
+    // Default ON. Stopping an agent is the last moment it can be asked what it
+    // was doing, and the cost of a note nobody reads is far lower than the cost
+    // of losing one somebody needed.
+    const [askHandoff, setAskHandoff] = useState(true);
+    const handoff = handoffOfferFor({ running: !!running, mode });
 
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
@@ -94,6 +109,20 @@ export default function AgentDeleteModal({
                     ))}
                 </div>
 
+                {handoff.available && (
+                    <label className="agent-form-wake agent-delete-handoff">
+                        <input
+                            type="checkbox"
+                            checked={askHandoff}
+                            disabled={busy}
+                            onChange={(e) => setAskHandoff(e.target.checked)}
+                        />
+                        <span className="agent-form-wake-text">
+                            <span className="agent-form-label">{handoff.label}</span>
+                            <span className="agent-form-scope-desc">{handoff.hint}</span>
+                        </span>
+                    </label>
+                )}
                 {error && <div className="agent-form-error">{error}</div>}
 
                 <div className="prompt-actions">
@@ -111,9 +140,14 @@ export default function AgentDeleteModal({
                             mode === 'delete' ? 'prompt-btn-destructive' : 'prompt-btn-primary'
                         }`}
                         disabled={busy}
-                        onClick={() => onConfirm({ mode })}
+                        onClick={() => onConfirm({ mode, handoff: handoff.available && askHandoff })}
                     >
-                        {busy ? 'Working…' : agentDeleteConfirmLabel(mode)}
+                        {busy
+                            ? agentDeleteBusyLabel({
+                                  agentName: agent.name,
+                                  handoff: handoff.available && askHandoff,
+                              })
+                            : agentDeleteConfirmLabel(mode)}
                     </button>
                 </div>
             </div>

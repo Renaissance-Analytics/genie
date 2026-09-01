@@ -1407,9 +1407,11 @@ const api = {
             }>,
         /** UNMOUNT (keep `.agents/*`) or DELETE (remove them too). Both shut
          *  down every TUI this agent may run under and kill its terminal
-         *  (#311). */
-        delete: (agentId: string, mode: 'unmount' | 'delete') =>
-            ipcRenderer.invoke('agents:delete', agentId, mode) as Promise<{
+         *  (#311), and both stop its SIDECARS. `handoff` asks the agent for
+         *  a note first and waits (bounded) for it to land — the last moment
+         *  it is still there to be asked. */
+        delete: (agentId: string, mode: 'unmount' | 'delete', handoff = false) =>
+            ipcRenderer.invoke('agents:delete', agentId, mode, handoff) as Promise<{
                 ok: boolean;
                 error?: string;
                 filesRemoved: boolean;
