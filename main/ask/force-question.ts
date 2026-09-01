@@ -112,6 +112,21 @@ function deferredAgentMessage(decision: AvailabilityDecision): string {
 }
 
 /**
+ * WHY a ForceTheQuestion answer is arriving asynchronously rather than inline —
+ * carried alongside the answer so the late "it was answered" message can name the
+ * real reason instead of always assuming DND (genie #315). Every MCP
+ * ForceTheQuestion answer is delivered through this same async channel (ping/poll/
+ * pull), so the reason is the ONLY thing that distinguishes a genuine DND parking
+ * from an ordinary modal answer.
+ *   - `'dnd'`: the scope was in Do Not Disturb — the modal never popped.
+ *   - `'unshowable'`: the modal could not be raised (no display) for an otherwise
+ *     available user.
+ *   - `undefined`: the modal WAS shown and this is its ordinary answer; only the
+ *     DELIVERY is asynchronous, by design (see `raiseDesktopModal`).
+ */
+export type DeferralReason = 'dnd' | 'unshowable';
+
+/**
  * An asynchronous agent question's late answer, ready to hand back to the asker.
  * The composition root wires a sink that delivers it through the AgentInbox broker
  * (append → the agent PULLs it; notifyDelivery + wake = the PING) so both a
@@ -127,7 +142,33 @@ export interface DeferredAnswerDelivery {
     questions: ForceQuestion[];
     /** The user's answer (selected options + note per question). */
     answers: ForceAnswer[];
+    /** See {@link DeferralReason}. Absent ⇒ a plain, non-parked modal answer. */
+    deferralReason?: DeferralReason;
 }
+
+/**
+ * Render a deferred/async ForceTheQuestion answer as the AgentInbox message the
+ * asking agent pulls (genie #62, genie #315). Restates each question with the
+ * option(s) picked + any note, and phrases the intro to match the TRUE reason the
+ * answer is arriving this way — a plain modal answer must never be mislabeled a
+ * DND deferral just because delivery is (always, by design) asynchronous.
+ */
+export function formatDeferredAnswer(d: DeferredAnswerDelivery): string {
+    const lines = d.answers.map((a, i) => {
+        const q = d.questions[i]?.question ?? d.questions[i]?.header ?? `Q${i + 1}`;
+        const picked = a.selected.length ? a.selected.join(', ') : '(no option selected)';
+        const note = a.note?.trim() ? ` — note: ${a.note.trim()}` : '';
+        return `• ${q}\n  → ${picked}${note}`;
+    });
+    const intro =
+        d.deferralReason === 'dnd'
+            ? 'Your ForceTheQuestion was answered (it had been deferred while you were in DND):'
+            : d.deferralReason === 'unshowable'
+              ? 'Your ForceTheQuestion was answered (it had been deferred because the modal could not be shown):'
+              : 'Your ForceTheQuestion was answered:';
+    return `${intro}\n\n${lines.join('\n')}\n\n(questionId: ${d.questionId})`;
+}
+
 /**
  * The clock every pending question is stamped with. Injectable so the arrival
  * time is assertable without freezing global time (tests install a fake; pass
@@ -178,6 +219,14 @@ interface DeferredQuestion {
      * gate (no MCP asker) or a forwarded question (which uses `resolve`).
      */
     askerTerminalId?: string;
+    /**
+     * WHY this row landed in the inbox instead of a modal — carried through to
+     * {@link DeferredAnswerDelivery} so the late "it was answered" message can
+     * tell the truth instead of assuming DND (genie #315). `'dnd'` for a genuine
+     * DND parking, `'unshowable'` when the modal itself could not be raised.
+     * Absent for a forwarded row (its own message lives on the remote driver).
+     */
+    deferralReason?: DeferralReason;
 }
 const deferred: DeferredQuestion[] = [];
 
@@ -402,6 +451,7 @@ export function answerPendingQuestion(
                     questionId: d.id,
                     questions: d.questions,
                     answers: answers ?? [],
+                    deferralReason: d.deferralReason,
                 });
             } catch {
                 /* a delivery failure must never break answering the question */
@@ -720,6 +770,7 @@ function enqueue(item: QueueItem): ForceQuestionResult | undefined {
             priority: item.priority,
             createdAt: item.createdAt,
             askerTerminalId: item.askerTerminalId,
+            deferralReason: 'unshowable',
         });
         notifyQuestionsChanged();
         const failure: ForceQuestionResult = {
@@ -774,6 +825,7 @@ function raiseDesktopModal(
                 priority,
                 createdAt: questionClock(),
                 askerTerminalId,
+                deferralReason: 'dnd',
             });
             // Opt-in AUDIBLE cue: a chime (no modal, no focus steal) so the owner
             // knows a question landed while heads-down — the whole point of DND is to
@@ -929,6 +981,7 @@ export function raiseForwardedQuestion(opts: {
                 createdAt: opts.createdAt ?? questionClock(),
                 resolve,
                 forward: { connKey: opts.connKey, hostId: opts.hostId },
+                deferralReason: 'dnd',
             });
             // Opt-in audible cue for a forwarded (remote-host) question too — chime,
             // no modal/focus steal (ftq_dnd_sound).
