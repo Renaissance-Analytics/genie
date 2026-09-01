@@ -49,6 +49,21 @@ export interface BackendProject {
      */
     isGapp?: boolean;
     isWorkspace?: boolean;
+    /**
+     * The one otherwise-reserved agent name this project's workspace may use —
+     * a SACRED workspace (Tynn story #262). A human marks it on the Tynn
+     * project; nothing infers it, exactly like `isGapp`.
+     *
+     * A NAME rather than a boolean, because Genie would otherwise have to guess
+     * WHICH reserved term was granted, and the obvious guess (the slug) is wrong
+     * in the one case that matters: the Tynn workspace's slug is `tynn-ai` while
+     * the name it needs is `tynn`.
+     *
+     * Optional because only Tynn declares it; a backend with no such concept —
+     * and a Tynn that predates the field — leaves it undefined, which reads as
+     * "not marked".
+     */
+    sacredAgentName?: string | null;
     repositories?: Array<{
         url: string;
         defaultBranch?: string;

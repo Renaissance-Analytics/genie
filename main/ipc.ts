@@ -71,6 +71,7 @@ import {
 } from './workspace/create-agi';
 import { analyseFolder } from './workspace/analyse';
 import { syncGappDevWorkspaces } from './workspace/gapp-dev-sync';
+import { syncSacredWorkspaces } from './workspace/sacred-sync';
 import { validateSimpleWorkspace } from './workspace/create-simple';
 import { openWorkspace } from './workspace/open';
 import { cloneRepo } from './workspace/clone';
@@ -1866,7 +1867,12 @@ export function registerIpcHandlers(): void {
         // Only when something actually moved: this handler runs on every modal
         // open, and a broadcast that changes nothing still costs every window a
         // workspace re-fetch.
-        if (syncGappDevWorkspaces(projects) > 0) broadcastWorkspacesChanged();
+        // Two mirrors ride this one fetch — the GDW flag and the sacred grant.
+        // OR, not two ifs: either moving is reason enough to broadcast, and a
+        // second broadcast for the same fetch costs every window a re-fetch.
+        const moved = syncGappDevWorkspaces(projects) > 0;
+        const sacredMoved = syncSacredWorkspaces(projects) > 0;
+        if (moved || sacredMoved) broadcastWorkspacesChanged();
         return projects;
     });
     // Project CREATION is Tynn-specific (the Aionima backend has no create

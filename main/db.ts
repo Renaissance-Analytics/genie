@@ -3378,6 +3378,18 @@ export function setWorkspaceAppKind(id: string, kind: WorkspaceAppKind | null): 
  * is no user-facing toggle on purpose: the flag has exactly one home, and Genie
  * converging on it is what makes "turn it on in Tynn and Genie notices" true.
  */
+/**
+ * Grant (or revoke) this workspace's one reserved agent name.
+ *
+ * Written ONLY by `syncSacredWorkspaces`, which mirrors Tynn's marking. There is
+ * no user-facing toggle on purpose, for the same reason `gapp_dev` has none: the
+ * flag has exactly one home, and Genie converging on it is what makes "mark it
+ * in Tynn and Genie notices" true.
+ */
+export function setWorkspaceSacredName(id: string, name: string | null): void {
+    getDb().prepare('UPDATE workspaces SET sacred_name = ? WHERE id = ?').run(name, id);
+}
+
 export function setWorkspaceGappDev(id: string, on: boolean): void {
     getDb()
         .prepare('UPDATE workspaces SET gapp_dev = ? WHERE id = ?')

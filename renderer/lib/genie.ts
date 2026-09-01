@@ -178,6 +178,10 @@ export interface WorkspaceRow {
      *  `is_gapp`, so a GApp is BUILT here (genie#245). Mirrored from Tynn by main;
      *  there is no local toggle. Read it through `resolveWorkspaceKind` too. */
     gapp_dev?: number | null;
+    /** The one otherwise-reserved agent name this workspace may use — a SACRED
+     *  workspace (Tynn story #262). Mirrored from Tynn by `syncSacredWorkspaces`;
+     *  there is no Genie-side toggle. Cosmetic here: the badge, and nothing else. */
+    sacred_name?: string | null;
     /** Workspace ids admitted when `agent_access: 'specific'`, JSON-encoded.
      *  Resolve via `workspaces.getAgentAccess` rather than parsing here. */
     agent_access_workspaces?: string | null;

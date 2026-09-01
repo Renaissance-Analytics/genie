@@ -64,6 +64,7 @@ import {
 import { listAllProjects, getTynnBackend } from '../backend/registry';
 import { mobileEmit } from './bus';
 import { syncGappDevWorkspaces } from '../workspace/gapp-dev-sync';
+import { syncSacredWorkspaces } from '../workspace/sacred-sync';
 import { workspaceDocHealth, repairWorkspaceDocs } from '../workspace/create-agi';
 import { runHostSessionSave, type SessionSaveReport } from '../workspace/session-save';
 // Types only (erased at runtime): the Hosting-Manager request shapes. The
@@ -1837,7 +1838,11 @@ export async function handleApi(
             // converge. Safe against the headless list being PARTIAL (only assigned
             // workspaces): a project absent from the list is "no answer", and
             // `planGappDevSync` leaves those rows alone.
-            if (syncGappDevWorkspaces(projects) > 0) mobileEmit('workspaces:changed');
+            // Both mirrors ride this fetch (see the ipc handler): the GDW flag
+            // and the sacred grant. Either moving is reason enough to emit.
+            const gappMoved = syncGappDevWorkspaces(projects) > 0;
+            const sacredMoved = syncSacredWorkspaces(projects) > 0;
+            if (gappMoved || sacredMoved) mobileEmit('workspaces:changed');
             sendJson(res, 200, { projects });
             return true;
         }
