@@ -12,7 +12,7 @@ import path from 'path';
 import { createTray, rebuildMenu } from './tray';
 import { registerShortcuts, unregisterShortcuts } from './shortcuts';
 import { launchedFromAutostart } from './autostart';
-import { resolveWorkstationProvider } from './agents/provider';
+import { resolveWorkstationTui } from './agents/tui';
 import { ensureGenieOsWorkspace, wireGenieOsWorkspace } from './agents/os-workspace';
 import { GENIE_OS_TERMINAL_ID, obsoleteOsAgentSpecIds, osAgentLaunchCommand } from './agents/os-agent';
 import { osAgentBootInstructions, osAgentBootMode } from './agents/os-lifecycle';
@@ -22,6 +22,16 @@ import { ensureOwnedProvidersInstalled } from './agents/availability';
 import { liveAvailabilityDeps } from './agents/availability-effects';
 import { appendLaunchFlags } from './agentinbox/session-capture';
 import { registerIpcHandlers, applyStartupToolchainPrecedence, addWorkspaceFromFolder } from './ipc';
+import {
+    agentRecordsList,
+    agentRecordCreate,
+    agentRecordStart,
+    agentRecordDelete,
+    agentRecordSetDefault,
+    agentRecordAddRuntime,
+    agentRecordFront,
+    agentRecordSetAvatar,
+} from './ipc';
 import { writeClipboardImagePng } from './clipboard-image';
 import crypto from 'node:crypto';
 import os from 'node:os';
@@ -1118,7 +1128,7 @@ app.whenReady().then(async () => {
         osAgentBootMode(app.getPath('userData')),
     );
     const osSettings = getAllSettings();
-    const osProvider = resolveWorkstationProvider(osSettings);
+    const osProvider = resolveWorkstationTui(osSettings);
     const osDef = providerDef(osProvider);
     const osBase = osSettings[osDef.commandSettingKey] || osDef.defaultCommand;
     const osCommand = osAgentLaunchCommand(
@@ -1538,9 +1548,14 @@ app.whenReady().then(async () => {
                 announceAgentUpgrade({
                     currentVersion,
                     previousVersion,
-                    agentIds: agentInboxBroker.directory()
+                    // NAME as well as id: an agent called `general` is never
+                    // nudged (Tynn story #262), and `announceAgentUpgrade`
+                    // cannot enforce that without knowing what each one is
+                    // called. `purpose` IS the agent's name — a saved agent's
+                    // name is its channel purpose.
+                    agents: agentInboxBroker.directory()
                         .filter((agent) => agent.status !== 'offline')
-                        .map((agent) => agent.agentId),
+                        .map((agent) => ({ agentId: agent.agentId, name: agent.purpose })),
                     changes: changelog.groups.flatMap((group) => group.changes).slice(0, 8),
                     // Reconnect the agent's `genie` server BEFORE telling it
                     // anything: the upgrade replaced the process behind the
@@ -2068,6 +2083,19 @@ app.whenReady().then(async () => {
             scheduleInfo: () => getScheduleInfo(),
             runScheduleNow: (id) => runScheduleNow(id),
             createAgentTerminal: (opts) => createAgentTerminal(opts),
+            // AMS agent RECORDS, so a REMOTE window manages the HOST's agents
+            // rather than its own (genie #327). Same functions the IPC handlers
+            // call -- one implementation, two transports.
+            agentRecords: {
+                list: (workspaceId) => agentRecordsList(workspaceId),
+                create: (input) => agentRecordCreate(input),
+                start: (workspaceId, name) => agentRecordStart(workspaceId, name),
+                remove: (agentId, mode, handoff) => agentRecordDelete(agentId, mode, handoff),
+                setDefault: (workspaceId, agentId) => agentRecordSetDefault(workspaceId, agentId),
+                addRuntime: (agentId, provider) => agentRecordAddRuntime(agentId, provider),
+                front: (agentId, runtimeId) => agentRecordFront(agentId, runtimeId),
+                setAvatar: (agentId, avatar) => agentRecordSetAvatar(agentId, avatar),
+            },
             createSpecializedAgentTerminal: (input) => createSpecializedAgentTerminal(input),
             restartAgentTerminal: (id) => restartAgentTerminal(id),
             updateAgentInboxChannel: (specId, patch) => updateAgentInboxChannel(specId, patch),

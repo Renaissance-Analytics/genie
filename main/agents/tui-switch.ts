@@ -20,7 +20,7 @@
 
 export interface SwitchRuntime {
     id: string;
-    provider: string;
+    tui: string;
     terminalSpecId: string | null;
     fronted: boolean;
 }
@@ -31,7 +31,7 @@ export type TuiSwitchDecision =
     /** The agent already holds this TUI: flip to it. Nothing starts, nothing stops. */
     | { kind: 'front'; runtimeId: string }
     /** The agent has never run this TUI: start one and front it. */
-    | { kind: 'create'; provider: string }
+    | { kind: 'create'; tui: string }
     /** The agent's own file does not list this TUI. */
     | { kind: 'refuse'; reason: string };
 
@@ -61,11 +61,11 @@ export function decideTuiSwitch(input: {
     // exited is still this agent's conversation on that TUI, and creating a
     // second runtime beside it would strand the thread and trip the
     // one-runtime-per-TUI rule.
-    const existing = runtimes.find((r) => r.provider === to);
+    const existing = runtimes.find((r) => r.tui === to);
     if (existing) {
         return existing.fronted
             ? { kind: 'already', runtimeId: existing.id }
             : { kind: 'front', runtimeId: existing.id };
     }
-    return { kind: 'create', provider: to };
+    return { kind: 'create', tui: to };
 }

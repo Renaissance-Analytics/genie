@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
+import { useOverlayRoot } from '../../lib/use-overlay-root';
 import { pickPath } from '../FilePickerModal';
 import { Input, Select } from '@particle-academy/react-fancy';
 import {
@@ -214,6 +215,10 @@ export default function Chooser({
     pluginPanels = [],
     onAddPluginPanel,
 }: Props) {
+    // Portal target: NEVER document.body -- Genie's surface tokens live on
+    // .gwrap/.genie-overlay-root, and a portal outside that subtree resolves
+    // them to nothing and paints transparent (genie #114).
+    const overlayRoot = useOverlayRoot();
     const [thumbedAgentTerminals, setThumbedAgentTerminals] = useState<Set<string>>(new Set());
     // THE AGENT RECORD, per workspace. The grid used to be built from terminal
     // specs carrying `meta.agent`, which meant a leftover spec looked like an
@@ -224,6 +229,14 @@ export default function Chooser({
         Record<string, { agents: AgentRecordSpec[]; runtimes: AgentRuntimeSpec[] }>
     >({});
     const workspaceIds = workspaces.map((w) => w.id).join(',');
+    // Bumped by `agents:changed` to force the roster fetch below to re-run.
+    // The effect's own keys — the workspace ids and the SPEC COUNT — do not move
+    // when a REGISTERED agent is added or removed without a terminal, which is
+    // exactly the shape an AMS agent has before its first boot. On a remote
+    // window that change happens on the HOST, so without this the roster sat at
+    // whatever it fetched on mount (genie #327).
+    const [rosterNonce, setRosterNonce] = useState(0);
+    useEffect(() => api().on.agentsChanged(() => setRosterNonce((n) => n + 1)), []);
     useEffect(() => {
         let cancelled = false;
         void Promise.all(
@@ -240,7 +253,7 @@ export default function Chooser({
             cancelled = true;
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [workspaceIds, specs.length]);
+    }, [workspaceIds, specs.length, rosterNonce]);
 
     useEffect(() => api().on.agentThumbsUp?.((event) => {
         setThumbedAgentTerminals((current) => new Set(current).add(event.terminalId));
@@ -1960,7 +1973,7 @@ export default function Chooser({
             </aside>
         </div>
         {procLog &&
-            typeof document !== 'undefined' &&
+            overlayRoot &&
             createPortal(
                 <div
                     className="proc-log-pop"
@@ -2004,10 +2017,10 @@ export default function Chooser({
                         </button>
                     </div>
                 </div>,
-                document.body,
+                overlayRoot,
             )}
         {agentMenu &&
-            typeof document !== 'undefined' &&
+            overlayRoot &&
             createPortal(
                 <AgentContextMenu
                     position={agentMenu.at}
@@ -2072,10 +2085,10 @@ export default function Chooser({
                         }
                     }}
                 />,
-                document.body,
+                overlayRoot,
             )}
         {deletePrompt &&
-            typeof document !== 'undefined' &&
+            overlayRoot &&
             createPortal(
                 <AgentDeleteModal
                     agent={deletePrompt.agent}
@@ -2115,10 +2128,10 @@ export default function Chooser({
                         }
                     }}
                 />,
-                document.body,
+                overlayRoot,
             )}
         {procMenu &&
-            typeof document !== 'undefined' &&
+            overlayRoot &&
             createPortal(
                 <>
                     <div
@@ -2163,7 +2176,7 @@ export default function Chooser({
                         </button>
                     </div>
                 </>,
-                document.body,
+                overlayRoot,
             )}
         </>
     );
@@ -2200,6 +2213,10 @@ function envelopeSlug(ws: WorkspaceRow): string {
  */
 function AgiHealth({ ws }: { ws: WorkspaceRow }) {
     const [status, setStatus] = useState<StructureDocStatus | null>(null);
+    // Portal target: NEVER document.body -- Genie's surface tokens live on
+    // .gwrap/.genie-overlay-root, and a portal outside that subtree resolves
+    // them to nothing and paints transparent (genie #114).
+    const overlayRoot = useOverlayRoot();
     const [mcp, setMcp] = useState<McpStatus | null>(null);
     const [open, setOpen] = useState(false);
     const [docsBusy, setDocsBusy] = useState(false);
@@ -2329,6 +2346,7 @@ function AgiHealth({ ws }: { ws: WorkspaceRow }) {
             </span>
             {open &&
                 coords &&
+                overlayRoot &&
                 createPortal(
                     <div
                         ref={popRef}
@@ -2413,7 +2431,7 @@ function AgiHealth({ ws }: { ws: WorkspaceRow }) {
                             </div>
                         )}
                     </div>,
-                    document.body,
+                    overlayRoot,
                 )}
         </span>
     );
@@ -2729,6 +2747,10 @@ function WorkspaceRuntimePill({
     onProcesses: () => void;
     onSites: () => void;
 }) {
+    // Portal target: NEVER document.body -- Genie's surface tokens live on
+    // .gwrap/.genie-overlay-root, and a portal outside that subtree resolves
+    // them to nothing and paints transparent (genie #114).
+    const overlayRoot = useOverlayRoot();
     const anchor = useRef<HTMLSpanElement>(null);
     const menu = useRef<HTMLDivElement>(null);
     const [open, setOpen] = useState(false);
@@ -2787,7 +2809,7 @@ function WorkspaceRuntimePill({
                 <i className={`runtime-half runtime-process proc-${processTone}`} />
                 <i className={`runtime-half runtime-site sites-${siteAvailable ? siteTone : 'none'}`} />
             </span>
-            {open && position && createPortal(
+            {open && position && overlayRoot && createPortal(
                 <div
                     ref={menu}
                     className="runtime-pill-menu"
@@ -2808,7 +2830,7 @@ function WorkspaceRuntimePill({
                         <span>Site Manager</span>
                     </button>
                 </div>,
-                document.body,
+                overlayRoot,
             )}
         </>
     );

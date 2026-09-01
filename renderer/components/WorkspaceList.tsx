@@ -102,6 +102,22 @@ export default function WorkspaceList({ rows, onOpen, onRemove, onAdd }: Props) 
                                                 Tynn
                                             </Badge>
                                         )}
+                                    {/* SACRED — cosmetic, and cosmetic is the whole
+                                        point. It confers no tools, no permissions and
+                                        no different guides; the one thing it carries
+                                        is permission to hold an agent under the
+                                        reserved name it names. Mirrored from Tynn, so
+                                        there is nothing to click here. */}
+                                    {!!w.sacred_name && (
+                                        <Badge
+                                            color="violet"
+                                            size="sm"
+                                            variant="soft"
+                                            title={`Sacred workspace — may use the reserved agent name "${w.sacred_name}"`}
+                                        >
+                                            Sacred
+                                        </Badge>
+                                    )}
                                 </div>
                                 <Text
                                     size="xs"

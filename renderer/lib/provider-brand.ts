@@ -1,4 +1,4 @@
-import { PROVIDER_IDS, type AgentProviderId } from '../../main/agents/registry';
+import { PROVIDER_IDS, type AgentTuiId } from '../../main/agents/registry';
 
 /**
  * The BRAND MARK that stands for each TUI.
@@ -17,7 +17,7 @@ import { PROVIDER_IDS, type AgentProviderId } from '../../main/agents/registry';
  *
  * A user-set avatar overrides all of this; these are only the defaults.
  */
-export const PROVIDER_BRAND_MARKS: Record<AgentProviderId, string | null> = {
+export const PROVIDER_BRAND_MARKS: Record<AgentTuiId, string | null> = {
     claude: 'anthropic',
     codex: 'openai',
     // Genie's own TUI gets GENIE's mark, never Tynn's — different products, and
@@ -45,5 +45,5 @@ export const PROVIDER_BRAND_MARKS: Record<AgentProviderId, string | null> = {
 export function providerBrandMark(provider: string | null | undefined): string | null {
     if (!provider) return null;
     if (!(PROVIDER_IDS as readonly string[]).includes(provider)) return null;
-    return PROVIDER_BRAND_MARKS[provider as AgentProviderId] ?? null;
+    return PROVIDER_BRAND_MARKS[provider as AgentTuiId] ?? null;
 }

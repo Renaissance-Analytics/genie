@@ -28,14 +28,14 @@
 
 import type { AgentType } from '../mcp/protocol';
 import { normalizePurpose } from '../agentinbox/types';
-import { isProviderId } from './registry';
+import { isTuiId } from './registry';
 
 /** The AI TUI an agent runs. Mirrors `AgentType` / `AgentInboxAgentType`. */
-export type AgentProvider = AgentType;
+export type AgentTui = AgentType;
 
 /** The parts of an agent's identity, as every surface needs them. */
 export interface AgentIdentity {
-    provider: AgentProvider;
+    tui: AgentTui;
     /** The saved agent's NAME — stable, human-chosen, kebab. */
     name: string;
     /** The harness's chat session, when it is known yet. Null before Codex's
@@ -65,10 +65,10 @@ export function agentName(raw: string | null | undefined): string {
 /**
  * The SAVED-CONFIG key — the agent's NAME, and nothing else.
  *
- * This used to be `{provider}:{name}`, which made the TUI part of the agent's
+ * This used to be `{tui}:{name}`, which made the TUI part of the agent's
  * IDENTITY. The schema says otherwise: v55 collapsed
- * `UNIQUE (workspace_id, provider, name)` to `UNIQUE (workspace_id, name)` and
- * moved the provider onto `agent_runtimes`, because an agent that switches
+ * `UNIQUE (workspace_id, tui, name)` to `UNIQUE (workspace_id, name)` and
+ * moved the tui onto `agent_runtimes`, because an agent that switches
  * drivers is the same agent. The key disagreeing with the schema is how
  * `claude:tynn` and `codex:tynn` could still read as two agents.
  *
@@ -81,7 +81,7 @@ export function savedAgentKey(name: string): string {
 }
 
 /**
- * The canonical machine-facing ref — `{provider}:{name}:{chat-id}`.
+ * The canonical machine-facing ref — `{tui}:{name}:{chat-id}`.
  *
  * Degrades to the saved-config key when the chat-id is not bound yet, rather
  * than emitting an empty third field: a ref with a blank tail reads as "this
@@ -96,16 +96,16 @@ export function agentRef(identity: AgentIdentity): string {
 }
 
 /**
- * The providers a ref may name. Anything else is not one of ours.
+ * The TUIs a ref may name. Anything else is not one of ours.
  *
- * DERIVED from `PROVIDER_REGISTRY` (genie#261). This used to be its own
+ * DERIVED from `TUI_REGISTRY` (genie#261). This used to be its own
  * `readonly string[]` — deliberately outside the union, so no compiler checked
- * it — and a provider missing from it was silently dropped by `savedAgentsOf`:
+ * it — and a tui missing from it was silently dropped by `savedAgentsOf`:
  * the agent launched, ran, and never appeared in the roster, with no error
  * anywhere. Membership is now the registry's answer, by construction.
  */
-export function isAgentProvider(value: unknown): value is AgentProvider {
-    return isProviderId(value);
+export function isAgentTui(value: unknown): value is AgentTui {
+    return isTuiId(value);
 }
 
 /**
@@ -113,7 +113,7 @@ export function isAgentProvider(value: unknown): value is AgentProvider {
  *
  * Accepts both forms — with and without a chat-id — because both are legitimate
  * things to be handed: an agent naming a peer it wants to reach knows the
- * `{provider}:{name}` half and often nothing more. The chat-id is taken as the
+ * `{tui}:{name}` half and often nothing more. The chat-id is taken as the
  * REMAINDER after the second separator, so a harness that ever puts a colon in a
  * session id survives instead of being silently truncated.
  */
@@ -123,16 +123,16 @@ export function parseAgentRef(ref: string): AgentIdentity | null {
 
     const parts = raw.split(SEP).map((part) => part.trim());
 
-    // LEGACY `{provider}:{name}[:{chat}]`. Agents were told this shape and may
+    // LEGACY `{tui}:{name}[:{chat}]`. Agents were told this shape and may
     // still have one written down, so reading it keeps working -- but only when
-    // there is something AFTER the provider. A bare `codex` is an agent NAMED
-    // codex, which is legal, and reading it as a provider with no name would
+    // there is something AFTER the tui. A bare `codex` is an agent NAMED
+    // codex, which is legal, and reading it as a tui with no name would
     // turn a valid ref into null.
-    if (parts.length >= 2 && isAgentProvider(parts[0]!)) {
+    if (parts.length >= 2 && isAgentTui(parts[0]!)) {
         const name = parts[1]!;
         if (!name) return null;
         return {
-            provider: parts[0] as AgentProvider,
+            tui: parts[0] as AgentTui,
             name: agentName(name),
             chatSessionId: parts.slice(2).join(SEP).trim() || null,
         };
@@ -143,27 +143,27 @@ export function parseAgentRef(ref: string): AgentIdentity | null {
     return {
         // The ref no longer carries a driver, because the driver is not the
         // agent. Callers that need one read it off the fronted runtime.
-        provider: undefined as unknown as AgentProvider,
+        tui: undefined as unknown as AgentTui,
         name: agentName(name),
         chatSessionId: parts.slice(1).join(SEP).trim() || null,
     };
 }
 
 /**
- * What a HUMAN-facing surface renders: the provider (so the right logo is drawn)
+ * What a HUMAN-facing surface renders: the tui (so the right logo is drawn)
  * and the name. Never the chat-id — there is no field for it here, which is what
  * stops one leaking into a header again.
  *
- * `provider` is returned rather than a logo component because this module is
+ * `tui` is returned rather than a logo component because this module is
  * pure and main-process; the renderer maps it through its own icon registry
  * (`renderer/lib/terminal-types.ts`). Two agents with the same name on different
- * providers therefore differ by logo alone, as required.
+ * TUIs therefore differ by logo alone, as required.
  */
 export function agentDisplay(identity: AgentIdentity): {
-    provider: AgentProvider;
+    tui: AgentTui;
     name: string;
 } {
-    return { provider: identity.provider, name: agentName(identity.name) };
+    return { tui: identity.tui, name: agentName(identity.name) };
 }
 
 /* ── AMS ↔ AgentInbox: one agent, one id ─────────────────────────────────── */

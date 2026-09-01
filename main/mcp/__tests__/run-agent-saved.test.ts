@@ -165,7 +165,10 @@ function start(req: Partial<RunAgentRequest> = {}): Promise<RunAgentResult> {
 }
 
 async function registerAndStart(req: Partial<RunAgentRequest> = {}): Promise<RunAgentResult> {
-    const name = req.name ?? 'general';
+    // Not `general`: that is a RESERVED name now (Tynn story #262) and
+    // registration refuses it, so a caller relying on this default would get a
+    // refusal that has nothing to do with what it was testing.
+    const name = req.name ?? 'tynn-builder';
     const provider = req.agent ?? 'claude';
     const registered = await registerAgentForMcp(CALLER_ID, {
         name,
@@ -206,9 +209,21 @@ afterAll(() => {
     }
 });
 
+/**
+ * NOTE ON THE FIXTURE NAME (Tynn story #262). These tests used to register an
+ * agent literally named `tynn`. That is now a RESERVED name — refused in every
+ * workspace except the one Tynn grants it to (`agents/reserved-names.ts`) — so
+ * the fixture is `tynn-builder`, which is deliberately not reserved and is
+ * asserted as such next to the block list itself.
+ *
+ * The name is incidental to everything below: these cover registration,
+ * reattachment, revival and restart, none of which depend on the string. The
+ * reserved-name contract has its own tests at the same tool boundary
+ * (`reserved-agent-names.test.ts`).
+ */
 describe('registering an agent before start', () => {
     it('needs `registerAgent` — a bare start refuses instead of minting a stranger', async () => {
-        const r = await start({ name: 'tynn' });
+        const r = await start({ name: 'tynn-builder' });
 
         expect(r.ok).toBe(false);
         expect(r.error).toMatch(/registerAgent/i);
@@ -220,33 +235,33 @@ describe('registering an agent before start', () => {
     });
 
     it('starts one registered agent, with its provider and name on the terminal', async () => {
-        const r = await registerAndStart({ name: 'tynn', agent: 'claude' });
+        const r = await registerAndStart({ name: 'tynn-builder', agent: 'claude' });
 
         expect(r.ok).toBe(true);
         expect(r.id).toBeTruthy();
         expect(r.reattached).toBe(false);
         // The canonical machine-facing identity, provider first.
-        expect(r.ref).toMatch(/^tynn:/);
+        expect(r.ref).toMatch(/^tynn-builder:/);
 
         const spec = getTerminalSpec(r.id!);
         expect(spec?.meta?.agent).toBe('claude');
-        expect(spec?.meta?.whisper_purpose).toBe('tynn');
+        expect(spec?.meta?.whisper_purpose).toBe('tynn-builder');
         expect(spec?.meta?.agent_id).toBeTruthy();
         expect(terminalManager().isLive(r.id!)).toBe(true);
     });
 
     it('refuses a second agent under a name the workspace already has', async () => {
-        const first = await registerAndStart({ name: 'tynn', agent: 'claude' });
+        const first = await registerAndStart({ name: 'tynn-builder', agent: 'claude' });
         expect(first.ok).toBe(true);
 
-        const second = await registerAndStart({ name: 'tynn', agent: 'claude' });
+        const second = await registerAndStart({ name: 'tynn-builder', agent: 'claude' });
 
         expect(second.ok).toBe(false);
         // The NAME, not `claude:tynn`: since v55 the TUI is not part of the
         // identity, so naming it in the refusal would describe a key that no
         // longer exists and imply a `codex:tynn` were still available.
-        expect(second.error).toContain('tynn');
-        expect(second.error).not.toContain('claude:tynn');
+        expect(second.error).toContain('tynn-builder');
+        expect(second.error).not.toContain('claude:tynn-builder');
         expect(agentSpecs()).toHaveLength(1);
         // POSITIVE CONTROL — the one that exists is genuinely running.
         expect(terminalManager().isLive(first.id!)).toBe(true);
@@ -255,9 +270,9 @@ describe('registering an agent before start', () => {
 
 describe('runAgent start on a SAVED agent', () => {
     it('binds a Codex SessionStart id onto the just-created saved agent without duplicating it', async () => {
-        const created = await registerAndStart({ name: 'tynn', agent: 'codex' });
+        const created = await registerAndStart({ name: 'tynn-builder', agent: 'codex' });
         expect(created.ok).toBe(true);
-        expect(created.ref).toBe('tynn');
+        expect(created.ref).toBe('tynn-builder');
         expect(created.sessionBinding).toBe('pending');
 
         const registered = registerAgentInboxSession(created.id!, 'codex-session-1', {
@@ -267,21 +282,21 @@ describe('runAgent start on a SAVED agent', () => {
         });
         expect(registered.ok).toBe(true);
 
-        const attached = await start({ name: 'tynn', agent: 'codex' });
+        const attached = await start({ name: 'tynn-builder', agent: 'codex' });
         expect(attached.ok).toBe(true);
         expect(attached.id).toBe(created.id);
-        expect(attached.ref).toBe('tynn:codex-session-1');
+        expect(attached.ref).toBe('tynn-builder:codex-session-1');
         expect(attached.sessionBinding).toBe('bound');
         expect(agentSpecs()).toHaveLength(1);
         expect(agentIds()).toHaveLength(1);
     });
 
     it('REATTACHES to the live agent instead of creating a second one', async () => {
-        const created = await registerAndStart({ name: 'tynn', agent: 'claude' });
+        const created = await registerAndStart({ name: 'tynn-builder', agent: 'claude' });
         expect(created.ok).toBe(true);
         const ptysAfterCreate = spawnedPtys.length;
 
-        const again = await start({ name: 'tynn' });
+        const again = await start({ name: 'tynn-builder' });
 
         expect(again.ok).toBe(true);
         expect(again.reattached).toBe(true);
@@ -300,13 +315,13 @@ describe('runAgent start on a SAVED agent', () => {
         // observable once the timers run.
         vi.useFakeTimers();
         try {
-            const created = await registerAndStart({ name: 'tynn', agent: 'claude' });
+            const created = await registerAndStart({ name: 'tynn-builder', agent: 'claude' });
             vi.runAllTimers();
             const pty = spawnedPtys[spawnedPtys.length - 1]!;
             const writesAfterLaunch = pty.written.length;
             expect(writesAfterLaunch).toBeGreaterThan(0); // POSITIVE CONTROL: it did launch
 
-            await start({ name: 'tynn' });
+            await start({ name: 'tynn-builder' });
             vi.runAllTimers();
 
             // Not vacuous: "the first pty got no new writes" is also true of a
@@ -325,7 +340,7 @@ describe('runAgent start on a SAVED agent', () => {
     });
 
     it('REVIVES a saved agent whose pty exited — same record, no second agent', async () => {
-        const created = await registerAndStart({ name: 'tynn', agent: 'claude' });
+        const created = await registerAndStart({ name: 'tynn-builder', agent: 'claude' });
         const agentIdBefore = getTerminalSpec(created.id!)?.meta?.agent_id;
         expect(agentIdBefore).toBeTruthy();
 
@@ -333,7 +348,7 @@ describe('runAgent start on a SAVED agent', () => {
         spawnedPtys[spawnedPtys.length - 1]!.exit();
         expect(terminalManager().isLive(created.id!)).toBe(false);
 
-        const revived = await start({ name: 'tynn' });
+        const revived = await start({ name: 'tynn-builder' });
 
         expect(revived.ok).toBe(true);
         expect(revived.reattached).toBe(true);
@@ -356,11 +371,11 @@ describe('runAgent start on a SAVED agent', () => {
         // A second TUI for the same agent is now a RUNTIME, not a second agent,
         // so the way to get one is to add a runtime rather than to register
         // again under a different provider.
-        const claude = await registerAndStart({ name: 'tynn', agent: 'claude' });
+        const claude = await registerAndStart({ name: 'tynn-builder', agent: 'claude' });
         expect(claude.ok).toBe(true);
 
         const second = await registerAgentForMcp(CALLER_ID, {
-            name: 'tynn',
+            name: 'tynn-builder',
             purpose: 'the same name, a different driver',
             agent: 'codex',
         });
@@ -371,20 +386,20 @@ describe('runAgent start on a SAVED agent', () => {
         expect(agentSpecs()).toHaveLength(1);
         expect(terminalManager().isLive(claude.id!)).toBe(true);
         // And a bare name is no longer ambiguous, because it cannot be.
-        expect((await start({ name: 'tynn' })).id).toBe(claude.id);
+        expect((await start({ name: 'tynn-builder' })).id).toBe(claude.id);
     });
 });
 
 describe('listing the workspace roster', () => {
     it('reports every saved agent by its canonical ref, and never invents one', async () => {
-        await registerAndStart({ name: 'tynn', agent: 'claude' });
+        await registerAndStart({ name: 'tynn-builder', agent: 'claude' });
         await registerAndStart({ name: 'tynn-slave', agent: 'codex' });
 
         const listed = await runAgentForMcp(CALLER_ID, { action: 'list' });
 
         expect(listed.ok).toBe(true);
-        expect(listed.agents?.map((a) => `${a.provider}:${a.name}`).sort()).toEqual([
-            'claude:tynn',
+        expect(listed.agents?.map((a) => `${a.tui}:${a.name}`).sort()).toEqual([
+            'claude:tynn-builder',
             'codex:tynn-slave',
         ]);
         // A read-only action creates nothing and asks nobody.
@@ -422,7 +437,7 @@ describe('runAgent restart', () => {
         runAgentForMcp(CALLER_ID, { action: 'restart', id } as RunAgentRequest);
 
     it('leaves ONE agent, not two', async () => {
-        const created = await registerAndStart({ name: 'tynn', agent: 'claude' });
+        const created = await registerAndStart({ name: 'tynn-builder', agent: 'claude' });
         expect(created.ok).toBe(true);
         expect(agentSpecs()).toHaveLength(1);
 
@@ -435,7 +450,7 @@ describe('runAgent restart', () => {
     });
 
     it('keeps the durable AgentInbox identity across the restart', async () => {
-        const created = await registerAndStart({ name: 'tynn', agent: 'claude' });
+        const created = await registerAndStart({ name: 'tynn-builder', agent: 'claude' });
         const identityBefore = getTerminalSpec(created.id!)?.meta?.agent_id;
         expect(identityBefore).toBeTruthy();
 
@@ -448,11 +463,11 @@ describe('runAgent restart', () => {
     });
 
     it('leaves the registry pointing at a spec that still exists', async () => {
-        const created = await registerAndStart({ name: 'tynn', agent: 'claude' });
+        const created = await registerAndStart({ name: 'tynn-builder', agent: 'claude' });
 
         await restart(created.id!);
 
-        const registered = listWorkspaceAgents(WS_ID).find((a) => a.name === 'tynn');
+        const registered = listWorkspaceAgents(WS_ID).find((a) => a.name === 'tynn-builder');
         expect(registered?.terminal_spec_id).toBeTruthy();
         // Pointing at a deleted or dead spec is how the next `start` reattached
         // to a corpse instead of the agent that is actually running.
@@ -461,10 +476,10 @@ describe('runAgent restart', () => {
     });
 
     it('a restarted agent is still the one a later start reattaches to', async () => {
-        const created = await registerAndStart({ name: 'tynn', agent: 'claude' });
+        const created = await registerAndStart({ name: 'tynn-builder', agent: 'claude' });
         await restart(created.id!);
 
-        const again = await start({ name: 'tynn' });
+        const again = await start({ name: 'tynn-builder' });
 
         expect(again.ok).toBe(true);
         expect(again.reattached).toBe(true);
@@ -491,7 +506,7 @@ describe('runAgent restart', () => {
  */
 describe('runAgent start with drifted spec meta', () => {
     it('reattaches via the registry binding even when whisper_purpose no longer matches', async () => {
-        const created = await registerAndStart({ name: 'tynn', agent: 'claude' });
+        const created = await registerAndStart({ name: 'tynn-builder', agent: 'claude' });
         expect(created.ok).toBe(true);
         const identityBefore = getTerminalSpec(created.id!)?.meta?.agent_id;
 
@@ -502,7 +517,7 @@ describe('runAgent start with drifted spec meta', () => {
             meta: { ...spec.meta, whisper_purpose: 'something-else' },
         });
 
-        const again = await start({ name: 'tynn' });
+        const again = await start({ name: 'tynn-builder' });
 
         expect(again.ok).toBe(true);
         expect(agentSpecs()).toHaveLength(1);

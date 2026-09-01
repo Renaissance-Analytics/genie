@@ -18,12 +18,12 @@
  * level, rather than two ladders that drift.
  */
 
-import type { AgentProvider } from './identity';
-import { isAgentProvider } from './identity';
-import { agentProviders } from './registry';
+import type { AgentTui } from './identity';
+import { isAgentTui } from './identity';
+import { agentTuis } from './registry';
 
-/** The AI TUIs Genie can launch. DERIVED from `PROVIDER_REGISTRY` (genie#261). */
-export const AGENT_PROVIDERS: readonly AgentProvider[] = agentProviders();
+/** The AI TUIs Genie can launch. DERIVED from `TUI_REGISTRY` (genie#261). */
+export const AGENT_TUIS: readonly AgentTui[] = agentTuis();
 
 /**
  * The workstation's default provider.
@@ -35,6 +35,6 @@ export const AGENT_PROVIDERS: readonly AgentProvider[] = agentProviders();
  * Settings arrive from a k/v text table, so an unrecognised value falls THROUGH
  * rather than being handed to a shell.
  */
-export function resolveWorkstationProvider(settings: { agent_default?: string }): AgentProvider {
-    return isAgentProvider(settings.agent_default) ? settings.agent_default : 'claude';
+export function resolveWorkstationTui(settings: { agent_default?: string }): AgentTui {
+    return isAgentTui(settings.agent_default) ? settings.agent_default : 'claude';
 }

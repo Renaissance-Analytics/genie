@@ -1,4 +1,4 @@
-import type { AgentProvider } from '../agents/identity';
+import type { AgentTui } from '../agents/identity';
 
 /**
  * PURE. What the `imDone` OS toast SAYS.
@@ -21,7 +21,7 @@ export interface ImDoneNoticeFacts {
     /** The workspace's display name (`project_name`), or the System Workspace. */
     workspace?: string | null;
     /** The agent running in this terminal, when it is one. */
-    agent?: { provider: AgentProvider; name: string } | null;
+    agent?: { tui: AgentTui; name: string } | null;
     /** The terminal spec's own label. */
     terminal?: string | null;
     /**
@@ -45,12 +45,12 @@ export function clean(v: string | null | undefined): string | null {
 }
 
 /**
- * The provider as a person reads it. Mirrors the renderer's terminal-type labels
- * (`renderer/lib/terminal-types.ts`) — the toast is plain text, so the provider
+ * The tui as a person reads it. Mirrors the renderer's terminal-type labels
+ * (`renderer/lib/terminal-types.ts`) — the toast is plain text, so the tui
  * that would be a LOGO in the UI is spelled out here instead. Same information,
- * same convention: provider + name, never the chat id.
+ * same convention: tui + name, never the chat id.
  */
-const PROVIDER_LABEL: Record<AgentProvider, string> = {
+const PROVIDER_LABEL: Record<AgentTui, string> = {
     claude: 'Claude Code',
     codex: 'Codex',
     kiwi: 'Kiwi Code',
@@ -66,8 +66,8 @@ const PROVIDER_LABEL: Record<AgentProvider, string> = {
 export interface NoticeSubject {
     workspace: string | null;
     terminal: string | null;
-    agent: { provider: AgentProvider; name: string } | null;
-    /** WHO the notice is about: an agent is provider + name; anything else is
+    agent: { tui: AgentTui; name: string } | null;
+    /** WHO the notice is about: an agent is tui + name; anything else is
      *  named by its own label, and only a terminal with neither is anonymous. */
     who: string;
     /** The terminal as a TIEBREAKER — ` in “build”`, or '' when the label adds
@@ -80,15 +80,15 @@ export interface NoticeSubject {
 export function noticeSubject(facts: {
     workspace?: string | null;
     terminal?: string | null;
-    agent?: { provider: AgentProvider; name: string } | null;
+    agent?: { tui: AgentTui; name: string } | null;
 }): NoticeSubject {
     const workspace = clean(facts.workspace);
     const terminal = clean(facts.terminal);
     const name = clean(facts.agent?.name);
-    const agent = facts.agent && name ? { provider: facts.agent.provider, name } : null;
+    const agent = facts.agent && name ? { tui: facts.agent.tui, name } : null;
 
     const who = agent
-        ? `${PROVIDER_LABEL[agent.provider] ?? 'Agent'} · ${agent.name}`
+        ? `${PROVIDER_LABEL[agent.tui] ?? 'Agent'} · ${agent.name}`
         : (terminal ?? 'A terminal');
     const showTerminal =
         !!agent && !!terminal && !terminal.toLowerCase().includes(agent.name.toLowerCase());

@@ -1572,7 +1572,7 @@ describe('v49 — GApp Development Workspaces', () => {
 
 describe('v50 — first-class AMS agents', () => {
     it('registers a new workspace with NO agent — the default is designated, not seeded', () => {
-        // v50 seeded a placeholder named 'workspace' with no provider and no
+        // v50 seeded a placeholder named 'workspace' with no tui and no
         // terminal. Once the renderer started drawing registered agents it
         // became a square labelled "works…" that clicked into nothing, in every
         // workspace on the estate. The workspace agent is a DESIGNATION on one
@@ -1630,7 +1630,7 @@ describe('v50 — first-class AMS agents', () => {
 
         const c = cols(db, 'workspace_agents');
         for (const column of [
-            'provider',
+            'tui',
             'name',
             'purpose',
             'avatar',
@@ -1674,16 +1674,16 @@ describe('v50 — first-class AMS agents', () => {
         const rows = db
             .prepare<[], {
                 role: string;
-                provider: string | null;
+                tui: string | null;
                 name: string;
                 terminal_spec_id: string | null;
                 parent_agent_id: string | null;
-            }>(`SELECT role, provider, name, terminal_spec_id, parent_agent_id
+            }>(`SELECT role, tui, name, terminal_spec_id, parent_agent_id
                 FROM workspace_agents WHERE workspace_id = 'ws-old-agent' ORDER BY role`)
             .all();
         expect(rows).toContainEqual({
             role: 'specialized',
-            provider: 'codex',
+            tui: 'codex',
             name: 'reviewer',
             terminal_spec_id: 'spec-reviewer',
             // The placeholder parent is GONE (v57), and the FK is
@@ -1715,7 +1715,7 @@ describe('v50 — first-class AMS agents', () => {
         // makes the agent it actually needs.
         db.prepare(
             `INSERT INTO workspace_agents
-                (id, workspace_id, provider, name, purpose, role, created_at, updated_at)
+                (id, workspace_id, tui, name, purpose, role, created_at, updated_at)
              VALUES ('workspace:ws-ready', 'ws-ready', 'codex', 'workspace', '', 'workspace', 1, 1)`,
         ).run();
         db.prepare(
@@ -1754,7 +1754,7 @@ describe('v50 — first-class AMS agents', () => {
         // makes the agent it actually needs.
         db.prepare(
             `INSERT INTO workspace_agents
-                (id, workspace_id, provider, name, purpose, role, created_at, updated_at)
+                (id, workspace_id, tui, name, purpose, role, created_at, updated_at)
              VALUES ('workspace:ws-unverified', 'ws-unverified', 'codex', 'workspace', '', 'workspace', 1, 1)`,
         ).run();
         db.prepare(
@@ -1787,7 +1787,7 @@ describe('v51 — bounded short-term AMS todos', () => {
         // makes the agent it actually needs.
         db.prepare(
             `INSERT INTO workspace_agents
-                (id, workspace_id, provider, name, purpose, role, created_at, updated_at)
+                (id, workspace_id, tui, name, purpose, role, created_at, updated_at)
              VALUES ('workspace:ws-todo', 'ws-todo', 'codex', 'workspace', '', 'workspace', 1, 1)`,
         ).run();
         return db;
@@ -1855,7 +1855,7 @@ describe('v52 — harness transport verification', () => {
         // makes the agent it actually needs.
         db.prepare(
             `INSERT INTO workspace_agents
-                (id, workspace_id, provider, name, purpose, role, created_at, updated_at)
+                (id, workspace_id, tui, name, purpose, role, created_at, updated_at)
              VALUES ('workspace:ws-transport', 'ws-transport', 'codex', 'workspace', '', 'workspace', 1, 1)`,
         ).run();
 
@@ -1887,7 +1887,7 @@ describe('v52 — harness transport verification', () => {
         // makes the agent it actually needs.
         db.prepare(
             `INSERT INTO workspace_agents
-                (id, workspace_id, provider, name, purpose, role, created_at, updated_at)
+                (id, workspace_id, tui, name, purpose, role, created_at, updated_at)
              VALUES ('workspace:ws-failed', 'ws-failed', 'codex', 'workspace', '', 'workspace', 1, 1)`,
         ).run();
 
@@ -1919,7 +1919,7 @@ describe('v52 — harness transport verification', () => {
         // makes the agent it actually needs.
         db.prepare(
             `INSERT INTO workspace_agents
-                (id, workspace_id, provider, name, purpose, role, created_at, updated_at)
+                (id, workspace_id, tui, name, purpose, role, created_at, updated_at)
              VALUES ('workspace:ws-rebind', 'ws-rebind', 'codex', 'workspace', '', 'workspace', 1, 1)`,
         ).run();
         db.prepare(

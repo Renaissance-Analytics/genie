@@ -71,6 +71,7 @@ import {
 } from './workspace/create-agi';
 import { analyseFolder } from './workspace/analyse';
 import { syncGappDevWorkspaces } from './workspace/gapp-dev-sync';
+import { syncSacredWorkspaces } from './workspace/sacred-sync';
 import { validateSimpleWorkspace } from './workspace/create-simple';
 import { openWorkspace } from './workspace/open';
 import { cloneRepo } from './workspace/clone';
@@ -83,7 +84,7 @@ import {
     createKnowledgeFolder,
 } from './workspace/envelope';
 import { stopProcess, forgetProcess } from './terminal/process-supervisor';
-import { isProviderId, providerDef } from './agents/registry';
+import { isTuiId, providerDef } from './agents/registry';
 import { osAgentLaunchCommand, osAgentMetaForProvider } from './agents/os-agent';
 import { requestWorkstationReset } from './workstation/reset';
 import { osAgentBootMode } from './agents/os-lifecycle';
@@ -434,6 +435,138 @@ export function addWorkspaceFromFolder(folder: string): { ok: boolean; error?: s
     }
 }
 
+
+/* -------------------------------------------------------------------------- */
+/* AMS agent RECORD operations (genie #327)                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The agent-record operations, as FUNCTIONS rather than only IPC handlers.
+ *
+ * A remote window drives the HOST's agents, so these have to be reachable over
+ * the desktop HTTP bridge as well as over IPC. They were IPC-only, which meant
+ * `api().agents.*` in a remote window fell through to the LOCAL preload and ran
+ * against the CLIENT's database: `create` looked up the host's workspace id in
+ * the client's rows and answered "That workspace is no longer registered", and
+ * `delete` removed a row on the client while the host kept the agent (genie
+ * #327).
+ *
+ * Exported so the IPC handlers below and the `/api/desktop/agents/*` endpoints
+ * call ONE implementation. A second copy is a second place to forget the
+ * handoff request, the broadcast, or the reserved-name check.
+ */
+export function agentRecordsList(workspaceId: string) {
+    const agents = listWorkspaceAgents(String(workspaceId ?? ''));
+    return {
+        agents: agents.map((a) => ({
+            id: a.id,
+            name: a.name,
+            purpose: a.purpose,
+            avatar: a.avatar,
+            role: a.role,
+            collisionGroup: a.collision_group ?? null,
+        })),
+        runtimes: agents.flatMap((a) =>
+            listAgentRuntimes(a.id).map((r) => ({
+                id: r.id,
+                agentId: r.agent_id,
+                tui: r.tui,
+                terminalSpecId: r.terminal_spec_id,
+                fronted: r.fronted === 1,
+            })),
+        ),
+    };
+}
+
+export async function agentRecordCreate(input: {
+    workspaceId: string;
+    name: string;
+    purpose: string;
+    agent?: string;
+    bootFolder?: string;
+}) {
+    const ws = getWorkspace(String(input?.workspaceId ?? ''));
+    if (!ws) return { ok: false, error: 'That workspace is no longer registered.' };
+    return registerAgentInWorkspace(ws, {
+        name: String(input.name ?? ''),
+        purpose: String(input.purpose ?? ''),
+        agent: input.agent as never,
+        bootFolder: input.bootFolder,
+    } as never);
+}
+
+export async function agentRecordStart(workspaceId: string, name: string) {
+    const ws = getWorkspace(String(workspaceId ?? ''));
+    if (!ws) return { ok: false, error: 'That workspace is no longer registered.' };
+    return startRegisteredAgent(ws, { action: 'start', name: String(name ?? '') } as never, {
+        humanInitiated: true,
+    });
+}
+
+export async function agentRecordDelete(
+    agentId: string,
+    mode: 'unmount' | 'delete',
+    handoff?: boolean,
+) {
+    const id = String(agentId ?? '');
+    // Ask BEFORE anything is killed. This is the last moment the agent is still
+    // there to be asked what it was doing -- the request goes to exactly the
+    // terminals the delete is about to kill, and the wait is bounded so a wedged
+    // agent cannot make Delete hang.
+    if (handoff) {
+        const agent = getWorkspaceAgentById(id);
+        const ws = agent ? getWorkspace(agent.workspace_id) : null;
+        if (agent && ws) {
+            await requestHandoffBeforeStop({
+                workspaceRoot: ws.path,
+                agentName: agent.name,
+                terminalIds: terminalsToStopFor(agent),
+                deliver: (terminalId, text) =>
+                    agentInboxBroker.deliverHumanMessageToTerminal(terminalId, text),
+            });
+        }
+    }
+    const result = deleteRegisteredAgent(id, mode === 'delete' ? 'delete' : 'unmount');
+    // Same reason `agents:setDefault`'s callers rebuild the grid: a deleted agent
+    // must stop drawing a square without waiting on the next unrelated refresh.
+    if (result.ok) {
+        broadcastWorkspacesChanged();
+        broadcastAgentsChanged();
+    }
+    return result;
+}
+
+export function agentRecordSetDefault(workspaceId: string, agentId: string | null) {
+    const out = setWorkspaceDefaultAgent(String(workspaceId ?? ''), agentId ? String(agentId) : null);
+    broadcastAgentsChanged();
+    return out;
+}
+
+export function agentRecordAddRuntime(agentId: string, tui: string) {
+    const id = String(agentId ?? '');
+    const existing = listAgentRuntimes(id).find((r) => r.tui === tui);
+    const runtime = existing ?? createAgentRuntime({ agentId: id, tui: String(tui) });
+    frontAgentRuntime(id, runtime.id);
+    broadcastAgentsChanged();
+    return { ok: true, runtimeId: runtime.id };
+}
+
+export function agentRecordFront(agentId: string, runtimeId: string) {
+    const out = frontAgentRuntime(String(agentId ?? ''), String(runtimeId ?? ''));
+    broadcastAgentsChanged();
+    return out;
+}
+
+export function agentRecordSetAvatar(agentId: string, avatar: string | null) {
+    try {
+        setAgentAvatar(getDb(), String(agentId ?? ''), avatar);
+        broadcastAgentsChanged();
+        return { ok: true };
+    } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+}
+
 export function registerIpcHandlers(): void {
     // --- Auth -----------------------------------------------------------
     ipcMain.handle('auth:start-sign-in', async (_e, kind?: BackendKind) => {
@@ -488,7 +621,7 @@ export function registerIpcHandlers(): void {
             patch = { ...patch, ai_system: patch.ai_system.slice(0, AI_SYSTEM_MAX) };
         }
         const next = setSettings(patch as Record<string, string>);
-        if (isProviderId(next.agent_default)) {
+        if (isTuiId(next.agent_default)) {
             const spec = getTerminalSpec('genie-workstation-agent');
             const def = providerDef(next.agent_default);
             if (spec && (
@@ -585,90 +718,34 @@ export function registerIpcHandlers(): void {
     // all, so every agent surface read `TerminalSpec.meta` instead: a leftover
     // spec looked like an agent, and a registered agent that was not running
     // was invisible. The grid reads this instead.
-    ipcMain.handle('agents:list', (_e, workspaceId: string) => {
-        const agents = listWorkspaceAgents(String(workspaceId ?? ''));
-        return {
-            agents: agents.map((a) => ({
-                id: a.id,
-                name: a.name,
-                purpose: a.purpose,
-                avatar: a.avatar,
-                role: a.role,
-                collisionGroup: a.collision_group ?? null,
-            })),
-            runtimes: agents.flatMap((a) =>
-                listAgentRuntimes(a.id).map((r) => ({
-                    id: r.id,
-                    agentId: r.agent_id,
-                    provider: r.provider,
-                    terminalSpecId: r.terminal_spec_id,
-                    fronted: r.fronted === 1,
-                })),
-            ),
-        };
-    });
+    ipcMain.handle('agents:list', (_e, workspaceId: string) =>
+        agentRecordsList(String(workspaceId ?? '')),
+    );
     ipcMain.handle('agents:front', (_e, agentId: string, runtimeId: string) =>
-        frontAgentRuntime(String(agentId ?? ''), String(runtimeId ?? '')),
+        agentRecordFront(agentId, runtimeId),
     );
     // Designate a workspace's DEFAULT agent -- the one that boots from the
     // workspace root. A property of a real agent, set by a human in workspace
     // settings; null clears it.
     ipcMain.handle('agents:setDefault', (_e, workspaceId: string, agentId: string | null) =>
-        setWorkspaceDefaultAgent(String(workspaceId ?? ''), agentId ? String(agentId) : null),
+        agentRecordSetDefault(workspaceId, agentId),
     );
     // The user's own mark, for a workspace and for an agent. Both slots already
     // PREFERRED a set value over the initials / the provider brand mark; there
     // was simply no way to set one, so the fallback was the only reachable
     // value. Rejection is surfaced rather than swallowed -- a silently ignored
     // icon looks like the control is broken.
-    ipcMain.handle('agents:setAvatar', (_e, agentId: string, avatar: string | null) => {
-        try {
-            setAgentAvatar(getDb(), String(agentId ?? ''), avatar);
-            return { ok: true };
-        } catch (e) {
-            return { ok: false, error: e instanceof Error ? e.message : String(e) };
-        }
-    });
+    ipcMain.handle('agents:setAvatar', (_e, agentId: string, avatar: string | null) =>
+        agentRecordSetAvatar(agentId, avatar),
+    );
     // UNMOUNT (keep `.agents/*`) or DELETE (remove them too) a registered
     // agent — genie#311. Both shut down every TUI it may run under and kill
     // its terminal; see `deleteRegisteredAgent` for why the two are not one
     // destructive action.
     ipcMain.handle(
         'agents:delete',
-        async (
-            _e,
-            agentId: string,
-            mode: 'unmount' | 'delete',
-            handoff?: boolean,
-        ) => {
-            const id = String(agentId ?? '');
-            // Ask BEFORE anything is killed. This is the last moment the agent
-            // is still there to be asked what it was doing — the request goes
-            // to exactly the terminals the delete is about to kill, and the
-            // wait is bounded so a wedged agent cannot make Delete hang.
-            if (handoff) {
-                const agent = getWorkspaceAgentById(id);
-                const ws = agent ? getWorkspace(agent.workspace_id) : null;
-                if (agent && ws) {
-                    await requestHandoffBeforeStop({
-                        workspaceRoot: ws.path,
-                        agentName: agent.name,
-                        terminalIds: terminalsToStopFor(agent),
-                        deliver: (terminalId, text) =>
-                            agentInboxBroker.deliverHumanMessageToTerminal(terminalId, text),
-                    });
-                }
-            }
-            const result = deleteRegisteredAgent(
-                id,
-                mode === 'delete' ? 'delete' : 'unmount',
-            );
-            // Same reason `agents:setDefault`'s callers rebuild the grid: a
-            // deleted agent must stop drawing a square without waiting on the
-            // next unrelated refresh.
-            if (result.ok) broadcastWorkspacesChanged();
-            return result;
-        },
+        async (_e, agentId: string, mode: 'unmount' | 'delete', handoff?: boolean) =>
+            agentRecordDelete(agentId, mode, handoff),
     );
     ipcMain.handle('workspaces:setIcon', (_e, workspaceId: string, icon: string | null) => {
         try {
@@ -685,26 +762,18 @@ export function registerIpcHandlers(): void {
     // Add a TUI an agent may run under, and front it. The TERMINAL is not
     // started here: `runAgent start` owns the approval gate and the agent cap,
     // and a switch must not become a second way past either.
-    ipcMain.handle('agents:addRuntime', (_e, agentId: string, provider: string) => {
-        const id = String(agentId ?? '');
-        const existing = listAgentRuntimes(id).find((r) => r.provider === provider);
-        const runtime = existing ?? createAgentRuntime({ agentId: id, provider: String(provider) });
-        frontAgentRuntime(id, runtime.id);
-        return { ok: true, runtimeId: runtime.id };
-    });
+    ipcMain.handle('agents:addRuntime', (_e, agentId: string, provider: string) =>
+        agentRecordAddRuntime(agentId, provider),
+    );
     // START a registered agent from the UI. Clicking a dormant agent's square
     // used to do nothing: there was no terminal to open and no way for the
     // renderer to make one. Goes through the SAME path the MCP tool uses, so
     // reattach, adoption and the agent-terminal cap all still apply -- a click
     // must not become a way past a limit the owner set. Only the approval modal
     // is skipped, because the click is the approval.
-    ipcMain.handle('agents:start', async (_e, workspaceId: string, name: string) => {
-        const ws = getWorkspace(String(workspaceId ?? ''));
-        if (!ws) return { ok: false, error: 'That workspace is no longer registered.' };
-        return startRegisteredAgent(ws, { action: 'start', name: String(name ?? '') } as never, {
-            humanInitiated: true,
-        });
-    });
+    ipcMain.handle('agents:start', async (_e, workspaceId: string, name: string) =>
+        agentRecordStart(workspaceId, name),
+    );
     // CREATE an agent from the UI — a record and a file, never a terminal.
     // Until now this was MCP-only: the form existed in the renderer and was
     // unreachable. Goes through the same core the MCP tool uses so there is one
@@ -720,16 +789,7 @@ export function registerIpcHandlers(): void {
                 agent?: string;
                 bootFolder?: string;
             },
-        ) => {
-            const ws = getWorkspace(String(input?.workspaceId ?? ''));
-            if (!ws) return { ok: false, error: 'That workspace is no longer registered.' };
-            return registerAgentInWorkspace(ws, {
-                name: String(input.name ?? ''),
-                purpose: String(input.purpose ?? ''),
-                agent: input.agent as never,
-                bootFolder: input.bootFolder,
-            } as never);
-        },
+        ) => agentRecordCreate(input),
     );
     ipcMain.handle('workspaces:add', (_e, row: WorkspaceRow) => {
         if (row.shape === 'simple') {
@@ -1866,7 +1926,12 @@ export function registerIpcHandlers(): void {
         // Only when something actually moved: this handler runs on every modal
         // open, and a broadcast that changes nothing still costs every window a
         // workspace re-fetch.
-        if (syncGappDevWorkspaces(projects) > 0) broadcastWorkspacesChanged();
+        // Two mirrors ride this one fetch — the GDW flag and the sacred grant.
+        // OR, not two ifs: either moving is reason enough to broadcast, and a
+        // second broadcast for the same fetch costs every window a re-fetch.
+        const moved = syncGappDevWorkspaces(projects) > 0;
+        const sacredMoved = syncSacredWorkspaces(projects) > 0;
+        if (moved || sacredMoved) broadcastWorkspacesChanged();
         return projects;
     });
     // Project CREATION is Tynn-specific (the Aionima backend has no create
@@ -2210,6 +2275,25 @@ export function broadcastDevSiteProgress(progress: DevSiteProgress): void {
  * this is for changes it can't see — notably workspaces provisioned via the MCP
  * `provisionWorkspaces` tool, which must appear in the rail immediately.
  */
+/**
+ * An agent RECORD changed on this machine — registered, deleted, renamed,
+ * re-avatared, or its runtimes moved (genie #327).
+ *
+ * Separate from `workspaces:changed` because the two answer different
+ * questions, and the roster is the one that was going stale. That event's
+ * renderer handler re-fetches the workspace LIST, and Chooser's roster effect
+ * keys on `[workspaceIds, specs.length]` — neither moves when a REGISTERED
+ * agent is added or removed without a terminal, which is exactly the shape an
+ * AMS agent has before its first boot.
+ *
+ * Fans to local windows AND to `/ws/events`, so a REMOTE window driving this
+ * host sees the host's roster change live rather than at its next mount.
+ */
+export function broadcastAgentsChanged(): void {
+    broadcastLocal('agents:changed');
+    mobileEmit('agents:changed');
+}
+
 export function broadcastWorkspacesChanged(): void {
     // LOCAL-only — a host window lists the HOST's workspaces (via its /ws/events);
     // a local rail change must not force a redundant remote re-fetch there.

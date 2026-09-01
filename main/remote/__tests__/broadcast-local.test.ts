@@ -96,6 +96,20 @@ describe('PASSTHROUGH_EVENTS — every host→client badge event passes through 
     // genie #64 — the AgentInbox header badge now reflects HOST-derived agent lag
     // (messages the host's agents haven't ACKed). It is a badge event, so it needs
     // passthrough for exactly the reason questions:changed did.
+    // The AGENT ROSTER is host-owned on a remote window (genie #327): create,
+    // delete, rename, avatar and runtime changes all land on the HOST. Without
+    // passthrough a remote client shows a roster frozen at whatever it fetched
+    // on mount — an agent the host deleted keeps its square, and one the host
+    // added never appears.
+    //
+    // `workspaces:changed` does NOT cover it. The renderer's handler for that
+    // re-fetches `workspaces.list()` only, and Chooser's roster effect keys on
+    // `[workspaceIds, specs.length]` — neither of which moves when a REGISTERED
+    // agent is added or removed without a terminal. That is the whole gap.
+    it('includes agents:changed so a remote roster tracks the HOST', () => {
+        expect(PASSTHROUGH_EVENTS.has('agents:changed')).toBe(true);
+    });
+
     it('includes agentinbox:lag so the host window badge tracks the HOST agents', () => {
         expect(PASSTHROUGH_EVENTS.has('agentinbox:lag')).toBe(true);
     });

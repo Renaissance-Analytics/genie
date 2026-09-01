@@ -545,6 +545,10 @@ function MasterInner() {
         void api().agents.list(activeWorkspaceId).then(setActiveAgentRecord).catch(() => {});
     }, [activeWorkspaceId]);
     useEffect(reloadActiveAgents, [reloadActiveAgents]);
+    // ...and again whenever an agent record changes on the machine this window
+    // drives. On a remote window that is the HOST, so a create or delete there
+    // must reach this roster live rather than at the next mount (genie #327).
+    useEffect(() => api().on.agentsChanged(reloadActiveAgents), [reloadActiveAgents]);
     // GitHub capability gate: which GitHub-powered features are unavailable
     // because the App is missing permissions on the user's installation. Drives
     // a persistent header warning + a resolve flyout (also auto-shown once on
@@ -4443,6 +4447,7 @@ function Toolbar({
                 customCommand={agentCustomCommand}
                 includeFiles
                 panelLauncher
+                iconOnly
             />
         </div>
     );

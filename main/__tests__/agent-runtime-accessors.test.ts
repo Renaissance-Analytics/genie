@@ -55,7 +55,7 @@ function agent(name: string): string {
     createWorkspaceAgent({
         id,
         workspace_id: WS,
-        provider: null,
+        tui: null,
         name,
         purpose: '',
         avatar: null,
@@ -79,19 +79,19 @@ beforeEach(() => {
 describe('agent runtimes', () => {
     it('records a TUI an agent may run under', () => {
         const id = agent('tynn');
-        createAgentRuntime({ agentId: id, provider: 'claude', fronted: true });
+        createAgentRuntime({ agentId: id, tui: 'claude', fronted: true });
 
         const runtimes = listAgentRuntimes(id);
         expect(runtimes).toHaveLength(1);
-        expect(runtimes[0]).toMatchObject({ provider: 'claude', fronted: 1 });
+        expect(runtimes[0]).toMatchObject({ tui: 'claude', fronted: 1 });
     });
 
     it('holds several TUIs for ONE agent — the whole point of the split', () => {
         const id = agent('tynn');
-        createAgentRuntime({ agentId: id, provider: 'claude', fronted: true });
-        createAgentRuntime({ agentId: id, provider: 'codex' });
+        createAgentRuntime({ agentId: id, tui: 'claude', fronted: true });
+        createAgentRuntime({ agentId: id, tui: 'codex' });
 
-        expect(listAgentRuntimes(id).map((r) => r.provider).sort()).toEqual([
+        expect(listAgentRuntimes(id).map((r) => r.tui).sort()).toEqual([
             'claude',
             'codex',
         ]);
@@ -100,8 +100,8 @@ describe('agent runtimes', () => {
     it('keeps each agent’s runtimes to itself', () => {
         const a = agent('one');
         const b = agent('two');
-        createAgentRuntime({ agentId: a, provider: 'claude' });
-        createAgentRuntime({ agentId: b, provider: 'claude' });
+        createAgentRuntime({ agentId: a, tui: 'claude' });
+        createAgentRuntime({ agentId: b, tui: 'claude' });
 
         expect(listAgentRuntimes(a)).toHaveLength(1);
         expect(listAgentRuntimes(b)).toHaveLength(1);
@@ -112,8 +112,8 @@ describe('agent runtimes', () => {
         // the one-fronted index; doing it as two writes leaves a window where an
         // agent has no visible TUI at all, and the UI reads that as stopped.
         const id = agent('tynn');
-        const claude = createAgentRuntime({ agentId: id, provider: 'claude', fronted: true });
-        const codex = createAgentRuntime({ agentId: id, provider: 'codex' });
+        const claude = createAgentRuntime({ agentId: id, tui: 'claude', fronted: true });
+        const codex = createAgentRuntime({ agentId: id, tui: 'codex' });
 
         frontAgentRuntime(id, codex.id);
 
@@ -124,7 +124,7 @@ describe('agent runtimes', () => {
 
     it('fronting the already-fronted runtime is a no-op, not a crash', () => {
         const id = agent('tynn');
-        const claude = createAgentRuntime({ agentId: id, provider: 'claude', fronted: true });
+        const claude = createAgentRuntime({ agentId: id, tui: 'claude', fronted: true });
 
         expect(() => frontAgentRuntime(id, claude.id)).not.toThrow();
         expect(listAgentRuntimes(id)[0]!.fronted).toBe(1);
@@ -135,8 +135,8 @@ describe('agent runtimes', () => {
         // one-fronted index would then be satisfied by the wrong pair.
         const a = agent('one');
         const b = agent('two');
-        createAgentRuntime({ agentId: a, provider: 'claude', fronted: true });
-        const stranger = createAgentRuntime({ agentId: b, provider: 'claude', fronted: true });
+        createAgentRuntime({ agentId: a, tui: 'claude', fronted: true });
+        const stranger = createAgentRuntime({ agentId: b, tui: 'claude', fronted: true });
 
         expect(frontAgentRuntime(a, stranger.id)).toBe(false);
         // POSITIVE CONTROL: b kept its own, so the refusal did not damage either.

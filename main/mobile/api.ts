@@ -64,6 +64,7 @@ import {
 import { listAllProjects, getTynnBackend } from '../backend/registry';
 import { mobileEmit } from './bus';
 import { syncGappDevWorkspaces } from '../workspace/gapp-dev-sync';
+import { syncSacredWorkspaces } from '../workspace/sacred-sync';
 import { workspaceDocHealth, repairWorkspaceDocs } from '../workspace/create-agi';
 import { runHostSessionSave, type SessionSaveReport } from '../workspace/session-save';
 // Types only (erased at runtime): the Hosting-Manager request shapes. The
@@ -392,6 +393,35 @@ export interface MobileDataDeps {
      * host window creates specialized terminals identically to a local one.
      * OPTIONAL — only a full desktop host wires it; absent ⇒ the endpoint 501s.
      */
+    /**
+     * AMS agent RECORD management on the HOST (genie #327).
+     *
+     * A remote window drives the host's agents, so create/delete/start/... must
+     * land on the HOST's database. Without this they fell through to the remote
+     * client's own local IPC: `create` answered "That workspace is no longer
+     * registered" (the host's workspace id is not in the client's rows) and
+     * `delete` removed a row on the client while the host kept the agent.
+     *
+     * One object rather than eight optional deps, so there is a single wiring
+     * point and a host either has the whole namespace or none of it.
+     * OPTIONAL -- only a full desktop host wires it; absent => the endpoints 501.
+     */
+    agentRecords?: {
+        list: (workspaceId: string) => unknown;
+        create: (input: {
+            workspaceId: string;
+            name: string;
+            purpose: string;
+            agent?: string;
+            bootFolder?: string;
+        }) => Promise<unknown>;
+        start: (workspaceId: string, name: string) => Promise<unknown>;
+        remove: (agentId: string, mode: 'unmount' | 'delete', handoff?: boolean) => Promise<unknown>;
+        setDefault: (workspaceId: string, agentId: string | null) => unknown;
+        addRuntime: (agentId: string, provider: string) => unknown;
+        front: (agentId: string, runtimeId: string) => unknown;
+        setAvatar: (agentId: string, avatar: string | null) => unknown;
+    };
     createSpecializedAgentTerminal?: (input: {
         workspace_id: string;
         agent: 'claude' | 'codex' | 'kiwi' | 'genie' | 'custom';
@@ -1837,7 +1867,11 @@ export async function handleApi(
             // converge. Safe against the headless list being PARTIAL (only assigned
             // workspaces): a project absent from the list is "no answer", and
             // `planGappDevSync` leaves those rows alone.
-            if (syncGappDevWorkspaces(projects) > 0) mobileEmit('workspaces:changed');
+            // Both mirrors ride this fetch (see the ipc handler): the GDW flag
+            // and the sacred grant. Either moving is reason enough to emit.
+            const gappMoved = syncGappDevWorkspaces(projects) > 0;
+            const sacredMoved = syncSacredWorkspaces(projects) > 0;
+            if (gappMoved || sacredMoved) mobileEmit('workspaces:changed');
             sendJson(res, 200, { projects });
             return true;
         }
@@ -2294,6 +2328,74 @@ export async function handleApi(
             // Specialized (AI-TUI) terminal — routes through the SAME create-agent
             // path as the local IPC (command resolution + session-id capture +
             // AgentInbox broker join), so a remote host window creates one identically.
+            // AMS agent RECORDS on the HOST (genie #327). A remote window drives
+            // the host's agents; without these the calls fell through to the
+            // client's own database and silently operated on the wrong machine.
+            if (pathname.startsWith('/api/desktop/agents/')) {
+                if (!deps.agentRecords) {
+                    sendJson(res, 501, {
+                        ok: false,
+                        error: 'Agent management is not available on this host.',
+                    });
+                    return true;
+                }
+                const a = deps.agentRecords;
+                // The shared body type is the terminal-spec shape; these
+                // endpoints carry their own fields, so read them off a
+                // widened view rather than growing that union.
+                const b = d as unknown as Record<string, unknown>;
+                const op = pathname.slice('/api/desktop/agents/'.length);
+                const wsId = String(b.workspaceId ?? '');
+                const agentId = String(b.agentId ?? '');
+                if (op === 'list') {
+                    sendJson(res, 200, { result: a.list(wsId) });
+                    return true;
+                }
+                if (op === 'create') {
+                    sendJson(res, 200, {
+                        result: await a.create(
+                            b.input as Parameters<NonNullable<MobileDataDeps['agentRecords']>['create']>[0],
+                        ),
+                    });
+                    return true;
+                }
+                if (op === 'start') {
+                    sendJson(res, 200, { result: await a.start(wsId, String(b.name ?? '')) });
+                    return true;
+                }
+                if (op === 'delete') {
+                    sendJson(res, 200, {
+                        result: await a.remove(
+                            agentId,
+                            b.mode === 'delete' ? 'delete' : 'unmount',
+                            !!b.handoff,
+                        ),
+                    });
+                    return true;
+                }
+                if (op === 'set-default') {
+                    sendJson(res, 200, {
+                        result: a.setDefault(wsId, b.agentId == null ? null : agentId),
+                    });
+                    return true;
+                }
+                if (op === 'add-runtime') {
+                    sendJson(res, 200, { result: a.addRuntime(agentId, String(b.provider ?? '')) });
+                    return true;
+                }
+                if (op === 'front') {
+                    sendJson(res, 200, { result: a.front(agentId, String(b.runtimeId ?? '')) });
+                    return true;
+                }
+                if (op === 'set-avatar') {
+                    sendJson(res, 200, {
+                        result: a.setAvatar(agentId, b.avatar == null ? null : String(b.avatar)),
+                    });
+                    return true;
+                }
+                sendJson(res, 404, { ok: false, error: `Unknown agent operation "${op}".` });
+                return true;
+            }
             if (pathname === '/api/desktop/terminal-spec/create-agent' && d.input) {
                 if (!deps.createSpecializedAgentTerminal) {
                     sendJson(res, 501, {

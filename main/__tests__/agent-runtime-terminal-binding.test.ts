@@ -65,7 +65,7 @@ function agent(name: string): string {
     createWorkspaceAgent({
         id,
         workspace_id: WS,
-        provider: null,
+        tui: null,
         name,
         purpose: '',
         avatar: null,
@@ -101,7 +101,7 @@ beforeEach(() => {
 describe('binding a terminal to an agent (#310)', () => {
     it('writes the terminal onto the FRONTED RUNTIME, not just the mirror', () => {
         const id = agent('tynn');
-        createAgentRuntime({ agentId: id, provider: 'claude', fronted: true });
+        createAgentRuntime({ agentId: id, tui: 'claude', fronted: true });
         const term = terminal('term-bind-1');
 
         bindWorkspaceAgentTerminal(id, term);
@@ -115,7 +115,7 @@ describe('binding a terminal to an agent (#310)', () => {
         // POSITIVE CONTROL: the mirror must not regress while we fix the
         // authority — a great deal of code still reads it.
         const id = agent('tynn');
-        createAgentRuntime({ agentId: id, provider: 'claude', fronted: true });
+        createAgentRuntime({ agentId: id, tui: 'claude', fronted: true });
         const term = terminal('term-bind-2');
 
         bindWorkspaceAgentTerminal(id, term);
@@ -127,7 +127,7 @@ describe('binding a terminal to an agent (#310)', () => {
 
     it('unbinding clears the runtime too, so the agent reads as stopped', () => {
         const id = agent('tynn');
-        createAgentRuntime({ agentId: id, provider: 'claude', fronted: true });
+        createAgentRuntime({ agentId: id, tui: 'claude', fronted: true });
         const term = terminal('term-bind-3');
         bindWorkspaceAgentTerminal(id, term);
         // POSITIVE CONTROL: assert it was actually bound first. Without this the
@@ -145,8 +145,8 @@ describe('binding a terminal to an agent (#310)', () => {
         // terminal; a sidecar keeping its conversation warm must not be
         // repointed at a terminal that is not its own.
         const id = agent('tynn');
-        createAgentRuntime({ agentId: id, provider: 'claude', fronted: true });
-        const sidecar = createAgentRuntime({ agentId: id, provider: 'codex' });
+        createAgentRuntime({ agentId: id, tui: 'claude', fronted: true });
+        const sidecar = createAgentRuntime({ agentId: id, tui: 'codex' });
         const term = terminal('term-bind-4');
 
         bindWorkspaceAgentTerminal(id, term);

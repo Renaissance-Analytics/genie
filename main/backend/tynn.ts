@@ -122,6 +122,7 @@ export class TynnBackend implements Backend {
                           base_url?: string;
                           is_gapp?: boolean;
                           is_workspace?: boolean;
+                          sacred_agent_name?: string | null;
                           repositories?: Array<{ url: string; default_branch?: string; kind?: 'code' | 'knowledge' | 'envelope' }>;
                       }>;
                   }
@@ -134,6 +135,7 @@ export class TynnBackend implements Backend {
                       base_url?: string;
                       is_gapp?: boolean;
                       is_workspace?: boolean;
+                      sacred_agent_name?: string | null;
                       repositories?: Array<{ url: string; default_branch?: string; kind?: 'code' | 'knowledge' | 'envelope' }>;
                   }>
             >('/api/v1/projects');
@@ -153,6 +155,12 @@ export class TynnBackend implements Backend {
                 // leaking undefined into the UI.
                 isGapp: !!p.is_gapp,
                 isWorkspace: !!p.is_workspace,
+                // The one reserved agent name this project's workspace may use
+                // (Tynn story #262). A NAME, not a flag, because Genie has to
+                // know WHICH term was granted. `?? null` rather than `!!`:
+                // absent and empty both mean "not marked", and null is what the
+                // planner compares against.
+                sacredAgentName: p.sacred_agent_name ?? null,
                 repositories: (p.repositories ?? []).map((repository) => ({
                     url: repository.url,
                     defaultBranch: repository.default_branch,

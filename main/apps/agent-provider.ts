@@ -19,16 +19,16 @@
 
 import path from 'path';
 import { APP_AGENTS_DIR } from './manifest';
-import { isAgentProvider, type AgentProvider } from '../agents/identity';
-import { AGENT_PROVIDERS, resolveWorkstationProvider } from '../agents/provider';
+import { isAgentTui, type AgentTui } from '../agents/identity';
+import { AGENT_TUIS, resolveWorkstationTui } from '../agents/tui';
 
 /** The AI TUIs Genie can launch. Mirrors the agent types the rest of Genie knows. */
-export const GAPP_PROVIDERS = AGENT_PROVIDERS;
+export const GAPP_PROVIDERS = AGENT_TUIS;
 
-export type GappProvider = AgentProvider;
+export type GappProvider = AgentTui;
 
 function known(value: unknown): value is GappProvider {
-    return isAgentProvider(value);
+    return isAgentTui(value);
 }
 
 /**
@@ -53,7 +53,7 @@ export function resolveGappProvider(settings: {
     agent_default?: string;
 }): GappProvider {
     if (known(settings.gapp_ai_provider)) return settings.gapp_ai_provider;
-    return resolveWorkstationProvider(settings);
+    return resolveWorkstationTui(settings);
 }
 
 /**

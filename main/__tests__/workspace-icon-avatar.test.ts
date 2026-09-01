@@ -7,7 +7,7 @@ import { runMigrations, setAgentAvatar, setWorkspaceIcon } from '../db';
  *
  * Both columns exist and both READ paths render — `workspaceIcon()` prefers
  * `ws.icon` over the initials, and the avatar stack's `Face` prefers
- * `entry.avatar` over the provider's brand mark. Neither could be WRITTEN: no
+ * `entry.avatar` over the tui's brand mark. Neither could be WRITTEN: no
  * accessor, no IPC, no control anywhere in the UI. So the fallback was not a
  * default, it was the only possible value, and "users should be able to change
  * the workspace icon in genie AND in tynn" was half a feature with the visible
@@ -37,7 +37,7 @@ function seedWorkspace(db: Database.Database, id: string): void {
 function seedAgent(db: Database.Database, id: string, workspaceId: string): void {
     db.prepare(
         `INSERT INTO workspace_agents
-           (id, workspace_id, provider, name, purpose, avatar, created_at, updated_at)
+           (id, workspace_id, tui, name, purpose, avatar, created_at, updated_at)
          VALUES (?, ?, 'claude', ?, 'p', NULL, ?, ?)`,
     ).run(id, workspaceId, id, Date.now(), Date.now());
 }

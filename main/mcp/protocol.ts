@@ -11,8 +11,8 @@ import { guideTopics, guideIndex, guideFor } from './guide-topics';
  */
 
 import { GENIE_MCP_GUIDE, GENIE_PROTOCOL_BRIEF } from './guide';
-import { agentProviders } from '../agents/registry';
-import type { AgentProviderId } from '../agents/registry';
+import { agentTuis } from '../agents/registry';
+import type { AgentTuiId } from '../agents/registry';
 import type { QuestionPriority } from '../ask/question-priority';
 import type { TerminalReadState } from '../terminal/read-buffer';
 import type {
@@ -1207,14 +1207,14 @@ export interface ManageTerminalsResult {
 
 // --- runAgent ----------------------------------------------------------------
 
-export type AgentType = AgentProviderId;
+export type AgentType = AgentTuiId;
 
 /** One saved agent as the runAgent tool reports it (Tynn #254). */
 export interface SavedAgentInfo {
     /** The canonical machine-facing id — `{provider}:{name}:{chat-id}`, or
      *  `{provider}:{name}` while the chat-id is not bound yet (Codex, pre-hook). */
     ref: string;
-    provider: AgentType;
+    tui: AgentType;
     /** The name this agent is reopened by. Human-facing surfaces show the
      *  provider's LOGO and this — never the chat-id. */
     name: string;
@@ -1316,7 +1316,7 @@ export interface RegisterAgentResult {
     agent?: {
         id: string;
         workspaceId: string;
-        provider: AgentType;
+        tui: AgentType;
         name: string;
         purpose: string;
         avatar?: string;
@@ -2253,7 +2253,7 @@ const REGISTER_AGENT_TOOL = {
             purpose: { type: 'string', description: 'What this agent is responsible for.' },
             agent: {
                 type: 'string',
-                enum: agentProviders(),
+                enum: agentTuis(),
                 description: 'The TUI provider. Defaults to the workstation provider.',
             },
             avatar: {
@@ -2346,9 +2346,9 @@ const RUN_AGENT_TOOL = {
             },
             agent: {
                 type: 'string',
-                // DERIVED from PROVIDER_REGISTRY (genie#261) — a provider absent
+                // DERIVED from TUI_REGISTRY (genie#261) — a provider absent
                 // from this enum cannot be NAMED over MCP, whatever the types say.
-                enum: agentProviders(),
+                enum: agentTuis(),
                 description:
                     "start: only disambiguates registered agents with the same name under different providers. The registered record decides what launches.",
             },
@@ -2404,7 +2404,7 @@ const RUN_AGENT_TOOL = {
     },
 };
 
-const MANAGE_WORKSPACES_TOOL = {
+export const MANAGE_WORKSPACES_TOOL = {
     name: 'manageWorkspaces',
     description:
         "Manage Genie WORKSPACES you can act on — your own and (for an Ops agent) the ones you govern. Actions: `list` / `status` (read-only — every workspace you may act on, with its id, name, path, and whether it's your own or a governed child); `open` (open/focus a workspace's window); `activate` (make a workspace the active one in Genie); `remove` (UNREGISTER a workspace from Genie — this only removes it from Genie's list, it NEVER deletes anything on disk); `add` (REGISTER an existing folder as a workspace — pass `path`, the ABSOLUTE path of the folder. WORKSTATION OPERATOR only: it introduces a folder Genie did not know about to every surface that lists workspaces. This is the counterpart to `remove`. An `.agi` envelope (a folder with `project.json`) registers as one; anything else registers as a simple folder). Targets are limited to your own workspace or one you govern; any other is rejected. To CREATE/clone missing child workspaces for an Ops project, use `provisionWorkspaces` instead.",
@@ -2415,7 +2415,12 @@ const MANAGE_WORKSPACES_TOOL = {
             ...TARGET_WORKSPACE_PROP,
             action: {
                 type: 'string',
-                enum: ['list', 'status', 'open', 'activate', 'remove'],
+                // `add` is the counterpart to `remove` and has been
+                // implemented and documented all along -- it was missing from
+                // THIS enum only, so every call was rejected at validation
+                // before reaching the handler (genie #322). An agent could
+                // unregister a workspace and not put it back.
+                enum: ['list', 'status', 'open', 'activate', 'remove', 'add'],
                 description: 'What to do.',
             },
         },
@@ -3829,7 +3834,7 @@ ${body}` }],
                     bootFolder: a.bootFolder,
                 });
                 const summary = result.ok
-                    ? `Registered ${result.agent?.provider ?? ''}:${result.agent?.name ?? ''}. Use runAgent start to launch it.`
+                    ? `Registered ${result.agent?.tui ?? ''}:${result.agent?.name ?? ''}. Use runAgent start to launch it.`
                     : `registerAgent failed: ${result.error ?? 'unknown error'}`;
                 return ok(msg.id, {
                     content: [{ type: 'text', text: `${summary}\n\n${JSON.stringify(result, null, 2)}` }],

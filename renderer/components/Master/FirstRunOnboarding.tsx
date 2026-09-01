@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Action, Card, Heading, Icon, Modal, Text } from '@particle-academy/react-fancy';
-import { agentProviders, providerDef, type AgentProviderId } from '../../../main/agents/registry';
+import { agentTuis, providerDef, type AgentTuiId } from '../../../main/agents/registry';
 import { api, type BackendUser, type HostToolName, type WorkspaceRow } from '../../lib/genie';
 import { GitHubConnect, OwnerSelect, useGitHubAccount } from '../GitHubConnect';
 import AddWorkspaceModal from '../AddWorkspaceModal';
@@ -9,7 +9,7 @@ import { canFinishFirstRun } from '../../lib/workspace-onboarding';
 
 type Step = 'welcome' | 'drivers' | 'toolchain' | 'tynn' | 'github' | 'os' | 'workspace';
 
-const DRIVER_TOOL: Partial<Record<AgentProviderId, HostToolName>> = {
+const DRIVER_TOOL: Partial<Record<AgentTuiId, HostToolName>> = {
     claude: 'claude-code',
     codex: 'codex',
 };
@@ -26,8 +26,8 @@ export function FirstRunOnboarding({
     existingWorkspaceCount: number;
 }) {
     const [step, setStep] = useState<Step>('welcome');
-    const [drivers, setDrivers] = useState<AgentProviderId[]>(['claude']);
-    const [primary, setPrimary] = useState<AgentProviderId>('claude');
+    const [drivers, setDrivers] = useState<AgentTuiId[]>(['claude']);
+    const [primary, setPrimary] = useState<AgentTuiId>('claude');
     const [tynnUser, setTynnUser] = useState<BackendUser | null>(null);
     const [signingIn, setSigningIn] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -131,7 +131,7 @@ export function FirstRunOnboarding({
                             body="Pick every TUI you want available. Choose one as the default for Workspace Agents and the built-in Genie workstation operator."
                         >
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                                {agentProviders().filter((id) => id !== 'custom').map((id) => {
+                                {agentTuis().filter((id) => id !== 'custom').map((id) => {
                                     const selected = drivers.includes(id);
                                     const def = providerDef(id);
                                     return (

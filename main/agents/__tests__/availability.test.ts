@@ -11,13 +11,13 @@ import {
     resetProviderAvailabilityCache,
     type AvailabilityDeps,
 } from '../availability';
-import { agentProviders, type ProviderDef } from '../registry';
+import { agentTuis, type TuiDef } from '../registry';
 
 /** A synthetic OWNED provider definition WITH a working `install` spec — the
  *  real registry deliberately configures none today (see `registry.ts`'s
  *  comments on `genie`/`kiwi`), so the install-attempt branches are exercised
  *  through this rather than any live registry entry. */
-function ownedProviderWithInstaller(): ProviderDef {
+function ownedProviderWithInstaller(): TuiDef {
     return {
         id: 'genie',
         label: 'Genie TUI',
@@ -209,7 +209,7 @@ describe('ensureOwnedProvidersInstalled — the boot-time sweep', () => {
         );
 
         const ids = results.map((r) => r.id).sort();
-        expect(ids).toEqual([...agentProviders()].sort());
+        expect(ids).toEqual([...agentTuis()].sort());
 
         // Non-owned providers never touch resolveOnPath at all.
         const nonOwnedCalls = (deps.resolveOnPath as ReturnType<typeof vi.fn>).mock.calls

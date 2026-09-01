@@ -18,7 +18,7 @@ import { runMigrations } from '../db';
  *
  * That is the real defect — a DEFAULT was persisted into two caches, so
  * changing it could never reach an existing install. This migration clears the
- * caches wherever they hold a string that is no longer any provider's command.
+ * caches wherever they hold a string that is no longer any tui's command.
  *
  * It matches EXACT retired values only. A command the owner actually chose must
  * survive untouched, or the repair becomes a different bug.

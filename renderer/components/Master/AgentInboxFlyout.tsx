@@ -44,7 +44,7 @@ import {
     sortedPairKey,
     agentDisplayOf,
     avatarInitials,
-    type AgentProviderId,
+    type AgentTuiId,
 } from '../../lib/agentinbox-view';
 import { terminalTypeForAgent } from '../../lib/terminal-types';
 
@@ -187,7 +187,7 @@ function toneOf(agentId: string, byId: Map<string, AgentInboxAgentInfo>): string
 function providerOf(
     agentId: string,
     byId: Map<string, AgentInboxAgentInfo>,
-): AgentProviderId | null {
+): AgentTuiId | null {
     if (agentId === HUMAN) return null;
     return agentDisplayOf(byId.get(agentId)).provider;
 }
@@ -277,7 +277,7 @@ function Avatar({
 }: {
     code: string;
     tone: string;
-    provider?: AgentProviderId | null;
+    provider?: AgentTuiId | null;
 }) {
     const Logo = provider ? terminalTypeForAgent(provider).icon : null;
     return (

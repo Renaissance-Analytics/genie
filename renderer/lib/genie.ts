@@ -8,7 +8,7 @@ import type { BoardRead, ReviewOutcome } from './artboard-model';
 
 import { makeRemoteBridge } from './remote-bridge';
 import type { TynnHealth } from '../../main/mcp/tynn-health';
-import type { AgentProviderId } from '../../main/agents/registry';
+import type { AgentTuiId } from '../../main/agents/registry';
 
 export type { TynnHealth };
 
@@ -178,6 +178,10 @@ export interface WorkspaceRow {
      *  `is_gapp`, so a GApp is BUILT here (genie#245). Mirrored from Tynn by main;
      *  there is no local toggle. Read it through `resolveWorkspaceKind` too. */
     gapp_dev?: number | null;
+    /** The one otherwise-reserved agent name this workspace may use — a SACRED
+     *  workspace (Tynn story #262). Mirrored from Tynn by `syncSacredWorkspaces`;
+     *  there is no Genie-side toggle. Cosmetic here: the badge, and nothing else. */
+    sacred_name?: string | null;
     /** Workspace ids admitted when `agent_access: 'specific'`, JSON-encoded.
      *  Resolve via `workspaces.getAgentAccess` rather than parsing here. */
     agent_access_workspaces?: string | null;
@@ -1765,9 +1769,9 @@ export interface ViewMeta {
 }
 
 /** The AI-TUI kind a specialized terminal launches. DERIVED from
- *  `PROVIDER_REGISTRY` (genie#261), so the renderer's idea of the provider set
+ *  `TUI_REGISTRY` (genie#261), so the renderer's idea of the provider set
  *  cannot drift from the main process's. */
-export type AgentType = AgentProviderId;
+export type AgentType = AgentTuiId;
 
 /**
  * AgentInbox accessibility scope (INNER tier) — who may DM this agent:
@@ -4154,6 +4158,8 @@ export interface GenieApi {
         /** The set of workspaces changed outside the renderer's own edits (e.g.
          *  MCP-provisioned child workspaces) — re-fetch the workspace list. */
         workspacesChanged: (cb: () => void) => () => void;
+        /** An agent record changed on the driven machine (genie #327). */
+        agentsChanged: (cb: () => void) => () => void;
         /** A dev site or service was configured / started / stopped / removed
          *  (#234) — the rail's sites icon and any open Site Manager re-read.
          *  Push, never a poll: a site can come up long after boot (an image

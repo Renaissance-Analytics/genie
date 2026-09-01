@@ -5,7 +5,7 @@ import {
     needsIdentityRewrite,
     agentName,
     agentRef,
-    isAgentProvider,
+    isAgentTui,
     parseAgentRef,
     savedAgentKey,
 } from '../identity';
@@ -20,10 +20,10 @@ import {
  */
 
 describe('the saved-config key', () => {
-    it('is the NAME, with no provider and no chat-id', () => {
-        // CHANGED CONTRACT. This was `{provider}:{name}`, which put the TUI
+    it('is the NAME, with no tui and no chat-id', () => {
+        // CHANGED CONTRACT. This was `{tui}:{name}`, which put the TUI
         // inside the agent's identity while the schema (v55) says identity is
-        // `UNIQUE (workspace_id, name)`. The provider moved to agent_runtimes
+        // `UNIQUE (workspace_id, name)`. The tui moved to agent_runtimes
         // because an agent that switches drivers is the same agent.
         expect(savedAgentKey('tynn')).toBe('tynn');
         expect(savedAgentKey('tynn-slave')).toBe('tynn-slave');
@@ -51,28 +51,28 @@ describe('the saved-config key', () => {
 
 describe('the canonical ref', () => {
     it('is name:chat-id when the chat-id is bound', () => {
-        // CHANGED CONTRACT: the provider is gone from the ref. It was making the
+        // CHANGED CONTRACT: the tui is gone from the ref. It was making the
         // canonical identity change when an agent switched driver, which is the
         // one thing a sidecar exists to prevent.
         expect(
-            agentRef({ provider: 'claude', name: 'tynn', chatSessionId: 'abc-123' }),
+            agentRef({ tui: 'claude', name: 'tynn', chatSessionId: 'abc-123' }),
         ).toBe('tynn:abc-123');
     });
 
     it('is the SAME ref on either driver', () => {
-        expect(agentRef({ provider: 'codex', name: 'tynn', chatSessionId: 'abc-123' })).toBe(
-            agentRef({ provider: 'claude', name: 'tynn', chatSessionId: 'abc-123' }),
+        expect(agentRef({ tui: 'codex', name: 'tynn', chatSessionId: 'abc-123' })).toBe(
+            agentRef({ tui: 'claude', name: 'tynn', chatSessionId: 'abc-123' }),
         );
     });
 
     it('degrades to the key — not an empty third field — before the bind', () => {
         // Codex spends its entire startup in this state, and `codex:tynn-slave:`
         // reads as "its chat is called nothing" rather than "not bound yet".
-        expect(agentRef({ provider: 'codex', name: 'tynn-slave', chatSessionId: null })).toBe(
+        expect(agentRef({ tui: 'codex', name: 'tynn-slave', chatSessionId: null })).toBe(
             'tynn-slave',
         );
-        expect(agentRef({ provider: 'codex', name: 'tynn-slave' })).toBe('tynn-slave');
-        expect(agentRef({ provider: 'codex', name: 'tynn-slave', chatSessionId: '  ' })).toBe(
+        expect(agentRef({ tui: 'codex', name: 'tynn-slave' })).toBe('tynn-slave');
+        expect(agentRef({ tui: 'codex', name: 'tynn-slave', chatSessionId: '  ' })).toBe(
             'tynn-slave',
         );
     });
@@ -85,12 +85,12 @@ describe('the canonical ref', () => {
         }
     });
 
-    it('reads a LEGACY provider-prefixed ref, and re-emits it in the new form', () => {
+    it('reads a LEGACY tui-prefixed ref, and re-emits it in the new form', () => {
         // Agents were told the old shape, so reading one keeps working. Writing
         // one does not: the round trip deliberately NORMALISES to the new form
         // rather than preserving a shape that encodes the wrong identity.
         const parsed = parseAgentRef('claude:tynn:abc-123');
-        expect(parsed).toMatchObject({ provider: 'claude', name: 'tynn', chatSessionId: 'abc-123' });
+        expect(parsed).toMatchObject({ tui: 'claude', name: 'tynn', chatSessionId: 'abc-123' });
         expect(agentRef(parsed!)).toBe('tynn:abc-123');
     });
 
@@ -110,11 +110,11 @@ describe('the canonical ref', () => {
     });
 
     it('accepts a bare NAME, which the old form could not', () => {
-        // `tynn` used to be rejected for having "no provider". Under the new
+        // `tynn` used to be rejected for having "no tui". Under the new
         // identity that IS the whole ref, and rejecting it would make every
         // chat-less agent unaddressable.
         expect(parseAgentRef('tynn')).toMatchObject({ name: 'tynn', chatSessionId: null });
-        // A name that is not one of Genie's providers is just a name, not a
+        // A name that is not one of Genie's TUIs is just a name, not a
         // broken legacy ref.
         expect(parseAgentRef('gemini:tynn')).toMatchObject({
             name: 'gemini',
@@ -122,25 +122,25 @@ describe('the canonical ref', () => {
         });
     });
 
-    it('knows which providers are ours', () => {
-        expect(isAgentProvider('claude')).toBe(true);
-        expect(isAgentProvider('codex')).toBe(true);
-        expect(isAgentProvider('kiwi')).toBe(true);
-        expect(isAgentProvider('genie')).toBe(true);
-        expect(isAgentProvider('custom')).toBe(true);
-        expect(isAgentProvider('CLAUDE')).toBe(false);
-        expect(isAgentProvider(undefined)).toBe(false);
+    it('knows which TUIs are ours', () => {
+        expect(isAgentTui('claude')).toBe(true);
+        expect(isAgentTui('codex')).toBe(true);
+        expect(isAgentTui('kiwi')).toBe(true);
+        expect(isAgentTui('genie')).toBe(true);
+        expect(isAgentTui('custom')).toBe(true);
+        expect(isAgentTui('CLAUDE')).toBe(false);
+        expect(isAgentTui(undefined)).toBe(false);
     });
 });
 
 describe('the human-facing display', () => {
-    it('is the provider and the name — and structurally CANNOT carry a chat-id', () => {
+    it('is the tui and the name — and structurally CANNOT carry a chat-id', () => {
         const shown = agentDisplay({
-            provider: 'claude',
+            tui: 'claude',
             name: 'tynn',
             chatSessionId: 'abc-123',
         });
-        expect(shown).toEqual({ provider: 'claude', name: 'tynn' });
+        expect(shown).toEqual({ tui: 'claude', name: 'tynn' });
         // Not a filter that a future edit can forget to apply: the chat-id has
         // nowhere to go in the returned shape.
         expect(Object.values(shown).join(' ')).not.toContain('abc-123');
@@ -149,10 +149,10 @@ describe('the human-facing display', () => {
     it('distinguishes two agents of the same name by PROVIDER alone', () => {
         // Which is what lets the renderer draw two different logos for them. If
         // this collapsed, `claude:tynn` and `codex:tynn` would be one row twice.
-        const a = agentDisplay({ provider: 'claude', name: 'tynn' });
-        const b = agentDisplay({ provider: 'codex', name: 'tynn' });
+        const a = agentDisplay({ tui: 'claude', name: 'tynn' });
+        const b = agentDisplay({ tui: 'codex', name: 'tynn' });
         expect(a.name).toBe(b.name);
-        expect(a.provider).not.toBe(b.provider);
+        expect(a.tui).not.toBe(b.tui);
     });
 });
 

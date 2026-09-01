@@ -5,7 +5,7 @@ import { backfillRuntimes, runMigrations } from '../db';
 /**
  * v55 — an Agent is no longer bound to the TUI driving it.
  *
- * `UNIQUE (workspace_id, provider, name)` made the TUI part of an agent's
+ * `UNIQUE (workspace_id, tui, name)` made the TUI part of an agent's
  * IDENTITY: `claude:tynn` and `codex:tynn` were two agents, and switching driver
  * meant becoming someone else. `UNIQUE (terminal_spec_id)` on the same table
  * allowed at most ONE terminal per agent, which forbids sidecars outright.
@@ -16,7 +16,7 @@ import { backfillRuntimes, runMigrations } from '../db';
  * a cached mirror of the fronted runtime: a great deal of code reads it, and
  * staging the migration is what keeps this from being a flag day.
  *
- * COLLISIONS ARE NOT RESOLVED HERE. Collapsing `(workspace, provider, name)` to
+ * COLLISIONS ARE NOT RESOLVED HERE. Collapsing `(workspace, tui, name)` to
  * `(workspace, name)` collides wherever a workspace holds `claude:general` AND
  * `codex:general`, and the owner decides which survives — from previews of the
  * real terminals, not from a rule this migration invented on an unattended host.
@@ -44,24 +44,24 @@ function seedWorkspace(db: Database.Database, wsId: string): void {
 
 function addAgent(
     db: Database.Database,
-    row: { id: string; ws: string; provider?: string | null; name: string; spec?: string | null },
+    row: { id: string; ws: string; tui?: string | null; name: string; spec?: string | null },
 ): void {
     db.prepare(
         `INSERT INTO workspace_agents
-           (id, workspace_id, provider, name, purpose, role, terminal_spec_id, created_at, updated_at)
+           (id, workspace_id, tui, name, purpose, role, terminal_spec_id, created_at, updated_at)
          VALUES (?, ?, ?, ?, '', 'specialized', ?, 1, 1)`,
-    ).run(row.id, row.ws, row.provider ?? null, row.name, row.spec ?? null);
+    ).run(row.id, row.ws, row.tui ?? null, row.name, row.spec ?? null);
 }
 
 function addRuntime(
     db: Database.Database,
-    row: { id: string; agent: string; provider: string; spec?: string | null; fronted?: number },
+    row: { id: string; agent: string; tui: string; spec?: string | null; fronted?: number },
 ): void {
     db.prepare(
         `INSERT INTO agent_runtimes
-           (id, agent_id, provider, terminal_spec_id, fronted, created_at, updated_at)
+           (id, agent_id, tui, terminal_spec_id, fronted, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, 1, 1)`,
-    ).run(row.id, row.agent, row.provider, row.spec ?? null, row.fronted ?? 0);
+    ).run(row.id, row.agent, row.tui, row.spec ?? null, row.fronted ?? 0);
 }
 
 function fresh(): Database.Database {
@@ -75,7 +75,7 @@ describe('v55 — the runtimes table', () => {
         const columns = cols(fresh(), 'agent_runtimes');
         for (const column of [
             'agent_id',
-            'provider',
+            'tui',
             'terminal_spec_id',
             'chat_session_id',
             'fronted',
@@ -89,8 +89,8 @@ describe('v55 — the runtimes table', () => {
         seedWorkspace(db, 'ws-1');
         addAgent(db, { id: 'a1', ws: 'ws-1', name: 'tynn' });
 
-        addRuntime(db, { id: 'r1', agent: 'a1', provider: 'claude', fronted: 1 });
-        addRuntime(db, { id: 'r2', agent: 'a1', provider: 'codex' });
+        addRuntime(db, { id: 'r1', agent: 'a1', tui: 'claude', fronted: 1 });
+        addRuntime(db, { id: 'r2', agent: 'a1', tui: 'codex' });
 
         expect(
             db
@@ -105,12 +105,12 @@ describe('v55 — the runtimes table', () => {
         const db = fresh();
         seedWorkspace(db, 'ws-1');
         addAgent(db, { id: 'a1', ws: 'ws-1', name: 'tynn' });
-        addRuntime(db, { id: 'r1', agent: 'a1', provider: 'claude', fronted: 1 });
+        addRuntime(db, { id: 'r1', agent: 'a1', tui: 'claude', fronted: 1 });
 
         // Two visible TUIs for one agent is not a state the UI can render, and
         // flipping between them is a swap, not an add.
         expect(() =>
-            addRuntime(db, { id: 'r2', agent: 'a1', provider: 'codex', fronted: 1 }),
+            addRuntime(db, { id: 'r2', agent: 'a1', tui: 'codex', fronted: 1 }),
         ).toThrow();
     });
 
@@ -118,10 +118,10 @@ describe('v55 — the runtimes table', () => {
         const db = fresh();
         seedWorkspace(db, 'ws-1');
         addAgent(db, { id: 'a1', ws: 'ws-1', name: 'tynn' });
-        addRuntime(db, { id: 'r1', agent: 'a1', provider: 'claude' });
+        addRuntime(db, { id: 'r1', agent: 'a1', tui: 'claude' });
 
         expect(() =>
-            addRuntime(db, { id: 'r2', agent: 'a1', provider: 'claude' }),
+            addRuntime(db, { id: 'r2', agent: 'a1', tui: 'claude' }),
         ).toThrow();
     });
 
@@ -136,9 +136,9 @@ describe('v55 — the runtimes table', () => {
              VALUES ('t1', 'ws-1', 'l', '/tmp', 'terminal', '{}', 0, 1)`,
         ).run();
 
-        addRuntime(db, { id: 'r1', agent: 'a1', provider: 'claude', spec: 't1' });
+        addRuntime(db, { id: 'r1', agent: 'a1', tui: 'claude', spec: 't1' });
         expect(() =>
-            addRuntime(db, { id: 'r2', agent: 'a2', provider: 'claude', spec: 't1' }),
+            addRuntime(db, { id: 'r2', agent: 'a2', tui: 'claude', spec: 't1' }),
         ).toThrow();
     });
 
@@ -149,7 +149,7 @@ describe('v55 — the runtimes table', () => {
         const db = fresh();
         seedWorkspace(db, 'ws-1');
         addAgent(db, { id: 'a1', ws: 'ws-1', name: 'tynn' });
-        addRuntime(db, { id: 'r1', agent: 'a1', provider: 'claude' });
+        addRuntime(db, { id: 'r1', agent: 'a1', tui: 'claude' });
         db.prepare('PRAGMA foreign_keys = ON').run();
 
         db.prepare('DELETE FROM workspace_agents WHERE id = ?').run('a1');
@@ -168,25 +168,25 @@ describe('v60 — identity is (workspace, tui, name)', () => {
     it('refuses a second agent under the same name under the SAME tui', () => {
         const db = fresh();
         seedWorkspace(db, 'ws-1');
-        addAgent(db, { id: 'a1', ws: 'ws-1', provider: 'claude', name: 'tynn' });
+        addAgent(db, { id: 'a1', ws: 'ws-1', tui: 'claude', name: 'tynn' });
 
         expect(() =>
-            addAgent(db, { id: 'a2', ws: 'ws-1', provider: 'claude', name: 'tynn' }),
+            addAgent(db, { id: 'a2', ws: 'ws-1', tui: 'claude', name: 'tynn' }),
         ).toThrow();
     });
 
     it('allows the same name under a DIFFERENT tui', () => {
-        // v55 forbade this: a different provider no longer made a different
+        // v55 forbade this: a different tui no longer made a different
         // agent. The owner reversed it — *"the tui is what determines the
-        // provider... Unique should be on workspace, tui, name"* — and the
+        // tui... Unique should be on workspace, tui, name"* — and the
         // reversal is what dissolves the `codex:moic-slave` /
         // `genie:moic-slave` collision that sat unresolvable under v55.
         const db = fresh();
         seedWorkspace(db, 'ws-1');
-        addAgent(db, { id: 'a1', ws: 'ws-1', provider: 'claude', name: 'tynn' });
+        addAgent(db, { id: 'a1', ws: 'ws-1', tui: 'claude', name: 'tynn' });
 
         expect(() =>
-            addAgent(db, { id: 'a2', ws: 'ws-1', provider: 'codex', name: 'tynn' }),
+            addAgent(db, { id: 'a2', ws: 'ws-1', tui: 'codex', name: 'tynn' }),
         ).not.toThrow();
     });
 
@@ -202,7 +202,7 @@ describe('v60 — identity is (workspace, tui, name)', () => {
 
 describe('v55 — migrating a profile that already has agents', () => {
     /** A pre-v55 database: schema up to v54, with rows written the way v50 wrote them. */
-    function preV55(rows: Array<{ id: string; provider: string; name: string; spec?: string }>) {
+    function preV55(rows: Array<{ id: string; tui: string; name: string; spec?: string }>) {
         const db = new Database(':memory:');
         runMigrations(db);
         // Undo the v55 shape so the migration has something to do, then re-run it.
@@ -217,22 +217,22 @@ describe('v55 — migrating a profile that already has agents', () => {
                      VALUES (?, 'ws-1', 'l', '/tmp', 'terminal', '{}', 0, 1)`,
                 ).run(r.spec);
             }
-            addAgent(db, { id: r.id, ws: 'ws-1', provider: r.provider, name: r.name, spec: r.spec });
+            addAgent(db, { id: r.id, ws: 'ws-1', tui: r.tui, name: r.name, spec: r.spec });
         }
         return db;
     }
 
     it('gives each existing agent a fronted runtime carrying its TUI and terminal', () => {
-        const db = preV55([{ id: 'a1', provider: 'claude', name: 'tynn', spec: 't1' }]);
+        const db = preV55([{ id: 'a1', tui: 'claude', name: 'tynn', spec: 't1' }]);
 
         backfillRuntimes(db);
 
         const runtime = db
-            .prepare<[string], { provider: string; terminal_spec_id: string | null; fronted: number }>(
-                'SELECT provider, terminal_spec_id, fronted FROM agent_runtimes WHERE agent_id = ?',
+            .prepare<[string], { tui: string; terminal_spec_id: string | null; fronted: number }>(
+                'SELECT tui, terminal_spec_id, fronted FROM agent_runtimes WHERE agent_id = ?',
             )
             .get('a1');
-        expect(runtime).toMatchObject({ provider: 'claude', terminal_spec_id: 't1', fronted: 1 });
+        expect(runtime).toMatchObject({ tui: 'claude', terminal_spec_id: 't1', fronted: 1 });
     });
 
     it('marks a NAME collision instead of picking a winner', () => {
@@ -240,8 +240,8 @@ describe('v55 — migrating a profile that already has agents', () => {
         // the key makes them one name, and which conversation survives is the
         // owner's call — so both rows stay, flagged, until they answer.
         const db = preV55([
-            { id: 'a1', provider: 'claude', name: 'general' },
-            { id: 'a2', provider: 'codex', name: 'general' },
+            { id: 'a1', tui: 'claude', name: 'general' },
+            { id: 'a2', tui: 'codex', name: 'general' },
         ]);
 
         backfillRuntimes(db);
@@ -260,7 +260,7 @@ describe('v55 — migrating a profile that already has agents', () => {
         // POSITIVE CONTROL: "collision_group is set" would pass against a
         // migration that marked every row, which would put the whole estate
         // behind a resolution prompt.
-        const db = preV55([{ id: 'a1', provider: 'claude', name: 'tynn' }]);
+        const db = preV55([{ id: 'a1', tui: 'claude', name: 'tynn' }]);
 
         backfillRuntimes(db);
 
@@ -278,8 +278,8 @@ describe('v55 — migrating a profile that already has agents', () => {
         // that could not tolerate them would fail the migration outright and
         // block the upgrade on an unattended host.
         const db = preV55([
-            { id: 'a1', provider: 'claude', name: 'general' },
-            { id: 'a2', provider: 'codex', name: 'general' },
+            { id: 'a1', tui: 'claude', name: 'general' },
+            { id: 'a2', tui: 'codex', name: 'general' },
         ]);
 
         expect(() => backfillRuntimes(db)).not.toThrow();
