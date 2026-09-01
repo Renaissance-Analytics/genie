@@ -38,6 +38,8 @@ import type {
 import { MEMORY_CLASSES } from '../knowledge/types';
 import { formatGappDevStatus, gappDevBrief } from '../workspace/gapp-dev-status';
 import type { GappDevStatus } from '../workspace/gapp-dev-status';
+import { formatRepoCheckoutLine } from '../workspace/repo-checkout';
+import type { RepoCheckoutInfo } from '../workspace/repo-checkout';
 import type { AppCheckReport } from '../apps/checkup';
 
 export type { SetEnvRequest, SetEnvResult, CheckEnvRequest, CheckEnvResult };
@@ -126,6 +128,13 @@ export interface WorkspaceRepoInfo {
         /** Detected package manifests (package.json, composer.json, …). */
         manifests: string[];
     };
+    /**
+     * Local-only checkout snapshot (genie#317): branch, default-branch match,
+     * and ahead/behind vs the repo's own default branch on `origin` — all from
+     * refs already on disk, never a fresh `git fetch`. Undefined when the repo
+     * couldn't be inspected as a git checkout at all (e.g. no `.git`).
+     */
+    checkout?: RepoCheckoutInfo;
 }
 
 /**
@@ -147,6 +156,14 @@ export interface WorkspaceMap {
     envelopeAgents: string | null;
     envelopeClaude: string | null;
     repos: WorkspaceRepoInfo[];
+    /**
+     * This running Genie build's own version (`app.getVersion()`), used ONLY to
+     * flag a `repos/genie` checkout whose own package.json version doesn't
+     * match the build actually executing this tool call (genie#317) — reading
+     * code that isn't the code the user runs is exactly the trap that prompted
+     * this report. Undefined on hosts that can't determine it.
+     */
+    runningGenieVersion?: string | null;
     /** The caller's Genie identity, Codex session hook, and installed workflow skills. */
     agentIntegration?: {
         agentType: string | null;
@@ -164,8 +181,18 @@ export interface WorkspaceMap {
     /** Health of the agent docs (AGENTS.md + Genie MCP section + CLAUDE sync). */
     docHealth?: {
         hasAgents: boolean;
+        /** A balanced Genie MCP block was found anywhere in the managed set
+         *  (AGENTS.md itself, `.agents/_genie/shared.md`, or RULES.md) —
+         *  not just directly inside AGENTS.md (genie#316). */
         hasGenieSection: boolean;
-        /** missing | symlink | broken-pointer | mirror | divergent */
+        /** An unbalanced BEGIN/END marker was found with no balanced block
+         *  anywhere else — the managed region is CORRUPT, a different and
+         *  more actionable finding than "missing" (genie#316). */
+        genieSectionCorrupt: boolean;
+        /** Where the section (or, if corrupt, the stray marker) was found,
+         *  relative to the workspace root. Null when nothing was found. */
+        genieSectionFile: string | null;
+        /** missing | symlink | broken-pointer | mirror | harness-mirror | divergent */
         claude: string;
         claudeDivergent: boolean;
         healthy: boolean;
@@ -2583,6 +2610,16 @@ export function formatWorkspaceMap(map: WorkspaceMap): string {
                 .join(' · ');
             lines.push(`- **${r.name}**${gh} — ${r.path}`);
             if (has) lines.push(`  has: ${has}`);
+            if (r.checkout) {
+                const runningVersion =
+                    r.name === 'genie' ? map.runningGenieVersion ?? undefined : undefined;
+                lines.push(`  checkout: ${formatRepoCheckoutLine(r.name, r.checkout, runningVersion)}`);
+            }
+        }
+        if (map.repos.some((r) => r.checkout)) {
+            lines.push(
+                '  (checkout state is read from locally cached refs only — no `git fetch` was run, so it can be stale.)',
+            );
         }
     }
     lines.push('');
@@ -2669,8 +2706,14 @@ export function formatWorkspaceMap(map: WorkspaceMap): string {
         lines.push('');
         lines.push('## Doc health — needs attention');
         if (!h.hasAgents) lines.push('- AGENTS.md is MISSING.');
-        else if (!h.hasGenieSection) {
-            lines.push('- AGENTS.md is missing the Genie MCP section.');
+        else if (h.genieSectionCorrupt) {
+            lines.push(
+                `- The Genie MCP managed region is CORRUPT — an unbalanced BEGIN/END marker was found in \`${h.genieSectionFile}\` with no matching balanced block anywhere else in the managed set (AGENTS.md, \`.agents/_genie/shared.md\`, RULES.md).`,
+            );
+        } else if (!h.hasGenieSection) {
+            lines.push(
+                '- No Genie MCP section was found anywhere in the managed set (AGENTS.md, `.agents/_genie/shared.md`, RULES.md).',
+            );
         }
         if (h.claudeDivergent) {
             lines.push(
