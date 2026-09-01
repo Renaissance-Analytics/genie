@@ -182,6 +182,13 @@ process.stdin.on('data', (chunk) => {
                 },
             });
         } else if (message.method === 'notifications/initialized') {
+            // genie#314 — this line was lost, leaving the .catch body and its
+            // closing \`});\` orphaned. The file then failed to parse at all
+            // ("SyntaxError: Unexpected token ')'"), so the channel process died
+            // before speaking any MCP and the harness reported CONNECTION_CLOSED
+            // — and \`deliver()\`, which registers the transport and runs the
+            // long-poll that IS the channel, was never called.
+            deliver().catch((error) => {
                 process.stderr.write('[AgentInbox Channel] ' + error.message + '\\n');
                 process.exitCode = 1;
             });
