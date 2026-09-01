@@ -2636,6 +2636,24 @@ export function bindWorkspaceAgentTerminalInDb(
     agentId: string,
     terminalSpecId: string | null,
 ): void {
+    const now = Date.now();
+    // The FRONTED RUNTIME is the source of truth for "which TUI is this agent
+    // in"; `workspace_agents.terminal_spec_id` is only its cached mirror (v55 --
+    // see `main/__tests__/agent-runtimes.test.ts`). Writing the mirror alone left
+    // the authority null, so `frontedAgentRuntime` reported a running agent as
+    // stopped and clicking its icon spawned a SECOND agent (#310).
+    //
+    // Only the fronted runtime moves: a sidecar keeping its conversation warm is
+    // not backed by this terminal and must not be repointed at it.
+    database
+        .prepare(
+            `UPDATE agent_runtimes
+             SET terminal_spec_id = ?, ready_at = NULL,
+                 transport_verified_at = NULL, transport_error = NULL,
+                 updated_at = ?
+             WHERE agent_id = ? AND fronted = 1`,
+        )
+        .run(terminalSpecId, now, agentId);
     database
         .prepare(
             `UPDATE workspace_agents
@@ -2644,7 +2662,7 @@ export function bindWorkspaceAgentTerminalInDb(
                  updated_at = ?
              WHERE id = ?`,
         )
-        .run(terminalSpecId, Date.now(), agentId);
+        .run(terminalSpecId, now, agentId);
 }
 
 export function markWorkspaceAgentReadyByTerminal(
