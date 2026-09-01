@@ -68,7 +68,7 @@ describe('the upgrade notice reconnects first', () => {
         const order: string[] = [];
         announceAgentUpgrade({
             ...base,
-            agentIds: ['a1'],
+            agents: [{ agentId: 'a1', name: 'alpha' }],
             reconnect: (id) => {
                 order.push(`reconnect:${id}`);
             },
@@ -86,7 +86,7 @@ describe('the upgrade notice reconnects first', () => {
         const reconnected: string[] = [];
         announceAgentUpgrade({
             ...base,
-            agentIds: ['a1', 'a2'],
+            agents: [{ agentId: 'a1', name: 'alpha' }, { agentId: 'a2', name: 'beta' }],
             reconnect: (id) => reconnected.push(id),
             send: () => true,
         });
@@ -100,7 +100,7 @@ describe('the upgrade notice reconnects first', () => {
         const send = vi.fn(() => true);
         announceAgentUpgrade({
             ...base,
-            agentIds: ['a1'],
+            agents: [{ agentId: 'a1', name: 'alpha' }],
             reconnect: () => {
                 throw new Error('pty gone');
             },
@@ -116,7 +116,7 @@ describe('the upgrade notice reconnects first', () => {
         announceAgentUpgrade({
             ...base,
             previousVersion: base.currentVersion,
-            agentIds: ['a1'],
+            agents: [{ agentId: 'a1', name: 'alpha' }],
             reconnect,
             send: () => true,
         });
@@ -127,7 +127,7 @@ describe('the upgrade notice reconnects first', () => {
         // Callers that have no way to reach a terminal must not be forced to
         // invent one.
         const send = vi.fn(() => true);
-        announceAgentUpgrade({ ...base, agentIds: ['a1'], send });
+        announceAgentUpgrade({ ...base, agents: [{ agentId: 'a1', name: 'alpha' }], send });
         expect(send).toHaveBeenCalledTimes(1);
     });
 });

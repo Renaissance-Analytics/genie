@@ -35,6 +35,19 @@
  * registration and never consults this list.
  */
 
+/**
+ * The one reserved name that is also never NUDGED.
+ *
+ * The owner's rule: *"No agents named general get any nudges or anything so they
+ * don't start doing work on restart if any still exist."* v62 removes the
+ * dormant `general` agents; the ones holding a live terminal survive, and a
+ * nudge would start a turn in an agent nobody meant to create.
+ *
+ * Deliberately NOT the whole reserved list. `tynn` is a real, working agent in
+ * the sacred workspace and must keep receiving upgrade notices like any other.
+ */
+export const NEVER_NUDGED_AGENT_NAME = 'general';
+
 /** The terms refused as an agent name. */
 export const RESERVED_AGENT_NAMES: readonly string[] = Object.freeze([
     'general',

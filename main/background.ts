@@ -1538,9 +1538,14 @@ app.whenReady().then(async () => {
                 announceAgentUpgrade({
                     currentVersion,
                     previousVersion,
-                    agentIds: agentInboxBroker.directory()
+                    // NAME as well as id: an agent called `general` is never
+                    // nudged (Tynn story #262), and `announceAgentUpgrade`
+                    // cannot enforce that without knowing what each one is
+                    // called. `purpose` IS the agent's name — a saved agent's
+                    // name is its channel purpose.
+                    agents: agentInboxBroker.directory()
                         .filter((agent) => agent.status !== 'offline')
-                        .map((agent) => agent.agentId),
+                        .map((agent) => ({ agentId: agent.agentId, name: agent.purpose })),
                     changes: changelog.groups.flatMap((group) => group.changes).slice(0, 8),
                     // Reconnect the agent's `genie` server BEFORE telling it
                     // anything: the upgrade replaced the process behind the
