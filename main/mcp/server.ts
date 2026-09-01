@@ -95,6 +95,8 @@ export interface ServerDeps {
     };
     /** Pulse the given terminal's attention glow (imDone). */
     onImDone: (terminalId: string) => void;
+    /** Persist an agent handoff note (optional). */
+    onHandoff?: (terminalId: string, note: string) => void;
     onThumbsUp?: (
         terminalId: string,
         reason: 'boot' | 'ack' | 'shutdown',
@@ -671,6 +673,7 @@ async function handle(
         serverName: SERVER_NAME,
         serverVersion: deps.serverVersion,
         onImDone: deps.onImDone,
+        onHandoff: deps.onHandoff,
         onThumbsUp: deps.onThumbsUp,
         checkIssues: deps.checkIssues,
         agentInboxMailLine: deps.agentInboxMailLine,

@@ -363,6 +363,9 @@ export interface McpContext {
     serverVersion: string;
     /** Side effect for the imDone tool — pulse the caller's terminal. */
     onImDone: (terminalId: string) => void;
+    /** Persist the note an agent left for its own next run (genie handoff).
+     *  Optional so a host that has not wired it behaves exactly as before. */
+    onHandoff?: (terminalId: string, note: string) => void;
     onThumbsUp?: (
         terminalId: string,
         reason: 'boot' | 'ack' | 'shutdown',
@@ -1580,10 +1583,17 @@ const TERMINAL_ID_PROP = {
 const IMDONE_TOOL = {
     name: 'imDone',
     description:
-        "Signal that the agent has finished its work in THIS terminal. Genie pulses the terminal's glow in the workspace rail, the flyout row, and the panel border until you focus it. Pass `terminalId` (from your GENIE_TERMINAL_ID env) to target this exact terminal. Required whenever the workspace has more than one terminal.",
+        "Signal that the agent has finished its work in THIS terminal. Genie pulses the terminal's glow in the workspace rail, the flyout row, and the panel border until you focus it. Pass `terminalId` (from your GENIE_TERMINAL_ID env) to target this exact terminal. Required whenever the workspace has more than one terminal. Pass `handoff` to leave a note for the NEXT run of this agent — restarts are constant (an upgrade, a crash, a killed terminal) and without it the next run starts from nothing; Genie cannot write this for you, because it knows the terminal ended, not what you were in the middle of.",
     inputSchema: {
         type: 'object',
-        properties: { ...TERMINAL_ID_PROP },
+        properties: {
+            ...TERMINAL_ID_PROP,
+            handoff: {
+                type: 'string',
+                description:
+                    'What the NEXT run of this agent needs to know: what you were doing, what is half-finished, what you would do next. Saved to `.ai/handoff/<agent>.md` (gitignored) and handed to that run at launch. REPLACES any previous note rather than appending. Omit it when there is genuinely nothing to carry forward — an empty handoff is worse than none, because it reads as "the last run had nothing to report".',
+            },
+        },
         additionalProperties: false,
     },
 };
@@ -3399,6 +3409,8 @@ export async function handleMcpMessage(
                 arguments?: {
                     questions?: ForceQuestion[];
                     priority?: QuestionPriority;
+                    /** imDone: the note left for this agent's next run. */
+                    handoff?: string;
                 } & Partial<ManageProcessRequest>;
             };
             if (params.name === 'thumbsUp') {
@@ -3414,6 +3426,18 @@ export async function handleMcpMessage(
             }
             if (params.name === 'imDone') {
                 ctx.onImDone(ctx.terminalId);
+                // The note for the NEXT run of this agent. Best-effort and
+                // deliberately after the glow: a handoff that cannot be written
+                // must never cost the human the signal that their agent
+                // finished, which is the thing imDone exists for.
+                const handoffNote = params.arguments?.handoff;
+                if (typeof handoffNote === 'string' && handoffNote.trim()) {
+                    try {
+                        ctx.onHandoff?.(ctx.terminalId, handoffNote);
+                    } catch {
+                        /* best-effort — see above */
+                    }
+                }
                 // Fold the caller's workspace IssueWatch counts into the response
                 // so every "done" surfaces what's still open (issues/PRs/security
                 // alerts) without a second call. Best-effort: a snapshot failure

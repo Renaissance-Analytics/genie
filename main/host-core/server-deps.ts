@@ -45,6 +45,7 @@ import { agentPulse } from '../terminal/agent-pulse';
 import { agentShutdownReadiness } from '../agents/shutdown-readiness';
 import { authorizeOsAgentBoot, GENIE_OS_TERMINAL_ID } from '../agents/os-agent';
 import { markOsAgentOriented } from '../agents/os-lifecycle';
+import { writeHandoff } from '../agents/handoff';
 import { harnessTransportRegistry, requiredHarnessTransport } from '../agentinbox/harness-transport';
 import { backendOfKind } from '../backend/registry';
 import { formatAgentInboxMailLine } from '../mcp/protocol';
@@ -121,6 +122,18 @@ export function buildHostServerDeps(
                     ? { provider: spec.meta.agent, name: spec.meta.whisper_purpose ?? '' }
                     : null,
             });
+        },
+        // The note an agent leaves for its own next run. Keyed by AGENT NAME —
+        // a terminal id changes on every restart, which is precisely the
+        // identity that fails to carry across the gap this bridges.
+        onHandoff: (terminalId, note) => {
+            const spec = terminalId ? getTerminalSpec(terminalId) : null;
+            const wsId = spec ? workspaceIdOfSpec(spec) : null;
+            if (!spec || !wsId || wsId === SYSTEM_WORKSPACE_ID) return;
+            const root = getWorkspace(wsId)?.path;
+            const name = String(spec.meta?.whisper_purpose ?? '').trim();
+            if (!root || !name) return;
+            writeHandoff({ workspaceRoot: root, agentName: name, note });
         },
         onThumbsUp: async (terminalId, reason, to) => {
             if (terminalId === GENIE_OS_TERMINAL_ID) {

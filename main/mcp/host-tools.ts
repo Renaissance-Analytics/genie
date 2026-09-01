@@ -76,6 +76,8 @@ import {
 } from '../terminal/ipc';
 import { agentName, agentRef, savedAgentKey, type AgentProvider } from '../agents/identity';
 import { agentAllowedTuis, agentScopeFor, renderAgentFile } from '../agents/agent-file';
+import { agentBootPrompt } from '../agents/boot-prompt';
+import { handoffPath } from '../agents/handoff';
 import { decideTuiSwitch } from '../agents/tui-switch';
 import { resolveWorkstationProvider } from '../agents/provider';
 import { restartProviderForSpec } from '../agents/restart';
@@ -2810,17 +2812,24 @@ export async function startRegisteredAgent(
                     };
                 }
                 const command = base;
-                const instructionFiles = providerInstructionFiles(agent, ws.path)
-                    .filter((file) => fs.existsSync(file));
-                const bootInstructions = [
-                    instructionFiles.length > 0
-                        ? `Before doing work, read and follow these instruction files in order: ${instructionFiles.join(', ')}.`
-                        : '',
-                    config.persona_path && fs.existsSync(config.persona_path)
-                        ? `Then read and adopt your specialized persona from ${config.persona_path}.`
-                        : '',
-                    req.instructions?.trim() ?? '',
-                ].filter(Boolean).join('\n\n');
+                // The boot prompt ORIENTS; it no longer recites the system
+                // prompt back. `AGENTS.md`/`CLAUDE.md` are routers of `@`
+                // imports the harness has already expanded, so telling the agent
+                // to go and read them spent the opening of every session
+                // re-fetching what it was handed — and said nothing about what
+                // it genuinely cannot know: whether it is connected to Genie,
+                // what its previous run was doing, and what the project expects.
+                const handoff = handoffPath(ws.path, config.name);
+                const bootInstructions = agentBootPrompt({
+                    genieAvailable: true,
+                    handoffPath: fs.existsSync(handoff) ? handoff : null,
+                    tynnLinked: !!readTynnLink(ws.path),
+                    personaPath:
+                        config.persona_path && fs.existsSync(config.persona_path)
+                            ? config.persona_path
+                            : null,
+                    extra: req.instructions ?? null,
+                });
                 const approvalCommand = bootInstructions
                     ? withProviderStartupInstructions(agent, base, bootInstructions)
                     : base;
