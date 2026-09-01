@@ -1826,6 +1826,47 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // v62 -- THE DORMANT `general` AGENTS GO.
+            //
+            // `general` was never a name anyone chose: `normalizePurpose`
+            // returned it for any agent joining with no stated purpose, so an
+            // unnamed terminal became `{tui}:general`. #326 stopped Genie
+            // inventing them and v61's block list stops one being typed back in.
+            // This clears the rows already sitting there.
+            //
+            // ONLY THE DORMANT ONES. The owner's instruction, and the only safe
+            // rule: deleting a row that owns a terminal would STRAND that
+            // terminal, the same hazard v57 called out. Measured on the live
+            // database before this was written -- of 7 agents named `general`
+            // across seven workspaces, THREE hold a live terminal spec and FOUR
+            // hold none.
+            //
+            // Inertness is tested THROUGH THE RUNTIME as well as the agent row.
+            // v55 moved terminal binding onto `agent_runtimes`, so an agent
+            // whose own `terminal_spec_id` is NULL may still be driving a
+            // terminal through one; checking only the legacy column would delete
+            // a live agent. The join onto `terminal_specs` is deliberate -- a
+            // runtime pointing at a spec that no longer exists is holding
+            // nothing.
+            //
+            // The name is matched WHOLE, so `general-purpose` is untouched.
+            // `agent_runtimes.agent_id` is ON DELETE CASCADE, so the runtimes of
+            // a deleted agent go with it rather than becoming orphans.
+            version: 62,
+            runner: (db) => {
+                db.prepare(
+                    `DELETE FROM workspace_agents
+                      WHERE name = 'general'
+                        AND terminal_spec_id IS NULL
+                        AND id NOT IN (
+                            SELECT r.agent_id
+                              FROM agent_runtimes r
+                              JOIN terminal_specs t ON t.id = r.terminal_spec_id
+                        )`,
+                ).run();
+            },
+        },
     ];
 
     const apply = d.transaction(
