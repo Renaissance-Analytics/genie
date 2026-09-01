@@ -64,10 +64,19 @@ const CLAUDE_CHANNEL_OPT_IN =
 
 export function withClaudeAgentInboxChannelLaunch(
     command: string,
-    input: { agent: string; mcpSyncClaudeOff: boolean },
+    input: { agent: string; mcpSyncClaudeOff: boolean; workspacePath: string },
 ): string {
     if (input.agent !== 'claude' || input.mcpSyncClaudeOff) return command;
     if (command.includes(CLAUDE_CHANNEL_OPT_IN)) return command;
+    // genie#319 — the flag names an MCP server the workspace has to actually
+    // define, backed by the adapter file below. Appending it on "is claude" and
+    // "sync is on" alone promised a channel in workspaces that had neither: the
+    // OSA raised Claude Code's dangerous-channels prompt on every launch and
+    // then reported `no MCP server configured with that name`. The adapter's
+    // presence is what `claudeChannelEntry` points at, so it is the honest
+    // precondition — asking costs the user a HITL prompt, so do not ask unless
+    // the answer can be yes.
+    if (!fs.existsSync(claudeChannelBridgePath(input.workspacePath))) return command;
     return `${command.trim()} ${CLAUDE_CHANNEL_OPT_IN}`;
 }
 

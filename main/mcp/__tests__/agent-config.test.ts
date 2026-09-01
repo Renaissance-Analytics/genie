@@ -1,3 +1,6 @@
+import fsMod from 'node:fs';
+import osMod from 'node:os';
+import pathMod from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
     applyAgentsSection,
@@ -26,10 +29,23 @@ const URL = 'http://127.0.0.1:51717/mcp/abc123';
 const entry = claudeEntry(URL);
 
 describe('withClaudeAgentInboxChannelLaunch', () => {
+    /** A workspace that genuinely carries the channel adapter the flag needs.
+     *  Since genie#319 the flag is only added when this file is present, so a
+     *  test about the flag has to say which workspace it is talking about. */
+    function wiredWorkspace(): string {
+        const root = fsMod.mkdtempSync(pathMod.join(osMod.tmpdir(), 'genie-agent-config-'));
+        const dir = pathMod.join(root, '.agents', '_genie');
+        fsMod.mkdirSync(dir, { recursive: true });
+        fsMod.writeFileSync(pathMod.join(dir, 'agentinbox-claude-channel.cjs'), '// adapter\n');
+        return root;
+    }
+
     it('opts managed Claude launches into the AgentInbox Channel exactly once', () => {
+        const workspacePath = wiredWorkspace();
         const once = withClaudeAgentInboxChannelLaunch('claude --model opus', {
             agent: 'claude',
             mcpSyncClaudeOff: false,
+            workspacePath,
         });
         expect(once).toBe(
             'claude --model opus --dangerously-load-development-channels server:genie-agentinbox-channel',
@@ -37,17 +53,21 @@ describe('withClaudeAgentInboxChannelLaunch', () => {
         expect(withClaudeAgentInboxChannelLaunch(once, {
             agent: 'claude',
             mcpSyncClaudeOff: false,
+            workspacePath,
         })).toBe(once);
     });
 
     it('does not touch non-Claude launches or workspaces with Claude sync disabled', () => {
+        const workspacePath = wiredWorkspace();
         expect(withClaudeAgentInboxChannelLaunch('codex', {
             agent: 'codex',
             mcpSyncClaudeOff: false,
+            workspacePath,
         })).toBe('codex');
         expect(withClaudeAgentInboxChannelLaunch('claude', {
             agent: 'claude',
             mcpSyncClaudeOff: true,
+            workspacePath,
         })).toBe('claude');
     });
 });

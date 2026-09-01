@@ -1508,6 +1508,7 @@ export function resolveAgentLaunch(
     const withNativeInbox = withClaudeAgentInboxChannelLaunch(withFlags, {
         agent,
         mcpSyncClaudeOff: s.mcp_sync_claude === 'off',
+        workspacePath: workspace.path,
     });
     return withCodexMcpLaunch(withNativeInbox, {
         agent,
