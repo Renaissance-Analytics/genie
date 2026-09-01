@@ -14,6 +14,7 @@ import {
     envelopeFolderName,
     hasEnvelopeSuffix,
     repairWorkspaceDocs,
+    scanGenieSection,
     structureDocStatus,
     symlinksSupported,
     syncClaudeFromAgents,
@@ -697,5 +698,131 @@ describe('repairWorkspaceDocs', () => {
         expect(fs.readFileSync(path.join(ws, 'CLAUDE.md'), 'utf8')).toBe(
             '# CLAUDE\n\nrich divergent\n',
         );
+    });
+});
+
+// genie#316 — a CLAUDE.md that differs from AGENTS.md ONLY in the per-harness
+// router import line (`@.agents/_genie/genie-<harness>.md`) is the SUPPORTED
+// two-harness shape on platforms without working symlinks (Codex reads
+// AGENTS.md, Claude reads CLAUDE.md) — doc-health must treat it as healthy,
+// never as a "divergent" file that might hold richer content.
+describe('classifyClaude — the two-harness router pair (genie#316)', () => {
+    const router = (harness: 'codex' | 'claude') =>
+        [
+            '# Agent instructions',
+            '',
+            '@README.md',
+            '@RULES.md',
+            '@.agents/_genie/shared.md',
+            `@.agents/_genie/genie-${harness}.md`,
+        ].join('\n');
+
+    it('classifies a CLAUDE.md differing only in the harness import line as harness-mirror, not divergent', () => {
+        const ws = makeTmpDir('claude-harness-pair');
+        fs.writeFileSync(path.join(ws, 'AGENTS.md'), router('codex'));
+        fs.writeFileSync(path.join(ws, 'CLAUDE.md'), router('claude'));
+        expect(classifyClaude(ws)).toBe('harness-mirror');
+    });
+
+    it('does not touch a harness-mirror CLAUDE.md on repair — it is already in sync', () => {
+        const ws = makeTmpDir('claude-harness-sync');
+        fs.writeFileSync(path.join(ws, 'AGENTS.md'), router('codex'));
+        fs.writeFileSync(path.join(ws, 'CLAUDE.md'), router('claude'));
+        expect(syncClaudeFromAgents(ws)).toBe('in-sync');
+        // Untouched: still the claude-flavored router, not overwritten with
+        // AGENTS.md's codex-flavored content (that would break Claude's import).
+        expect(fs.readFileSync(path.join(ws, 'CLAUDE.md'), 'utf8')).toBe(router('claude'));
+    });
+
+    it('counts a harness-mirror CLAUDE.md as OK in workspaceDocHealth (claudeDivergent is false)', () => {
+        const ws = makeTmpDir('claude-harness-health');
+        fs.writeFileSync(path.join(ws, 'AGENTS.md'), router('codex'));
+        fs.writeFileSync(path.join(ws, 'CLAUDE.md'), router('claude'));
+        const h = workspaceDocHealth(ws);
+        expect(h.claude).toBe('harness-mirror');
+        expect(h.claudeDivergent).toBe(false);
+    });
+
+    it('still reports a REAL divergent CLAUDE.md (more than one differing line) as divergent', () => {
+        const ws = makeTmpDir('claude-still-divergent');
+        fs.writeFileSync(path.join(ws, 'AGENTS.md'), router('codex'));
+        fs.writeFileSync(
+            path.join(ws, 'CLAUDE.md'),
+            router('claude') + '\n\nAn extra line an optimizer added.\n',
+        );
+        expect(classifyClaude(ws)).toBe('divergent');
+    });
+
+    it('still reports divergent when the single differing line is not a harness import', () => {
+        const ws = makeTmpDir('claude-divergent-one-line');
+        fs.writeFileSync(path.join(ws, 'AGENTS.md'), '# Agent instructions\n\nline one\nline two\n');
+        fs.writeFileSync(path.join(ws, 'CLAUDE.md'), '# Agent instructions\n\nline one\nDIFFERENT\n');
+        expect(classifyClaude(ws)).toBe('divergent');
+    });
+});
+
+// genie#316 — the router architecture moved the Genie MCP block itself OUT of
+// AGENTS.md and into `.agents/_genie/shared.md` (which AGENTS.md/CLAUDE.md
+// both `@`-import). Checking only AGENTS.md's own content for the block
+// reports a false "missing" on every such workspace.
+describe('scanGenieSection — the managed set (genie#316)', () => {
+    const BEGIN = '<!-- BEGIN GENIE MCP (auto-managed by Genie) -->';
+    const END = '<!-- END GENIE MCP (auto-managed by Genie) -->';
+
+    it('finds a balanced block in .agents/_genie/shared.md when AGENTS.md is a bare router', () => {
+        const ws = makeTmpDir('section-in-shared');
+        fs.writeFileSync(path.join(ws, 'AGENTS.md'), '# Agent instructions\n\n@.agents/_genie/shared.md\n');
+        fs.mkdirSync(path.join(ws, '.agents', '_genie'), { recursive: true });
+        fs.writeFileSync(
+            path.join(ws, '.agents', '_genie', 'shared.md'),
+            `${BEGIN}\n## GENIE PROTOCOL\n\nbody\n${END}\n`,
+        );
+        const scan = scanGenieSection(ws);
+        expect(scan.present).toBe(true);
+        expect(scan.corrupt).toBe(false);
+
+        const h = workspaceDocHealth(ws);
+        expect(h.hasGenieSection).toBe(true);
+    });
+
+    it('reports CORRUPT (not "missing") when only an unbalanced marker exists anywhere in the managed set', () => {
+        const ws = makeTmpDir('section-corrupt');
+        fs.writeFileSync(path.join(ws, 'AGENTS.md'), '# Agent instructions\n\n@RULES.md\n');
+        // A historical migration left a dangling END marker with no BEGIN, and
+        // no balanced block exists anywhere else (genie#316's actual finding).
+        fs.writeFileSync(path.join(ws, 'RULES.md'), `# Workspace rules\n\nsome migrated text\n${END}\n`);
+        const scan = scanGenieSection(ws);
+        expect(scan.present).toBe(false);
+        expect(scan.corrupt).toBe(true);
+        expect(scan.file).toContain('RULES.md');
+
+        const h = workspaceDocHealth(ws);
+        expect(h.hasGenieSection).toBe(false);
+        expect(h.genieSectionCorrupt).toBe(true);
+    });
+
+    it('a balanced block elsewhere pre-empts a stray unbalanced marker (no false alarm)', () => {
+        const ws = makeTmpDir('section-real-plus-stray');
+        fs.writeFileSync(path.join(ws, 'AGENTS.md'), '# Agent instructions\n\n@.agents/_genie/shared.md\n');
+        fs.mkdirSync(path.join(ws, '.agents', '_genie'), { recursive: true });
+        fs.writeFileSync(
+            path.join(ws, '.agents', '_genie', 'shared.md'),
+            `${BEGIN}\n## GENIE PROTOCOL\n\nbody\n${END}\n`,
+        );
+        // Stray leftover artifact from a past migration — should not shadow the
+        // real, balanced block found in shared.md.
+        fs.writeFileSync(path.join(ws, 'RULES.md'), `# Workspace rules\n\nold text\n${END}\n`);
+        const h = workspaceDocHealth(ws);
+        expect(h.hasGenieSection).toBe(true);
+        expect(h.genieSectionCorrupt).toBe(false);
+    });
+
+    it('reports missing (not corrupt) when nothing at all is found', () => {
+        const ws = makeTmpDir('section-missing');
+        fs.writeFileSync(path.join(ws, 'AGENTS.md'), '# Agent instructions\n\nno genie mention here\n');
+        const scan = scanGenieSection(ws);
+        expect(scan.present).toBe(false);
+        expect(scan.corrupt).toBe(false);
+        expect(scan.file).toBeNull();
     });
 });

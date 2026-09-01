@@ -329,13 +329,46 @@ export type ClaudeKind =
     | 'symlink' // a real filesystem symlink (→ AGENTS.md)
     | 'broken-pointer' // the legacy one-liner "AGENTS.md" or the readable pointer
     | 'mirror' // a real file whose content matches AGENTS.md
+    | 'harness-mirror' // differs from AGENTS.md ONLY in the per-harness router import line
     | 'divergent'; // a real file whose content DIFFERS from AGENTS.md
+
+/** The per-harness router import line, e.g. `@.agents/_genie/genie-claude.md`. */
+const HARNESS_IMPORT_LINE_RE = /^@\.agents\/_genie\/genie-[\w-]+\.md$/;
+
+/**
+ * True when `claudeBody` is identical to `agentsBody` except for exactly one
+ * line, and that one differing line is the per-harness router import in BOTH
+ * files. This is the supported two-harness shape on platforms without working
+ * symlinks — Codex reads AGENTS.md, Claude Code reads CLAUDE.md, and the two
+ * files are byte-identical apart from which `genie-<harness>.md` they import.
+ * genie#316: doc-health was mistaking this deliberate, single-line difference
+ * for "an external optimizer rewrote CLAUDE.md with richer content".
+ */
+function differsOnlyInHarnessImportLine(agentsBody: string, claudeBody: string): boolean {
+    const a = agentsBody.split('\n');
+    const c = claudeBody.split('\n');
+    if (a.length !== c.length) return false;
+    let diffIndex = -1;
+    for (let i = 0; i < a.length; i++) {
+        if (a[i] !== c[i]) {
+            if (diffIndex !== -1) return false; // more than one differing line
+            diffIndex = i;
+        }
+    }
+    if (diffIndex === -1) return false; // identical — that's 'mirror', not this
+    return (
+        HARNESS_IMPORT_LINE_RE.test(a[diffIndex].trim()) &&
+        HARNESS_IMPORT_LINE_RE.test(c[diffIndex].trim())
+    );
+}
 
 /**
  * Classify the envelope's CLAUDE.md against its AGENTS.md. `divergent` is the
  * "an external optimizer rewrote it" case — richer content we must NOT clobber.
  * `broken-pointer` is the Windows breakage: a plain file literally containing
  * the link-target text, which Claude Code reads as a useless one-liner.
+ * `harness-mirror` is the supported two-harness router pair (genie#316) — also
+ * never clobbered, but reported as healthy rather than as drift.
  */
 export function classifyClaude(envelopePath: string): ClaudeKind {
     const claude = path.join(envelopePath, 'CLAUDE.md');
@@ -363,6 +396,7 @@ export function classifyClaude(envelopePath: string): ClaudeKind {
         agents = null;
     }
     if (agents !== null && body === agents) return 'mirror';
+    if (agents !== null && differsOnlyInHarnessImportLine(agents, body)) return 'harness-mirror';
     return 'divergent';
 }
 
@@ -391,6 +425,11 @@ export function syncClaudeFromAgents(envelopePath: string): ClaudeSyncResult {
     }
     const kind = classifyClaude(envelopePath);
     if (kind === 'symlink') return 'in-sync'; // a real link tracks AGENTS.md
+    // A correct two-harness router pair (genie#316): NEVER touch it — writing
+    // AGENTS.md's content (or a symlink to it) over CLAUDE.md would replace its
+    // `genie-claude.md` import with AGENTS.md's `genie-codex.md` one, breaking
+    // Claude Code's half of the pair.
+    if (kind === 'harness-mirror') return 'in-sync';
     if (kind === 'mirror') {
         // Already identical content. If symlinks work, upgrade to a true link;
         // otherwise it's already the mirror we'd write — no-op.
@@ -1207,16 +1246,82 @@ export async function addStructureDocs(
 }
 
 /**
+ * Files where the auto-managed Genie MCP block might be found, in scan order.
+ * AGENTS.md is the legacy/direct location; the router architecture moved the
+ * block itself OUT of AGENTS.md and into `.agents/_genie/shared.md` (which
+ * AGENTS.md/CLAUDE.md both `@`-import as bare routers) — checking AGENTS.md
+ * alone reports a false "missing" on every router-style workspace (genie#316).
+ * RULES.md is included because a historical instruction migration can leave a
+ * stray marker fragment there: scanning it lets a real, balanced block found
+ * elsewhere pre-empt a false alarm, and lets a genuinely dangling marker there
+ * (no balanced block anywhere) be reported as corruption instead of ignored.
+ */
+function genieSectionCandidateFiles(envelopePath: string): string[] {
+    return [
+        path.join(envelopePath, 'AGENTS.md'),
+        path.join(envelopePath, '.agents', '_genie', 'shared.md'),
+        path.join(envelopePath, 'RULES.md'),
+    ];
+}
+
+// Substrings of the real markers (`<!-- BEGIN GENIE MCP (auto-managed by
+// Genie) -->` / `<!-- END … -->`), used only to detect an UNBALANCED marker —
+// i.e. one half present without the other. `hasGenieAgentsSection` remains the
+// authority for "a complete, balanced block is present".
+const GENIE_SECTION_BEGIN_TOKEN = 'BEGIN GENIE MCP';
+const GENIE_SECTION_END_TOKEN = 'END GENIE MCP';
+
+export interface GenieSectionScan {
+    /** A balanced BEGIN…END Genie MCP block was found somewhere in the managed set. */
+    present: boolean;
+    /**
+     * An UNBALANCED marker (BEGIN without END, or vice versa) was found, and no
+     * balanced block exists anywhere else in the managed set. Distinct from
+     * "missing": the region exists but is corrupt — e.g. a migration left a
+     * dangling END marker behind (genie#316) — which is what needs fixing, and
+     * pointing at a DIFFERENT file than "AGENTS.md is missing the section".
+     */
+    corrupt: boolean;
+    /** Absolute path of the file the (balanced or corrupt) marker was found in, else null. */
+    file: string | null;
+}
+
+/** Scan the managed set of files for the Genie MCP block, LOCAL-ONLY (genie#316). */
+export function scanGenieSection(envelopePath: string): GenieSectionScan {
+    let corruptFile: string | null = null;
+    for (const file of genieSectionCandidateFiles(envelopePath)) {
+        let content: string;
+        try {
+            content = fs.readFileSync(file, 'utf8');
+        } catch {
+            continue;
+        }
+        if (hasGenieAgentsSection(content)) return { present: true, corrupt: false, file };
+        const hasBegin = content.includes(GENIE_SECTION_BEGIN_TOKEN);
+        const hasEnd = content.includes(GENIE_SECTION_END_TOKEN);
+        if ((hasBegin || hasEnd) && corruptFile === null) corruptFile = file;
+    }
+    return { present: false, corrupt: corruptFile !== null, file: corruptFile };
+}
+
+/**
  * Health of a workspace's agent docs — surfaced in the initializeWorkspace MCP
  * tool and consumed by the repair action. Reports whether AGENTS.md exists,
- * whether it carries the auto-managed Genie MCP block, and how CLAUDE.md
- * relates to AGENTS.md (in sync via symlink/mirror, a broken one-liner, a
- * divergent rewrite, or missing).
+ * whether the Genie MCP block is present anywhere in the managed set (or
+ * corrupt), and how CLAUDE.md relates to AGENTS.md (in sync via symlink,
+ * mirror, or harness-router pair; a broken one-liner; a divergent rewrite; or
+ * missing).
  */
 export interface WorkspaceDocHealth {
     hasAgents: boolean;
-    /** AGENTS.md carries the `<!-- BEGIN GENIE MCP -->`…`<!-- END -->` block. */
+    /** A balanced Genie MCP block was found somewhere in the managed set. */
     hasGenieSection: boolean;
+    /** An unbalanced marker was found with no balanced block anywhere else —
+     *  the managed region is CORRUPT, not simply missing (genie#316). */
+    genieSectionCorrupt: boolean;
+    /** Where the section (or, if corrupt, the stray marker) was found, relative
+     *  to the envelope root. Null when nothing was found at all. */
+    genieSectionFile: string | null;
     claude: ClaudeKind;
     /** True when CLAUDE.md is a real, divergent file we must not clobber. */
     claudeDivergent: boolean;
@@ -1225,23 +1330,19 @@ export interface WorkspaceDocHealth {
 }
 
 export function workspaceDocHealth(envelopePath: string): WorkspaceDocHealth {
-    let agents: string | null = null;
-    try {
-        agents = fs.readFileSync(path.join(envelopePath, 'AGENTS.md'), 'utf8');
-    } catch {
-        agents = null;
-    }
-    const hasAgents = agents !== null;
-    const hasGenieSection = hasAgents && hasGenieAgentsSection(agents!);
+    const hasAgents = fs.existsSync(path.join(envelopePath, 'AGENTS.md'));
+    const scan = scanGenieSection(envelopePath);
     const claude = classifyClaude(envelopePath);
     const claudeDivergent = claude === 'divergent';
-    const claudeOk = claude === 'symlink' || claude === 'mirror';
+    const claudeOk = claude === 'symlink' || claude === 'mirror' || claude === 'harness-mirror';
     return {
         hasAgents,
-        hasGenieSection,
+        hasGenieSection: scan.present,
+        genieSectionCorrupt: scan.corrupt,
+        genieSectionFile: scan.file ? path.relative(envelopePath, scan.file) : null,
         claude,
         claudeDivergent,
-        healthy: hasAgents && hasGenieSection && claudeOk,
+        healthy: hasAgents && scan.present && claudeOk,
     };
 }
 

@@ -109,6 +109,8 @@ import { describeCron, isValidCron } from '../terminal/cron';
 import { resolveRestartCommand } from '../agentinbox/session-capture';
 import { detectFolder } from '../workspace/detect';
 import { workspaceDocHealth } from '../workspace/create-agi';
+import { repoCheckoutInfo } from '../workspace/repo-checkout';
+import { app } from 'electron';
 import { openWorkspace } from '../workspace/open';
 import { resolveWorkspaceRepos, getWorkspaceFeed, getOpenCounts, getWorkspaceStatus } from '../issue-watch';
 import { forceQuestion } from '../ask/force-question';
@@ -262,21 +264,28 @@ export async function describeWorkspaceForMcp(
         exists('.gitmodules');
 
     const resolved = await resolveWorkspaceRepos(workspaceId).catch(() => []);
-    const repos: WorkspaceRepoInfo[] = resolved.map((r) => {
-        const at = (f: string) => fs.existsSync(path.join(r.path, f));
-        return {
-            name: path.basename(r.path),
-            path: r.path,
-            owner: r.owner ?? null,
-            repo: r.repo ?? null,
-            orientation: {
-                readme: at('README.md'),
-                agents: at('AGENTS.md'),
-                claude: at('CLAUDE.md'),
-                manifests: MANIFEST_FILES.filter((m) => at(m)),
-            },
-        };
-    });
+    const repos: WorkspaceRepoInfo[] = await Promise.all(
+        resolved.map(async (r) => {
+            const at = (f: string) => fs.existsSync(path.join(r.path, f));
+            // Checkout drift (genie#317) is local-refs-only and best-effort: a
+            // repo that isn't actually a git checkout (or whose git plumbing
+            // fails) just omits `checkout` rather than failing orientation.
+            const checkout = await repoCheckoutInfo(r.path).catch(() => undefined);
+            return {
+                name: path.basename(r.path),
+                path: r.path,
+                owner: r.owner ?? null,
+                repo: r.repo ?? null,
+                orientation: {
+                    readme: at('README.md'),
+                    agents: at('AGENTS.md'),
+                    claude: at('CLAUDE.md'),
+                    manifests: MANIFEST_FILES.filter((m) => at(m)),
+                },
+                checkout,
+            };
+        }),
+    );
     const agentType = (terminalSpec?.meta?.agent as string | undefined) ?? null;
     const agentId = (terminalSpec?.meta?.agent_id as string | undefined) ?? null;
     const liveAgent = agentId ? agentInboxBroker.getInfo(agentId) : null;
@@ -318,6 +327,10 @@ export async function describeWorkspaceForMcp(
         envelopeAgents: exists('AGENTS.md') ? path.join(root, 'AGENTS.md') : null,
         envelopeClaude: exists('CLAUDE.md') ? path.join(root, 'CLAUDE.md') : null,
         repos,
+        // This running build's own version (genie#317), so a `repos/genie`
+        // checkout whose package.json disagrees can be flagged rather than
+        // silently read as if it were the code actually executing.
+        runningGenieVersion: app.getVersion(),
         agentIntegration: {
             agentType,
             agentId,
@@ -352,6 +365,8 @@ export async function describeWorkspaceForMcp(
             return {
                 hasAgents: dh.hasAgents,
                 hasGenieSection: dh.hasGenieSection,
+                genieSectionCorrupt: dh.genieSectionCorrupt,
+                genieSectionFile: dh.genieSectionFile,
                 claude: dh.claude,
                 claudeDivergent: dh.claudeDivergent,
                 healthy: dh.healthy,

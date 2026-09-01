@@ -2,8 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { GENIE_MCP_GUIDE } from '../guide';
 import {
     MCP_PROTOCOL_VERSION,
+    formatWorkspaceMap,
     handleMcpMessage,
     type McpContext,
+    type WorkspaceMap,
 } from '../protocol';
 
 function ctx(overrides: Partial<McpContext> = {}): McpContext {
@@ -1688,5 +1690,165 @@ describe('handleMcpMessage', () => {
             ctx(),
         );
         expect(res?.error?.code).toBe(-32601);
+    });
+});
+
+function baseWorkspaceMap(overrides: Partial<WorkspaceMap> = {}): WorkspaceMap {
+    return {
+        root: 'C:/ws',
+        isAgiEnvelope: true,
+        hasProjectJson: true,
+        hasGitmodules: true,
+        knowledgeDir: null,
+        envelopeAgents: 'C:/ws/AGENTS.md',
+        envelopeClaude: 'C:/ws/CLAUDE.md',
+        repos: [],
+        ...overrides,
+    };
+}
+
+// genie#316 — doc-health must not raise a false alarm for the supported
+// two-harness router pair, and must look beyond AGENTS.md itself (and
+// distinguish "corrupt" from "missing") before reporting the Genie MCP
+// section absent.
+describe('formatWorkspaceMap — doc health (genie#316)', () => {
+    it('says nothing about doc health when everything is healthy (harness-mirror CLAUDE.md included)', () => {
+        const map = baseWorkspaceMap({
+            docHealth: {
+                hasAgents: true,
+                hasGenieSection: true,
+                genieSectionCorrupt: false,
+                genieSectionFile: '.agents/_genie/shared.md',
+                claude: 'harness-mirror',
+                claudeDivergent: false,
+                healthy: true,
+            },
+        });
+        const out = formatWorkspaceMap(map);
+        expect(out).not.toContain('Doc health');
+    });
+
+    it('reports a CORRUPT managed region distinctly from "missing", naming the actual file', () => {
+        const map = baseWorkspaceMap({
+            docHealth: {
+                hasAgents: true,
+                hasGenieSection: false,
+                genieSectionCorrupt: true,
+                genieSectionFile: 'RULES.md',
+                claude: 'harness-mirror',
+                claudeDivergent: false,
+                healthy: false,
+            },
+        });
+        const out = formatWorkspaceMap(map);
+        expect(out).toContain('## Doc health — needs attention');
+        expect(out).toContain('CORRUPT');
+        expect(out).toContain('RULES.md');
+        expect(out).not.toContain('is missing the Genie MCP section');
+    });
+
+    it('reports the section missing (not corrupt) when nothing was found anywhere', () => {
+        const map = baseWorkspaceMap({
+            docHealth: {
+                hasAgents: true,
+                hasGenieSection: false,
+                genieSectionCorrupt: false,
+                genieSectionFile: null,
+                claude: 'mirror',
+                claudeDivergent: false,
+                healthy: false,
+            },
+        });
+        const out = formatWorkspaceMap(map);
+        expect(out).toContain('No Genie MCP section was found anywhere in the managed set');
+        expect(out).not.toContain('CORRUPT');
+    });
+
+    it('still reports a genuinely divergent CLAUDE.md', () => {
+        const map = baseWorkspaceMap({
+            docHealth: {
+                hasAgents: true,
+                hasGenieSection: true,
+                genieSectionCorrupt: false,
+                genieSectionFile: 'AGENTS.md',
+                claude: 'divergent',
+                claudeDivergent: true,
+                healthy: false,
+            },
+        });
+        const out = formatWorkspaceMap(map);
+        expect(out).toContain('SEPARATE, divergent file');
+    });
+});
+
+// genie#317 — orientation must report each repo's checkout drift from local
+// refs, and flag a repos/genie version mismatch against the running build.
+describe('formatWorkspaceMap — repo checkout drift (genie#317)', () => {
+    function repo(overrides: Partial<WorkspaceMap['repos'][number]> = {}): WorkspaceMap['repos'][number] {
+        return {
+            name: 'genie',
+            path: 'C:/ws/repos/genie',
+            owner: 'Renaissance-Analytics',
+            repo: 'genie',
+            orientation: { readme: true, agents: true, claude: true, manifests: ['package.json'] },
+            ...overrides,
+        };
+    }
+
+    it("renders the repo's checkout line, including a running-build version mismatch", () => {
+        const map = baseWorkspaceMap({
+            repos: [
+                repo({
+                    checkout: {
+                        branch: 'feat/gapp-agents-and-self-update',
+                        detached: false,
+                        defaultBranch: 'main',
+                        isDefaultBranch: false,
+                        ahead: 0,
+                        behind: 178,
+                        comparedTo: 'origin/main',
+                        packageVersion: '0.7.0-beta.265',
+                    },
+                }),
+            ],
+            runningGenieVersion: '0.7.0-beta.289',
+        });
+        const out = formatWorkspaceMap(map);
+        expect(out).toContain(
+            'checkout: genie — feat/gapp-agents-and-self-update, 178 behind origin/main (v0.7.0-beta.265; running build is v0.7.0-beta.289)',
+        );
+        expect(out).toContain('no `git fetch` was run');
+    });
+
+    it('does NOT apply the running-build version note to a repo that is not "genie"', () => {
+        const map = baseWorkspaceMap({
+            repos: [
+                repo({
+                    name: 'tynn',
+                    path: 'C:/ws/repos/tynn',
+                    checkout: {
+                        branch: 'main',
+                        detached: false,
+                        defaultBranch: 'main',
+                        isDefaultBranch: true,
+                        ahead: 0,
+                        behind: 0,
+                        comparedTo: 'origin/main',
+                        packageVersion: '0.7.0-beta.265',
+                    },
+                }),
+            ],
+            runningGenieVersion: '0.7.0-beta.289',
+        });
+        const out = formatWorkspaceMap(map);
+        expect(out).toContain('checkout: tynn — main (default), up to date with origin/main (v0.7.0-beta.265)');
+        expect(out).not.toContain('running build is');
+    });
+
+    it('omits the checkout line and the footnote entirely when no repo has a checkout', () => {
+        const map = baseWorkspaceMap({ repos: [repo({ checkout: undefined })] });
+        const out = formatWorkspaceMap(map);
+        expect(out).not.toContain('checkout:');
+        expect(out).not.toContain('git fetch');
     });
 });
