@@ -41,6 +41,7 @@ import { agentStack } from '../../lib/agent-stack';
 import { workspaceInitials } from '../../lib/workspace-avatar';
 import AgentAvatarStack from './AgentAvatarStack';
 import AgentContextMenu from './AgentContextMenu';
+import AgentDeleteModal from './AgentDeleteModal';
 import TerminalTypeSplitButton from './TerminalTypeSplitButton';
 import { workspaceHasThumb, workspaceNeedsAttention } from '../../lib/attention';
 import { gappLaunchLabel, gappLaunchTarget } from '../../lib/gapp-launch';
@@ -257,6 +258,19 @@ export default function Chooser({
         row: AgentGridRow;
         at: { x: number; y: number };
     } | null>(null);
+    // The DELETE confirm dialog (genie#311) — reached from both the expanded
+    // grid's context menu and the collapsed sidebar's avatar-stack popover, so
+    // it lives at this level rather than inside either one.
+    const [deletePrompt, setDeletePrompt] = useState<{
+        ws: string;
+        agent: { id: string; name: string };
+    } | null>(null);
+    const [deleteBusy, setDeleteBusy] = useState(false);
+    const [deleteError, setDeleteError] = useState<string | null>(null);
+    const openDeletePrompt = (ws: string, agent: { id: string; name: string }) => {
+        setDeleteError(null);
+        setDeletePrompt({ ws, agent });
+    };
     // Right-click context menu for a process row.
     const [procMenu, setProcMenu] = useState<{
         spec: TerminalSpec;
@@ -1287,6 +1301,11 @@ export default function Chooser({
                                                         void api()
                                                             .agents.setDefault(ws.id, null)
                                                             .catch(() => {});
+                                                    } else if (action === 'delete') {
+                                                        openDeletePrompt(ws.id, {
+                                                            id: entry.id,
+                                                            name: entry.name,
+                                                        });
                                                     } else {
                                                         onActivateWorkspace(ws.id);
                                                     }
@@ -1989,6 +2008,45 @@ export default function Chooser({
                             if (row.specId) onDestroySpec(row.specId);
                         } else if (id === 'resolve-collision') {
                             onActivateWorkspace(ws);
+                        } else if (id === 'delete') {
+                            openDeletePrompt(ws, { id: row.id, name: row.name });
+                        }
+                    }}
+                />,
+                document.body,
+            )}
+        {deletePrompt &&
+            typeof document !== 'undefined' &&
+            createPortal(
+                <AgentDeleteModal
+                    agent={deletePrompt.agent}
+                    busy={deleteBusy}
+                    error={deleteError}
+                    onCancel={() => setDeletePrompt(null)}
+                    onConfirm={async ({ mode }) => {
+                        setDeleteBusy(true);
+                        setDeleteError(null);
+                        try {
+                            const res = await api().agents.delete(deletePrompt.agent.id, mode);
+                            if (!res.ok) {
+                                setDeleteError(res.error || 'Could not delete the agent.');
+                                return;
+                            }
+                            // The agent record is gone -- refresh THIS
+                            // workspace's grid data directly rather than
+                            // waiting on a broader refresh: a dormant agent's
+                            // delete touches no terminal spec, so nothing else
+                            // would otherwise notice.
+                            const ws = deletePrompt.ws;
+                            void api()
+                                .agents.list(ws)
+                                .then((r) => setAgentRecords((cur) => ({ ...cur, [ws]: r })))
+                                .catch(() => {});
+                            setDeletePrompt(null);
+                        } catch {
+                            setDeleteError('Could not delete the agent.');
+                        } finally {
+                            setDeleteBusy(false);
                         }
                     }}
                 />,

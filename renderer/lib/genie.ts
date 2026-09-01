@@ -3975,6 +3975,18 @@ export interface GenieApi {
             agentId: string,
             avatar: string | null,
         ) => Promise<{ ok: boolean; error?: string }>;
+        /** UNMOUNT (keep `.agents/*`) or DELETE (remove them too). Both shut
+         *  down every TUI this agent may run under and kill its terminal
+         *  (#311). */
+        delete: (
+            agentId: string,
+            mode: 'unmount' | 'delete',
+        ) => Promise<{
+            ok: boolean;
+            error?: string;
+            filesRemoved: boolean;
+            workspaceTynnLinked: boolean;
+        }>;
     };
     ask: {
         onShow: (

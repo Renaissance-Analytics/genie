@@ -97,6 +97,7 @@ import {
     registerAgentInWorkspace,
     startRegisteredAgent,
 } from './mcp/host-tools';
+import { deleteRegisteredAgent } from './agents/deletion';
 import { agentInboxBroker } from './agentinbox/broker';
 import { type AgentInboxScope } from './agentinbox/types';
 import { appendLaunchFlags } from './agentinbox/session-capture';
@@ -626,6 +627,24 @@ export function registerIpcHandlers(): void {
             return { ok: false, error: e instanceof Error ? e.message : String(e) };
         }
     });
+    // UNMOUNT (keep `.agents/*`) or DELETE (remove them too) a registered
+    // agent — genie#311. Both shut down every TUI it may run under and kill
+    // its terminal; see `deleteRegisteredAgent` for why the two are not one
+    // destructive action.
+    ipcMain.handle(
+        'agents:delete',
+        (_e, agentId: string, mode: 'unmount' | 'delete') => {
+            const result = deleteRegisteredAgent(
+                String(agentId ?? ''),
+                mode === 'delete' ? 'delete' : 'unmount',
+            );
+            // Same reason `agents:setDefault`'s callers rebuild the grid: a
+            // deleted agent must stop drawing a square without waiting on the
+            // next unrelated refresh.
+            if (result.ok) broadcastWorkspacesChanged();
+            return result;
+        },
+    );
     ipcMain.handle('workspaces:setIcon', (_e, workspaceId: string, icon: string | null) => {
         try {
             setWorkspaceIcon(getDb(), String(workspaceId ?? ''), icon);

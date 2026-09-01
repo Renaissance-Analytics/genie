@@ -1781,6 +1781,30 @@ button.iw-feedback-note.as-link:hover {
     flex-wrap: wrap;
 }
 
+/* Agent DELETE confirm (genie#311) — reuses the prompt-scrim/card/btn chrome,
+   same as quit-terms-card, for the choice between unmounting (keep files) and
+   deleting (remove them too). `.agent-form-wake` supplies the input + title +
+   description row layout already used by AgentSettingsModal, for both the
+   radio choices and the Tynn opt-in checkbox. */
+.agent-delete-card {
+    width: 400px;
+}
+.agent-delete-choices {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.agent-delete-choice {
+    padding: 8px;
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-md);
+    background: var(--card);
+}
+.agent-delete-choice:has(input:checked) {
+    border-color: var(--agent);
+    background: var(--agent-soft);
+}
+
 .seg {
     display: inline-flex;
     padding: 3px;
@@ -6706,6 +6730,15 @@ body.gutter-dragging .grid-gutter {
 .agent-ctx-menu .ctx-item.is-primary .ctx-item-label {
     color: var(--fg-1);
     font-weight: 600;
+}
+.agent-ctx-menu .ctx-item.is-destructive .ctx-item-label {
+    color: #f43f5e;
+}
+.agent-ctx-menu .ctx-item.is-destructive svg {
+    color: #f43f5e;
+}
+.agent-ctx-menu .ctx-item.is-destructive:hover {
+    background: color-mix(in srgb, #f43f5e 12%, transparent);
 }
 .agent-ctx-menu .ctx-item svg {
     margin-top: 2px;
