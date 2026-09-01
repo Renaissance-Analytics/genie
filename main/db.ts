@@ -1738,6 +1738,58 @@ export function runMigrations(d: Database.Database): void {
                 ).run();
             },
         },
+        {
+            // v60 -- THE TUI IS PART OF AN AGENT'S IDENTITY AGAIN.
+            //
+            // The owner's rule: *"provider should be tui because the tui is what
+            // determines the provider and supports TUIs that can use any
+            // provider, so provider itself is not important for agent identity.
+            // Unique should be on workspace, tui, name."*
+            //
+            // v55 went the other way -- it collapsed (workspace, provider, name)
+            // to (workspace, name) on the reasoning that an agent switching
+            // driver is the same agent. The cost was `collision_group`: a partial
+            // index escape hatch for every pair that clashed on the way down,
+            // left for a human to settle by hand. On this workstation that
+            // stranded `codex:moic-slave` against `genie:moic-slave`
+            // indefinitely. Under (workspace, tui, name) that pair is simply two
+            // agents, and the collision stops existing rather than waiting to be
+            // resolved.
+            //
+            // VERIFIED AGAINST THE LIVE DATABASE BEFORE WRITING THIS: all 29
+            // agents already satisfy the new key -- zero duplicate
+            // (workspace, provider, name) groups, zero NULL providers among
+            // them. So this renames nothing, merges nothing and drops nothing.
+            // That is the only reason it is safe to tighten a key on real rows.
+            //
+            // The index is still PARTIAL on `collision_group IS NULL` for the
+            // same reason v55 made it so: a plain UNIQUE would FAIL TO BUILD on
+            // a profile that does hold a duplicate and take the whole upgrade
+            // down with it. Marks are cleared first, and only re-applied to rows
+            // that still clash under the WIDER key -- which is strictly fewer.
+            version: 60,
+            runner: (db) => {
+                // A row with no TUI cannot be keyed by one. `role='workspace'`
+                // rows carry provider NULL by design, and SQLite treats NULLs as
+                // distinct in a unique index, so they neither collide nor need
+                // an exemption -- but they must not keep a mark either.
+                db.prepare('UPDATE workspace_agents SET collision_group = NULL').run();
+                db.prepare(
+                    `UPDATE workspace_agents
+                        SET collision_group = workspace_id || ':' || COALESCE(provider, '') || ':' || name
+                      WHERE (workspace_id, provider, name) IN (
+                            SELECT workspace_id, provider, name FROM workspace_agents
+                             WHERE provider IS NOT NULL
+                             GROUP BY workspace_id, provider, name HAVING COUNT(*) > 1)`,
+                ).run();
+                db.exec(`
+                    DROP INDEX IF EXISTS idx_workspace_agents_name;
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_agents_tui_name
+                        ON workspace_agents(workspace_id, provider, name)
+                        WHERE collision_group IS NULL;
+                `);
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -2768,9 +2820,13 @@ export function markWorkspaceAgentTransportState(
 }
 
 export function deleteWorkspaceAgent(agentId: string): void {
-    getDb()
-        .prepare(`DELETE FROM workspace_agents WHERE id = ? AND role <> 'workspace'`)
-        .run(agentId);
+    // No role filter. The old `AND role <> 'workspace'` made this a DELETE that
+    // reported success while removing nothing — a failure that reports success,
+    // which is worse than one that stops, because nothing prompts anyone to
+    // look. Whether the WORKSPACE agent may be removed is decided in
+    // `resolveAgentDeletion` (it may — genie#324), where a refusal can actually
+    // be returned to the caller.
+    getDb().prepare(`DELETE FROM workspace_agents WHERE id = ?`).run(agentId);
 }
 
 export type WorkspaceTodoKind = 'user' | 'agent';

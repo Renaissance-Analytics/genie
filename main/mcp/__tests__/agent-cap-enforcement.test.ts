@@ -260,7 +260,7 @@ beforeEach(() => {
     terminalManager().killAll();
     for (const s of listTerminalSpecs()) deleteTerminalSpec(s.id);
     for (const agent of listWorkspaceAgents(WS_ID)) {
-        if (agent.role !== 'workspace') deleteWorkspaceAgent(agent.id);
+        deleteWorkspaceAgent(agent.id);
     }
     spawnedPtys.length = 0;
     modalsRaised.length = 0;

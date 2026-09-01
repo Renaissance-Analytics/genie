@@ -55,13 +55,18 @@ describe('agentCardMenuItems', () => {
         expect(ids(items)).not.toContain('make-default');
     });
 
-    it('does not offer to start an agent that is already running', () => {
-        // POSITIVE CONTROL on the guard: a menu that always offered Start would
-        // give a second way to spawn past a live agent, which is the orphan bug
-        // this whole area exists to fix.
+    it('offers the same actions on a running agent, with Start reading as Focus', () => {
+        // The old rule withheld Start from a running agent, to stop a second
+        // spawn past a live one. The owner requires all five actions always
+        // present, so the guard moves from ABSENCE to MEANING: the item stays,
+        // and on a running agent it focuses the existing terminal rather than
+        // launching another. What must never happen is a second pty — that is
+        // enforced in the start path, not by hiding the menu item.
         const items = agentCardMenuItems(row({ running: true, provider: 'claude' }));
-        expect(ids(items)).not.toContain('start');
-        // …but it is still an agent, so the agent-level items remain.
+
+        expect(ids(items)).toContain('start');
+        expect(items.find((i) => i.id === 'start')?.label).toBe('Focus agent');
+        // …and it is still an agent, so the agent-level items remain.
         expect(ids(items)).toContain('make-default');
     });
 

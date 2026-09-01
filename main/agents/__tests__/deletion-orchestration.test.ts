@@ -97,7 +97,7 @@ function registerAgent(
 beforeEach(() => {
     for (const wsId of [LINKED_WS, PLAIN_WS]) {
         for (const a of listWorkspaceAgents(wsId)) {
-            if (a.role !== 'workspace') deleteWorkspaceAgent(a.id);
+            deleteWorkspaceAgent(a.id);
         }
     }
 });
@@ -150,7 +150,7 @@ describe('deleteRegisteredAgent', () => {
         expect(deleteRegisteredAgent(plain, 'delete')).not.toHaveProperty('tynnNote');
     });
 
-    it('refuses to delete the WORKSPACE agent', () => {
+    it('deletes the WORKSPACE agent like any other', () => {
         // A new workspace gets no placeholder agent (v50's did, and it became
         // a phantom square — see the comment on `addWorkspace`), so this
         // registers one explicitly rather than relying on auto-seeding.
@@ -172,9 +172,11 @@ describe('deleteRegisteredAgent', () => {
 
         const result = deleteRegisteredAgent(wsAgentId, 'delete');
 
-        expect(result.ok).toBe(false);
-        // Still registered — a refusal must not have deleted it anyway.
-        expect(getWorkspaceAgentById(wsAgentId)).toBeDefined();
+        expect(result.ok).toBe(true);
+        // ...and actually GONE. The old guard was a DELETE with a role filter,
+        // so it reported success while removing nothing — the worse of the two
+        // failures, because nothing prompts anyone to look.
+        expect(getWorkspaceAgentById(wsAgentId)).toBeUndefined();
     });
 
     it('refuses an unknown agent id rather than throwing', () => {

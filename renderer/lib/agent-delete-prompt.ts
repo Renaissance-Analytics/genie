@@ -48,3 +48,56 @@ export const AGENT_DELETE_CHOICES: readonly AgentDeleteChoice[] = [
 export function agentDeleteConfirmLabel(mode: AgentDeleteMode): string {
     return mode === 'delete' ? 'Delete for real' : 'Unmount';
 }
+
+/** Whether stopping this agent can take a handoff first, and what to say. */
+export interface HandoffOffer {
+    available: boolean;
+    label: string;
+    hint: string;
+}
+
+/**
+ * The offer to take a handoff before stopping.
+ *
+ * Unmount and Delete both stop the agent AND its sidecars, and that is the LAST
+ * moment the agent is still there to be asked what it was in the middle of.
+ * Once its terminal is gone, whatever it had in flight is unrecoverable — and
+ * this is the one point in the UI where a person is about to cause that.
+ *
+ * Only offered while the agent is RUNNING. A dormant agent has no live
+ * conversation to summarise, so a checkbox there would promise something
+ * nothing can deliver — the exact failure mode this codebase keeps fixing.
+ */
+export function handoffOfferFor(input: {
+    running: boolean;
+    mode: AgentDeleteMode;
+}): HandoffOffer {
+    if (!input.running) {
+        return {
+            available: false,
+            label: 'Ask for a handoff first',
+            // Says why it is unavailable rather than sitting greyed and mute.
+            hint: 'This agent is not running, so there is nothing to ask.',
+        };
+    }
+    return {
+        available: true,
+        label: 'Ask for a handoff first',
+        hint:
+            input.mode === 'delete'
+                ? 'It writes what it was doing to .ai/handoff/ before stopping. That note survives even though its .agents/ files do not. Without one, whatever it had in flight is lost.'
+                : 'It writes what it was doing to .ai/handoff/ before stopping, so the next run picks up where it left off. Without one, whatever it had in flight is lost.',
+    };
+}
+
+/**
+ * What the confirm button says while the stop is in flight.
+ *
+ * Waiting on a handoff is bounded at 45 seconds. A generic "Working…" for that
+ * long reads as a dialog that has hung, and the person cancels a stop that was
+ * doing exactly what they ticked — so when a note was asked for, the button
+ * says WHO it is waiting on.
+ */
+export function agentDeleteBusyLabel(input: { agentName: string; handoff: boolean }): string {
+    return input.handoff ? `Waiting for ${input.agentName}…` : 'Working…';
+}

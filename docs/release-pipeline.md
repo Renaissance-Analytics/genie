@@ -39,6 +39,26 @@ The release workflow picks up the tag, builds all three platforms,
 and attaches the installers + `latest.yml` / `latest-mac.yml` to the
 GitHub Release.
 
+## Writing the release notes
+
+Every tag needs `docs/releases/v<tag>.md`. It becomes the GitHub release
+body, which is what the in-app **What’s New** popover and the upgrade log
+render — so it is read in a small scrolling panel, not as a changelog.
+
+**It is length-limited, and the limit is enforced.** `npm test` fails at PR
+time and `release.yml` fails before the release is created, both running
+`node scripts/release-notes-policy.mjs <file>`:
+
+- **200 characters per bullet** — a bold lede and one sentence.
+- **8 bullets** across the whole file, both sections.
+- **1400 characters** overall.
+
+One line per change: what a user can now do, or what they must do. The
+reasoning, the history and the issue numbers belong in the commit and the
+issue, where someone who wants them can find them. Notes written before
+beta.294 are not checked — their release bodies are already published, so
+editing the files would change nothing anyone sees.
+
 ## Unsigned releases — the alpha default
 
 Genie's alpha releases ship **unsigned** so anyone can try them

@@ -1523,6 +1523,10 @@ app.whenReady().then(async () => {
             agentInboxBroker.deliverHumanMessageToTerminal(
                 d.terminalId,
                 formatDeferredAnswer(d),
+                // This is the human ANSWERING a question this agent asked, not
+                // ordinary mail. It arrived as "You just received a message from
+                // You as a DM" — which reads as a note the agent sent itself.
+                'ftq-answer',
             );
         });
         rehydrateAgentInbox();

@@ -1804,6 +1804,15 @@ button.iw-feedback-note.as-link:hover {
     border-color: var(--agent);
     background: var(--agent-soft);
 }
+/* The handoff opt-in sits BELOW the choices and separated from them: it is a
+   different question (what to ask the agent before it stops), not a third way
+   to delete, and reading as one more radio option is how a person mis-clicks
+   it. */
+.agent-delete-handoff {
+    margin-top: 10px;
+    padding: 8px;
+    border-top: 1px solid var(--border-1);
+}
 
 .seg {
     display: inline-flex;

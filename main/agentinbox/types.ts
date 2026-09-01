@@ -310,6 +310,13 @@ export function normalizePurpose(raw: string | undefined | null): string {
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, '-')
         .replace(/^-+|-+$/g, '');
+    // NOTE (genie#324): `general` is NOT only an accident here. It is also the
+    // designated name of a workspace's DEFAULT agent — `runAgent start` with no
+    // name resolves to it (see `agents/identity.ts` and `agents/saved.ts`).
+    // Removing this fallback outright breaks that convention and took out 12
+    // runAgent tests. The accidental mint is fixed at the ONE site that lazily
+    // invents an agent from an unnamed terminal (`agentInboxForMcp`), which
+    // checks the RAW purpose instead of this normalised one.
     if (!kebab) return 'general';
     return kebab.split('-').filter(Boolean).slice(0, 6).join('-');
 }

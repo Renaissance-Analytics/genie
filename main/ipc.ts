@@ -97,7 +97,9 @@ import {
     registerAgentInWorkspace,
     startRegisteredAgent,
 } from './mcp/host-tools';
-import { deleteRegisteredAgent } from './agents/deletion';
+import { deleteRegisteredAgent, terminalsToStopFor } from './agents/deletion';
+import { requestHandoffBeforeStop } from './agents/handoff-request';
+import { getWorkspaceAgentById } from './agents/lookup';
 import { agentInboxBroker } from './agentinbox/broker';
 import { type AgentInboxScope } from './agentinbox/types';
 import { appendLaunchFlags } from './agentinbox/session-capture';
@@ -633,9 +635,32 @@ export function registerIpcHandlers(): void {
     // destructive action.
     ipcMain.handle(
         'agents:delete',
-        (_e, agentId: string, mode: 'unmount' | 'delete') => {
+        async (
+            _e,
+            agentId: string,
+            mode: 'unmount' | 'delete',
+            handoff?: boolean,
+        ) => {
+            const id = String(agentId ?? '');
+            // Ask BEFORE anything is killed. This is the last moment the agent
+            // is still there to be asked what it was doing — the request goes
+            // to exactly the terminals the delete is about to kill, and the
+            // wait is bounded so a wedged agent cannot make Delete hang.
+            if (handoff) {
+                const agent = getWorkspaceAgentById(id);
+                const ws = agent ? getWorkspace(agent.workspace_id) : null;
+                if (agent && ws) {
+                    await requestHandoffBeforeStop({
+                        workspaceRoot: ws.path,
+                        agentName: agent.name,
+                        terminalIds: terminalsToStopFor(agent),
+                        deliver: (terminalId, text) =>
+                            agentInboxBroker.deliverHumanMessageToTerminal(terminalId, text),
+                    });
+                }
+            }
             const result = deleteRegisteredAgent(
-                String(agentId ?? ''),
+                id,
                 mode === 'delete' ? 'delete' : 'unmount',
             );
             // Same reason `agents:setDefault`'s callers rebuild the grid: a

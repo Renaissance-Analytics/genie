@@ -9,11 +9,18 @@ import type { AgentGridRow } from './ams-grid';
  * terminal-is-the-agent assumption the redesign exists to remove: the actions
  * that matter most while an agent is stopped need no terminal to act on.
  *
- * A RUNNING agent still gets the terminal menu on top of these, because items
- * like rename and restart act on a terminal that exists. Delete does NOT move
- * to that menu, though: an agent is not its terminal (genie#311) — its
- * `.agents/*` files outlive any terminal, so deleting it stays here, on the
- * agent, whether or not one is currently running.
+ * ONE menu, running or not. A running agent used to fall through to the
+ * TERMINAL menu instead — Remove from view, Open in new window, Rename,
+ * Duplicate, Agent settings, Restart, Move to project, Delete — while a stopped
+ * one got a four-item agent menu with none of those. The same square answered
+ * differently from one moment to the next, and two of those items describe
+ * things this product does not do: agents are not DUPLICATED, and agents are
+ * not MOVED between projects (nor are terminals detached from them).
+ *
+ * Start, Restart, Edit, Unmount and Delete are always present. Unmount and
+ * Delete both stop the agent AND its sidecars; the only difference is whether
+ * `.agents/*` survives. Both offer to take a handoff first, because stopping an
+ * agent is the moment its unfinished context is lost.
  *
  * PURE — the model is testable without a window, which is where the guards
  * below are worth pinning.
@@ -22,6 +29,9 @@ import type { AgentGridRow } from './ams-grid';
 export interface AgentCardMenuItem {
     id:
         | 'start'
+        | 'restart'
+        | 'edit'
+        | 'unmount'
         | 'make-default'
         | 'clear-default'
         | 'remove-orphan'
@@ -31,6 +41,14 @@ export interface AgentCardMenuItem {
     hint?: string;
     /** Renders as the emphasised item. */
     primary?: boolean;
+    /** Destructive styling. */
+    danger?: boolean;
+    /**
+     * Ask twice before doing it. Set for removing a leftover that still has a
+     * live TUI: a disconnected terminal cannot be asked for a handoff, so its
+     * work cannot be preserved, and that must not be one click.
+     */
+    confirmTwice?: boolean;
 }
 
 export function agentCardMenuItems(row: AgentGridRow): AgentCardMenuItem[] {
@@ -44,12 +62,21 @@ export function agentCardMenuItems(row: AgentGridRow): AgentCardMenuItem[] {
     // the thing that wants removing, and this is the only surface that can
     // offer it.
     if (row.kind !== 'agent') {
+        // A leftover with a LIVE TUI is asked about twice. Nothing owns it, so
+        // there is no agent to ask for a handoff — whatever that TUI was in the
+        // middle of cannot be preserved, and a disconnected terminal cannot be
+        // asked either. A dead leftover stays one click, or the second prompt
+        // becomes noise everyone learns to click through.
         return [
             {
                 id: 'remove-orphan',
                 label: 'Remove leftover',
-                hint: 'Nothing owns this any more. Removing it affects no agent.',
+                hint: row.running
+                    ? 'Something is STILL RUNNING in here. Nothing owns it, so no handoff can be taken — whatever it was doing is lost.'
+                    : 'Nothing owns this any more. Removing it affects no agent.',
                 primary: true,
+                danger: true,
+                confirmTwice: !!row.running,
             },
         ];
     }
@@ -82,15 +109,29 @@ export function agentCardMenuItems(row: AgentGridRow): AgentCardMenuItem[] {
         ];
     }
 
-    const items: AgentCardMenuItem[] = [];
-    if (!row.running) {
-        items.push({
+    // The SAME five, running or not. Which one a person wants depends on what
+    // they are about to do, not on whether a pty happens to be alive — and a
+    // menu that changes shape underneath them is the thing this replaces.
+    const items: AgentCardMenuItem[] = [
+        {
             id: 'start',
-            label: 'Start agent',
-            hint: 'Opens its terminal and resumes where it left off.',
-            primary: true,
-        });
-    }
+            label: row.running ? 'Focus agent' : 'Start agent',
+            hint: row.running
+                ? 'Brings its terminal forward.'
+                : 'Opens its terminal and resumes where it left off.',
+            primary: !row.running,
+        },
+        {
+            id: 'restart',
+            label: 'Restart agent',
+            hint: 'Relaunches its TUI and resumes the same conversation.',
+        },
+        {
+            id: 'edit',
+            label: 'Edit agent…',
+            hint: 'Its name, purpose, TUI and persona.',
+        },
+    ];
     items.push(
         row.role === 'workspace'
             ? {
@@ -110,10 +151,25 @@ export function agentCardMenuItems(row: AgentGridRow): AgentCardMenuItem[] {
     // itself never destroys anything — it opens the choice between the two, so
     // this menu can offer it without becoming a second dead end for a guess
     // made wrong.
-    items.push({
-        id: 'delete',
-        label: 'Delete…',
-        hint: 'Unmount to keep its files, or delete them for good.',
-    });
+    // UNMOUNT and DELETE are separate items, not one that asks which you meant.
+    // They are different intentions and the menu should say so. Both stop the
+    // agent AND its sidecars; the only difference is whether `.agents/*`
+    // survives. Both offer to take a handoff first — stopping an agent is the
+    // moment its unfinished context is lost, and it is the only moment the
+    // agent is still there to be asked.
+    items.push(
+        {
+            id: 'unmount',
+            label: 'Unmount…',
+            hint: 'Stops this agent and its sidecars. Keeps every file under .agents/.',
+            danger: true,
+        },
+        {
+            id: 'delete',
+            label: 'Delete…',
+            hint: 'Stops this agent and its sidecars, and removes its .agents/ files. No undo.',
+            danger: true,
+        },
+    );
     return items;
 }

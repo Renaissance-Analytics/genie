@@ -98,6 +98,11 @@ interface Props {
     onToggleSpec: (id: string) => void;
     onAddSpec: (workspaceId: string, type: ViewType) => void;
     onDestroySpec: (id: string) => void;
+    /** Restart an agent by its terminal spec — the same resume the terminal menu
+     *  offers, so a resume is a resume wherever it is asked for. */
+    onRestartAgentSpec: (specId: string) => void;
+    /** Open the agent-settings editor for an agent by its terminal spec. */
+    onEditAgentSpec: (specId: string) => void;
     /** Tier 2: suspend a terminal (keep pty, hide panel). */
     onDisableSpec: (id: string) => void;
     /** Tier 2: resume a suspended terminal (reattach to the live session). */
@@ -184,6 +189,8 @@ export default function Chooser({
     onToggleSpec,
     onAddSpec,
     onDestroySpec,
+    onRestartAgentSpec,
+    onEditAgentSpec,
     onDisableSpec,
     onEnableSpec,
     onOpenContextMenu,
@@ -264,12 +271,28 @@ export default function Chooser({
     const [deletePrompt, setDeletePrompt] = useState<{
         ws: string;
         agent: { id: string; name: string };
+        /** Whether it is LIVE. A handoff can only be asked of a running agent,
+         *  so the dialog must not offer one otherwise. */
+        running: boolean;
+        /** Which the menu asked for. Unmount and Delete are separate items now,
+         *  so the dialog opens already knowing the intent rather than asking a
+         *  question the person just answered. */
+        mode: 'unmount' | 'delete';
     } | null>(null);
     const [deleteBusy, setDeleteBusy] = useState(false);
     const [deleteError, setDeleteError] = useState<string | null>(null);
-    const openDeletePrompt = (ws: string, agent: { id: string; name: string }) => {
+    const openDeletePrompt = (
+        ws: string,
+        agent: { id: string; name: string; running?: boolean },
+        mode: 'unmount' | 'delete' = 'delete',
+    ) => {
         setDeleteError(null);
-        setDeletePrompt({ ws, agent });
+        setDeletePrompt({
+            ws,
+            agent: { id: agent.id, name: agent.name },
+            running: !!agent.running,
+            mode,
+        });
     };
     // Right-click context menu for a process row.
     const [procMenu, setProcMenu] = useState<{
@@ -1305,6 +1328,7 @@ export default function Chooser({
                                                         openDeletePrompt(ws.id, {
                                                             id: entry.id,
                                                             name: entry.name,
+                                                            running: entry.running,
                                                         });
                                                     } else {
                                                         onActivateWorkspace(ws.id);
@@ -2001,13 +2025,50 @@ export default function Chooser({
                             void api().agents.setDefault(ws, row.id).catch(() => {});
                         } else if (id === 'clear-default') {
                             void api().agents.setDefault(ws, null).catch(() => {});
+                        } else if (id === 'restart') {
+                            // Same path the terminal menu's restart takes, so a
+                            // resume is a resume wherever it is asked for.
+                            if (row.specId) onRestartAgentSpec(row.specId);
+                        } else if (id === 'edit') {
+                            if (row.specId) onEditAgentSpec(row.specId);
                         } else if (id === 'remove-orphan') {
-                            // The leftover IS the spec. Nothing owns it, so
-                            // removing it cannot orphan an agent -- which is
-                            // why this one does not ask twice.
-                            if (row.specId) onDestroySpec(row.specId);
-                        } else if (id === 'delete') {
-                            openDeletePrompt(ws, { id: row.id, name: row.name });
+                            // A leftover with a LIVE TUI is asked about twice.
+                            // Nothing owns it, so no agent can be asked for a
+                            // handoff, and a disconnected terminal cannot be
+                            // asked either — whatever it was doing is lost. A
+                            // dead leftover stays one click.
+                            if (!row.specId) return;
+                            const specId = row.specId;
+                            if (!row.running) {
+                                onDestroySpec(specId);
+                                return;
+                            }
+                            // A leftover with a LIVE TUI is asked about TWICE.
+                            // Nothing owns it, so there is no agent to ask for a
+                            // handoff, and a disconnected terminal cannot be
+                            // asked either — whatever it was doing is lost.
+                            void (async () => {
+                                const first = await showPrompt({
+                                    title: 'Remove leftover',
+                                    body: `Something is still RUNNING in "${row.name}". Nothing owns it, so no handoff can be taken — whatever it was doing is lost.`,
+                                    confirmLabel: 'Continue',
+                                    destructive: true,
+                                });
+                                if (first === null) return;
+                                const second = await showPrompt({
+                                    title: 'Remove it anyway?',
+                                    body: 'This cannot be undone and its work cannot be recovered.',
+                                    confirmLabel: 'Remove leftover',
+                                    destructive: true,
+                                });
+                                if (second === null) return;
+                                onDestroySpec(specId);
+                            })();
+                        } else if (id === 'unmount' || id === 'delete') {
+                            // Both stop the agent AND its sidecars; the prompt
+                            // offers a handoff first, because this is the last
+                            // moment the agent is still there to be asked.
+                            openDeletePrompt(ws, { id: row.id, name: row.name, running: row.running }, id);
                         }
                     }}
                 />,
@@ -2018,14 +2079,20 @@ export default function Chooser({
             createPortal(
                 <AgentDeleteModal
                     agent={deletePrompt.agent}
+                    running={deletePrompt.running}
+                    initialMode={deletePrompt.mode}
                     busy={deleteBusy}
                     error={deleteError}
                     onCancel={() => setDeletePrompt(null)}
-                    onConfirm={async ({ mode }) => {
+                    onConfirm={async ({ mode, handoff }) => {
                         setDeleteBusy(true);
                         setDeleteError(null);
                         try {
-                            const res = await api().agents.delete(deletePrompt.agent.id, mode);
+                            const res = await api().agents.delete(
+                                deletePrompt.agent.id,
+                                mode,
+                                handoff,
+                            );
                             if (!res.ok) {
                                 setDeleteError(res.error || 'Could not delete the agent.');
                                 return;

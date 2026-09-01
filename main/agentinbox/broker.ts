@@ -360,9 +360,11 @@ export class AgentInboxBroker {
      */
     private notifyNow(target: AgentInboxAgent, msg: AgentInboxMessage): boolean {
         if (!this.wakeSink || !target.terminalId) return false;
+        const isAnswer = this.ftqAnswerTerminals.delete(target.terminalId);
         const text = inboxNoticeText({
             from: msg.fromLabel,
             priority: msg.interrupt ? 'high' : 'normal',
+            kind: isAnswer ? 'ftq-answer' : 'dm',
         });
         const plan = planNudge(target.draft);
         if (plan.mode === 'defer') {
@@ -571,12 +573,27 @@ export class AgentInboxBroker {
      * (`interrupt`) — ping, poll, pull. Returns false if the terminal has no
      * registered agent identity (nothing to deliver to yet).
      */
-    deliverHumanMessageToTerminal(terminalId: string, text: string): boolean {
+    /**
+     * @param kind `ftq-answer` when this is the human ANSWERING a question the
+     * agent asked. It changes only the notice: an answer must not read as a
+     * message the agent sent itself ("from You as a DM"), and must be tellable
+     * at a glance from ordinary mail.
+     */
+    deliverHumanMessageToTerminal(
+        terminalId: string,
+        text: string,
+        kind: 'dm' | 'ftq-answer' = 'dm',
+    ): boolean {
         const target = this.agentForTerminal(terminalId);
         if (!target) return false;
+        if (kind === 'ftq-answer') this.ftqAnswerTerminals.add(terminalId);
         const r = this.send({ human: true, toAgentId: target.agentId, text, interrupt: true });
         return r.ok;
     }
+
+    /** Terminals whose NEXT notice is an answer rather than ordinary mail.
+     *  Consumed as it is read, so exactly one notice is reshaped. */
+    private ftqAnswerTerminals = new Set<string>();
 
     /**
      * Rehydrate the in-memory logs + inboxes from the store at boot — call AFTER
