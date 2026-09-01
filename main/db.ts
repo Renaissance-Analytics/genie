@@ -1776,12 +1776,26 @@ export function runMigrations(d: Database.Database): void {
             // that still clash under the WIDER key -- which is strictly fewer.
             version: 60,
             runner: (db) => {
+                const drv = driverColumn(db, 'workspace_agents');
+                // DROP THE NARROW KEY FIRST. v55's `idx_workspace_agents_name` is
+                // UNIQUE (workspace_id, name) WHERE collision_group IS NULL, and
+                // the MARK is the only thing keeping a colliding pair out of it.
+                // Clearing the marks while that index is still live puts both
+                // halves straight back into it, and the upgrade dies on
+                // `UNIQUE constraint failed: workspace_agents.workspace_id,
+                // workspace_agents.name` before it can widen anything.
+                //
+                // Found by running the ladder against a COPY OF THE LIVE
+                // DATABASE: `codex:moic-slave` and `genie:moic-slave`, marked,
+                // in one workspace -- exactly the pair this migration exists to
+                // dissolve. It reproduces nowhere else, because every migration
+                // fixture is built on a FRESH database where no row is marked.
+                db.exec('DROP INDEX IF EXISTS idx_workspace_agents_name');
                 // A row with no TUI cannot be keyed by one. `role='workspace'`
-                // rows carry provider NULL by design, and SQLite treats NULLs as
+                // rows carry a NULL driver by design, and SQLite treats NULLs as
                 // distinct in a unique index, so they neither collide nor need
                 // an exemption -- but they must not keep a mark either.
                 db.prepare('UPDATE workspace_agents SET collision_group = NULL').run();
-                const drv = driverColumn(db, 'workspace_agents');
                 db.prepare(
                     `UPDATE workspace_agents
                         SET collision_group = workspace_id || ':' || COALESCE(${drv}, '') || ':' || name
@@ -1791,7 +1805,6 @@ export function runMigrations(d: Database.Database): void {
                              GROUP BY workspace_id, ${drv}, name HAVING COUNT(*) > 1)`,
                 ).run();
                 db.exec(`
-                    DROP INDEX IF EXISTS idx_workspace_agents_name;
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_agents_tui_name
                         ON workspace_agents(workspace_id, ${drv}, name)
                         WHERE collision_group IS NULL;
