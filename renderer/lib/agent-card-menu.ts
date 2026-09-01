@@ -17,7 +17,12 @@ import type { AgentGridRow } from './ams-grid';
  */
 
 export interface AgentCardMenuItem {
-    id: 'start' | 'make-default' | 'clear-default' | 'resolve-collision';
+    id:
+        | 'start'
+        | 'make-default'
+        | 'clear-default'
+        | 'resolve-collision'
+        | 'remove-orphan';
     label: string;
     /** Longer copy for a menu that explains rather than just naming. */
     hint?: string;
@@ -26,9 +31,25 @@ export interface AgentCardMenuItem {
 }
 
 export function agentCardMenuItems(row: AgentGridRow): AgentCardMenuItem[] {
-    // An ORPHAN is a terminal no agent owns. There is no record to start or
-    // designate, and guessing one would act on the wrong thing.
-    if (row.kind !== 'agent') return [];
+    // An ORPHAN is a leftover no agent owns — what is left on screen after the
+    // agent it belonged to is gone. It has no record to start or designate, so
+    // it gets no agent actions; guessing one would act on the wrong thing.
+    //
+    // It does NOT get an empty menu. That is what shipped, and it left the
+    // owner right-clicking a square that answered with nothing — the exact dead
+    // end this codebase is supposed to stop creating. The leftover itself is
+    // the thing that wants removing, and this is the only surface that can
+    // offer it.
+    if (row.kind !== 'agent') {
+        return [
+            {
+                id: 'remove-orphan',
+                label: 'Remove leftover',
+                hint: 'Nothing owns this any more. Removing it affects no agent.',
+                primary: true,
+            },
+        ];
+    }
 
     // A name conflict means two agents answer to this name and nobody has said
     // which survives. Acting on "the" agent is ambiguous until they do, so the

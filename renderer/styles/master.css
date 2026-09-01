@@ -6755,3 +6755,46 @@ body.gutter-dragging .grid-gutter {
     align-items: flex-start;
     gap: 7px;
 }
+
+/* The avatar popover carries STATUS, STATS and CONTROLS — it is the collapsed
+   sidebar's equivalent of the expanded agent grid, not a tooltip, so it is
+   sized and spaced to be operated rather than only read. */
+.ws-agent-popover-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 3px;
+}
+.ws-agent-stat {
+    padding: 1px 6px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-1);
+    background: var(--bg-2);
+    color: var(--fg-3);
+    font-size: 10.5px;
+    line-height: 1.5;
+    white-space: nowrap;
+}
+.ws-agent-popover-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 6px;
+}
+.ws-agent-action {
+    padding: 3px 9px;
+    font-size: 11px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-1);
+    background: var(--bg-2);
+    color: var(--fg-2);
+    cursor: pointer;
+}
+.ws-agent-action:hover {
+    border-color: var(--fg-4);
+    color: var(--fg-1);
+}
+.ws-agent-action.is-primary {
+    border-color: var(--agent-ring, var(--agent));
+    color: var(--fg-1);
+}

@@ -214,7 +214,12 @@ export default function SpecContextMenu({
             <div className="proj-popover-section">
                 <CtxItem
                     icon={<IconTrash size={14} />}
-                    label="Delete terminal"
+                    // An agent is not its terminal. Deleting one from an
+                    // agent's menu removes the AGENT, and saying "terminal"
+                    // there reads as "just close the shell". A plain terminal
+                    // is still a terminal — renaming both would be the same
+                    // error mirrored.
+                    label={isAgent ? 'Delete agent' : 'Delete terminal'}
                     destructive
                     onClick={() => {
                         onDelete();

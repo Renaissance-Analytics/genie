@@ -65,10 +65,32 @@ describe('agentCardMenuItems', () => {
         expect(ids(items)).toContain('make-default');
     });
 
-    it('never offers agent actions for an ORPHAN', () => {
-        // An orphan is a terminal no agent owns. There is no record to start,
-        // designate, or rename — offering those would act on a guess.
-        expect(agentCardMenuItems(row({ kind: 'orphan' }))).toEqual([]);
+    it('gives an ORPHAN a way to CLEAR ITSELF, never an empty menu', () => {
+        // I shipped this returning [] — so a leftover square had no menu at all,
+        // which is the dead end the owner had just told me to stop creating.
+        // The reasoning was that an orphan has no agent record to act on. True,
+        // and beside the point: the leftover itself is the thing that needs
+        // removing, and it is the only thing on screen that can offer it.
+        const items = agentCardMenuItems(row({ kind: 'orphan' }));
+        expect(ids(items)).toContain('remove-orphan');
+        // Still no AGENT actions — there is no record to start or designate,
+        // and offering those would act on a guess.
+        expect(ids(items)).not.toContain('start');
+        expect(ids(items)).not.toContain('make-default');
+    });
+
+    it('never returns an empty menu for anything that renders', () => {
+        // THE rule, as a test: a square you can right-click must give you
+        // something. Every kind that reaches the grid is covered here, so a new
+        // one added later fails this rather than shipping a dead end.
+        for (const kind of ['agent', 'orphan'] as const) {
+            for (const running of [true, false]) {
+                for (const collisionGroup of [null, 'g1']) {
+                    const items = agentCardMenuItems(row({ kind, running, collisionGroup }));
+                    expect(items.length).toBeGreaterThan(0);
+                }
+            }
+        }
     });
 
     it('marks a name conflict as needing the human, and offers nothing else', () => {

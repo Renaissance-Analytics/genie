@@ -1269,6 +1269,28 @@ export default function Chooser({
                                         if (!record) return null;
                                         return (
                                             <AgentAvatarStack
+                                                // The collapsed sidebar must not
+                                                // be a reduced one: the popover
+                                                // runs the SAME actions the
+                                                // expanded grid's menu does.
+                                                onAct={(entry, action) => {
+                                                    if (action === 'start') {
+                                                        onActivateWorkspace(ws.id);
+                                                        void api()
+                                                            .agents.start(ws.id, entry.name)
+                                                            .catch(() => {});
+                                                    } else if (action === 'make-default') {
+                                                        void api()
+                                                            .agents.setDefault(ws.id, entry.id)
+                                                            .catch(() => {});
+                                                    } else if (action === 'clear-default') {
+                                                        void api()
+                                                            .agents.setDefault(ws.id, null)
+                                                            .catch(() => {});
+                                                    } else {
+                                                        onActivateWorkspace(ws.id);
+                                                    }
+                                                }}
                                                 stack={agentStack({
                                                     rows: agentGridRows({
                                                         agents: record.agents,
@@ -1452,8 +1474,18 @@ export default function Chooser({
                                                                 // running one also gets the
                                                                 // terminal menu, whose items act
                                                                 // on a terminal that exists.
-                                                                if (specId) onOpenContextMenu(specId, p);
-                                                                else if (row.kind === 'agent') {
+                                                                // Routed by KIND, not by "has a
+                                                                // spec". An orphan has one, so it
+                                                                // used to open the terminal menu --
+                                                                // Rename, Duplicate, Move to
+                                                                // workspace -- every item of which
+                                                                // is wrong for a leftover nothing
+                                                                // owns.
+                                                                if (row.kind === 'orphan') {
+                                                                    setAgentMenu({ ws: ws.id, row, at: p });
+                                                                } else if (specId) {
+                                                                    onOpenContextMenu(specId, p);
+                                                                } else if (row.kind === 'agent') {
                                                                     setAgentMenu({ ws: ws.id, row, at: p });
                                                                 }
                                                             }}
@@ -1950,6 +1982,11 @@ export default function Chooser({
                             void api().agents.setDefault(ws, row.id).catch(() => {});
                         } else if (id === 'clear-default') {
                             void api().agents.setDefault(ws, null).catch(() => {});
+                        } else if (id === 'remove-orphan') {
+                            // The leftover IS the spec. Nothing owns it, so
+                            // removing it cannot orphan an agent -- which is
+                            // why this one does not ask twice.
+                            if (row.specId) onDestroySpec(row.specId);
                         } else if (id === 'resolve-collision') {
                             onActivateWorkspace(ws);
                         }

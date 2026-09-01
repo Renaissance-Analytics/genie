@@ -26,6 +26,9 @@ export interface AgentStackEntry {
     /** Every TUI it holds BESIDES the visible one. */
     sidecars: Array<{ provider: string; running: boolean }>;
     collisionGroup: string | null;
+    /** The workspace-default designation, so the popover can say why this agent
+     *  boots from the root — and so its controls can offer to clear it. */
+    role: 'workspace' | 'specialized' | 'gapp';
 }
 
 export interface AgentStack {
@@ -57,6 +60,7 @@ export function agentStack(input: AgentStackInput): AgentStack {
     const entries = ordered.slice(0, max).map((row) => ({
         id: row.id,
         name: row.name,
+        role: row.role,
         provider: row.provider,
         avatar: row.avatar,
         running: row.running,
