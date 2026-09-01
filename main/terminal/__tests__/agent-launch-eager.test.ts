@@ -104,6 +104,7 @@ vi.mock('../genie-adapter', () => ({
 
 import { createAgentTerminal } from '../ipc';
 import { terminalManager, configureInProcessBackend } from '@particle-academy/fancy-term-host';
+import { recordProviderAvailability, resetProviderAvailabilityCache } from '../../agents/availability';
 
 configureInProcessBackend({
     settings: { get: (k) => (k === 'track_cwd' ? 'off' : undefined) },
@@ -207,5 +208,85 @@ describe('createAgentTerminal — the Host launches the agent (genie #63 Phase 0
 
         expect(terminalManager().isLive(r.id)).toBe(true);
         expect(writes).toHaveLength(0);
+    });
+});
+
+/**
+ * genie#313 — "when a provider's binary is absent and cannot be installed, the
+ * provider should surface that... rather than opening a terminal that fails
+ * with command not found." Before this, a FRESH agent terminal always spawned
+ * a pty and typed the launch command into it, whatever the boot-time detect
+ * pass had learned — so an owned-but-missing binary produced exactly the shell
+ * error the ticket describes, just with an extra pty left behind.
+ */
+describe('createAgentTerminal refuses a FRESH launch the boot pass already knows will fail (genie#313)', () => {
+    beforeEach(() => {
+        resetProviderAvailabilityCache();
+    });
+
+    afterEach(() => {
+        resetProviderAvailabilityCache();
+    });
+
+    it('throws with the recorded reason instead of spawning a pty', () => {
+        recordProviderAvailability({
+            id: 'genie',
+            status: 'unavailable',
+            reason: 'Genie TUI is not installed, and Genie does not have an automatic installer for it yet.',
+        });
+
+        expect(() =>
+            createAgentTerminal({
+                workspaceId: 'ws-1',
+                cwd: process.cwd(),
+                label: 'genie agent',
+                agentMeta: { agent: 'genie', command: 'genie' },
+            }),
+        ).toThrow(/does not have an automatic installer/);
+
+        // No pty was spawned at all — the failure surfaces BEFORE the terminal
+        // opens, not as `command not found` inside one.
+        expect(spawned).toHaveLength(0);
+    });
+
+    it('does not block a provider the boot pass never marked unavailable', () => {
+        // No availability recorded at all — must fail OPEN, exactly like today.
+        const r = createAgentTerminal({
+            workspaceId: 'ws-1',
+            cwd: process.cwd(),
+            label: 'claude agent',
+            agentMeta: { agent: 'claude', command: 'claude' },
+        });
+        vi.runAllTimers();
+        expect(terminalManager().isLive(r.id)).toBe(true);
+    });
+
+    it('does not block reattaching to an agent that already has a saved spec', () => {
+        // A REVIVE/restart of an existing agent is a different, riskier
+        // decision (a saved conversation) than refusing a brand-new one — this
+        // guard only covers the first-ever launch of a terminal id.
+        const first = createAgentTerminal({
+            workspaceId: 'ws-1',
+            cwd: process.cwd(),
+            label: 'genie agent',
+            agentMeta: { agent: 'genie', command: 'genie' },
+        });
+        vi.runAllTimers();
+
+        recordProviderAvailability({
+            id: 'genie',
+            status: 'unavailable',
+            reason: 'now unavailable',
+        });
+
+        expect(() =>
+            createAgentTerminal({
+                id: first.id,
+                workspaceId: 'ws-1',
+                cwd: process.cwd(),
+                label: 'genie agent',
+                agentMeta: { agent: 'genie', command: 'genie' },
+            }),
+        ).not.toThrow();
     });
 });
