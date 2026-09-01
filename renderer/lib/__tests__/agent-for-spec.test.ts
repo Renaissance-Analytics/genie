@@ -34,7 +34,7 @@ const runtime = (
 ): AgentRuntimeSpec => ({
     id,
     agentId,
-    provider: 'claude',
+    tui: 'claude',
     terminalSpecId: null,
     fronted: false,
     ...over,
@@ -61,7 +61,7 @@ describe('agentForSpec', () => {
             agents: [agent('a1')],
             runtimes: [
                 runtime('r1', 'a1', { terminalSpecId: 't-front', fronted: true }),
-                runtime('r2', 'a1', { terminalSpecId: 't-side', provider: 'codex' }),
+                runtime('r2', 'a1', { terminalSpecId: 't-side', tui: 'codex' }),
             ],
             specId: 't-side',
         });

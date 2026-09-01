@@ -51,10 +51,15 @@ describe('agentGridRows', () => {
         collisionGroup: null,
         ...over,
     });
+    // The fixture still SAYS `provider` at its call sites; the field the type
+    // requires is `tui` (genie v63). Mapping it here keeps the callers reading
+    // naturally and pins the rename in exactly one place.
     const runtime = (over: { id: string; agentId: string; provider: string; specId?: string | null; fronted?: boolean }) => ({
+        id: over.id,
+        agentId: over.agentId,
+        tui: over.provider,
         terminalSpecId: over.specId ?? null,
         fronted: over.fronted ?? false,
-        ...over,
     });
     const spec = (id: string, purpose?: string) =>
         ({ id, label: 'l', meta: { agent: 'claude', whisper_purpose: purpose ?? 'x' } }) as never;

@@ -39,7 +39,7 @@ export default function AgentTuiSwitcher({
     const sidecars = mine.filter((r) => !r.fronted);
 
     const pick = (provider: string): void => {
-        const existing = mine.find((r) => r.provider === provider);
+        const existing = mine.find((r) => r.tui === provider);
         if (existing?.fronted) return; // already the visible one — not a relaunch
         void (existing
             ? api().agents.front(agentId, existing.id)
@@ -75,14 +75,14 @@ export default function AgentTuiSwitcher({
                     className="pctl agent-tui-trigger"
                     title={
                         fronted
-                            ? `Running ${fronted.provider}${
+                            ? `Running ${fronted.tui}${
                                   sidecars.length > 0 ? ` · ${sidecars.length} sidecar(s)` : ''
                               }`
                             : 'No TUI yet'
                     }
                     onClick={(e) => e.stopPropagation()}
                 >
-                    {fronted ? <Mark provider={fronted.provider} /> : <span>·</span>}
+                    {fronted ? <Mark provider={fronted.tui} /> : <span>·</span>}
                     {sidecars.length > 0 && (
                         <span className="agent-tui-count">{sidecars.length}</span>
                     )}
@@ -92,7 +92,7 @@ export default function AgentTuiSwitcher({
                 <div className="agent-tui-head">Driver</div>
                 {agentTerminalTypes().map((type) => {
                     const provider = type.agent as string;
-                    const runtime = mine.find((r) => r.provider === provider);
+                    const runtime = mine.find((r) => r.tui === provider);
                     return (
                         <button
                             key={provider}

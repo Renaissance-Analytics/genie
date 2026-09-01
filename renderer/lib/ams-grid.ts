@@ -46,7 +46,10 @@ export interface AgentRecordSpec {
 export interface AgentRuntimeSpec {
     id: string;
     agentId: string;
-    provider: string;
+    /** The TUI this runtime drives. Renamed from `provider` with the schema
+     *  (genie v63) — main sends `tui`, and a renderer still reading `provider`
+     *  got `undefined`, which is how the agent panel started throwing. */
+    tui: string;
     terminalSpecId: string | null;
     /** The visible one. At most one per agent. */
     fronted: boolean;
@@ -107,7 +110,10 @@ export function agentGridRows(input: {
         const mine = byAgent.get(agent.id) ?? [];
         const tuis = mine.map((runtime) => ({
             runtimeId: runtime.id,
-            provider: runtime.provider,
+            // `AgentGridRow.provider` is a DISPLAY field fed from runtimes AND
+            // from `spec.meta.agent`, so it keeps its name; only the runtime's
+            // own field moved to `tui` (genie v63).
+            provider: runtime.tui,
             fronted: runtime.fronted,
             running: !!runtime.terminalSpecId && isLive(runtime.terminalSpecId),
         }));
