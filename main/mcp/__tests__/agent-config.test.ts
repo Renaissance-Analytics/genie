@@ -15,12 +15,14 @@ import {
     readTynnMcpBearerToken,
     cursorEntry,
     ensureClaudeProjectMcpEnabled,
+    ensureClaudeImDoneStopHook,
     GENIE_SERVER_NAME,
     readTynnMcpUrl,
     withCodexMcpLaunch,
     withCodexGenieMcpLaunch,
     withClaudeAgentInboxChannelLaunch,
 } from '../agent-config';
+import { IMDONE_HOOK_COMMAND } from '../guide';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -484,6 +486,106 @@ describe('ensureClaudeProjectMcpEnabled (genie #10 — auto-approve project MCP)
 
     it('is a no-op for an empty workspace path (never throws)', () => {
         expect(() => ensureClaudeProjectMcpEnabled('')).not.toThrow();
+    });
+});
+
+describe('ensureClaudeImDoneStopHook (genie #318 — seed the on-finish hook)', () => {
+    const mk = () => fs.mkdtempSync(path.join(os.tmpdir(), 'genie-imdone-hook-'));
+    const settingsPath = (dir: string) => path.join(dir, '.claude', 'settings.local.json');
+
+    it('seeds a Stop hook calling imDone when settings.local.json is absent', () => {
+        const dir = mk();
+        ensureClaudeImDoneStopHook(dir);
+        const written = JSON.parse(fs.readFileSync(settingsPath(dir), 'utf8'));
+        expect(written.hooks.Stop).toHaveLength(1);
+        expect(written.hooks.Stop[0].hooks).toHaveLength(1);
+        expect(written.hooks.Stop[0].hooks[0]).toEqual({
+            type: 'command',
+            command: IMDONE_HOOK_COMMAND,
+        });
+        // The seeded command is the SAME string the guide documents — one
+        // source of truth, not a hand-duplicated copy that can drift.
+        expect(IMDONE_HOOK_COMMAND).toContain('imDone');
+        expect(IMDONE_HOOK_COMMAND).toContain('$GENIE_MCP_URL');
+        expect(IMDONE_HOOK_COMMAND).toContain('$GENIE_TERMINAL_ID');
+    });
+
+    it('merges into an existing hooks block without clobbering an unrelated hook', () => {
+        const dir = mk();
+        fs.mkdirSync(path.dirname(settingsPath(dir)), { recursive: true });
+        fs.writeFileSync(
+            settingsPath(dir),
+            JSON.stringify({
+                permissions: { allow: ['Bash'] },
+                hooks: {
+                    PreToolUse: [
+                        { matcher: 'Bash', hooks: [{ type: 'command', command: 'echo pre' }] },
+                    ],
+                    Stop: [{ hooks: [{ type: 'command', command: 'echo bye' }] }],
+                },
+            }),
+        );
+        ensureClaudeImDoneStopHook(dir);
+        const written = JSON.parse(fs.readFileSync(settingsPath(dir), 'utf8'));
+        expect(written.permissions).toEqual({ allow: ['Bash'] });
+        expect(written.hooks.PreToolUse).toEqual([
+            { matcher: 'Bash', hooks: [{ type: 'command', command: 'echo pre' }] },
+        ]);
+        expect(written.hooks.Stop).toHaveLength(2);
+        expect(written.hooks.Stop[0]).toEqual({ hooks: [{ type: 'command', command: 'echo bye' }] });
+        expect(written.hooks.Stop[1].hooks[0].command).toBe(IMDONE_HOOK_COMMAND);
+    });
+
+    it('is idempotent — a no-op when a Stop hook already calls imDone', () => {
+        const dir = mk();
+        fs.mkdirSync(path.dirname(settingsPath(dir)), { recursive: true });
+        const preExisting = {
+            hooks: {
+                Stop: [{ hooks: [{ type: 'command', command: IMDONE_HOOK_COMMAND }] }],
+            },
+        };
+        fs.writeFileSync(settingsPath(dir), JSON.stringify(preExisting));
+        ensureClaudeImDoneStopHook(dir);
+        expect(JSON.parse(fs.readFileSync(settingsPath(dir), 'utf8'))).toEqual(preExisting);
+    });
+
+    it('is idempotent even for a differently-worded pre-existing imDone hook', () => {
+        const dir = mk();
+        fs.mkdirSync(path.dirname(settingsPath(dir)), { recursive: true });
+        const preExisting = {
+            hooks: {
+                Stop: [
+                    {
+                        hooks: [
+                            {
+                                type: 'command',
+                                command: 'curl -s "$GENIE_MCP_URL" -d \'{"name":"imDone"}\'',
+                            },
+                        ],
+                    },
+                ],
+            },
+        };
+        fs.writeFileSync(settingsPath(dir), JSON.stringify(preExisting));
+        ensureClaudeImDoneStopHook(dir);
+        expect(JSON.parse(fs.readFileSync(settingsPath(dir), 'utf8'))).toEqual(preExisting);
+    });
+
+    it('is idempotent for the flat { type, command } shape older guide prose described', () => {
+        const dir = mk();
+        fs.mkdirSync(path.dirname(settingsPath(dir)), { recursive: true });
+        const preExisting = {
+            hooks: {
+                Stop: [{ type: 'command', command: 'curl ... imDone ...' }],
+            },
+        };
+        fs.writeFileSync(settingsPath(dir), JSON.stringify(preExisting));
+        ensureClaudeImDoneStopHook(dir);
+        expect(JSON.parse(fs.readFileSync(settingsPath(dir), 'utf8'))).toEqual(preExisting);
+    });
+
+    it('is a no-op for an empty workspace path (never throws)', () => {
+        expect(() => ensureClaudeImDoneStopHook('')).not.toThrow();
     });
 });
 
