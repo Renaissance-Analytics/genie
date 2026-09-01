@@ -89,11 +89,18 @@ describe('agentCardMenuItems', () => {
         expect(ids(items)).not.toContain('delete');
     });
 
-    it('does not offer delete during an unresolved name collision', () => {
-        // Acting on "the" agent is ambiguous until the collision is resolved —
-        // same reasoning as every other agent-level action being withheld here.
+    it('withholds START and DEFAULT during a collision, but not delete', () => {
+        // The ambiguity argument holds for actions that need to know WHICH
+        // agent is meant — starting one, or making one the default. It does not
+        // hold for delete: removing one of the two is precisely how a person
+        // says which survives.
         const items = agentCardMenuItems(row({ collisionGroup: 'g1' }));
-        expect(ids(items)).not.toContain('delete');
+
+        expect(ids(items)).not.toContain('start');
+        expect(ids(items)).not.toContain('make-default');
+        expect(ids(items)).not.toContain('clear-default');
+        // POSITIVE CONTROL: the menu is not simply empty.
+        expect(ids(items)).toContain('delete');
     });
 
     it('gives an ORPHAN a way to CLEAR ITSELF, never an empty menu', () => {
@@ -124,11 +131,21 @@ describe('agentCardMenuItems', () => {
         }
     });
 
-    it('marks a name conflict as needing the human, and offers nothing else', () => {
-        // Until someone picks which of two same-named agents survives, acting
-        // on "the" agent is ambiguous by construction.
+    it('offers DELETE on a name conflict, because that is what settles it', () => {
+        // This used to return only "Resolve name conflict…", on the reasoning
+        // that acting on "the" agent is ambiguous until someone picks. Starting
+        // or designating one is indeed ambiguous — but nothing implemented the
+        // resolution: the handler called `onActivateWorkspace` and merely
+        // activated the workspace. So a colliding agent had exactly one menu
+        // item, it did nothing, and it was also the only row on screen that
+        // could never be deleted — leaving the conflict unclearable by hand.
+        //
+        // Deleting one of the two really does settle it, so that is offered,
+        // and the hint says why.
         const items = agentCardMenuItems(row({ collisionGroup: 'g1' }));
-        expect(ids(items)).toEqual(['resolve-collision']);
+
+        expect(ids(items)).toEqual(['delete']);
+        expect(items[0]!.hint).toMatch(/share this name/i);
     });
 
     it('every item carries a label a human can read', () => {

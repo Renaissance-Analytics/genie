@@ -1709,6 +1709,35 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // v59 -- THE INTERACTIVE CHANNEL FLAG MUST NOT SURVIVE IN A STORED
+            // COMMAND.
+            //
+            // genie#324 stopped Genie ADDING
+            // `--dangerously-load-development-channels`, which makes Claude Code
+            // stop and ask permission on EVERY launch. But a spec written before
+            // that has the flag baked into `meta_json.agent_command`, and a
+            // revive replays the stored command verbatim (terminal/ipc.ts) — the
+            // builder, and the strip inside it, never run. Those agents would
+            // keep prompting forever while the fix sat unused.
+            //
+            // The same shape as v58 above: a value persisted into a cache that
+            // outranks the corrected default. Same remedy — REMOVE the stored
+            // command so resolution falls through to the builder, rather than
+            // editing a string inside JSON.
+            //
+            // Only specs that actually carry the flag are touched. A command the
+            // owner chose survives untouched, or the repair is worse than the bug.
+            version: 59,
+            runner: (db) => {
+                db.prepare(
+                    `UPDATE terminal_specs
+                        SET meta_json = json_remove(meta_json, '$.agent_command')
+                      WHERE json_extract(meta_json, '$.agent_command')
+                            LIKE '%--dangerously-load-development-channels%'`,
+                ).run();
+            },
+        },
     ];
 
     const apply = d.transaction(
