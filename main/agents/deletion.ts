@@ -80,12 +80,13 @@ export function resolveAgentDeletion(
     agent: AgentDeletionSubject,
     mode: AgentDeleteMode,
 ): ResolvedAgentDeletion {
-    if (agent.role === 'workspace') {
-        return {
-            ok: false,
-            error: 'The workspace agent is not a specialized agent — it cannot be deleted.',
-        };
-    }
+    // The WORKSPACE agent is removable too. The owner's rule for the agent menu
+    // is unconditional — "I always need to be able to Start, Restart, Edit,
+    // Unmount and Delete as an option" — and an agent that can never be removed
+    // was the exact dead end genie#324 is about. No exemption is needed: the
+    // role simply passes to whichever agent is registered next
+    // (`firstAgentRole`), and `idx_workspace_agents_master` is satisfied by
+    // there being none in the meantime.
     if (mode === 'unmount' || !agent.persona_path) {
         return { ok: true, plan: { agentId: agent.id, removeFiles: false, agentDir: null } };
     }

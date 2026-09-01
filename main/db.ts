@@ -2820,9 +2820,13 @@ export function markWorkspaceAgentTransportState(
 }
 
 export function deleteWorkspaceAgent(agentId: string): void {
-    getDb()
-        .prepare(`DELETE FROM workspace_agents WHERE id = ? AND role <> 'workspace'`)
-        .run(agentId);
+    // No role filter. The old `AND role <> 'workspace'` made this a DELETE that
+    // reported success while removing nothing — a failure that reports success,
+    // which is worse than one that stops, because nothing prompts anyone to
+    // look. Whether the WORKSPACE agent may be removed is decided in
+    // `resolveAgentDeletion` (it may — genie#324), where a refusal can actually
+    // be returned to the caller.
+    getDb().prepare(`DELETE FROM workspace_agents WHERE id = ?`).run(agentId);
 }
 
 export type WorkspaceTodoKind = 'user' | 'agent';

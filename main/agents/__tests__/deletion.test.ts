@@ -71,14 +71,35 @@ describe('resolveAgentDeletion', () => {
         expect(result).toMatchObject({ ok: true, plan: { removeFiles: false, agentDir: null } });
     });
 
-    it('refuses to delete the WORKSPACE agent, in either mode', () => {
+    it('lets the WORKSPACE agent be removed too, in either mode', () => {
+        // The owner's rule for the agent menu is unconditional: *"I always need
+        // to be able to Start, Restart, Edit, Unmount and Delete as an
+        // option."* A workspace agent that can never be removed was exactly the
+        // dead end #324 is about — and it needs no exemption, because the role
+        // simply passes to whichever agent is registered next
+        // (`firstAgentRole`).
         for (const mode of ['unmount', 'delete'] as const) {
             const result = resolveAgentDeletion(
                 root,
                 { id: 'workspace:x', role: 'workspace', persona_path: null },
                 mode,
             );
-            expect(result.ok).toBe(false);
+            expect(result.ok).toBe(true);
         }
+    });
+
+    it('still boundary-checks a workspace agent’s files like any other', () => {
+        // POSITIVE CONTROL: allowing the delete must not also skip the guard
+        // that stops a hand-edited persona_path wiping `.agents/` wholesale.
+        const result = resolveAgentDeletion(
+            root,
+            {
+                id: 'workspace:x',
+                role: 'workspace',
+                persona_path: path.resolve(root, '.agents', 'AGENT.md'),
+            },
+            'delete',
+        );
+        expect(result).toMatchObject({ ok: true, plan: { removeFiles: false, agentDir: null } });
     });
 });

@@ -1958,17 +1958,23 @@ export async function registerAgentInWorkspace(
         boot_cwd: resolved.bootCwd,
         persona_path: resolved.personaPath,
         // genie#324 — the FIRST agent in a workspace is that workspace's agent
-        // (TWA). The AMS guide says every workspace has one by default; the role
-        // existed in the schema and `deleteWorkspaceAgent` refuses to delete
-        // one, but nothing ever created it — 29 agents on one workstation, zero
-        // with role='workspace'.
-        // genie#324 — NOT wired yet, deliberately. Auto-assigning the TWA to
-        // the first agent collides with `deleteWorkspaceAgent` refusing to
-        // delete a role='workspace' agent (#311): the first agent would become
-        // permanently undeletable. It broke 12 runAgent tests exactly that way.
-        // `firstAgentRole` is implemented and unit-tested; wiring it needs the
-        // owner's decision on how a TWA becomes deletable.
-        role: 'specialized',
+        // (TWA). The AMS guide says every workspace has one by default and
+        // `idx_workspace_agents_master` enforces one per workspace, but nothing
+        // ever created it: 29 agents on one workstation, zero with
+        // role='workspace'.
+        //
+        // The predicate is "does this workspace already HAVE one", not "are
+        // there no agents yet" — a workspace can hold specialized agents while
+        // its master slot is empty (every existing workspace does), and the
+        // index is UNIQUE, so claiming the role a second time throws rather
+        // than falling back.
+        //
+        // The role is not a life sentence. `resolveAgentDeletion` lets the TWA
+        // be removed like any other agent, and the slot then passes to whoever
+        // is registered next — which is what made wiring this safe.
+        role: firstAgentRole({
+            hasWorkspaceAgent: listWorkspaceAgents(ws.id).some((a) => a.role === 'workspace'),
+        }),
         // The workspace's DESIGNATED default agent, or nothing. This used to be
         // a hard-coded `workspace:<id>` -- the placeholder v50 seeded and v57
         // removed -- so it now points at a row that may not exist and trips the

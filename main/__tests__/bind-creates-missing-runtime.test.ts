@@ -98,7 +98,7 @@ function terminal(id: string): string {
 
 beforeEach(() => {
     for (const a of listWorkspaceAgents(WS)) {
-        if (a.role !== 'workspace') deleteWorkspaceAgent(a.id);
+        deleteWorkspaceAgent(a.id);
     }
 });
 
