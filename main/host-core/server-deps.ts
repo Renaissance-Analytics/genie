@@ -5,6 +5,7 @@ import {
     listWorkspaces,
     getDb,
     markWorkspaceAgentReadyByTerminal,
+    listWorkspaceAgents,
 } from '../db';
 import {
     lastActiveTerminalForWorkspace,
@@ -154,6 +155,27 @@ export function buildHostServerDeps(
         checkIssues: (terminalId) => checkIssuesForMcp(terminalId),
         agentInboxMailLine: (terminalId) =>
             formatAgentInboxMailLine(agentInboxBroker.unreadForTerminal(terminalId)),
+        // genie#321 — asked BEFORE a question is accepted. A caller with no
+        // workspace, or with no agent row for its terminal, has nowhere for an
+        // answer to land; accepting anyway is what discarded the user's answers.
+        askDeliverability: (terminalId: string) => {
+            try {
+                const workspaceId = terminalId
+                    ? (getTerminalSpec(terminalId)?.workspace_id ?? null)
+                    : null;
+                return {
+                    workspaceId,
+                    hasInboxIdentity: workspaceId
+                        ? listWorkspaceAgents(workspaceId).some(
+                              (a: { terminal_spec_id: string | null }) => a.terminal_spec_id === terminalId,
+                          )
+                        : false,
+                };
+            } catch {
+                // Fail OPEN: a probe that throws must not silence every question.
+                return { workspaceId: 'unknown', hasInboxIdentity: true };
+            }
+        },
         onForceQuestion: (terminalId, questions, priority) => {
             let workspaceLabel: string | undefined;
             let workspaceId: string | undefined;
