@@ -144,7 +144,7 @@ import {
     type OpsScaffoldTarget,
 } from '../tynn/ops-provision';
 import { createRepo, getViewer } from '../github/api';
-import { broadcastWorkspacesChanged } from '../ipc';
+import { broadcastAgentsChanged, broadcastWorkspacesChanged } from '../ipc';
 import type {
     WorkspaceMap,
     WorkspaceRepoInfo,
@@ -1997,6 +1997,10 @@ export async function registerAgentInWorkspace(
         wake_on_dm: 1,
     });
     broadcastWorkspacesChanged();
+    // The ROSTER changed, which `workspaces:changed` does not convey: a
+    // registered agent with no terminal moves neither the workspace list nor
+    // the spec count the roster effect keys on (genie #327).
+    broadcastAgentsChanged();
     return {
         ok: true,
         agent: {

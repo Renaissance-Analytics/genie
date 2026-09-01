@@ -229,6 +229,14 @@ export default function Chooser({
         Record<string, { agents: AgentRecordSpec[]; runtimes: AgentRuntimeSpec[] }>
     >({});
     const workspaceIds = workspaces.map((w) => w.id).join(',');
+    // Bumped by `agents:changed` to force the roster fetch below to re-run.
+    // The effect's own keys — the workspace ids and the SPEC COUNT — do not move
+    // when a REGISTERED agent is added or removed without a terminal, which is
+    // exactly the shape an AMS agent has before its first boot. On a remote
+    // window that change happens on the HOST, so without this the roster sat at
+    // whatever it fetched on mount (genie #327).
+    const [rosterNonce, setRosterNonce] = useState(0);
+    useEffect(() => api().on.agentsChanged(() => setRosterNonce((n) => n + 1)), []);
     useEffect(() => {
         let cancelled = false;
         void Promise.all(
@@ -245,7 +253,7 @@ export default function Chooser({
             cancelled = true;
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [workspaceIds, specs.length]);
+    }, [workspaceIds, specs.length, rosterNonce]);
 
     useEffect(() => api().on.agentThumbsUp?.((event) => {
         setThumbedAgentTerminals((current) => new Set(current).add(event.terminalId));

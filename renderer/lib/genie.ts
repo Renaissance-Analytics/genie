@@ -4158,6 +4158,8 @@ export interface GenieApi {
         /** The set of workspaces changed outside the renderer's own edits (e.g.
          *  MCP-provisioned child workspaces) — re-fetch the workspace list. */
         workspacesChanged: (cb: () => void) => () => void;
+        /** An agent record changed on the driven machine (genie #327). */
+        agentsChanged: (cb: () => void) => () => void;
         /** A dev site or service was configured / started / stopped / removed
          *  (#234) — the rail's sites icon and any open Site Manager re-read.
          *  Push, never a poll: a site can come up long after boot (an image

@@ -1187,6 +1187,14 @@ export const PASSTHROUGH_EVENTS = new Set([
     'schedule:next',
     'terminal-spec:changed',
     'workspaces:changed',
+    // The AGENT ROSTER is host-owned on a remote window (genie #327). Create,
+    // delete, rename, avatar and runtime changes all land on the HOST, so a
+    // client that is not told keeps a roster frozen at mount: an agent the host
+    // deleted keeps its square and one the host added never appears.
+    // `workspaces:changed` does not cover it -- its renderer handler re-fetches
+    // the workspace LIST, and the roster effect keys on the spec count, neither
+    // of which moves for a registered agent with no terminal.
+    'agents:changed',
     // Host IssueWatch pushes its per-workspace counts/errors here; re-emitting it
     // keeps a host window's rail pill / flyout / badge live with the HOST's data.
     'issue-watch:update',

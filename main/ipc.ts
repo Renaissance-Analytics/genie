@@ -529,12 +529,17 @@ export async function agentRecordDelete(
     const result = deleteRegisteredAgent(id, mode === 'delete' ? 'delete' : 'unmount');
     // Same reason `agents:setDefault`'s callers rebuild the grid: a deleted agent
     // must stop drawing a square without waiting on the next unrelated refresh.
-    if (result.ok) broadcastWorkspacesChanged();
+    if (result.ok) {
+        broadcastWorkspacesChanged();
+        broadcastAgentsChanged();
+    }
     return result;
 }
 
 export function agentRecordSetDefault(workspaceId: string, agentId: string | null) {
-    return setWorkspaceDefaultAgent(String(workspaceId ?? ''), agentId ? String(agentId) : null);
+    const out = setWorkspaceDefaultAgent(String(workspaceId ?? ''), agentId ? String(agentId) : null);
+    broadcastAgentsChanged();
+    return out;
 }
 
 export function agentRecordAddRuntime(agentId: string, tui: string) {
@@ -542,16 +547,20 @@ export function agentRecordAddRuntime(agentId: string, tui: string) {
     const existing = listAgentRuntimes(id).find((r) => r.tui === tui);
     const runtime = existing ?? createAgentRuntime({ agentId: id, tui: String(tui) });
     frontAgentRuntime(id, runtime.id);
+    broadcastAgentsChanged();
     return { ok: true, runtimeId: runtime.id };
 }
 
 export function agentRecordFront(agentId: string, runtimeId: string) {
-    return frontAgentRuntime(String(agentId ?? ''), String(runtimeId ?? ''));
+    const out = frontAgentRuntime(String(agentId ?? ''), String(runtimeId ?? ''));
+    broadcastAgentsChanged();
+    return out;
 }
 
 export function agentRecordSetAvatar(agentId: string, avatar: string | null) {
     try {
         setAgentAvatar(getDb(), String(agentId ?? ''), avatar);
+        broadcastAgentsChanged();
         return { ok: true };
     } catch (e) {
         return { ok: false, error: e instanceof Error ? e.message : String(e) };
@@ -2266,6 +2275,25 @@ export function broadcastDevSiteProgress(progress: DevSiteProgress): void {
  * this is for changes it can't see — notably workspaces provisioned via the MCP
  * `provisionWorkspaces` tool, which must appear in the rail immediately.
  */
+/**
+ * An agent RECORD changed on this machine — registered, deleted, renamed,
+ * re-avatared, or its runtimes moved (genie #327).
+ *
+ * Separate from `workspaces:changed` because the two answer different
+ * questions, and the roster is the one that was going stale. That event's
+ * renderer handler re-fetches the workspace LIST, and Chooser's roster effect
+ * keys on `[workspaceIds, specs.length]` — neither moves when a REGISTERED
+ * agent is added or removed without a terminal, which is exactly the shape an
+ * AMS agent has before its first boot.
+ *
+ * Fans to local windows AND to `/ws/events`, so a REMOTE window driving this
+ * host sees the host's roster change live rather than at its next mount.
+ */
+export function broadcastAgentsChanged(): void {
+    broadcastLocal('agents:changed');
+    mobileEmit('agents:changed');
+}
+
 export function broadcastWorkspacesChanged(): void {
     // LOCAL-only — a host window lists the HOST's workspaces (via its /ws/events);
     // a local rail change must not force a redundant remote re-fetch there.

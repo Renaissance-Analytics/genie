@@ -1833,6 +1833,15 @@ const api = {
             ipcRenderer.on('workspaces:changed', handler);
             return () => ipcRenderer.off('workspaces:changed', handler);
         },
+        /** An agent RECORD changed on the machine this window is driving —
+         *  registered, deleted, re-avatared, or its runtimes moved. Distinct
+         *  from `workspacesChanged`, whose handler re-fetches the workspace LIST
+         *  and leaves the roster stale (genie #327). */
+        agentsChanged: (cb: () => void) => {
+            const handler = () => cb();
+            ipcRenderer.on('agents:changed', handler);
+            return () => ipcRenderer.off('agents:changed', handler);
+        },
         /** A dev site or service was configured, started, stopped or removed
          *  (#234) — the rail's sites icon and any open Site Manager re-read
          *  `dev:site` / `dev:service`. Push, not a poll: a site can come up
