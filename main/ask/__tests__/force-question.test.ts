@@ -150,7 +150,9 @@ import {
     setQuestionTransport,
     setDeferredAnswerSink,
     setUserPresenceReader,
+    formatDeferredAnswer,
 } from '../force-question';
+import type { DeferredAnswerDelivery } from '../force-question';
 import type { ForceAnswer } from '../../mcp/protocol';
 
 /** Simulate the renderer for the currently-shown window: answer / cancel / dismiss. */
@@ -507,8 +509,7 @@ describe('ForceTheQuestion DND availability', () => {
 
     it('DND: delivers the answer back to the asking agent on answer (ping/poll/pull), and marks the result deferred', async () => {
         setAvailabilityReader(() => ({ availability: 'dnd', dndMessage: 'heads-down' }));
-        const delivered: Array<{ terminalId: string; questionId: string; answers: ForceAnswer[] }> =
-            [];
+        const delivered: DeferredAnswerDelivery[] = [];
         setDeferredAnswerSink((d) => delivered.push(d));
 
         // An agent on terminal T1 asks under DND: it defers + resolves at once
@@ -535,6 +536,10 @@ describe('ForceTheQuestion DND availability', () => {
         expect(delivered[0].questionId).toBe(result.questionId);
         expect(delivered[0].answers[0].selected).toEqual(['Yes']);
         expect(delivered[0].answers[0].note).toBe('go');
+        // genie #315: the late answer must accurately say this one really was
+        // parked for DND — the truth the immediate reply already told the agent.
+        expect(delivered[0].deferralReason).toBe('dnd');
+        expect(formatDeferredAnswer(delivered[0])).toMatch(/DND/);
     });
 
     it('DND with NO asking terminal (a local approval gate) never invokes the sink', async () => {
@@ -588,8 +593,7 @@ describe('ForceTheQuestion DND availability', () => {
     it('an available agent FTQ returns immediately, opens the modal, and delivers its answer through AgentInbox', async () => {
         setAvailabilityReader(() => ({ availability: 'available', dndMessage: 'x' }));
         setUserPresenceReader(() => ({ away: false, idleSeconds: 12 }));
-        const delivered: Array<{ terminalId: string; questionId: string; answers: ForceAnswer[] }> =
-            [];
+        const delivered: DeferredAnswerDelivery[] = [];
         setDeferredAnswerSink((d) => delivered.push(d));
         const before = state.windows.length;
 
@@ -619,6 +623,13 @@ describe('ForceTheQuestion DND availability', () => {
                 answers,
             }),
         ]);
+        // genie #315: the modal was live and this is its ordinary answer — the
+        // user was never actually parked for DND, so the late message must not
+        // claim it was. This is the exact inversion the bug report described:
+        // "the user is active" up front, then "deferred while you were in DND"
+        // on delivery, for the SAME question.
+        expect(delivered[0].deferralReason).toBeUndefined();
+        expect(formatDeferredAnswer(delivered[0])).not.toMatch(/DND/);
     });
 
     it('an agent FTQ reports user-away after five minutes without activity', async () => {
@@ -652,6 +663,37 @@ describe('ForceTheQuestion DND availability', () => {
         // ...and it's answerable in the inbox rather than silently lost.
         const row = listPendingQuestions().find((p) => p.workspaceLabel === 'Workspace');
         expect(row?.deferred).toBe(true);
+    });
+
+    it('an unshowable modal for an available agent delivers "unshowable" on its late answer, never "DND"', async () => {
+        setAvailabilityReader(() => ({ availability: 'available', dndMessage: 'x' }));
+        state.throwOnCreate = true; // the next createAskWindow throws (no display)
+        const delivered: DeferredAnswerDelivery[] = [];
+        setDeferredAnswerSink((d) => delivered.push(d));
+
+        // A real MCP agent call always carries its terminal id — exercise that,
+        // not just the terminal-less internal-gate path the sibling test covers.
+        const result = await forceQuestion(
+            Q('E'),
+            'Workspace',
+            'normal',
+            { workspaceId: 'ws1' },
+            'terminal-2',
+        );
+        expect(result.dndMessage).toMatch(/could not be shown/i);
+        expect(result.dndMessage).not.toMatch(/DND/i);
+
+        const row = listPendingQuestions().find((p) => p.workspaceLabel === 'Workspace')!;
+        const answers: ForceAnswer[] = [
+            { header: 'E', question: 'E?', selected: ['No'], note: '' },
+        ];
+        expect(answerPendingQuestion(row.id, answers)).toBe(true);
+
+        // genie #315: the user was available the whole time — the modal simply
+        // could not be raised. The late answer must say THAT, never DND.
+        expect(delivered).toHaveLength(1);
+        expect(delivered[0].deferralReason).toBe('unshowable');
+        expect(formatDeferredAnswer(delivered[0])).not.toMatch(/DND/);
     });
 });
 

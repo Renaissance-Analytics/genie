@@ -147,6 +147,7 @@ import {
     answerPendingQuestion,
     desktopQuestionTransport,
     setDeferredAnswerSink,
+    formatDeferredAnswer,
     type DeferredAnswerDelivery,
 } from './ask/force-question';
 import { listAllProcesses } from './terminal/process-list';
@@ -987,26 +988,6 @@ const nudgeIO: NudgeIO = {
     releaseHold: (terminalId) => releaseInputHold(terminalId),
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
 };
-
-/**
- * Render a DND-deferred ForceTheQuestion answer as the AgentInbox message the
- * asking agent pulls (genie #62). Restates each question with the option(s) the
- * user picked + any note, and echoes the questionId so the agent can correlate it
- * to the ForceTheQuestion call that deferred.
- */
-function formatDeferredAnswer(d: DeferredAnswerDelivery): string {
-    const lines = d.answers.map((a, i) => {
-        const q = d.questions[i]?.question ?? d.questions[i]?.header ?? `Q${i + 1}`;
-        const picked = a.selected.length ? a.selected.join(', ') : '(no option selected)';
-        const note = a.note?.trim() ? ` — note: ${a.note.trim()}` : '';
-        return `• ${q}\n  → ${picked}${note}`;
-    });
-    return (
-        `Your ForceTheQuestion was answered (it had been deferred while you were in DND):\n\n` +
-        `${lines.join('\n')}\n\n` +
-        `(questionId: ${d.questionId})`
-    );
-}
 
 /** `genie host stop` — kill the running pty-host (terminates its terminals). */
 async function hostStop(): Promise<string> {
