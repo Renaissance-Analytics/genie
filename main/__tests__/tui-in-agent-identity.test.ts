@@ -30,6 +30,16 @@ import { runMigrations } from '../db';
 function db(): Database.Database {
     const d = new Database(':memory:');
     runMigrations(d);
+    // `workspace_agents.workspace_id` is a real foreign key, so the workspaces
+    // have to exist before an agent can point at one.
+    for (const id of ['w1', 'w2']) {
+        d.prepare(
+            `INSERT INTO workspaces
+               (id, backend, project_id, project_name, tynn_project_id, tynn_project_name,
+                shape, path, created_by_genie)
+             VALUES (?, 'tynn', ?, ?, ?, ?, 'simple', ?, 0)`,
+        ).run(id, id, id, id, id, `/tmp/${id}`);
+    }
     return d;
 }
 
@@ -51,15 +61,16 @@ function addAgent(
     ).run(id, ws, tui, name, collision);
 }
 
-// SKIPPED until the owner settles two questions (see genie#324):
-//   1. how a TWA becomes deletable — auto-assigning it to the first agent
-//      collides with deleteWorkspaceAgent refusing to delete role='workspace';
-//   2. whether the column is literally renamed provider -> tui.
-// This is the RED-FIRST spec for migration v60, kept so the next agent does
-// not have to rediscover the contract. Verified against the live database:
-// all 29 agents already satisfy (workspace, tui, name), zero NULL providers,
-// zero duplicates — so the migration renames, merges and drops nothing.
-describe.skip('agent identity is (workspace, tui, name) — v60', () => {
+// The owner settled the identity key: *"Unique should be on workspace, tui,
+// name."* Whether the COLUMN is literally renamed `provider` -> `tui` is a
+// separate question and does not block this — the key is what identity means,
+// the column name is what the code calls it.
+//
+// Verified against the live database before writing: all 29 agents already
+// satisfy (workspace, tui, name), zero NULL providers, zero duplicates — so
+// this migration renames, merges and drops nothing. That is the only reason it
+// is safe to tighten a key on real records.
+describe('agent identity is (workspace, tui, name) — v60', () => {
     it('lets the SAME name exist under two different TUIs', () => {
         const d = db();
 

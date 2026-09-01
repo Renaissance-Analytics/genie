@@ -164,17 +164,30 @@ describe('v55 — the runtimes table', () => {
     });
 });
 
-describe('v55 — identity is (workspace, name)', () => {
-    it('refuses a second agent under the same NAME, whatever TUI it names', () => {
+describe('v60 — identity is (workspace, tui, name)', () => {
+    it('refuses a second agent under the same name under the SAME tui', () => {
         const db = fresh();
         seedWorkspace(db, 'ws-1');
         addAgent(db, { id: 'a1', ws: 'ws-1', provider: 'claude', name: 'tynn' });
 
-        // Legal under the old key — a different provider made it a different
-        // agent. That is precisely the model being removed.
+        expect(() =>
+            addAgent(db, { id: 'a2', ws: 'ws-1', provider: 'claude', name: 'tynn' }),
+        ).toThrow();
+    });
+
+    it('allows the same name under a DIFFERENT tui', () => {
+        // v55 forbade this: a different provider no longer made a different
+        // agent. The owner reversed it — *"the tui is what determines the
+        // provider... Unique should be on workspace, tui, name"* — and the
+        // reversal is what dissolves the `codex:moic-slave` /
+        // `genie:moic-slave` collision that sat unresolvable under v55.
+        const db = fresh();
+        seedWorkspace(db, 'ws-1');
+        addAgent(db, { id: 'a1', ws: 'ws-1', provider: 'claude', name: 'tynn' });
+
         expect(() =>
             addAgent(db, { id: 'a2', ws: 'ws-1', provider: 'codex', name: 'tynn' }),
-        ).toThrow();
+        ).not.toThrow();
     });
 
     it('still allows the same name in DIFFERENT workspaces', () => {
