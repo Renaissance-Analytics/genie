@@ -880,6 +880,19 @@
     top: auto;
     left: auto;
     margin: 0;
+    /* #312: every context menu shares `.proj-popover ctx-menu [...]`, and
+       `.proj-popover` was the ONLY class in that stack with a `background` --
+       a DROPDOWN class this rule exists to fight for positioning. Neither
+       `.ctx-menu` nor any per-menu class layered on top (`.agent-ctx-menu`,
+       etc.) set one, so a context menu's opacity was borrowed entirely from a
+       class it was already half-overriding. Declare the full opaque surface
+       here so a context menu is readable on its own, independent of
+       `.proj-popover` -- with a literal fallback so an unresolved --shell
+       token can never produce transparency again. */
+    background: var(--shell, #0e0e12);
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-xl);
 }
 /* ===== Issue Watch ====================================================== */
 .iw-btn {
