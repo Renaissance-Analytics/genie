@@ -995,7 +995,13 @@ export function registerIpcHandlers(): void {
         if (!ws && req?.action !== 'catalog') {
             return { ok: false, error: 'Unknown workspace.', services: [] };
         }
-        return runManageService(ws, req ?? { action: 'list' });
+        // The WHOLE machine: this is the human at their own workstation, and the
+        // Services settings page has shown every engine and who holds it since it
+        // shipped. Only an AGENT's view is narrowed (genie#345).
+        return runManageService(ws, req ?? { action: 'list' }, {
+            workspaceId: ws?.id ?? null,
+            wholeWorkstation: true,
+        });
     });
     // Which runtime is driving, or why none is. A pure probe — the Workstation
     // settings page must never start a download by being looked at.

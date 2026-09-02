@@ -208,10 +208,13 @@ is dedicated per workspace because framework cache clearing uses the unscopable
 engine starts when the first workspace acquires it and stops when the last one
 releases it. Actions (\`action\`):
 - \`catalog\` — every engine on offer, its versions, and how strongly each isolates.
-- \`inventory\` — MACHINE-level: every engine on this workstation, whether its
-  image is on disk, whether it is up, and how many workspaces hold it (and
-  which). Read this BEFORE stopping/removing anything — \`stop\` is a RELEASE, and
-  it only stops the container if this was the last holder.
+- \`inventory\` — MACHINE-level: every engine on this workstation you can act on,
+  whether its image is on disk, whether it is up, and how many workspaces hold
+  it. Read this BEFORE stopping/removing anything — \`stop\` is a RELEASE, and it
+  only stops the container if this was the last holder, so check
+  \`sharedWithOthers\` (\`holders: 1\` alone cannot tell you whether that 1 is you).
+  You get counts, never other workspaces' names, and another workspace's
+  dedicated engine is not listed: none of it is yours to touch.
 - \`list\` / \`status\` — this workspace's services + live state.
 - \`add\` — \`engine\` (+ optional \`version\`): defines it, starts the engine,
   creates this workspace's database/role/credentials, attaches the engine to the

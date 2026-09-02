@@ -19,7 +19,7 @@ import {
 } from '../dev-server/services/services-config';
 import { devServiceManager } from '../dev-server/services/service-manager';
 import { runtimeInfo } from './dev-site-tools';
-import { resolveAgentTarget } from './host-tools';
+import { callerSeesWholeWorkstation, resolveAgentTarget } from './host-tools';
 import type { DevServiceRow } from '../dev-server/services/service-manager';
 import type { EngineInventoryRow } from '../dev-server/services/inventory';
 import type { DevServiceConfig } from '../dev-server/services/services-config';
@@ -83,10 +83,43 @@ function toInfo(row: DevServiceRow): DevServiceInfo {
     };
 }
 
-/** One MACHINE-level engine row, as `inventory` reports it. Passed through
- *  whole: the three independent facts (`installed`, `state`, `holders`) and the
- *  workspace NAMES are the entire point — see `services/inventory.ts`. */
-function toEngineInfo(row: EngineInventoryRow): DevServiceEngineInfo {
+/**
+ * WHO is reading an `inventory`, and therefore how much of the machine the
+ * answer may describe (genie#345).
+ *
+ * The machine-level row carries every workspace's name, id and container. That
+ * is the right answer for the human at the workstation Services page and for
+ * the workstation operator; it is the wrong one for an agent, which should
+ * never be shown a resource it can neither reach nor act on. So the view is
+ * stated explicitly at every call site rather than defaulted — a new caller has
+ * to decide, instead of inheriting the wider answer by omission.
+ */
+export interface InventoryView {
+    /** The workspace doing the reading. `null` when the reader is not acting AS
+     *  a workspace at all — Genie's own workstation surfaces, and the owner's
+     *  remote control of their own machine. */
+    workspaceId: string | null;
+    /** May they see the whole machine, other workspaces named? True for the
+     *  workstation operator (see `callerSeesWholeWorkstation`) and for Genie's
+     *  own human surfaces; false for an agent in a workspace. */
+    wholeWorkstation: boolean;
+}
+
+/**
+ * One MACHINE-level engine row, shaped for the reader.
+ *
+ * The three independent facts (`installed`, `state`, `holders`) are the point
+ * and reach everyone — without them an agent stops an engine five other
+ * workspaces are using and reports success. The workspace NAMES are not: the
+ * question that hazard raises is *"is anyone else on this?"*, which
+ * `sharedWithOthers` answers without saying who. Identity is not needed to make
+ * the safe decision, only the unsafe one.
+ */
+function toEngineInfo(row: EngineInventoryRow, view: InventoryView): DevServiceEngineInfo {
+    // The reader's OWN id is not a disclosure; anyone else's is.
+    const ownerIsReader = Boolean(
+        row.ownerWorkspaceId && row.ownerWorkspaceId === view.workspaceId,
+    );
     return {
         recordKey: row.recordKey,
         engineKey: row.engineKey,
@@ -99,11 +132,35 @@ function toEngineInfo(row: EngineInventoryRow): DevServiceEngineInfo {
         state: row.state,
         ...(row.containerId ? { containerId: row.containerId } : {}),
         dedicated: row.dedicated,
-        ...(row.ownerWorkspaceId ? { ownerWorkspaceId: row.ownerWorkspaceId } : {}),
+        ...(row.ownerWorkspaceId && (view.wholeWorkstation || ownerIsReader)
+            ? { ownerWorkspaceId: row.ownerWorkspaceId }
+            : {}),
         holders: row.holders,
         configured: row.configured,
-        workspaces: row.workspaces,
+        sharedWithOthers: row.workspaceIds.some((id) => id !== view.workspaceId),
+        ...(view.wholeWorkstation ? { workspaces: row.workspaces } : {}),
     };
+}
+
+/**
+ * The engines this reader may be told about.
+ *
+ * A DEDICATED engine belonging to another workspace is dropped whole rather
+ * than redacted, because there is nothing left to redact: its `recordKey` is
+ * `<engineKey>@<workspaceId>` and its container is named after that workspace —
+ * the row IS the identity. It is also unreachable: no action here can start,
+ * stop or remove somebody else's container. A shared engine stays, because a
+ * shared engine is exactly what this reader might acquire or release.
+ */
+function enginesFor(rows: EngineInventoryRow[], view: InventoryView): DevServiceEngineInfo[] {
+    return rows
+        .filter(
+            (row) =>
+                view.wholeWorkstation ||
+                !row.dedicated ||
+                row.ownerWorkspaceId === view.workspaceId,
+        )
+        .map((row) => toEngineInfo(row, view));
 }
 
 function catalogEntries(): DevServiceCatalogEntry[] {
@@ -135,18 +192,33 @@ export async function manageServiceForMcp(
     terminalId: string,
     req: ManageServiceRequest,
 ): Promise<ManageServiceResult> {
-    // `catalog` and `inventory` are answerable with no workspace — one says what
-    // could be run here and the other says what IS running on the machine, and
-    // neither is a property of a workspace. Refusing them because the caller's
-    // terminal could not be resolved would be a dead end.
     const { decision, ws } = await resolveAgentTarget(terminalId, req.workspaceId);
-    if (req.action === 'catalog' || req.action === 'inventory') {
-        return runManageService(ws ?? null, req);
+    // Read off the CALLER's terminal, never off the request: a `workspaceId` in
+    // the arguments must not be able to buy a wider view of the machine.
+    const view: InventoryView = {
+        workspaceId: ws?.id ?? null,
+        wholeWorkstation: callerSeesWholeWorkstation(terminalId),
+    };
+    // `catalog` alone is answerable with no workspace: it is STATIC — what this
+    // build could run — so it is a property of the machine and names nobody.
+    // Refusing it because the caller's terminal could not be resolved would be a
+    // dead end with nothing to protect.
+    if (req.action === 'catalog') return runManageService(ws ?? null, req, view);
+    // `inventory` used to be the second exception, which made a machine-wide
+    // read the ONE answer an unauthorized caller could get (genie#345). It now
+    // goes through the same gate as everything else — an unattached caller has
+    // no workspace to scope the answer to, and nothing it could act on — with
+    // ONE deliberate exception: the workstation operator. The OS Agent's
+    // terminal is `workspace_id: null` on purpose, because the machine IS its
+    // scope; denying it the machine view would close the hole by removing the
+    // feature from the one caller it was built for.
+    if (req.action === 'inventory' && view.wholeWorkstation) {
+        return runManageService(ws ?? null, req, view);
     }
     if (!decision.allowed || !ws) {
         return { ok: false, error: decision.reason, services: [], runtime: await runtimeInfo() };
     }
-    return runManageService(ws, req);
+    return runManageService(ws, req, view);
 }
 
 /**
@@ -154,10 +226,16 @@ export async function manageServiceForMcp(
  *
  * `null` is accepted for `catalog` alone — see the header on that action. Every
  * other action refuses it, because a service is defined ON a workspace.
+ *
+ * `view` says how much of the MACHINE the `inventory` answer may describe. It
+ * has no default: the two human surfaces (the desktop's IPC, the owner's remote
+ * control) pass the whole-workstation view deliberately, and an agent's is
+ * narrowed by {@link manageServiceForMcp}. See {@link InventoryView}.
  */
 export async function runManageService(
     ws: DevServiceTarget | null,
     req: ManageServiceRequest,
+    view: InventoryView,
 ): Promise<ManageServiceResult> {
     const runtime = await runtimeInfo();
     const bare = (error: string): ManageServiceResult => ({
@@ -177,11 +255,13 @@ export async function runManageService(
         };
     }
 
-    // MACHINE-level, like `catalog`: a shared engine belongs to no workspace, so
-    // requiring one to ask about it would be asking the wrong question. This is
-    // the read a human has had as a settings page since the workstation Services
-    // page shipped; without it an agent can stop an engine five other workspaces
-    // are using and report success.
+    // MACHINE-level: a shared engine belongs to no workspace, so a purely
+    // per-workspace answer would be the wrong shape. This is the read a human
+    // has had as a settings page since the workstation Services page shipped;
+    // without it an agent can stop an engine five other workspaces are using and
+    // report success. `view` decides how much of the machine comes back —
+    // everyone gets the counts that make a release honest, only the workstation
+    // sees who those holders are.
     if (req.action === 'inventory') {
         const manager = devServiceManager();
         if (!manager) {
@@ -193,7 +273,7 @@ export async function runManageService(
             return {
                 ok: true,
                 services: ws ? manager.list(ws.id).map(toInfo) : [],
-                engines: (await manager.inventory()).map(toEngineInfo),
+                engines: enginesFor(await manager.inventory(), view),
                 runtime,
             };
         } catch (e) {

@@ -1043,7 +1043,8 @@ export interface ManageServiceRequest {
         /** Make THIS version the one this workspace's apps connect to, when the
          *  workspace holds more than one major of the same engine (#242 P3). */
         | 'active'
-        /** MACHINE-level: every engine on this workstation, and who holds it. */
+        /** MACHINE-level: every engine on this workstation, and HOW MANY hold
+         *  each — not who (genie#345). */
         | 'inventory';
     /** Target workspace. Omit for your own; an Ops agent may pass a governed one. */
     workspaceId?: string;
@@ -1079,6 +1080,15 @@ export interface ManageServiceRequest {
  * opened (running, zero holders); a workspace that has it defined but disabled
  * (configured, not held). Flattening them into one status is how an agent stops
  * a container five other workspaces are using.
+ *
+ * ## Counts, not identities (genie#345)
+ *
+ * The row is machine-level; the reader is not. An agent asks *"is anyone else on
+ * this engine?"* and that is answered by `holders`, `configured` and
+ * `sharedWithOthers` — no other workspace's name, id or container reaches it,
+ * and a dedicated engine belonging to someone else is not reported at all.
+ * Identity is not needed to make the safe decision, only the unsafe one. Only
+ * the WORKSTATION operator gets `workspaces`; see `mcp/dev-service-tools.ts`.
  */
 export interface DevServiceEngineInfo {
     /** The CONTAINER's identity — the engine key, or `<engineKey>@<workspaceId>`
@@ -1097,13 +1107,25 @@ export interface DevServiceEngineInfo {
     state: string;
     containerId?: string;
     dedicated: boolean;
+    /** The workspace whose container this is. Present only when that workspace
+     *  is the READER's own, or the reader is the workstation operator — another
+     *  workspace's dedicated engine is omitted from the list entirely. */
     ownerWorkspaceId?: string;
     /** Workspaces holding it RIGHT NOW — the live reference count. */
     holders: number;
     /** Workspaces that have it configured at all, enabled or not. */
     configured: number;
-    /** WHO. `holders: 6` is a number; this is the answer. */
-    workspaces: string[];
+    /** At least one workspace OTHER than the reader's has this engine
+     *  CONFIGURED — the same population `configured` counts, so it stays the
+     *  broader fact that `holders` is not: someone with the engine defined but
+     *  off still has data in its volume. This is what identity was ever needed
+     *  for: `holders: 1` reads as "just me" exactly when it is not, and this
+     *  says so without saying who. (When the reader is not a workspace at all —
+     *  Genie's own workstation surfaces — it means simply that some workspace
+     *  has it.) */
+    sharedWithOthers: boolean;
+    /** WHO, by workspace name. The WORKSTATION operator's view only. */
+    workspaces?: string[];
 }
 
 export interface ManageServiceResult {
@@ -1116,7 +1138,8 @@ export interface ManageServiceResult {
     affectedId?: string;
     /** catalog: every engine on offer. */
     catalog?: DevServiceCatalogEntry[];
-    /** inventory: every engine on THIS MACHINE, and who is holding it. */
+    /** inventory: the engines on THIS MACHINE this caller may act on, and how
+     *  many workspaces are holding each. */
     engines?: DevServiceEngineInfo[];
     /** logs: the engine's log tail. */
     logs?: string;
@@ -2075,7 +2098,7 @@ const MANAGE_SITE_TOOL = {
 const MANAGE_SERVICE_TOOL = {
     name: 'manageService',
     description:
-        "Give this workspace a backing SERVICE — Postgres, MySQL, Redis, Meilisearch, MinIO (S3), Mailpit, WebSockets (bundled Sockudo), or any image — and get back how to connect to it. These are the same engines a hosted site runs against, so a site served by `manageSite` is backed the way production is. THE MODEL, because it changes what you should expect: an engine is WORKSTATION-hosted and SHARED per (engine, major version) across every workspace that asks for it, and each workspace gets its OWN database + role + credentials on it. Ten workspaces on Postgres 16 run ONE postgres container, not ten; a workspace's role cannot reach another workspace's database. The engine starts when the first workspace acquires it and stops when the last one releases it. A workspace that genuinely needs hard isolation (a custom config, an extension, destructive testing) flips `dedicated` and gets its own container — note that shared and dedicated have SEPARATE data volumes, so flipping does not move data. Actions: `catalog` (every engine on offer, its versions, and how strongly each isolates); `inventory` (MACHINE-level — every engine on this WORKSTATION: whether its image is on disk, whether a container exists and is up, how many workspaces hold it right now and WHICH, plus the dedicated ones. Needs no workspace. Read this BEFORE stopping or removing anything: `installed`, `state` and `holders` are three independent facts, and stopping a shared engine stops it for every workspace holding it); `list` (this workspace's services + live state); `add` (`engine` plus optional `version` — defines it, starts the engine, creates this workspace's database/role/credentials, and attaches the engine to this workspace's network); `start` / `stop` / `status` (by `id` from a prior list); `logs` (the engine's log tail); `connection` (the connection surface + the exact env keys injected into this workspace's sites); `dedicated` (flip one service between shared and its own container); `remove` (release it, and with `purge` drop the engine's data volume — REFUSED whenever another workspace has a database in that volume, whether or not it is open right now, because a shared engine keeps every workspace's data in ONE volume; the refusal names what it protected, and the way past it is to remove those services first or flip this one to `dedicated` and purge its own volume). READ THE RESULT: `endpoints` carries TWO surfaces and they are not interchangeable — `host`+`port` is how a CONTAINER on this workspace's network dials the engine (its container name, its real port), `localAddress` is how a program on THIS MACHINE dials it (loopback, published port). A connection string built from the second and used inside a container fails every time. A service is BACKEND: it is never given a browser-facing name and never published to the browser, so do not try to expose one through `manageSite`. `envKeys` are already injected into this workspace's hosted sites (`manageSite`), and into their BUILD steps too, so an app served there needs no `.env` edit. MinIO gives each workspace its OWN IAM user, admitted by policy to its own bucket and no other — so `AWS_ACCESS_KEY_ID` is the workspace, never the engine root. Meilisearch, Mailpit and Reverb are NAMESPACE-isolated, not credential-isolated: workspaces share the master key/secret and are separated by index prefix / inbox / Reverb app (each workspace gets its own app whose secret is derived from the shared master, so a site can broadcast but never forge another workspace's app). `custom` takes `image` + `port` + `env` and is always dedicated. WebSockets run natively on the Genie Host without Docker. Other engines require Docker or Podman and return the install hint when neither is usable. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; required when the workspace has more than one terminal.",
+        "Give this workspace a backing SERVICE — Postgres, MySQL, Redis, Meilisearch, MinIO (S3), Mailpit, WebSockets (bundled Sockudo), or any image — and get back how to connect to it. These are the same engines a hosted site runs against, so a site served by `manageSite` is backed the way production is. THE MODEL, because it changes what you should expect: an engine is WORKSTATION-hosted and SHARED per (engine, major version) across every workspace that asks for it, and each workspace gets its OWN database + role + credentials on it. Ten workspaces on Postgres 16 run ONE postgres container, not ten; a workspace's role cannot reach another workspace's database. The engine starts when the first workspace acquires it and stops when the last one releases it. A workspace that genuinely needs hard isolation (a custom config, an extension, destructive testing) flips `dedicated` and gets its own container — note that shared and dedicated have SEPARATE data volumes, so flipping does not move data. Actions: `catalog` (every engine on offer, its versions, and how strongly each isolates); `inventory` (MACHINE-level — every engine on this WORKSTATION you can act on: whether its image is on disk, whether a container exists and is up, and HOW MANY workspaces hold it right now. Read this BEFORE stopping or removing anything: `installed`, `state` and `holders` are three independent facts, and stopping a shared engine stops it for every workspace holding it — `sharedWithOthers` tells you whether any of those holders is someone other than you, which `holders: 1` on its own does not. You are told counts, never other workspaces' names, and another workspace's dedicated engine is not listed at all: nothing there is yours to touch); `list` (this workspace's services + live state); `add` (`engine` plus optional `version` — defines it, starts the engine, creates this workspace's database/role/credentials, and attaches the engine to this workspace's network); `start` / `stop` / `status` (by `id` from a prior list); `logs` (the engine's log tail); `connection` (the connection surface + the exact env keys injected into this workspace's sites); `dedicated` (flip one service between shared and its own container); `remove` (release it, and with `purge` drop the engine's data volume — REFUSED whenever another workspace has a database in that volume, whether or not it is open right now, because a shared engine keeps every workspace's data in ONE volume; the refusal names what it protected, and the way past it is to remove those services first or flip this one to `dedicated` and purge its own volume). READ THE RESULT: `endpoints` carries TWO surfaces and they are not interchangeable — `host`+`port` is how a CONTAINER on this workspace's network dials the engine (its container name, its real port), `localAddress` is how a program on THIS MACHINE dials it (loopback, published port). A connection string built from the second and used inside a container fails every time. A service is BACKEND: it is never given a browser-facing name and never published to the browser, so do not try to expose one through `manageSite`. `envKeys` are already injected into this workspace's hosted sites (`manageSite`), and into their BUILD steps too, so an app served there needs no `.env` edit. MinIO gives each workspace its OWN IAM user, admitted by policy to its own bucket and no other — so `AWS_ACCESS_KEY_ID` is the workspace, never the engine root. Meilisearch, Mailpit and Reverb are NAMESPACE-isolated, not credential-isolated: workspaces share the master key/secret and are separated by index prefix / inbox / Reverb app (each workspace gets its own app whose secret is derived from the shared master, so a site can broadcast but never forge another workspace's app). `custom` takes `image` + `port` + `env` and is always dedicated. WebSockets run natively on the Genie Host without Docker. Other engines require Docker or Podman and return the install hint when neither is usable. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; required when the workspace has more than one terminal.",
     inputSchema: {
         type: 'object',
         properties: {

@@ -14,6 +14,12 @@ import type { ManageServiceRequest, ManageServiceResult } from '../protocol';
  * The reason it matters is the same reason the human page exists: an agent that
  * cannot see the reference count will stop an engine that five other workspaces
  * are using and report success.
+ *
+ * What it must NOT carry is who those workspaces are (genie#345). The counts are
+ * the safety fact; the names were only ever noise an agent could act on wrongly.
+ * WHO gets which shape is decided one layer down and tested there
+ * (`manage-service-inventory-scope.test.ts`); this file is the PROTOCOL layer —
+ * the action's reachability and the headline an agent reads first.
  */
 
 function ctx(over: Partial<McpContext> = {}): McpContext {
@@ -80,7 +86,7 @@ describe('the action exists and is reachable', () => {
         expect(tool.description).toMatch(/machine|workstation/i);
     });
 
-    it('passes through to the host with no workspace required', async () => {
+    it('passes straight through to the host, which is where authorization lives', async () => {
         const manageService = vi
             .fn()
             .mockResolvedValue({ ok: true, services: [], engines: [] } as ManageServiceResult);
@@ -93,7 +99,7 @@ describe('the action exists and is reachable', () => {
 });
 
 describe('the result an agent reads', () => {
-    it('carries every engine, with the reference count and WHO holds it', async () => {
+    it('carries every engine, with the reference count and whether anyone ELSE is on it', async () => {
         const manageService = vi.fn().mockResolvedValue({
             ok: true,
             services: [],
@@ -111,7 +117,7 @@ describe('the result an agent reads', () => {
                     dedicated: false,
                     holders: 3,
                     configured: 5,
-                    workspaces: ['acme', 'beta', 'gamma'],
+                    sharedWithOthers: true,
                 },
             ],
         } as ManageServiceResult);
@@ -119,7 +125,7 @@ describe('the result an agent reads', () => {
         const text = (res?.result as { content: Array<{ text: string }> }).content[0]?.text ?? '';
         const parsed = JSON.parse(text.slice(text.indexOf('{'))) as ManageServiceResult;
         expect(parsed.engines?.[0]?.holders).toBe(3);
-        expect(parsed.engines?.[0]?.workspaces).toEqual(['acme', 'beta', 'gamma']);
+        expect(parsed.engines?.[0]?.sharedWithOthers).toBe(true);
     });
 
     it('the headline SAYS how many engines are up, not just that the call worked', () => {
@@ -129,8 +135,8 @@ describe('the result an agent reads', () => {
             ok: true,
             services: [],
             engines: [
-                { recordKey: 'a', engineKey: 'postgres-16', engine: 'postgres', version: '16', label: 'PostgreSQL', image: 'i', containerName: 'c', installed: true, state: 'running', dedicated: false, holders: 2, configured: 2, workspaces: ['x', 'y'] },
-                { recordKey: 'b', engineKey: 'redis-7', engine: 'redis', version: '7', label: 'Redis', image: 'i', containerName: 'c', installed: true, state: 'absent', dedicated: false, holders: 0, configured: 0, workspaces: [] },
+                { recordKey: 'a', engineKey: 'postgres-16', engine: 'postgres', version: '16', label: 'PostgreSQL', image: 'i', containerName: 'c', installed: true, state: 'running', dedicated: false, holders: 2, configured: 2, sharedWithOthers: true },
+                { recordKey: 'b', engineKey: 'redis-7', engine: 'redis', version: '7', label: 'Redis', image: 'i', containerName: 'c', installed: true, state: 'absent', dedicated: false, holders: 0, configured: 0, sharedWithOthers: false },
             ],
         } as ManageServiceResult);
         expect(summary).toMatch(/1 .*running/i);

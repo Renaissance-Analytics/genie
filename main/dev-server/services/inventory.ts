@@ -40,6 +40,13 @@ import type { ContainerState } from '../container-runtime';
  * `holders: 6` is a number. `workspaces: ['web', 'api', …]` is an answer. The
  * shared model's whole risk is acting on a container without knowing who else
  * is on it, so the row carries who.
+ *
+ * That is the MACHINE's row, and it is for whoever is entitled to the machine —
+ * the human at the workstation settings page, and the workstation operator. It
+ * is NOT what an agent in one workspace may read: see `mcp/dev-service-tools.ts`,
+ * which shapes this row down to counts before an agent sees it (genie#345).
+ * `workspaceIds` exists for that shaping — a narrowed view has to know which of
+ * these workspaces is the reader's, and labels can collide.
  */
 
 // --- what a caller sees -----------------------------------------------------
@@ -76,6 +83,10 @@ export interface EngineInventoryRow {
     configured: number;
     /** WHO — workspace labels, in the order they were listed. */
     workspaces: string[];
+    /** The same workspaces as {@link workspaces}, by ID. Labels are for people
+     *  and two projects can share one; an id identifies. What a per-workspace,
+     *  identity-free view of this row is computed against (genie#345). */
+    workspaceIds: string[];
 }
 
 export interface EngineInventoryInput {
@@ -98,6 +109,7 @@ interface Draft {
     ownerWorkspaceId?: string;
     image: string;
     workspaces: string[];
+    workspaceIds: string[];
 }
 
 /** Running first, then merely installed, then the rest — a machine-wide list is
@@ -129,6 +141,7 @@ export function buildEngineInventory(input: EngineInventoryInput): EngineInvento
                         ? `${spec.distribution.project}@${spec.distribution.version}`
                         : spec.image(version),
                 workspaces: [],
+                workspaceIds: [],
             });
         }
     }
@@ -148,6 +161,7 @@ export function buildEngineInventory(input: EngineInventoryInput): EngineInvento
             const existing = drafts.get(recordKey);
             if (existing) {
                 existing.workspaces.push(workspaceLabel);
+                existing.workspaceIds.push(workspaceId);
                 continue;
             }
             drafts.set(recordKey, {
@@ -157,6 +171,7 @@ export function buildEngineInventory(input: EngineInventoryInput): EngineInvento
                 ...(dedicated ? { ownerWorkspaceId: workspaceId } : {}),
                 image,
                 workspaces: [workspaceLabel],
+                workspaceIds: [workspaceId],
             });
         }
     }
@@ -195,6 +210,7 @@ export function buildEngineInventory(input: EngineInventoryInput): EngineInvento
             holders: held,
             configured: draft.workspaces.length,
             workspaces: draft.workspaces,
+            workspaceIds: draft.workspaceIds,
         });
     }
 

@@ -1195,6 +1195,28 @@ export async function isOpsProjectFor(callerWorkspacePath: string): Promise<bool
 }
 
 /**
+ * May this caller be shown the WHOLE workstation — every workspace on the
+ * machine, by name?
+ *
+ * Exactly the two authorities {@link actionableWorkspaces} already grants the
+ * full workspace list to, named once so a second tool cannot drift into its own
+ * private notion of "operator": the built-in workstation operator agent
+ * (`genie:workstation`), and an agent whose workspace the human designated this
+ * workstation's operator (Tynn #248).
+ *
+ * Read from the CALLER's terminal, never from the request — authority comes
+ * from what the machine was configured to trust, not from what a caller claims.
+ * Fails CLOSED: a caller with no terminal spec (an installed GApp, an unknown
+ * id) is not an operator.
+ */
+export function callerSeesWholeWorkstation(callerTerminalId: string): boolean {
+    const spec = callerTerminalId ? getTerminalSpec(callerTerminalId) : null;
+    if (!spec) return false;
+    if (spec.meta?.agent_id === 'genie:workstation') return true;
+    return spec.workspace_id ? isWorkstationOperator(spec.workspace_id) : false;
+}
+
+/**
  * Resolve + authorize the workspace a tool call should act on. The caller's
  * terminal → its workspace is the default; a different `workspaceId` is allowed
  * only when the caller governs it. Returns the decision (with the resolved

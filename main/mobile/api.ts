@@ -2129,6 +2129,12 @@ export async function handleApi(
             const result = await hosting.runManageService(
                 ws,
                 (dsb.req ?? { action: 'list' }) as unknown as ManageServiceRequest,
+                // The remote control IS the desktop: a person driving their own
+                // workstation from another device sees what the Services page
+                // shows them when they are sitting at it. The narrowed view
+                // (genie#345) is for an AGENT inside one workspace, not for the
+                // owner looking at their own machine.
+                { workspaceId: ws?.id ?? null, wholeWorkstation: true },
             );
             if (SERVICE_WRITE_ACTIONS.has(action)) {
                 audit(
