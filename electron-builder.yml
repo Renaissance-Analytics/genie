@@ -185,6 +185,42 @@ nsis:
   # path adds it via a UAC prompt from Settings -> Mobile.
   include: build/installer.nsh
 
+# Build the AppImage on the STATIC runtime instead of the legacy FUSE 2 one.
+#
+# An AppImage is a self-mounting archive: the runtime stub prepended to it has
+# to mount the squashfs payload before a single line of Genie runs. The legacy
+# stub does that by `dlopen`ing `libfuse.so.2` — and modern Arch-based distros
+# ship FUSE 3 only. On Omarchy 4.0.2 there is no `/usr/lib/libfuse.so.2*` at
+# all, so our AppImage died on its first instruction with:
+#
+#     dlopen(): error loading libfuse.so.2
+#     AppImages require FUSE to run.
+#
+# The same build, unpacked (`--appimage-extract` then `./squashfs-root/AppRun`),
+# reached Chromium display init on that machine. Genie was never the problem —
+# only the launcher wrapped around it, which could not start. The static runtime
+# mounts the payload itself and needs no libfuse of either generation.
+#
+# This lives at the ROOT and not under `linux:` even though it only affects the
+# AppImage: app-builder-lib reads `packager.config.toolsets`, i.e. the top-level
+# config. Moving it into the linux block below silently reverts this fix, and
+# also violates electron-builder's own schema (LinuxConfiguration is
+# `additionalProperties: false`). scripts/__tests__/appimage-toolset.test.ts
+# asserts both halves.
+#
+# `0.0.0` (or omitting the key, which is what we did until now) is the legacy
+# FUSE 2 toolset; `1.0.3` is upstream's newest AppImage bundle — "Runtime
+# 20251108 (Resolves GH issue #9598)" per app-builder-lib 26.15.3's own
+# ToolsetConfig docs. Two knock-on effects, both wanted:
+#   - Payload compression becomes zstd. The static runtime is compiled without
+#     xz support, so app-builder-lib maps xz/unset onto zstd for this path.
+#   - `--no-sandbox` is no longer baked into the .desktop `Exec=` line. The
+#     generated AppRun probes for user namespaces (`unshare -Ur true`) and adds
+#     the flag only on kernels that actually need it, instead of disabling the
+#     Chromium sandbox unconditionally for everyone.
+toolsets:
+  appimage: 1.0.3
+
 linux:
   target:
     - AppImage
