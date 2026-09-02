@@ -241,6 +241,43 @@ export class AgentInboxBroker {
         this.notifySink = fn;
     }
 
+    /**
+     * Is a harness-native transport bound for this agent RIGHT NOW?
+     *
+     * The PTY notice and the unread backstop exist for one case only: an agent
+     * running in a terminal with no channel of its own. `transportSink` answers
+     * that at delivery time, but the backstop is armed from {@link markTurnEnd},
+     * where no message is in hand and the sink is never consulted — which is how
+     * an attached agent could still be woken at its prompt five minutes on
+     * (genie#344).
+     *
+     * Injected by the host (background.ts reads the transport registry).
+     * Unwired → false, so a build with no transports keeps the PTY fallback
+     * exactly as it was.
+     */
+    private harnessAttached: (agentId: string) => boolean = () => false;
+
+    setHarnessAttachedResolver(fn: (agentId: string) => boolean): void {
+        this.harnessAttached = fn;
+    }
+
+    /** The agent's own harness owns delivery, so its keyboard is not ours. */
+    private harnessOwnsDelivery(target: AgentInboxAgent): boolean {
+        try {
+            return this.harnessAttached(target.agentId);
+        } catch {
+            // A resolver that throws must not be read as "no transport" — that
+            // is the answer that types at a prompt. Fail toward silence.
+            return true;
+        }
+    }
+
+    /** The agent id registered for a terminal, or null. Lets the host release a
+     *  harness binding when the process holding it exits. */
+    agentIdForTerminal(terminalId: string): string | null {
+        return this.byTerminal.get(terminalId) ?? null;
+    }
+
     private notifyDelivery(agent: AgentInboxAgent, msg: AgentInboxMessage): void {
         if (!this.notifySink) return;
         try {
@@ -360,6 +397,9 @@ export class AgentInboxBroker {
      */
     private notifyNow(target: AgentInboxAgent, msg: AgentInboxMessage): boolean {
         if (!this.wakeSink || !target.terminalId) return false;
+        // Its harness has the message coming. A notice on top would be a second
+        // copy, typed where nothing can tell it from the human.
+        if (this.harnessOwnsDelivery(target)) return false;
         const isAnswer = this.ftqAnswerTerminals.delete(target.terminalId);
         const text = inboxNoticeText({
             from: msg.fromLabel,
@@ -419,6 +459,13 @@ export class AgentInboxBroker {
      */
     private scheduleNudge(target: AgentInboxAgent): void {
         if (!this.wakeSink || !target.terminalId) return;
+        // An attached agent's unread mail is its channel's to deliver, on its own
+        // schedule. Arming a deadline against it would put "you have N unread"
+        // at a prompt Genie has no business typing into.
+        if (this.harnessOwnsDelivery(target)) {
+            this.clearNudge(target);
+            return;
+        }
         const unread = target.inbox.filter((m) => m.seq > target.cursor);
         if (unread.length === 0) {
             this.clearNudge(target);
@@ -469,6 +516,9 @@ export class AgentInboxBroker {
      *  failed inject leaves the mail queued for the next deadline. */
     private fireNudge(target: AgentInboxAgent): void {
         if (!this.wakeSink || !target.terminalId) return;
+        // Re-checked at the deadline, not just when it was armed: a channel that
+        // came up in between owns this agent now.
+        if (this.harnessOwnsDelivery(target)) return;
         const safe = shouldWakeAgent({
             lastTurnEndAt: target.lastTurnEndAt,
             lastOutputAt: target.lastOutputAt,
