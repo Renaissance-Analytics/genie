@@ -78,6 +78,7 @@ import {
     uninstallConfirmation,
 } from '../lib/apps-view';
 import { isolationNote } from '../lib/dev-server';
+import { gappProviderOptions, providerSettingsGroups } from '../lib/provider-settings';
 import {
     newPromptId,
     parsePromptLibrary,
@@ -362,93 +363,58 @@ export default function SettingsPage() {
                 <SettingRow
                     label="GApp AI Provider"
                     desc="Which AI agent a Genie App's own agents run as. The app declares that it needs an agent; you decide what that agent is — it runs on your machine, under your subscription, so the choice is not the app's. Blank follows your default agent."
-                    keywords="gapp genie app ai provider agent tui claude codex custom persona"
+                    keywords="gapp genie app ai provider agent tui claude codex kiwi custom persona"
                     grow
                 >
                     <Select
                         value={s.gapp_ai_provider ?? ''}
                         onValueChange={(v) => patch({ gapp_ai_provider: v })}
-                        list={[
-                            { value: '', label: 'Follow my default agent' },
-                            { value: 'claude', label: 'Claude Code' },
-                            { value: 'codex', label: 'Codex' },
-                            { value: 'custom', label: 'Custom agent' },
-                        ]}
-                    />
-                </SettingRow>
-                <SettingRow
-                    label="Claude Code command"
-                    desc="Launched when you add a Claude Code terminal. Blank uses the built-in default (claude)."
-                    keywords="claude code agent command specialized terminal launch"
-                    grow
-                >
-                    <Input
-                        value={s.agent_command_claude ?? ''}
-                        onValueChange={(v) => patch({ agent_command_claude: v })}
-                        placeholder="claude"
-                    />
-                </SettingRow>
-                <SettingRow
-                    label="Claude Code extra flags"
-                    desc="Always passed when launching this agent (after the command, before Genie's --session-id)."
-                    keywords="claude code agent flags specialized terminal launch dangerously skip permissions"
-                    grow
-                >
-                    <Input
-                        value={s.agent_flags_claude ?? ''}
-                        onValueChange={(v) => patch({ agent_flags_claude: v })}
-                        placeholder="--dangerously-skip-permissions"
-                    />
-                </SettingRow>
-                <SettingRow
-                    label="Codex command"
-                    desc="Launched when you add a Codex terminal. Blank uses the built-in default."
-                    keywords="codex agent command specialized terminal launch openai"
-                    grow
-                >
-                    <Input
-                        value={s.agent_command_codex ?? ''}
-                        onValueChange={(v) => patch({ agent_command_codex: v })}
-                        placeholder="codex"
-                    />
-                </SettingRow>
-                <SettingRow
-                    label="Codex extra flags"
-                    desc="Always passed when launching this agent (after the command, before Genie's --session-id)."
-                    keywords="codex agent flags specialized terminal launch openai"
-                    grow
-                >
-                    <Input
-                        value={s.agent_flags_codex ?? ''}
-                        onValueChange={(v) => patch({ agent_flags_codex: v })}
-                        placeholder="--dangerously-skip-permissions"
-                    />
-                </SettingRow>
-                <SettingRow
-                    label="Custom agent command"
-                    desc="The default command for a Custom agent terminal. You can still override it per-terminal when creating one."
-                    keywords="custom agent command specialized terminal launch"
-                    grow
-                >
-                    <Input
-                        value={s.agent_command_custom ?? ''}
-                        onValueChange={(v) => patch({ agent_command_custom: v })}
-                        placeholder="e.g. my-agent --interactive"
-                    />
-                </SettingRow>
-                <SettingRow
-                    label="Custom agent extra flags"
-                    desc="Always passed when launching this agent (after the command, before Genie's --session-id)."
-                    keywords="custom agent flags specialized terminal launch"
-                    grow
-                >
-                    <Input
-                        value={s.agent_flags_custom ?? ''}
-                        onValueChange={(v) => patch({ agent_flags_custom: v })}
-                        placeholder="--dangerously-skip-permissions"
+                        list={gappProviderOptions()}
                     />
                 </SettingRow>
             </SetSection>
+
+            {/* One section per provider, from the registry (genie#261). The page
+                used to hand-roll a command row and a flags row for three of the
+                five, so `kiwi` and `genie` were launchable with no way to set
+                either — and a sixth copy of the provider list lived here to
+                drift. `providerSettingsGroups()` is now the only list, and a
+                structural test fails the build if a key is named here again. */}
+            {providerSettingsGroups().map((provider) => (
+                <SetSection
+                    key={provider.id}
+                    title={provider.label}
+                    desc={provider.hint}
+                    host={restricted}
+                >
+                    <SettingRow
+                        label="Command"
+                        desc={provider.id === 'custom'
+                            ? 'The default command for a Custom agent terminal. You can still override it per-terminal when creating one.'
+                            : `Launched when you add a ${provider.label} terminal. Blank uses the built-in default (${provider.commandPlaceholder}).`}
+                        keywords={`${provider.keywords} command`}
+                        grow
+                    >
+                        <Input
+                            value={s[provider.commandKey] ?? ''}
+                            onValueChange={(v) => patch({ [provider.commandKey]: v })}
+                            placeholder={provider.commandPlaceholder}
+                        />
+                    </SettingRow>
+                    <SettingRow
+                        label="Extra flags"
+                        desc="Always passed when launching this agent (after the command, before Genie's --session-id)."
+                        keywords={`${provider.keywords} flags dangerously skip permissions`}
+                        grow
+                    >
+                        <Input
+                            value={s[provider.flagsKey] ?? ''}
+                            onValueChange={(v) => patch({ [provider.flagsKey]: v })}
+                            placeholder="--dangerously-skip-permissions"
+                        />
+                    </SettingRow>
+                </SetSection>
+            ))}
 
                             </SearchGroup>
                         )}

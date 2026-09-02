@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { agentTuis, TUI_REGISTRY } from '../../../main/agents/registry';
 import {
     NAV_GROUPS,
     HOST_SOURCED_SETTINGS_KEYS,
@@ -115,6 +116,23 @@ describe('host-sourced (bucket 2) classification', () => {
     });
 
     it('the host-sourced key allow-list is exactly the workspace/agent-env keys', () => {
+        // The provider half is DERIVED. It used to be six literals covering
+        // `claude`, `codex` and `custom`, which is how `kiwi` and `genie` came
+        // to be missing: their command and flags were read from and written to
+        // the CLIENT in a remote window, while the host is what spawns them.
+        // Spelling them out again here would just be a seventh copy of the
+        // provider list, and the next provider would be missing from this test
+        // as well as from the list it checks.
+        const providerKeys = agentTuis().flatMap((id) => [
+            TUI_REGISTRY[id].commandSettingKey,
+            TUI_REGISTRY[id].flagsSettingKey,
+        ]);
+
+        // POSITIVE CONTROL: the derivation is not an empty list agreeing with
+        // itself — every provider must contribute exactly two keys.
+        expect(providerKeys.length).toBe(agentTuis().length * 2);
+        expect(providerKeys).toContain('agent_command_kiwi');
+
         expect([...HOST_SOURCED_SETTINGS_KEYS].sort()).toEqual(
             [
                 'ai_system',
@@ -124,12 +142,7 @@ describe('host-sourced (bucket 2) classification', () => {
                 'mcp_sync_codex',
                 'mcp_sync_cursor',
                 // Specialized-terminal launch command + flags (host resolves these).
-                'agent_command_claude',
-                'agent_flags_claude',
-                'agent_command_codex',
-                'agent_flags_codex',
-                'agent_command_custom',
-                'agent_flags_custom',
+                ...providerKeys,
                 // GApp AI Provider: which TUI a Genie App's declared agents run as.
                 'gapp_ai_provider',
                 // Workstation Setup: the owner's default + enabled agents.
