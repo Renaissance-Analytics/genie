@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 /**
- * `--debug`: write a startup log to a file the user can hand over.
+ * `--genie-debug`: write a startup log to a file the user can hand over.
  *
  * GENIE WRITES NO LOG FILE. There is no `electron-log`, no `getPath('logs')`
  * writer, nothing — so when Genie fails to start, everything it knows about why
@@ -23,9 +23,29 @@ import path from 'node:path';
  * separated out so they are testable without a filesystem.
  */
 
-/** True when this process was started with `--debug`. */
+/**
+ * The flag, and why it is not `--debug`.
+ *
+ * `--debug` is ELECTRON'S. Chromium/Node claim it before any of our code runs,
+ * and Electron 42 answers it with
+ *
+ *     electron: [DEP0062]: `node --debug` and `node --debug-brk` are invalid.
+ *     Please use `node --inspect` and `node --inspect-brk` instead.
+ *
+ * and then does not start normally. Verified by running the real AppImage on
+ * Omarchy: `--debug` produced that line and no application. So the flag as
+ * first shipped could never have written a log — the process it was meant to
+ * diagnose never got far enough to open one.
+ *
+ * `--genie-debug` is namespaced for exactly that reason: the argv of an
+ * Electron app is shared with Chromium and Node, and an unprefixed word is
+ * somebody else's option waiting to happen.
+ */
+export const DEBUG_FLAG = '--genie-debug';
+
+/** True when this process was started with {@link DEBUG_FLAG}. */
 export function debugRequested(argv: readonly string[] = process.argv): boolean {
-    return argv.includes('--debug');
+    return argv.includes(DEBUG_FLAG);
 }
 
 /**
@@ -152,7 +172,7 @@ const inactive: DebugLog = {
 };
 
 /**
- * Open the debug log for this run, or return a no-op when `--debug` is absent.
+ * Open the debug log for this run, or return a no-op when the flag is absent.
  *
  * Every write is wrapped: a diagnostic that crashes the thing it is diagnosing
  * is worse than none, and this runs before almost everything else in boot.
@@ -182,10 +202,10 @@ export function openDebugLog(info: {
 
     for (const line of debugHeader({ ...info, argv })) append(line);
 
-    // Say it on stdout too. A user who ran with --debug is at a terminal, and
+    // Say it on stdout too. A user who ran with the flag is at a terminal, and
     // the path is the one thing they need out of this.
     // eslint-disable-next-line no-console
-    console.log(`[Genie] --debug: writing startup log to ${file}`);
+    console.log(`[Genie] ${DEBUG_FLAG}: writing startup log to ${file}`);
 
     return {
         active: true,

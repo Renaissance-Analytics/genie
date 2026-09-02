@@ -1051,7 +1051,7 @@ process.on('unhandledRejection', (reason) => {
 });
 
 /**
- * `--debug`: the startup log, opened before anything that can fail.
+ * `--genie-debug`: the startup log, opened before anything that can fail.
  *
  * Genie writes no log otherwise, so a start that dies before its window exists
  * leaves nothing behind — the failure mode that made diagnosing Omarchy a

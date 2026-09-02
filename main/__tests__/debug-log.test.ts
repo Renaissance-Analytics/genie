@@ -1,6 +1,7 @@
 import os from 'node:os';
 import { describe, expect, it } from 'vitest';
 import {
+    DEBUG_FLAG,
     debugRequested,
     debugLogPath,
     isSecretKey,
@@ -10,7 +11,7 @@ import {
 } from '../debug-log';
 
 /**
- * `--debug` exists because Genie writes NO log file.
+ * `--genie-debug` exists because Genie writes NO log file.
  *
  * There is no electron-log and no `getPath('logs')` writer anywhere in `main/`,
  * so everything Genie knows about a failed start goes to stderr and dies with
@@ -28,13 +29,31 @@ import {
  */
 
 describe('opting in', () => {
-    it('is off unless --debug is passed', () => {
+    /**
+     * THE FLAG IS NOT `--debug`, and this is the test that matters.
+     *
+     * `--debug` is Electron's. Chromium/Node claim it before any of our code
+     * runs, and Electron 42 answers it with DEP0062 ("`node --debug` ... are
+     * invalid") and then does not start normally.
+     *
+     * Found by running the real AppImage on Omarchy: `--debug` produced that
+     * line and no application. So the flag as first shipped could never have
+     * written a log -- the process it was meant to diagnose never got far
+     * enough to open one. A unit test could not have caught it; only running
+     * the built artifact could.
+     */
+    it('is namespaced, because --debug belongs to Electron', () => {
+        expect(DEBUG_FLAG).toBe('--genie-debug');
+        expect(debugRequested(['electron', '.', '--debug'])).toBe(false);
+    });
+
+    it('is off unless the flag is passed', () => {
         expect(debugRequested(['electron', '.'])).toBe(false);
         expect(debugRequested(['electron', '.', '--autostart'])).toBe(false);
     });
 
-    it('is on with --debug', () => {
-        expect(debugRequested(['electron', '.', '--debug'])).toBe(true);
+    it('is on with the flag', () => {
+        expect(debugRequested(['electron', '.', DEBUG_FLAG])).toBe(true);
     });
 
     it('writes nothing when it is off', () => {
@@ -166,12 +185,12 @@ describe('the header', () => {
         const text = debugHeader({
             version: '0.7.0-beta.295',
             electron: '42.8.1',
-            argv: ['genie', '--debug'],
+            argv: ['genie', DEBUG_FLAG],
         }).join('\n');
 
         expect(text).toContain('0.7.0-beta.295');
         expect(text).toContain('42.8.1');
-        expect(text).toContain('--debug');
+        expect(text).toContain(DEBUG_FLAG);
         expect(text).toContain(process.platform);
     });
 });
