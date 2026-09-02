@@ -94,11 +94,23 @@ describe('v57 — the phantom workspace agent is removed', () => {
         ).toThrow();
     });
 
-    it('does NOT designate a replacement', () => {
-        // POSITIVE CONTROL on "nothing is auto-designated": a workspace with one
-        // obvious candidate is exactly where a migration would be tempted to
-        // choose, and choosing puts an agent in the boots-from-root position on
-        // the strength of a guess.
+    it('leaves the replacement to v64, which designates only where it is unambiguous', () => {
+        // v57 itself still designates nothing — it removes the placeholder and
+        // stops. What CHANGED is what happens further up the ladder.
+        //
+        // This assertion used to read `role: 'specialized'`, as a positive
+        // control on "nothing is ever auto-designated". That was the right rule
+        // while nothing designated at all: on the live workstation, 17 of the 18
+        // workspaces with agents had no workspace agent, because the role was
+        // only ever assigned at registration time and every older workspace
+        // missed it (#324).
+        //
+        // v64 backfills, and the owner set the bound that keeps the old worry
+        // honest: ONLY where the choice is unambiguous — exactly one `claude`
+        // agent — so it never puts an agent in the boots-from-root position on
+        // the strength of a guess. This fixture is that case: one claude agent,
+        // nothing to weigh it against. The cases where v64 REFUSES to choose
+        // (two claude agents, none, a GApp) are pinned in db-migrations.test.ts.
         const db = fresh();
         seedWorkspace(db, 'ws-1');
         addAgent(db, { id: 'workspace:ws-1', ws: 'ws-1', name: 'workspace', role: 'workspace' });
@@ -107,7 +119,27 @@ describe('v57 — the phantom workspace agent is removed', () => {
         db.prepare("DELETE FROM schema_version WHERE version >= 57").run();
         runMigrations(db);
 
-        expect(roles(db, 'ws-1')).toEqual([{ name: 'tynn', role: 'specialized' }]);
+        expect(roles(db, 'ws-1')).toEqual([{ name: 'tynn', role: 'workspace' }]);
+    });
+
+    it('still designates nobody when the choice is not obvious', () => {
+        // The half of the old control that MUST survive: v57 removes the
+        // placeholder, and with two candidates nothing is promoted in its place.
+        // Without this, "v64 backfills" could quietly become "a migration always
+        // picks someone", which is the outcome the original test guarded.
+        const db = fresh();
+        seedWorkspace(db, 'ws-1');
+        addAgent(db, { id: 'workspace:ws-1', ws: 'ws-1', name: 'workspace', role: 'workspace' });
+        addAgent(db, { id: 'a1', ws: 'ws-1', name: 'ripple', tui: 'claude' });
+        addAgent(db, { id: 'a2', ws: 'ws-1', name: 'ripple-builder', tui: 'claude' });
+
+        db.prepare("DELETE FROM schema_version WHERE version >= 57").run();
+        runMigrations(db);
+
+        expect(roles(db, 'ws-1')).toEqual([
+            { name: 'ripple', role: 'specialized' },
+            { name: 'ripple-builder', role: 'specialized' },
+        ]);
     });
 
     it('keeps a placeholder that somehow holds a terminal', () => {
