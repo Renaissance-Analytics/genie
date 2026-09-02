@@ -50,7 +50,11 @@ describe('withClaudeAgentInboxChannelLaunch', () => {
             workspacePath,
         });
         expect(once).toBe(
-            'claude --model opus --channels server:genie-agentinbox-channel',
+            // The DEVELOPMENT flag, not `--channels`. The approved allowlist is
+            // Anthropic-curated and ours is not on it, so `--channels` registers
+            // nothing and the events are dropped silently — see
+            // approved-channels-flag.test.ts for the full reasoning.
+            'claude --model opus --dangerously-load-development-channels server:genie-agentinbox-channel',
         );
         expect(withClaudeAgentInboxChannelLaunch(once, {
             agent: 'claude',

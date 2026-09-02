@@ -2103,3 +2103,80 @@ describe('db migration v64 (backfill the workspace agent)', () => {
         ).toBe(1);
     });
 });
+
+/**
+ * v65 — the NO-OP channel flag must not survive in a stored command.
+ *
+ * v59's lesson, for the flag that replaced the one v59 swept. #324 moved Genie
+ * to `--channels`, which cannot register a channel that is not on Anthropic's
+ * curated allowlist — so it matches nothing and Claude Code "drops the events
+ * silently and returns no error". A visible prompt became an invisible no-op.
+ *
+ * The builder strips it now, but a REVIVE replays `meta_json.agent_command`
+ * verbatim and the builder never runs. Without this, every spec written while
+ * #324 shipped keeps launching a channel that does nothing, forever.
+ *
+ * The assertion that matters most is the third: the CORRECT flag must survive.
+ * `--dangerously-load-development-channels` ends in `channels`, so a careless
+ * pattern would strip the fix on every upgrade and re-resolve endlessly.
+ */
+describe('db migration v65 (sweep the no-op channel flag)', () => {
+    function specWith(db: Database.Database, id: string, command: string): void {
+        db.prepare(
+            `INSERT INTO workspaces
+                (id, tynn_project_id, tynn_project_name, project_id, project_name,
+                 shape, path, sort_order)
+             VALUES (?, 'p', 'P', 'p', 'P', 'simple', '/tmp/p', 0)`,
+        ).run(`ws-${id}`);
+        db.prepare(
+            `INSERT INTO terminal_specs
+                (id, workspace_id, label, cwd, args_json, env_json, sort_order, created_at, meta_json)
+             VALUES (?, ?, 'agent', '/tmp/p', '[]', '{}', 0, 'now', ?)`,
+        ).run(id, `ws-${id}`, JSON.stringify({ agent: 'claude', agent_command: command }));
+    }
+
+    function storedCommand(db: Database.Database, id: string): string | undefined {
+        const row = db
+            .prepare<[string], { c: string | null }>(
+                `SELECT json_extract(meta_json, '$.agent_command') AS c
+                   FROM terminal_specs WHERE id = ?`,
+            )
+            .get(id);
+        return row?.c ?? undefined;
+    }
+
+    function rerun(db: Database.Database): void {
+        db.prepare('DELETE FROM schema_version WHERE version >= 65').run();
+        runMigrations(db);
+    }
+
+    it('removes a stored command carrying the no-op flag', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        specWith(db, 'stale', 'claude --channels server:genie-agentinbox-channel');
+        rerun(db);
+
+        expect(storedCommand(db, 'stale')).toBeUndefined();
+    });
+
+    it('KEEPS a stored command carrying the working development flag', () => {
+        // The one that would bite: both flags end in `channels`, so a pattern
+        // without the leading `--` would strip the fix on every upgrade.
+        const db = new Database(':memory:');
+        runMigrations(db);
+        const good = 'claude --dangerously-load-development-channels server:genie-agentinbox-channel';
+        specWith(db, 'fixed', good);
+        rerun(db);
+
+        expect(storedCommand(db, 'fixed')).toBe(good);
+    });
+
+    it('leaves an unrelated command the owner chose alone', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        specWith(db, 'mine', 'claude --model opus --dangerously-skip-permissions');
+        rerun(db);
+
+        expect(storedCommand(db, 'mine')).toBe('claude --model opus --dangerously-skip-permissions');
+    });
+});

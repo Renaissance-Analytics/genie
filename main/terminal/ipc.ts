@@ -99,6 +99,7 @@ import { listAllProcesses } from './process-list';
 import { logPtyOsc } from './osc-debug';
 import { agentPulse } from './agent-pulse';
 import { InputHolds } from './input-hold';
+import { devChannelConsentReply } from './dev-channel-consent';
 import crypto from 'node:crypto';
 
 /**
@@ -232,6 +233,11 @@ export function lastActiveTerminalForWorkspace(workspaceId: string): string | nu
  * read it. Capacity-capped (see read-buffer.ts) so it can't grow unboundedly.
  */
 const agentReadBuffer = new TerminalReadBuffer();
+
+/** How much of the tail the development-channel warning check reads. The dialog
+ *  is a few hundred bytes, but Ink repaints it and the pty wraps every line, so
+ *  the assembled frame is comfortably larger than it looks. */
+const DEV_CHANNEL_SCAN_BYTES = 8 * 1024;
 
 /**
  * How much of a terminal's output survives its pty EXIT. The spec is retained
@@ -934,8 +940,39 @@ function feedTerminalData(id: string, data: string): void {
     // Wake-on-DM idle signal (issue #9): any output means the agent is active — so
     // a DM wake fails closed until it's genuinely quiet again. Cheap (a timestamp).
     agentInboxBroker.noteOutput(id);
+    // Answer OUR OWN development-channel warning, and nothing else.
+    // `--dangerously-load-development-channels` is the only flag that registers
+    // a custom channel, and it stops on a full-screen warning every launch with
+    // nothing available to pre-accept it. Genie added the flag and owns this
+    // pty, so it answers for its own decision — see dev-channel-consent.ts for
+    // why the match is narrow enough for that to be defensible.
+    maybeAnswerDevChannelWarning(id);
     // Mirror to any attached mobile /ws/term socket (no-op when off / unwatched).
     mobileTermFanout(id, data);
+}
+
+/** Terminals whose development-channel warning we have already answered. One
+ *  reply per pty: the dialog is drawn once, but Ink repaints it many times, and
+ *  a second Enter would land in the session that follows it. */
+const devChannelAnswered = new Set<string>();
+
+function maybeAnswerDevChannelWarning(id: string): void {
+    if (devChannelAnswered.has(id)) return;
+    // Read from the SAME capped buffer `manageTerminals.read` uses, so the
+    // decision sees the assembled frame rather than one arbitrary chunk — the
+    // channel list routinely arrives split across writes.
+    const recent = agentReadBuffer.readTail(id, DEV_CHANNEL_SCAN_BYTES);
+    if (!recent.buffered || devChannelConsentReply(recent.data) !== 'accept') return;
+    devChannelAnswered.add(id);
+    try {
+        // The confirm choice is already selected when the dialog opens, so a
+        // bare Enter accepts it. Anything more would be typing into a TUI whose
+        // state we are inferring.
+        terminalManager().write(id, '\r');
+    } catch {
+        // A pty that died between the read and the write is not an error worth
+        // surfacing — the warning went with it.
+    }
 }
 
 function feedTerminalExit(id: string, payload: { exitCode: number; signal?: number }): void {

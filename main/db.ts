@@ -1987,6 +1987,46 @@ export function runMigrations(d: Database.Database): void {
                 `);
             },
         },
+        {
+            // v65 -- THE NO-OP CHANNEL FLAG MUST NOT SURVIVE IN A STORED COMMAND.
+            //
+            // Exactly v59's shape, for the flag that replaced the one v59 swept.
+            //
+            // #324 moved Genie from `--dangerously-load-development-channels` to
+            // `--channels`, to escape a prompt that fires on every launch. That
+            // flag cannot register OUR channel: the approved allowlist is
+            // Anthropic-curated (`claude-plugins-official`) and a bare `server:`
+            // entry of ours is not on it, so `--channels` matches nothing and --
+            // per the channels reference -- Claude Code "drops the events
+            // silently and returns no error". A visible prompt became an
+            // invisible no-op.
+            //
+            // `withClaudeAgentInboxChannelLaunch` now strips it and adds the
+            // working flag, but that is the BUILDER. v59's whole lesson is that
+            // a revive replays `meta_json.agent_command` verbatim
+            // (terminal/ipc.ts) and the builder never runs -- so every spec
+            // written while #324 shipped would keep launching with a channel
+            // that silently does nothing, forever.
+            //
+            // Same remedy as v59: REMOVE the stored command so resolution falls
+            // through to the builder, rather than editing a string inside JSON.
+            // Only specs that actually carry the flag are touched, so a command
+            // the owner chose survives untouched.
+            //
+            // The pattern is anchored on `--channels ` with its leading double
+            // hyphen and trailing space: `development-channels` has a single
+            // hyphen before `channels`, so a stored command carrying the CORRECT
+            // flag is not matched and re-resolved on every upgrade.
+            version: 65,
+            runner: (db) => {
+                db.prepare(
+                    `UPDATE terminal_specs
+                        SET meta_json = json_remove(meta_json, '$.agent_command')
+                      WHERE json_extract(meta_json, '$.agent_command')
+                            LIKE '%--channels server:%'`,
+                ).run();
+            },
+        },
     ];
 
     const apply = d.transaction(
