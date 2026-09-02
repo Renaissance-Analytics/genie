@@ -194,7 +194,14 @@ describe('POST /api/desktop/dev-server/service', () => {
             SERVICE,
         );
         expect(r.status).toBe(200);
-        expect(serviceTools.runManageService).toHaveBeenCalledWith(null, { action: 'catalog' });
+        // The owner driving their OWN machine from another device sees what the
+        // desktop Services page shows them — only an agent's view is narrowed
+        // (genie#345).
+        expect(serviceTools.runManageService).toHaveBeenCalledWith(
+            null,
+            { action: 'catalog' },
+            { workspaceId: null, wholeWorkstation: true },
+        );
     });
 
     it('gates a WRITE (add) on the baton and audits it when it runs', async () => {
@@ -216,6 +223,7 @@ describe('POST /api/desktop/dev-server/service', () => {
         expect(serviceTools.runManageService).toHaveBeenCalledWith(
             { id: 'w1', project_name: 'Proj', path: '/ws/w1' },
             { action: 'add', engine: 'postgres' },
+            { workspaceId: 'w1', wholeWorkstation: true },
         );
         expect(recentAudit().find((e) => e.action === 'dev-service.add')).toBeDefined();
     });

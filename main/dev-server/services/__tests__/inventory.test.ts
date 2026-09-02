@@ -148,6 +148,10 @@ describe('buildEngineInventory', () => {
             holders: 2,
             configured: 3,
             workspaces: ['web', 'api', 'docs'],
+            // The same three by ID, in step with the labels. A per-workspace
+            // view of this row is computed from these, and two projects can
+            // share a label (genie#345) — so the identity, not the name.
+            workspaceIds: ['w1', 'w2', 'w3'],
         });
     });
 
@@ -187,6 +191,7 @@ describe('buildEngineInventory', () => {
             holders: 1,
             configured: 1,
             workspaces: ['lab'],
+            workspaceIds: ['w9'],
             containerId: 'own',
         });
     });
