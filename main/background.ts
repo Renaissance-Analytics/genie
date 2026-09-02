@@ -11,6 +11,7 @@ import fs from 'fs';
 import path from 'path';
 import { createTray, rebuildMenu } from './tray';
 import { registerShortcuts, unregisterShortcuts } from './shortcuts';
+import { openDebugLog } from './debug-log';
 import { launchedFromAutostart } from './autostart';
 import { resolveWorkstationTui } from './agents/tui';
 import { ensureGenieOsWorkspace, wireGenieOsWorkspace } from './agents/os-workspace';
@@ -1041,13 +1042,33 @@ async function hostRestart(): Promise<string> {
 process.on('uncaughtException', (err) => {
     // eslint-disable-next-line no-console
     console.error('[Genie main] uncaughtException — kept alive:', err);
+    debugLog.fail('uncaughtException', err);
 });
 process.on('unhandledRejection', (reason) => {
     // eslint-disable-next-line no-console
     console.error('[Genie main] unhandledRejection — kept alive:', reason);
+    debugLog.fail('unhandledRejection', reason);
 });
 
+/**
+ * `--debug`: the startup log, opened before anything that can fail.
+ *
+ * Genie writes no log otherwise, so a start that dies before its window exists
+ * leaves nothing behind — the failure mode that made diagnosing Omarchy a
+ * conversation instead of a file. Inactive and free unless the flag is passed.
+ *
+ * Opened at module scope, not inside whenReady: a crash during app init would
+ * otherwise happen before the logger exists, which is exactly the crash worth
+ * catching.
+ */
+const debugLog = openDebugLog({
+    version: app.getVersion(),
+    electron: process.versions.electron ?? 'unknown',
+});
+debugLog.note('main module loaded; waiting for app ready');
+
 app.whenReady().then(async () => {
+    debugLog.note('app ready');
     // HEADLESS (genie-cloud host): the electron stub still resolves whenReady, so
     // this DESKTOP boot would otherwise run on a headless host — calling
     // markDesktopRuntime() (which wrongly flips isDesktop()/isHeadless() and would
