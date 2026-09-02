@@ -1922,6 +1922,71 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // v64 -- BACKFILL THE WORKSPACE AGENT ON WORKSPACES THAT PREDATE IT.
+            //
+            // `firstAgentRole()` gives the first agent registered in a workspace
+            // the `workspace` role, but it decides that AT REGISTRATION TIME. A
+            // workspace whose agents were all registered before that shipped
+            // never got one, and nothing backfilled it: measured on the live
+            // workstation at beta.295, SEVENTEEN of the eighteen workspaces that
+            // had agents held no `role='workspace'` row at all. The code was
+            // correct going forward and wrong on every machine that already
+            // existed -- which is the whole shape of #324's third symptom, and
+            // invisible to a test that only ever sees a fresh database.
+            //
+            // THE OWNER'S RULE, and the only part that is a judgement call:
+            // backfill ONLY where the choice is unambiguous, considering ONLY
+            // `claude` agents.
+            //
+            //   exactly one claude agent -> promote it
+            //   two or more              -> leave it, a human picks
+            //   none                     -> leave it
+            //
+            // Guessing is worse than waiting here. The TWA's terminal is "the
+            // one that drives most work there" and is master of the agents it
+            // spawns, and `idx_workspace_agents_master` allows exactly ONE such
+            // row per workspace -- so a wrong pick has to be demoted before it
+            // can be corrected, and it silently changes which terminal work
+            // lands in until someone notices.
+            //
+            // Restricting candidates to `claude` is not a stylistic preference:
+            // the common real shape is a claude agent beside a codex `-slave`
+            // sidecar (`fancy` + `fancy-slave`, `weaver` + `weaver-slave`), and
+            // a sidecar is the one agent that must never become the workspace's
+            // master. It also makes those workspaces unambiguous rather than
+            // ties, so the rule promotes them instead of parking them.
+            //
+            // `role='gapp'` is excluded for the reason firstAgentRole() already
+            // excludes it: a GApp's agent belongs to the app, and handing it the
+            // single workspace slot would lock the workspace out of ever having
+            // an agent of its own.
+            //
+            // The `NOT EXISTS` guard is what makes this idempotent AND safe to
+            // replay: claiming the role where one is already held would violate
+            // the UNIQUE index, and a throw inside a migration takes the whole
+            // upgrade transaction down with it.
+            version: 64,
+            runner: (db) => {
+                db.exec(`
+                    UPDATE workspace_agents
+                       SET role = 'workspace'
+                     WHERE role = 'specialized'
+                       AND tui = 'claude'
+                       AND NOT EXISTS (
+                            SELECT 1 FROM workspace_agents peer
+                             WHERE peer.workspace_id = workspace_agents.workspace_id
+                               AND peer.role = 'workspace'
+                       )
+                       AND (
+                            SELECT COUNT(*) FROM workspace_agents cand
+                             WHERE cand.workspace_id = workspace_agents.workspace_id
+                               AND cand.tui = 'claude'
+                               AND cand.role = 'specialized'
+                       ) = 1
+                `);
+            },
+        },
     ];
 
     const apply = d.transaction(

@@ -1947,3 +1947,159 @@ describe('v52 — harness transport verification', () => {
         });
     });
 });
+
+/**
+ * v64 — BACKFILL THE WORKSPACE AGENT ON WORKSPACES THAT PREDATE beta.294.
+ *
+ * `firstAgentRole()` gives the first agent registered in a workspace the
+ * `workspace` role, but it decides that AT REGISTRATION TIME. Every workspace
+ * whose agents were registered before that shipped never got one, and nothing
+ * backfilled it — measured on the live workstation, 17 of the 18 workspaces
+ * that had agents had no `role='workspace'` row at all. Correct going forward,
+ * wrong on every machine that already existed.
+ *
+ * The owner's rule, and what this implements: backfill only where the choice is
+ * UNAMBIGUOUS, and consider only `claude` agents.
+ *
+ *   exactly one claude agent  → promote it
+ *   two or more               → leave it; a human picks
+ *   none                      → leave it
+ *
+ * Picking for someone would put the wrong terminal in the position that "drives
+ * most work there" and is the master of the agents it spawns — and the schema
+ * allows only ONE `role='workspace'` row per workspace, so a wrong guess has to
+ * be undone before it can be corrected.
+ */
+describe('db migration v64 (backfill the workspace agent)', () => {
+    /** A workspace plus its agents, at the pre-v64 state: nobody holds the role. */
+    function seed(
+        db: Database.Database,
+        ws: string,
+        agents: Array<{ name: string; tui: string; role?: string }>,
+    ): void {
+        db.prepare(
+            `INSERT INTO workspaces
+                (id, tynn_project_id, tynn_project_name, project_id, project_name,
+                 shape, path, sort_order)
+             VALUES (?, 'p', 'P', 'p', 'P', 'simple', '/tmp/p', 0)`,
+        ).run(ws);
+        for (const a of agents) {
+            db.prepare(
+                `INSERT INTO workspace_agents
+                    (id, workspace_id, tui, name, purpose, role, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, '', ?, 1, 1)`,
+            ).run(`${ws}:${a.name}`, ws, a.tui, a.name, a.role ?? 'specialized');
+        }
+    }
+
+    function roleOf(db: Database.Database, id: string): string {
+        return db
+            .prepare<[string], { role: string }>(`SELECT role FROM workspace_agents WHERE id = ?`)
+            .get(id)!.role;
+    }
+
+    /**
+     * Force v64 to run against rows seeded afterwards.
+     *
+     * `runMigrations` takes no target version, and a fresh database is already
+     * at v64 before a fixture row exists — so a test that just seeded and
+     * re-ran would assert against a migration that had nothing to do. Dropping
+     * the schema_version row puts the database back in the state a real
+     * pre-beta.294 workstation is in, which is the only state this migration
+     * has to be right about. Same technique as the v25/v34/v35/v50 tests above.
+     */
+    function rerunV64(db: Database.Database): void {
+        db.prepare('DELETE FROM schema_version WHERE version >= 64').run();
+        runMigrations(db);
+    }
+
+    it('promotes the sole claude agent', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        seed(db, 'ws-one', [{ name: 'tynn', tui: 'claude' }]);
+        rerunV64(db);
+
+        expect(roleOf(db, 'ws-one:tynn')).toBe('workspace');
+    });
+
+    it('promotes the claude agent even when codex sidecars sit beside it', () => {
+        // The common real shape: `fancy` (claude) + `fancy-slave` (codex). Only
+        // claude agents are candidates, so this is unambiguous, not a tie.
+        const db = new Database(':memory:');
+        runMigrations(db);
+        seed(db, 'ws-side', [
+            { name: 'fancy', tui: 'claude' },
+            { name: 'fancy-slave', tui: 'codex' },
+        ]);
+        rerunV64(db);
+
+        expect(roleOf(db, 'ws-side:fancy')).toBe('workspace');
+        expect(roleOf(db, 'ws-side:fancy-slave')).toBe('specialized');
+    });
+
+    it('leaves a workspace with two claude agents alone', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        seed(db, 'ws-two', [
+            { name: 'ripple', tui: 'claude' },
+            { name: 'ripple-builder', tui: 'claude' },
+        ]);
+        rerunV64(db);
+
+        expect(roleOf(db, 'ws-two:ripple')).toBe('specialized');
+        expect(roleOf(db, 'ws-two:ripple-builder')).toBe('specialized');
+    });
+
+    it('leaves a workspace with no claude agent alone', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        seed(db, 'ws-codex', [{ name: 'civi-slave', tui: 'codex' }]);
+        rerunV64(db);
+
+        expect(roleOf(db, 'ws-codex:civi-slave')).toBe('specialized');
+    });
+
+    it('never displaces a workspace agent that already exists', () => {
+        // `UNIQUE (workspace_id) WHERE role='workspace'` means a second claim
+        // THROWS rather than losing — so this is the case that would turn a
+        // backfill into a failed boot, not merely a wrong answer.
+        const db = new Database(':memory:');
+        runMigrations(db);
+        seed(db, 'ws-has', [
+            { name: 'owner', tui: 'claude', role: 'workspace' },
+            { name: 'helper', tui: 'claude' },
+        ]);
+        expect(() => rerunV64(db)).not.toThrow();
+
+        expect(roleOf(db, 'ws-has:owner')).toBe('workspace');
+        expect(roleOf(db, 'ws-has:helper')).toBe('specialized');
+    });
+
+    it('does not hand the workspace slot to a GApp agent', () => {
+        // A GApp's agent belongs to the app, not the workspace. Promoting it
+        // would consume the single `workspace` slot and lock the workspace out
+        // of ever having an agent of its own — the exclusion firstAgentRole()
+        // already makes for new registrations.
+        const db = new Database(':memory:');
+        runMigrations(db);
+        seed(db, 'ws-gapp', [{ name: 'app', tui: 'claude', role: 'gapp' }]);
+        rerunV64(db);
+
+        expect(roleOf(db, 'ws-gapp:app')).toBe('gapp');
+    });
+
+    it('is idempotent — running it again promotes nothing further', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        seed(db, 'ws-idem', [{ name: 'solo', tui: 'claude' }]);
+        rerunV64(db);
+        expect(() => rerunV64(db)).not.toThrow();
+
+        expect(roleOf(db, 'ws-idem:solo')).toBe('workspace');
+        expect(
+            db.prepare<[], { n: number }>(
+                `SELECT COUNT(*) n FROM workspace_agents WHERE role = 'workspace'`,
+            ).get()!.n,
+        ).toBe(1);
+    });
+});
