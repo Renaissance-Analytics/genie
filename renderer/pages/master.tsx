@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DEFAULT_HOTKEYS, type HotkeyBindings } from '../lib/hotkeys';
 import { useGenieHotkeys } from '../lib/use-genie-hotkeys';
-import { ftqNudgeBytes } from '../lib/ftq-nudge';
+import { ftqNudgeDelivery } from '../lib/ftq-nudge';
 import GenieCommandWindow, { type SavedPrompt } from '../components/Master/GenieCommandWindow';
 import FeedbackModal from '../components/Master/FeedbackModal';
 import Chooser from '../components/Master/Chooser';
@@ -353,8 +353,22 @@ function MasterInner() {
             () => ({
                 // Typed into the agent's TUI exactly as a person would, then
                 // submitted — the agent re-asks through the MCP tool itself.
+                //
+                // The submit is delivered SEPARATELY when the nudge is long
+                // enough to trip a TUI's paste heuristic: in paste mode a
+                // trailing CR lands in the buffer as a newline rather than
+                // submitting (genie#218), which parks the prompt with text in
+                // it and no turn started — silent, and indistinguishable from
+                // the agent ignoring you. `ftqNudgeDelivery` decides; this just
+                // performs it.
                 onFtqNudge: (terminalId: string) => {
-                    void api().terminal.write(terminalId, ftqNudgeBytes());
+                    const plan = ftqNudgeDelivery();
+                    void (async () => {
+                        await api().terminal.write(terminalId, plan.body);
+                        if (!plan.submitSeparately) return;
+                        await new Promise((resolve) => setTimeout(resolve, plan.delayMs));
+                        await api().terminal.write(terminalId, plan.submit);
+                    })();
                 },
                 onCommandWindow: (terminalId: string) => setCommandWindowFor(terminalId),
             }),
