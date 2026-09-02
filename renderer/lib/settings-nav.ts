@@ -137,10 +137,21 @@ export const HOST_SOURCED_SETTINGS_KEYS = [
     // Specialized-terminal launch: the command + always-on flags the HOST resolves
     // when it spawns each agent type (resolveAgentLaunch reads these on the host).
     // Badged "On the host" in Settings, so their VALUES must come from + write to it.
+    // EVERY provider in the registry, not the three this list used to name.
+    // `kiwi` and `genie` were missing, so their command and flags were read
+    // from — and written to — the CLIENT in a remote window, while the host is
+    // what actually spawns them. Kept explicit rather than spread from the
+    // registry so the `satisfies keyof Settings` check below stays a compile
+    // error; `provider-settings.test.ts` fails if a provider is ever added
+    // without appearing here.
     'agent_command_claude',
     'agent_flags_claude',
     'agent_command_codex',
     'agent_flags_codex',
+    'agent_command_kiwi',
+    'agent_flags_kiwi',
+    'agent_command_genie',
+    'agent_flags_genie',
     'agent_command_custom',
     'agent_flags_custom',
     // GApp AI Provider: which TUI a Genie App's declared agents run as. The HOST

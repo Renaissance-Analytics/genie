@@ -8,7 +8,7 @@ import type { BoardRead, ReviewOutcome } from './artboard-model';
 
 import { makeRemoteBridge } from './remote-bridge';
 import type { TynnHealth } from '../../main/mcp/tynn-health';
-import type { AgentTuiId } from '../../main/agents/registry';
+import type { AgentTuiId, TuiDef } from '../../main/agents/registry';
 
 export type { TynnHealth };
 
@@ -1110,7 +1110,22 @@ export interface GithubCapabilities {
     checked: boolean;
 }
 
-export interface Settings {
+/**
+ * The command + always-on flags keys for EVERY provider, derived from the
+ * registry (genie#261).
+ *
+ * These were six hand-written optional fields covering `claude`, `codex` and
+ * `custom`. `kiwi` and `genie` were launchable but had no key here, so nothing
+ * could type a value for them -- the settings page could not render a row, and
+ * `HOST_SOURCED_SETTINGS_KEYS` could not list one, because both are checked
+ * against `keyof Settings`. A mapped type makes adding a provider to the
+ * registry enough, and a missing one a COMPILE error rather than a silence.
+ */
+export type ProviderLaunchSettings = {
+    [K in TuiDef['commandSettingKey'] | TuiDef['flagsSettingKey']]?: string;
+};
+
+export interface Settings extends ProviderLaunchSettings {
     primary_workspace?: string;
     /** Last-activated workspace id in the master view. */
     active_workspace?: string;
@@ -1234,23 +1249,6 @@ export interface Settings {
      *  Toolchain page's `toolchain:set-default` ipc, never by the Settings form's
      *  whole-object Save (which would carry a stale default back). */
     toolchain_defaults?: string;
-    /** Specialized terminals: the launch command for a Claude Code agent
-     *  (resolved server-side; blank = the built-in default `claude`). */
-    agent_command_claude?: string;
-    /** Specialized terminals: the launch command for a Codex agent (blank =
-     *  the built-in default). */
-    agent_command_codex?: string;
-    /** Specialized terminals: the launch command for a Custom agent — no
-     *  built-in default, so a per-terminal command is required when blank. */
-    agent_command_custom?: string;
-    /** Specialized terminals: always-on launch flags for a Claude Code agent —
-     *  appended after the command, before Genie's `--session-id` (e.g.
-     *  `--dangerously-skip-permissions`). Blank = none. */
-    agent_flags_claude?: string;
-    /** Specialized terminals: always-on launch flags for a Codex agent. */
-    agent_flags_codex?: string;
-    /** Specialized terminals: always-on launch flags for a Custom agent. */
-    agent_flags_custom?: string;
     /** GApp AI Provider (genie#245): which AI TUI a Genie App's DECLARED agents run
      *  as — `claude` | `codex` | `custom`, or '' to follow `agent_default`. The
      *  user's choice per WORKSTATION, never the app's: it is spending this
