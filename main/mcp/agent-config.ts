@@ -60,29 +60,48 @@ export function claudeChannelEntry(workspacePath: string, url: string): JsonObj 
 }
 
 /**
- * The APPROVED-channel flag. `--dangerously-load-development-channels` is
- * interactive by design — Claude Code stops on "1. I am using this for local
- * development / 2. Exit" and waits, on EVERY launch. For the Genie OS agent,
- * which Genie starts itself, that is a wall it can never get past unaided; it
- * relaunches and prompts again. Claude Code's own warning names this
- * alternative ("Please use --channels to run a list of approved channels"), and
- * `claude --channels` confirms it takes `<servers...>` (genie#324).
+ * The DEVELOPMENT-channel flag — the only one that registers a channel of ours.
+ *
+ * #324 moved this to `--channels`, following Claude Code's own warning ("Please
+ * use --channels to run a list of approved channels") and the fact that the flag
+ * is real and takes `<servers...>`. That escaped a prompt that fires on every
+ * launch, but it does not load our channel. Per the channels reference:
+ *
+ *   > every channel must be on the approved allowlist to register... The bypass
+ *   > is per-entry. Combining this flag with `--channels` doesn't extend the
+ *   > bypass to the `--channels` entries. ...the approved allowlist is
+ *   > Anthropic-curated, so your channel stays on the development flag.
+ *
+ * The allowlist is the channel plugins in `claude-plugins-official`;
+ * `genie-agentinbox-channel` is a bare `server:` entry of ours and matches
+ * nothing in it. The same page notes that a session which has not loaded a
+ * server as a channel "drops the events silently and returns no error".
+ *
+ * So #324 traded a VISIBLE prompt for an INVISIBLE no-op. This is the reversal.
+ * The prompt is handled where it actually lives — Genie owns the pty and
+ * answers its OWN channel's warning (see `terminal/dev-channel-consent.ts`).
  */
-const CLAUDE_CHANNEL_OPT_IN = `--channels server:${AGENTINBOX_CLAUDE_CHANNEL_NAME}`;
-
-/** The interactive flag this replaced. Stripped from any command that still
- *  carries it — leaving it alongside the new one would keep prompting. */
-const CLAUDE_CHANNEL_DEV_FLAG =
+const CLAUDE_CHANNEL_OPT_IN =
     `--dangerously-load-development-channels server:${AGENTINBOX_CLAUDE_CHANNEL_NAME}`;
+
+/** The no-op flag this replaced. Stripped from any command that still carries
+ *  it — leaving it alongside the working one would register nothing and, per the
+ *  docs above, would not inherit the development bypass either. */
+const CLAUDE_CHANNEL_DEV_FLAG = `--channels server:${AGENTINBOX_CLAUDE_CHANNEL_NAME}`;
 
 export function withClaudeAgentInboxChannelLaunch(
     command: string,
     input: { agent: string; mcpSyncClaudeOff: boolean; workspacePath: string },
 ): string {
     if (input.agent !== 'claude' || input.mcpSyncClaudeOff) return command;
-    // A spec written before #324 has the interactive flag baked into its stored
-    // command. Skipping or appending would both leave it in place, and it
-    // prompts wherever it appears — so remove it before deciding.
+    // A spec written WHILE #324 shipped has `--channels` baked into its stored
+    // command. Skipping or appending would both leave it there, registering
+    // nothing and — per the docs on the constant above — not inheriting the
+    // development bypass either. So remove it before deciding.
+    //
+    // The two constants cannot be confused for one another by `includes`:
+    // `development-channels` carries a single hyphen before `channels`, so the
+    // `--channels` needle never matches inside the flag that replaced it.
     if (command.includes(CLAUDE_CHANNEL_DEV_FLAG)) {
         command = command.replace(CLAUDE_CHANNEL_DEV_FLAG, '').replace(/\s{2,}/g, ' ').trim();
     }

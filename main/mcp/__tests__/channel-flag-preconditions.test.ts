@@ -55,9 +55,12 @@ describe('the AgentInbox channel flag checks its preconditions (#319)', () => {
             workspacePath: workspace(true),
         });
 
-        // Since #324 this is the APPROVED-channel flag, not the interactive
-        // development one — see approved-channels-flag.test.ts.
-        expect(cmd).toContain('--channels server:genie-agentinbox-channel');
+        // The DEVELOPMENT flag. #324 moved this to `--channels`, which cannot
+        // register a channel that is not on Anthropic's curated allowlist — see
+        // approved-channels-flag.test.ts for why that was reversed.
+        expect(cmd).toContain(
+            '--dangerously-load-development-channels server:genie-agentinbox-channel',
+        );
     });
 
     it('still refuses a non-claude agent even with the adapter present', () => {
