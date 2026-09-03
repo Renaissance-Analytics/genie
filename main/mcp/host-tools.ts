@@ -111,7 +111,8 @@ import {
     runScheduleNow,
 } from '../terminal/process-scheduler';
 import { describeCron, isValidCron } from '../terminal/cron';
-import { resolveRestartCommand } from '../agentinbox/session-capture';
+import { capturedSessionId, resolveRestartCommand } from '../agentinbox/session-capture';
+import { launchBlockReason } from '../agents/availability';
 import { detectFolder } from '../workspace/detect';
 import { workspaceDocHealth } from '../workspace/create-agi';
 import { repoCheckoutInfo } from '../workspace/repo-checkout';
@@ -1684,18 +1685,50 @@ export function updateAgentInboxChannel(
 }
 
 export type RestartAgentResult =
-    | { ok: true; oldId: string; newId: string; agent: AgentInboxAgentType; command: string }
+    | {
+          ok: true;
+          oldId: string;
+          newId: string;
+          agent: AgentInboxAgentType;
+          command: string;
+          /**
+           * What Genie has actually ESTABLISHED — not what it hopes happened.
+           *
+           * `relaunching` is the only value, and that is the honest answer rather
+           * than a placeholder: when this returns, the launch line has not even
+           * been typed yet (`deliverAgentLaunch` waits `AGENT_LAUNCH_SETTLE_MS`
+           * so the fresh shell has finished loading), and once it is, a TUI that
+           * dies inside its pty leaves a shell that is indistinguishable from a
+           * healthy agent. Genie does not have a signal for "the agent came up"
+           * at this moment, so it does not claim one (genie#364; the same class
+           * as #227's unfalsifiable "may still be starting" and #305's
+           * start-time readiness snapshot).
+           *
+           * A future `running` state belongs to whatever gains that signal — a
+           * post-launch observation, not this call.
+           */
+          state: 'relaunching';
+          /** One line, in the words a surface should show the user. */
+          note: string;
+      }
     | { ok: false; error: string };
 
 /**
  * GRACEFULLY restart an agent terminal so its TUI reconnects to the (possibly
  * updated) MCP rig WITHOUT losing the conversation (wish #88): tear the current
- * agent down, then relaunch it in a fresh terminal with `--resume <captured-id>`.
- * Claude persists its session to disk continuously, so the resumed CLI continues
- * where it left off while re-reading the current `.mcp.json` + getting a fresh
- * agent MCP endpoint. REFUSES (no teardown) when the terminal isn't a resumable
- * agent — no captured session id, or an unsupported custom agent — so a restart can never
- * silently drop the conversation into a fresh, context-less session.
+ * agent down, then relaunch it in a fresh terminal with the provider's RESUME
+ * grammar (`TuiDef.resume` — never the one-shot `--session-id` create flag; see
+ * genie#364). Claude persists its session to disk continuously, so the resumed
+ * CLI continues where it left off while re-reading the current `.mcp.json` +
+ * getting a fresh agent MCP endpoint. REFUSES (no teardown) when the terminal
+ * isn't a resumable agent — no captured session id, or an unsupported custom
+ * agent — so a restart can never silently drop the conversation into a fresh,
+ * context-less session.
+ *
+ * On success it reports `state: 'relaunching'`, NOT "restarted": everything it
+ * can decide, it decides here and refuses on (the provider is launchable, the
+ * command resolves, the fresh pty is live); the one thing it cannot see is
+ * inside the pty, and it says so instead of implying otherwise.
  */
 export function restartAgentTerminal(id: string): RestartAgentResult {
     const spec = getTerminalSpec(id);
@@ -1705,6 +1738,17 @@ export function restartAgentTerminal(id: string): RestartAgentResult {
     }
     const provider = restartProviderForSpec(spec.meta ?? {}, getAllSettings());
     if (!provider) return { ok: false, error: `"${id}" is not an agent terminal.` };
+
+    // The boot-time detect pass (genie#313) already knows this provider's binary
+    // is missing and uninstallable. `createAgentTerminal` deliberately does NOT
+    // refuse a REVIVE on it — a saved conversation must not be blocked by a stale
+    // cache entry — so a restart that went ahead here would kill a working agent,
+    // print `command not found`, and report success. Refuse BEFORE any teardown:
+    // the agent that is running is worth more than the relaunch that cannot.
+    const blocked = launchBlockReason(provider);
+    if (blocked) {
+        return { ok: false, error: `Cannot restart "${provider}": ${blocked}` };
+    }
 
     // Genie OSA is a recovery surface: restart means a complete teardown and a
     // fresh launch using CURRENT provider settings. It must work even when the
@@ -1737,18 +1781,49 @@ export function restartAgentTerminal(id: string): RestartAgentResult {
         const fresh = getTerminalSpec(restarted.id);
         if (fresh) updateTerminalSpec(restarted.id, { meta: { ...preserved, ...fresh.meta, system: true, ...(identity ? { agent_id: identity } : {}) } });
         broadcastTerminalSpecsChanged();
-        return { ok: true, oldId: id, newId: restarted.id, agent: provider, command: restarted.command ?? command };
+        return relaunchInFlight(id, restarted.id, provider, restarted.command ?? command);
     }
+
+    // The BASE the resume is built on. `meta.agent_command` is a cache of what
+    // the builder produced, and migrations DELETE it when the flags it froze go
+    // bad (v59's interactive channel prompt, v65's no-op `--channels`) precisely
+    // so resolution falls back to the builder. Nothing here used to do that
+    // fall-back: `renderAgentResume` dropped to the registry's bare
+    // `defaultCommand`, so a swept spec restarted as a plain `claude --resume
+    // <id>` — without the owner's always-on flags, without
+    // `--dangerously-skip-permissions`, and without the AgentInbox channel. The
+    // agent came back visibly crippled and the sweep looked like the culprit.
+    // Re-resolve, and PERSIST it so the reopen path (maybeRelaunchAgent, which
+    // has no access to settings) gets the same command.
+    const ws = getWorkspace(spec.workspace_id ?? '');
+    if (!spec.meta?.agent_command?.trim() && ws) {
+        const rebuilt = resolveAgentLaunch(provider, undefined, ws);
+        if (rebuilt) {
+            updateTerminalSpec(spec.id, { meta: { ...spec.meta, agent_command: rebuilt } });
+        }
+    }
+    const current = getTerminalSpec(spec.id) ?? spec;
 
     // Resolve the relaunch command with the ON-DISK transcript check, so a
     // drifted session id falls back to `--continue` instead of dead-ending at
     // `--resume <phantom>` ("No conversation found" — reads as lost work). Refuses
     // when the terminal has no resumable conversation.
-    const decision = resolveRestartCommand(spec, (sid) => agentSessionTranscriptExists(spec, sid));
+    const decision = resolveRestartCommand(current, (sid) =>
+        agentSessionTranscriptExists(current, sid),
+    );
     if ('error' in decision) {
         return { ok: false, error: decision.error };
     }
     const resume = decision.command;
+
+    // A session id that lived only in the stored `--session-id` flag has just
+    // been recovered (genie#364). Move it into the field that owns it, so the
+    // AgentInbox, the agent ref and the next relaunch all read one record rather
+    // than re-parsing a command string that the next migration may sweep away.
+    const recovered = capturedSessionId(current);
+    if (recovered && current.meta?.chat_session_id !== recovered) {
+        updateTerminalSpec(spec.id, { meta: { ...current.meta, chat_session_id: recovered } });
+    }
 
     // Tear the old agent down FIRST (releases its pty + MCP endpoint + AgentInbox
     // presence) so two processes never share the session id, THEN relaunch into
@@ -1782,10 +1857,47 @@ export function restartAgentTerminal(id: string): RestartAgentResult {
             scopeWorkspaces: spec.meta?.whisper_workspaces,
         },
     });
-    // createAgentTerminal launches it host-side; renderAgentLaunch leaves a
-    // resume/continue command untouched (it already carries the session), so what
-    // was submitted is `restarted.command` === resume.
-    return { ok: true, oldId: id, newId: restarted.id, agent, command: restarted.command ?? resume };
+    // createAgentTerminal launches it host-side from the spec's own relaunch
+    // decision, which is the same `resume` resolved above.
+    return relaunchInFlight(id, restarted.id, agent, restarted.command ?? resume);
+}
+
+/**
+ * The one place a restart's SUCCESS is worded, so no surface can quietly promote
+ * "relaunching" to "restarted".
+ *
+ * The last decidable fact is checked here: a fresh pty that is not live means the
+ * relaunch failed outright, and that IS knowable now. Everything past it — did
+ * the shell take the command, did the TUI come up, did it resume the right chat —
+ * happens after this call returns and is not observable from here, so the result
+ * says so rather than implying otherwise.
+ */
+function relaunchInFlight(
+    oldId: string,
+    newId: string,
+    agent: AgentInboxAgentType,
+    command: string,
+): RestartAgentResult {
+    if (!isTerminalLive(newId)) {
+        return {
+            ok: false,
+            error:
+                `Restarted "${agent}" but its terminal did not come up, so the agent is not ` +
+                'running. Its conversation is untouched — try again, or reopen the terminal.',
+        };
+    }
+    return {
+        ok: true,
+        oldId,
+        newId,
+        agent,
+        command,
+        state: 'relaunching',
+        note:
+            `Relaunching ${agent} — the old agent was stopped and \`${command}\` was submitted ` +
+            'to a fresh terminal. Genie cannot see inside the pty, so it has not confirmed the ' +
+            'agent came back up: watch the terminal.',
+    };
 }
 
 /**
@@ -2177,7 +2289,10 @@ export async function runAgentForMcp(
                 }
                 const r = restartAgentTerminal(req.id!);
                 if (!r.ok) return { ok: false, error: r.error };
-                return { ok: true, id: r.newId, agent: r.agent, command: r.command };
+                // `note` travels with the result: the caller is another agent,
+                // and "restarted" would have it report a recovery Genie has not
+                // observed to whoever asked (genie#364).
+                return { ok: true, id: r.newId, agent: r.agent, command: r.command, note: r.note };
             }
             case 'switchTui': {
                 // An agent is not its TUI. Switching keeps its identity, inbox
