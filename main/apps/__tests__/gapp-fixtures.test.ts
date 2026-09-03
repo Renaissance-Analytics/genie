@@ -168,10 +168,27 @@ describe('the report a developer actually reads', () => {
     });
 
     it('does not drown the reader — every line stays readable in a terminal', () => {
-        const text = formatCheckReport(
-            checkFixture('stranded-agents'),
-            path.join(FIXTURES, 'stranded-agents'),
-        );
+        // The folder is a SHORT LITERAL here, not `path.join(FIXTURES, …)`.
+        //
+        // `formatCheckReport` puts the folder verbatim on its first line, so the
+        // original form measured the DEVELOPER'S ABSOLUTE PATH rather than the
+        // report's own formatting. Identical code passed in a normal checkout and
+        // failed in a git worktree, whose prefix is ~40 characters longer
+        // (genie#359) — so every agent working in a worktree met a red suite it
+        // had not caused, on every run, and had to learn to ignore it.
+        //
+        // A caller's deep path is not a formatting defect, and truncating it
+        // inside `formatCheckReport` would be worse: a half-printed path is no
+        // use to the person the report is FOR. So the test controls its own input
+        // and measures the only thing it can be responsible for — the lines the
+        // report composes itself.
+        const report = checkFixture('stranded-agents');
+        const text = formatCheckReport(report, '/fixtures/stranded-agents');
+
+        // POSITIVE CONTROL. "every line is short" passes perfectly against an
+        // empty report, so prove there is something to measure first.
+        expect(report.findings.length).toBeGreaterThan(0);
+        expect(text.split('\n').length).toBeGreaterThan(3);
 
         for (const line of text.split('\n')) expect(line.length).toBeLessThanOrEqual(120);
     });
