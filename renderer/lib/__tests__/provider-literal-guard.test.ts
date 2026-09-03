@@ -31,10 +31,11 @@ import { PROVIDER_IDS } from '../../../main/agents/registry';
  * red suite. #261 tracks the rest.
  *
  * `recipes/workstation-setup.ts`'s `SETUP_AGENTS` is not an offender to be swept
- * up either, and it is the reason the list pattern is deliberately confined to
- * ONE expression. It is category E — a hand-mirror of genie-cloud's
- * `AGENT_CATALOG` that must not be widened from this repo alone — and its own
- * test file asserts that narrowness as a decision.
+ * up either. It is category E — a hand-mirror of genie-cloud's `AGENT_CATALOG`
+ * that must not be widened from this repo alone — and its own test file asserts
+ * that narrowness as a decision. It falls outside the list pattern because each
+ * catalog entry is a braced object, and the pattern stops at a brace; that is
+ * luck rather than design, so it is written down here rather than relied on.
  */
 
 const RENDERER = path.resolve(__dirname, '../..');
