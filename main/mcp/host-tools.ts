@@ -104,6 +104,7 @@ import {
     getProcessLog,
     getProcessStatuses,
     settleProcess,
+    type StopResult,
 } from '../terminal/process-supervisor';
 import {
     armSchedule,
@@ -628,6 +629,10 @@ export async function manageProcessForMcp(
     /** Set for start/restart — the id whose spawn must be watched before this
      *  call may claim anything about it. */
     let settleId: string | undefined;
+    /** Set for every action that stops a process (stop/disable/delete) — what
+     *  the stop actually established, so this call reports that instead of
+     *  assuming the kill worked. */
+    let stopped: StopResult | undefined;
     try {
         switch (req.action) {
             case 'list':
@@ -852,14 +857,19 @@ export async function manageProcessForMcp(
                         disarmSchedule(target.id);
                         // A disabled LONG-RUNNING process should also stop; a
                         // scheduled task has nothing running between fires.
-                        if (!target.meta?.schedule) stopProcess(target.id);
+                        if (!target.meta?.schedule) {
+                            stopped = await stopProcess(target.id, opts.settleMs);
+                        }
                     }
                     broadcastTerminalSpecsChanged();
                     affectedId = target.id;
                     break;
                 }
                 if (req.action === 'delete') {
-                    stopProcess(target.id);
+                    // AWAITED: forgetProcess drops the supervisor state the stop
+                    // is still waiting on, so a fire-and-forget stop here would
+                    // be watching for an exit nothing can deliver.
+                    stopped = await stopProcess(target.id, opts.settleMs);
                     forgetProcess(target.id);
                     forgetSchedule(target.id);
                     deleteTerminalSpec(target.id);
@@ -902,8 +912,9 @@ export async function manageProcessForMcp(
                     }
                     startProcess(target.id);
                     settleId = target.id;
-                } else if (req.action === 'stop') stopProcess(target.id);
-                else {
+                } else if (req.action === 'stop') {
+                    stopped = await stopProcess(target.id, opts.settleMs);
+                } else {
                     restartProcess(target.id);
                     settleId = target.id;
                 }
@@ -917,6 +928,21 @@ export async function manageProcessForMcp(
             error: e instanceof Error ? e.message : String(e),
             processes: listFor(),
         };
+    }
+    // A kill is not an exit. The pty backend accepts a kill and forgets the pty
+    // immediately (the host client's is a frame written to a socket), so `stop`
+    // reports what the supervisor OBSERVED (CONTRIBUTING.md). `stop` fails when
+    // it could not be confirmed; `disable`/`delete` still did what they were
+    // asked — the spec is disabled/gone — so those carry it as a note instead of
+    // failing an action that did happen.
+    if (stopped && !stopped.confirmed) {
+        if (req.action === 'stop') {
+            return { ok: false, error: stopped.reason, processes: listFor(), affectedId };
+        }
+        return { ok: true, note: stopped.reason, processes: listFor(), affectedId };
+    }
+    if (stopped && req.action === 'stop') {
+        return { ok: true, note: stopped.note, processes: listFor(), affectedId };
     }
     // A spawn is not a run. `startProcess` sets `running` the moment a pty
     // registers, which a `command not found` shell also does before exiting

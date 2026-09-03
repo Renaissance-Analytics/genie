@@ -151,13 +151,16 @@ const statusWatchers = new Map<string, Set<(s: ProcessStatus) => void>>();
 export const PROCESS_SETTLE_MS = 1_200;
 
 /**
- * Watch a just-started process until its status leaves `running`, or `settleMs`
- * passes — whichever comes first. Event-driven (no polling): the exit hook's
- * `setStatus` is what resolves it early.
+ * Watch a process until its status leaves `running`, or `settleMs` passes —
+ * whichever comes first. Event-driven (no polling): the exit hook's `setStatus`
+ * is what resolves it early.
  *
- * The returned status is what was OBSERVED, not what was intended. A long-lived
- * service never "finishes" starting, so a still-`running` result means exactly
- * "alive `settleMs` after the spawn" and nothing stronger.
+ * The returned status is what was OBSERVED, not what was intended. Used from
+ * both ends of a process's life, and it means something slightly different at
+ * each: after a START, a long-lived service never "finishes" starting, so a
+ * still-`running` result means exactly "alive `settleMs` after the spawn"; after
+ * a STOP, a `stopped` result means the pty's exit actually landed, and anything
+ * else means it did not.
  */
 export function settleProcess(
     specId: string,
@@ -287,21 +290,87 @@ export function startProcess(specId: string): void {
     }
 }
 
-/** Stop a process (deliberate — never auto-restarts over this). */
-export function stopProcess(specId: string): void {
+/** What a {@link stopProcess} call actually established. */
+export interface StopResult {
+    /** True only when the process is KNOWN to be down — see stopProcess. */
+    confirmed: boolean;
+    /** Always set: what was established, in the caller's words. */
+    note: string;
+    /** Set when `confirmed` is false — what would settle it. */
+    reason?: string;
+}
+
+/**
+ * Stop a process (deliberate — never auto-restarts over this), and report what
+ * that established rather than assuming it worked.
+ *
+ * This used to end `try { terminalManager().kill(specId); } catch {}` followed
+ * by an unconditional `setStatus(specId, 'stopped')`. `kill(id): boolean`
+ * RETURNS FALSE for a missing pty — it does not throw — so that `catch` could
+ * never fire, the boolean went nowhere, and `'stopped'` was written whatever
+ * happened. Same discovery that fixed `restartProcess` in #368; `stopProcess`
+ * was simply not in that PR's scope.
+ *
+ * A `true` is not much better taken alone. Both backends delete their record and
+ * return `true` the moment a kill is REQUESTED, and the host client's `kill()`
+ * is `this.send({kind:'kill', id})` over a socket to a detached process — so
+ * `true` means "a kill was accepted", never "the process is gone". It also makes
+ * `isLive()` false immediately after ANY kill, which is why the confirmation
+ * here is not built on it: that check would pass for every stop and prove
+ * nothing. The pty's EXIT EVENT is the one thing that reports a real exit, and
+ * it is already what turns a process `'stopped'` (see onProcessPtyExit) — so
+ * this waits for that, bounded, and reports what it saw.
+ *
+ * The two honest outcomes:
+ *
+ *   • `kill()` returned FALSE → the backend has no pty for this id, so there is
+ *     nothing running under Genie's supervision and no exit event is coming.
+ *     `stopped` is established by that ABSENCE, not by a kill. (What it does not
+ *     establish is anything about a process the backend has already forgotten —
+ *     that is bookkeeping, and it is the same thing `restartProcess` relies on.)
+ *   • `kill()` returned TRUE → wait for the exit. Landed: stopped, verified.
+ *     Did not land inside the window: say so, and leave the status alone rather
+ *     than write a `stopped` nothing observed.
+ */
+export async function stopProcess(
+    specId: string,
+    confirmMs: number = PROCESS_SETTLE_MS,
+): Promise<StopResult> {
     const st = ensure(specId);
     clearTimer(st);
     st.userStopped = true;
     st.restartRequested = false;
     st.attempt = 0;
+
+    let killed = false;
     try {
-        terminalManager().kill(specId);
+        killed = terminalManager().kill(specId);
     } catch {
-        /* no live pty — fine */
+        killed = false;
     }
-    setStatus(specId, 'stopped');
+
     // A deliberate stop clears the running intent so it does NOT auto-restore.
+    // Independent of the outcome: the user asked for it down either way.
     persistWasRunning(specId, false);
+
+    if (!killed) {
+        setStatus(specId, 'stopped');
+        return { confirmed: true, note: 'There was no live process to stop — it was already down.' };
+    }
+
+    const settled = await settleProcess(specId, confirmMs);
+    if (settled === 'stopped') {
+        return { confirmed: true, note: "The process's pty exited — Genie saw it go." };
+    }
+    return {
+        confirmed: false,
+        note: 'The kill was accepted by the pty backend.',
+        reason:
+            `The kill was accepted, but no exit for this process had landed ${confirmMs}ms later, ` +
+            `so it is NOT confirmed stopped — its status is left as \`${settled}\` rather than a ` +
+            '`stopped` nothing observed. Poll `manageProcess {action:\'list\'}` until it reads ' +
+            '`stopped`; if it does not, the process is still up and `stop` can be retried.',
+    };
 }
 
 /** Restart a process: kill then respawn once the old pty's exit lands. */

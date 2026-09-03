@@ -1708,11 +1708,15 @@ export function registerIpcHandlers(): void {
             return row;
         },
     );
-    ipcMain.handle('terminal-spec:delete', (_e, id: string) => {
+    ipcMain.handle('terminal-spec:delete', async (_e, id: string) => {
         // If it's a running Process, stop + forget it before dropping the spec.
+        // AWAITED: the stop waits for the pty's exit to land, and forgetProcess
+        // drops the supervisor state that exit is delivered into — so letting it
+        // run unawaited would tear down the very thing being watched. It
+        // resolves as soon as the exit arrives, so a normal delete is unchanged.
         const spec = getTerminalSpec(id);
         if (spec?.type === 'process') {
-            stopProcess(id);
+            await stopProcess(id);
             forgetProcess(id);
             forgetSchedule(id);
         }
