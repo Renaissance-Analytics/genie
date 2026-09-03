@@ -18,6 +18,7 @@ import {
     sortByActivityDesc,
     sortedPairKey,
 } from '../agentinbox-view';
+import { PROVIDER_IDS } from '../../../main/agents/registry';
 
 /**
  * genie #64 parts 3 + 4 — the AgentInbox panel's PURE view logic.
@@ -309,6 +310,18 @@ describe('how an agent is shown to a PERSON (Tynn #254)', () => {
             provider: null,
             name: 'gemini · x',
         });
+    });
+
+    it('draws a logo for EVERY registered TUI, not the three it was written for', () => {
+        // The membership test here was a restated literal — `'claude' ||
+        // 'codex' || 'custom'` — frozen at the provider set of the day. `kiwi`
+        // and `genie` were added to the registry afterwards and fell straight
+        // through it: `provider: null`, so the row rendered the two-letter
+        // initials meant for a HUMAN or a DEPARTED agent. Nothing failed; the
+        // logo was simply never drawn. genie#261, category B — the silent half.
+        for (const id of PROVIDER_IDS) {
+            expect(agentDisplayOf({ agentType: id, purpose: 'tynn' }).provider, id).toBe(id);
+        }
     });
 
     it('falls back to initials only where there is no logo to draw', () => {

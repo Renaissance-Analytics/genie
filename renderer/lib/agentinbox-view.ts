@@ -15,6 +15,7 @@
  * `renderer/lib/view-state.ts` uses — and the host never sees it.
  */
 import type { AgentType } from './genie';
+import { isTuiId } from '../../main/agents/registry';
 
 /** The human panel's sender identity token (mirrors the broker's `AGENTINBOX_HUMAN`). */
 export const HUMAN_ID = 'human';
@@ -257,10 +258,6 @@ interface AgentLike {
     purpose?: string;
 }
 
-function knownProvider(value: unknown): value is AgentTuiId {
-    return value === 'claude' || value === 'codex' || value === 'custom';
-}
-
 /**
  * How an agent is shown to a PERSON: the provider's logo, plus the name.
  *
@@ -277,9 +274,16 @@ function knownProvider(value: unknown): value is AgentTuiId {
  *
  * A departed agent (present in a thread, gone from the directory) keeps its
  * logged label rather than rendering blank — a DM with somebody has to say who.
+ *
+ * `isTuiId` is the registry's membership test, deliberately rather than a local
+ * one. The local one was `'claude' || 'codex' || 'custom'` — the provider set of
+ * the day, frozen. `kiwi` and `genie` were registered later and fell straight
+ * through it, so their rows drew the two-letter initials meant for a HUMAN or a
+ * departed agent. Nothing errored; the logo was simply never asked for
+ * (genie#261).
  */
 export function agentDisplayOf(agent: AgentLike | undefined, fallback = ''): AgentDisplay {
-    const provider = knownProvider(agent?.agentType) ? agent.agentType : null;
+    const provider = isTuiId(agent?.agentType) ? agent.agentType : null;
     const name = agent?.purpose?.trim() || agent?.label?.trim() || fallback;
     return { provider, name };
 }

@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import crypto from 'crypto';
 import type { AgentInboxAgentType } from './types';
+import { isTuiId, providerDef } from '../agents/registry';
 
 /**
  * Capture an AI TUI's CHAT-SESSION identity when Genie launches it, so a
@@ -112,16 +113,28 @@ function stripSessionFlags(command: string): string {
         .trim();
 }
 
+/** Quote a registry-supplied binary/token for use inside a built RegExp. */
+function escapeForRegExp(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /**
  * Build the command to RESUME an agent's captured chat session — the heart of a
  * GRACEFUL restart: re-launching the SAME conversation so the TUI reconnects to
- * the (updated) MCP rig without losing context (wish #88). Claude resumes with
- * `--resume <id>` (confirmed flag). Any existing session/resume flag is stripped
- * first so we never double-flag.
+ * the (updated) MCP rig without losing context (wish #88). Any existing
+ * session/resume flag is stripped first so we never double-flag.
  *
- * Returns null when there's no captured id, or the agent can't be safely resumed
- * (a `custom` wrapper's resume syntax is unknown) — so
- * the caller REFUSES rather than silently launching a fresh, context-less session.
+ * WHICH providers resume, and with what syntax, is `TuiDef.resume` in
+ * `agents/registry.ts` — not a literal here (genie#261). This function owns the
+ * ARGV: where the id goes relative to the provider's own options. That split is
+ * the point: the terminal context menu asks the registry whether to offer
+ * "Restart agent", so its answer cannot drift from the command built here. It
+ * did drift — the menu was claude-only while codex resumed fine — and that is
+ * the bug this arrangement makes unrepresentable.
+ *
+ * Returns null when there's no captured id, or the provider has no known resume
+ * grammar (a `custom` wrapper's syntax is its author's, not Genie's) — so the
+ * caller REFUSES rather than silently launching a fresh, context-less session.
  */
 export function renderAgentResume(
     agent: AgentInboxAgentType,
@@ -129,16 +142,33 @@ export function renderAgentResume(
     sessionId: string | null,
 ): string | null {
     if (!sessionId || !isSafeSessionId(sessionId)) return null;
-    if (agent === 'codex') {
-        const raw = String(baseCommand ?? '').trim() || 'codex';
-        const match = raw.match(/^(codex(?:\.exe)?)(?:\s+resume)?(?:\s+(.*))?$/i);
+    // `agent` reaches here from stored spec meta, so an id this build does not
+    // know is a real case, not a cannot-happen. It resumes like anything else
+    // with no grammar: it does not.
+    if (!isTuiId(agent)) return null;
+    const def = providerDef(agent);
+    const grammar = def.resume;
+    if (!grammar) return null;
+
+    if (grammar.kind === 'subcommand') {
+        // `codex resume [options] <id>` — the id is POSITIONAL and goes last, so
+        // the `-c` TOML overrides Genie injects stay ahead of it. The base
+        // command is split rather than stripped because the subcommand has to
+        // land immediately after the binary.
+        const binary = def.defaultCommand || agent;
+        const raw = String(baseCommand ?? '').trim() || binary;
+        const shape = new RegExp(
+            `^(${escapeForRegExp(binary)}(?:\\.exe)?)(?:\\s+${escapeForRegExp(grammar.token)})?(?:\\s+(.*))?$`,
+            'i',
+        );
+        const match = raw.match(shape);
         if (!match) return null;
         const options = (match[2] ?? '').trim();
-        return `${match[1]} resume${options ? ` ${options}` : ''} ${sessionId}`;
+        return `${match[1]} ${grammar.token}${options ? ` ${options}` : ''} ${sessionId}`;
     }
-    if (agent !== 'claude') return null;
-    const base = stripSessionFlags(baseCommand) || 'claude';
-    return `${base} --resume ${sessionId}`;
+
+    const base = stripSessionFlags(baseCommand) || def.defaultCommand || agent;
+    return `${base} ${grammar.token} ${sessionId}`;
 }
 
 /**
@@ -148,15 +178,22 @@ export function renderAgentResume(
  * there without needing the (possibly drifted) id. Used when the stored
  * `chat_session_id` has no transcript on disk: `--resume <that id>` would dead-end
  * "No conversation found", so we continue the latest instead of scaring the user.
- * Claude-only (codex/custom have no generic continue) — null otherwise.
+ *
+ * Whether a provider HAS such a flag is `TuiDef.resume.continueFlag`, not a
+ * literal here. Only claude declares one today — codex genuinely has no generic
+ * continue — but that is now a row in the table rather than an `if` that the
+ * next provider has to remember to visit.
  */
 export function renderAgentContinue(
     agent: AgentInboxAgentType,
     baseCommand: string,
 ): string | null {
-    if (agent !== 'claude') return null;
-    const base = stripSessionFlags(baseCommand) || 'claude';
-    return `${base} --continue`;
+    if (!isTuiId(agent)) return null;
+    const def = providerDef(agent);
+    const flag = def.resume?.continueFlag;
+    if (!flag) return null;
+    const base = stripSessionFlags(baseCommand) || def.defaultCommand || agent;
+    return `${base} ${flag}`;
 }
 
 /** The agent-relevant slice of a terminal spec's meta (loose so this stays free of

@@ -31,18 +31,20 @@
  *
  * ## What is deliberately NOT here yet
  *
- * LAUNCH behaviour — `LAUNCH_PROFILES`, the resume/continue templates, and argv
+ * LAUNCH behaviour — `LAUNCH_PROFILES`, the session-capture strategy, and argv
  * ordering — stays in `agentinbox/session-capture.ts` and `agents/startup.ts`.
  * This refactor was written alongside #259, which owned those surfaces; it has
  * since merged (`099fd30`), so folding them in is now the natural SECOND pass
  * rather than a collision. The fields it wants — `sessionStrategy`,
- * `flagTemplate`, `resumeTemplate`, `continueTemplate`, `lateBindAllowed`,
- * `launchGrammar` — belong on `TuiDef`.
+ * `flagTemplate`, `lateBindAllowed`, `launchGrammar` — belong on `TuiDef`.
  *
- * That second pass is where a third provider stops being second-class:
- * `renderAgentResume` / `renderAgentContinue` still hardcode `agent === 'claude'`,
- * so anything else gets NO graceful restart. `withStartupInstructions` remains
- * the single owner of shell quoting regardless.
+ * RESUME has already made that move (`TuiDef.resume`), because it was not merely
+ * untidy: `renderAgentResume` rendered a real `codex resume <id>` while the
+ * terminal context menu hid "Restart agent" from every provider but `claude`,
+ * under a comment asserting codex could not resume. A codex agent was therefore
+ * denied a restart that works. Rendering still lives in `session-capture.ts`;
+ * only the GRAMMAR moved here. `withStartupInstructions` remains the single owner
+ * of shell quoting regardless.
  */
 
 /** The AI TUIs Genie can launch. Adding one starts here and nowhere else. */
@@ -59,6 +61,44 @@ export interface ProviderInstallSpec {
     manager: 'npm';
     /** The npm package that provides the binary. */
     package: string;
+}
+
+/**
+ * How a provider RE-ENTERS a captured chat session (genie#261, category C).
+ *
+ * Two surfaces used to answer this independently, and they disagreed:
+ * `renderAgentResume` has emitted `codex resume <id>` for as long as codex has
+ * been a provider, while the terminal context menu gated "Restart agent" on
+ * `agent === 'claude'` under a comment asserting codex had no resume. So a codex
+ * agent was refused a restart that would have worked, and the comment is why
+ * nobody looked. One table, read by both, makes that disagreement
+ * unrepresentable rather than merely unlikely.
+ *
+ * `null` on a provider is a real answer, not an omission: without a known resume
+ * grammar a "restart" drops the conversation into a fresh, context-less session,
+ * so the honest move is to withhold the button rather than lose the work.
+ *
+ * The GRAMMAR lives here; the RENDERING stays in
+ * `agentinbox/session-capture.ts`, which owns argv ordering and quoting.
+ */
+export interface ResumeGrammar {
+    /**
+     * `flag` appends `<token> <id>` to the launch command — claude's
+     * `claude --resume <id>`. `subcommand` inserts `<token>` straight after the
+     * binary and puts the id LAST, so any `-c` overrides stay in front of it —
+     * codex's `codex resume [options] <id>`.
+     */
+    kind: 'flag' | 'subcommand';
+    /** The flag (`--resume`) or subcommand word (`resume`). */
+    token: string;
+    /**
+     * The flag that resumes the MOST-RECENT chat in the terminal's cwd, for a
+     * provider that has one. It is the fallback when a captured id has no
+     * transcript on disk. Absent where the provider offers no such thing —
+     * codex has no generic continue, so a stale id there falls through to a
+     * fresh launch instead.
+     */
+    continueFlag?: string;
 }
 
 export interface TuiDef {
@@ -96,6 +136,13 @@ export interface TuiDef {
      * `kiwi` are in exactly that state today.
      */
     install?: ProviderInstallSpec;
+    /**
+     * How this provider re-enters a captured chat session, or `null` when it has
+     * no known resume grammar. Required (not optional) on purpose: adding a
+     * provider must be a DECISION about whether it can be gracefully restarted,
+     * and `undefined` would read as "no" without anyone having chosen.
+     */
+    resume: ResumeGrammar | null;
 }
 
 /**
@@ -113,6 +160,10 @@ export const TUI_REGISTRY: Record<AgentTuiId, TuiDef> = {
         flagsSettingKey: 'agent_flags_claude',
         // The owner's own install — Genie must never touch it.
         ownedBinary: false,
+        // `claude --resume <id>`, plus `--continue` for the most-recent chat in
+        // the cwd when the captured id has drifted. Both flags confirmed against
+        // `claude --help` at build time.
+        resume: { kind: 'flag', token: '--resume', continueFlag: '--continue' },
     },
     codex: {
         id: 'codex',
@@ -122,6 +173,10 @@ export const TUI_REGISTRY: Record<AgentTuiId, TuiDef> = {
         commandSettingKey: 'agent_command_codex',
         flagsSettingKey: 'agent_flags_codex',
         ownedBinary: false,
+        // `codex resume [options] <id>` — a SUBCOMMAND, not a flag, and the id
+        // goes last so the `-c` TOML overrides Genie injects stay ahead of it.
+        // No `continueFlag`: codex has no generic "continue the last chat".
+        resume: { kind: 'subcommand', token: 'resume' },
     },
     kiwi: {
         id: 'kiwi',
@@ -135,6 +190,10 @@ export const TUI_REGISTRY: Record<AgentTuiId, TuiDef> = {
         // for the `kiwi` binary this codebase can point npm (or anything else)
         // at, so the detect pass can only surface the gap, not close it.
         ownedBinary: true,
+        // No documented resume grammar, so a "restart" would silently start a
+        // NEW conversation. Withholding the button is the honest answer until
+        // the CLI's own resume syntax is known.
+        resume: null,
     },
     genie: {
         id: 'genie',
@@ -156,6 +215,10 @@ export const TUI_REGISTRY: Record<AgentTuiId, TuiDef> = {
         // ticket's sibling already fixed, one layer later. Wire `install` up
         // once that package is public AND its bin matches `defaultCommand`.
         ownedBinary: true,
+        // Same as kiwi: no resume grammar yet. Genie's own TUI is the one that
+        // could most easily grow one, and this is the line to fill in when it
+        // does — nothing else needs editing.
+        resume: null,
     },
     custom: {
         id: 'custom',
@@ -166,6 +229,10 @@ export const TUI_REGISTRY: Record<AgentTuiId, TuiDef> = {
         flagsSettingKey: 'agent_flags_custom',
         // No fixed binary to detect or install — the owner IS the installer.
         ownedBinary: false,
+        // A custom agent IS its command; Genie cannot know how that wrapper
+        // resumes, and guessing would look like a restart and behave like a
+        // fresh start.
+        resume: null,
     },
 };
 
@@ -182,6 +249,19 @@ export function isTuiId(value: unknown): value is AgentTuiId {
 /** A provider's definition. Callers hold an `AgentTuiId`, so it exists. */
 export function providerDef(id: AgentTuiId): TuiDef {
     return TUI_REGISTRY[id];
+}
+
+/**
+ * True when this provider can re-enter a captured chat session — the ONE answer
+ * behind both `renderAgentResume` and the "Restart agent" menu item.
+ *
+ * Takes `unknown` rather than `AgentTuiId` because the callers that need it hold
+ * a STORED string: `spec.meta.agent` comes out of SQLite and can name a provider
+ * written by a newer build. An unknown provider answers `false` — the same as a
+ * provider with no grammar, and for the same reason.
+ */
+export function canResumeTui(value: unknown): boolean {
+    return isTuiId(value) && TUI_REGISTRY[value].resume !== null;
 }
 
 /**
