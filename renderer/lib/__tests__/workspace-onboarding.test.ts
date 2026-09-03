@@ -7,7 +7,6 @@ import {
     workspaceWizardEntry,
     tynnWorkspaceSource,
     tynnProjectImportSource,
-    availableTynnProjects,
     scannedWorkspaceAction,
     gdwChoicesForSource,
 } from '../workspace-onboarding';
@@ -46,18 +45,8 @@ describe('managed workspace entry points', () => {
 });
 
 describe('Tynn workspace import', () => {
-    it('offers every accessible project except ones already linked to a Genie workspace', () => {
-        const projects = [
-            { id: 'available-empty', name: 'Empty', slug: 'empty', repositories: [] },
-            { id: 'available-repo', name: 'Repo', slug: 'repo', repositories: [{ url: 'https://github.com/acme/repo.git', kind: 'code' as const }] },
-            { id: 'linked', name: 'Linked', slug: 'linked', repositories: [] },
-        ];
-
-        expect(availableTynnProjects(projects, [
-            { project_id: '', tynn_project_id: 'linked' },
-            { project_id: '__genie_os__', tynn_project_id: '__genie_os__' },
-        ]).map((project) => project.id)).toEqual(['available-empty', 'available-repo']);
-    });
+    // Which projects the picker LISTS, and what an already-linked one does, moved
+    // to ./tynn-import with genie#355 — see tynn-import.test.ts.
 
     it('uses the declared envelope repository, independent of its suffix', () => {
         expect(tynnWorkspaceSource({

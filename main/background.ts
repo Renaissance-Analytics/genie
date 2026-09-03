@@ -322,6 +322,7 @@ import {
 import { seedAgentAccessE2E } from './e2e/agent-access';
 import { seedRepoE2E } from './e2e/repo';
 import { seedAgentPulseE2E } from './e2e/agent-pulse';
+import { seedTynnImportE2E } from './e2e/tynn-import';
 import { seedMasterE2E } from './e2e/master';
 
 /**
@@ -2592,6 +2593,7 @@ function showE2EWindow(): void {
         'e2e-repo-panel',
         'e2e-terminal-recovery',
         'e2e-tynn-health',
+        'e2e-tynn-import',
         'e2e-agent-pulse',
         // The product page, not a harness (genie#228). See the doc comment.
         'master',
@@ -2626,6 +2628,16 @@ function showE2EWindow(): void {
             seedAgentPulseE2E();
         } catch (e) {
             console.error('[e2e] agent-pulse seed failed', e);
+        }
+    }
+    if (page === 'e2e-tynn-import') {
+        // Clear any workspace a previous run registered and pre-set the primary
+        // workspace folder BEFORE the window loads — the modal reads it on mount
+        // as the default clone destination (genie#355).
+        try {
+            seedTynnImportE2E();
+        } catch (e) {
+            console.error('[e2e] tynn-import seed failed', e);
         }
     }
     if (page === 'master') {
