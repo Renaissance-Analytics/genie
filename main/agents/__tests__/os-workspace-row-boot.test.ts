@@ -47,6 +47,17 @@ describe('boot seeds the System Workspace row before the operator spec', () => {
         expect(seed).toContain('workspace_id: SYSTEM_WORKSPACE_ROW_ID');
         expect(seed).not.toContain('workspace_id: null');
     });
+
+    it('strips the stale `system` tag when it re-parents an existing spec', () => {
+        // `updateTerminalSpec` REPLACES meta rather than merging, so the tag has
+        // to be destructured out — spreading the old meta would carry it forward,
+        // and a stale tag is exactly what every deleted substitution used to read.
+        const start = boot.indexOf('id: GENIE_OS_TERMINAL_ID');
+        const reconcile = boot.slice(start, start + 2500).replace(/^\s*\/\/.*$/gm, '');
+
+        expect(reconcile).toContain('const { system: _wasSystem, ...meta } = existingOsAgent.meta;');
+        expect(reconcile).not.toContain('system: true');
+    });
 });
 
 /**

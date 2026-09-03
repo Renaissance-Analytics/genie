@@ -4,6 +4,7 @@ import type { ProviderSettingKeys } from './agents/registry';
 import path from 'path';
 import fs from 'fs';
 import { randomUUID } from 'node:crypto';
+import { SYSTEM_WORKSPACE_ROW_ID } from './workspace/system-workspace-id';
 import {
     devSiteIdFor,
     parseDevSites,
@@ -2912,8 +2913,7 @@ export interface WorkspaceRow {
  * machine re-seeds an empty operator over its preserved memory. That is the
  * intended split: the workstation is new, the operator's notes are not.
  */
-export { SYSTEM_WORKSPACE_ROW_ID } from './workspace/system-workspace-id';
-import { SYSTEM_WORKSPACE_ROW_ID } from './workspace/system-workspace-id';
+export { SYSTEM_WORKSPACE_ROW_ID };
 
 /**
  * Create (or re-point) the System Workspace row.
