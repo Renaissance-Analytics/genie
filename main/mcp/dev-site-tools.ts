@@ -429,7 +429,18 @@ export async function runManageSite(
     try {
         switch (req.action) {
             case 'list':
+                // The INVENTORY, on the state the manager already holds. Every
+                // other action's envelope calls this too, so a probe here would put
+                // a network round-trip behind all of them.
+                return { ok: true, sites: sites(), runtime, ...(req.id ? { affectedId: req.id } : {}) };
+
             case 'status':
+                // The HEALTH question, and it is a LIVE one (genie#305). `ready` was
+                // written only on the start path, so a `hostServe: php` site whose
+                // php-cgi backend died went on reporting `ready: true` while every
+                // request 502'd — the answer outliving the thing it measured. Re-ask
+                // before answering, and read the sites AFTER.
+                await manager.refresh(ws.id);
                 return { ok: true, sites: sites(), runtime, ...(req.id ? { affectedId: req.id } : {}) };
 
             case 'detect': {

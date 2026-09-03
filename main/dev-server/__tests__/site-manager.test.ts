@@ -557,6 +557,37 @@ describe('stop / list / logs', () => {
     });
 });
 
+describe('refresh — a CONTAINER site is re-asked THROUGH Caddy (genie#305)', () => {
+    it('re-probes over TLS+SNI, where a gateway status still means "the app has not bound"', async () => {
+        // The container half of the live-readiness fix. This port is the SANDBOX'S
+        // Caddy, so the probe has to be the SNI one — the same one the start used —
+        // and NOT the plain-http probe a host-native site gets. Sending it down the
+        // host path would both fail the TLS handshake and lose the 502 rejection
+        // that is correct for a proxy port.
+        const runtime = fakeRuntime();
+        const probes: Array<{ port: number; kind: string; servername?: string }> = [];
+        let appUp = true;
+        const m = manager(runtime, { [SITE_ID]: SITE }, {
+            probeReady: async (req) => {
+                probes.push(req);
+                return appUp;
+            },
+        });
+        await m.start('acme', SITE_ID);
+        expect(m.list('acme')[0]?.ready).toBe(true);
+
+        probes.length = 0;
+        appUp = false;
+        await m.refresh('acme');
+
+        expect(probes).toHaveLength(1);
+        expect(probes[0]?.kind).toBe('http');
+        expect(probes[0]?.port).toBe(CADDY_HOST_PORT);
+        expect(probes[0]?.servername).toBe('web.acme.gen');
+        expect(m.list('acme')[0]?.ready).toBe(false);
+    });
+});
+
 describe('reconcile', () => {
     it('starts every ENABLED site and leaves disabled ones alone', async () => {
         const runtime = fakeRuntime();

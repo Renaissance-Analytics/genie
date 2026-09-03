@@ -158,8 +158,11 @@ ARTIFACT: run the build yourself (a terminal, or \`manageProcess\`) and point
   \`confident\`, and \`needs\` when it is a guess OR when Genie cannot run that mode
   at all — READ \`needs\` before choosing). Host-native dev needs none of it.
 - \`list\` / \`status\` — every site + live state. \`state:'running'\` means the
-  process/container is up; \`ready:true\` means the port actually accepted a
-  connection.
+  process/container is up; \`ready:true\` means the site actually answered. \`list\`
+  reports the last known state; \`status\` RE-PROBES first, so it is the one to
+  trust when a site was working and has stopped behaving (a \`hostServe\` php site
+  whose FastCGI backend died leaves Caddy answering 502s — \`status\` catches that,
+  \`list\` would still show the state it was last in).
 - \`create\` — define one and host it: \`name\` (a DNS label) and, for the default,
   NOTHING else (host-native dev is inferred). Or \`hostServe\` (Genie serves it), or
   an explicit \`command\` + \`port\`. Optional \`repo\` (host \`repos/<repo>\`), \`env\`,

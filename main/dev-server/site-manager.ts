@@ -392,6 +392,21 @@ export interface DevSiteManager {
     adopt(): Promise<void>;
     /** Configured sites + live state. All workspaces, or one. */
     list(workspaceId?: string): DevSiteRow[];
+    /**
+     * RE-ASK whether each live site is serving, and update `ready` (genie#305).
+     *
+     * `ready` used to be written only on the start path, which made it a
+     * START-TIME SNAPSHOT: a `hostServe: php` site whose `php-cgi` backend died
+     * mid-session went on reporting `ready: true` for as long as Genie ran,
+     * because nothing ever asked again. A status has to re-run the question, and
+     * — see {@link probeHostNativeReady} — ask the process that actually dies.
+     *
+     * Probes every live site in the scope CONCURRENTLY, so the cost is one probe
+     * budget rather than one per site, and fires the change notification only when
+     * something actually flipped. Never throws: a probe that cannot be answered
+     * leaves the site's last known state alone rather than inventing one.
+     */
+    refresh(workspaceId?: string): Promise<void>;
     /** A bounded log tail for a running site. Never throws. */
     logs(siteId: string, tail?: number): Promise<string>;
     /** Start every enabled site and stop everything that no longer is. */
@@ -452,6 +467,17 @@ interface Live {
     /** The app's own loopback port INSIDE the sandbox — what Caddy proxies to.
      *  Absent for a host-native site (there is no sandbox hop). */
     internalPort?: number;
+    /**
+     * The FastCGI port a `hostServe: php` site's `php-cgi` worker holds — the
+     * SECOND host process behind Genie's own Caddy, and the one whose death
+     * genie#305 reported. Present only for that shape; a static `hostServe` site
+     * and a repo-dev-server site are one process, so there is nothing else to ask.
+     *
+     * It is recorded because readiness has to be answerable AFTER the start that
+     * allocated it (see {@link DevSiteManager.refresh}); without it a status could
+     * only ask Caddy, which answers 502 for a dead backend and reads as ready.
+     */
+    fcgiPort?: number;
     ready: boolean;
     /** The `.gen` rows this site contributes (its own). Resolved at start so
      *  `genSites()` stays synchronous. */
@@ -552,6 +578,27 @@ function fcgiSiteId(siteId: string): string {
  * probe's per-attempt cap in port-probe.ts.
  */
 const ADOPT_PROBE_MS = 12_000;
+
+/**
+ * How long a STATUS re-probe gives a live site to answer.
+ *
+ * The same question as an adopted site's, about the same already-running process,
+ * so it gets the same budget and for the same reason: a healthy single-threaded
+ * dev server takes seconds to answer, and a shorter budget would report it dead.
+ * The budget is a CEILING, not a cost — a healthy site answers and returns at
+ * once; only a broken one spends it.
+ */
+const STATUS_PROBE_MS = ADOPT_PROBE_MS;
+
+/**
+ * How long the FastCGI backend gets to accept a TCP connection.
+ *
+ * Short, because the question is narrow: `php-cgi` either holds its listening
+ * socket or it does not, and a host process answers a loopback connect in
+ * microseconds. It still polls, so a worker still binding at start gets several
+ * tries — and a DEAD one costs a status call this much and no more.
+ */
+const FCGI_PROBE_MS = 2_000;
 
 export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
     // --- observable startup (Gap 2) -----------------------------------------
@@ -983,6 +1030,8 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         config: DevSiteConfig,
         route: HostNativeRoute,
         probeTimeoutMs: number = readyTimeoutMs,
+        /** The `php-cgi` FastCGI port, for a `hostServe: php` site. See {@link Live.fcgiPort}. */
+        fcgiPort?: number,
     ): Promise<DevSiteStatus> {
         const routes: DevGenSite[] = [
             {
@@ -996,22 +1045,105 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                 loopback: route.loopback,
             },
         ];
-        live.set(siteId, { workspaceId, siteId, config, caddyHostPort: route.port, ready: false, routes });
+        live.set(siteId, {
+            workspaceId,
+            siteId,
+            config,
+            caddyHostPort: route.port,
+            ...(fcgiPort === undefined ? {} : { fcgiPort }),
+            ready: false,
+            routes,
+        });
 
-        const ready = await probe({
-            port: route.port,
+        const ready = await probeHostNativeReady(live.get(siteId)!, probeTimeoutMs);
+        const entry = live.get(siteId);
+        if (entry) entry.ready = ready;
+        changed();
+        return statusOf(workspaceId, siteId, config, live.get(siteId)!);
+    }
+
+    /**
+     * Is this HOST-NATIVE site serving RIGHT NOW? The one place that decides, so a
+     * start and a status can never disagree about what "ready" means (genie#305).
+     *
+     * ## The FastCGI port is asked FIRST, and over TCP
+     *
+     * A `hostServe: php` site is TWO host processes: Genie's own Caddy on the site
+     * port, and a `php-cgi` worker on `fcgiPort` behind it. When the worker dies,
+     * Caddy stays up and answers `502 dial tcp 127.0.0.1:<fcgiPort>: refused` — and
+     * `waitForHttp` counts ANY status as "a server answered", so an HTTP probe of
+     * the site port reports a dead site as ready. That is genie#305.
+     *
+     * The gate is NOT a 502 rejection inside `waitForHttp`, because that helper is
+     * shared with the OTHER host path — where the port is the APP'S OWN dev server,
+     * and a Next.js rewrite, a BFF or a Vite proxy can answer 502/503/504 while
+     * perfectly healthy. Rejecting there would report those as dead. So the backend
+     * is asked directly instead, in the only protocol it speaks: a TCP connect. It
+     * is honest here for the same reason it is a lie against a container port —
+     * this is a plain host process, with no Docker userland forwarder in front of it
+     * to accept on its behalf.
+     *
+     * Asked first, and short-circuiting, so a dead backend costs milliseconds rather
+     * than a full HTTP budget spent on a Caddy that will answer either way.
+     */
+    async function probeHostNativeReady(entry: Live, httpTimeoutMs: number): Promise<boolean> {
+        if (!(await fcgiBackendUp(entry))) return false;
+        return probe({
+            port: entry.caddyHostPort,
             kind: 'http',
             // NO servername: a host-native dev server speaks PLAIN HTTP on the host
             // port, so the probe must use waitForHttp — a servername would route it
             // to the HTTPS-SNI path, whose TLS handshake fails against the plain-http
             // port and reports ready:false for a site that is actually up (genie#160).
-            hostHeader: config.upstreamHost ?? config.genName,
-            timeoutMs: probeTimeoutMs,
+            hostHeader: entry.config.upstreamHost ?? entry.config.genName,
+            timeoutMs: httpTimeoutMs,
         });
-        const entry = live.get(siteId);
-        if (entry) entry.ready = ready;
-        changed();
-        return statusOf(workspaceId, siteId, config, live.get(siteId)!);
+    }
+
+    /**
+     * Is a `hostServe: php` site's FastCGI backend there? `true` for every other
+     * shape — a static `hostServe` site and a repo-dev-server site are ONE process,
+     * so there is no second thing to lose.
+     */
+    async function fcgiBackendUp(entry: Live): Promise<boolean> {
+        if (entry.config.hostServe?.mode !== 'php') return true;
+        if (entry.fcgiPort !== undefined) {
+            return probe({ port: entry.fcgiPort, kind: 'tcp', timeoutMs: FCGI_PROBE_MS });
+        }
+        // ADOPTED across a restart, with no port to dial: the worker's port died with
+        // the process that recorded it. The worker is still a process Genie TRACKS,
+        // though, so its registry answers the same question. Weaker than a connect —
+        // a wedged process still has a pid — but strictly better than asking Caddy,
+        // which answers 502 either way and would call a dead site ready.
+        if (!deps.hostSpawn) return true;
+        // Unanswerable is not the same as dead.
+        return deps.hostSpawn.alive(fcgiSiteId(entry.siteId)).catch(() => true);
+    }
+
+    /**
+     * Is this LIVE site — of any shape — serving right now? What {@link
+     * DevSiteManager.refresh} asks of each entry, routed to the same probe that
+     * entry's START path used, so a re-ask can never mean something different from
+     * the answer it is replacing.
+     *
+     *  - a HOST-NATIVE site (no `internalPort` — the same sandbox-Caddy
+     *    discriminator `siteLocalReach` uses) goes to {@link probeHostNativeReady};
+     *  - a CONTAINER http site is asked THROUGH Caddy over TLS+SNI, where a
+     *    502/503/504 IS rejected — that port is the sandbox's proxy, so a gateway
+     *    status can only mean the app behind it has not bound;
+     *  - a container NON-http site has no protocol to speak, so `recordLive` calls
+     *    it ready the moment it runs and there is nothing here to re-ask.
+     */
+    async function probeLiveReady(entry: Live): Promise<boolean> {
+        if (entry.internalPort === undefined) return probeHostNativeReady(entry, STATUS_PROBE_MS);
+        if (entry.config.kind !== 'http') return entry.ready;
+        return probe({
+            port: entry.caddyHostPort,
+            kind: 'http',
+            servername: entry.config.genName,
+            hostHeader: entry.config.upstreamHost ?? entry.config.genName,
+            timeoutMs: STATUS_PROBE_MS,
+        });
     }
 
     /**
@@ -1059,6 +1191,10 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                             ...(config.upstreamHost ? { upstreamHost: config.upstreamHost } : {}),
                         },
                         ADOPT_PROBE_MS,
+                        // The worker records its FastCGI port with its own run, so an
+                        // adopted php site re-learns which port its backend holds and
+                        // stays honestly probeable across a restart (genie#305).
+                        ports.get(fcgiSiteId(siteId)),
                     );
                 } catch {
                     /* one unreadable site must not abandon the rest */
@@ -1089,7 +1225,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         sitePort: number,
         siteId: string,
     ): Promise<
-        | { ok: true; command: string[]; worker?: string[]; workerRuns?: string }
+        | { ok: true; command: string[]; worker?: string[]; workerRuns?: string; fcgiPort?: number }
         | { ok: false; error: string }
     > {
         if (!deps.caddyBin || !deps.writeServeConfig) {
@@ -1130,6 +1266,10 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                 command: caddyServeArgv(deps.caddyBin, configPath),
                 worker: phpFastcgiWorkerCommand(engine.exe, fcgiPort),
                 workerRuns: `PHP ${engine.version} (${engine.exe})`,
+                // Travels out so the live entry remembers WHICH port the backend
+                // holds — readiness has to stay answerable after this start
+                // (genie#305), and Caddy cannot answer it.
+                fcgiPort,
             };
         }
         const caddyfile = serveCaddyfile({
@@ -1174,7 +1314,16 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         // port — don't allocate a fresh one and don't respawn.
         const existing = live.get(siteId);
         if (existing && (await hostSpawn.alive(siteId))) {
-            return await recordHostNativeLive(workspaceId, siteId, config, buildRoute(existing.caddyHostPort));
+            // Carry the FastCGI port forward: this path allocates nothing, and
+            // losing it would leave the site's readiness answerable only by Caddy.
+            return await recordHostNativeLive(
+                workspaceId,
+                siteId,
+                config,
+                buildRoute(existing.caddyHostPort),
+                readyTimeoutMs,
+                existing.fcgiPort,
+            );
         }
         live.delete(siteId);
 
@@ -1195,6 +1344,8 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
          *  PATH would send someone to fix the wrong thing now that the version is
          *  resolved through the toolchain (genie#207). */
         let workerRuns: string | undefined;
+        /** The FastCGI port the worker binds, for a `hostServe: php` site. */
+        let fcgiPort: number | undefined;
         let portEnv: Record<string, string> = {};
         if (config.hostServe) {
             const planned = await planHostServe(config.hostServe, cwd, port, siteId);
@@ -1202,6 +1353,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             command = planned.command;
             worker = planned.worker;
             workerRuns = planned.workerRuns;
+            fcgiPort = planned.fcgiPort;
         } else {
             const baseCommand = effectiveCommand(config);
             if (!baseCommand) {
@@ -1258,6 +1410,11 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                 command: worker,
                 cwd,
                 env,
+                // The FastCGI port travels with the run, exactly as the site's own
+                // port does — so a Genie that restarts can re-learn WHICH port the
+                // adopted worker holds and go on answering "is the backend there?"
+                // (genie#305) instead of falling back to asking Caddy.
+                ...(fcgiPort === undefined ? {} : { port: fcgiPort }),
             });
             if (!workerStarted.ok) {
                 return failed(
@@ -1311,7 +1468,14 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             if (worker) await hostSpawn.stop(fcgiSiteId(siteId)).catch(() => {});
             return failed(workspaceId, siteId, config, `The dev server did not start: ${started.error}`);
         }
-        return await recordHostNativeLive(workspaceId, siteId, config, buildRoute(port));
+        return await recordHostNativeLive(
+            workspaceId,
+            siteId,
+            config,
+            buildRoute(port),
+            readyTimeoutMs,
+            fcgiPort,
+        );
     }
 
     function statusOf(
@@ -1519,6 +1683,33 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                     );
                 }
             }
+        },
+
+        async refresh(workspaceId) {
+            const entries = [...live.values()].filter(
+                (e) => !workspaceId || e.workspaceId === workspaceId,
+            );
+            if (entries.length === 0) return;
+            const verdicts = await Promise.all(
+                entries.map(async (entry) => {
+                    try {
+                        return await probeLiveReady(entry);
+                    } catch {
+                        // Unanswerable is not the same as dead: leave what we knew.
+                        return entry.ready;
+                    }
+                }),
+            );
+            let flipped = false;
+            entries.forEach((entry, i) => {
+                const ready = verdicts[i]!;
+                // The entry may have been stopped/replaced while the probe ran —
+                // only write back to the one we actually asked about.
+                if (live.get(entry.siteId) !== entry || entry.ready === ready) return;
+                entry.ready = ready;
+                flipped = true;
+            });
+            if (flipped) changed();
         },
 
         list(workspaceId) {
