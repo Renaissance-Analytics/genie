@@ -2167,7 +2167,7 @@ export function registerIpcHandlers(): void {
             title: 'Reset Genie Workstation',
             message: 'Reset this Genie workstation?',
             detail:
-                'Genie local data, registrations, agents, plugins, and connections will be removed after restart. Workspace folders and the managed toolchain are preserved.',
+                'Genie local data, registrations, agents, plugins, and connections will be removed after restart. Workspace folders, the managed toolchain, and Genie’s downloaded runtimes are preserved.',
             buttons: ['Cancel', 'Reset and restart'],
             defaultId: 0,
             cancelId: 0,
