@@ -50,19 +50,24 @@ export function setEventSocketPrincipal(
  * Fan an event out to every dashboard socket. No-op when the server is off.
  * Guarded per-socket so one dead socket can't abort the broadcast.
  */
-export function mobileEmit(type: string, payload?: unknown): void {
+export function mobileEmit(type: string, payload?: unknown): number {
     const sockets = eventSockets;
-    if (!sockets || sockets.size === 0) return;
+    if (!sockets || sockets.size === 0) return 0;
     const msg = JSON.stringify({ type, payload });
+    let delivered = 0;
     for (const ws of sockets) {
         // 1 === OPEN. Avoid importing ws's enum just for the constant.
         if (ws.readyState !== 1) continue;
         try {
             ws.send(msg);
+            delivered += 1;
         } catch {
             /* socket went away mid-send — the close handler drops it */
         }
     }
+    // Sockets that actually took it — see broadcastLocal for why a caller that
+    // REPORTS the push to an agent has to look at this.
+    return delivered;
 }
 
 /**

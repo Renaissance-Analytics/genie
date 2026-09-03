@@ -15,7 +15,7 @@ function ctx(overrides: Partial<McpContext> = {}): McpContext {
         terminalId: 'term-1',
         serverName: 'genie',
         serverVersion: '0.0.0-test',
-        onImDone: vi.fn(),
+        onImDone: vi.fn().mockReturnValue({ attention: 1 }),
         checkIssues: vi.fn(),
         onForceQuestion: vi.fn(),
         describeWorkspace: vi.fn(),

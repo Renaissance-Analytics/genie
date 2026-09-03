@@ -356,16 +356,42 @@ export interface McpToolCallResult {
     isError?: boolean;
 }
 
+/** What an imDone pulse actually reached. */
+export interface ImDoneDelivery {
+    /** Surfaces that received the attention event — local windows PLUS connected
+     *  remote/mobile clients. Zero means nobody saw it. */
+    attention: number;
+}
+
+/** Whether a handoff note was persisted, and — when it was not — why not. */
+export interface HandoffOutcome {
+    saved: boolean;
+    /** Where it landed (workspace-relative), on `saved`. */
+    path?: string;
+    /** Why it did NOT land, as a sentence the agent can act on. */
+    reason?: string;
+}
+
 export interface McpContext {
     /** The terminal id this endpoint is bound to (from the URL token). */
     terminalId: string;
     serverName: string;
     serverVersion: string;
-    /** Side effect for the imDone tool — pulse the caller's terminal. */
-    onImDone: (terminalId: string) => void;
-    /** Persist the note an agent left for its own next run (genie handoff).
-     *  Optional so a host that has not wired it behaves exactly as before. */
-    onHandoff?: (terminalId: string, note: string) => void;
+    /**
+     * Side effect for the imDone tool — pulse the caller's terminal, and report
+     * HOW MANY surfaces received that pulse.
+     *
+     * Attention is a pure IPC event with no persistence: zero means it reached
+     * nobody and nothing will replay it, which is the normal state for a
+     * tray-resident Genie. imDone must not tell an agent its terminal is glowing
+     * when nothing is displaying a glow.
+     */
+    onImDone: (terminalId: string) => ImDoneDelivery;
+    /** Persist the note an agent left for its own next run (genie handoff), and
+     *  say whether it LANDED — it is dropped for a System-workspace terminal,
+     *  for one with no agent name, and on any fs failure. Optional so a host
+     *  that has not wired it behaves exactly as before. */
+    onHandoff?: (terminalId: string, note: string) => HandoffOutcome;
     onThumbsUp?: (
         terminalId: string,
         reason: 'boot' | 'ack' | 'shutdown',
@@ -1650,7 +1676,7 @@ const TERMINAL_ID_PROP = {
 const IMDONE_TOOL = {
     name: 'imDone',
     description:
-        "Signal that the agent has finished its work in THIS terminal. Genie pulses the terminal's glow in the workspace rail, the flyout row, and the panel border until you focus it. Pass `terminalId` (from your GENIE_TERMINAL_ID env) to target this exact terminal. Required whenever the workspace has more than one terminal. Pass `handoff` to leave a note for the NEXT run of this agent — restarts are constant (an upgrade, a crash, a killed terminal) and without it the next run starts from nothing; Genie cannot write this for you, because it knows the terminal ended, not what you were in the middle of.",
+        "Signal that the agent has finished its work in THIS terminal. Genie pulses the terminal's glow in the workspace rail, the flyout row, and the panel border until you focus it. That pulse is a live event with NO persistence: if no Genie window is open and no remote/mobile client is connected it reaches nobody and is not replayed later, and the response says so instead of claiming a glow — read it, and reach the person another way when it says nothing received the signal. Pass `terminalId` (from your GENIE_TERMINAL_ID env) to target this exact terminal. Required whenever the workspace has more than one terminal. Pass `handoff` to leave a note for the NEXT run of this agent — restarts are constant (an upgrade, a crash, a killed terminal) and without it the next run starts from nothing; Genie cannot write this for you, because it knows the terminal ended, not what you were in the middle of. The response reports whether that note was actually saved.",
     inputSchema: {
         type: 'object',
         properties: {
@@ -1658,7 +1684,7 @@ const IMDONE_TOOL = {
             handoff: {
                 type: 'string',
                 description:
-                    'What the NEXT run of this agent needs to know: what you were doing, what is half-finished, what you would do next. Saved to `.ai/handoff/<agent>.md` (gitignored) and handed to that run at launch. REPLACES any previous note rather than appending. Omit it when there is genuinely nothing to carry forward — an empty handoff is worse than none, because it reads as "the last run had nothing to report".',
+                    'What the NEXT run of this agent needs to know: what you were doing, what is half-finished, what you would do next. When it CAN be saved it goes to `.ai/handoff/<agent>.md` (gitignored) in the workspace and is handed to that run at launch, REPLACING any previous note rather than appending. It can NOT always be saved — a System-workspace terminal has no project folder, a terminal with no agent name has no key to file it under, and a write can fail — so the response says whether it landed and, if not, why. Read that line: a dropped handoff means the next run starts from nothing. Omit the parameter when there is genuinely nothing to carry forward — an empty handoff is worse than none, because it reads as "the last run had nothing to report".',
             },
         },
         additionalProperties: false,
@@ -3497,18 +3523,30 @@ export async function handleMcpMessage(
                 return ok(msg.id, { content: [{ type: 'text', text: `${text}\n\n${JSON.stringify(result, null, 2)}` }] });
             }
             if (params.name === 'imDone') {
-                ctx.onImDone(ctx.terminalId);
+                const pulse = ctx.onImDone(ctx.terminalId);
                 // The note for the NEXT run of this agent. Best-effort and
                 // deliberately after the glow: a handoff that cannot be written
                 // must never cost the human the signal that their agent
-                // finished, which is the thing imDone exists for.
+                // finished, which is the thing imDone exists for. Best-effort is
+                // not the same as silent, though — the outcome is reported.
                 const handoffNote = params.arguments?.handoff;
+                let handoffLine: string | null = null;
                 if (typeof handoffNote === 'string' && handoffNote.trim()) {
+                    let outcome: HandoffOutcome;
                     try {
-                        ctx.onHandoff?.(ctx.terminalId, handoffNote);
-                    } catch {
-                        /* best-effort — see above */
+                        outcome = ctx.onHandoff?.(ctx.terminalId, handoffNote) ?? {
+                            saved: false,
+                            reason: 'this Genie host has no handoff storage wired up',
+                        };
+                    } catch (e) {
+                        outcome = {
+                            saved: false,
+                            reason: `saving it threw: ${e instanceof Error ? e.message : String(e)}`,
+                        };
                     }
+                    handoffLine = outcome.saved
+                        ? `Handoff saved to ${outcome.path ?? 'this agent’s handoff file'} — the next run of this agent gets it at launch.`
+                        : `Handoff NOT saved: ${outcome.reason ?? 'Genie could not write it'}. The next run of this agent will start with nothing, so carry it forward another way if it matters.`;
                 }
                 // Fold the caller's workspace IssueWatch counts into the response
                 // so every "done" surfaces what's still open (issues/PRs/security
@@ -3533,8 +3571,14 @@ export async function handleMcpMessage(
                 } catch {
                     /* best-effort */
                 }
+                // The glow is an IPC event with NO persistence anywhere. With a
+                // tray-resident Genie and nothing connected it reaches nobody,
+                // is stored nowhere, and a window opened a second later never
+                // shows it — so the ack says which of those happened.
                 const base =
-                    'Done — this terminal is now glowing in Genie until you focus it.';
+                    pulse.attention > 0
+                        ? 'Done — this terminal is now glowing in Genie until you focus it.'
+                        : 'Done — but nothing received that signal: no Genie window is open and no remote or mobile client is connected. The glow is not stored anywhere, so it will NOT appear when a window opens later. If someone is waiting on this, reach them another way.';
                 // Always remind the agent to route questions/concerns through
                 // ForceTheQuestion. A plaintext question printed here goes UNSEEN
                 // — the Operator rarely watches THIS terminal — so it would just
@@ -3542,7 +3586,7 @@ export async function handleMcpMessage(
                 // conditional; it's appended on every imDone.
                 const ftqReminder =
                     'Questions or concerns for the Operator? Use ForceTheQuestion — never print a question and wait; a plaintext question goes unseen.';
-                const extras = [countsLine, mailLine, ftqReminder]
+                const extras = [handoffLine, countsLine, mailLine, ftqReminder]
                     .filter(Boolean)
                     .join('\n');
                 return ok(msg.id, {

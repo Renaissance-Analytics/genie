@@ -86,8 +86,11 @@ export function buildHostServerDeps(
             lastActive: lastActiveTerminalForWorkspace(workspaceId),
         }),
         onImDone: (terminalId) => {
-            if (!terminalId) return;
-            broadcastTerminalAttention(terminalId, true);
+            if (!terminalId) return { attention: 0 };
+            // How many surfaces actually took the glow (local windows + any
+            // connected remote/mobile client). imDone reports this rather than
+            // asserting a glow nothing is displaying.
+            const attention = broadcastTerminalAttention(terminalId, true);
             // Wake-on-DM idle signal (issue #9): imDone = the agent's turn ended, so
             // it's now at its prompt. A later DM may wake it IF no output follows.
             agentInboxBroker.markTurnEnd(terminalId);
@@ -122,18 +125,50 @@ export function buildHostServerDeps(
                     ? { provider: spec.meta.agent, name: spec.meta.whisper_purpose ?? '' }
                     : null,
             });
+            return { attention };
         },
         // The note an agent leaves for its own next run. Keyed by AGENT NAME —
         // a terminal id changes on every restart, which is precisely the
         // identity that fails to carry across the gap this bridges.
+        //
+        // Every early return here DROPS the note, and each used to do it in
+        // silence while imDone reported it saved. They are real refusals, so
+        // they are reported as refusals (CONTRIBUTING.md).
         onHandoff: (terminalId, note) => {
             const spec = terminalId ? getTerminalSpec(terminalId) : null;
             const wsId = spec ? workspaceIdOfSpec(spec) : null;
-            if (!spec || !wsId || wsId === SYSTEM_WORKSPACE_ID) return;
+            if (!spec || !wsId) {
+                return {
+                    saved: false,
+                    reason: 'this terminal is not attached to a Genie workspace, so there is no folder to write a handoff into',
+                };
+            }
+            if (wsId === SYSTEM_WORKSPACE_ID) {
+                // The Workstation Agent lands here EVERY time: its spec carries
+                // workspace_id null + meta.system, which maps to the System
+                // workspace. Nothing reads a note back for it yet either.
+                return {
+                    saved: false,
+                    reason: 'this terminal belongs to the System workspace, which has no project folder — Genie has nowhere to file a handoff for it',
+                };
+            }
             const root = getWorkspace(wsId)?.path;
+            if (!root) {
+                return { saved: false, reason: `workspace ${wsId} has no path on disk` };
+            }
             const name = String(spec.meta?.whisper_purpose ?? '').trim();
-            if (!root || !name) return;
-            writeHandoff({ workspaceRoot: root, agentName: name, note });
+            if (!name) {
+                return {
+                    saved: false,
+                    reason: 'this terminal has no agent name, and a handoff is filed under the agent name (a terminal id changes on every restart)',
+                };
+            }
+            const rel = `.ai/handoff/${name}.md`;
+            // `writeHandoff` has always returned whether it landed; that boolean
+            // was being discarded, so a full disk ate the note silently.
+            return writeHandoff({ workspaceRoot: root, agentName: name, note })
+                ? { saved: true, path: rel }
+                : { saved: false, reason: `writing ${rel} failed` };
         },
         onThumbsUp: async (terminalId, reason, to) => {
             if (terminalId === GENIE_OS_TERMINAL_ID) {

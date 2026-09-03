@@ -51,6 +51,8 @@ import {
     type IssueWatchSnapshot,
     type McpToolDescriptor,
     type McpToolCallResult,
+    type ImDoneDelivery,
+    type HandoffOutcome,
 } from './protocol';
 
 /**
@@ -93,10 +95,13 @@ export interface ServerDeps {
         ids: string[];
         lastActive: string | null;
     };
-    /** Pulse the given terminal's attention glow (imDone). */
-    onImDone: (terminalId: string) => void;
-    /** Persist an agent handoff note (optional). */
-    onHandoff?: (terminalId: string, note: string) => void;
+    /** Pulse the given terminal's attention glow (imDone), reporting how many
+     *  surfaces received it — zero means nobody saw it and nothing replays it. */
+    onImDone: (terminalId: string) => ImDoneDelivery;
+    /** Persist an agent handoff note (optional), reporting whether it LANDED —
+     *  it is dropped for a System-workspace terminal, one with no agent name,
+     *  and on any fs failure. */
+    onHandoff?: (terminalId: string, note: string) => HandoffOutcome;
     onThumbsUp?: (
         terminalId: string,
         reason: 'boot' | 'ack' | 'shutdown',
