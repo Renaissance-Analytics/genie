@@ -45,6 +45,7 @@ const manager = vi.hoisted(() => ({
     reconfigure: vi.fn(),
     list: vi.fn(),
     logs: vi.fn(),
+    refresh: vi.fn(),
 }));
 
 vi.mock('../../dev-server/site-manager', () => ({ devSiteManager: () => manager }));
@@ -129,6 +130,36 @@ beforeEach(() => {
     manager.reconfigure.mockResolvedValue(status());
     manager.stop.mockResolvedValue(undefined);
     manager.logs.mockResolvedValue('');
+    manager.refresh.mockResolvedValue(undefined);
+});
+
+// --- genie#305: `status` re-asks, it does not replay a start-time snapshot ---
+
+describe('status is a LIVE question (genie#305)', () => {
+    it('RE-PROBES the workspace before answering, so a backend that died is not still reported ready', async () => {
+        // The reported failure: a `hostServe: php` site whose php-cgi worker died
+        // kept answering `ready: true` for the rest of the session, because `ready`
+        // was only ever written on the start path. `status` has to re-run the
+        // question — and read the sites AFTER it, not before.
+        manager.refresh.mockImplementation(async () => {
+            manager.list.mockReturnValue([row({ ready: false })]);
+        });
+
+        const res = await runManageSite(WS, { action: 'status', id: SITE_ID });
+
+        expect(manager.refresh).toHaveBeenCalledWith('acme');
+        expect(res.ok).toBe(true);
+        expect(res.sites[0]?.ready).toBe(false);
+    });
+
+    it('leaves `list` on the cached state — it is the inventory, not a health check', async () => {
+        // `list` is what the Site Manager panel and every result envelope call, so
+        // making it probe would put a network round-trip behind every action.
+        const res = await runManageSite(WS, { action: 'list' });
+
+        expect(manager.refresh).not.toHaveBeenCalled();
+        expect(res.ok).toBe(true);
+    });
 });
 
 // --- genie#194: a long start answers, it does not time out -------------------

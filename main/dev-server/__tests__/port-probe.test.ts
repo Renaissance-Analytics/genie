@@ -195,6 +195,26 @@ describe('waitForHttp — what an HTTP surface actually needs', () => {
         expect(await waitForHttp(port, 2_000)).toBe(true);
     });
 
+    it('counts a 502/503/504 as ready TOO — the gateway statuses are NOT rejected here (genie#305)', async () => {
+        // DELIBERATE, and the guard on it belongs at this layer.
+        //
+        // `waitForHttpsSni` rejects 502/503/504 because that port is the SANDBOX'S
+        // Caddy and the status can only mean "the app behind me has not bound".
+        // This port is the APP ITSELF — a Next.js rewrite, a BFF, a Vite proxy can
+        // all answer 502/503/504 while perfectly healthy — so the same rejection
+        // here would report a working dev server as dead.
+        //
+        // The dead-FastCGI case that motivates asking (genie#305) is answered by
+        // TCP-probing the backend port instead, in the site manager, gated on the
+        // site being `hostServe`. It must not be answered by narrowing this.
+        for (const status of [502, 503, 504]) {
+            const port = await listen((socket) => {
+                socket.on('data', () => socket.end(`HTTP/1.1 ${status} Bad Gateway\r\n\r\n`));
+            });
+            expect(await waitForHttp(port, 2_000)).toBe(true);
+        }
+    });
+
     it('is FALSE for a socket that accepts and then hangs up', async () => {
         // THE DOCKER DESKTOP CASE. The TCP probe says yes here; that is the lie.
         const port = await listen((socket) => socket.destroy());
