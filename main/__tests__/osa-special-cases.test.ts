@@ -27,7 +27,7 @@ import { describe, expect, it } from 'vitest';
  * Tests are excluded: a test NAMING the convention is the opposite of a surface
  * depending on it. Comments are stripped: see {@link stripComments}.
  *
- * **31 before this change, 9 after.** The nine are NOT residue to be shaved:
+ * **31 before this change, 8 after.** The eight are NOT residue to be shaved:
  *   - the id constant and its one use in `workspaceIdOfSpec`;
  *   - `meta.system`, which marks UNATTACHED System-Workspace panels and global
  *     processes — a real, different thing (they root at their own `cwd`, and an
@@ -40,7 +40,7 @@ import { describe, expect, it } from 'vitest';
  *
  * Raising `MAX` is a decision, not a formality. Lowering it is always welcome.
  */
-const MAX_OSA_SPECIAL_CASES = 9;
+const MAX_OSA_SPECIAL_CASES = 8;
 
 const PATTERNS: ReadonlyArray<RegExp> = [
     /SYSTEM_WORKSPACE_ID/g,

@@ -8,11 +8,7 @@ import {
 } from '../agents/command';
 import path from 'path';
 import crypto from 'crypto';
-import os from 'os';
-import {
-    workspaceIdOfTerminal,
-    SYSTEM_WORKSPACE_ID,
-} from '../terminal/workspace-of-terminal';
+import { workspaceIdOfTerminal } from '../terminal/workspace-of-terminal';
 import {
     listWorkspaces,
     listTerminalSpecs,
@@ -1878,7 +1874,7 @@ export function restartAgentTerminal(id: string): RestartAgentResult {
     // old TUI never captured a resumable session or its input path is wedged.
     if (spec.meta?.agent_id === 'genie:workstation') {
         // This used to key on `meta.system` and then rebuild a fake workspace
-        // (`{ id: SYSTEM_WORKSPACE_ID, path: spec.cwd }`) because the operator
+        // (`{ id: '__system__', path: spec.cwd }`) because the operator
         // had no row — an earlier version asserted `getWorkspace(spec.workspace_id!)`
         // on a value that was ALWAYS null, so every restart failed with "Genie OS
         // workspace is unavailable". The row exists now, so the workspace is

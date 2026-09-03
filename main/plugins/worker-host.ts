@@ -29,7 +29,6 @@
 
 import crypto from 'crypto';
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
 import { app, utilityProcess, type UtilityProcess } from 'electron';
 import type {
