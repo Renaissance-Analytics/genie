@@ -105,6 +105,42 @@ repo's workflow from another's — they differ deliberately.
 
 ---
 
+## Known constraints — decided, not discovered
+
+Things that are deliberately not-yet. **These are settled.** Do not re-diagnose them,
+do not file issues about them, and do not present them as findings — note the
+constraint, work around it, move on.
+
+### macOS builds are UNSIGNED, and that is expected for now
+
+`MAC_CSC_LINK` is not set and the signing secrets do not exist. Every release log
+says so:
+
+```
+⚠️ macOS signing: unsigned — MAC_CSC_LINK is not set
+```
+
+Signing is a business step (an Apple Developer account and a notarisation identity),
+not an engineering gap, and we are not ready for it yet.
+
+**What that means when you are reasoning about a Mac bug:**
+
+- **Hardened Runtime is not in effect**, so `build/entitlements.mac.plist` does
+  nothing on any build shipped to date. Any explanation that depends on macOS
+  enforcing entitlements is wrong for the artifact users actually run.
+- The working mechanism for the shipped build is the **ad-hoc signature** applied
+  after packaging — look for `[after-pack] fancy-term-host node-pty: darwin ->
+  fixed (ok=true) - ad-hoc signed spawn-helper` in the release log. That is what
+  keeps Apple Silicon from SIGKILLing an unsigned `spawn-helper`.
+- Gatekeeper warnings, quarantine prompts and updater signature failures on macOS
+  are **expected consequences**, not bugs to chase.
+
+So: reason from the ad-hoc path, not the entitlements path. If a fix genuinely
+requires signing, say "this needs signing, which is not available yet" and stop
+there.
+
+---
+
 ## Shared rules (everyone)
 
 ### TDD — write the failing test first
