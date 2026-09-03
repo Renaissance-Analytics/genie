@@ -7,7 +7,7 @@
  *
  * Two capabilities gate on this today:
  *   - System-workspace FULL filesystem access (`files/ipc.ts`) — DESKTOP-ONLY.
- *   - Excluding the synthetic System workspace + confining terminals on the
+ *   - Excluding the protected System workspace + confining terminals on the
  *     member-facing headless surface (`mobile/*`) — applied when HEADLESS.
  *
  * Detection: the desktop runs inside the Electron MAIN process, which sets

@@ -794,8 +794,9 @@ function MasterInner() {
         [],
     );
 
-    // The synthetic System Workspace row (null until the home dir resolves).
-    // Built in-memory — never persisted, never in `workspaces`/the DB.
+    // The System Workspace row the sidebar draws (null until the path resolves).
+    // Composed here because main's `listWorkspaces()` deliberately withholds the
+    // real, protected row from every list a picker reads.
     // It's the CLIENT machine's local full-filesystem home dir — a desktop-only
     // concept. In a remote/host window you're driving ANOTHER machine, so it makes
     // no sense there and must NOT appear in the rail: keep it null (which also
@@ -1213,10 +1214,13 @@ function MasterInner() {
         async (workspaceId: string, type: ViewType = 'terminal') => {
             const ws = workspacesById.get(workspaceId);
             if (!ws) return;
-            // The System Workspace is synthetic: its specs persist UNATTACHED
-            // (workspace_id: null — `__system__` has no DB row) and carry a
-            // `meta.system` tag so the sidebar groups them under it. Real
-            // workspaces persist their own id.
+            // A System-Workspace PANEL or PROCESS persists UNATTACHED
+            // (workspace_id: null) with a `meta.system` tag, and must: an
+            // attached panel resolves its tabs against the workspace path, so a
+            // panel rooted at the user's chosen cwd would be re-rooted. (The
+            // operator's own terminal is a different thing — it carries the real
+            // `__system__` id and is seeded by main.) Real workspaces persist
+            // their own id.
             const system = isSystemWorkspace(ws);
             const persistedWsId = system ? null : workspaceId;
             const existing = specs.filter((s) =>

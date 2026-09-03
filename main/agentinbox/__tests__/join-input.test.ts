@@ -3,25 +3,22 @@ import { agentInboxJoinInputFor } from '../join-input';
 import { SYSTEM_WORKSPACE_ID } from '../../terminal/workspace-of-terminal';
 
 /**
- * genie#352 — the workstation operator was never rehydrated into the inbox.
+ * AgentInbox identity is `workspaceId:purpose` — the workspace is not a scope on
+ * the inbox, it is HALF THE PRIMARY KEY. That is the real reason the workstation
+ * operator could never join: no workspace, no identity, and
+ * `agentInboxBroker.directory()` therefore had no `genie:workstation` in it at
+ * boot, so every broadcast built from that directory reached every agent except
+ * the machine's own operator.
  *
- * `joinInputFromSpec` refused any spec with a null `workspace_id`, and the OSA
- * is the ONE agent that always has one: it is deliberately not a workspace
- * agent, so that deleting a project cannot delete or re-parent it. The result is
- * that `agentInboxBroker.directory()` does not contain `genie:workstation` at
- * boot — which is why the upgrade broadcast, built from that directory, reached
- * every agent except the machine's own operator.
- *
- * genie#321 already established the resolution: a system spec IS in a
- * workspace — the synthetic one — and `callerWorkspaceDescriptor` says so. The
- * MCP path has resolved it that way since; the boot rehydrate had not caught up.
+ * The operator has a workspace row now (`__system__`, rooted at `~/.gosa`), so it
+ * joins on the ORDINARY path with no branch of its own — the spec carries a real
+ * `workspace_id` and the lookup finds a real row.
  */
 const osaSpec = {
     id: 'genie-workstation-agent',
-    workspace_id: null,
+    workspace_id: SYSTEM_WORKSPACE_ID,
     label: 'Genie',
     meta: {
-        system: true,
         agent: 'claude',
         agent_id: 'genie:workstation',
         whisper_purpose: 'genie',
@@ -37,24 +34,39 @@ const projectSpec = {
 };
 
 const lookup = (id: string) =>
-    id === 'ws-1' ? { id: 'ws-1', project_name: 'Demo', path: '/src/demo' } : undefined;
+    id === 'ws-1'
+        ? { id: 'ws-1', project_name: 'Demo', path: '/src/demo' }
+        : id === SYSTEM_WORKSPACE_ID
+          ? { id: SYSTEM_WORKSPACE_ID, project_name: 'System', path: '/home/w/.gosa' }
+          : undefined;
 
 describe('rehydrating an AgentInbox identity from a terminal spec', () => {
-    it('resolves the workstation operator into the System Workspace', () => {
+    it('joins the workstation operator through its own workspace row', () => {
         const input = agentInboxJoinInputFor(osaSpec, lookup);
 
         expect(input).toMatchObject({
             agentId: 'genie:workstation',
             terminalId: 'genie-workstation-agent',
             workspaceId: SYSTEM_WORKSPACE_ID,
+            workspaceName: 'System',
+            slug: 'system',
             purpose: 'genie',
         });
     });
 
-    it('POSITIVE CONTROL — a terminal genuinely in no workspace is still refused', () => {
-        // Without this, "resolve the null workspace" degrades into "register
-        // every loose terminal as an agent", which is the leak #321 closed.
-        const loose = { ...osaSpec, meta: { ...osaSpec.meta, system: false } };
+    it('POSITIVE CONTROL — an ordinary project agent resolves unchanged', () => {
+        expect(agentInboxJoinInputFor(projectSpec, lookup)).toMatchObject({
+            agentId: 'uuid-1',
+            workspaceId: 'ws-1',
+            workspaceName: 'Demo',
+            purpose: 'frontend',
+        });
+    });
+
+    it('still refuses a terminal genuinely in no workspace', () => {
+        // Without this, "resolve the operator" degrades into "register every
+        // loose terminal as an agent", which is the leak #321 closed.
+        const loose = { ...osaSpec, workspace_id: null, meta: { ...osaSpec.meta, system: true } };
 
         expect(agentInboxJoinInputFor(loose, lookup)).toBeNull();
     });
@@ -63,15 +75,6 @@ describe('rehydrating an AgentInbox identity from a terminal spec', () => {
         const notAnAgent = { ...projectSpec, meta: { agent: 'claude' } };
 
         expect(agentInboxJoinInputFor(notAnAgent, lookup)).toBeNull();
-    });
-
-    it('resolves an ordinary project agent unchanged', () => {
-        expect(agentInboxJoinInputFor(projectSpec, lookup)).toMatchObject({
-            agentId: 'uuid-1',
-            workspaceId: 'ws-1',
-            workspaceName: 'Demo',
-            purpose: 'frontend',
-        });
     });
 
     it('refuses a project spec whose workspace row is gone', () => {

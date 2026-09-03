@@ -4384,18 +4384,23 @@ export function hasGenieBridge(): boolean {
 }
 
 /**
- * Synthetic "System Workspace" — a hardcoded sidebar entry that is NOT a real
- * workspace: it has no project.json and never enters the persisted workspace
- * store. Its `path` is the user's home directory, so terminals/editors opened
- * in it root there. It exists to host SYSTEM PROCESSES — background processes
- * not tied to any project, whose cwd is an arbitrary directory the user picks.
+ * The System Workspace — the workstation operator's own workspace.
  *
- * The id is a fixed sentinel so the renderer can recognise it everywhere a
- * workspace id flows; it is never written to the DB. System Workspace
- * terminal specs persist with `workspace_id: null` (FK-safe — `__system__`
- * has no `workspaces` row) and a `meta.system === true` tag so the sidebar can
- * group them under the System Workspace rather than the generic Unattached
- * bucket.
+ * MAIN HAS A REAL ROW under this id now (`ensureSystemWorkspaceRow`, rooted at
+ * `~/.gosa`), and the operator's terminal carries it like any agent. What the
+ * RENDERER gets is still composed locally, because the row is PROTECTED:
+ * `listWorkspaces()` — the query behind `workspaces:list` and therefore behind
+ * every picker, the Floor, the command palette and the sidebar — deliberately
+ * excludes it, so nothing offers it as somewhere to install an app, move a
+ * terminal, or grant cross-workspace access. The sidebar composes its own row to
+ * draw the chip (see {@link makeSystemWorkspace}).
+ *
+ * It also hosts SYSTEM PROCESSES and unattached full-filesystem editor panels —
+ * background processes and panels not tied to any project, whose cwd is a
+ * directory the user picks. Those still persist with `workspace_id: null` and a
+ * `meta.system === true` tag, and MUST: an ATTACHED panel resolves its tabs
+ * against the workspace path, so attaching one rooted elsewhere would re-read
+ * `<file dir>/<tab>` under the wrong root.
  */
 export const SYSTEM_WORKSPACE_ID = '__system__';
 
@@ -4427,10 +4432,11 @@ export function workspaceSurfaceRows<T extends { path: string }>(
 /**
  * The workspace rows the sidebar lists, with the System Workspace composed in.
  *
- * The System Workspace is SYNTHETIC — never persisted, never in `workspaces` —
- * so the sidebar has to add it rather than filter for it, and it is pinned to
- * the top because it is fixed: never draggable, never reorderable, so a reorder
- * of the real workspaces can't shuffle it down.
+ * The renderer never RECEIVES the System Workspace — main's `listWorkspaces()`
+ * excludes the protected row on purpose — so the sidebar adds it rather than
+ * filtering for it, and it is pinned to the top because it is fixed: never
+ * draggable, never reorderable, so a reorder of the real workspaces can't
+ * shuffle it down.
  *
  * `workspaceSurfaceRows` runs FIRST and keeps running while the chip is on. A
  * legacy registered row pointing at the managed OSA directory must stay hidden
@@ -4512,10 +4518,14 @@ export function workspaceSlug(
 }
 
 /**
- * Build the in-memory System Workspace row. `homePath` is `os.homedir()` from
- * main (see `api().app.homeDir()`). Shaped as a `WorkspaceRow` so it slots into
- * the sidebar's workspace list without special-casing the renderer everywhere,
- * but it is never persisted and has no repos.
+ * Build the System Workspace row the sidebar draws. `homePath` is the operator's
+ * envelope root (`~/.gosa`, from the operator terminal's cwd), falling back to
+ * the home directory before that resolves.
+ *
+ * Shaped as a `WorkspaceRow` so it slots into the sidebar's list without
+ * special-casing the renderer everywhere. Main HAS a real row for this id — this
+ * is the display copy, composed here because the real one is deliberately kept
+ * out of every list a picker reads.
  */
 export function makeSystemWorkspace(homePath: string): WorkspaceRow {
     return {

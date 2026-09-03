@@ -14,11 +14,7 @@ import {
     broadcastAgentThumbsUp,
 } from '../terminal/ipc';
 import { mobileEmit } from '../mobile/server';
-import {
-    workspaceIdOfTerminal,
-    workspaceIdOfSpec,
-    SYSTEM_WORKSPACE_ID,
-} from '../terminal/workspace-of-terminal';
+import { workspaceIdOfTerminal, workspaceIdOfSpec } from '../terminal/workspace-of-terminal';
 import { forceQuestion } from '../ask/force-question';
 import {
     describeWorkspaceForMcp,
@@ -45,7 +41,7 @@ import { agentPulse } from '../terminal/agent-pulse';
 import { agentShutdownReadiness } from '../agents/shutdown-readiness';
 import { authorizeOsAgentBoot, GENIE_OS_TERMINAL_ID } from '../agents/os-agent';
 import { markOsAgentOriented } from '../agents/os-lifecycle';
-import { writeHandoff } from '../agents/handoff';
+import { planHandoff, writeHandoff } from '../agents/handoff';
 import { harnessTransportRegistry, requiredHarnessTransport } from '../agentinbox/harness-transport';
 import { backendOfKind } from '../backend/registry';
 import { formatAgentInboxMailLine } from '../mcp/protocol';
@@ -114,12 +110,7 @@ export function buildHostServerDeps(
             const wsForNotice = spec ? workspaceIdOfSpec(spec) : null;
             mobileEmit('notify:imdone', {
                 label: spec?.label,
-                workspace:
-                    wsForNotice && wsForNotice !== SYSTEM_WORKSPACE_ID
-                        ? getWorkspace(wsForNotice)?.project_name ?? null
-                        : wsForNotice
-                          ? 'System Workspace'
-                          : null,
+                workspace: wsForNotice ? getWorkspace(wsForNotice)?.project_name ?? null : null,
                 // provider + NAME only — the chat id is addressing, never display.
                 agent: spec?.meta?.agent
                     ? { provider: spec.meta.agent, name: spec.meta.whisper_purpose ?? '' }
@@ -136,39 +127,27 @@ export function buildHostServerDeps(
         // they are reported as refusals (CONTRIBUTING.md).
         onHandoff: (terminalId, note) => {
             const spec = terminalId ? getTerminalSpec(terminalId) : null;
-            const wsId = spec ? workspaceIdOfSpec(spec) : null;
-            if (!spec || !wsId) {
+            if (!spec) {
                 return {
                     saved: false,
                     reason: 'this terminal is not attached to a Genie workspace, so there is no folder to write a handoff into',
                 };
             }
-            if (wsId === SYSTEM_WORKSPACE_ID) {
-                // The Workstation Agent lands here EVERY time: its spec carries
-                // workspace_id null + meta.system, which maps to the System
-                // workspace. Nothing reads a note back for it yet either.
-                return {
-                    saved: false,
-                    reason: 'this terminal belongs to the System workspace, which has no project folder — Genie has nowhere to file a handoff for it',
-                };
-            }
-            const root = getWorkspace(wsId)?.path;
-            if (!root) {
-                return { saved: false, reason: `workspace ${wsId} has no path on disk` };
-            }
-            const name = String(spec.meta?.whisper_purpose ?? '').trim();
-            if (!name) {
-                return {
-                    saved: false,
-                    reason: 'this terminal has no agent name, and a handoff is filed under the agent name (a terminal id changes on every restart)',
-                };
-            }
-            const rel = `.ai/handoff/${name}.md`;
+            // The workstation operator used to be refused here, every time, on
+            // the grounds that the System workspace "has no project folder". It
+            // has one — `~/.gosa` — and a row that says so, so it takes the same
+            // path as every other agent and no branch of its own.
+            const plan = planHandoff(spec, (id) => getWorkspace(id));
+            if (!plan.ok) return { saved: false, reason: plan.reason };
             // `writeHandoff` has always returned whether it landed; that boolean
             // was being discarded, so a full disk ate the note silently.
-            return writeHandoff({ workspaceRoot: root, agentName: name, note })
-                ? { saved: true, path: rel }
-                : { saved: false, reason: `writing ${rel} failed` };
+            return writeHandoff({
+                workspaceRoot: plan.workspaceRoot,
+                agentName: plan.agentName,
+                note,
+            })
+                ? { saved: true, path: plan.relPath }
+                : { saved: false, reason: `writing ${plan.relPath} failed` };
         },
         onThumbsUp: async (terminalId, reason, to) => {
             if (terminalId === GENIE_OS_TERMINAL_ID) {
@@ -181,7 +160,10 @@ export function buildHostServerDeps(
                 if (!authorization.allowed) return { ok: false, error: authorization.reason };
                 if (reason === 'boot') markOsAgentOriented(cfg.userDataDir);
                 broadcastAgentThumbsUp({
-                    agentId: 'genie:workstation', terminalId, workspaceId: SYSTEM_WORKSPACE_ID, reason,
+                    agentId: 'genie:workstation',
+                    terminalId,
+                    workspaceId: getTerminalSpec(terminalId)?.workspace_id ?? '',
+                    reason,
                     ...(to ? { to } : {}),
                 });
                 return { ok: true, agentId: 'genie:workstation' };

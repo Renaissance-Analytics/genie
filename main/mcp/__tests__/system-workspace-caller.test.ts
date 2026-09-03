@@ -2,66 +2,79 @@ import { describe, expect, it } from 'vitest';
 import { callerWorkspaceDescriptor } from '../caller-workspace';
 
 /**
- * The System Workspace is a real scope, not "no workspace".
+ * The System Workspace resolves like every other workspace — through its ROW.
  *
- * `workspace-of-terminal.ts` states the convention:
+ * This file used to assert the opposite, and said so at length: the OSA's spec
+ * carried `workspace_id: null` + `meta.system === true`, no `__system__` row
+ * existed "by design", and the guard's job was to substitute the sentinel. That
+ * reasoning was sound given its premise. The premise is gone: the row exists
+ * (`ensureSystemWorkspaceRow`), rooted at `~/.gosa`, and the OSA's spec carries
+ * its id like any agent's.
  *
- *   The System Workspace has NO `workspaces` row, so its terminal specs persist
- *   with `workspace_id: null` + `meta.system === true`; everywhere a workspace
- *   id flows we substitute this sentinel.
- *
- * The Genie OS agent is exactly such a spec. But the workspace-scoped guards
- * read `spec.workspace_id` RAW, saw null, and refused it:
- *
- *   agentinbox      → "This terminal is not in a workspace, so it can't use agentinbox."
- *   submitFeedback  → "This terminal is not attached to a Genie workspace."
- *   connectToGenie  → "Couldn't resolve this terminal to a Genie workspace."
- *
- * which made the OSA the one agent that cannot report its own defects, and —
- * because `thumbsUp` gates on a transport it therefore cannot register —
- * left it unable to ever signal boot complete. So it re-ran first-boot
- * orientation on every launch, forever (genie#321).
- *
- * Binding it to a `__system__` row is NOT the fix: no such row exists, by
- * design, so that only trades "not in a workspace" for "Workspace not found".
- * The spec is already correct; the guards have to honour the convention.
+ * So the substitution is DELETED, not relaxed. A spec with no `workspace_id` is
+ * once again exactly what it says it is — a terminal in no workspace — and is
+ * refused, `meta.system` or not. That tag still marks unattached System-Workspace
+ * PANELS and global processes, which root at their own cwd and are not callers;
+ * it no longer stands in for a missing row.
  */
 
-const systemSpec = { workspace_id: null, meta: { system: true } };
+const systemRow = {
+    id: '__system__',
+    project_name: 'System',
+    path: '/home/wishborn/.gosa',
+};
+const lookup = (id: string) =>
+    id === '__system__'
+        ? systemRow
+        : id === 'ws-1'
+          ? { id: 'ws-1', project_name: 'Tynn.ai', path: '/src/tynn' }
+          : undefined;
+
+const osaSpec = { workspace_id: '__system__', meta: { system: true } };
 const projectSpec = { workspace_id: 'ws-1', meta: {} };
 const looseSpec = { workspace_id: null, meta: {} };
+const legacySystemSpec = { workspace_id: null, meta: { system: true } };
 
-describe('resolving the caller workspace for a System spec (#321)', () => {
-    it('resolves a system spec to the System Workspace, not to nothing', () => {
-        const ws = callerWorkspaceDescriptor(systemSpec, () => undefined);
+describe('resolving the caller workspace', () => {
+    it('resolves the operator through the ordinary row lookup', () => {
+        const ws = callerWorkspaceDescriptor(osaSpec, lookup);
 
-        expect(ws).not.toBeNull();
-        expect(ws!.id).toBe('__system__');
+        expect(ws).toEqual({
+            id: '__system__',
+            name: 'System',
+            slug: 'system',
+            path: '/home/wishborn/.gosa',
+        });
     });
 
-    it('gives it a name and slug, so it can join the inbox like any workspace', () => {
-        const ws = callerWorkspaceDescriptor(systemSpec, () => undefined)!;
+    it('POSITIVE CONTROL — an ordinary project spec resolves exactly as before', () => {
+        // The assertion that matters most: "the operator works" would pass just
+        // as well against a change that broke every other workspace.
+        const ws = callerWorkspaceDescriptor(projectSpec, lookup);
 
-        expect(ws.name.length).toBeGreaterThan(0);
-        expect(ws.slug.length).toBeGreaterThan(0);
-    });
-
-    it('still resolves a normal project spec through its real row', () => {
-        // POSITIVE CONTROL: the System path must not swallow ordinary lookups.
-        const ws = callerWorkspaceDescriptor(projectSpec, (id) =>
-            id === 'ws-1' ? { id: 'ws-1', project_name: 'Tynn.ai' } : undefined,
+        expect(ws).toEqual(
+            expect.objectContaining({ id: 'ws-1', name: 'Tynn.ai', path: '/src/tynn' }),
         );
-
-        expect(ws).toEqual(expect.objectContaining({ id: 'ws-1', name: 'Tynn.ai' }));
     });
 
-    it('still refuses a spec that is genuinely in no workspace', () => {
-        // POSITIVE CONTROL: an unattached terminal is a real state and must keep
-        // being refused — otherwise this "fix" lets anything into the inbox.
-        expect(callerWorkspaceDescriptor(looseSpec, () => undefined)).toBeNull();
+    it('refuses a terminal that is genuinely in no workspace', () => {
+        expect(callerWorkspaceDescriptor(looseSpec, lookup)).toBeNull();
+    });
+
+    it('no longer substitutes a workspace for an unattached `meta.system` spec', () => {
+        // This is the deleted special case. A code panel or a global process
+        // carries this shape; neither is an MCP caller, and neither may borrow
+        // the operator's identity by wearing its tag.
+        expect(callerWorkspaceDescriptor(legacySystemSpec, lookup)).toBeNull();
     });
 
     it('refuses a project spec whose workspace row has vanished', () => {
         expect(callerWorkspaceDescriptor(projectSpec, () => undefined)).toBeNull();
+    });
+
+    it('refuses the operator spec when its row is missing, like any other', () => {
+        // No more "the row does not exist, so invent one". A missing row is a
+        // broken install and must read as one.
+        expect(callerWorkspaceDescriptor(osaSpec, () => undefined)).toBeNull();
     });
 });

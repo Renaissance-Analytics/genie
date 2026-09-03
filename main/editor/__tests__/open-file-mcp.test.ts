@@ -29,6 +29,8 @@ let tmp = '';
 /** Two registered workspaces — the caller's, and the one that owns the file. */
 let wsA = '';
 let wsB = '';
+/** The protected System Workspace root — the operator's `~/.gosa` envelope. */
+let gosa = '';
 
 /** Every open-file payload main pushed to the Floor, in order. */
 const sent: Array<{
@@ -63,10 +65,16 @@ beforeAll(() => {
     fs.writeFileSync(path.join(wsA, '.ai', 'plans', 'roadmap.md'), '# roadmap\n');
     fs.writeFileSync(path.join(wsB, '.ai', 'plans', 'civic-commons-curriculum.md'), '# plan\n');
 
+    gosa = path.join(tmp, '.gosa');
+    fs.mkdirSync(gosa, { recursive: true });
+    fs.mkdirSync(path.join(tmp, 'loose'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'loose', 'notes.md'), '# notes');
+
     registerOpenFile({
         workspaceIdOfTerminal: (terminalId) =>
             terminalId === 'term-a' ? 'ws-a' : terminalId === 'term-sys' ? '__system__' : null,
-        getWorkspaceRoot: (id) => (id === 'ws-a' ? wsA : id === 'ws-b' ? wsB : null),
+        getWorkspaceRoot: (id) =>
+            id === 'ws-a' ? wsA : id === 'ws-b' ? wsB : id === '__system__' ? gosa : null,
         homeDir: () => tmp,
         listWorkspaces: () => [
             { id: 'ws-a', path: wsA },
@@ -156,13 +164,27 @@ describe('openFileForUser (main → Floor payload)', () => {
         expect(sent).toHaveLength(0);
     });
 
-    it('a System terminal still opens an absolute path', async () => {
-        const file = path.join(wsB, '.ai', 'plans', 'civic-commons-curriculum.md');
+    it('a System terminal still opens an absolute path no workspace owns', async () => {
+        const file = path.join(tmp, 'loose', 'notes.md');
         const res = await openFileForUserForMcp('term-sys', { path: file });
         expect(res.ok).toBe(true);
         expect(res.workspaceId).toBe('__system__');
         expect(sent[0].root).toBe(path.dirname(file));
-        expect(sent[0].relPath).toBe('civic-commons-curriculum.md');
+        expect(sent[0].relPath).toBe('notes.md');
+    });
+
+    it('a System terminal opening a file a workspace OWNS routes it to that workspace', async () => {
+        // The System Workspace is a workspace now (`__system__`, rooted at
+        // `~/.gosa`), so it takes the same cross-workspace routing every other
+        // caller does. It used to skip that branch entirely — it had no root to
+        // compare against — and opened a loose System panel on top of a file the
+        // owning workspace's own editor already had open.
+        const file = path.join(wsB, '.ai', 'plans', 'civic-commons-curriculum.md');
+        const res = await openFileForUserForMcp('term-sys', { path: file });
+        expect(res.ok).toBe(true);
+        expect(res.workspaceId).toBe('ws-b');
+        expect(sent[0].root).toBe(wsB);
+        expect(sent[0].relPath).toBe('.ai/plans/civic-commons-curriculum.md');
     });
 
     it('an unattached terminal cannot open anything', async () => {

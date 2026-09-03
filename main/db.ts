@@ -2897,13 +2897,82 @@ export interface WorkspaceRow {
     dev_services?: string | null;
 }
 
-export function listWorkspaces(): WorkspaceRow[] {
-    return getDb()
-        .prepare<[], WorkspaceRow>(
+/**
+ * The PROTECTED System Workspace — the workstation operator's own row.
+ *
+ * It is a real row like any other, which is the whole point: AgentInbox identity
+ * is `workspaceId:purpose`, so an operator with no workspace had no identity, and
+ * every surface that needed one substituted a sentinel instead. It is reachable
+ * by id ({@link getWorkspace}) so those guards now find a row, and deliberately
+ * absent from {@link listWorkspaces} so nothing enumerating "the workspaces"
+ * offers it, polls it, serves it, pushes it, or starts a container in it.
+ *
+ * Rooted at `~/.gosa` — outside `userData`, so Reset Workstation cannot reach its
+ * files. The ROW lives in `genie.db`, which a reset does delete, so a reset
+ * machine re-seeds an empty operator over its preserved memory. That is the
+ * intended split: the workstation is new, the operator's notes are not.
+ */
+export { SYSTEM_WORKSPACE_ROW_ID } from './workspace/system-workspace-id';
+import { SYSTEM_WORKSPACE_ROW_ID } from './workspace/system-workspace-id';
+
+/**
+ * Create (or re-point) the System Workspace row.
+ *
+ * `workstation_operator` is set here rather than by a human: this row IS the
+ * workstation's operator, and the designation is what lets its agent act on
+ * every workspace on the machine through the ORDINARY authorization path
+ * (`decideTargetWorkspace`) instead of a bespoke "the caller has no workspace but
+ * is the OSA" escape hatch.
+ */
+export function ensureSystemWorkspaceRow(
+    d: Database.Database,
+    workspacePath: string,
+): WorkspaceRow {
+    d.prepare(
+        `INSERT INTO workspaces
+           (id, backend, project_id, project_name, tynn_project_id, tynn_project_name,
+            shape, path, editor, editor_cmd, start_cmd, env_file, last_opened_at,
+            created_by_genie, sort_order, mcp_enabled, assignment_managed, sacred_name,
+            workstation_operator)
+         VALUES (@id, 'aionima', '', 'System', '', 'System', 'agi', @path,
+                 NULL, NULL, NULL, NULL, NULL, 1, -1, 1, 0, NULL, 1)
+         ON CONFLICT(id) DO UPDATE SET
+            path = excluded.path,
+            project_name = excluded.project_name,
+            mcp_enabled = 1,
+            workstation_operator = 1,
+            assignment_managed = 0`,
+    ).run({ id: SYSTEM_WORKSPACE_ROW_ID, path: workspacePath });
+    return d
+        .prepare<[string], WorkspaceRow>('SELECT * FROM workspaces WHERE id = ?')
+        .get(SYSTEM_WORKSPACE_ROW_ID)!;
+}
+
+/** Create (or re-point) the System Workspace row on the live database. */
+export function ensureSystemWorkspace(workspacePath: string): WorkspaceRow {
+    return ensureSystemWorkspaceRow(getDb(), workspacePath);
+}
+
+/**
+ * The workspaces anything may enumerate — pickers, sidebars, the workstation
+ * inventory, IssueWatch counts, the Dev Server reconcile, the mobile payload.
+ *
+ * The System Workspace is excluded HERE, once, rather than filtered at each of
+ * those. That is what "protected" means structurally: a surface has to ask for it
+ * by id to see it, and none of them do.
+ */
+export function listWorkspacesIn(d: Database.Database): WorkspaceRow[] {
+    return d
+        .prepare<[string], WorkspaceRow>(
             `SELECT * FROM workspaces
+             WHERE id != ?
              ORDER BY sort_order ASC, (last_opened_at IS NULL) ASC, last_opened_at DESC, project_name ASC`,
         )
-        .all();
+        .all(SYSTEM_WORKSPACE_ROW_ID);
+}
+
+export function listWorkspaces(): WorkspaceRow[] {
+    return listWorkspacesIn(getDb());
 }
 
 export function listWorkspaceAgents(workspaceId: string): WorkspaceAgentRow[] {
@@ -3357,8 +3426,27 @@ export function updateWorkspace(
     return getWorkspace(id);
 }
 
+/**
+ * Unregister a workspace — and REFUSE the System Workspace.
+ *
+ * The refusal lives at the delete itself because three callers reach it: the
+ * `workspaces:remove` IPC, `manageWorkspaces remove` (any workstation-operator
+ * agent), and the assignment deprovisioner. A guard in one of them is a guard in
+ * one of them. `workspace_agents` and `workspace_todos` cascade on this delete,
+ * so an agent unmounting the machine's own operator would take its agents with
+ * it.
+ */
+export function removeWorkspaceIn(d: Database.Database, id: string): void {
+    if (id === SYSTEM_WORKSPACE_ROW_ID) {
+        throw new Error(
+            'The System Workspace is the workstation operator’s own workspace and cannot be unregistered.',
+        );
+    }
+    d.prepare('DELETE FROM workspaces WHERE id = ?').run(id);
+}
+
 export function removeWorkspace(id: string): void {
-    getDb().prepare('DELETE FROM workspaces WHERE id = ?').run(id);
+    removeWorkspaceIn(getDb(), id);
 }
 
 export function touchWorkspace(id: string): void {
@@ -4523,9 +4611,15 @@ export interface TerminalSpecMeta {
     fancy_package?: string;
     fancy_version?: string;
     /**
-     * System Workspace tag: the spec belongs to the synthetic System Workspace
-     * (which has no `workspaces` row), so it persists with `workspace_id: null`
-     * + `system: true` and is grouped under the System Workspace in the UI.
+     * System Workspace tag: the spec belongs to the System Workspace but is
+     * deliberately UNATTACHED — an editor/plugin panel that roots at its own `cwd`
+     * and reads the whole filesystem, or a global background process whose cwd the
+     * user picked. Attaching those to the row would re-root them: `CodePanel`
+     * resolves an ATTACHED panel's tabs against the workspace path.
+     *
+     * It is no longer the workstation operator's marker. The operator has a real
+     * `workspace_id` (`__system__`, rooted at `~/.gosa`); this tag used to stand in
+     * for a row that did not exist, and every surface substituting for it is gone.
      */
     system?: boolean;
     /**

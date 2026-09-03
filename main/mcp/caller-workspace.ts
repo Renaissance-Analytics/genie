@@ -18,7 +18,6 @@
 import { getTerminalSpec } from '../db';
 import { appGrantFor } from '../apps/grant-lookup';
 import { resolveCaller, type Caller } from './caller-identity';
-import { SYSTEM_WORKSPACE_ID } from '../terminal/workspace-of-terminal';
 import { workspaceSlug } from '../agentinbox/slug';
 
 export function resolveCallerFor(callerId: string): Caller {
@@ -47,40 +46,43 @@ export interface CallerWorkspace {
 }
 
 /**
- * The workspace a caller acts from, INCLUDING the System Workspace.
+ * The workspace a caller acts from — ONE lookup, no exceptions.
  *
- * The System Workspace deliberately has no `workspaces` row — its specs carry
- * `workspace_id: null` + `meta.system === true`, and every surface substitutes
- * the sentinel (see `terminal/workspace-of-terminal.ts`). The workspace-scoped
- * guards read `spec.workspace_id` RAW, so they saw null and refused the Genie OS
- * agent outright: it could not use agentinbox, could not file its own feedback,
- * and — because `thumbsUp` gates on a transport it therefore could not register
- * — could never signal boot complete, so it re-ran first-boot orientation on
- * every launch (genie#321).
+ * ★ This docblock used to argue against what the code now does, so read the
+ * reversal rather than trusting either half from memory.
  *
- * Binding it to a `__system__` row is NOT the fix; no such row exists by design,
- * so that only trades "not in a workspace" for "Workspace not found". The spec
- * is already correct — the guard has to honour the convention.
+ * It said: the System Workspace deliberately has no `workspaces` row, its specs
+ * carry `workspace_id: null` + `meta.system === true`, "every surface
+ * substitutes", and *"binding it to a `__system__` row is NOT the fix; no such
+ * row exists by design, so that only trades 'not in a workspace' for 'Workspace
+ * not found'."*
+ *
+ * That reasoning was correct GIVEN ITS PREMISE. The premise is what changed: the
+ * row exists now (`ensureSystemWorkspaceRow`, rooted at `~/.gosa`), because the
+ * pretence was costing more than it saved. AgentInbox identity is
+ * `workspaceId:purpose` — the workspace is not a scope on the inbox, it is half
+ * the primary key — so an operator with no workspace had no identity, and forty
+ * or so surfaces each had to remember to substitute one. Five of those were
+ * found broken in a single day: it had never joined the inbox at all, its
+ * handoff note was always dropped, it was nearly locked out of service
+ * inventory, every restart failed on a non-null assertion against an always-null
+ * value, and it was permanently stuck in first-boot.
+ *
+ * So the substitution is DELETED, not moved. A spec with no `workspace_id` is
+ * what it says it is — a terminal in no workspace — and is refused, `meta.system`
+ * or not. That tag still marks unattached System-Workspace PANELS and global
+ * processes, which root at their own `cwd` and are not callers; it no longer
+ * stands in for a missing row. And a missing row now reads as a missing row,
+ * which on a machine whose operator is supposed to have one is exactly the
+ * report you want.
  *
  * Pure: takes the row lookup, so it is testable without a database.
  */
 export function callerWorkspaceDescriptor(
-    spec: { workspace_id: string | null; meta?: { system?: boolean } | null },
+    spec: { workspace_id: string | null },
     lookup: (id: string) => { id: string; project_name: string; path?: string } | undefined,
-    /** Where the System Workspace lives on disk (the OSA envelope). */
-    systemRoot = '',
 ): CallerWorkspace | null {
-    if (!spec.workspace_id) {
-        // A system spec is IN a workspace — the synthetic one. An unattached
-        // terminal is genuinely in none, and must still be refused.
-        if (spec.meta?.system !== true) return null;
-        return {
-            id: SYSTEM_WORKSPACE_ID,
-            name: 'System Workspace',
-            slug: 'system',
-            path: systemRoot,
-        };
-    }
+    if (!spec.workspace_id) return null;
     const ws = lookup(spec.workspace_id);
     if (!ws) return null;
     return {

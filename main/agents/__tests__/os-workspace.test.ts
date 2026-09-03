@@ -7,17 +7,17 @@ import { genieOsWorkspacePath, listGenieOsEntries, syncGenieOsWorkspace } from '
 describe('Genie OS workspace', () => {
     it('lists the real managed repository directory for Fancy Git UI', async () => {
         const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'genie-os-list-'));
-        await fs.promises.mkdir(path.join(root, 'genie-os.agi', '.ai'), { recursive: true });
-        await fs.promises.writeFile(path.join(root, 'genie-os.agi', 'project.json'), '{}');
+        await fs.promises.mkdir(path.join(root, '.gosa', '.ai'), { recursive: true });
+        await fs.promises.writeFile(path.join(root, '.gosa', 'project.json'), '{}');
         await expect(listGenieOsEntries(root, '')).resolves.toEqual([
             { id: '.ai', name: '.ai', path: '.ai', kind: 'directory' },
             { id: 'project.json', name: 'project.json', path: 'project.json', kind: 'file' },
         ]);
         await fs.promises.rm(root, { recursive: true, force: true });
     });
-    it('lives in its own AGI envelope instead of using the user home directory', () => {
-        expect(genieOsWorkspacePath(path.join('C:', 'GenieData'))).toBe(
-            path.join('C:', 'GenieData', 'genie-os.agi'),
+    it('lives in its own protected envelope, outside the reset boundary', () => {
+        expect(genieOsWorkspacePath(path.join('C:', 'Users', 'wishborn'))).toBe(
+            path.join('C:', 'Users', 'wishborn', '.gosa'),
         );
     });
 

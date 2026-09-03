@@ -66,6 +66,8 @@ import {
     getOrCreateDevServiceEngine,
     getDevServicePorts,
     saveDevServicePorts,
+    ensureSystemWorkspace,
+    SYSTEM_WORKSPACE_ROW_ID,
 } from './db';
 import { listLocalEnabledGenSites, resolveEnabledSite } from './sites/local-sites';
 import { remoteGenUrl } from './sites/gen-url';
@@ -1279,7 +1281,27 @@ app.whenReady().then(async () => {
     // every subsequent boot repeated it (genie#349).
     applyWorkstationResetAtBoot(app.getPath('userData'), reportWorkstationResetFailures);
     initDatabase(app.getPath('userData'));
-    const genieOsWorkspace = await ensureGenieOsWorkspace(app.getPath('userData'));
+    // The operator's envelope moved from `<userData>/genie-os.agi` to `~/.gosa`,
+    // outside the directory a reset empties. An existing install is MIGRATED
+    // here — copied, verified, then swapped, and the old folder is never deleted.
+    // The outcome is reported rather than swallowed: a migration that quietly did
+    // nothing is the one worth seeing in a log.
+    const genieOs = await ensureGenieOsWorkspace(
+        app.getPath('home'),
+        app.getPath('userData'),
+    );
+    const genieOsWorkspace = genieOs.path;
+    if (genieOs.migration?.migrated) {
+        console.log(
+            `[gosa] migrated ${genieOs.migration.files} files from ${genieOs.migration.from} to ${genieOsWorkspace} (source left in place)`,
+        );
+    } else if (genieOs.migration?.from) {
+        console.warn(`[gosa] not migrated — ${genieOs.migration.reason}`);
+    }
+    // The System Workspace is a REAL row, rooted there. Seeded BEFORE the OSA's
+    // terminal spec, because that spec now carries `workspace_id` and
+    // `terminal_specs.workspace_id` is a foreign key.
+    ensureSystemWorkspace(genieOsWorkspace);
     // The OSA is wired further down, AFTER `startMcpServer` — see genie#319.
     for (const obsoleteId of obsoleteOsAgentSpecIds(listTerminalSpecs())) {
         deleteTerminalSpec(obsoleteId);
@@ -1302,7 +1324,7 @@ app.whenReady().then(async () => {
     const osAgentInstructions = osAgentBootInstructions(
         recordOsAgentBoot(
             app.getPath('userData'),
-            readWorkstationEvidence(app.getPath('userData'), listWorkspaces().length > 0),
+            readWorkstationEvidence(listWorkspaces().length > 0),
         ),
     );
     const osSettings = getAllSettings();
@@ -1335,12 +1357,11 @@ app.whenReady().then(async () => {
     if (!existingOsAgent) {
         createTerminalSpec({
             id: GENIE_OS_TERMINAL_ID,
-            workspace_id: null,
+            workspace_id: SYSTEM_WORKSPACE_ROW_ID,
             label: 'Genie',
             cwd: genieOsWorkspace,
             type: 'terminal',
             meta: {
-                system: true,
                 agent: osProvider,
                 agent_command: osCommand,
                 agent_id: 'genie:workstation',
@@ -1352,15 +1373,22 @@ app.whenReady().then(async () => {
         });
     } else if (
         existingOsAgent.cwd !== genieOsWorkspace ||
-        existingOsAgent.workspace_id !== null ||
+        existingOsAgent.workspace_id !== SYSTEM_WORKSPACE_ROW_ID ||
         existingOsAgent.meta.agent_instructions !== osAgentInstructions ||
         existingOsAgent.meta.agent !== osProvider ||
         existingOsAgent.meta.agent_command !== osCommand
     ) {
+        // This is also the MIGRATION for an existing install: a spec seeded by an
+        // older build carries `workspace_id: null` + `meta.system`, and the boot
+        // reconcile re-parents it onto the real row and drops the tag. `system` is
+        // removed explicitly rather than by omission — a spread keeps what it is
+        // spreading, and a stale tag is what every deleted substitution used to
+        // read.
+        const { system: _wasSystem, ...meta } = existingOsAgent.meta;
         updateTerminalSpec(existingOsAgent.id, {
             cwd: genieOsWorkspace,
-            workspace_id: null,
-            meta: { ...existingOsAgent.meta, system: true, agent: osProvider, agent_command: osCommand, agent_id: 'genie:workstation', agent_instructions: osAgentInstructions },
+            workspace_id: SYSTEM_WORKSPACE_ROW_ID,
+            meta: { ...meta, agent: osProvider, agent_command: osCommand, agent_id: 'genie:workstation', agent_instructions: osAgentInstructions },
         });
     }
     // The container DEV SERVER — sites (#234 P2), services (P3) and their

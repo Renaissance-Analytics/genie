@@ -79,11 +79,14 @@ export function planOpenFile(
     const raw = (inputPath ?? '').trim();
     if (!raw) return { error: 'No file path given.' };
 
-    const isSystem = workspaceId === SYSTEM_WORKSPACE_ID;
-    const base = isSystem ? homeDir : workspaceRoot ?? homeDir;
+    // A relative path resolves against the CALLER's own root. The System
+    // Workspace used to resolve against the home directory instead, because it had
+    // no row to read a root from; it has one (`~/.gosa`), which is also its
+    // terminals' cwd, so the ordinary rule is now both simpler and more accurate.
+    const base = workspaceRoot ?? homeDir;
     const abs = path.isAbsolute(raw) ? path.normalize(raw) : path.resolve(base, raw);
 
-    if (!isSystem && workspaceRoot) {
+    if (workspaceRoot) {
         const rel = relWithin(workspaceRoot, abs);
         if (rel) return { plan: { workspaceId, abs, root: workspaceRoot, relPath: rel } };
 
@@ -187,9 +190,8 @@ export async function openFileForUserForMcp(
             error: 'This terminal is not attached to a Genie workspace, so there is no editor to open into.',
         };
     }
-    const workspaceRoot =
-        workspaceId === SYSTEM_WORKSPACE_ID ? null : deps.getWorkspaceRoot(workspaceId);
-    if (workspaceId !== SYSTEM_WORKSPACE_ID && !workspaceRoot) {
+    const workspaceRoot = deps.getWorkspaceRoot(workspaceId);
+    if (!workspaceRoot) {
         return { ok: false, error: `Workspace ${workspaceId} not found.` };
     }
 
@@ -210,8 +212,7 @@ export async function openFileForUserForMcp(
         // resolved against, since that is the mistake worth seeing (the agent
         // meant a file in another directory or another workspace entirely).
         const relativeInput = !path.isAbsolute(req.path.trim());
-        const resolvedAgainst =
-            workspaceId === SYSTEM_WORKSPACE_ID ? deps.homeDir() : workspaceRoot ?? deps.homeDir();
+        const resolvedAgainst = workspaceRoot ?? deps.homeDir();
         return {
             ok: false,
             error: relativeInput

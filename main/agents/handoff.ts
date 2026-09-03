@@ -75,6 +75,54 @@ export function writeHandoff(input: {
     }
 }
 
+/** Where a handoff is going, or why it is not going anywhere. */
+export type HandoffPlan =
+    | { ok: true; workspaceRoot: string; agentName: string; relPath: string }
+    | { ok: false; reason: string };
+
+/**
+ * WHERE an agent's handoff is filed — the decision, without the disk.
+ *
+ * The workstation operator's note used to be dropped on every single call: an
+ * early return on `SYSTEM_WORKSPACE_ID` refused it with *"the System workspace
+ * has no project folder"*. That was a truthful refusal of a false premise — the
+ * operator HAD a folder, it just had no row pointing at one. It has both now
+ * (`__system__` → `~/.gosa`), so there is nothing left to special-case and the
+ * note lands on the same path every other agent's does.
+ *
+ * Pure, and separate from the write, because each of these refusals is real and
+ * used to happen in silence while `imDone` reported the note saved. Asserting
+ * them needs a function, not the whole MCP server.
+ */
+export function planHandoff(
+    spec: { workspace_id: string | null; meta?: { whisper_purpose?: unknown } | null },
+    lookupWorkspace: (id: string) => { path?: string } | undefined,
+): HandoffPlan {
+    if (!spec.workspace_id) {
+        return {
+            ok: false,
+            reason: 'this terminal is not attached to a Genie workspace, so there is no folder to write a handoff into',
+        };
+    }
+    const root = lookupWorkspace(spec.workspace_id)?.path;
+    if (!root) {
+        return { ok: false, reason: `workspace ${spec.workspace_id} has no path on disk` };
+    }
+    const agentName = String(spec.meta?.whisper_purpose ?? '').trim();
+    if (!agentName) {
+        return {
+            ok: false,
+            reason: 'this terminal has no agent name, and a handoff is filed under the agent name (a terminal id changes on every restart)',
+        };
+    }
+    return {
+        ok: true,
+        workspaceRoot: root,
+        agentName,
+        relPath: `.ai/handoff/${path.basename(handoffPath('', agentName))}`,
+    };
+}
+
 /** The note left for this agent, or null when there is none. */
 export function readHandoff(workspaceRoot: string, agentName: string): string | null {
     try {
