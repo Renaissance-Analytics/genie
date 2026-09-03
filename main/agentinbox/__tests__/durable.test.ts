@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { AgentInboxBroker } from '../broker';
+import { HarnessTransportRegistry } from '../harness-transport';
+import { createHarnessTransportSink } from '../transport-sink';
 import type { AgentInboxStore } from '../store';
 import type { AgentInboxJoinInput, AgentInboxMessage } from '../types';
 import { WAKE_QUIET_MS } from '../wake';
@@ -351,6 +353,69 @@ describe('AgentInbox durable inbox (Track B)', () => {
         expect(b2.hasMail('b')).toBe(true);
         const res = await b2.receive('b', {});
         expect(res.messages.map((m) => m.text)).toEqual(['you have mail']);
+    });
+
+    /**
+     * genie#346 — what an upgrade actually costs, and what it must not.
+     *
+     * The durable store survives (the test above). The HARNESS TRANSPORT REGISTRY
+     * does not: it is in-memory in the main process, so the replacement Genie
+     * starts with every agent looking unattached. `notifyNow` then correctly
+     * falls through to the PTY and the notice is TYPED at the prompt — which is
+     * the field evidence on #346, and the reason it defeats #344 on every single
+     * upgrade.
+     *
+     * The channel bridge is now supervised (`claudeChannelBridge`), so it
+     * re-registers itself seconds after the new server binds. This pins the
+     * consequence: once it has, mail rides the channel again, and the message
+     * that spanned the upgrade is still there to be read.
+     */
+    it('after an upgrade, mail rides the RE-BOUND channel instead of the keyboard', async () => {
+        // Boot 1: `a` DMs `b`, and the app dies before `b` reads it.
+        const b1 = new AgentInboxBroker();
+        b1.setStore(store);
+        join(b1, 'a');
+        join(b1, 'b');
+        b1.send({ fromAgentId: 'a', toAgentId: 'b', text: 'sent across the upgrade' });
+
+        // Boot 2: fresh broker AND fresh registry — both die with the process —
+        // against the SAME durable store, wired exactly as background.ts wires
+        // them.
+        const registry = new HarnessTransportRegistry();
+        const woken: string[] = [];
+        const b2 = new AgentInboxBroker();
+        b2.setStore(store);
+        b2.setTransportSink(createHarnessTransportSink(registry));
+        b2.setWakeSink((d) => {
+            woken.push(d.text);
+        });
+        join(b2, 'a');
+        join(b2, 'b');
+        b2.rehydrateMessages();
+
+        // POSITIVE CONTROL, and the bug itself: with no channel bound — the
+        // state every agent is in the instant an upgrade finishes — a new notice
+        // IS typed at the prompt. If this did not happen the assertion below
+        // would prove nothing, because "nothing was typed" passes against a
+        // broker that never types at all.
+        b2.send({ system: true, toAgentId: 'b', text: 'notice with no channel' });
+        expect(woken).toHaveLength(1);
+
+        // The supervised bridge reconnects and re-registers itself.
+        registry.bindPull('b', 'claude-channel');
+
+        b2.send({ system: true, toAgentId: 'b', text: 'notice over the channel' });
+        // NOTHING new was typed: the agent is attached again.
+        expect(woken).toHaveLength(1);
+
+        // …and the message that spanned the upgrade is still deliverable, along
+        // with everything queued behind it. Nothing in flight was lost.
+        const res = await b2.receive('b', {});
+        expect(res.messages.map((m) => m.text)).toEqual([
+            'sent across the upgrade',
+            'notice with no channel',
+            'notice over the channel',
+        ]);
     });
 
     it('resumes the global seq across a restart (cursors stay valid)', () => {
