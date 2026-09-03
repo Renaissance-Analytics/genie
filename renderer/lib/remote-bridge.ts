@@ -364,7 +364,15 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
                 method: 'POST',
                 json: { id },
             })) as
-                | { ok: true; oldId: string; newId: string; agent: AgentType; command: string }
+                | {
+                      ok: true;
+                      oldId: string;
+                      newId: string;
+                      agent: AgentType;
+                      command: string;
+                      state: 'relaunching';
+                      note: string;
+                  }
                 | { ok: false; error: string },
     };
 

@@ -3624,11 +3624,23 @@ export interface GenieApi {
         /** Gracefully restart an agent terminal: reconnect its TUI to the current
          *  MCP rig (fresh tools/protocol) while resuming the conversation. Resolves
          *  to the old→new terminal ids, or `{ ok: false, error }` when the agent
-         *  can't be resumed (non-claude, or no captured session). */
+         *  can't be resumed (no resume grammar, or no captured session).
+         *
+         *  `ok` means the relaunch was STARTED, not that the agent is back —
+         *  `state`/`note` carry what the host actually established (genie#364).
+         *  Render `note`; never harden it into "restarted". */
         restartAgent: (
             id: string,
         ) => Promise<
-            | { ok: true; oldId: string; newId: string; agent: AgentType; command: string }
+            | {
+                  ok: true;
+                  oldId: string;
+                  newId: string;
+                  agent: AgentType;
+                  command: string;
+                  state: 'relaunching';
+                  note: string;
+              }
             | { ok: false; error: string }
         >;
     };

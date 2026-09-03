@@ -207,9 +207,35 @@ interface AgentSpecLike {
 }
 
 /**
+ * The session id a RELAUNCH should resume — `meta.chat_session_id` when it is
+ * there, otherwise the id sitting inside the stored launch command's
+ * `--session-id` flag.
+ *
+ * The second half is genie#364. `--session-id <uuid>` is CREATE-a-session-with-
+ * this-id: {@link renderAgentLaunch} MINTS the uuid so the conversation is
+ * identified from the first keystroke, and is idempotent about a flag that is
+ * already present. That means the id can end up recorded ONLY in the stored
+ * command — the owner's always-on flags may pin one, and a spec written by an
+ * older build has one baked in. Reading it here is what lets a relaunch change
+ * the flag's VERB (`--resume`) instead of replaying a create that can only ever
+ * succeed once ("Error: Session ID <uuid> is already in use").
+ *
+ * `chat_session_id` OUTRANKS the command: it is the live record, updated when a
+ * session is detected or re-captured, while a command string can hold a stale id
+ * indefinitely.
+ */
+export function capturedSessionId(spec: AgentSpecLike | null): string | null {
+    const meta = spec?.meta;
+    if (!meta) return null;
+    const stored = meta.chat_session_id?.trim();
+    if (stored) return stored;
+    return extractSessionId(meta.agent_command ?? '');
+}
+
+/**
  * Fresh-vs-continue decision for an AGENT terminal on a FRESH pty spawn (a restart /
- * reopen where the previous shell + agent died). The spec's captured `chat_session_id`
- * is the signal:
+ * reopen where the previous shell + agent died). The spec's captured session id
+ * ({@link capturedSessionId}) is the signal:
  *   - present → RESUME the same conversation (`claude --resume <id>`) — a restart
  *               continues where it left off (the graceful resume the MCP
  *               `runAgent restart` uses).
@@ -227,7 +253,7 @@ export function agentRelaunchDecision(
     const agent = spec.meta?.agent as AgentInboxAgentType | undefined;
     if (!agent) return null;
     const baseCmd = spec.meta?.agent_command ?? '';
-    const sid = spec.meta?.chat_session_id ?? null;
+    const sid = capturedSessionId(spec);
 
     // A captured session id: resume it by EXACT id only when its transcript
     // actually exists on disk. The stored id can DRIFT from the live conversation
@@ -251,7 +277,13 @@ export function agentRelaunchDecision(
         }
     }
 
-    const r = renderAgentLaunch(agent, baseCmd);
+    // GENUINELY FRESH — nothing captured, or a provider Genie cannot resume.
+    // The stored command's session/resume flags are stripped FIRST: a create
+    // flag is one-shot, so carrying one into a relaunch is not "preserving the
+    // conversation", it is a guaranteed `Session ID … is already in use`
+    // (genie#364). Everything that COULD have preserved it has already been
+    // tried above, and which providers can is `TuiDef.resume`, not an `if` here.
+    const r = renderAgentLaunch(agent, stripSessionFlags(baseCmd));
     if (!r.command) return null;
     return r.chatSessionId && !sid
         ? { command: r.command, newSessionId: r.chatSessionId }
@@ -281,7 +313,7 @@ export function resolveRestartCommand(
     if (!spec || !agent) return { error: 'Not an agent terminal.' };
 
     const base = spec.meta?.agent_command ?? '';
-    const sid = spec.meta?.chat_session_id ?? null;
+    const sid = capturedSessionId(spec);
     // Resumable when the provider has confirmed exact-resume grammar and a
     // captured session id (Claude flag or Codex subcommand).
     if (!renderAgentResume(agent, base, sid)) {

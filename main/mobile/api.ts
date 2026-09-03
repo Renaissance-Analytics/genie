@@ -444,7 +444,17 @@ export interface MobileDataDeps {
     restartAgentTerminal?: (
         id: string,
     ) =>
-        | { ok: true; oldId: string; newId: string; agent: 'claude' | 'codex' | 'kiwi' | 'genie' | 'custom'; command: string }
+        | {
+              ok: true;
+              oldId: string;
+              newId: string;
+              agent: 'claude' | 'codex' | 'kiwi' | 'genie' | 'custom';
+              command: string;
+              /** The relaunch is IN FLIGHT — the host has not seen the agent come
+               *  back up and does not claim to (genie#364). */
+              state: 'relaunching';
+              note: string;
+          }
         | { ok: false; error: string };
     /**
      * Edit a specialized (agent) terminal's AgentInbox settings — purpose / scope /

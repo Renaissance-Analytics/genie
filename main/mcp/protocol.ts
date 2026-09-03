@@ -1378,6 +1378,15 @@ export interface RunAgentResult {
     dropped?: boolean;
     /** read: what an EMPTY read means — see ManageTerminalsResult.state. */
     state?: TerminalReadState;
+    /**
+     * restart: what Genie actually established, in one line.
+     *
+     * `ok` on a restart means the old agent was stopped and the resume command
+     * was handed to a fresh terminal — NOT that the agent came back up, which
+     * Genie cannot see from inside the pty (genie#364). Relay this rather than
+     * reporting a recovery nobody has observed.
+     */
+    note?: string;
 }
 
 // --- manageWorkspaces --------------------------------------------------------

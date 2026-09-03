@@ -136,6 +136,10 @@ const deps = (): MobileDataDeps => ({
                       newId: 't-agent-2',
                       agent: 'claude' as const,
                       command: 'claude --resume sess-1',
+                      // The host does not claim the agent is back up — only that
+                      // the relaunch is under way (genie#364).
+                      state: 'relaunching' as const,
+                      note: 'Relaunching claude — watch the terminal.',
                   };
               },
           }

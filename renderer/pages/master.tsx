@@ -2173,10 +2173,10 @@ function MasterInner() {
                             void api()
                                 .terminalSpec.restartAgent(sp.id)
                                 .then((r) =>
+                                    // The host's own words for what it did — see
+                                    // the agent-panel restart below (genie#364).
                                     setToast(
-                                        r.ok
-                                            ? 'Agent restarted.'
-                                            : r.error || 'Could not restart the agent.',
+                                        r.ok ? r.note : r.error || 'Could not restart the agent.',
                                     ),
                                 );
                         }}
@@ -2314,7 +2314,17 @@ function MasterInner() {
                             });
                             if (ok === null) return;
                             const result = await api().terminalSpec.restartAgent(spec.id);
-                            setToast(result.ok ? 'Agent restarted.' : result.error || 'Could not restart the agent.');
+                            // NOT "Agent restarted." — the host has torn the old
+                            // agent down and handed the resume command to a fresh
+                            // terminal, and that is all it knows (genie#364). It
+                            // says so in `note`; repeating a stronger claim here
+                            // is how the owner was told an agent was back while
+                            // the relaunch was dying in the pty.
+                            setToast(
+                                result.ok
+                                    ? result.note
+                                    : result.error || 'Could not restart the agent.',
+                            );
                         }}
                         onAddTerminal={() =>
                             activeWorkspaceId && void addSpec(activeWorkspaceId, 'terminal')
@@ -2346,7 +2356,14 @@ function MasterInner() {
                             onAgentSettings={() => setAgentEditSpec(genieOsSpec)}
                             onRestartAgent={async () => {
                                 const result = await api().terminalSpec.restartAgent(genieOsSpec.id);
-                                setToast(result.ok ? 'Genie OS restarted.' : result.error || 'Could not restart Genie OS.');
+                                // Same honesty as the agent panel above: report
+                                // the relaunch the host actually performed, not a
+                                // recovery it has not observed (genie#364).
+                                setToast(
+                                    result.ok
+                                        ? result.note
+                                        : result.error || 'Could not restart Genie OS.',
+                                );
                             }}
                             onMarkActive={() => markActive(genieOsSpec.id)}
                             onMarkInactive={() => markInactive(genieOsSpec.id)}
