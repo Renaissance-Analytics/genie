@@ -7,33 +7,40 @@ import { describe, expect, it } from 'vitest';
  *
  * The operator used to be `workspace_id: null` + `meta.system === true` with no
  * row behind it, and `caller-workspace.ts` said so outright: *"every surface
- * substitutes"*. Forty-four sites did. Every one was a place someone had to
- * remember, and on 2026-09-03 five of them were found broken at once — it had
- * never joined AgentInbox, its handoff note was always dropped, it was nearly
- * locked out of service inventory, every restart failed on a non-null assertion
- * against an always-null value, and it was permanently stuck in first-boot.
+ * substitutes"*. Every substitution was a place someone had to remember, and on
+ * 2026-09-03 five of them were found broken at once — it had never joined
+ * AgentInbox, its handoff note was always dropped, it was nearly locked out of
+ * service inventory, every restart failed on a non-null assertion against an
+ * always-null value, and it was permanently stuck in first-boot.
  *
- * Giving it a real workspace row deleted the substitutions rather than adding a
- * forty-fifth. This test is what stops the count creeping back: a new branch on
- * the operator's identity fails here, and the person adding it has to either
- * justify raising the ceiling or — far more often — find the ordinary path that
- * already works now that the row exists.
+ * Giving it a real workspace row deleted the substitutions rather than adding
+ * another. This test is what stops the count creeping back: a new branch on the
+ * operator's identity fails here, and whoever adds it has to either justify
+ * raising the ceiling or — far more often — find the ordinary path that already
+ * works now that the row exists.
  *
- * WHAT IS COUNTED (production `main/` only; tests are excluded because a test
- * NAMING the convention is the opposite of a surface depending on it):
+ * WHAT IS COUNTED, in production `main/` only:
  *   - `SYSTEM_WORKSPACE_ID` — the sentinel id, wherever it appears;
  *   - `meta.system` — the "no row, tag instead" convention;
  *   - `agent_id === 'genie:workstation'` — a branch on the operator's identity.
  *
- * 41 before this change, 21 after. The remainder is NOT residue to be shaved: it
- * is the tag that marks unattached System-Workspace panels and global processes
- * (a real, different thing — they root at their own `cwd`), the id constant
- * itself, and two DELIBERATE policy branches on the operator's role. Each is
- * named where it stands.
+ * Tests are excluded: a test NAMING the convention is the opposite of a surface
+ * depending on it. Comments are stripped: see {@link stripComments}.
+ *
+ * **31 before this change, 9 after.** The nine are NOT residue to be shaved:
+ *   - the id constant and its one use in `workspaceIdOfSpec`;
+ *   - `meta.system`, which marks UNATTACHED System-Workspace panels and global
+ *     processes — a real, different thing (they root at their own `cwd`, and an
+ *     attached panel would resolve its tabs against the workspace path instead);
+ *   - the System panel `open-file` falls back to for a file no workspace owns;
+ *   - three DELIBERATE policy branches on the operator's ROLE (which TUI a
+ *     restart uses, teardown-and-relaunch, and the refusal to let it override a
+ *     saved agent's command).
+ * Each is named where it stands.
  *
  * Raising `MAX` is a decision, not a formality. Lowering it is always welcome.
  */
-const MAX_OSA_SPECIAL_CASES = 21;
+const MAX_OSA_SPECIAL_CASES = 9;
 
 const PATTERNS: ReadonlyArray<RegExp> = [
     /SYSTEM_WORKSPACE_ID/g,
@@ -55,12 +62,22 @@ function productionSources(dir: string): string[] {
     return out;
 }
 
+/**
+ * CODE only. Comments are stripped first, deliberately: this counts branches a
+ * surface actually depends on, and a docblock EXPLAINING why a substitution was
+ * deleted is the opposite of one. Counting prose would also make the ceiling
+ * punish the explanation and reward silence.
+ */
+export function stripComments(src: string): string {
+    return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+}
+
 function countSpecialCases(): { total: number; byFile: Record<string, number> } {
     const mainDir = path.resolve(__dirname, '..');
     const byFile: Record<string, number> = {};
     let total = 0;
     for (const file of productionSources(mainDir)) {
-        const src = fs.readFileSync(file, 'utf8');
+        const src = stripComments(fs.readFileSync(file, 'utf8'));
         let n = 0;
         for (const pattern of PATTERNS) n += (src.match(pattern) ?? []).length;
         if (n > 0) {
