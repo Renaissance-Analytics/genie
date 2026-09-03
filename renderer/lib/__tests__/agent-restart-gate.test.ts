@@ -16,8 +16,8 @@ import { PROVIDER_IDS, canResumeTui, providerDef } from '../../../main/agents/re
  *
  * The fix is not `|| === 'codex'`. That is the same bug with one more literal,
  * and it would go stale again the next time a provider learns to resume. The
- * menu now asks the registry, which is also what the renderer derives from — so
- * the answer cannot drift from the command that gets run.
+ * menu now asks the registry, and `renderAgentResume` builds its command from
+ * that same table — so the answer cannot drift from the command that gets run.
  *
  * SOURCE-LEVEL for the component half: this lane has no DOM harness (see
  * `vitest.config.ts`), and the precedent for pinning a menu's decisions off its
