@@ -62,6 +62,12 @@ describe('the upgrade notice reconnects first', () => {
         previousVersion: '0.7.0-beta.285',
         changes: ['something'],
         persist: () => {},
+        // The nudges are STAGGERED ~15s apart now (genie#353), so the second
+        // agent's turn is queued rather than run in this tick. The scheduler is
+        // an injected seam precisely so a test can BE the clock: driving it
+        // synchronously keeps every assertion below about ordering, not timing,
+        // and costs the suite nothing.
+        schedule: (run: () => void) => run(),
     };
 
     it('reconnects BEFORE the notice is sent', () => {

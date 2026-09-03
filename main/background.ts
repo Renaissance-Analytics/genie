@@ -16,7 +16,11 @@ import { launchedFromAutostart } from './autostart';
 import { resolveWorkstationTui } from './agents/tui';
 import { ensureGenieOsWorkspace, wireGenieOsWorkspace } from './agents/os-workspace';
 import { GENIE_OS_TERMINAL_ID, obsoleteOsAgentSpecIds, osAgentLaunchCommand } from './agents/os-agent';
-import { osAgentBootInstructions, osAgentBootMode } from './agents/os-lifecycle';
+import {
+    osAgentBootInstructions,
+    readWorkstationEvidence,
+    recordOsAgentBoot,
+} from './agents/os-lifecycle';
 import {
     applyWorkstationResetAtBoot,
     isWorkstationResetPending,
@@ -135,7 +139,7 @@ import { harnessTransportRegistry } from './agentinbox/harness-transport';
 import { createHarnessTransportSink } from './agentinbox/transport-sink';
 import { agentShutdownReadiness } from './agents/shutdown-readiness';
 import { setPluginPanelOpenSink } from './plugins/registry';
-import { announceAgentUpgrade } from './agents/upgrade-announcement';
+import { announceAgentUpgrade, withWorkstationOperator } from './agents/upgrade-announcement';
 import { reconnectStrategy } from './agents/mcp-reconnect';
 import { terminalIsBlocked } from './agents/injection-guard';
 import { getChangelog } from './updater/changelog';
@@ -1191,8 +1195,16 @@ app.whenReady().then(async () => {
     // of SKILL.md, frontmatter and all, arriving with no task attached. It is
     // installed as a skill file by `wireGenieOsWorkspace` now, so the operator
     // loads it when it is relevant instead of wearing it as an opening prompt.
+    // genie#352 — the mode is DERIVED from evidence a reset would clear, not
+    // from a dotfile that (until #348) could never be written, and the boot
+    // RECORDS it so the next one needs no evidence at all. Without this the
+    // operator was handed the first-boot script on every single restart and
+    // re-ran onboarding instead of resuming as the workstation's operator.
     const osAgentInstructions = osAgentBootInstructions(
-        osAgentBootMode(app.getPath('userData')),
+        recordOsAgentBoot(
+            app.getPath('userData'),
+            readWorkstationEvidence(app.getPath('userData'), listWorkspaces().length > 0),
+        ),
     );
     const osSettings = getAllSettings();
     const osProvider = resolveWorkstationTui(osSettings);
@@ -1613,9 +1625,17 @@ app.whenReady().then(async () => {
                     // cannot enforce that without knowing what each one is
                     // called. `purpose` IS the agent's name — a saved agent's
                     // name is its channel purpose.
-                    agents: agentInboxBroker.directory()
-                        .filter((agent) => agent.status !== 'offline')
-                        .map((agent) => ({ agentId: agent.agentId, name: agent.purpose })),
+                    // …and the workstation OPERATOR, whatever the directory
+                    // says (genie#352). It is the one agent that can be missing
+                    // from it — deliberately not a workspace agent — so the ONE
+                    // broadcast that exists to tell agents the ground moved
+                    // under them reached everyone except the agent whose job is
+                    // the machine.
+                    agents: withWorkstationOperator(
+                        agentInboxBroker.directory()
+                            .filter((agent) => agent.status !== 'offline')
+                            .map((agent) => ({ agentId: agent.agentId, name: agent.purpose })),
+                    ),
                     changes: changelog.groups.flatMap((group) => group.changes).slice(0, 8),
                     // Reconnect the agent's `genie` server BEFORE telling it
                     // anything: the upgrade replaced the process behind the

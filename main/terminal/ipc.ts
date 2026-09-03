@@ -44,7 +44,7 @@ import {
     prepareCodexAppServer,
     type PreparedCodexAppServer,
 } from '../agentinbox/codex-app-server-lifecycle';
-import { workspaceSlug } from '../agentinbox/slug';
+import { agentInboxJoinInputFor } from '../agentinbox/join-input';
 import {
     renderAgentLaunch,
     captureSessionByDetect,
@@ -57,7 +57,6 @@ import { buildSubmitBytes } from './keystrokes';
 import {
     normalizePurpose,
     type AgentInboxJoinInput,
-    type AgentInboxAgentType,
     type AgentInboxScope,
 } from '../agentinbox/types';
 import { withCodexGenieMcpLaunch } from '../mcp/agent-config';
@@ -858,35 +857,12 @@ function maybeRelaunchAgent(id: string, existing: boolean): void {
 }
 
 /**
- * Build an AgentInbox join input from a persisted agent spec — resolves the
- * workspace + its display slug (the db/fs I/O the pure broker can't do). Null
- * when the spec isn't an AgentInbox agent (no `agent_id`) or its workspace is gone.
+ * Build an AgentInbox join input from a persisted agent spec — supplies the db
+ * lookup the pure resolver can't do. Null when the spec isn't an AgentInbox
+ * agent (no `agent_id`) or its workspace is gone.
  */
 function joinInputFromSpec(spec: TerminalSpecRow | null): AgentInboxJoinInput | null {
-    if (!spec || !spec.workspace_id) return null;
-    const agentId = spec.meta?.agent_id;
-    if (!agentId) return null;
-    const ws = getWorkspace(spec.workspace_id);
-    if (!ws) return null;
-    return {
-        agentId,
-        terminalId: spec.id,
-        workspaceId: ws.id,
-        workspaceName: ws.project_name,
-        slug: workspaceSlug(ws),
-        agentType: (spec.meta?.agent as AgentInboxAgentType) ?? 'custom',
-        label: spec.label,
-        purpose: normalizePurpose(spec.meta?.whisper_purpose),
-        scope: (spec.meta?.whisper_scope as AgentInboxScope) ?? 'self',
-        scopeWorkspaces: Array.isArray(spec.meta?.whisper_workspaces)
-            ? (spec.meta.whisper_workspaces as string[])
-            : [],
-        chatSessionId: spec.meta?.chat_session_id ?? null,
-        // Default ON (owner, beta.248): the meta key is written ONLY when someone
-        // sets the toggle, so `undefined` means "never chose" → announce, and only
-        // an explicit `false` silences the agent.
-        wakeOnDm: spec.meta?.whisper_wake_on_dm !== false,
-    };
+    return agentInboxJoinInputFor(spec, (id) => getWorkspace(id));
 }
 
 /**
