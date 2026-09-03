@@ -9,6 +9,10 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 const created: string[] = [];
 const killed: string[] = [];
 let killThrows = false;
+/** Ids the fake backend currently has a pty for — `isLive` is a real question
+ *  the supervisor asks after a spawn, so the mock has to answer it truthfully
+ *  rather than not at all. */
+const livePtys = new Set<string>();
 
 // Mutable spec store the db mock reads/writes. Each spec is a process with a
 // command unless overridden by the test before calling the supervisor.
@@ -32,13 +36,18 @@ vi.mock('@particle-academy/fancy-term-host', () => ({
     terminalManager: () => ({
         create: (opts: { id: string }) => {
             created.push(opts.id);
+            livePtys.add(opts.id);
             return { id: opts.id, pid: 1, shell: 'bash' };
         },
         kill: (id: string) => {
             killed.push(id);
             if (killThrows) throw new Error('no such pty');
+            // The real manager returns false (it does NOT throw) when there is
+            // no pty for that id — the case a restart has to handle.
+            if (!livePtys.delete(id)) return false;
             return true;
         },
+        isLive: (id: string) => livePtys.has(id),
     }),
     resolveDefaultShell: () => ({ command: '/usr/bin/bash', args: [] }),
 }));
@@ -65,6 +74,7 @@ beforeEach(() => {
     created.length = 0;
     killed.length = 0;
     killThrows = false;
+    livePtys.clear();
     specs.clear();
     // The restart-respawn tests use ids p1/p2; seed them as process specs.
     seedSpec('p1');

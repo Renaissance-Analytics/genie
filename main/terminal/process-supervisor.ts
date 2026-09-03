@@ -134,8 +134,65 @@ function clearTimer(st: ProcState): void {
     }
 }
 
+/** Per-process status-change listeners — the seam {@link settleProcess} waits on,
+ *  so nothing has to poll for a spawn's outcome. */
+const statusWatchers = new Map<string, Set<(s: ProcessStatus) => void>>();
+
+/**
+ * How long a just-spawned process must stay up before Genie will call it
+ * started.
+ *
+ * `create()` returning is not evidence the command runs: a `command not found`
+ * shell starts, prints, and exits milliseconds later, and the old code set
+ * `running` on the next line. This window is what turns "the spawn call
+ * returned" into "it was still alive N ms later" — a claim that can be made
+ * honestly. Overridable by tests only; nothing in the product passes it.
+ */
+export const PROCESS_SETTLE_MS = 1_200;
+
+/**
+ * Watch a just-started process until its status leaves `running`, or `settleMs`
+ * passes — whichever comes first. Event-driven (no polling): the exit hook's
+ * `setStatus` is what resolves it early.
+ *
+ * The returned status is what was OBSERVED, not what was intended. A long-lived
+ * service never "finishes" starting, so a still-`running` result means exactly
+ * "alive `settleMs` after the spawn" and nothing stronger.
+ */
+export function settleProcess(
+    specId: string,
+    settleMs: number = PROCESS_SETTLE_MS,
+): Promise<ProcessStatus> {
+    return new Promise((resolve) => {
+        const st = procs.get(specId);
+        // Already settled into a terminal state before we got here.
+        if (!st || (st.status !== 'running' && st.status !== 'restarting')) {
+            resolve(st?.status ?? 'stopped');
+            return;
+        }
+        const set = statusWatchers.get(specId) ?? new Set();
+        statusWatchers.set(specId, set);
+        const done = (s: ProcessStatus): void => {
+            set.delete(watcher);
+            clearTimeout(timer);
+            resolve(s);
+        };
+        // Resolve early only on a status that ENDS the question. 'restarting'
+        // does not: it is both "crashed, backing off" and "the kill for a
+        // deliberate restart is in flight", so it waits out the window and is
+        // reported as unsettled if it is still that at the deadline.
+        const watcher = (s: ProcessStatus): void => {
+            if (s === 'crashed' || s === 'failed' || s === 'stopped') done(s);
+        };
+        const timer = setTimeout(() => done(procs.get(specId)?.status ?? 'stopped'), settleMs);
+        if (typeof timer.unref === 'function') timer.unref();
+        set.add(watcher);
+    });
+}
+
 function setStatus(id: string, status: ProcessStatus): void {
     ensure(id).status = status;
+    for (const w of [...(statusWatchers.get(id) ?? [])]) w(status);
     // LOCAL-only — a host window's process list reflects the HOST (via its
     // /ws/events); a local process status must not leak in there.
     broadcastLocal('process:status', { id, status });
@@ -208,6 +265,15 @@ export function startProcess(specId: string): void {
 
     try {
         terminalManager().create({ id: specId, cwd, shell, args });
+        // `create()` returning is NOT evidence the command runs — a `command not
+        // found` shell exits milliseconds later. The check that IS decidable
+        // here is whether a pty registered at all; the rest is the caller's
+        // (see {@link settleProcess}, which watches it survive a window).
+        if (!terminalManager().isLive(specId)) {
+            recordProcessOutput(specId, '[genie] spawn produced no live process\n');
+            setStatus(specId, 'crashed');
+            return;
+        }
         setStatus(specId, 'running');
         // Record the running intent so this process is restored on next launch
         // if Genie goes down (quit/update/crash) while it's up.
@@ -246,11 +312,27 @@ export function restartProcess(specId: string): void {
     if (st.status === 'running' || st.status === 'restarting') {
         st.userStopped = true;
         st.restartRequested = true;
+        // The honest intermediate: the kill is out, the respawn has not
+        // happened. Set BEFORE the kill, because a backend that reports the
+        // exit synchronously would otherwise have its 'running' clobbered.
+        setStatus(specId, 'restarting');
+        // `kill()` RETURNS FALSE for a missing pty — it does not throw. So this
+        // recovery used to hang off a `catch` that could never fire: a restart
+        // against a stale `running` killed nothing, waited for an exit event
+        // that was never coming, respawned nothing, and reported success.
+        let killed = false;
         try {
-            terminalManager().kill(specId);
+            killed = terminalManager().kill(specId);
         } catch {
+            killed = false;
+        }
+        if (!killed) {
             // No pty actually died → the exit event won't come; start now.
+            // 'stopped' first, or startProcess's own guard bounces this
+            // straight back into restartProcess (see onProcessPtyExit).
             st.restartRequested = false;
+            st.userStopped = false;
+            st.status = 'stopped';
             startProcess(specId);
         }
     } else {

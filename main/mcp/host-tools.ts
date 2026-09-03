@@ -101,7 +101,9 @@ import {
     stopProcess,
     restartProcess,
     forgetProcess,
+    getProcessLog,
     getProcessStatuses,
+    settleProcess,
 } from '../terminal/process-supervisor';
 import {
     armSchedule,
@@ -608,6 +610,7 @@ async function deliverTerminalInput(
 export async function manageProcessForMcp(
     terminalId: string,
     req: ManageProcessRequest,
+    opts: { settleMs?: number } = {},
 ): Promise<ManageProcessResult> {
     const wsId = callerWorkspaceIdFor(terminalId);
     const ws = wsId ? getWorkspace(wsId) : null;
@@ -622,6 +625,9 @@ export async function manageProcessForMcp(
     };
 
     let affectedId: string | undefined;
+    /** Set for start/restart — the id whose spawn must be watched before this
+     *  call may claim anything about it. */
+    let settleId: string | undefined;
     try {
         switch (req.action) {
             case 'list':
@@ -895,8 +901,12 @@ export async function manageProcessForMcp(
                         }
                     }
                     startProcess(target.id);
+                    settleId = target.id;
                 } else if (req.action === 'stop') stopProcess(target.id);
-                else restartProcess(target.id);
+                else {
+                    restartProcess(target.id);
+                    settleId = target.id;
+                }
                 affectedId = target.id;
                 break;
             }
@@ -906,6 +916,48 @@ export async function manageProcessForMcp(
             ok: false,
             error: e instanceof Error ? e.message : String(e),
             processes: listFor(),
+        };
+    }
+    // A spawn is not a run. `startProcess` sets `running` the moment a pty
+    // registers, which a `command not found` shell also does before exiting
+    // milliseconds later — so watch it survive a bounded window and report what
+    // was OBSERVED (CONTRIBUTING.md). Same shape as manageSite's settle/pending.
+    if (settleId) {
+        const settled = await settleProcess(settleId, opts.settleMs);
+        const verb = req.action === 'restart' ? 'restart' : 'start';
+        if (settled === 'crashed' || settled === 'failed') {
+            const tail = getProcessLog(settleId).trim().split('\n').slice(-8).join('\n');
+            return {
+                ok: false,
+                error:
+                    `The process was spawned but exited straight away (status: ${settled}), so the ${verb} did not take.` +
+                    (tail ? ` Its last output was:\n${tail}` : ''),
+                processes: listFor(),
+                affectedId,
+            };
+        }
+        if (settled === 'restarting') {
+            return {
+                ok: true,
+                pending: true,
+                note: `The process is between runs (auto-restart backoff) and has not been observed up. Poll \`manageProcess {action:'list'}\` until its status settles on \`running\` (or \`crashed\`/\`failed\`); do NOT report it as started until then.`,
+                processes: listFor(),
+                affectedId,
+            };
+        }
+        if (settled !== 'running') {
+            return {
+                ok: false,
+                error: `The process is ${settled} after the ${verb} — it is not running.`,
+                processes: listFor(),
+                affectedId,
+            };
+        }
+        return {
+            ok: true,
+            note: `Spawned, and still alive when Genie last looked. That is all Genie can see from outside the process — it is not a health check, so read the process log before reporting the service as working.`,
+            processes: listFor(),
+            affectedId,
         };
     }
     return { ok: true, processes: listFor(), affectedId };
