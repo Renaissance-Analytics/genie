@@ -17,7 +17,11 @@ import { resolveWorkstationTui } from './agents/tui';
 import { ensureGenieOsWorkspace, wireGenieOsWorkspace } from './agents/os-workspace';
 import { GENIE_OS_TERMINAL_ID, obsoleteOsAgentSpecIds, osAgentLaunchCommand } from './agents/os-agent';
 import { osAgentBootInstructions, osAgentBootMode } from './agents/os-lifecycle';
-import { applyPendingWorkstationReset, isWorkstationResetPending } from './workstation/reset';
+import {
+    applyWorkstationResetAtBoot,
+    isWorkstationResetPending,
+    type ResetFailure,
+} from './workstation/reset';
 import { providerDef } from './agents/registry';
 import { ensureOwnedProvidersInstalled } from './agents/availability';
 import { liveAvailabilityDeps } from './agents/availability-effects';
@@ -1068,6 +1072,38 @@ const debugLog = openDebugLog({
 });
 debugLog.note('main module loaded; waiting for app ready');
 
+/**
+ * Tell the user a workstation reset did not finish.
+ *
+ * An OS message box rather than a toast, for the same reason
+ * `reportAgentSeedingRefusal` uses one: this fires during boot, where there may
+ * be no window at all (tray-resident launch, autostart, "start minimised"), and
+ * a partial reset is precisely the failure that otherwise looks like success —
+ * Genie comes up fine while state the user asked to have removed is still
+ * there. Non-blocking; boot carries on either way.
+ */
+function reportWorkstationResetFailures(failures: ResetFailure[]): void {
+    const detail = failures.map((f) => `${f.entry} — ${f.message}`).join('\n');
+    // eslint-disable-next-line no-console
+    console.error(`[workstation reset] incomplete:\n${detail}`);
+    debugLog.fail('workstation reset incomplete', new Error(detail));
+    void dialog
+        .showMessageBox({
+            type: 'warning',
+            title: 'Genie',
+            message: 'The workstation reset did not finish.',
+            detail:
+                `Genie removed everything else, but these items are still there:\n\n${detail}\n\n` +
+                'They are usually held open by something still running. Genie will not try again — ' +
+                'restart the computer and reset again if you need them gone.',
+            buttons: ['OK'],
+            noLink: true,
+        })
+        .catch(() => {
+            /* no window to host the dialog — the console + debug log above stand */
+        });
+}
+
 app.whenReady().then(async () => {
     debugLog.note('app ready');
     // HEADLESS (genie-cloud host): the electron stub still resolves whenReady, so
@@ -1126,10 +1162,19 @@ app.whenReady().then(async () => {
         });
     });
 
-    // A reset is applied before any database, terminal host, service, or window
-    // opens the files. Genie's managed toolchain is deliberately outside the
-    // reset boundary and survives intact.
-    applyPendingWorkstationReset(app.getPath('userData'));
+    // A reset is applied before THIS process's database, terminal host, service
+    // or window opens the files. It is NOT applied before the PREVIOUS
+    // process's children are gone: a detached pty-host is designed to outlive
+    // the quit, and an OS-service host outlives it by definition. So the two
+    // directories holding those running executables — `runtime/` and
+    // `pty-host/` — stay outside the reset boundary alongside the managed
+    // toolchain, which survives intact (see workstation/reset.ts).
+    //
+    // Guarded, and it reports itself: an unguarded throw here used to abort the
+    // boot before `initDatabase`, leaving Genie half-started with no IPC and no
+    // window, forever — the marker was only cleared after the deletions, so
+    // every subsequent boot repeated it (genie#349).
+    applyWorkstationResetAtBoot(app.getPath('userData'), reportWorkstationResetFailures);
     initDatabase(app.getPath('userData'));
     const genieOsWorkspace = await ensureGenieOsWorkspace(app.getPath('userData'));
     // The OSA is wired further down, AFTER `startMcpServer` — see genie#319.
