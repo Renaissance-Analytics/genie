@@ -128,6 +128,7 @@ import {
 import { installAgentInboxPresence } from './agentinbox/presence';
 import { agentInboxBroker } from './agentinbox/broker';
 import { harnessTransportRegistry } from './agentinbox/harness-transport';
+import { createHarnessTransportSink } from './agentinbox/transport-sink';
 import { agentShutdownReadiness } from './agents/shutdown-readiness';
 import { setPluginPanelOpenSink } from './plugins/registry';
 import { announceAgentUpgrade } from './agents/upgrade-announcement';
@@ -1506,21 +1507,14 @@ app.whenReady().then(async () => {
         agentInboxBroker.setPendingNudgeSink(({ terminalId, pending }) => {
             announceInboxIncoming(terminalId, false, pending);
         });
-        agentInboxBroker.setTransportSink((target, msg) => {
-            // Claude Channels pull from the durable inbox and ACK only after
-            // stdout accepts the notification. Codex is host-pushed and its
-            // delivery promise resolves only after App Server accepts turn/start.
-            if (harnessTransportRegistry.kindFor(target.agentId) !== 'codex-app-server') {
-                return false;
-            }
-            return Promise.resolve(harnessTransportRegistry.deliver(target.agentId, {
-                text: msg.text,
-                messageId: msg.id,
-                from: msg.from,
-                fromLabel: msg.fromLabel,
-                priority: msg.interrupt ? 'high' : 'normal',
-            })).then((result) => result.ok);
-        });
+        agentInboxBroker.setTransportSink(createHarnessTransportSink(harnessTransportRegistry));
+        // The PTY notice and the unread backstop are for an agent with NO
+        // channel of its own. This is how the broker knows which agents those
+        // are — the backstop is armed on imDone, where no message is in hand and
+        // the transport sink is never consulted (genie#344).
+        agentInboxBroker.setHarnessAttachedResolver((agentId) =>
+            harnessTransportRegistry.isVerified(agentId),
+        );
         // AgentInbox OUTER tier: the broker asks the workspaces table who may reach
         // into a given workspace. Kept a seam so the broker stays db-free (and
         // permissive when unwired, e.g. in unit tests).

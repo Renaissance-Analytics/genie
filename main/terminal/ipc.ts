@@ -975,6 +975,21 @@ function maybeAnswerDevChannelWarning(id: string): void {
     }
 }
 
+/**
+ * Release a PULL harness binding whose holder has gone.
+ *
+ * The Claude Channel bridge is a child of the agent's own process, so the pty
+ * dying takes the channel with it. Nothing ever calls into a pull binding, so it
+ * cannot fail its way out the way a push adapter does — a stale one would
+ * swallow every message AND suppress the PTY fallback that exists for exactly
+ * this state. Push bindings are deliberately left alone: they own their own
+ * lifecycle (a send that throws unbinds them).
+ */
+function releaseHarnessPullTransport(id: string): void {
+    const agentId = agentInboxBroker.agentIdForTerminal(id);
+    if (agentId) harnessTransportRegistry.unbindPull(agentId);
+}
+
 function feedTerminalExit(id: string, payload: { exitCode: number; signal?: number }): void {
     // Supervisor decides a Process runner's fate (no-op for other ids).
     onProcessPtyExit(id, payload);
@@ -987,6 +1002,7 @@ function feedTerminalExit(id: string, payload: { exitCode: number; signal?: numb
     agentReadBuffer.trimToTail(id, EXIT_TAIL_BYTES);
     // AgentInbox: the pty exited but the spec is retained (revivable) — mark the
     // agent `away` (no-op for a non-agent terminal).
+    releaseHarnessPullTransport(id);
     agentInboxBroker.away(id);
     // AgentPulse: the agent's process is gone → its turn is over. Drop the mid-turn
     // glow (no-op if the terminal wasn't a working agent).
@@ -1425,6 +1441,7 @@ export function killTerminalById(id: string): boolean {
     unregisterTerminalEndpoint(id);
     // AgentInbox: a killed terminal is a hard leave — drop the agent from the
     // registry + channels and push an offline presence (no-op for a non-agent).
+    releaseHarnessPullTransport(id);
     agentInboxBroker.leaveByTerminal(id);
     codexAppServerManager.stop(id);
     // kill() also clears the retained flag in the manager.

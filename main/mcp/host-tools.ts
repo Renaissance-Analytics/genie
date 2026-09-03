@@ -45,6 +45,7 @@ import {
 } from '../db';
 import { agentInboxBroker } from '../agentinbox/broker';
 import {
+    completeTransportHandshake,
     harnessTransportRegistry,
     requiredHarnessTransport,
 } from '../agentinbox/harness-transport';
@@ -2505,19 +2506,17 @@ export async function agentInboxForMcp(
                 const configured = listWorkspaceAgents(ws.id).find(
                     (candidate) => candidate.terminal_spec_id === spec.id,
                 );
-                // Codex is connected by the app-server adapter in terminal/ipc;
-                // an agent handshake may confirm that binding, never replace it.
-                // Claude Channels use the blocking AgentInbox.receive request as
-                // their live connection and therefore do not occupy this registry.
-                if (
-                    required === 'codex-app-server' &&
-                    !harnessTransportRegistry.confirm(agentId, required)
-                ) {
-                    return {
-                        ok: false,
-                        error: 'The Codex app-server adapter is not connected.',
-                    };
-                }
+                // Each adapter proves liveness from its own end — Codex's
+                // binding is made by Genie before the agent speaks, Claude's is
+                // made by this very call. `completeTransportHandshake` holds
+                // that asymmetry (genie#344: Claude's half was missing, so a
+                // live channel never registered and its mail went to the PTY).
+                const handshake = completeTransportHandshake(
+                    harnessTransportRegistry,
+                    agentId,
+                    required,
+                );
+                if (!handshake.ok) return handshake;
                 if (configured) {
                     markWorkspaceAgentTransportState(getDb(), configured.id, required, { ok: true });
                 }
