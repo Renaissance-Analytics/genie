@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createDevSiteManager } from '../site-manager';
+import { createDevSiteManager, stopNotes } from '../site-manager';
 import {
     defaultGenNameFor,
     devSiteIdFor,
@@ -1977,6 +1977,42 @@ describe('a restart says what it established (genie#226)', () => {
         await m.start('acme', SITE_ID);
         const report = await m.stop(SITE_ID);
         expect(report.orphaned).toContain(SITE_ID);
+    });
+
+    it('a stop on an EXTERNAL host-native site reports that it stopped nothing', async () => {
+        // Same shape as the restart lie, one action over: `stop` on a `hostPort`
+        // site drops the route and returns ok, while the dev server it points at
+        // is the user's own and keeps running on its port.
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const { hostSpawn } = spawnFake(false);
+        const external: DevSiteConfig = {
+            name: 'web',
+            genName: 'web.acme.gen',
+            repo: 'app',
+            runMode: 'explicit',
+            hostPort: 8001,
+            kind: 'http',
+            enabled: true,
+        };
+        const m = manager(runtime, { [SITE_ID]: external }, { hostSpawn, probeReady: async () => true });
+        await m.start('acme', SITE_ID);
+        const report = await m.stop(SITE_ID);
+        expect(report.external).toBe(true);
+        expect(stopNotes(report).join(' ')).toMatch(/did not stop|still running/i);
+    });
+
+    it('a stop on a MANAGED site is not called external — positive control', async () => {
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const { hostSpawn } = spawnFake(false);
+        const m = manager(
+            runtime,
+            { [SITE_ID]: HOST_SITE },
+            { hostSpawn, probeReady: async () => true, allocateFreePort: async () => 5321 },
+        );
+        await m.start('acme', SITE_ID);
+        const report = await m.stop(SITE_ID);
+        expect(report.external).toBe(false);
+        expect(stopNotes(report)).toEqual([]);
     });
 
     it('a stop that took reports no orphan — positive control', async () => {

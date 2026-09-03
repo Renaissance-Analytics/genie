@@ -172,6 +172,40 @@ export interface DevSiteStopReport {
     external: boolean;
 }
 
+/** The stop Genie asked for and did not get. Shared by `stop` and `restart`,
+ *  which both otherwise report an orphan as a completed stop. */
+function orphanNote(stopped: DevSiteStopReport): string[] {
+    if (stopped.orphaned.length === 0) return [];
+    const which = stopped.orphaned.join(', ');
+    const one = stopped.orphaned.length === 1;
+    return [
+        `Genie could not stop ${which} — ${one ? 'it was' : 'they were'} asked to stop and ${one ? 'was' : 'were'} ` +
+            `still alive afterwards. The site has already been dropped from Genie's live set, so Genie cannot ` +
+            `reach ${one ? 'that process' : 'those processes'} again: the old dev server is still holding its ` +
+            `port and has to be killed by hand.`,
+    ];
+}
+
+/**
+ * PURE. What a `stop` has to say beyond "ok" (genie#226).
+ *
+ * Two ways a stop is not the stop it looks like: a process that was asked to go
+ * and did not (now an orphan Genie has already forgotten), and an EXTERNAL
+ * host-native site, where dropping the route IS the whole stop and the dev
+ * server behind `hostPort` is the user's own and still running.
+ */
+export function stopNotes(stopped: DevSiteStopReport): string[] {
+    const notes = orphanNote(stopped);
+    if (stopped.external) {
+        notes.push(
+            `Genie stopped ROUTING to this site; it did not stop a dev server. A site defined with \`hostPort\` ` +
+                `points .gen at a process Genie does not run, so that process is still running and still holding ` +
+                `its port. Stop it where you started it (manageProcess, or the terminal it runs in).`,
+        );
+    }
+    return notes;
+}
+
 /**
  * PURE. What a `restart` has to say beyond the resulting status (genie#226).
  *
@@ -184,22 +218,13 @@ export interface DevSiteStopReport {
  *    re-added it, and probed a dev server that never stopped. Since genie#305
  *    that `ready: true` is genuinely true, which is precisely what makes an
  *    unqualified "restarted" convincing.
+ *
+ * The external note is phrased for a RESTART (and names the port), so it is
+ * built here rather than taken from {@link stopNotes} — saying both would say
+ * it twice.
  */
-export function stopNotes(stopped: DevSiteStopReport): string[] {
-    if (stopped.orphaned.length === 0) return [];
-    const which = stopped.orphaned.join(', ');
-    const one = stopped.orphaned.length === 1;
-    return [
-        `Genie could not stop ${which} — ${one ? 'it was' : 'they were'} asked to stop and ${one ? 'was' : 'were'} ` +
-            `still alive afterwards. The site has already been dropped from Genie's live set, so Genie cannot ` +
-            `reach ${one ? 'that process' : 'those processes'} again: the old dev server is still holding its ` +
-            `port and has to be killed by hand.`,
-    ];
-}
-
-/** @see stopNotes — the orphan half is shared with a plain `stop`. */
 export function restartNotes(stopped: DevSiteStopReport, config?: DevSiteConfig): string[] {
-    const notes: string[] = [...stopNotes(stopped)];
+    const notes: string[] = orphanNote(stopped);
     if (stopped.orphaned.length > 0) {
         notes.push(
             `The site that just started is a NEW process on a NEW port — Genie allocates a free one per start — ` +
