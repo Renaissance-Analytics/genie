@@ -1226,6 +1226,17 @@ export interface ManageTerminalsResult {
      *  the scrollback that survived in the pty host), or 'exited' (its pty is not
      *  running, so there is nothing to read at all). */
     state?: TerminalReadState;
+    /** write: the input BODY reached the pty. False (with `ok: false`) means
+     *  NOTHING was sent — the terminal has no running pty. */
+    delivered?: boolean;
+    /** write: the submit keystroke landed too. A multi-line submit is two writes
+     *  (body, then Enter after a delay), so `delivered: true, submitted: false`
+     *  is a real outcome: the text is in the input box, UNSUBMITTED. */
+    submitted?: boolean;
+    /** write: what Genie actually established when that is not simply "sent" —
+     *  currently the unsubmitted-body case. Relay it; do not report the input as
+     *  delivered to the agent. */
+    note?: string;
 }
 
 // --- runAgent ----------------------------------------------------------------
@@ -1378,13 +1389,22 @@ export interface RunAgentResult {
     dropped?: boolean;
     /** read: what an EMPTY read means — see ManageTerminalsResult.state. */
     state?: TerminalReadState;
+    /** send: the prompt BODY reached the pty. False (with `ok: false`) means
+     *  NOTHING was sent — that agent terminal has no running pty. */
+    delivered?: boolean;
+    /** send: the submit keystroke landed too. A multi-line prompt is two writes
+     *  (body, then Enter after a delay), so `delivered: true, submitted: false`
+     *  is a real outcome: the prompt is in the TUI's input box, UNSUBMITTED, and
+     *  the agent has not seen it. */
+    submitted?: boolean;
     /**
-     * restart: what Genie actually established, in one line.
+     * restart / send: what Genie actually established, in one line.
      *
      * `ok` on a restart means the old agent was stopped and the resume command
      * was handed to a fresh terminal — NOT that the agent came back up, which
-     * Genie cannot see from inside the pty (genie#364). Relay this rather than
-     * reporting a recovery nobody has observed.
+     * Genie cannot see from inside the pty (genie#364). On a `send` it names the
+     * unsubmitted-prompt case. Relay this rather than reporting a recovery — or a
+     * delivery — nobody has observed.
      */
     note?: string;
 }
@@ -2208,7 +2228,7 @@ const TARGET_WORKSPACE_PROP = {
 const MANAGE_TERMINALS_TOOL = {
     name: 'manageTerminals',
     description:
-        "Spawn and drive TERMINALS — real shell sessions — in your own workspace, or (for an Ops agent) a workspace you govern. This EXECUTES ARBITRARY CODE: `create` opens a pty, `write` sends input (by default it SUBMITS — an Enter is appended; pass `submit:false` to type without running), and the shell does whatever you tell it. Use it to run builds/tests/scripts and to operate interactive tools. Actions: `create` (spawn a terminal — optional `repo` (repos/<repo>) or `cwd`, optional `label`; returns its id + recent output); `write` (send `data` to terminal `id` — submitted by default; or deliver a single `key` (`enter`/`escape`/`ctrl-c`) on its own, e.g. a bare Enter to submit/clear a stuck buffer); `read` (recent output of `id` — pass a `cursor` from a prior read for just-what's-new, or `bytes` for the last N bytes; add `strip:true` for plain text with ANSI/escape codes removed); `list` (terminals in the workspace); `kill` (terminate `id`). Multi-line input is wrapped in bracketed paste with the Enter delivered separately, so it submits cleanly to a TUI. SAFETY: `create` and `write` are APPROVAL-GATED — when the target workspace requires approval (the default), each blocks on an OS modal until the user approves; when the user has turned approval OFF they run immediately. `read` and `list` never prompt. Output is read from a bounded buffer (oldest bytes age out), so a `read` after a long-running command may report `dropped:true`.",
+        "Spawn and drive TERMINALS — real shell sessions — in your own workspace, or (for an Ops agent) a workspace you govern. This EXECUTES ARBITRARY CODE: `create` opens a pty, `write` sends input (by default it SUBMITS — an Enter is appended; pass `submit:false` to type without running), and the shell does whatever you tell it. Use it to run builds/tests/scripts and to operate interactive tools. Actions: `create` (spawn a terminal — optional `repo` (repos/<repo>) or `cwd`, optional `label`; returns its id + recent output); `write` (send `data` to terminal `id` — submitted by default; or deliver a single `key` (`enter`/`escape`/`ctrl-c`) on its own, e.g. a bare Enter to submit/clear a stuck buffer); `read` (recent output of `id` — pass a `cursor` from a prior read for just-what's-new, or `bytes` for the last N bytes; add `strip:true` for plain text with ANSI/escape codes removed); `list` (terminals in the workspace); `kill` (terminate `id`). Multi-line input is wrapped in bracketed paste with the Enter delivered separately, so it submits cleanly to a TUI — which makes a `write` two writes, and its result says which landed: `delivered` (the body reached the pty) and `submitted` (the Enter did too). `delivered:true, submitted:false` means the text is sitting UNSUBMITTED in the input box, not that it ran; `ok:false` with `delivered:false` means nothing was sent at all. Genie reports what reached the pty — it cannot see what the program then did with it, so confirm with a `read`. SAFETY: `create` and `write` are APPROVAL-GATED — when the target workspace requires approval (the default), each blocks on an OS modal until the user approves; when the user has turned approval OFF they run immediately. `read` and `list` never prompt. Output is read from a bounded buffer (oldest bytes age out), so a `read` after a long-running command may report `dropped:true`.",
     inputSchema: {
         type: 'object',
         properties: {
@@ -3833,12 +3853,18 @@ ${body}` }],
                     bytes: a.bytes,
                     strip: a.strip,
                 });
+                const terminalsLine = `${result.terminals.length} terminal${result.terminals.length === 1 ? '' : 's'} in the workspace${
+                    result.affectedId ? ` (acted on ${result.affectedId})` : ''
+                }.`;
                 const summary = result.ok
                     ? action === 'read'
                         ? `Read ${result.data?.length ?? 0} byte(s)${result.dropped ? ' (some earlier output was dropped)' : ''}.${readStateNote(result.state)}`
-                        : `${result.terminals.length} terminal${result.terminals.length === 1 ? '' : 's'} in the workspace${
-                              result.affectedId ? ` (acted on ${result.affectedId})` : ''
-                          }.`
+                        : // A body that landed without its Enter belongs in the
+                          // SUMMARY, not only the JSON: "acted on t-1" over text
+                          // still sitting in the input box reads as sent.
+                          action === 'write' && result.submitted === false
+                          ? `Input reached ${result.affectedId ?? 'the terminal'} but is UNSUBMITTED — the Enter did not land. ${terminalsLine}`
+                          : terminalsLine
                     : `manageTerminals failed: ${result.error ?? 'unknown error'}`;
                 return ok(msg.id, {
                     content: [
@@ -3925,6 +3951,10 @@ ${body}` }],
                     summary = `${result.agents?.length ?? 0} saved agent(s) in this workspace.`;
                 } else if (action === 'read') {
                     summary = `Read ${result.data?.length ?? 0} byte(s)${result.dropped ? ' (some earlier output was dropped)' : ''}.${readStateNote(result.state)}`;
+                } else if (action === 'send' && result.submitted === false) {
+                    // The prompt is in the TUI's input box, unread. "send ok" is
+                    // exactly the false success the agent would act on.
+                    summary = `Prompt reached ${result.id ?? 'the agent terminal'} but is UNSUBMITTED — the Enter did not land, so the agent has not seen it.`;
                 } else {
                     summary = `runAgent ${action} ok${result.id ? ` (${result.id})` : ''}.`;
                 }

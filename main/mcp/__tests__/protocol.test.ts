@@ -571,6 +571,105 @@ describe('handleMcpMessage', () => {
         expect(text).toContain('dropped');
     });
 
+    it('manageTerminals write: an UNSUBMITTED body is said so in the summary line', async () => {
+        // The summary is what an agent skimming the result reads. "acted on t-1"
+        // over a body that is still sitting in the input box reads as sent.
+        const manageTerminals = vi.fn().mockResolvedValue({
+            ok: true,
+            terminals: [{ id: 't-1', label: 'x', cwd: '', agent: null }],
+            affectedId: 't-1',
+            delivered: true,
+            submitted: false,
+            note: 'The text reached the terminal but the submit Enter did not.',
+        });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 44,
+                method: 'tools/call',
+                params: { name: 'manageTerminals', arguments: { action: 'write', id: 't-1', data: 'x' } },
+            },
+            ctx({ manageTerminals }),
+        );
+        const summary = (res?.result as { content: Array<{ text: string }> }).content[0].text.split(
+            '\n\n',
+        )[0];
+        expect(summary).toMatch(/unsubmitted/i);
+    });
+
+    it('manageTerminals write: POSITIVE CONTROL — a submitted write says sent, not unsubmitted', async () => {
+        // Without this, the assertion above passes against a summary that warns
+        // on every write.
+        const manageTerminals = vi.fn().mockResolvedValue({
+            ok: true,
+            terminals: [{ id: 't-1', label: 'x', cwd: '', agent: null }],
+            affectedId: 't-1',
+            delivered: true,
+            submitted: true,
+        });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 45,
+                method: 'tools/call',
+                params: { name: 'manageTerminals', arguments: { action: 'write', id: 't-1', data: 'x' } },
+            },
+            ctx({ manageTerminals }),
+        );
+        const summary = (res?.result as { content: Array<{ text: string }> }).content[0].text.split(
+            '\n\n',
+        )[0];
+        expect(summary).not.toMatch(/unsubmitted/i);
+        expect(summary).toContain('t-1');
+    });
+
+    it('runAgent send: an UNSUBMITTED prompt is not summarized as "send ok"', async () => {
+        const runAgent = vi.fn().mockResolvedValue({
+            ok: true,
+            id: 't-agent',
+            delivered: true,
+            submitted: false,
+            note: 'The text reached the terminal but the submit Enter did not.',
+        });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 46,
+                method: 'tools/call',
+                params: { name: 'runAgent', arguments: { action: 'send', id: 't-agent', prompt: 'x' } },
+            },
+            ctx({ runAgent }),
+        );
+        const summary = (res?.result as { content: Array<{ text: string }> }).content[0].text.split(
+            '\n\n',
+        )[0];
+        expect(summary).toMatch(/unsubmitted/i);
+        expect(summary).not.toMatch(/send ok/i);
+    });
+
+    it('runAgent send: POSITIVE CONTROL — a submitted prompt still summarizes as ok', async () => {
+        const runAgent = vi.fn().mockResolvedValue({
+            ok: true,
+            id: 't-agent',
+            delivered: true,
+            submitted: true,
+        });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 47,
+                method: 'tools/call',
+                params: { name: 'runAgent', arguments: { action: 'send', id: 't-agent', prompt: 'x' } },
+            },
+            ctx({ runAgent }),
+        );
+        const summary = (res?.result as { content: Array<{ text: string }> }).content[0].text.split(
+            '\n\n',
+        )[0];
+        expect(summary).not.toMatch(/unsubmitted/i);
+        expect(summary).toContain('t-agent');
+    });
+
     it('manageTerminals says an EMPTY read came from a dead pty, not a quiet one', async () => {
         // genie#217: "0 bytes because the pty is gone" and "0 bytes because
         // nothing was written" must not read identically to the agent.

@@ -558,21 +558,46 @@ async function approveScheduledTask(
     return selected.includes('Approve');
 }
 
+/** What actually reached the pty. See {@link deliverTerminalInput}. */
+interface TerminalInputDelivery {
+    /** The BODY write landed. False means nothing was sent at all. */
+    delivered: boolean;
+    /** The submit keystroke landed too (trivially true when the CR rides inline
+     *  on a single-line body). `delivered && !submitted` is the third outcome. */
+    submitted: boolean;
+}
+
+/** The note for a body that landed with its Enter lost — what state the terminal
+ *  is actually in, and why it matters that nobody is told "sent". */
+const UNSUBMITTED_NOTE =
+    'The text reached the terminal but the submit Enter did not — its pty stopped ' +
+    'accepting input between the two writes. The body is sitting UNSUBMITTED in the ' +
+    "TUI's input box: nothing has been read by the agent, and the next Enter from any " +
+    'source will send it. Read the terminal to see the current state before resending.';
+
 /**
  * Deliver resolved terminal input to a pty: the body now, then — for a MULTI-LINE
  * bracketed paste — the submit Enter as a SEPARATE write after a short delay, so
  * the Enter can't race the TUI exiting paste mode and leave the prompt parked
  * (issue #8). Single-line submits carry the CR inline and skip the second write.
+ *
+ * Reports what LANDED, because the split makes the outcome three-valued and both
+ * `writeToTerminal` calls really can fail (they return false when the backend has
+ * no pty for that id). Collapsing the middle case either way is a false report:
+ * `ok: true` claims a prompt the agent never saw, and `ok: false` claims nothing
+ * was sent when the body is sitting in the input box waiting for any Enter.
  */
 async function deliverTerminalInput(
     id: string,
     built: { bytes: string; submitAfter?: string },
-): Promise<void> {
-    writeToTerminal(id, built.bytes);
-    if (built.submitAfter) {
-        await new Promise((resolve) => setTimeout(resolve, PASTE_SUBMIT_DELAY_MS));
-        writeToTerminal(id, built.submitAfter);
-    }
+): Promise<TerminalInputDelivery> {
+    const delivered = writeToTerminal(id, built.bytes);
+    if (!built.submitAfter) return { delivered, submitted: delivered };
+    // Nothing to submit if the body never arrived — and a bare CR into a
+    // half-dead terminal is exactly the stray Enter this warns callers about.
+    if (!delivered) return { delivered: false, submitted: false };
+    await new Promise((resolve) => setTimeout(resolve, PASTE_SUBMIT_DELAY_MS));
+    return { delivered: true, submitted: writeToTerminal(id, built.submitAfter) };
 }
 
 /**
@@ -1490,8 +1515,25 @@ export async function manageTerminalsForMcp(
                         terminals: listAgentTerminals(ws),
                     };
                 }
-                await deliverTerminalInput(req.id!, built);
-                return { ok: true, terminals: listAgentTerminals(ws), affectedId: req.id };
+                const wrote = await deliverTerminalInput(req.id!, built);
+                if (!wrote.delivered) {
+                    return {
+                        ok: false,
+                        error: `Nothing was sent — terminal "${req.id}" has no running pty (it exited, or the terminal backend dropped it). Its spec still exists; restart it before writing again.`,
+                        delivered: false,
+                        submitted: false,
+                        terminals: listAgentTerminals(ws),
+                        affectedId: req.id,
+                    };
+                }
+                return {
+                    ok: true,
+                    delivered: true,
+                    submitted: wrote.submitted,
+                    ...(wrote.submitted ? {} : { note: UNSUBMITTED_NOTE }),
+                    terminals: listAgentTerminals(ws),
+                    affectedId: req.id,
+                };
             }
         }
     } catch (e) {
@@ -2250,8 +2292,23 @@ export async function runAgentForMcp(
                 if (!approved) {
                     return { ok: false, error: 'Denied by user — nothing was sent.' };
                 }
-                await deliverTerminalInput(req.id!, built);
-                return { ok: true, id: req.id };
+                const wrote = await deliverTerminalInput(req.id!, built);
+                if (!wrote.delivered) {
+                    return {
+                        ok: false,
+                        error: `Nothing was sent — agent terminal "${req.id}" has no running pty (its TUI exited, or the terminal backend dropped it). Restart the agent before sending again.`,
+                        delivered: false,
+                        submitted: false,
+                        id: req.id,
+                    };
+                }
+                return {
+                    ok: true,
+                    id: req.id,
+                    delivered: true,
+                    submitted: wrote.submitted,
+                    ...(wrote.submitted ? {} : { note: UNSUBMITTED_NOTE }),
+                };
             }
             case 'read': {
                 if (!ownTerminal(req.id)) {
