@@ -8,6 +8,7 @@ import {
     type ToolchainPackageManager,
     type ToolchainStepStatus,
 } from '../../lib/genie';
+import { installOutcomeNotice } from '../../lib/toolchain-page';
 
 /**
  * First-run toolchain setup (Tynn #240) — the guided step that turns a fresh
@@ -315,7 +316,17 @@ export function ToolchainSetupWizard({
                                 // artifact automatically yet…", "spawn npm
                                 // ENOENT"); rendering only "failed" turns an
                                 // actionable message into a dead end.
-                                const why = result?.results.find((r) => r.tool === s.tool)?.error;
+                                const step = result?.results.find((r) => r.tool === s.tool);
+                                // WHY it failed, or — on a step that PASSED but
+                                // whose post-install probe could not find the
+                                // tool — that nothing has confirmed it. A
+                                // silently unconfirmed install is the success
+                                // nobody verified (CONTRIBUTING.md).
+                                const why =
+                                    step?.error ??
+                                    (step?.status === 'succeeded' && step.verified === false
+                                        ? `installed, but not found on PATH yet`
+                                        : undefined);
                                 return (
                                     <li key={s.tool} className="tcw-plan-row">
                                         <span className="tcw-plan-tool">{TOOL_LABEL[s.tool]}</span>
@@ -337,9 +348,7 @@ export function ToolchainSetupWizard({
                         </ul>
                         {step === 'done' && result && (
                             <div className={`set-note${result.ok ? '' : ' bad'}`}>
-                                {result.ok
-                                    ? 'All set — your toolchain is ready.'
-                                    : 'Some tools didn’t install. You can re-run setup, or install the rest manually.'}
+                                {installOutcomeNotice(result)}
                                 {result.restartRequired && (
                                     <div>
                                         <Icon name="refresh" size="xs" /> Restart your machine to finish the Docker /

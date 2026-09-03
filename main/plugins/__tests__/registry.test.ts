@@ -38,6 +38,7 @@ import {
     setPluginPanelOpenSink,
     type PluginToolExecutor,
 } from '../registry';
+import { ARTBOARD_SOURCE } from '../artboard-plugin';
 
 function helloManifest(namespace = 'hello'): string {
     return JSON.stringify({
@@ -193,5 +194,85 @@ describe('ownsPluginTool', () => {
         expect(ownsPluginTool('hello.greet')).toBe(true);
         expect(ownsPluginTool('hello.nope')).toBe(false);
         expect(ownsPluginTool('imDone')).toBe(false);
+    });
+});
+
+// --- CONTRIBUTING.md "Never report a success you have not verified" ---------
+//
+// #306 was ArtBoard's tool description promising it "opens and focuses the
+// panel" while NOTHING did. The sink is wired now — but a post still only ever
+// ASKS. `_meta.geniePanel` is a request that six separate places drop in
+// silence, none of them routed back to the caller:
+//
+//   1. background.ts    — `if (!workspaceId) return`
+//   2. registry.ts      — `panelOpenSink` is still null
+//   3. registry.ts      — the panel is not `declared` in the manifest
+//   4. master.tsx       — `if (!panel || !workspace) return`
+//   5. remote/index.ts  — `broadcastLocal` skips remote-bound windows
+//   6. remote/index.ts  — a headless host has no windows to broadcast to
+//
+// So "Genie opened and focused the panel" is a success no post has verified.
+// Outcome 2: narrow the claim to what holds in all six cases — it was
+// REQUESTED. The two drops below are the positive control: they prove the
+// request really can vanish, so the narrowing is not cosmetic.
+
+describe('a panel-open request is dropped SILENTLY', () => {
+    function requestingExecutor() {
+        return {
+            call: vi.fn().mockResolvedValue({
+                content: [{ type: 'text', text: 'Posted.' }],
+                _meta: { geniePanel: { panelId: 'board' } },
+            }),
+            dispose: vi.fn(),
+        } as unknown as PluginToolExecutor;
+    }
+
+    it('drops it when NO sink is registered, and the call still reports success', async () => {
+        store.rows = [row()];
+        setPluginPanelOpenSink(null);
+        setPluginToolExecutor(requestingExecutor());
+
+        const res = await dispatchPluginTool('hello.greet', {}, 'term-1');
+        // Nothing opened, nothing failed, and the caller is told nothing.
+        expect(res.isError).toBeFalsy();
+    });
+
+    it('drops it when the manifest declares no such panel', async () => {
+        const noPanels = JSON.parse(helloManifest()) as Record<string, unknown>;
+        delete noPanels.panels;
+        store.rows = [row({ manifest_json: JSON.stringify(noPanels) })];
+        const open = vi.fn();
+        setPluginPanelOpenSink(open);
+        setPluginToolExecutor(requestingExecutor());
+
+        const res = await dispatchPluginTool('hello.greet', {}, 'term-1');
+        expect(open).not.toHaveBeenCalled();
+        expect(res.isError).toBeFalsy();
+    });
+});
+
+describe("ArtBoard's prose claims a REQUEST, not a completed open", () => {
+    /** Every place ArtBoard describes the panel: the manifest's agent guide and
+     *  its tool description, plus the text the tool hands back to the caller. */
+    const manifestProse = () => JSON.stringify(ARTBOARD_SOURCE.manifest);
+    const returnProse = () => ARTBOARD_SOURCE.tools;
+
+    it('never says Genie OPENED or FOCUSED the panel', () => {
+        for (const prose of [manifestProse(), returnProse()]) {
+            expect(prose).not.toMatch(/opened and focused/i);
+            expect(prose).not.toMatch(/opens and focuses/i);
+        }
+    });
+
+    it('says the post REQUESTED the panel — true whichever of the six drops fires', () => {
+        expect(returnProse()).toMatch(/requested that Genie surface the ArtBoard panel/i);
+        expect(manifestProse()).toMatch(/request/i);
+    });
+
+    it('still ASKS: the tool result carries the geniePanel request', () => {
+        // Positive control. "It no longer claims to open the panel" would pass
+        // just as well if the request had been deleted; it has not been.
+        expect(returnProse()).toContain('geniePanel');
+        expect(returnProse()).toContain("panelId: 'board'");
     });
 });

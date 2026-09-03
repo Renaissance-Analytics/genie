@@ -6,6 +6,7 @@ import type {
     ToolUpdate,
     ToolchainPathReport,
     ToolchainSiteUsage,
+    ToolchainStepResult,
 } from './genie';
 
 /**
@@ -333,4 +334,42 @@ export function repairNotice(result: {
             ? ` ${listNames(fixed)} now resolve${fixed.length === 1 ? 's' : ''} to the version Genie manages.`
             : '';
     return `Genie's toolchain now comes first on PATH.${named}${iniNote} Terminals, sites and agents already running keep the environment they started with — restart them to pick this up.${staleNote}`;
+}
+
+/**
+ * The one line the setup wizard shows when an install run finishes.
+ *
+ * It used to be an unconditional *"All set — your toolchain is ready."* off
+ * `result.ok`, and `result.ok` is not that claim. A step is `succeeded` whenever
+ * the install effect returned `{ok: true}`, and it returns that even when the
+ * post-install probe answered "not on PATH" — deliberately, because gating on
+ * the probe is genie#209 (a Windows `.cmd` shim is invisible to it, and a PATH
+ * entry the installer added is not on this process's PATH until a NEW terminal).
+ *
+ * So the run can be `ok` with nothing having confirmed a single tool, and the
+ * person is told done. This is where that stops: an install the probe could not
+ * see is NAMED, with the command that settles it (CONTRIBUTING.md, "Never
+ * report a success you have not verified" — outcome 3).
+ *
+ * `verified` absent is left alone. It means no verifier was wired, which is no
+ * evidence about the tool; reporting "could not confirm php" when nothing was
+ * ever asked is the same lie pointed the other way.
+ */
+export function installOutcomeNotice(result: {
+    ok: boolean;
+    results: ToolchainStepResult[];
+}): string {
+    if (!result.ok) {
+        return 'Some tools didn’t install. You can re-run setup, or install the rest manually.';
+    }
+    const unconfirmed = result.results
+        .filter((r) => r.status === 'succeeded' && r.verified === false)
+        .map((r) => r.tool);
+    if (unconfirmed.length === 0) return 'All set — your toolchain is ready.';
+    return (
+        `Installed, but Genie could not confirm ${listNames(unconfirmed)} on PATH afterwards. ` +
+        `Open a NEW terminal and run \`${unconfirmed[0]} --version\` — installers often add to PATH ` +
+        `only for terminals started after them. If that answers, you are set; if it does not, the ` +
+        `install did not land and “Re-check” will say so.`
+    );
 }

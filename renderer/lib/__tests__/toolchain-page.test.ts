@@ -12,8 +12,9 @@ import {
     sitesFollowingDefault,
     type ToolchainSiteUse,
     repairNotice,
+    installOutcomeNotice,
 } from '../toolchain-page';
-import type { EngineInstall, ToolUpdate } from '../genie';
+import type { EngineInstall, ToolUpdate, ToolchainStepResult } from '../genie';
 
 /**
  * The Toolchain page's VIEW model. The renderer test env has no DOM, so every
@@ -350,5 +351,68 @@ describe('repairNotice reports rewritten config', () => {
         const notice = repairNotice({ before: clean, after: clean, changed: false, inis: [] });
 
         expect(notice).not.toContain('php.ini');
+    });
+});
+
+/**
+ * CONTRIBUTING.md, "Never report a success you have not verified" — where the
+ * toolchain run finally SAYS something to a person.
+ *
+ * `runInstallPlan` marks a step `succeeded` whenever the effect returns
+ * `{ok: true}`, and the effect returns that even when its post-install probe
+ * answered "not on PATH" — deliberately, because gating on the probe is
+ * genie#209. So `result.ok` can be true with nothing having confirmed a single
+ * install, and the wizard's closing line was an unconditional
+ *
+ *     'All set — your toolchain is ready.'
+ *
+ * That is the propagation the rule warns about: the person is told done, and
+ * finds out at the next prompt. `verified` now travels with each step, and this
+ * is the one place it has to change what is said.
+ */
+describe('installOutcomeNotice', () => {
+    const ok = (over: Partial<ToolchainStepResult> = {}): ToolchainStepResult => ({
+        tool: 'php',
+        status: 'succeeded',
+        ...over,
+    });
+
+    it('says all set when every install was CONFIRMED — positive control', () => {
+        const notice = installOutcomeNotice({
+            ok: true,
+            results: [ok({ verified: true, version: '8.3.33' }), ok({ tool: 'node', verified: true })],
+        });
+        expect(notice).toMatch(/all set|ready/i);
+        expect(notice).not.toMatch(/could not confirm/i);
+    });
+
+    it('says all set when there was no probe to ask — an absent check is not a denial', () => {
+        // `verified` absent means no verifier was wired, which is no evidence
+        // about the tool. Blaming it here would be the mirror-image lie.
+        const notice = installOutcomeNotice({ ok: true, results: [ok(), ok({ tool: 'node' })] });
+        expect(notice).not.toMatch(/could not confirm/i);
+    });
+
+    it('does NOT say all set when a probe answered "not there"', () => {
+        const notice = installOutcomeNotice({
+            ok: true,
+            results: [ok({ verified: true }), ok({ tool: 'codex', verified: false })],
+        });
+        expect(notice).not.toMatch(/all set/i);
+        // Outcome 3: name what is unconfirmed, and what would settle it.
+        expect(notice).toContain('codex');
+        expect(notice).toMatch(/could not confirm/i);
+        expect(notice).toMatch(/--version/);
+        // And it must not slander the tool that DID check out.
+        expect(notice).not.toContain('php');
+    });
+
+    it('still leads with the real failure when a step failed outright', () => {
+        const notice = installOutcomeNotice({
+            ok: false,
+            results: [ok({ tool: 'docker', status: 'failed', error: 'exit 1' }), ok({ verified: false })],
+        });
+        expect(notice).toMatch(/didn|failed|manually/i);
+        expect(notice).not.toMatch(/all set/i);
     });
 });

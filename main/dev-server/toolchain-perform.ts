@@ -139,13 +139,15 @@ async function performRun(
         const version = await deps.verify?.(command.tool);
         if (!version) return { ok: false, error: reason(res) };
         await applyPathAdd(command, deps);
-        return ok(version);
+        // The probe is the ONLY reason this passed, so it is verified by
+        // construction.
+        return ok(version, true);
     }
     // The agent CLIs install into a Genie-owned npm prefix the system PATH knows
     // nothing about (genie#214). Adding it here — after success, never before —
     // is what makes `claude` runnable at a prompt instead of merely present.
     await applyPathAdd(command, deps);
-    return ok(await deps.verify?.(command.tool));
+    return probed(deps, command.tool);
 }
 
 /**
@@ -163,7 +165,7 @@ async function performVerify(
     if (!deps.verify) return ok(undefined);
     const version = await deps.verify(command.tool);
     return version
-        ? ok(version)
+        ? ok(version, true)
         : {
               ok: false,
               error: `${command.coveredBy} installed, but ${command.tool} was not found afterwards — open a new terminal, or install ${command.tool} yourself and re-run detection.`,
@@ -190,7 +192,37 @@ async function performDownload(
 
     const res = await deps.installArtifact(command, dl.path);
     if (res.code !== 0) return { ok: false, error: reason(res) };
-    return ok(await deps.verify?.(command.tool));
+    return probed(deps, command.tool);
 }
 
-const ok = (version: string | undefined): StepOutcome => ({ ok: true, ...(version ? { version } : {}) });
+const ok = (version: string | undefined, verified?: boolean): StepOutcome => ({
+    ok: true,
+    ...(version ? { version } : {}),
+    ...(verified === undefined ? {} : { verified }),
+});
+
+/**
+ * Run the post-install probe and KEEP both halves of its answer.
+ *
+ * The probe used to be run and then discarded unless it produced a version
+ * string — `ok(await deps.verify?.(tool))` — which collapsed "the probe said the
+ * tool is not there" into the same `{ok: true}` as "nobody checked". The
+ * executor reads that as `succeeded`, marks the tool satisfied for its
+ * dependents, and folds it into a run-level `ok`, so one unconfirmed install
+ * becomes a whole toolchain reported as ready (CONTRIBUTING.md, "Never report a
+ * success you have not verified").
+ *
+ * It stays a REPORT, not a gate. Making the probe decide is genie#209: on
+ * Windows the tool is often a `.cmd` shim the probe cannot see, or sits on a
+ * PATH entry only a NEW terminal has, and failing those skipped installs that
+ * had in fact worked.
+ *
+ * The two silences stay apart. With no verifier wired there is nothing to
+ * appeal to, so `verified` is left ABSENT — saying "could not confirm `php`"
+ * when nothing was ever asked would blame the tool for our own missing check.
+ */
+async function probed(deps: PerformDeps, tool: HostToolName): Promise<StepOutcome> {
+    if (!deps.verify) return ok(undefined);
+    const version = await deps.verify(tool);
+    return ok(version, Boolean(version));
+}

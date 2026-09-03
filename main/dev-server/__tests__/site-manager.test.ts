@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createDevSiteManager } from '../site-manager';
+import { createDevSiteManager, stopNotes } from '../site-manager';
 import {
     defaultGenNameFor,
     devSiteIdFor,
@@ -1831,5 +1831,199 @@ describe('service env injection (#234 P3)', () => {
         expect(probeCalls).toHaveLength(1);
         expect(probeCalls[0]?.kind).toBe('http');
         expect(probeCalls[0]?.servername).toBeUndefined(); // plain http → waitForHttp, not waitForHttpsSni
+    });
+});
+
+// --- genie#226: what a RESTART actually did ---------------------------------
+//
+// CONTRIBUTING.md, "Never report a success you have not verified" — and the one
+// instance the rule cites whose own comment already admitted it:
+//
+//     // An EXTERNAL host-native site (hostPort, no container) runs no process
+//     // Genie owns — dropping its route above IS the stop; the dev server it
+//     // points at is the user's own host process, left running.
+//
+// `restart` is `stop()` then `start()`. For an external host-native site that
+// drops a route and re-adds it, then probes a dev server that was never
+// stopped. genie#305 made the resulting `ready: true` genuinely true, which
+// makes the unqualified "restarted" MORE convincing, not less.
+//
+// The MANAGED path has the other half: both `hostSpawn.stop` calls are
+// `.catch(() => {})`, and the entry is removed from `live` first. A stop that
+// fails therefore leaves a process Genie has already forgotten — it is no
+// longer in `livePortSet()`, so no later stop can reach it — while the caller
+// is told the site restarted.
+
+const HOST_SITE: DevSiteConfig = {
+    name: 'web',
+    genName: 'web.acme.gen',
+    repo: 'app',
+    runMode: 'host',
+    command: ['php', 'artisan', 'serve'],
+    port: 8001,
+    kind: 'http',
+    enabled: true,
+};
+
+/** A host spawn whose `stop` resolves but changes nothing, so `alive` decides. */
+function spawnFake(alive: boolean) {
+    const stopped: string[] = [];
+    const started: string[] = [];
+    return {
+        stopped,
+        started,
+        hostSpawn: {
+            start: async (o: { siteId: string }) => {
+                started.push(o.siteId);
+                return { ok: true as const, pid: 4242 };
+            },
+            stop: async (id: string) => {
+                stopped.push(id);
+            },
+            alive: async () => alive,
+            readLog: async () => '',
+        },
+    };
+}
+
+describe('a restart says what it established (genie#226)', () => {
+    it('reports the process the stop did NOT kill, rather than a clean restart', async () => {
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const { hostSpawn, stopped } = spawnFake(true);
+        const m = manager(
+            runtime,
+            { [SITE_ID]: HOST_SITE },
+            { hostSpawn, probeReady: async () => true, allocateFreePort: async () => 5321 },
+        );
+        await m.start('acme', SITE_ID);
+        const status = await m.restart('acme', SITE_ID);
+
+        expect(stopped).toContain(SITE_ID);
+        const notes = (status.notes ?? []).join(' ');
+        // The damage is an ORPHAN: already dropped from `live`, so excluded from
+        // livePortSet() and unreachable by any later stop. Say so, and name it.
+        expect(notes).toMatch(/still running|did not stop|could not stop/i);
+        expect(notes).toContain(SITE_ID);
+    });
+
+    it('says nothing when the stop DID take — positive control', async () => {
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const { hostSpawn, started } = spawnFake(false);
+        const m = manager(
+            runtime,
+            { [SITE_ID]: HOST_SITE },
+            { hostSpawn, probeReady: async () => true, allocateFreePort: async () => 5321 },
+        );
+        await m.start('acme', SITE_ID);
+        const status = await m.restart('acme', SITE_ID);
+
+        expect(status.state).toBe('running');
+        expect(status.ready).toBe(true);
+        // A real restart: the dev server was spawned again.
+        expect(started).toEqual([SITE_ID, SITE_ID]);
+        expect((status.notes ?? []).join(' ')).not.toMatch(/still running|did not stop|could not stop/i);
+    });
+
+    it('tells an EXTERNAL host-native site that its dev server was NOT restarted', async () => {
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const { hostSpawn, started } = spawnFake(false);
+        const external: DevSiteConfig = {
+            name: 'web',
+            genName: 'web.acme.gen',
+            repo: 'app',
+            runMode: 'explicit',
+            hostPort: 8001,
+            kind: 'http',
+            enabled: true,
+        };
+        const m = manager(runtime, { [SITE_ID]: external }, { hostSpawn, probeReady: async () => true });
+        await m.start('acme', SITE_ID);
+        const status = await m.restart('acme', SITE_ID);
+
+        // The evidence for the claim: Genie spawned NOTHING, either time.
+        expect(started).toEqual([]);
+        expect(runtime.ran).toHaveLength(0);
+        // …and `ready` is now genuinely true (genie#305), which is exactly why an
+        // unqualified "restarted" reads as convincing.
+        expect(status.ready).toBe(true);
+        const notes = (status.notes ?? []).join(' ');
+        expect(notes).toMatch(/not restarted|did not restart|Genie does not run/i);
+        expect(notes).toContain('8001');
+    });
+
+    it('does not claim a managed site was left alone — positive control on the note', async () => {
+        // The external note must not fire for a site Genie DOES run, or it would
+        // teach the reader to ignore it.
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const { hostSpawn } = spawnFake(false);
+        const m = manager(
+            runtime,
+            { [SITE_ID]: HOST_SITE },
+            { hostSpawn, probeReady: async () => true, allocateFreePort: async () => 5321 },
+        );
+        await m.start('acme', SITE_ID);
+        const status = await m.restart('acme', SITE_ID);
+        expect((status.notes ?? []).join(' ')).not.toMatch(/not restarted|Genie does not run/i);
+    });
+
+    it('a plain STOP reports the orphan too — the same lie, one action over', async () => {
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const { hostSpawn } = spawnFake(true);
+        const m = manager(
+            runtime,
+            { [SITE_ID]: HOST_SITE },
+            { hostSpawn, probeReady: async () => true, allocateFreePort: async () => 5321 },
+        );
+        await m.start('acme', SITE_ID);
+        const report = await m.stop(SITE_ID);
+        expect(report.orphaned).toContain(SITE_ID);
+    });
+
+    it('a stop on an EXTERNAL host-native site reports that it stopped nothing', async () => {
+        // Same shape as the restart lie, one action over: `stop` on a `hostPort`
+        // site drops the route and returns ok, while the dev server it points at
+        // is the user's own and keeps running on its port.
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const { hostSpawn } = spawnFake(false);
+        const external: DevSiteConfig = {
+            name: 'web',
+            genName: 'web.acme.gen',
+            repo: 'app',
+            runMode: 'explicit',
+            hostPort: 8001,
+            kind: 'http',
+            enabled: true,
+        };
+        const m = manager(runtime, { [SITE_ID]: external }, { hostSpawn, probeReady: async () => true });
+        await m.start('acme', SITE_ID);
+        const report = await m.stop(SITE_ID);
+        expect(report.external).toBe(true);
+        expect(stopNotes(report).join(' ')).toMatch(/did not stop|still running/i);
+    });
+
+    it('a stop on a MANAGED site is not called external — positive control', async () => {
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const { hostSpawn } = spawnFake(false);
+        const m = manager(
+            runtime,
+            { [SITE_ID]: HOST_SITE },
+            { hostSpawn, probeReady: async () => true, allocateFreePort: async () => 5321 },
+        );
+        await m.start('acme', SITE_ID);
+        const report = await m.stop(SITE_ID);
+        expect(report.external).toBe(false);
+        expect(stopNotes(report)).toEqual([]);
+    });
+
+    it('a stop that took reports no orphan — positive control', async () => {
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const { hostSpawn } = spawnFake(false);
+        const m = manager(
+            runtime,
+            { [SITE_ID]: HOST_SITE },
+            { hostSpawn, probeReady: async () => true, allocateFreePort: async () => 5321 },
+        );
+        await m.start('acme', SITE_ID);
+        expect((await m.stop(SITE_ID)).orphaned).toEqual([]);
     });
 });

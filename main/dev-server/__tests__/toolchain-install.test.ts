@@ -382,3 +382,80 @@ describe('runInstallPlan — a failed VC++ runtime skips php', () => {
         expect(result.results[0].status).toBe('succeeded');
     });
 });
+
+/**
+ * CONTRIBUTING.md, "Never report a success you have not verified" — the
+ * PROPAGATION half.
+ *
+ * `performRun` runs the post-install probe and, on the success path, throws the
+ * answer away unless it is a version string. So a step whose probe answered "not
+ * found" arrived here as a plain `{ok: true}` — and this executor then
+ *
+ *   - records it `succeeded`,
+ *   - `satisfied.add(step.tool)`, which clears its DEPENDENTS' prerequisites,
+ *   - and folds it into `InstallRunResult.ok`.
+ *
+ * One unconfirmed install becomes a whole run reported as fine. The gate must
+ * NOT move (genie#209: Windows `.cmd` shims and a PATH the installer only adds
+ * for NEW terminals are both invisible to the probe, and failing on that skipped
+ * real installs). What changes is that the outcome now SAYS so.
+ */
+describe('an install nothing could confirm still succeeds, and says so', () => {
+    const UNCONFIRMED: StepOutcome = { ok: true, verified: false };
+    const CONFIRMED: StepOutcome = { ok: true, version: '20.11.0', verified: true };
+
+    it('keeps the genie#209 guard: a tool the probe cannot see STILL succeeds and STILL satisfies its dependents', async () => {
+        const { perform, ran } = performing({ vcredist: UNCONFIRMED });
+        const result = await runInstallPlan({
+            steps: [
+                step({ tool: 'vcredist' }),
+                step({ tool: 'php', method: 'direct', packageManager: undefined, dependsOn: ['vcredist'] }),
+            ],
+            ctx: WIN,
+            approved: true,
+            perform,
+        });
+        expect(result.results.map((r) => [r.tool, r.status])).toEqual([
+            ['vcredist', 'succeeded'],
+            ['php', 'succeeded'],
+        ]);
+        // The dependent RAN — it was not skipped for want of a prerequisite.
+        expect(ran.map((c) => c.tool)).toEqual(['vcredist', 'php']);
+        expect(result.ok).toBe(true);
+    });
+
+    it('carries verified:false onto the step result, so the run can say what it could not confirm', async () => {
+        const { perform } = performing({ node: UNCONFIRMED });
+        const result = await runInstallPlan({
+            steps: [step({ tool: 'node' })],
+            ctx: WIN,
+            approved: true,
+            perform,
+        });
+        expect(result.results[0].verified).toBe(false);
+    });
+
+    it('carries verified:true when the probe DID find it — positive control', async () => {
+        const { perform } = performing({ node: CONFIRMED });
+        const result = await runInstallPlan({
+            steps: [step({ tool: 'node' })],
+            ctx: WIN,
+            approved: true,
+            perform,
+        });
+        expect(result.results[0].verified).toBe(true);
+        expect(result.results[0].version).toBe('20.11.0');
+    });
+
+    it('leaves verified ABSENT when there was no probe to ask — that is not evidence against the tool', async () => {
+        const { perform } = performing({ node: { ok: true } });
+        const result = await runInstallPlan({
+            steps: [step({ tool: 'node' })],
+            ctx: WIN,
+            approved: true,
+            perform,
+        });
+        expect(result.results[0].status).toBe('succeeded');
+        expect('verified' in result.results[0]).toBe(false);
+    });
+});

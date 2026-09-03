@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { awaitCaddyStart } from './host-caddy';
 import { buildHostReconcileEffects, type HostEffectIo, type HostEffectPaths } from './host-effects';
 import { reconcileHostSites, type HostReconcileResult, type HostSiteRoute } from './host-reconcile';
 import { createHostBrowserReconciler, type HostBrowserReconciler } from './host-browser-reconcile';
@@ -109,21 +110,24 @@ export function hostBrowserIo(platform: NodeJS.Platform): HostEffectIo {
             return p;
         },
         spawn: runToEnd,
-        spawnDetached: (argv) =>
-            new Promise((resolve) => {
-                try {
-                    const child = spawn(argv[0], argv.slice(1), {
-                        stdio: 'ignore',
-                        ...hostCaddySpawnOptions(platform),
-                    });
-                    child.on('error', (e) => resolve({ ok: false, error: e.message }));
-                    child.unref();
-                    // `caddy start` daemonises and exits; give it a tick to fail loudly.
-                    setTimeout(() => resolve({ ok: true }), 50);
-                } catch (e) {
-                    resolve({ ok: false, error: e instanceof Error ? e.message : String(e) });
-                }
-            }),
+        spawnDetached: (argv) => {
+            try {
+                const child = spawn(argv[0], argv.slice(1), {
+                    // stderr is PIPED, not ignored: a `caddy start` that fails
+                    // says why there, and that reason is the whole content of the
+                    // failure now reported in place of the old 50ms shrug.
+                    stdio: ['ignore', 'ignore', 'pipe'],
+                    ...hostCaddySpawnOptions(platform),
+                });
+                // `caddy start` daemonises and exits — 0 only once the server is
+                // up and serving. WAIT for that, instead of assuming it (see
+                // awaitCaddyStart; CONTRIBUTING.md, "Never report a success you
+                // have not verified").
+                return awaitCaddyStart(child);
+            } catch (e) {
+                return Promise.resolve({ ok: false, error: e instanceof Error ? e.message : String(e) });
+            }
+        },
     };
 }
 
