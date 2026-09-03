@@ -48,7 +48,13 @@ const manager = vi.hoisted(() => ({
     refresh: vi.fn(),
 }));
 
-vi.mock('../../dev-server/site-manager', () => ({ devSiteManager: () => manager }));
+// Only the MANAGER is faked. The module's pure helpers (`stopNotes`, which turns
+// a stop report into the sentence a caller reads) stay real — mocking them away
+// would let the tool ship a note nobody ever wrote.
+vi.mock('../../dev-server/site-manager', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('../../dev-server/site-manager')>()),
+    devSiteManager: () => manager,
+}));
 vi.mock('../../dev-server', () => ({
     resolveContainerRuntime: async () => ({ detection: { kind: 'docker', version: '29.6.1' } }),
 }));
@@ -159,6 +165,78 @@ describe('status is a LIVE question (genie#305)', () => {
 
         expect(manager.refresh).not.toHaveBeenCalled();
         expect(res.ok).toBe(true);
+    });
+
+    /**
+     * …and the OTHER half of the same fix (CONTRIBUTING.md, "Never report a
+     * success you have not verified"). `list` staying cheap is right; what was
+     * wrong is that its result was then rendered by `manageSiteSummary` as
+     * "<name> is serving at <origin>" — a live claim, off a `ready` of unknown
+     * age, on the FIRST LINE of every `manageSite` reply.
+     *
+     * `probed` is the missing distinction: it says whether THIS call re-asked.
+     */
+    it('marks a `status` result as PROBED, and a `list` result as not', async () => {
+        expect((await runManageSite(WS, { action: 'status', id: SITE_ID })).probed).toBe(true);
+        expect((await runManageSite(WS, { action: 'list' })).probed).toBeUndefined();
+    });
+
+    it('does NOT mark `logs` as probed — nothing about it re-asks', async () => {
+        expect((await runManageSite(WS, { action: 'logs', id: SITE_ID })).probed).toBeUndefined();
+    });
+
+    it('marks a SETTLED start as probed — starting the site is itself a probe', async () => {
+        // Positive control: `probed` must not become a synonym for "action ===
+        // status". A start that settled ran the readiness probe to settle.
+        const res = await runManageSite(WS, { action: 'start', id: SITE_ID }, { settleMs: 5_000 });
+        expect(res.probed).toBe(true);
+    });
+
+    it('does NOT mark a start that has not settled — it is still pending', async () => {
+        manager.start.mockReturnValue(never<DevSiteStatus>());
+        const res = await runManageSite(WS, { action: 'start', id: SITE_ID }, { settleMs: 30 });
+        expect(res.pending).toBe(true);
+        expect(res.probed).toBeUndefined();
+    });
+});
+
+// --- genie#226: a restart reports what it actually did -----------------------
+//
+// The manager now says, on the status it returns, when a "restart" was not one:
+// a stop it could not confirm, or an EXTERNAL host-native site whose dev server
+// Genie never ran. That only helps if it reaches the caller, and `manageSite`
+// was dropping `notes` on every settled path (they were built for the PENDING
+// case alone).
+
+describe('a restart says what it did (genie#226)', () => {
+    it('carries the manager’s restart notes into the result', async () => {
+        manager.restart.mockResolvedValue(
+            status({ notes: ['the dev server behind it was NOT restarted'] } as Partial<DevSiteStatus>),
+        );
+        const res = await runManageSite(WS, { action: 'restart', id: SITE_ID }, { settleMs: 5_000 });
+        expect(res.ok).toBe(true);
+        expect(res.notes?.join(' ')).toContain('NOT restarted');
+    });
+
+    it('adds no notes when the restart was an ordinary one — positive control', async () => {
+        const res = await runManageSite(WS, { action: 'restart', id: SITE_ID }, { settleMs: 5_000 });
+        expect(res.ok).toBe(true);
+        expect(res.notes ?? []).toEqual([]);
+    });
+
+    it('reports a stop that left an orphan instead of a bare ok', async () => {
+        manager.stop.mockResolvedValue({ orphaned: [SITE_ID], external: false });
+        const res = await runManageSite(WS, { action: 'stop', id: SITE_ID });
+        expect(res.ok).toBe(true);
+        expect(res.notes?.join(' ')).toMatch(/could not stop/i);
+        expect(res.notes?.join(' ')).toContain(SITE_ID);
+    });
+
+    it('reports a clean stop with no notes — positive control', async () => {
+        manager.stop.mockResolvedValue({ orphaned: [], external: false });
+        const res = await runManageSite(WS, { action: 'stop', id: SITE_ID });
+        expect(res.ok).toBe(true);
+        expect(res.notes ?? []).toEqual([]);
     });
 });
 

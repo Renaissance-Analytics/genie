@@ -264,7 +264,9 @@ describe('tools/call dispatch', () => {
         const text = (res?.result as { content: Array<{ text: string }> }).content[0]!.text;
         expect(text.split('\n')[0]).toContain('https://web.acme.gen');
         // The whole result is there too, so an agent never has to parse prose.
-        expect(JSON.parse(text.slice(text.indexOf('{')))).toEqual(result);
+        // Split on the blank line the formatter writes, not on the first `{`: a
+        // headline may itself quote a call (`manageSite {action:'status', …}`).
+        expect(JSON.parse(text.slice(text.indexOf('\n\n') + 2))).toEqual(result);
     });
 });
 
@@ -308,6 +310,26 @@ describe('the manageSite description matches what the tool does', () => {
         // genie#194 — the handle, named where the arguments are chosen.
         expect(text).toContain('pending');
     });
+
+    /**
+     * genie#226, and CONTRIBUTING.md: "A tool DESCRIPTION in `protocol.ts` is read
+     * by an agent as a promise about behaviour; if the code does not do what the
+     * description says, the description is a bug of exactly this kind."
+     *
+     * The list read `start` / `stop` / `restart` / `status` (by `id` from a prior
+     * list) with no qualification — while for a site defined with `hostPort`,
+     * `start` "spawns NOTHING" (it registers a `.gen` route and probes it) and
+     * `stop` only drops that route. So the tool advertises four lifecycle verbs
+     * that, for that whole class of site, do not do what they are named.
+     */
+    it('does not promise start/stop/restart for a site whose server Genie does not run', async () => {
+        const text = await description();
+        expect(text).toContain('hostPort');
+        // The caveat has to be attached to the ACTIONS, in words an agent can act
+        // on — not left to be inferred from the SERVICES paragraph.
+        expect(text).toMatch(/NOT restart|does not restart|never restarts/i);
+        expect(text).toMatch(/genie#226|#226/);
+    });
 });
 
 // --- the headline -----------------------------------------------------------
@@ -329,6 +351,9 @@ describe('manageSiteSummary', () => {
     it('reports where a READY site is serving', () => {
         const text = manageSiteSummary({
             ok: true,
+            // This call PROBED — the unqualified 'is serving' is only ever said
+            // by one that did (CONTRIBUTING.md, genie#305).
+            probed: true,
             affectedId: 'abc',
             sites: [site({ ready: true, origin: 'https://web.acme.gen' })],
         });
@@ -342,6 +367,7 @@ describe('manageSiteSummary', () => {
         // The headline is where that is prevented, because it is what gets read.
         const text = manageSiteSummary({
             ok: true,
+            probed: true,
             affectedId: 'abc',
             sites: [
                 site({

@@ -91,7 +91,7 @@ describe('createPerformInstall — run path (package managers, npm i -g)', () =>
         const perform = createPerformInstall(d, WIN);
         const outcome = await perform(runCmd());
         expect(calls.run).toEqual([{ command: 'winget', args: ['install', '--id', 'Git.Git'], elevated: false }]);
-        expect(outcome).toEqual({ ok: true, version: '1.2.3' });
+        expect(outcome).toEqual({ ok: true, version: '1.2.3', verified: true });
     });
 
     it('routes an elevated step through the elevated run', async () => {
@@ -124,7 +124,7 @@ describe('createPerformInstall — run path (package managers, npm i -g)', () =>
         };
         const { deps: d, calls } = deps({ run: async () => alreadyInstalled });
         const perform = createPerformInstall(d, WIN);
-        expect(await perform(runCmd({ tool: 'npm' }))).toEqual({ ok: true, version: '1.2.3' });
+        expect(await perform(runCmd({ tool: 'npm' }))).toEqual({ ok: true, version: '1.2.3', verified: true });
         expect(calls.verified).toEqual(['npm']);
     });
 
@@ -139,6 +139,95 @@ describe('createPerformInstall — run path (package managers, npm i -g)', () =>
         const { deps: d } = deps({ verify: undefined });
         const perform = createPerformInstall(d, WIN);
         expect(await perform(runCmd())).toEqual({ ok: true });
+    });
+});
+
+/**
+ * CONTRIBUTING.md, "Never report a success you have not verified".
+ *
+ * On the SUCCESS path the outcome was `ok(await deps.verify?.(tool))` — the
+ * probe ran, and its answer was kept only if it was a version string. A probe
+ * that came back "not found" left an outcome indistinguishable from one nobody
+ * checked, and `runInstallPlan` reads that as `succeeded`, marks the tool
+ * SATISFIED, and clears its dependents' prerequisites. A false success that
+ * propagates, exactly as the rule describes.
+ *
+ * The fix is outcome 3, NOT a gate: making the probe decide would re-open
+ * genie#209 (Windows `.cmd` shims are invisible to the probe, and a PATH entry
+ * added by the installer is not on this process's PATH until a new terminal).
+ * The step still succeeds; the outcome records that nothing confirmed it.
+ *
+ * The two "no answer" cases stay APART. `verified: false` means the probe ran
+ * and said no — that is worth telling a user. `verified` absent means there was
+ * no probe to ask, which is no evidence against the tool and must never be
+ * reported as one.
+ */
+describe('createPerformInstall — what the post-install probe ESTABLISHED', () => {
+    it('records verified:true when the probe found the tool', async () => {
+        const { deps: d } = deps();
+        const perform = createPerformInstall(d, WIN);
+        expect(await perform(runCmd())).toEqual({ ok: true, version: '1.2.3', verified: true });
+    });
+
+    it('records verified:false when the probe ran and could NOT find it', async () => {
+        const asked: string[] = [];
+        const { deps: d } = deps({
+            verify: async (tool) => {
+                asked.push(tool);
+                return undefined;
+            },
+        });
+        const perform = createPerformInstall(d, WIN);
+        const outcome = await perform(runCmd());
+        // POSITIVE CONTROL for the genie#209 guard: the step still SUCCEEDS. A
+        // `.cmd` shim the probe cannot see is not a failed install, and gating on
+        // the probe is what skipped claude-code and codex on a clean Windows box.
+        expect(outcome.ok).toBe(true);
+        expect(outcome.verified).toBe(false);
+        // The probe really was ASKED — `verified: false` is its answer, not a
+        // default nobody produced.
+        expect(asked).toEqual(['git']);
+    });
+
+    it('leaves verified ABSENT when no verifier was wired — no probe is not a denial', async () => {
+        const { deps: d } = deps({ verify: undefined });
+        const perform = createPerformInstall(d, WIN);
+        const outcome = await perform(runCmd());
+        expect(outcome.ok).toBe(true);
+        expect(outcome.verified).toBeUndefined();
+    });
+
+    it('records verified:true when a NON-ZERO exit was overruled by the probe', async () => {
+        const alreadyInstalled: CommandResult = {
+            code: -1978335135,
+            stdout: 'Found an existing package already installed.',
+            stderr: '',
+        };
+        const { deps: d } = deps({ run: async () => alreadyInstalled });
+        const perform = createPerformInstall(d, WIN);
+        // Here the probe is the ONLY reason this passed, so it is verified.
+        expect(await perform(runCmd({ tool: 'npm' }))).toEqual({
+            ok: true,
+            version: '1.2.3',
+            verified: true,
+        });
+    });
+
+    it('carries the same distinction through the DOWNLOAD path', async () => {
+        const found = deps();
+        expect(await createPerformInstall(found.deps, WIN)(downloadCmd())).toEqual({
+            ok: true,
+            version: '1.2.3',
+            verified: true,
+        });
+
+        const missing = deps({ verify: async () => undefined });
+        const outcome = await createPerformInstall(missing.deps, WIN)(downloadCmd());
+        expect(outcome.ok).toBe(true);
+        expect(outcome.verified).toBe(false);
+
+        const unasked = deps({ verify: undefined });
+        expect(await createPerformInstall(unasked.deps, WIN)(downloadCmd())).toEqual({ ok: true });
     });
 });
 
@@ -163,7 +252,7 @@ describe('createPerformInstall — verify path (a shared package)', () => {
     it('confirms the tool without running or downloading anything', async () => {
         const { deps: d, calls } = deps();
         const perform = createPerformInstall(d, WIN);
-        expect(await perform(verifyCmd())).toEqual({ ok: true, version: '1.2.3' });
+        expect(await perform(verifyCmd())).toEqual({ ok: true, version: '1.2.3', verified: true });
         expect(calls.run).toEqual([]);
         expect(calls.downloaded).toEqual([]);
         expect(calls.verified).toEqual(['npm']);

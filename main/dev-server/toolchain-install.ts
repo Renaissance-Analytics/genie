@@ -31,6 +31,18 @@ export interface StepOutcome {
     error?: string;
     /** The version the effect verified after installing, when it could. */
     version?: string;
+    /**
+     * What the post-install PROBE established — three states, deliberately.
+     *
+     * `true`   the probe ran and found the tool.
+     * `false`  the probe ran and did NOT find it. The step still succeeded (see
+     *          `performRun`: gating on the probe is genie#209), but nothing has
+     *          confirmed the install, and a run that says "all set" off the back
+     *          of it is reporting a success it has not verified.
+     * absent   there was no verifier to ask. That is no evidence about the tool
+     *          and must never be reported as if the tool were missing.
+     */
+    verified?: boolean;
 }
 
 /** The single impure seam: carry out ONE materialised command. */
@@ -41,6 +53,10 @@ export interface StepResult {
     status: StepStatus;
     error?: string;
     version?: string;
+    /** What the post-install probe established — see {@link StepOutcome.verified}.
+     *  A `succeeded` step with `verified: false` is an install NOTHING has
+     *  confirmed; whoever reports the run has to say so rather than call it done. */
+    verified?: boolean;
 }
 
 /** Streamed as the run proceeds, so a wizard row can go live. `start` fires
@@ -122,6 +138,12 @@ export async function runInstallPlan(opts: RunInstallPlanOptions): Promise<Insta
             status,
             ...(outcome.error ? { error: outcome.error } : {}),
             ...(outcome.version ? { version: outcome.version } : {}),
+            // Carried, never acted on. The line below is the genie#209 guard: a
+            // tool the probe could not see is STILL satisfied, because the probe
+            // is blind to a `.cmd` shim and to a PATH entry that only a new
+            // terminal has. What `verified` changes is what the run can honestly
+            // SAY afterwards, not which steps run.
+            ...(outcome.verified === undefined ? {} : { verified: outcome.verified }),
         });
         if (outcome.ok) {
             satisfied.add(step.tool);

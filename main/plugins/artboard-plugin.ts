@@ -127,7 +127,7 @@ async function post(args, bridge, ctx) {
         content: [{
             type: 'text',
             text: 'Posted "' + title + '" to the ArtBoard as ' + id + '.' + NL +
-                'Genie opened and focused the ArtBoard panel on this artifact. The reviewer can approve or reject it with a comment. That verdict arrives here as an AgentInbox message, so this call does NOT block - carry on with work that does not depend on the answer and check your inbox.' + NL +
+                'This post requested that Genie surface the ArtBoard panel on the artifact; whether a window was there to take it is not something this call can see. The reviewer can approve or reject it with a comment. That verdict arrives here as an AgentInbox message, so this call does NOT block - carry on with work that does not depend on the answer and check your inbox.' + NL +
                 'Revising? Post again with id "' + id + '" and the board REPLACES that card instead of stacking a second one beside it.'
         }]
     };
@@ -152,14 +152,14 @@ export const ARTBOARD_SOURCE: BundledPluginSource = {
         entry: { tools: 'tools.cjs' },
         agent: {
             guide:
-                'Use artboard.post when you have MADE something visual and want a human to look at it before going further — a rendered mockup, a generated image. NOT for plans, proposals or written summaries: those are text and belong in a message or a document. Give a post a stable id and RE-POST with the same id when you revise, so the board replaces the card instead of stacking drafts. Posting opens and focuses the ArtBoard panel on that artifact but does not block — the approve/reject verdict arrives as an AgentInbox message, so continue with work that does not depend on the answer.',
+                'Use artboard.post when you have MADE something visual and want a human to look at it before going further — a rendered mockup, a generated image. NOT for plans, proposals or written summaries: those are text and belong in a message or a document. Give a post a stable id and RE-POST with the same id when you revise, so the board replaces the card instead of stacking drafts. Posting REQUESTS that Genie surface the ArtBoard panel on that artifact — a request the post cannot confirm landed (there may be no window, or none showing this workspace) — and does not block: the approve/reject verdict arrives as an AgentInbox message, so continue with work that does not depend on the answer.',
         },
         contributes: {
             mcpTools: [
                 {
                     name: 'post',
                     description:
-                        'Put something you MADE on the ArtBoard for a human to review — a rendered HTML mockup, or an image you generated. Not for plans or written proposals. Provide a title and either `html` (the markup) or `imagePath` (workspace-relative). Pass a stable `id` and re-post with the same id to REPLACE that card when you revise. Genie opens and focuses the panel on the posted artifact. Returns immediately; the approve/reject verdict, with any comment, arrives as an AgentInbox message.',
+                        'Put something you MADE on the ArtBoard for a human to review — a rendered HTML mockup, or an image you generated. Not for plans or written proposals. Provide a title and either `html` (the markup) or `imagePath` (workspace-relative). Pass a stable `id` and re-post with the same id to REPLACE that card when you revise. The post REQUESTS that Genie surface the panel on the artifact; it cannot confirm a window took the request. Returns immediately; the approve/reject verdict, with any comment, arrives as an AgentInbox message.',
                     inputSchema: {
                         type: 'object',
                         properties: {

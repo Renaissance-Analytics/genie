@@ -769,6 +769,14 @@ export interface ToolchainStepResult {
     status: ToolchainStepStatus;
     error?: string;
     version?: string;
+    /**
+     * What the post-install PROBE established. Mirrors
+     * `main/dev-server/toolchain-install.ts`, three states on purpose:
+     * `true` found it, `false` the probe ran and did NOT (the step still
+     * succeeded — gating on the probe is genie#209), absent means there was no
+     * verifier to ask, which is no evidence about the tool.
+     */
+    verified?: boolean;
 }
 /** The outcome of running an install plan (`devServer.toolchainInstall`). */
 export interface ToolchainInstallResult {

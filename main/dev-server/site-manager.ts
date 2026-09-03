@@ -141,6 +141,79 @@ export interface DevSiteStatus {
      *  the secure-only model. */
     exposed?: ExposedRoute[];
     error?: string;
+    /**
+     * What the ACTION established that the state alone does not say — a stop
+     * Genie could not confirm took, or a "restart" that restarted nothing
+     * because the site points at a dev server Genie does not run (genie#226).
+     *
+     * Not an error: the site may be perfectly up. It is the difference between
+     * what happened and what the caller would otherwise assume happened.
+     */
+    notes?: string[];
+}
+
+/**
+ * What a stop could ESTABLISH, as opposed to what it asked for.
+ *
+ * `stop()` used to return `void` while swallowing both `hostSpawn.stop`
+ * failures, having already removed the site from `live`. A stop that failed
+ * therefore produced a process Genie no longer tracks — outside
+ * `livePortSet()`, unreachable by any later `stop` — and a caller told the site
+ * was stopped (CONTRIBUTING.md, "Never report a success you have not verified").
+ */
+export interface DevSiteStopReport {
+    /** Spawn ids Genie asked to stop that were STILL ALIVE afterwards. Each one
+     *  is an orphan: forgotten by the manager, and no longer stoppable through
+     *  it. Empty is the normal case. */
+    orphaned: string[];
+    /** True when Genie owns NO process for this site — an EXTERNAL host-native
+     *  site (`hostPort`) whose dev server is the user's own. Dropping the route
+     *  is the whole of the stop; nothing was terminated. */
+    external: boolean;
+}
+
+/**
+ * PURE. What a `restart` has to say beyond the resulting status (genie#226).
+ *
+ * Two things a caller would otherwise assume wrongly:
+ *
+ *  - an orphan — the stop did not take, and the process is now unreachable
+ *    through Genie, while the site reports running again on a NEW port;
+ *  - an external host-native site — `start` for one of these "spawns NOTHING":
+ *    it registers a `.gen` route and probes it. So `restart` dropped a route,
+ *    re-added it, and probed a dev server that never stopped. Since genie#305
+ *    that `ready: true` is genuinely true, which is precisely what makes an
+ *    unqualified "restarted" convincing.
+ */
+export function stopNotes(stopped: DevSiteStopReport): string[] {
+    if (stopped.orphaned.length === 0) return [];
+    const which = stopped.orphaned.join(', ');
+    const one = stopped.orphaned.length === 1;
+    return [
+        `Genie could not stop ${which} — ${one ? 'it was' : 'they were'} asked to stop and ${one ? 'was' : 'were'} ` +
+            `still alive afterwards. The site has already been dropped from Genie's live set, so Genie cannot ` +
+            `reach ${one ? 'that process' : 'those processes'} again: the old dev server is still holding its ` +
+            `port and has to be killed by hand.`,
+    ];
+}
+
+/** @see stopNotes — the orphan half is shared with a plain `stop`. */
+export function restartNotes(stopped: DevSiteStopReport, config?: DevSiteConfig): string[] {
+    const notes: string[] = [...stopNotes(stopped)];
+    if (stopped.orphaned.length > 0) {
+        notes.push(
+            `The site that just started is a NEW process on a NEW port — Genie allocates a free one per start — ` +
+                `so it is not the process above, and starting it did not reclaim anything.`,
+        );
+    }
+    if (config && hostNativeRoute(config) !== null) {
+        notes.push(
+            `"${config.name}" points .gen at 127.0.0.1:${config.hostPort} — a dev server Genie does not run. ` +
+                `This restart re-registered that route and re-probed it; the dev server behind it was NOT restarted ` +
+                `and never stopped. Restart it where you started it (manageProcess, or the terminal it runs in).`,
+        );
+    }
+    return notes;
 }
 
 /** One extra browser-facing surface. RETAINED for shape compatibility. */
@@ -371,7 +444,15 @@ export interface DevSiteManagerDeps {
 export interface DevSiteManager {
     /** Start one configured site. Never throws — a failure is a failed status. */
     start(workspaceId: string, siteId: string): Promise<DevSiteStatus>;
-    stop(siteId: string): Promise<void>;
+    /** Stop one site, and report what that ESTABLISHED — see
+     *  {@link DevSiteStopReport}. Never throws. */
+    stop(siteId: string): Promise<DevSiteStopReport>;
+    /**
+     * Stop, then start. The returned status carries {@link DevSiteStatus.notes}
+     * when the restart was not what "restart" implies: a stop Genie could not
+     * confirm, or an EXTERNAL host-native site whose dev server it never ran
+     * (genie#226).
+     */
     restart(workspaceId: string, siteId: string): Promise<DevSiteStatus>;
     /**
      * Apply an edited config (Gap 1). Restart it when the change requires it,
@@ -1530,7 +1611,17 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         return promise;
     }
 
-    async function stop(siteId: string): Promise<void> {
+    /**
+     * Did the process Genie asked to stop actually go? Best effort, and a probe
+     * that cannot be answered is read as GONE rather than as an orphan — the
+     * point is to catch a stop that demonstrably failed, not to invent one.
+     */
+    async function stillAlive(spawnId: string): Promise<boolean> {
+        if (!deps.hostSpawn) return false;
+        return await deps.hostSpawn.alive(spawnId).catch(() => false);
+    }
+
+    async function stop(siteId: string): Promise<DevSiteStopReport> {
         // A stop clears the remembered failure: the site is off because it was
         // asked to be, which is not the same as being broken.
         lastFailure.delete(siteId);
@@ -1541,25 +1632,40 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             // run, so fire changed() to let the host-browser reconcile DRAIN it. A
             // redundant schedule is harmless (the reconcile no-ops when in sync).
             changed();
-            return;
+            return { orphaned: [], external: false };
         }
         live.delete(siteId);
         // MANAGED HOST-NATIVE (story #238): Genie owns the dev server process — stop
         // it. No container runtime involved.
         if (entry.config.runMode === 'host') {
+            const orphaned: string[] = [];
             if (deps.hostSpawn) {
                 await deps.hostSpawn.stop(siteId).catch(() => {});
                 // Stop the PHP FastCGI worker companion too — a no-op for a static or
                 // proxy site, which has no such process tracked.
                 await deps.hostSpawn.stop(fcgiSiteId(siteId)).catch(() => {});
+                // …and ASK whether either survived (genie#226). Both stops above
+                // swallow their failure, and the entry has already left `live` —
+                // so a process that did not die is one `livePortSet()` no longer
+                // excludes and no later stop can reach. Reporting "stopped"
+                // regardless is the success nobody verified; `alive()` is the
+                // check, and it was already here (it is what `adopt` and the
+                // worker watchdog use).
+                if (await stillAlive(siteId)) orphaned.push(siteId);
+                // The worker is only probed for a site that HAD one; asking about
+                // a companion that never existed would manufacture an orphan.
+                if (entry.fcgiPort !== undefined && (await stillAlive(fcgiSiteId(siteId)))) {
+                    orphaned.push(fcgiSiteId(siteId));
+                }
             }
             changed();
-            return;
+            return { orphaned, external: false };
         }
         const { runtime } = await deps.resolveRuntime();
         // An EXTERNAL host-native site (hostPort, no container) runs no process Genie
         // owns — dropping its route above IS the stop; the dev server it points at is
         // the user's own host process (via manageProcess), left running.
+        const external = hostNativeRoute(entry.config) !== null;
         if (runtime && entry.containerId) {
             // Stop ONLY this site's process group — never the shared sandbox, which
             // holds the toolchain and the other sites. Then re-point Caddy at what
@@ -1568,6 +1674,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             await reapplyCaddy(runtime, entry.workspaceId, entry.containerId);
         }
         changed();
+        return { orphaned: [], external };
     }
 
     return {
@@ -1575,8 +1682,13 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         stop,
 
         async restart(workspaceId, siteId) {
-            await stop(siteId);
-            return start(workspaceId, siteId);
+            const stopped = await stop(siteId);
+            const status = await start(workspaceId, siteId);
+            const notes = [
+                ...(status.notes ?? []),
+                ...restartNotes(stopped, findSite(workspaceId, siteId)?.config),
+            ];
+            return notes.length > 0 ? { ...status, notes } : status;
         },
 
         async reconfigure(workspaceId, siteId, opts) {

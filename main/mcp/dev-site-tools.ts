@@ -13,7 +13,7 @@ import {
 } from '../dev-server/sites-config';
 import { describeRepoRun, detectPhpServe, detectStaticServe } from '../dev-server/repo-facts';
 import { applySetEnv } from '../env-store';
-import { devSiteManager } from '../dev-server/site-manager';
+import { devSiteManager, stopNotes } from '../dev-server/site-manager';
 import { resolveContainerRuntime } from '../dev-server';
 import { detectFolder } from '../workspace/detect';
 import { resolveAgentTarget } from './host-tools';
@@ -441,7 +441,11 @@ export async function runManageSite(
                 // request 502'd — the answer outliving the thing it measured. Re-ask
                 // before answering, and read the sites AFTER.
                 await manager.refresh(ws.id);
-                return { ok: true, sites: sites(), runtime, ...(req.id ? { affectedId: req.id } : {}) };
+                // …and SAY that it re-asked. Without this the envelope reads
+                // identically to `list`'s, and the summary above it states "is
+                // serving" off a `ready` nothing checked (CONTRIBUTING.md,
+                // "Never report a success you have not verified").
+                return { ok: true, probed: true, sites: sites(), runtime, ...(req.id ? { affectedId: req.id } : {}) };
 
             case 'detect': {
                 const repo = resolveRepoDir(req.repo);
@@ -649,6 +653,8 @@ export async function runManageSite(
                     ok: status ? status.state !== 'failed' : true,
                     ...(status?.error ? { error: status.error } : {}),
                     ...(status ? {} : { pending: true }),
+                    // Settled ⇒ the start's own readiness probe ran; see `status`.
+                    ...(status ? { probed: true } : {}),
                     sites: sites(),
                     affectedId: siteId,
                     runtime,
@@ -757,6 +763,10 @@ export async function runManageSite(
                     ok: status ? status.state !== 'failed' : true,
                     ...(status?.error ? { error: status.error } : {}),
                     ...(status ? {} : { pending: true }),
+                    // Only the RESTARTING path re-ran the site and its readiness
+                    // probe. A cosmetic edit refreshed the stored config and
+                    // touched nothing live, so its `ready` is as old as `list`'s.
+                    ...(status && restart ? { probed: true } : {}),
                     sites: sites(),
                     affectedId: newId,
                     runtime,
@@ -785,21 +795,41 @@ export async function runManageSite(
                     ok: status ? status.state !== 'failed' : true,
                     ...(status?.error ? { error: status.error } : {}),
                     ...(status ? {} : { pending: true }),
+                    // A start that SETTLED ran the readiness probe to settle, so
+                    // this result's `ready` is a live answer. One that has not
+                    // settled has established nothing yet.
+                    ...(status ? { probed: true } : {}),
                     sites: sites(),
                     affectedId: target.siteId,
                     runtime,
-                    ...(status ? {} : { notes: [pendingNote(req.action, target.siteId)] }),
+                    // The manager's own notes ride along on a SETTLED action too
+                    // — they carry what a "restart" did not do (genie#226), and
+                    // dropping them here is how that stayed invisible.
+                    ...(status
+                        ? status.notes?.length
+                            ? { notes: status.notes }
+                            : {}
+                        : { notes: [pendingNote(req.action, target.siteId)] }),
                 };
             }
 
             case 'stop': {
                 const target = targetSite();
                 if ('error' in target) return fail(target.error);
-                await manager.stop(target.siteId);
+                // A stop that could not confirm the process died leaves an ORPHAN
+                // Genie has already forgotten — reported, not swallowed (#226).
+                const report = await manager.stop(target.siteId);
                 // Persisted, so it stays stopped across a restart rather than
                 // being started again by the boot reconcile.
                 setWorkspaceDevSite(ws.id, { siteId: target.siteId, enabled: false });
-                return { ok: true, sites: sites(), affectedId: target.siteId, runtime };
+                const notes = stopNotes(report);
+                return {
+                    ok: true,
+                    sites: sites(),
+                    affectedId: target.siteId,
+                    runtime,
+                    ...(notes.length ? { notes } : {}),
+                };
             }
 
             case 'logs': {

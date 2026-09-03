@@ -66,11 +66,59 @@ describe('a CONTAINER site that is not answering', () => {
     });
 });
 
+/**
+ * CONTRIBUTING.md, "Never report a success you have not verified".
+ *
+ * This headline is the FIRST LINE of every `manageSite` reply — `list` and
+ * `logs` included, not just `status` — and for a ready site it said flatly
+ * "<name> is serving at <origin>."
+ *
+ * Only `status` re-asks: it calls `manager.refresh()` before answering, which is
+ * the genie#305 fix. `list` deliberately does not (a probe there would put a
+ * network round-trip behind every other action's envelope), so its `ready` is
+ * whatever was last written — which is exactly the start-time-snapshot problem
+ * #305 removed from `status`, still live one action over. A `list` run an hour
+ * after the dev server died still says "is serving".
+ *
+ * The claim is narrowed rather than the probe added: `probed` says whether THIS
+ * call re-asked, and the unprobed wording says what would settle it.
+ */
+describe('a ready site the call did not re-probe', () => {
+    const ready = (over: Partial<ManageSiteResult> = {}): ManageSiteResult =>
+        ({
+            ...result(site({ ready: true, origin: 'https://karma.gen' } as Partial<DevSiteInfo>)),
+            ...over,
+        }) as ManageSiteResult;
+
+    it('does not state it IS serving when nothing checked', () => {
+        const text = manageSiteSummary(ready());
+        expect(text).not.toMatch(/\bis serving\b/);
+    });
+
+    it('says where the answer came from, and what would settle it', () => {
+        const text = manageSiteSummary(ready());
+        // Not an uncheckable hedge — it names the call that re-asks.
+        expect(text).toContain('status');
+        expect(text).toContain('site-1');
+        expect(text).toContain('https://karma.gen');
+    });
+
+    it('states it plainly once the call DID re-probe — positive control', () => {
+        // Without this, "it stopped saying is serving" would also pass against a
+        // summary that never says it at all.
+        const text = manageSiteSummary(ready({ probed: true }));
+        expect(text).toMatch(/\bis serving\b/);
+        expect(text).toContain('https://karma.gen');
+        expect(text).not.toContain('status');
+    });
+});
+
 describe('what still works', () => {
-    it('reports a ready site as serving', () => {
-        const text = manageSiteSummary(
-            result(site({ ready: true, origin: 'https://karma.gen' } as Partial<DevSiteInfo>)),
-        );
+    it('reports a ready site it PROBED as serving', () => {
+        const text = manageSiteSummary({
+            ...result(site({ ready: true, origin: 'https://karma.gen' } as Partial<DevSiteInfo>)),
+            probed: true,
+        } as ManageSiteResult);
         expect(text).toContain('serving');
         expect(text).toContain('https://karma.gen');
     });
