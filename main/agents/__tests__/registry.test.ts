@@ -7,7 +7,9 @@ import {
     providerDef,
     tuiSettingDefaults,
     providerSettingKeys,
+    canResumeTui,
 } from '../registry';
+import { renderAgentResume } from '../../agentinbox/session-capture';
 import { agentName, isAgentTui } from '../identity';
 import { AGENT_TUIS } from '../tui';
 import { savedAgentsOf } from '../saved';
@@ -316,6 +318,41 @@ describe('tui ownership — genie#313', () => {
             if (!TUI_REGISTRY[id].ownedBinary) {
                 expect(TUI_REGISTRY[id].install, id).toBeUndefined();
             }
+        }
+    });
+});
+
+describe('the registry owns which tuis can RESUME (genie#261, category C)', () => {
+    const SID = 'abcd1234-5678-90ab-cdef-1234567890ab';
+
+    /**
+     * The single fact behind two surfaces: the command `renderAgentResume`
+     * builds, and whether the context menu offers "Restart agent" at all.
+     *
+     * They used to be independent claims, and they disagreed. `SpecContextMenu`
+     * gated the item on `agent === 'claude'` while the renderer had been
+     * emitting `codex resume <id>` the whole time — so a codex agent was denied
+     * a restart that would have worked. One table, read by both, is what makes
+     * that disagreement unrepresentable rather than merely unlikely.
+     */
+    it('agrees with renderAgentResume for EVERY registered tui', () => {
+        for (const id of PROVIDER_IDS) {
+            const command = renderAgentResume(id, providerDef(id).defaultCommand || id, SID);
+            expect(canResumeTui(id), id).toBe(command !== null);
+        }
+    });
+
+    it('renders each grammar the way that provider actually takes it', () => {
+        // Positive controls with teeth: "resumable" is not enough — the command
+        // has to be the one the CLI accepts, and the two providers differ.
+        expect(renderAgentResume('claude', 'claude', SID)).toBe(`claude --resume ${SID}`);
+        expect(renderAgentResume('codex', 'codex', SID)).toBe(`codex resume ${SID}`);
+    });
+
+    it('has a resume decision for every tui, none left undefined', () => {
+        for (const id of agentTuis()) {
+            const resume = TUI_REGISTRY[id].resume;
+            expect(resume === null || typeof resume === 'object', id).toBe(true);
         }
     });
 });

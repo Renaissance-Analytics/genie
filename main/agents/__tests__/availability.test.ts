@@ -27,6 +27,9 @@ function ownedProviderWithInstaller(): TuiDef {
         flagsSettingKey: 'agent_flags_genie',
         ownedBinary: true,
         install: { manager: 'npm', package: 'some-future-genie-tui-package' },
+        // Availability is about the BINARY existing; resume grammar plays no
+        // part in it. Mirrors the real `genie` entry rather than inventing one.
+        resume: null,
     };
 }
 

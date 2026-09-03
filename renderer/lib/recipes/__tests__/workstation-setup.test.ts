@@ -1,4 +1,7 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { describe, it, expect, vi } from 'vitest';
+import { PROVIDER_IDS, isTuiId } from '../../../../main/agents/registry';
 import type { api as apiType } from '../../genie';
 import { RecipeEngine, resolveFields } from '../engine';
 import {
@@ -8,6 +11,7 @@ import {
     agentFlagFields,
     enabledAgentIds,
     AGENT_FLAG_CATALOG,
+    SETUP_AGENTS,
     SETUP_COMPLETE_PATH,
     WORKSTATION_SETUP_RECIPE_ID,
 } from '../workstation-setup';
@@ -282,5 +286,58 @@ describe('workstationSetupRecipe — effects', () => {
         expect(e.isLastStep).toBe(true);
         e.markSuccess();
         expect(e.complete()).toBe(true);
+    });
+});
+
+/**
+ * SETUP_AGENTS is narrower than genie's provider registry ON PURPOSE
+ * (genie#261, category E).
+ *
+ * It hand-mirrors genie-cloud's `AGENT_CATALOG`, and this recipe runs against a
+ * HOST — per-agent login terminals, then `/api/desktop/setup/complete`. Widening
+ * it in this repo alone would offer a first-connecting owner a provider the host
+ * has no catalog entry, no login step and no binary for, and it would fail
+ * silently at the worst moment. So it stays a cross-repo change, and these tests
+ * exist so the narrowness reads as a decision rather than an oversight — which
+ * is exactly how it read before, under a docblock that got genie's own
+ * `AgentType` wrong.
+ */
+describe('the setup agent catalog is a CROSS-REPO contract', () => {
+    const SRC = fs.readFileSync(
+        path.resolve(__dirname, '../workstation-setup.ts'),
+        'utf8',
+    );
+
+    it('POSITIVE CONTROL: the source is actually read', () => {
+        // Otherwise every `not.toMatch` below passes on an empty string.
+        expect(SRC).toContain('export const SETUP_AGENTS');
+    });
+
+    it('names only providers this build actually registers', () => {
+        // The real invariant, and the one that could break silently: each id
+        // becomes `agent_command_<id>` / `agent_flags_<id>`, so a typo or a
+        // retired provider here writes settings nothing reads.
+        for (const a of SETUP_AGENTS) {
+            expect(isTuiId(a.id), a.id).toBe(true);
+        }
+    });
+
+    it('is deliberately NOT the whole registry', () => {
+        // If this ever fails it is not a broken test — it means someone widened
+        // the list, and the thing to check is that genie-cloud's AGENT_CATALOG
+        // (and the host's login steps) went with it.
+        const setup = SETUP_AGENTS.map((a) => a.id);
+        expect(setup.length).toBeLessThan(PROVIDER_IDS.length);
+        expect(PROVIDER_IDS.filter((id) => !setup.includes(id as never))).toEqual(['kiwi', 'genie']);
+    });
+
+    it('no longer states a frozen AgentType union as the reason', () => {
+        // The claim that made the list look self-justifying: genie's `AgentType`
+        // has not been `claude | codex | custom` since kiwi and genie were
+        // registered. The blocker is the genie-cloud catalog, and the docblock
+        // has to say so or the next reader "fixes" the list on its own.
+        expect(SRC).not.toMatch(/AgentType[^\n]*claude \| codex \| custom/);
+        expect(SRC).toMatch(/AGENT_CATALOG/);
+        expect(SRC).toMatch(/genie#261/);
     });
 });

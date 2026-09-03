@@ -12,6 +12,7 @@ import {
     IconTrash,
 } from './icons';
 import type { TerminalSpec, WorkspaceRow } from '../../lib/genie';
+import { canResumeTui } from '../../../main/agents/registry';
 
 interface Position {
     x: number;
@@ -33,9 +34,11 @@ interface Props {
     /** Edit a specialized (agent) terminal's AgentInbox purpose/scope. Only
      *  offered when this spec is an agent terminal (`meta.agent` set). */
     onAgentSettings?: () => void;
-    /** Gracefully restart a claude agent terminal so its TUI reconnects to the
-     *  current MCP rig (fresh tools) while resuming the conversation. Only offered
-     *  for a claude agent — codex/custom can't resume, so the main side refuses. */
+    /** Gracefully restart an agent terminal so its TUI reconnects to the current
+     *  MCP rig (fresh tools) while resuming the conversation. Offered only for a
+     *  provider the registry says can resume (`TuiDef.resume`) — the same table
+     *  `renderAgentResume` builds the command from, so the item appears exactly
+     *  where the restart would succeed. */
     onRestartAgent?: () => void;
 }
 
@@ -63,10 +66,16 @@ export default function SpecContextMenu({
     onRestartAgent,
 }: Props) {
     const isAgent = !!spec.meta?.agent;
-    // Only a claude agent can be gracefully resumed (codex/custom have no resume
-    // in v1); gating the item here keeps the menu honest instead of offering a
-    // button that always errors.
-    const isResumableAgent = spec.meta?.agent === 'claude';
+    // Whether a graceful resume is possible is a PROVIDER capability, and the
+    // registry decides it — the same `TuiDef.resume` that `renderAgentResume`
+    // builds the command from, so the menu cannot disagree with the main side.
+    //
+    // It did disagree. This line read `spec.meta?.agent === 'claude'` under a
+    // comment claiming codex had no resume; codex has rendered
+    // `codex resume <id>` all along, so a codex agent was refused a restart that
+    // works. Adding `|| === 'codex'` would have been the same bug with one more
+    // literal, stale again the next time a provider learns to resume (genie#261).
+    const isResumableAgent = canResumeTui(spec.meta?.agent);
     const menuRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {

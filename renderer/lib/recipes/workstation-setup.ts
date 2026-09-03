@@ -33,12 +33,33 @@ export const SETUP_STATUS_PATH = '/api/desktop/setup/status';
 export const SETUP_COMPLETE_PATH = '/api/desktop/setup/complete';
 
 /**
- * The supported agents (id + label). MIRRORS genie-cloud's `AGENT_CATALOG`
- * (src/setup/agents.ts) and genie's `AgentType` (`claude | codex | custom`) — the
- * fixed set the launch pipeline reads via `agent_command_<id>` / `agent_flags_<id>`.
- * Kept in sync by hand (the desktop cannot import genie-cloud). The KNOWN launch
- * flags live in {@link AGENT_FLAG_CATALOG} (single source of truth) so a flag is
- * never duplicated here and there.
+ * The agents a CLOUD WORKSTATION SETUP can log in and configure.
+ *
+ * This is a deliberately NARROWER set than genie's own provider registry, and
+ * saying so is the whole point of this comment — the list looks like an
+ * oversight and is not.
+ *
+ * It MIRRORS genie-cloud's `AGENT_CATALOG` (`src/setup/agents.ts`) by hand,
+ * because the desktop cannot import genie-cloud. That hand-mirroring is
+ * genie#261's category E: the obligation does not end at this repo. This recipe
+ * runs against a HOST — it drives `claude-login` / `codex-login` terminals there
+ * and posts to `/api/desktop/setup/complete` — so widening it here alone would
+ * offer an owner a provider the host has no catalog entry, no login step and no
+ * binary for. That failure is silent in the worst place: first connection.
+ *
+ * So it does NOT derive from `main/agents/registry.ts`, and must not be widened
+ * unilaterally. Adding a provider to workstation setup is a CROSS-REPO change —
+ * genie-cloud's `AGENT_CATALOG` first (or in the same shipment), then this list.
+ * genie#261 tracks the decision about whether the two should share a schema
+ * instead of a convention.
+ *
+ * (An earlier version of this comment asserted genie's `AgentType` was
+ * `claude | codex | custom`. That stopped being true on 2026-08-25, when `kiwi`
+ * and `genie` were registered; the union is now whatever `PROVIDER_IDS` says.
+ * The overlap with this list is a coincidence of history, not a definition.)
+ *
+ * The KNOWN launch flags live in {@link AGENT_FLAG_CATALOG} (single source of
+ * truth) so a flag is never duplicated here and there.
  */
 export const SETUP_AGENTS = [
     { id: 'claude', label: 'Claude Code' },
