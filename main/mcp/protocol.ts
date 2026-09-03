@@ -1618,10 +1618,18 @@ export interface OpenFileResult {
     file?: string;
     /** The workspace the file was opened in (incl the System workspace). */
     workspaceId?: string;
-    /** True when an editor panel already open for the workspace was reused. */
+    /** The request reached the Genie window. False (with `ok: false`) means
+     *  there was no window to send it to and NOTHING was opened. */
+    dispatched?: boolean;
+    /** True when an editor panel already open for the workspace was reused.
+     *  ABSENT when the renderer did not reply — nobody established it. */
     reused?: boolean;
-    /** True when a NEW editor panel was opened (none was open to reuse). */
+    /** True when a NEW editor panel was opened (none was open to reuse).
+     *  ABSENT when the renderer did not reply — see `note`. */
     openedNew?: boolean;
+    /** What Genie could NOT establish, and what would settle it — set when the
+     *  request was dispatched but the renderer never confirmed the outcome. */
+    note?: string;
 }
 
 const TERMINAL_ID_PROP = {
@@ -1671,7 +1679,7 @@ const CHECK_ISSUES_TOOL = {
 const OPEN_FILE_TOOL = {
     name: 'openFileForUser',
     description:
-        "Open a file in Genie's BUILT-IN editor for the USER to look at — surfaces it on the Floor in a Code panel. This REUSES an editor panel already open for this workspace (adds the file as a tab and focuses it — or just focuses the tab if the file is already open); if no editor panel is open for the workspace, it opens a NEW one with the file loaded. Use it to put a file in front of the user (a change you made, a result, something to review) instead of only describing it. Benign DISPLAY action — like imDone it just surfaces something, so there is NO approval prompt. `path` is workspace-relative (preferred) or absolute; for the System workspace pass an absolute/system path. A relative path resolves against the WORKSPACE ROOT (not your shell's cwd) and keeps its full subdirectory path; an absolute path inside ANOTHER Genie workspace opens in THAT workspace's editor, and one no workspace owns opens in the System workspace. Optional `line` reveals a 1-based line. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; required when the workspace has more than one terminal. Available to System-workspace agents too.",
+        "Open a file in Genie's BUILT-IN editor for the USER to look at — surfaces it on the Floor in a Code panel. This REUSES an editor panel already open for this workspace (adds the file as a tab and focuses it — or just focuses the tab if the file is already open); if no editor panel is open for the workspace, it opens a NEW one with the file loaded. Use it to put a file in front of the user (a change you made, a result, something to review) instead of only describing it. Benign DISPLAY action — like imDone it just surfaces something, so there is NO approval prompt. `path` is workspace-relative (preferred) or absolute; for the System workspace pass an absolute/system path. A relative path resolves against the WORKSPACE ROOT (not your shell's cwd) and keeps its full subdirectory path; an absolute path inside ANOTHER Genie workspace opens in THAT workspace's editor, and one no workspace owns opens in the System workspace. Optional `line` reveals a 1-based line. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; required when the workspace has more than one terminal. Available to System-workspace agents too. WHAT THE RESULT MEANS: `dispatched` is what Genie establishes on its own — the request reached the Genie window. `reused`/`openedNew` come from the window's own reply and are ABSENT when it did not answer in time; a `note` then says so. `ok:false` with `dispatched:false` means Genie is tray-resident with no window and NOTHING was opened — do not tell the user to look at a file that is not on screen.",
     inputSchema: {
         type: 'object',
         properties: {
@@ -4162,13 +4170,18 @@ ${body}` }],
                     path: p,
                     line: typeof a.line === 'number' ? a.line : undefined,
                 });
-                const summary = result.ok
-                    ? `Opened ${result.file ?? p} for the user — ${
-                          result.reused
-                              ? 'reused the editor panel already open for this workspace'
-                              : 'opened a new editor panel'
-                      }.`
-                    : `openFileForUser failed: ${result.error ?? 'unknown error'}`;
+                // `reused` is ABSENT when the renderer never confirmed the
+                // outcome, and a ternary reads absent as "not reused" — the same
+                // guess the result object stopped making (CONTRIBUTING.md).
+                const summary = !result.ok
+                    ? `openFileForUser failed: ${result.error ?? 'unknown error'}`
+                    : result.reused === undefined
+                      ? `Sent ${result.file ?? p} to the Genie window, which did not confirm it — whether a panel was reused or opened is unknown. ${result.note ?? ''}`.trim()
+                      : `Opened ${result.file ?? p} for the user — ${
+                            result.reused
+                                ? 'reused the editor panel already open for this workspace'
+                                : 'opened a new editor panel'
+                        }.`;
                 return ok(msg.id, {
                     content: [
                         {

@@ -670,6 +670,56 @@ describe('handleMcpMessage', () => {
         expect(summary).toContain('t-agent');
     });
 
+    it('openFileForUser: an UNCONFIRMED open is not summarized as "opened a new editor panel"', async () => {
+        // `result.reused ? … : 'opened a new editor panel'` reads an ABSENT
+        // reused (the renderer never answered) as "not reused" — the same guess
+        // the result object stopped making.
+        const openFileForUser = vi.fn().mockResolvedValue({
+            ok: true,
+            file: '/w/a.md',
+            dispatched: true,
+            note: 'The request was handed to the Genie window, which did not reply.',
+        });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 48,
+                method: 'tools/call',
+                params: { name: 'openFileForUser', arguments: { path: 'a.md' } },
+            },
+            ctx({ openFileForUser }),
+        );
+        const summary = (res?.result as { content: Array<{ text: string }> }).content[0].text.split(
+            '\n\n',
+        )[0];
+        expect(summary).not.toMatch(/opened a new editor panel/i);
+        expect(summary).toMatch(/did not (reply|confirm)|unconfirmed|not confirmed/i);
+    });
+
+    it('openFileForUser: POSITIVE CONTROL — a CONFIRMED new panel still says so', async () => {
+        const openFileForUser = vi.fn().mockResolvedValue({
+            ok: true,
+            file: '/w/a.md',
+            dispatched: true,
+            reused: false,
+            openedNew: true,
+        });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 49,
+                method: 'tools/call',
+                params: { name: 'openFileForUser', arguments: { path: 'a.md' } },
+            },
+            ctx({ openFileForUser }),
+        );
+        const summary = (res?.result as { content: Array<{ text: string }> }).content[0].text.split(
+            '\n\n',
+        )[0];
+        expect(summary).toMatch(/opened a new editor panel/i);
+        expect(summary).not.toMatch(/did not reply/i);
+    });
+
     it('manageTerminals says an EMPTY read came from a dead pty, not a quiet one', async () => {
         // genie#217: "0 bytes because the pty is gone" and "0 bytes because
         // nothing was written" must not read identically to the agent.

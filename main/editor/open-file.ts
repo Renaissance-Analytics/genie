@@ -145,7 +145,13 @@ export interface OpenFileDeps {
         root: string;
         relPath: string;
         line?: number;
-    }) => void;
+    }) => boolean;
+}
+
+/** Options the caller may tune. Tests shorten the wait; nothing in the product
+ *  does (same seam as `RunManageSiteOptions.settleMs`). */
+export interface OpenFileOptions {
+    replyTimeoutMs?: number;
 }
 
 let deps: OpenFileDeps | null = null;
@@ -170,8 +176,9 @@ export function registerOpenFile(d: OpenFileDeps): void {
 export async function openFileForUserForMcp(
     terminalId: string,
     req: OpenFileRequest,
+    opts: OpenFileOptions = {},
 ): Promise<OpenFileResult> {
-    if (!deps) return { ok: false, error: 'Editor not ready.' };
+    if (!deps) return { ok: false, error: 'Editor not ready.', dispatched: false };
 
     const workspaceId = deps.workspaceIdOfTerminal(terminalId);
     if (!workspaceId) {
@@ -213,30 +220,69 @@ export async function openFileForUserForMcp(
         };
     }
 
+    // THREE outcomes, and only one of them is "opened" (CONTRIBUTING.md, "Never
+    // report a success you have not verified"). `openedNew` used to be
+    // `reply ? !reply.reused : true` — its own comment called that a "best-effort
+    // default", which is to say a guess presented as a fact.
+    let dispatched = false;
     const reply = await new Promise<RendererReply>((resolve) => {
         const requestId = crypto.randomUUID();
         const timer = setTimeout(() => {
             pending.delete(requestId);
             resolve(null);
-        }, REPLY_TIMEOUT_MS);
+        }, opts.replyTimeoutMs ?? REPLY_TIMEOUT_MS);
         if (typeof timer.unref === 'function') timer.unref();
         pending.set(requestId, { resolve, timer });
-        deps!.sendOpenFile({
+        dispatched = deps!.sendOpenFile({
             requestId,
             workspaceId: targetWorkspaceId,
             root,
             relPath,
             ...(typeof req.line === 'number' ? { line: req.line } : {}),
         });
+        // OUTCOME 1 — nothing to send into (tray-resident, or the window is
+        // being destroyed). Fail NOW: waiting out the timeout only buys a
+        // longer path to the same false answer.
+        if (!dispatched) {
+            clearTimeout(timer);
+            pending.delete(requestId);
+            resolve(null);
+        }
     });
 
+    if (!dispatched) {
+        return {
+            ok: false,
+            error: `Could not open ${abs} — Genie has no open window to show it in (it is running tray-resident, or its window is closing). Nothing was opened. Open the Genie window and try again.`,
+            file: abs,
+            workspaceId: targetWorkspaceId,
+            dispatched: false,
+        };
+    }
+
+    // OUTCOME 3 — handed to the Floor, which then said nothing. The request is
+    // not cancelled and the file may well be on screen; what is NOT known is
+    // whether a panel was reused or opened, so neither is claimed. `reused` and
+    // `openedNew` are both optional precisely so they can be absent here.
+    if (!reply) {
+        return {
+            ok: true,
+            file: abs,
+            workspaceId: targetWorkspaceId,
+            dispatched: true,
+            note: `The request was handed to the Genie window, which did not reply within ${
+                opts.replyTimeoutMs ?? REPLY_TIMEOUT_MS
+            }ms — so whether an editor panel was reused or newly opened is UNKNOWN, and so is whether the file is on screen. Look at the Genie window to confirm; a renderer this slow usually means it is still loading.`,
+        };
+    }
+
+    // OUTCOME 2 — the renderer answered. Trust it.
     return {
         ok: true,
         file: abs,
         workspaceId: targetWorkspaceId,
-        // On a reply: trust it. On timeout (reply null): the file was still
-        // dispatched to the Floor — report opened-new as the best-effort default.
-        reused: reply?.reused ?? false,
-        openedNew: reply ? !reply.reused : true,
+        dispatched: true,
+        reused: reply.reused,
+        openedNew: !reply.reused,
     };
 }
