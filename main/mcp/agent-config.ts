@@ -126,9 +126,33 @@ const endpoint = process.env.GENIE_MCP_URL;
 let requestId = 1;
 let cursor = 0;
 let stopped = false;
+let running = false;
+
+/**
+ * Reconnect pacing (genie#346).
+ *
+ * A Genie upgrade REPLACES the process behind this endpoint, so a socket dying
+ * under a long-poll is the normal case here, not a fault. The backoff exists to
+ * keep a restarting server from being hammered while it binds, and it is capped
+ * so a channel is never more than a few seconds behind once the server is back.
+ */
+const RETRY_MIN_MS = 250;
+const RETRY_MAX_MS = 5000;
 
 function write(message) {
     process.stdout.write(JSON.stringify(message) + '\\n');
+}
+
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** An error the endpoint will keep giving us. Retrying it is a hot loop, not a
+ *  heal, so it stops the bridge and surfaces in the harness instead. */
+function fatal(message) {
+    const error = new Error(message);
+    error.fatal = true;
+    return error;
 }
 
 function writeAccepted(message) {
@@ -144,7 +168,7 @@ function decodeRpc(body) {
 }
 
 async function agentInbox(args) {
-    if (!endpoint) throw new Error('GENIE_MCP_URL is required.');
+    if (!endpoint) throw fatal('GENIE_MCP_URL is required.');
     const id = requestId++;
     const response = await fetch(endpoint, {
         method: 'POST',
@@ -159,7 +183,17 @@ async function agentInbox(args) {
             params: { name: 'agentinbox', arguments: args },
         }),
     });
-    if (!response.ok) throw new Error('AgentInbox HTTP ' + response.status);
+    if (!response.ok) {
+        // 401/403 mean the endpoint is UP and has REFUSED this token — that is
+        // configuration, and no amount of retrying fixes it. Everything else is
+        // treated as the replacement server coming back: a 404 while it is
+        // still wiring its workspace endpoints, a 5xx mid-boot, a refused
+        // socket. Those are the upgrade, and they heal.
+        if (response.status === 401 || response.status === 403) {
+            throw fatal('AgentInbox HTTP ' + response.status);
+        }
+        throw new Error('AgentInbox HTTP ' + response.status);
+    }
     const rpc = decodeRpc(await response.text());
     if (rpc.error) throw new Error(rpc.error.message || 'AgentInbox request failed.');
     const text = rpc.result?.content?.find((part) => part.type === 'text')?.text || '';
@@ -167,8 +201,13 @@ async function agentInbox(args) {
     return JSON.parse(json);
 }
 
-async function deliver() {
+async function deliver(onConnected) {
     await agentInbox({ action: 'registerTransport', transport: 'claude-channel' });
+    // The registry that binding lands in is IN-MEMORY in Genie's main process,
+    // so a replacement server starts with none. Re-registering on every
+    // reconnect is what makes the channel visible again -- without it Genie
+    // reads the agent as unattached and types its mail at the prompt.
+    if (onConnected) onConnected();
     while (!stopped) {
         const result = await agentInbox({
             action: 'receive', cursor, wait: true, timeoutMs: 240000, acknowledge: false
@@ -189,6 +228,52 @@ async function deliver() {
             });
             cursor = Number(message.seq || cursor);
             await agentInbox({ action: 'acknowledge', cursor });
+        }
+    }
+}
+
+/**
+ * The channel's SUPERVISOR — what makes it survive a Genie upgrade (genie#346).
+ *
+ * \`deliver()\` used to be called once, and a rejection wrote one line to stderr
+ * and set \`process.exitCode\`. But the bridge is spawned by Claude Code, not by
+ * Genie, so it OUTLIVES the upgrade that killed its long-poll: the process
+ * stayed up and the channel was gone for the rest of the session. With no
+ * transport bound, AgentInbox correctly falls through to the PTY, so the
+ * upgrade notice was TYPED at the agent's prompt — the exact symptom genie#344
+ * fixed, reproduced on every upgrade.
+ *
+ * Retrying is bounded by the HARNESS's own lifetime, not by a timer: \`stopped\`
+ * is set when Claude Code closes stdin, and a fatal error stops it outright.
+ * There is deliberately no give-up window — Genie can legitimately be shut for
+ * an hour while an agent terminal stays open, and a bridge that had given up
+ * would never notice it came back.
+ *
+ * \`cursor\` is module state and is preserved across reconnects, so the channel
+ * resumes where it left off instead of re-reading the whole backlog.
+ */
+async function run() {
+    if (running) return;
+    running = true;
+    let delay = RETRY_MIN_MS;
+    while (!stopped) {
+        try {
+            // Reset on a CONNECTION, not on a clean exit: a channel that ran for
+            // an hour and then dropped should retry fast, not at the old cap.
+            await deliver(() => { delay = RETRY_MIN_MS; });
+            return;
+        } catch (error) {
+            const message = (error && error.message) || String(error);
+            if (error && error.fatal) {
+                process.stderr.write('[AgentInbox Channel] ' + message + '\\n');
+                process.exitCode = 1;
+                return;
+            }
+            process.stderr.write(
+                '[AgentInbox Channel] disconnected (' + message + '); reconnecting in ' + delay + 'ms\\n',
+            );
+            await sleep(delay);
+            delay = Math.min(delay * 2, RETRY_MAX_MS);
         }
     }
 }
@@ -226,7 +311,11 @@ process.stdin.on('data', (chunk) => {
             // before speaking any MCP and the harness reported CONNECTION_CLOSED
             // — and \`deliver()\`, which registers the transport and runs the
             // long-poll that IS the channel, was never called.
-            deliver().catch((error) => {
+            //
+            // genie#346 — this is \`run()\`, the supervisor, not a bare
+            // \`deliver()\`: one dropped connection used to end the channel for
+            // the whole session, and an upgrade drops it every time.
+            run().catch((error) => {
                 process.stderr.write('[AgentInbox Channel] ' + error.message + '\\n');
                 process.exitCode = 1;
             });

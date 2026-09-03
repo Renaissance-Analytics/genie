@@ -1,5 +1,24 @@
 import { NEVER_NUDGED_AGENT_NAME } from './reserved-names';
 import { GENIE_OS_AGENT } from './os-agent';
+import { MANUAL_RECOVERY, recoveryInstruction, type McpRecovery } from './mcp-reconnect';
+
+/**
+ * How long the announcement waits before it nudges ANYONE (genie#346).
+ *
+ * The upgrade killed every agent's `genie` MCP connection, and the harness
+ * channels that carry AgentInbox re-attach on their own shortly after the new
+ * server binds — the generated channel bridge retries with capped backoff
+ * rather than dying on the first refused connection.
+ *
+ * Firing the first nudge in the boot tick meant that notice was composed while
+ * no transport was bound, so the broker read "not attached" and typed it at the
+ * prompt. That is the field evidence on #346: the message an agent most needs
+ * after an upgrade is the one guaranteed to arrive the wrong way. Waiting out
+ * one full backoff cap lets a healed channel report itself first, which puts
+ * the notice back on the harness transport and leaves the PTY as the exception
+ * it was meant to be.
+ */
+export const AGENT_UPGRADE_TRANSPORT_GRACE_MS = 10_000;
 
 /**
  * How far apart two agents are woken by an upgrade (genie#353).
@@ -69,11 +88,29 @@ export function nudgeableAgents(agents: readonly UpgradeAnnouncementTarget[]): s
     return [...seen];
 }
 
-export function formatAgentUpgradeMessage(version: string, changes: string[]): string {
+/**
+ * The notice one agent gets, built from THAT agent's recovery (genie#346).
+ *
+ * The old text said *"call agentUpgrade now and follow its ordered migration
+ * guide"* — and `agentUpgrade` is served by the process the upgrade just
+ * replaced. The single instruction the agent was handed was the one it could
+ * not follow, which is why a routine disconnect read as the tools being broken.
+ *
+ * So the order here is load-bearing: what happened, how to restore it, and only
+ * THEN what to do once it answers again. `recovery` is required rather than
+ * optional because a caller that cannot say how this agent recovers cannot
+ * write an honest notice — it passes {@link MANUAL_RECOVERY} and tells the
+ * agent to reconnect itself.
+ */
+export function formatAgentUpgradeMessage(
+    version: string,
+    changes: string[],
+    recovery: McpRecovery,
+): string {
     const summary = changes.length > 0
         ? ` What changed:\n${changes.map((change) => `- ${change}`).join('\n')}`
         : '';
-    return `Genie upgraded to v${version}.${summary}\n\nIf this terminal predates AMS, call agentUpgrade now and follow its ordered migration guide.\n\nThis is a system notice; no reply is needed.`;
+    return `Genie upgraded to v${version}.${summary}\n\nYour \`genie\` MCP connection was replaced by the upgrade, so its tools do not answer until it is restored. ${recoveryInstruction(recovery)}\n\nOnce \`genie\` answers again: if this terminal predates AMS, call agentUpgrade and follow its ordered migration guide.\n\nThis is a system notice; no reply is needed.`;
 }
 
 /** One agent the announcement may reach. */
@@ -100,8 +137,14 @@ export function announceAgentUpgrade(input: {
      * notice would otherwise arrive telling the agent to call tools that will
      * not answer — which reads as broken rather than disconnected. Optional:
      * callers with no way to reach a terminal should not have to invent one.
+     *
+     * RETURNS what it did, so the notice can say so. A reconnect that was
+     * refused (a terminal mid-turn, an agent with no resumable session) and one
+     * that ran are different facts, and an agent told the wrong one acts on it.
+     * Returning nothing — or throwing — degrades to {@link MANUAL_RECOVERY}:
+     * Genie does not know that anything was repaired, so it says so.
      */
-    reconnect?: (agentId: string) => void;
+    reconnect?: (agentId: string) => McpRecovery | void;
     persist: (version: string) => void;
     /**
      * The stagger's clock (genie#353). Defaults to `setTimeout`; tests pass a
@@ -111,35 +154,49 @@ export function announceAgentUpgrade(input: {
     schedule?: UpgradeNudgeScheduler;
     /** Override the ~15s spacing. Named constant by default, never a literal. */
     intervalMs?: number;
+    /**
+     * Override the head-start every agent gets before the first nudge
+     * ({@link AGENT_UPGRADE_TRANSPORT_GRACE_MS}). Named constant by default.
+     */
+    graceMs?: number;
 }): number {
     if (!input.currentVersion || input.previousVersion === input.currentVersion) return 0;
 
-    const text = formatAgentUpgradeMessage(input.currentVersion, input.changes);
     const targets = nudgeableAgents(input.agents);
     const schedule = input.schedule ?? defaultScheduler;
     const intervalMs = input.intervalMs ?? AGENT_UPGRADE_NUDGE_INTERVAL_MS;
+    const graceMs = input.graceMs ?? AGENT_UPGRADE_TRANSPORT_GRACE_MS;
 
     /**
      * One agent's whole nudge, in one tick. ORDER IS THE POINT — a notice that
      * lands first is read with dead tools — so the pair is kept ATOMIC rather
      * than spaced apart, which is exactly what staggering must not turn into a
      * race between one agent's reconnect and another's send.
+     *
+     * The message is composed HERE, per agent, from what the reconnect actually
+     * managed to do. Built once for the fleet it could only be a guess, and the
+     * guess was wrong for every provider Genie cannot reconnect.
      */
     const nudge = (agentId: string): void => {
+        let recovery: McpRecovery = MANUAL_RECOVERY;
         try {
-            input.reconnect?.(agentId);
+            recovery = input.reconnect?.(agentId) ?? MANUAL_RECOVERY;
         } catch {
             // A failed reconnect leaves the agent worse informed, not silent —
             // the notice is the durable half and must not be lost to a TUI that
-            // would not take the command.
+            // would not take the command. It degrades to the manual notice, so
+            // the agent is told how to reconnect ITSELF rather than being handed
+            // a message that assumes the tools are live.
+            recovery = MANUAL_RECOVERY;
         }
-        input.send(agentId, text);
+        input.send(agentId, formatAgentUpgradeMessage(input.currentVersion, input.changes, recovery));
     };
 
+    // NOTHING goes out in the boot tick, not even the first agent: the grace is
+    // what lets a healed harness channel report itself before Genie decides
+    // whether the notice rides that channel or the keyboard (genie#346).
     targets.forEach((agentId, index) => {
-        // The first agent has nothing to wait behind; the rest are spaced.
-        if (index === 0) nudge(agentId);
-        else schedule(() => nudge(agentId), index * intervalMs);
+        schedule(() => nudge(agentId), graceMs + index * intervalMs);
     });
 
     // BEFORE the stagger finishes, deliberately. A crash part-way through must

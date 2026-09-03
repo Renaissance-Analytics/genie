@@ -1,11 +1,19 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
     AGENT_UPGRADE_NUDGE_INTERVAL_MS,
+    AGENT_UPGRADE_TRANSPORT_GRACE_MS,
     announceAgentUpgrade,
     formatAgentUpgradeMessage,
     withWorkstationOperator,
 } from '../upgrade-announcement';
+import { MANUAL_RECONNECT_NOTICE, type McpRecovery } from '../mcp-reconnect';
 import { GENIE_OS_AGENT } from '../os-agent';
+
+/** The recovery a Claude terminal gets when the reconnect command actually ran. */
+const RECONNECTED: McpRecovery = {
+    strategy: { kind: 'command', text: '/mcp reconnect genie' },
+    applied: true,
+};
 
 /**
  * The stagger's scheduler seam, driven SYNCHRONOUSLY (genie#353). Tests drive
@@ -16,9 +24,61 @@ const runNow = (run: () => void): void => run();
 
 describe('agent upgrade announcement', () => {
     it('formats a concise no-reply system message', () => {
-        expect(formatAgentUpgradeMessage('0.8.0', ['Native AgentInbox transport', 'What’s New menu'])).toBe(
-            'Genie upgraded to v0.8.0. What changed:\n- Native AgentInbox transport\n- What’s New menu\n\nIf this terminal predates AMS, call agentUpgrade now and follow its ordered migration guide.\n\nThis is a system notice; no reply is needed.',
+        expect(
+            formatAgentUpgradeMessage(
+                '0.8.0',
+                ['Native AgentInbox transport', 'What’s New menu'],
+                RECONNECTED,
+            ),
+        ).toBe(
+            'Genie upgraded to v0.8.0. What changed:\n- Native AgentInbox transport\n- What’s New menu\n\n' +
+            'Your `genie` MCP connection was replaced by the upgrade, so its tools do not answer until it is restored. ' +
+            'Genie ran `/mcp reconnect genie` in this terminal to restore it. If `genie` still does not answer, run it again yourself.\n\n' +
+            'Once `genie` answers again: if this terminal predates AMS, call agentUpgrade and follow its ordered migration guide.\n\n' +
+            'This is a system notice; no reply is needed.',
         );
+    });
+
+    /**
+     * genie#346 — the notice used to say *"call agentUpgrade now and follow its
+     * ordered migration guide"*, and `agentUpgrade` is served by the very server
+     * the upgrade just replaced. The one instruction the agent was given was the
+     * one it could not follow, which is why the whole thing reads as the tools
+     * being broken rather than merely disconnected.
+     */
+    describe('the notice is honest about the dead connection', () => {
+        it('never asks for agentUpgrade as though the tools were live', () => {
+            const msg = formatAgentUpgradeMessage('0.8.0', [], RECONNECTED);
+            // What is TRUE comes first: the connection was replaced.
+            expect(msg).toContain('replaced by the upgrade');
+            // The restore step is stated BEFORE the migration is asked for…
+            expect(msg.indexOf('/mcp reconnect genie')).toBeLessThan(msg.indexOf('agentUpgrade'));
+            // …and the migration is CONDITIONED on the connection being back,
+            // not demanded "now".
+            expect(msg).toContain('Once `genie` answers again');
+            expect(msg).not.toContain('call agentUpgrade now');
+        });
+
+        it('carries the per-agent recovery, so a notice provider is not told a lie', () => {
+            // A kiwi/custom/Genie-TUI agent gets no reconnect at all. Handing it
+            // Claude's sentence would tell it a command had been run in a
+            // terminal that never saw one.
+            const msg = formatAgentUpgradeMessage('0.8.0', [], {
+                strategy: { kind: 'notice', text: MANUAL_RECONNECT_NOTICE },
+                applied: false,
+            });
+            expect(msg).toContain(MANUAL_RECONNECT_NOTICE);
+            expect(msg).not.toContain('/mcp reconnect genie');
+        });
+
+        it('says a reconnect was HELD BACK when the terminal refused it', () => {
+            const msg = formatAgentUpgradeMessage('0.8.0', [], {
+                strategy: { kind: 'command', text: '/mcp reconnect genie' },
+                applied: false,
+            });
+            expect(msg).toContain('held the command back');
+            expect(msg).not.toContain('Genie ran `/mcp reconnect genie`');
+        });
     });
 
     it('sends once to every registered agent after a version change', () => {
@@ -42,6 +102,35 @@ describe('agent upgrade announcement', () => {
         expect(send).toHaveBeenNthCalledWith(1, 'a-tynn', expect.stringContaining('no reply is needed'));
         expect(send).toHaveBeenNthCalledWith(2, 'a-front', expect.stringContaining('no reply is needed'));
         expect(persist).toHaveBeenCalledWith('0.8.0');
+    });
+
+    it('composes EACH agent its own notice from its own recovery', () => {
+        // One text for the whole fleet is what made the notice dishonest: a
+        // Claude terminal that was reconnected and a kiwi terminal that was not
+        // are told different truths, so the message cannot be built once.
+        const send = vi.fn((_agentId: string, _text: string) => true);
+        const recoveries: Record<string, McpRecovery> = {
+            'a-claude': { strategy: { kind: 'command', text: '/mcp reconnect genie' }, applied: true },
+            'a-kiwi': { strategy: { kind: 'notice', text: MANUAL_RECONNECT_NOTICE }, applied: false },
+        };
+
+        announceAgentUpgrade({
+            currentVersion: '0.8.0',
+            previousVersion: '0.7.9',
+            agents: [
+                { agentId: 'a-claude', name: 'claude-one' },
+                { agentId: 'a-kiwi', name: 'kiwi-one' },
+            ],
+            changes: [],
+            reconnect: (agentId) => recoveries[agentId],
+            send,
+            persist: vi.fn(),
+            schedule: runNow,
+        });
+
+        expect(send.mock.calls[0][1]).toContain('Genie ran `/mcp reconnect genie`');
+        expect(send.mock.calls[1][1]).toContain(MANUAL_RECONNECT_NOTICE);
+        expect(send.mock.calls[1][1]).not.toContain('/mcp reconnect genie');
     });
 
     it('does nothing when this version was already announced', () => {
@@ -190,23 +279,45 @@ describe('upgrade nudges are staggered (genie#353)', () => {
         expect(AGENT_UPGRADE_NUDGE_INTERVAL_MS).toBe(15_000);
     });
 
-    it('spaces the sends by the interval instead of firing them all at once', () => {
+    /**
+     * genie#346 — NOTHING goes out in the boot tick, not even the first agent.
+     *
+     * The announcement runs at startup, and the harness channels an upgrade
+     * killed re-attach on their own a second or two after the MCP server binds.
+     * Firing the first nudge immediately meant that agent's notice was composed
+     * while no transport was bound — so the broker read "not attached" and typed
+     * it at the prompt, which is the exact symptom genie#344 fixed and this
+     * issue re-created on every upgrade.
+     *
+     * The grace is what turns the PTY fallback back into the exception: it lets
+     * a healed channel report itself BEFORE Genie decides how to reach the
+     * agent.
+     */
+    it('holds even the FIRST nudge for the transport grace window', () => {
         const clock = recorder();
         const send = vi.fn((_agentId: string, _text: string) => true);
 
         announceAgentUpgrade({ ...base, agents: fleet, send, persist: vi.fn(), schedule: clock.schedule });
 
-        // The first agent goes now; nothing else has been woken yet.
-        expect(send).toHaveBeenCalledTimes(1);
+        // Nothing at all in the boot tick — the old code sent to `a-one` here.
+        expect(send).not.toHaveBeenCalled();
         expect(clock.queue.map((entry) => entry.delayMs)).toEqual([
-            AGENT_UPGRADE_NUDGE_INTERVAL_MS,
-            AGENT_UPGRADE_NUDGE_INTERVAL_MS * 2,
+            AGENT_UPGRADE_TRANSPORT_GRACE_MS,
+            AGENT_UPGRADE_TRANSPORT_GRACE_MS + AGENT_UPGRADE_NUDGE_INTERVAL_MS,
+            AGENT_UPGRADE_TRANSPORT_GRACE_MS + AGENT_UPGRADE_NUDGE_INTERVAL_MS * 2,
         ]);
 
         // POSITIVE CONTROL: "they were spaced out" passes just as well against a
         // function that sent nothing. Drive the clock and check all three land.
         clock.drain();
         expect(send.mock.calls.map((call) => call[0])).toEqual(['a-one', 'a-two', 'a-three']);
+    });
+
+    it('gives the grace its own named constant, long enough for a channel to heal', () => {
+        // The generated channel bridge retries with capped backoff (see
+        // `claudeChannelBridge`); the grace has to outlast one full cap so a
+        // healed channel is bound before the first notice is composed.
+        expect(AGENT_UPGRADE_TRANSPORT_GRACE_MS).toBeGreaterThan(5_000);
     });
 
     it('keeps reconnect → send paired per agent, never interleaved', () => {
@@ -218,7 +329,9 @@ describe('upgrade nudges are staggered (genie#353)', () => {
         announceAgentUpgrade({
             ...base,
             agents: fleet,
-            reconnect: (agentId) => order.push(`reconnect:${agentId}`),
+            reconnect: (agentId) => {
+                order.push(`reconnect:${agentId}`);
+            },
             send: (agentId) => {
                 order.push(`send:${agentId}`);
                 return true;

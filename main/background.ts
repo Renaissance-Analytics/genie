@@ -140,7 +140,7 @@ import { createHarnessTransportSink } from './agentinbox/transport-sink';
 import { agentShutdownReadiness } from './agents/shutdown-readiness';
 import { setPluginPanelOpenSink } from './plugins/registry';
 import { announceAgentUpgrade, withWorkstationOperator } from './agents/upgrade-announcement';
-import { reconnectStrategy } from './agents/mcp-reconnect';
+import { MANUAL_RECOVERY, reconnectStrategy, type McpRecovery } from './agents/mcp-reconnect';
 import { terminalIsBlocked } from './agents/injection-guard';
 import { getChangelog } from './updater/changelog';
 import { deliverNudge, type NudgeIO } from './agentinbox/nudge-delivery';
@@ -1108,6 +1108,104 @@ function reportWorkstationResetFailures(failures: ResetFailure[]): void {
         });
 }
 
+/**
+ * Tell every live agent that Genie upgraded — and repair the connection the
+ * upgrade broke, first (genie#346).
+ *
+ * MUST be called AFTER `startMcpServer`. It used to run in the AgentInbox
+ * wiring block, hundreds of lines earlier, which meant the reconnect was
+ * performed against an endpoint that was not listening yet: `/mcp reconnect
+ * genie` was typed into a Claude terminal before there was anything to connect
+ * to, and no harness channel could possibly have re-bound, so every notice was
+ * composed as "not attached" and typed at a prompt. Ordering it here is the
+ * structural half of the fix; `AGENT_UPGRADE_TRANSPORT_GRACE_MS` is the other,
+ * giving the channel bridges their few seconds to come back.
+ *
+ * Best-effort throughout: an upgrade notice must never be able to block boot.
+ */
+function announceUpgradeToAgents(): void {
+    try {
+        const currentVersion = app.getVersion();
+        const previousVersion = getAllSettings().agent_upgrade_announced_version;
+        if (previousVersion === currentVersion) return;
+        void getChangelog(currentVersion, previousVersion).then((changelog) => {
+            announceAgentUpgrade({
+                currentVersion,
+                previousVersion,
+                // NAME as well as id: an agent called `general` is never
+                // nudged (Tynn story #262), and `announceAgentUpgrade`
+                // cannot enforce that without knowing what each one is
+                // called. `purpose` IS the agent's name — a saved agent's
+                // name is its channel purpose.
+                // …and the workstation OPERATOR, whatever the directory
+                // says (genie#352). It is the one agent that can be missing
+                // from it — deliberately not a workspace agent — so the ONE
+                // broadcast that exists to tell agents the ground moved
+                // under them reached everyone except the agent whose job is
+                // the machine.
+                agents: withWorkstationOperator(
+                    agentInboxBroker.directory()
+                        .filter((agent) => agent.status !== 'offline')
+                        .map((agent) => ({ agentId: agent.agentId, name: agent.purpose })),
+                ),
+                changes: changelog.groups.flatMap((group) => group.changes).slice(0, 8),
+                // Reconnect the agent's `genie` server BEFORE telling it
+                // anything: the upgrade replaced the process behind the
+                // endpoint, so the notice would otherwise arrive telling it
+                // to call tools that will not answer.
+                //
+                // RETURNS what it managed to do, so the notice can say so. Both
+                // repairs can legitimately refuse — `wakeTerminalIfIdle` will
+                // not type over a live prompt, `restartAgentTerminal` will not
+                // drop an agent with no resumable session — and an agent told
+                // "Genie reconnected you" when nothing happened acts on a lie.
+                reconnect: (agentId): McpRecovery => {
+                    // ITS OWN SEND, and per-harness. A raw write plus CR does
+                    // not use the terminal's real submit bytes, so the command
+                    // was TYPED and never submitted -- and the upgrade notice
+                    // then landed in the same box, the two sharing one line.
+                    const info = agentInboxBroker.getInfo(agentId);
+                    const terminalId = info?.terminalId;
+                    // No terminal to reach: the agent is still told how to
+                    // reconnect itself rather than left to discover dead tools.
+                    if (!terminalId) return MANUAL_RECOVERY;
+                    const spec = getTerminalSpec(terminalId);
+                    const strategy = reconnectStrategy(spec?.meta?.agent as string | undefined);
+                    if (strategy.kind === 'command') {
+                        // Through the nudge machinery: it holds the keyboard,
+                        // submits properly, replays anything typed during the
+                        // swap, and refuses when the agent is not provably idle.
+                        const typed = agentInboxBroker.wakeTerminalIfIdle(terminalId, strategy.text);
+                        return { strategy, applied: typed };
+                    }
+                    if (strategy.kind === 'restart') {
+                        // Codex has no reconnect command and does not discover
+                        // the replacement URL -- Genie passes it in launch
+                        // config, so the running process keeps the old one. A
+                        // managed restart resumes the session against refreshed
+                        // config, OUT OF BAND, with nothing typed at a prompt
+                        // that may be a modal.
+                        return { strategy, applied: restartAgentTerminal(terminalId).ok };
+                    }
+                    // A provider Genie cannot repair (genie#346). It used to get
+                    // NOTHING and stay disconnected until a human noticed; now
+                    // its terminal glows for attention and the notice carries
+                    // the instruction. Nothing is typed — the whole reason this
+                    // provider has no command is that Genie cannot read its
+                    // prompt.
+                    broadcastTerminalAttention(terminalId, true);
+                    return { strategy, applied: false };
+                },
+                send: (agentId, text) =>
+                    agentInboxBroker.send({ system: true, toAgentId: agentId, text }).ok,
+                persist: (version) => setSettings({ agent_upgrade_announced_version: version }),
+            });
+        });
+    } catch {
+        /* best-effort — the upgrade notice never blocks or breaks boot */
+    }
+}
+
 app.whenReady().then(async () => {
     debugLog.note('app ready');
     // HEADLESS (genie-cloud host): the electron stub still resolves whenReady, so
@@ -1613,66 +1711,11 @@ app.whenReady().then(async () => {
         });
         rehydrateAgentInbox();
         agentInboxBroker.rehydrateMessages();
-        const currentVersion = app.getVersion();
-        const previousVersion = getAllSettings().agent_upgrade_announced_version;
-        if (previousVersion !== currentVersion) {
-            void getChangelog(currentVersion, previousVersion).then((changelog) => {
-                announceAgentUpgrade({
-                    currentVersion,
-                    previousVersion,
-                    // NAME as well as id: an agent called `general` is never
-                    // nudged (Tynn story #262), and `announceAgentUpgrade`
-                    // cannot enforce that without knowing what each one is
-                    // called. `purpose` IS the agent's name — a saved agent's
-                    // name is its channel purpose.
-                    // …and the workstation OPERATOR, whatever the directory
-                    // says (genie#352). It is the one agent that can be missing
-                    // from it — deliberately not a workspace agent — so the ONE
-                    // broadcast that exists to tell agents the ground moved
-                    // under them reached everyone except the agent whose job is
-                    // the machine.
-                    agents: withWorkstationOperator(
-                        agentInboxBroker.directory()
-                            .filter((agent) => agent.status !== 'offline')
-                            .map((agent) => ({ agentId: agent.agentId, name: agent.purpose })),
-                    ),
-                    changes: changelog.groups.flatMap((group) => group.changes).slice(0, 8),
-                    // Reconnect the agent's `genie` server BEFORE telling it
-                    // anything: the upgrade replaced the process behind the
-                    // endpoint, so the notice would otherwise arrive telling it
-                    // to call tools that will not answer. Typed straight into
-                    // the terminal, because it is a TUI command, not an MCP one.
-                    reconnect: (agentId) => {
-                        // ITS OWN SEND, and per-harness. A raw write plus CR does
-                        // not use the terminal's real submit bytes, so the command
-                        // was TYPED and never submitted -- and the upgrade notice
-                        // then landed in the same box, the two sharing one line.
-                        const info = agentInboxBroker.getInfo(agentId);
-                        const terminalId = info?.terminalId;
-                        if (!terminalId) return;
-                        const spec = getTerminalSpec(terminalId);
-                        const strategy = reconnectStrategy(spec?.meta?.agent as string | undefined);
-                        if (strategy.kind === 'command') {
-                            // Through the nudge machinery: it holds the keyboard,
-                            // submits properly, replays anything typed during the
-                            // swap, and refuses when the agent is not provably idle.
-                            agentInboxBroker.wakeTerminalIfIdle(terminalId, strategy.text);
-                        } else if (strategy.kind === 'restart') {
-                            // Codex has no reconnect command and does not discover
-                            // the replacement URL -- Genie passes it in launch
-                            // config, so the running process keeps the old one. A
-                            // managed restart resumes the session against refreshed
-                            // config, OUT OF BAND, with nothing typed at a prompt
-                            // that may be a modal.
-                            restartAgentTerminal(terminalId);
-                        }
-                    },
-                    send: (agentId, text) =>
-                        agentInboxBroker.send({ system: true, toAgentId: agentId, text }).ok,
-                    persist: (version) => setSettings({ agent_upgrade_announced_version: version }),
-                });
-            });
-        }
+        // The upgrade announcement used to run HERE, and that was the bug
+        // (genie#346): the MCP server is not started until the end of
+        // `whenReady`, so every reconnect was aimed at an endpoint that was not
+        // listening. It now runs from `announceUpgradeToAgents()`, after
+        // `startMcpServer`.
     } catch {
         /* best-effort — AgentInbox is additive; a failure never blocks startup */
     }
@@ -1883,6 +1926,12 @@ app.whenReady().then(async () => {
     // cannot be established by reading code. Inert in a normal run.
     if (isE2E()) registerAppsE2E();
     await startMcpServer(mcpDeps).catch((e) => console.error('[mcp] failed to start', e));
+    // genie#346 — ONLY now. Every agent's `genie` connection died with the old
+    // process, and both halves of the repair need a listening endpoint: the
+    // typed `/mcp reconnect genie` has nothing to connect to without one, and a
+    // harness channel cannot re-register itself against a port nobody is on.
+    // Fire-and-forget: it schedules its own work and never blocks boot.
+    announceUpgradeToAgents();
 
     // Wire the operator's OWN workspace the way every other workspace is wired.
     // Without this it had no `.mcp.json`, no `.agents/skills/` and no Codex

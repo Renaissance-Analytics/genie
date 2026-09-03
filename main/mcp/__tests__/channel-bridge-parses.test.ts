@@ -39,13 +39,16 @@ describe('the generated AgentInbox channel bridge (#314)', () => {
 
     it('actually starts delivery on notifications/initialized', () => {
         // POSITIVE CONTROL for the test above: a file can parse and still be
-        // inert. `deliver()` registers the transport and runs the long-poll that
-        // IS the channel; it was defined and never called, so even a parsing
-        // bridge would have sat silent.
+        // inert. `run()` supervises `deliver()`, which registers the transport
+        // and holds the long-poll that IS the channel; `deliver` was once
+        // defined and never called, so even a parsing bridge sat silent.
         expect(src).toMatch(/notifications\/initialized/);
-        // Must be a CALL, not the `async function deliver()` definition — a bare
-        // /deliver\(\)/ matches the declaration and passes on the broken file.
-        expect(src).toMatch(/deliver\(\)\s*\.catch\(/);
+        // Must be a CALL, not the `async function run()` definition — a bare
+        // /run\(\)/ matches the declaration and passes on the broken file.
+        // genie#346 replaced a bare `deliver()` here with the supervisor: a
+        // single dropped connection used to end the channel for the session.
+        expect(src).toMatch(/run\(\)\s*\.catch\(/);
+        expect(src).toMatch(/await deliver\(/);
     });
 
     it('keeps the handlers that make it a usable MCP server', () => {
