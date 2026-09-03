@@ -83,25 +83,6 @@ test.beforeAll(async () => {
         await expect(whatsNew).toHaveCount(0);
     }
 
-    // A throwaway profile has never completed workstation setup, so
-    // `genieOsStatus()` comes back `setup: false` and the Genie OS layer opens
-    // itself — full-screen, `pointer-events: auto`, with a flyout that is
-    // `min(760px, 100vw - 48px)` wide and therefore over the sidebar at this
-    // window size. It resolves asynchronously, so it lands AFTER the window is
-    // interactive: the tests that only assert (through :209) pass, and 238, the
-    // first one that CLICKS a workspace row, times out with the row visible,
-    // enabled, stable, and covered. Three releases read that as a sidebar
-    // regression. It is first-run onboarding working as designed, so dismiss it
-    // here rather than change it.
-    const genieOs = page.locator('.genie-os-layer.is-open');
-    await genieOs.waitFor({ state: 'visible', timeout: 20_000 }).catch(() => {});
-    if (await genieOs.count()) {
-        // The backdrop's own top-left corner: the flyout is right-anchored and
-        // starts 24px in at its widest, so this is backdrop rather than panel.
-        await page.locator('.genie-os-backdrop').click({ position: { x: 5, y: 5 } });
-        await expect(page.locator('.genie-os-layer.is-open')).toHaveCount(0);
-    }
-
     const seeded = await readMasterSeed(app);
     if (!seeded) {
         throw new Error(
@@ -109,6 +90,27 @@ test.beforeAll(async () => {
         );
     }
     seed = seeded;
+
+    // The Genie OS first-run layer must NOT be over this window (genie#352).
+    //
+    // This fixture seeds two REGISTERED workspaces, so the profile is a
+    // configured machine and `genieOsStatus()` answers `setup: true`. Until
+    // #352 the boot mode came from one dotfile that nothing could ever write,
+    // so a profile with workspaces in it was told it had never been set up: the
+    // layer raised itself full-screen with `pointer-events: auto` over the
+    // sidebar, and the first test that CLICKS a workspace row timed out with
+    // the row visible, enabled, stable, and COVERED. Three releases read that
+    // as a sidebar regression. This hook used to spend 20 seconds of its 60s
+    // budget waiting for that layer so it could dismiss it.
+    //
+    // Asserted rather than waited for, and asserted in a shape that cannot pass
+    // vacuously: the element is rendered unconditionally, so it must be PRESENT
+    // (a page that never mounted fails here) and must not carry `is-open`. It
+    // runs after the seed read, by which point the window is fully up and the
+    // one `genieOsStatus()` round-trip has long since been applied.
+    const genieOsLayer = page.locator('.genie-os-layer');
+    await expect(genieOsLayer).toHaveCount(1);
+    await expect(genieOsLayer).not.toHaveClass(/\bis-open\b/);
 });
 
 test.afterAll(async () => {

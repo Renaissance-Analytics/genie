@@ -1,4 +1,50 @@
 import { NEVER_NUDGED_AGENT_NAME } from './reserved-names';
+import { GENIE_OS_AGENT } from './os-agent';
+
+/**
+ * How far apart two agents are woken by an upgrade (genie#353).
+ *
+ * Each nudge starts a model TURN, and a woken agent's first move is typically
+ * `agentinbox receive` plus a `connectToGenie` — against an MCP server whose
+ * process the upgrade has just replaced (#346). Waking a dozen agents in one
+ * tick is a thundering herd at the exact moment connections are still being
+ * re-established.
+ */
+export const AGENT_UPGRADE_NUDGE_INTERVAL_MS = 15_000;
+
+/**
+ * The stagger's clock, as an injected SEAM.
+ *
+ * `announceAgentUpgrade` stays synchronous and keeps returning a count, which is
+ * the whole reason it is testable; making it `async` and awaiting real timers
+ * would cost that and make the suite 15s slower per agent. Tests pass a
+ * scheduler they drive themselves.
+ */
+export type UpgradeNudgeScheduler = (run: () => void, delayMs: number) => void;
+
+const defaultScheduler: UpgradeNudgeScheduler = (run, delayMs) => {
+    setTimeout(run, delayMs);
+};
+
+/**
+ * Put the workstation operator in the audience, whatever the directory says
+ * (genie#352).
+ *
+ * The audience is built from `agentInboxBroker.directory()`, and the OSA is the
+ * one agent that can be missing from it — it is deliberately not a workspace
+ * agent, so nothing about a project's lifecycle can delete or re-parent it. The
+ * result was that the ONE broadcast whose purpose is telling agents the ground
+ * moved under them reached every agent except the one whose job is the machine.
+ *
+ * Idempotent: a directory that DOES report the operator is returned unchanged,
+ * so it is never nudged twice.
+ */
+export function withWorkstationOperator(
+    agents: readonly UpgradeAnnouncementTarget[],
+): UpgradeAnnouncementTarget[] {
+    if (agents.some((agent) => agent.agentId === GENIE_OS_AGENT.id)) return [...agents];
+    return [...agents, { agentId: GENIE_OS_AGENT.id, name: GENIE_OS_AGENT.name }];
+}
 
 /**
  * PURE. The agent ids an upgrade may nudge — everything except `general`.
@@ -57,13 +103,29 @@ export function announceAgentUpgrade(input: {
      */
     reconnect?: (agentId: string) => void;
     persist: (version: string) => void;
+    /**
+     * The stagger's clock (genie#353). Defaults to `setTimeout`; tests pass a
+     * scheduler they drive synchronously so the suite does not grow 15s per
+     * agent.
+     */
+    schedule?: UpgradeNudgeScheduler;
+    /** Override the ~15s spacing. Named constant by default, never a literal. */
+    intervalMs?: number;
 }): number {
     if (!input.currentVersion || input.previousVersion === input.currentVersion) return 0;
 
     const text = formatAgentUpgradeMessage(input.currentVersion, input.changes);
-    let sent = 0;
-    for (const agentId of nudgeableAgents(input.agents)) {
-        // ORDER IS THE POINT. A notice that lands first is read with dead tools.
+    const targets = nudgeableAgents(input.agents);
+    const schedule = input.schedule ?? defaultScheduler;
+    const intervalMs = input.intervalMs ?? AGENT_UPGRADE_NUDGE_INTERVAL_MS;
+
+    /**
+     * One agent's whole nudge, in one tick. ORDER IS THE POINT — a notice that
+     * lands first is read with dead tools — so the pair is kept ATOMIC rather
+     * than spaced apart, which is exactly what staggering must not turn into a
+     * race between one agent's reconnect and another's send.
+     */
+    const nudge = (agentId: string): void => {
         try {
             input.reconnect?.(agentId);
         } catch {
@@ -71,8 +133,21 @@ export function announceAgentUpgrade(input: {
             // the notice is the durable half and must not be lost to a TUI that
             // would not take the command.
         }
-        if (input.send(agentId, text)) sent += 1;
-    }
+        input.send(agentId, text);
+    };
+
+    targets.forEach((agentId, index) => {
+        // The first agent has nothing to wait behind; the rest are spaced.
+        if (index === 0) nudge(agentId);
+        else schedule(() => nudge(agentId), index * intervalMs);
+    });
+
+    // BEFORE the stagger finishes, deliberately. A crash part-way through must
+    // not re-announce the whole fleet on the next boot — and with N agents the
+    // last nudge is minutes away, which is a long time to leave that unrecorded.
     input.persist(input.currentVersion);
-    return sent;
+    // How many agents this announcement will nudge. It can no longer be "how
+    // many sends succeeded": all but the first are still queued when this
+    // returns. `send`'s own result is what the caller's mock asserts on.
+    return targets.length;
 }

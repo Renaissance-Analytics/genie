@@ -4,8 +4,97 @@ import path from 'node:path';
 const ORIENTED_MARKER = '.genie-osa-oriented';
 export type OsAgentBootMode = 'first-boot' | 'recovery';
 
-export function osAgentBootMode(userDataDir: string): OsAgentBootMode {
-    return fs.existsSync(path.join(userDataDir, ORIENTED_MARKER)) ? 'recovery' : 'first-boot';
+/**
+ * Durable proof that this workstation has already been set up — the things a
+ * missing `.genie-osa-oriented` cannot see (genie#352).
+ *
+ * Every field is chosen for ONE property: a Reset Workstation clears it. That
+ * is what keeps the positive control real — a machine that was genuinely made
+ * new again still gets `first-boot`.
+ *
+ * Deliberately NOT here: the managed toolchain. `workstation/reset.ts` PRESERVES
+ * `toolchain/` (it holds live binaries other processes are running), so an
+ * installed php would outlive the very reset that is supposed to make the
+ * machine new — and the OSA would be told to "resume" a workstation with no
+ * workspaces, no memory and no configuration.
+ */
+export interface WorkstationSetupEvidence {
+    /** A project workspace exists. Read from the db, which a reset deletes. */
+    hasWorkspace: boolean;
+    /** The operator's own memory envelope holds notes from a previous run. */
+    hasOsMemory: boolean;
+}
+
+/** PURE. Whether the evidence says this machine has been through setup already. */
+export function workstationIsConfigured(evidence: WorkstationSetupEvidence): boolean {
+    return evidence.hasWorkspace || evidence.hasOsMemory;
+}
+
+/**
+ * Gather the on-disk half of the evidence. `hasWorkspace` comes from the caller
+ * because the workspace list lives in the db, which this module deliberately
+ * does not reach into.
+ */
+export function readWorkstationEvidence(
+    userDataDir: string,
+    hasWorkspace: boolean,
+): WorkstationSetupEvidence {
+    return { hasWorkspace, hasOsMemory: hasOsAgentMemory(userDataDir) };
+}
+
+/**
+ * `<userData>/genie-os.agi/.ai/memory` with something in it.
+ *
+ * The DIRECTORY is not evidence: `ensureGenieOsWorkspace` creates it on every
+ * boot, including the first one. A file inside it is a note the operator left
+ * itself on a previous run, which a brand-new machine cannot have.
+ */
+function hasOsAgentMemory(userDataDir: string): boolean {
+    try {
+        return (
+            fs.readdirSync(path.join(userDataDir, 'genie-os.agi', '.ai', 'memory')).length > 0
+        );
+    } catch {
+        // No envelope yet — genuinely nothing to remember.
+        return false;
+    }
+}
+
+/**
+ * Which script the workstation operator is handed on this boot.
+ *
+ * The marker settles it when present. When it is ABSENT the evidence decides,
+ * because a missing dotfile is indistinguishable from a genuinely new machine —
+ * and for every version up to beta.296 it was ALWAYS absent: the only writer was
+ * `thumbsUp(reason:'boot')`, gated on a `claude-channel` nothing ever bound
+ * (genie#348). So an owner with workspaces, memory and a configured toolchain
+ * was told, every single restart, that this was the first boot, and the operator
+ * re-ran onboarding instead of resuming as the machine's operator.
+ */
+export function osAgentBootMode(
+    userDataDir: string,
+    evidence: WorkstationSetupEvidence,
+): OsAgentBootMode {
+    if (fs.existsSync(path.join(userDataDir, ORIENTED_MARKER))) return 'recovery';
+    return workstationIsConfigured(evidence) ? 'recovery' : 'first-boot';
+}
+
+/**
+ * Decide the boot mode AND make it durable.
+ *
+ * This is the "written on a successful boot" half of genie#352. The transport
+ * gate on `thumbsUp(reason:'boot')` stays exactly as it was — an OSA still
+ * cannot report setup complete with no working inbox — it simply is no longer
+ * the ONLY thing that can ever record "this machine is not new". A machine with
+ * no evidence is never marked, so a first boot stays a first boot.
+ */
+export function recordOsAgentBoot(
+    userDataDir: string,
+    evidence: WorkstationSetupEvidence,
+): OsAgentBootMode {
+    const mode = osAgentBootMode(userDataDir, evidence);
+    if (mode === 'recovery') markOsAgentOriented(userDataDir);
+    return mode;
 }
 
 export function markOsAgentOriented(userDataDir: string): void {

@@ -87,7 +87,7 @@ import { stopProcess, forgetProcess } from './terminal/process-supervisor';
 import { isTuiId, providerDef } from './agents/registry';
 import { osAgentLaunchCommand, osAgentMetaForProvider } from './agents/os-agent';
 import { requestWorkstationReset } from './workstation/reset';
-import { osAgentBootMode } from './agents/os-lifecycle';
+import { osAgentBootMode, readWorkstationEvidence } from './agents/os-lifecycle';
 import { armSchedule, forgetSchedule } from './terminal/process-scheduler';
 import { broadcastTerminalSpecsChanged, liveTerminalCount } from './terminal/ipc';
 import { agentPulse } from './terminal/agent-pulse';
@@ -2124,10 +2124,16 @@ export function registerIpcHandlers(): void {
     // defaults to it. Surfaced from main (renderer has no `os` access).
     ipcMain.handle('app:home-dir', () => os.homedir());
     ipcMain.handle('app:genie-os-workspace', () => ({ path: genieOsWorkspacePath(app.getPath('userData')) }));
-    ipcMain.handle('app:genie-os-status', () => ({
-        setup: osAgentBootMode(app.getPath('userData')) === 'recovery',
-        bootMode: osAgentBootMode(app.getPath('userData')),
-    }));
+    ipcMain.handle('app:genie-os-status', () => {
+        // The SAME evidence the boot used (genie#352), so this surface cannot
+        // disagree with the script the operator was actually handed.
+        const userData = app.getPath('userData');
+        const mode = osAgentBootMode(
+            userData,
+            readWorkstationEvidence(userData, listWorkspaces().length > 0),
+        );
+        return { setup: mode === 'recovery', bootMode: mode };
+    });
     ipcMain.handle('app:genie-os-sync', (_e, remoteUrl: string) =>
         syncGenieOsWorkspace(app.getPath('userData'), remoteUrl).then((workspacePath) => ({ ok: true, path: workspacePath })),
     );
