@@ -105,6 +105,52 @@ repo's workflow from another's — they differ deliberately.
 
 ---
 
+## Never report a success you have not verified
+
+**Say what you established, not what you hoped.** This is one anti-pattern that has
+produced at least six separate bugs, and it keeps recurring because each instance
+looks locally reasonable.
+
+The shape is always the same: something reports **worked** / **ready** / **done** at
+a moment when nothing has established that it is true.
+
+- `restartAgentTerminal` returned `{ok: true}` once it had spawned a pty. The agent
+  died a second later; the user had been told "agent restarted" (#364).
+- A site's `ready` flag was written on the start path and read forever after, so
+  `ready: true` outlived the backend it measured (#305).
+- `manageSite restart` on a host site recycles Genie's proxy, not the dev server
+  behind it, and reports success — its own comment admits it (#226).
+- `artboard post`'s tool description promised it "opens and focuses the panel".
+  Nothing did (#306).
+- "may still be starting" named no port and no check, so nobody could falsify it
+  (#227).
+
+**Why it is worse than an ordinary bug:** an AGENT cannot look at the screen and
+notice the claim was false. It takes `ok: true` literally, reports done to the
+person, and moves on. A false success does not just fail — it *propagates*, and the
+person finds out much later and much further from the cause.
+
+### The rule
+
+When you are about to report a result, one of three things must be true:
+
+1. **You verified it.** The check was available, and you ran it.
+2. **You narrowed the claim to what you actually know.** `submitted`, `accepted`,
+   `requested`, `queued` — not `done`. A caller can act correctly on "submitted";
+   nobody can act correctly on a false "done".
+3. **You said it is unverified, and what would settle it.** An honest
+   "I could not confirm this — check X" is far more useful than a confident wrong
+   answer.
+
+A hedge that cannot be checked (*"should be ready shortly"*) is not option 3. It is
+option 1 with the evidence removed.
+
+This applies to code and to prose equally. A tool DESCRIPTION in `protocol.ts` is
+read by an agent as a promise about behaviour; if the code does not do what the
+description says, the description is a bug of exactly this kind.
+
+---
+
 ## Known constraints — decided, not discovered
 
 Things that are deliberately not-yet. **These are settled.** Do not re-diagnose them,
