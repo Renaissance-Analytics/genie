@@ -59,6 +59,12 @@ export interface CreateAgiOpts {
     parent_path: string;     // where the envelope folder will be created
     /** Which envelope this is. Defaults to `agi`. */
     suffix?: EnvelopeSuffix;
+    /**
+     * Override the folder name, which is otherwise `<slug>.<suffix>`. Only the
+     * protected operator envelope uses this: it lives at a fixed `~/.gosa` the
+     * user never names, so deriving the folder from a slug would be a fiction.
+     */
+    folder_name?: string;
     remote?:
         | { kind: 'none' }
         | { kind: 'paste'; url: string }
@@ -468,7 +474,7 @@ export async function createAgiEnvelope(
     const suffix = opts.suffix ?? 'agi';
     const envelopePath = path.join(
         opts.parent_path,
-        envelopeFolderName(opts.slug, suffix),
+        opts.folder_name || envelopeFolderName(opts.slug, suffix),
     );
     if (fs.existsSync(envelopePath)) {
         const entries = fs.readdirSync(envelopePath);

@@ -2127,22 +2127,21 @@ export function registerIpcHandlers(): void {
     // terminals/editors here, and the directory picker for system processes
     // defaults to it. Surfaced from main (renderer has no `os` access).
     ipcMain.handle('app:home-dir', () => os.homedir());
-    ipcMain.handle('app:genie-os-workspace', () => ({ path: genieOsWorkspacePath(app.getPath('userData')) }));
+    ipcMain.handle('app:genie-os-workspace', () => ({ path: genieOsWorkspacePath(app.getPath('home')) }));
     ipcMain.handle('app:genie-os-status', () => {
         // The SAME evidence the boot used (genie#352), so this surface cannot
         // disagree with the script the operator was actually handed.
-        const userData = app.getPath('userData');
         const mode = osAgentBootMode(
-            userData,
-            readWorkstationEvidence(userData, listWorkspaces().length > 0),
+            app.getPath('userData'),
+            readWorkstationEvidence(listWorkspaces().length > 0),
         );
         return { setup: mode === 'recovery', bootMode: mode };
     });
     ipcMain.handle('app:genie-os-sync', (_e, remoteUrl: string) =>
-        syncGenieOsWorkspace(app.getPath('userData'), remoteUrl).then((workspacePath) => ({ ok: true, path: workspacePath })),
+        syncGenieOsWorkspace(app.getPath('home'), remoteUrl).then((workspacePath) => ({ ok: true, path: workspacePath })),
     );
     ipcMain.handle('app:genie-os-files', (_e, relativePath = '') =>
-        listGenieOsEntries(app.getPath('userData'), relativePath),
+        listGenieOsEntries(app.getPath('home'), relativePath),
     );
     ipcMain.handle('app:show-settings', (e, fromRemote?: boolean) => {
         // fromRemote = the caller is a remote/host window → restrict Settings to the

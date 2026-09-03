@@ -1,5 +1,5 @@
 import { getTerminalSpec, getWorkspace } from '../db';
-import { workspaceIdOfSpec, SYSTEM_WORKSPACE_ID } from '../terminal/workspace-of-terminal';
+import { workspaceIdOfSpec } from '../terminal/workspace-of-terminal';
 import { agentDisplay, type AgentTui } from '../agents/identity';
 
 /**
@@ -37,12 +37,9 @@ export function terminalNoticeFacts(terminalId: string): TerminalNoticeFacts {
         const spec = getTerminalSpec(terminalId);
         if (!spec) return UNKNOWN;
         const wsId = workspaceIdOfSpec(spec);
-        const workspace =
-            wsId === SYSTEM_WORKSPACE_ID
-                ? 'System Workspace'
-                : wsId
-                  ? getWorkspace(wsId)?.project_name ?? null
-                  : null;
+        // One lookup. The System Workspace used to need a hard-coded label here
+        // because there was no row to read a name off; there is one now.
+        const workspace = wsId ? getWorkspace(wsId)?.project_name ?? null : null;
         // The identity convention (#258): tui + NAME, never the chat id.
         // `whisper_purpose` IS the agent's name — see agents/identity.ts, which
         // deliberately makes them the same field so the two can't drift.

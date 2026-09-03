@@ -12,12 +12,15 @@ import type { ProcessStatus } from './process-lifecycle';
  * Tasks are `terminal_specs` of type 'process' (background) or 'terminal'
  * (interactive pty). 'code' specs are editor views — they execute nothing — so
  * they're excluded. The owning workspace is recorded on the spec
- * (`workspace_id`); a System-Workspace spec persists with `workspace_id: null`
- * + `meta.system === true` (the System Workspace is synthetic and has no
- * `workspaces` row), so those map to the "System" label here.
+ * (`workspace_id`). Two kinds of spec land under the "System" label: a global
+ * process, which persists UNATTACHED (`workspace_id: null` + `meta.system`)
+ * because its cwd is a directory the user picked; and the workstation operator's
+ * own terminal, which carries the real `__system__` id — a PROTECTED row that
+ * `listWorkspaces()` withholds, so it has no name in the map and falls through
+ * to the same label.
  */
 
-/** Label for System-Workspace tasks (workspace_id null + meta.system). */
+/** Label for System-Workspace tasks. */
 export const SYSTEM_WORKSPACE_LABEL = 'System';
 
 /** One task row for the Task Manager: spec + owning workspace + live status. */
@@ -62,9 +65,11 @@ export function buildProcessList(
                 command: isProcess
                     ? s.meta?.command ?? ''
                     : [s.shell, s.live_cwd ?? s.cwd].filter(Boolean).join('  ·  '),
-                // A spec with no workspace_id is a System-Workspace task; a
-                // workspace_id with no matching name (a since-removed workspace)
-                // also falls back to System rather than showing a dangling id.
+                // A spec with no workspace_id is a System-Workspace task. A
+                // workspace_id with no matching name falls back to System too —
+                // which covers both the protected `__system__` row (withheld from
+                // the list on purpose) and a since-removed workspace, rather than
+                // showing a dangling id.
                 workspace: s.workspace_id
                     ? workspaceNames.get(s.workspace_id) ?? SYSTEM_WORKSPACE_LABEL
                     : SYSTEM_WORKSPACE_LABEL,

@@ -4,8 +4,138 @@ import { simpleGit } from 'simple-git';
 import { createAgiEnvelope } from '../workspace/create-agi';
 import { osAgentBuilderSkill, writeWorkspaceAgentMcp } from '../mcp/agent-config';
 
-export function genieOsWorkspacePath(userDataDir: string): string {
+/**
+ * The workstation operator's envelope folder, in the user's HOME directory.
+ *
+ * It lived at `<userData>/genie-os.agi` — inside the one directory on the
+ * machine whose entire purpose is to be deleted (Reset Workstation empties
+ * `userData`, keeping only `PRESERVED_ENTRIES`). The operator's `.ai/memory` is
+ * its accumulated knowledge of this workstation, and a reset it performed itself
+ * would take it. `~/.gosa` sits outside that boundary, so a reset cannot reach it
+ * at all — no preserve-list entry, no exception, nothing to remember.
+ */
+export const GOSA_FOLDER = '.gosa';
+
+export function genieOsWorkspacePath(homeDir: string): string {
+    return path.join(homeDir, GOSA_FOLDER);
+}
+
+/** Where the envelope used to live, so an existing install can be migrated. */
+export function legacyGenieOsWorkspacePath(userDataDir: string): string {
     return path.join(userDataDir, 'genie-os.agi');
+}
+
+/** What a migration attempt did. `migrated` is false for "nothing to do" too —
+ *  `reason` says which. */
+export interface GenieOsMigration {
+    migrated: boolean;
+    /** The legacy folder, when there was one. */
+    from: string | null;
+    to: string;
+    /** Files verified at the destination. */
+    files: number;
+    reason?: string;
+}
+
+/** Every file under `dir`, as paths relative to it. Directories are implied. */
+function filesUnder(dir: string, base = dir): string[] {
+    const out: string[] = [];
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) out.push(...filesUnder(full, base));
+        else if (entry.isFile()) out.push(path.relative(base, full));
+    }
+    return out;
+}
+
+/**
+ * Prove the copy landed before anything starts using it.
+ *
+ * Size-equal for every file, and BYTE-equal for everything under `.ai/` — the
+ * memory and knowledge are the part whose loss would be unacceptable, and a
+ * matching size is not proof of matching content. Anything missing or different
+ * fails the whole migration; a partial move is the failure mode that would be
+ * discovered months later.
+ */
+function verifyCopy(source: string, destination: string): { ok: boolean; files: number; reason?: string } {
+    const expected = filesUnder(source);
+    for (const rel of expected) {
+        const from = path.join(source, rel);
+        const to = path.join(destination, rel);
+        let toStat: fs.Stats;
+        try {
+            toStat = fs.statSync(to);
+        } catch {
+            return { ok: false, files: 0, reason: `missing at the destination: ${rel}` };
+        }
+        if (toStat.size !== fs.statSync(from).size) {
+            return { ok: false, files: 0, reason: `size differs at the destination: ${rel}` };
+        }
+        const normalized = rel.split(path.sep).join('/');
+        if (normalized.startsWith('.ai/') && !fs.readFileSync(from).equals(fs.readFileSync(to))) {
+            return { ok: false, files: 0, reason: `content differs at the destination: ${rel}` };
+        }
+    }
+    return { ok: true, files: expected.length };
+}
+
+/**
+ * Move `<userData>/genie-os.agi` to `~/.gosa`, once, on an existing install.
+ *
+ * COPY, VERIFY, THEN SWAP — and the source is NEVER deleted. The old folder
+ * holds the operator's memory and knowledge; there is no version of this worth
+ * doing that risks it to save a directory's worth of disk. The copy lands in a
+ * staging folder and is only renamed into place after every file is accounted
+ * for, so a crash mid-copy leaves no half-envelope that would read as a good one.
+ *
+ * Idempotent by observation rather than by marker: a destination that already
+ * holds a `project.json` is the operator's live envelope and is never touched
+ * again — including one the user made themselves, which is why this refuses to
+ * clobber rather than preferring the legacy copy.
+ */
+export function migrateLegacyGenieOsWorkspace(
+    userDataDir: string,
+    homeDir: string,
+): GenieOsMigration {
+    const legacy = legacyGenieOsWorkspacePath(userDataDir);
+    const target = genieOsWorkspacePath(homeDir);
+    const nothing = (reason: string, from: string | null = null): GenieOsMigration => ({
+        migrated: false, from, to: target, files: 0, reason,
+    });
+
+    if (!fs.existsSync(path.join(legacy, 'project.json'))) {
+        return nothing('no legacy envelope to migrate');
+    }
+    if (fs.existsSync(path.join(target, 'project.json'))) {
+        return nothing('the operator already has an envelope at ~/.gosa', legacy);
+    }
+
+    const staging = `${target}.incoming`;
+    try {
+        fs.rmSync(staging, { recursive: true, force: true });
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.cpSync(legacy, staging, { recursive: true });
+        const verified = verifyCopy(legacy, staging);
+        if (!verified.ok) {
+            fs.rmSync(staging, { recursive: true, force: true });
+            return nothing(`copy could not be verified — ${verified.reason}`, legacy);
+        }
+        // A destination that exists without a `project.json` is the empty folder
+        // `ensureGenieOsWorkspace` makes; anything else is somebody's data and is
+        // left exactly where it is.
+        if (fs.existsSync(target)) {
+            if (fs.readdirSync(target).length > 0) {
+                fs.rmSync(staging, { recursive: true, force: true });
+                return nothing('~/.gosa already exists and is not empty', legacy);
+            }
+            fs.rmdirSync(target);
+        }
+        fs.renameSync(staging, target);
+        return { migrated: true, from: legacy, to: target, files: verified.files };
+    } catch (e) {
+        fs.rmSync(staging, { recursive: true, force: true });
+        return nothing(`migration failed — ${e instanceof Error ? e.message : String(e)}`, legacy);
+    }
 }
 
 export interface GenieOsEntry {
@@ -15,8 +145,8 @@ export interface GenieOsEntry {
     kind: 'file' | 'directory' | 'symlink';
 }
 
-export async function listGenieOsEntries(userDataDir: string, relativePath: string): Promise<GenieOsEntry[]> {
-    const root = await fs.promises.realpath(genieOsWorkspacePath(userDataDir));
+export async function listGenieOsEntries(homeDir: string, relativePath: string): Promise<GenieOsEntry[]> {
+    const root = await fs.promises.realpath(genieOsWorkspacePath(homeDir));
     const target = await fs.promises.realpath(path.resolve(root, relativePath || '.'));
     const relativeTarget = path.relative(root, target);
     if (relativeTarget === '..' || relativeTarget.startsWith(`..${path.sep}`) || path.isAbsolute(relativeTarget)) {
@@ -37,11 +167,11 @@ export async function listGenieOsEntries(userDataDir: string, relativePath: stri
         .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export async function syncGenieOsWorkspace(userDataDir: string, remoteUrl: string): Promise<string> {
+export async function syncGenieOsWorkspace(homeDir: string, remoteUrl: string): Promise<string> {
     if (!/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\.git$/i.test(remoteUrl)) {
         throw new Error('Genie OS sync requires a GitHub HTTPS clone URL.');
     }
-    const workspacePath = await ensureGenieOsWorkspace(userDataDir);
+    const { path: workspacePath } = await ensureGenieOsWorkspace(homeDir);
     const git = simpleGit(workspacePath);
     const remotes = await git.getRemotes(true);
     if (remotes.some((remote) => remote.name === 'origin')) await git.remote(['set-url', 'origin', remoteUrl]);
@@ -51,19 +181,49 @@ export async function syncGenieOsWorkspace(userDataDir: string, remoteUrl: strin
     return workspacePath;
 }
 
-/** Ensure the built-in workstation operator has a durable, git-backed memory envelope. */
-export async function ensureGenieOsWorkspace(userDataDir: string): Promise<string> {
-    const workspacePath = genieOsWorkspacePath(userDataDir);
+/**
+ * Ensure the built-in workstation operator has a durable, git-backed memory
+ * envelope at `~/.gosa`, migrating an existing `<userData>/genie-os.agi` first.
+ *
+ * The migration runs BEFORE the create so an upgrading install never gets a
+ * blank envelope written over the top of the one it already had. Its outcome is
+ * returned rather than logged and forgotten — boot reports it, because a
+ * migration that quietly did nothing is exactly the failure worth seeing.
+ */
+export async function ensureGenieOsWorkspace(
+    homeDir: string,
+    legacyUserDataDir?: string,
+): Promise<{ path: string; migration: GenieOsMigration | null }> {
+    const workspacePath = genieOsWorkspacePath(homeDir);
+    const migration = legacyUserDataDir
+        ? migrateLegacyGenieOsWorkspace(legacyUserDataDir, homeDir)
+        : null;
     if (!fs.existsSync(path.join(workspacePath, 'project.json'))) {
-        await createAgiEnvelope({
-            slug: 'genie-os',
-            name: 'Genie OS',
-            parent_path: userDataDir,
-            remote: { kind: 'none' },
-        });
+        try {
+            await createAgiEnvelope({
+                slug: 'genie-os',
+                name: 'Genie OS',
+                parent_path: homeDir,
+                // The folder is `.gosa`, not `<slug>.agi`: it is a fixed, protected
+                // root the user never names, and a dotfolder keeps it out of the way
+                // in a home directory it does not own.
+                folder_name: GOSA_FOLDER,
+                remote: { kind: 'none' },
+            });
+        } catch (e) {
+            // `createAgiEnvelope` refuses a non-empty target, and this one lives
+            // in the user's HOME — a folder they may have made themselves, or a
+            // previous run may have half-written. That must not abort the boot:
+            // an unguarded throw this early leaves Genie with no IPC and no
+            // window (the shape of genie#349). Report it and carry on with the
+            // folder as it stands; the operator still gets a working cwd below.
+            console.warn(
+                `[gosa] could not scaffold ${workspacePath} — ${e instanceof Error ? e.message : String(e)}`,
+            );
+        }
     }
     fs.mkdirSync(path.join(workspacePath, '.ai', 'memory'), { recursive: true });
-    return workspacePath;
+    return { path: workspacePath, migration };
 }
 
 /**

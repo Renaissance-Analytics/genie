@@ -108,6 +108,8 @@ import {
     listWorkspaceAgents,
     setSettings,
     setWorkspaceAgentCap,
+    ensureSystemWorkspace,
+    SYSTEM_WORKSPACE_ROW_ID,
 } from '../../db';
 import {
     manageTerminalsForMcp,
@@ -137,6 +139,12 @@ initDatabase(dataDir);
 const WS_ID = 'ws-cap';
 const CALLER_ID = 'term-caller';
 const OS_AGENT_ID = 'genie-os-agent';
+
+// The operator's own workspace row, rooted where its envelope lives. It carries
+// `workstation_operator`, which is how it now reaches other workspaces — it used
+// to reach them by having no workspace at all, through an escape hatch in
+// `decideTargetWorkspace` that has been deleted.
+ensureSystemWorkspace(path.join(tmpRoot, '.gosa'));
 
 addWorkspace({
     id: WS_ID,
@@ -293,11 +301,11 @@ afterAll(() => {
 });
 
 describe('the built-in Genie OS agent capability boundary', () => {
-    it('can discover workspaces but cannot use generic project terminal operations', async () => {
+    it('discovers every workspace on the machine, as this workstation’s operator', async () => {
         deleteTerminalSpec(CALLER_ID);
         createTerminalSpec({
             id: OS_AGENT_ID,
-            workspace_id: null,
+            workspace_id: SYSTEM_WORKSPACE_ROW_ID,
             label: 'Genie',
             cwd: tmpRoot,
             type: 'terminal',
@@ -313,19 +321,48 @@ describe('the built-in Genie OS agent capability boundary', () => {
             ]),
         );
 
+        // AUTHORITY CHANGE, deliberate and worth stating: the operator now
+        // reaches other workspaces through the ordinary `workstation_operator`
+        // designation its own row carries, not through the narrow
+        // `osAgentCapability` hatch that was only reachable by having no
+        // workspace. That hatch granted exactly two verbs; the designation grants
+        // what a designated operator gets. The one explicit restriction on the
+        // operator survives untouched — see the next test.
         const terminalAttempt = await manageTerminalsForMcp(OS_AGENT_ID, {
             action: 'list',
             workspaceId: WS_ID,
         });
-        expect(terminalAttempt.ok).toBe(false);
-        expect(terminalAttempt.error).toMatch(/no authority/i);
+        expect(terminalAttempt.ok).toBe(true);
+    });
+
+    it('POSITIVE CONTROL — an ordinary agent still cannot reach another workspace', async () => {
+        // The assertion that keeps the change above honest: "the operator can" is
+        // equally true of a change that let EVERY agent act anywhere.
+        deleteTerminalSpec(OS_AGENT_ID);
+        deleteTerminalSpec(CALLER_ID);
+        createTerminalSpec({
+            id: CALLER_ID,
+            workspace_id: 'ws-other',
+            label: 'caller',
+            cwd: wsDir,
+            type: 'terminal',
+            meta: {},
+        });
+
+        const attempt = await manageTerminalsForMcp(CALLER_ID, {
+            action: 'list',
+            workspaceId: WS_ID,
+        });
+
+        expect(attempt.ok).toBe(false);
+        expect(attempt.error).toMatch(/not allowed to target/i);
     });
 
     it('may launch only the saved agent configuration, never project command overrides', async () => {
         deleteTerminalSpec(CALLER_ID);
         createTerminalSpec({
             id: OS_AGENT_ID,
-            workspace_id: null,
+            workspace_id: SYSTEM_WORKSPACE_ROW_ID,
             label: 'Genie',
             cwd: tmpRoot,
             type: 'terminal',

@@ -163,24 +163,38 @@ describe('without the operator designation', () => {
 });
 
 describe('the built-in Genie OS agent', () => {
-    it('is denied generic project access even with an explicit target', () => {
-        const explicit = decideTargetWorkspace(null, 'project-1', new Set(), {
-            callerIsOsAgent: true,
+    /**
+     * It used to be authorized HERE, by having NO workspace at all: an
+     * `osAgentCapability` branch let an unattached caller act on any workspace it
+     * named. That branch existed only because the operator had no row to carry a
+     * designation on. Its `__system__` row carries `workstation_operator` now, so
+     * it is allowed by the ORDINARY operator path — one definition of "operator"
+     * rather than two — and having no workspace means what it says again.
+     */
+    it('is authorized as an operator, through its own workspace row', () => {
+        const decision = decideTargetWorkspace('__system__', 'project-1', new Set(), {
+            callerIsOperator: true,
         });
-        expect(explicit.allowed).toBe(false);
+
+        expect(decision.allowed).toBe(true);
+        expect(decision.workspaceId).toBe('project-1');
+        expect(decision.via).toBe('operator');
     });
 
-    it('may target an explicit workspace only for an AgentBuilder capability', () => {
-        const explicit = decideTargetWorkspace(null, 'project-1', new Set(), {
-            osAgentCapability: 'agent-register',
-        });
-        expect(explicit.allowed).toBe(true);
-        expect(explicit.workspaceId).toBe('project-1');
-        expect(explicit.via).toBe('operator');
+    it('POSITIVE CONTROL — an ordinary agent is still denied a workspace it does not govern', () => {
+        const decision = decideTargetWorkspace('ws-a', 'project-1', new Set(), {});
 
-        const missing = decideTargetWorkspace(null, undefined, new Set(), {
-            osAgentCapability: 'agent-register',
-        });
-        expect(missing.allowed).toBe(false);
+        expect(decision.allowed).toBe(false);
+        expect(decision.via).toBe('denied');
+    });
+
+    it('no longer grants anything to a caller with no workspace', () => {
+        // The deleted escape hatch. An unattached terminal naming a target used
+        // to be allowed on the strength of a capability flag; nothing grants that
+        // now, so an unattached caller is denied like any other.
+        expect(decideTargetWorkspace(null, 'project-1', new Set(), {}).allowed).toBe(false);
+        expect(
+            decideTargetWorkspace(null, 'project-1', new Set(), { callerIsOperator: true }).allowed,
+        ).toBe(false);
     });
 });

@@ -388,9 +388,11 @@ function withTerminalGenieUrlForCodex(
     agent: string | undefined,
     command: string,
 ): string {
-    const spec = getTerminalSpec(terminalId);
-    const osAgent = spec?.meta?.agent_id === 'genie:workstation';
-    if (agent !== 'codex' || (!osAgent && (!workspaceId || !workspaceMcpEnabled(workspaceId)))) return command;
+    // The operator used to need an exemption here: it had no workspace row, so
+    // `workspaceMcpEnabled` could never say yes for it and Codex launched without
+    // the Genie MCP. Its row has `mcp_enabled` set like any opted-in workspace,
+    // so the ordinary check answers for it.
+    if (agent !== 'codex' || !workspaceId || !workspaceMcpEnabled(workspaceId)) return command;
     const mcpUrl = registerTerminalEndpoint(terminalId);
     if (!mcpUrl) return command;
     return withCodexGenieMcpLaunch(command, {
@@ -1138,10 +1140,7 @@ export function registerTerminalIpc(): void {
             // Agent-integration MCP: when the spec's workspace has opted in, mint
             // this terminal's auto-wired endpoint and expose it as GENIE_MCP_URL
             // (+ GENIE_TERMINAL_ID) so an agent can drive the Genie UI (imDone).
-            if (
-                (spec?.workspace_id && workspaceMcpEnabled(spec.workspace_id)) ||
-                spec?.meta?.agent_id === 'genie:workstation'
-            ) {
+            if (spec?.workspace_id && workspaceMcpEnabled(spec.workspace_id)) {
                 const mcpUrl = registerTerminalEndpoint(opts.id);
                 if (mcpUrl) {
                     opts = {
@@ -1679,8 +1678,8 @@ export function broadcastTerminalAttention(id: string, on: boolean): number {
  * notice named neither the workspace nor the agent, and the click went nowhere
  * in particular. Naming it in the text is half the fix; going there is the other.
  *
- * `workspaceId` is the synthetic System Workspace id for a System-Workspace
- * terminal, and null for an unattached one (the panel is still surfaced).
+ * `workspaceId` is the System Workspace id for a System-Workspace terminal, and
+ * null for an unattached one (the panel is still surfaced).
  */
 export function broadcastTerminalReveal(id: string, workspaceId: string | null): void {
     // LOCAL-only, for the same reason as the attention glow: a host terminal's
@@ -1695,7 +1694,7 @@ export function broadcastTerminalReveal(id: string, workspaceId: string | null):
  * sidebar-level "something finished in workspace X" cue even when the terminal
  * itself isn't visible. The renderer adds a transient `pulsing` class to that
  * workspace's rail button + flyout row, then clears it. `workspaceId` is the
- * synthetic System Workspace id for a System-Workspace terminal.
+ * System Workspace id for a System-Workspace terminal.
  */
 export function broadcastWorkspacePulse(workspaceId: string): void {
     // LOCAL-only — a host window's pulse arrives via its host's /ws/events; a

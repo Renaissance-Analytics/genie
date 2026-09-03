@@ -8,56 +8,39 @@ export type OsAgentBootMode = 'first-boot' | 'recovery';
  * Durable proof that this workstation has already been set up — the things a
  * missing `.genie-osa-oriented` cannot see (genie#352).
  *
- * Every field is chosen for ONE property: a Reset Workstation clears it. That
- * is what keeps the positive control real — a machine that was genuinely made
- * new again still gets `first-boot`.
+ * ONE property decides what belongs here: a Reset Workstation clears it. That is
+ * what keeps the positive control real — a machine that was genuinely made new
+ * again still gets `first-boot`.
  *
- * Deliberately NOT here: the managed toolchain. `workstation/reset.ts` PRESERVES
- * `toolchain/` (it holds live binaries other processes are running), so an
- * installed php would outlive the very reset that is supposed to make the
- * machine new — and the OSA would be told to "resume" a workstation with no
- * workspaces, no memory and no configuration.
+ * That rule is also why the operator's own `.ai/memory` is NO LONGER evidence.
+ * It used to be, while the envelope lived at `<userData>/genie-os.agi` and a
+ * reset took it. The envelope moved to `~/.gosa`, deliberately outside the reset
+ * boundary, so its notes now survive a wipe — which would make them proof that a
+ * freshly-reset machine was configured. It is dropped for exactly the reason it
+ * was added.
+ *
+ * Deliberately NOT here either: the managed toolchain. `workstation/reset.ts`
+ * PRESERVES `toolchain/` (it holds live binaries other processes are running),
+ * so an installed php would outlive the very reset that is supposed to make the
+ * machine new.
  */
 export interface WorkstationSetupEvidence {
     /** A project workspace exists. Read from the db, which a reset deletes. */
     hasWorkspace: boolean;
-    /** The operator's own memory envelope holds notes from a previous run. */
-    hasOsMemory: boolean;
 }
 
 /** PURE. Whether the evidence says this machine has been through setup already. */
 export function workstationIsConfigured(evidence: WorkstationSetupEvidence): boolean {
-    return evidence.hasWorkspace || evidence.hasOsMemory;
+    return evidence.hasWorkspace;
 }
 
 /**
- * Gather the on-disk half of the evidence. `hasWorkspace` comes from the caller
- * because the workspace list lives in the db, which this module deliberately
- * does not reach into.
+ * Gather the evidence. `hasWorkspace` comes from the caller because the
+ * workspace list lives in the db, which this module deliberately does not reach
+ * into.
  */
-export function readWorkstationEvidence(
-    userDataDir: string,
-    hasWorkspace: boolean,
-): WorkstationSetupEvidence {
-    return { hasWorkspace, hasOsMemory: hasOsAgentMemory(userDataDir) };
-}
-
-/**
- * `<userData>/genie-os.agi/.ai/memory` with something in it.
- *
- * The DIRECTORY is not evidence: `ensureGenieOsWorkspace` creates it on every
- * boot, including the first one. A file inside it is a note the operator left
- * itself on a previous run, which a brand-new machine cannot have.
- */
-function hasOsAgentMemory(userDataDir: string): boolean {
-    try {
-        return (
-            fs.readdirSync(path.join(userDataDir, 'genie-os.agi', '.ai', 'memory')).length > 0
-        );
-    } catch {
-        // No envelope yet — genuinely nothing to remember.
-        return false;
-    }
+export function readWorkstationEvidence(hasWorkspace: boolean): WorkstationSetupEvidence {
+    return { hasWorkspace };
 }
 
 /**

@@ -39,8 +39,6 @@ export interface TargetDecision {
     via: 'self' | 'governed' | 'operator' | 'granted' | 'workstation' | 'denied';
 }
 
-export type OsAgentCapability = 'agent-register' | 'agent-start';
-
 /**
  * Decide whether `callerWorkspaceId` may act on `requestedWorkspaceId`.
  *
@@ -60,20 +58,14 @@ export function decideTargetWorkspace(
     governedIds: ReadonlySet<string>,
     opts: {
         callerIsOperator?: boolean;
-        /** @deprecated Identity alone never grants project access. */
-        callerIsOsAgent?: boolean;
-        osAgentCapability?: OsAgentCapability;
     } = {},
 ): TargetDecision {
     if (!callerWorkspaceId) {
-        if (opts.osAgentCapability && requestedWorkspaceId?.trim()) {
-            return {
-                allowed: true,
-                workspaceId: requestedWorkspaceId.trim(),
-                reason: 'Acting as the built-in Genie workstation operator.',
-                via: 'operator',
-            };
-        }
+        // No escape hatch for the built-in operator any more. It used to be
+        // authorized HERE, on the strength of having no workspace at all, because
+        // it had none to designate. Its `__system__` row carries
+        // `workstation_operator`, so it is allowed by the ordinary operator path
+        // below and an unattached caller is once again simply unauthorized.
         return {
             allowed: false,
             workspaceId: '',
@@ -142,10 +134,9 @@ export interface TargetResolverDeps {
      */
     governedWorkspaceIds: () => Promise<Set<string>>;
     /** WORKSTATION OPERATOR (Tynn #248) — the caller's own workspace holds the
-     *  designation, so it may act on every workspace on this machine. */
+     *  designation, so it may act on every workspace on this machine. The
+     *  built-in operator's own row carries it too. */
     callerIsOperator?: boolean;
-    /** Narrow operation granted to the immutable Genie OS identity. */
-    osAgentCapability?: OsAgentCapability;
 }
 
 /**
@@ -158,10 +149,7 @@ export async function resolveTargetWorkspace(
     deps: TargetResolverDeps,
 ): Promise<TargetDecision> {
     const requested = requestedWorkspaceId?.trim();
-    const operator = {
-        callerIsOperator: deps.callerIsOperator === true,
-        ...(deps.osAgentCapability ? { osAgentCapability: deps.osAgentCapability } : {}),
-    };
+    const operator = { callerIsOperator: deps.callerIsOperator === true };
     // Fast path: own workspace (or no/unattached caller) — no governance lookup.
     if (!requested || requested === deps.callerWorkspaceId || !deps.callerWorkspaceId) {
         return decideTargetWorkspace(deps.callerWorkspaceId, requested, new Set(), operator);

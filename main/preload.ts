@@ -1014,7 +1014,7 @@ const api = {
     app: {
         hideCapture: () => ipcRenderer.invoke('app:hide-capture'),
         getCurrentProject: () => ipcRenderer.invoke('app:get-current-project'),
-        /** The user's home directory (for the synthetic System Workspace). */
+        /** The user's home directory (the System Workspace row's fallback path). */
         homeDir: () => ipcRenderer.invoke('app:home-dir') as Promise<string>,
         genieOsWorkspace: () => ipcRenderer.invoke('app:genie-os-workspace') as Promise<{ path: string }>,
         genieOsStatus: () => ipcRenderer.invoke('app:genie-os-status') as Promise<{ setup: boolean; bootMode: 'first-boot' | 'recovery' }>,

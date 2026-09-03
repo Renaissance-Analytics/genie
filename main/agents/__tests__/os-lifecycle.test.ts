@@ -19,7 +19,7 @@ const newRoot = (prefix: string): string => {
 };
 
 /** A machine with nothing on it — the shape a genuinely new workstation has. */
-const NOTHING = { hasWorkspace: false, hasOsMemory: false } as const;
+const NOTHING = { hasWorkspace: false } as const;
 
 describe('Genie OSA lifecycle', () => {
     it('stays in first-boot setup until Genie records completed orientation', () => {
@@ -46,7 +46,7 @@ describe('OSA boot mode is derived from evidence, not one dotfile (genie#352)', 
     it('a configured workstation with NO marker still boots into recovery', () => {
         const root = newRoot('genie-osa-evidence-');
 
-        expect(osAgentBootMode(root, { hasWorkspace: true, hasOsMemory: false })).toBe('recovery');
+        expect(osAgentBootMode(root, { hasWorkspace: true })).toBe('recovery');
     });
 
     it('POSITIVE CONTROL — a genuinely new machine still gets first-boot', () => {
@@ -56,22 +56,18 @@ describe('OSA boot mode is derived from evidence, not one dotfile (genie#352)', 
         expect(osAgentBootMode(root, NOTHING)).toBe('first-boot');
     });
 
-    it('counts the operator’s own memory envelope as evidence', () => {
+    it('does NOT count the operator’s memory — it now outlives a reset', () => {
+        // The evidence rule is one property: a Reset Workstation clears every
+        // field. The operator's memory moved to `~/.gosa`, OUTSIDE userData, so a
+        // reset no longer clears it — which makes it evidence that the workstation
+        // is configured on a machine that has just been wiped. It is dropped for
+        // exactly the reason it was added.
         const root = newRoot('genie-osa-evidence-mem-');
-
-        expect(osAgentBootMode(root, { hasWorkspace: false, hasOsMemory: true })).toBe('recovery');
-    });
-
-    it('reads that evidence off disk — an OSA memory note is a prior run', () => {
-        const root = newRoot('genie-osa-evidence-read-');
-        const memory = path.join(root, 'genie-os.agi', '.ai', 'memory');
+        const memory = path.join(root, '.gosa', '.ai', 'memory');
         fs.mkdirSync(memory, { recursive: true });
-
-        // The empty envelope `ensureGenieOsWorkspace` creates on EVERY boot is
-        // not evidence of anything; a note written into it is.
-        expect(readWorkstationEvidence(root, false).hasOsMemory).toBe(false);
         fs.writeFileSync(path.join(memory, 'toolchain.md'), 'php 8.4 installed');
-        expect(readWorkstationEvidence(root, false).hasOsMemory).toBe(true);
+
+        expect(osAgentBootMode(root, readWorkstationEvidence(false))).toBe('first-boot');
     });
 
     it('a Reset Workstation puts it back to first-boot, toolchain and all', () => {
@@ -82,8 +78,8 @@ describe('OSA boot mode is derived from evidence, not one dotfile (genie#352)', 
         const root = newRoot('genie-osa-evidence-reset-');
         fs.mkdirSync(path.join(root, 'toolchain', 'php', '8.4'), { recursive: true });
 
-        expect(readWorkstationEvidence(root, false)).toEqual(NOTHING);
-        expect(osAgentBootMode(root, readWorkstationEvidence(root, false))).toBe('first-boot');
+        expect(readWorkstationEvidence(false)).toEqual(NOTHING);
+        expect(osAgentBootMode(root, readWorkstationEvidence(false))).toBe('first-boot');
     });
 });
 
@@ -97,7 +93,7 @@ describe('recording a boot makes the mode durable', () => {
     it('writes the marker when the evidence says the machine is configured', () => {
         const root = newRoot('genie-osa-record-');
 
-        expect(recordOsAgentBoot(root, { hasWorkspace: true, hasOsMemory: false })).toBe('recovery');
+        expect(recordOsAgentBoot(root, { hasWorkspace: true })).toBe('recovery');
         // Durable: the NEXT boot needs no evidence at all.
         expect(osAgentBootMode(root, NOTHING)).toBe('recovery');
     });

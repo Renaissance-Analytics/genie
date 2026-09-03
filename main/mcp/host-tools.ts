@@ -8,11 +8,7 @@ import {
 } from '../agents/command';
 import path from 'path';
 import crypto from 'crypto';
-import os from 'os';
-import {
-    workspaceIdOfTerminal,
-    SYSTEM_WORKSPACE_ID,
-} from '../terminal/workspace-of-terminal';
+import { workspaceIdOfTerminal } from '../terminal/workspace-of-terminal';
 import {
     listWorkspaces,
     listTerminalSpecs,
@@ -222,13 +218,16 @@ export function registerHostTools(d: HostToolsDeps): void {
 
 /**
  * Resolve a terminal → its workspace ROOT directory for the env tools
- * (setEnv/checkEnv): a real workspace's path, or the home directory for the
- * synthetic System workspace (mirroring openFileForUser). Null when unresolved.
+ * (setEnv/checkEnv). Null when unresolved.
+ *
+ * This used to substitute the home directory for the System workspace, because
+ * there was no row to read a path off. There is now, and `~/.gosa` is the more
+ * honest answer anyway: the operator's environment belongs in the operator's own
+ * envelope, not scattered across the user's home.
  */
 export function workspaceRootForTerminal(terminalId: string): string | null {
     const wsId = workspaceIdOfTerminal(terminalId);
     if (!wsId) return null;
-    if (wsId === SYSTEM_WORKSPACE_ID) return os.homedir();
     return getWorkspace(wsId)?.path ?? null;
 }
 
@@ -254,7 +253,10 @@ export async function describeWorkspaceForMcp(
     if (!workspaceId) return null;
     // Agent metadata is a TERMINAL fact; a GApp caller simply has none.
     const terminalSpec = terminalId ? getTerminalSpec(terminalId) : null;
-    const ws = listWorkspaces().find((w) => w.id === workspaceId);
+    // `getWorkspace`, not a scan of `listWorkspaces()`: the protected System
+    // Workspace is deliberately absent from that list, and the operator asking
+    // `connectToGenie` for its own map is exactly the caller a scan would decline.
+    const ws = getWorkspace(workspaceId);
     if (!ws) return null;
 
     const root = ws.path;
@@ -1303,11 +1305,12 @@ export async function isOpsProjectFor(callerWorkspacePath: string): Promise<bool
  * May this caller be shown the WHOLE workstation — every workspace on the
  * machine, by name?
  *
- * Exactly the two authorities {@link actionableWorkspaces} already grants the
- * full workspace list to, named once so a second tool cannot drift into its own
- * private notion of "operator": the built-in workstation operator agent
- * (`genie:workstation`), and an agent whose workspace the human designated this
- * workstation's operator (Tynn #248).
+ * ONE authority: the caller's workspace carries the workstation-operator
+ * designation (Tynn #248). The built-in operator used to need a second, parallel
+ * check on its identity, because it had no workspace row to carry a designation
+ * on. Its row carries one now (`ensureSystemWorkspaceRow` sets
+ * `workstation_operator`), so the identity branch is gone and there is a single
+ * definition of "operator" rather than two that could drift.
  *
  * Read from the CALLER's terminal, never from the request — authority comes
  * from what the machine was configured to trust, not from what a caller claims.
@@ -1317,7 +1320,6 @@ export async function isOpsProjectFor(callerWorkspacePath: string): Promise<bool
 export function callerSeesWholeWorkstation(callerTerminalId: string): boolean {
     const spec = callerTerminalId ? getTerminalSpec(callerTerminalId) : null;
     if (!spec) return false;
-    if (spec.meta?.agent_id === 'genie:workstation') return true;
     return spec.workspace_id ? isWorkstationOperator(spec.workspace_id) : false;
 }
 
@@ -1330,7 +1332,6 @@ export function callerSeesWholeWorkstation(callerTerminalId: string): boolean {
 export async function resolveAgentTarget(
     callerTerminalId: string,
     requestedWorkspaceId: string | undefined,
-    opts: { osAgentCapability?: import('./target-workspace').OsAgentCapability } = {},
 ): Promise<{ decision: TargetDecision; ws: ReturnType<typeof getWorkspace> | null }> {
     // A caller is a terminal OR an installed GApp (Tynn #250). Both land here, so
     // there is one answer to "may this caller act there?" instead of a second,
@@ -1351,8 +1352,6 @@ export async function resolveAgentTarget(
     }
 
     const callerWorkspaceId = caller.workspaceId;
-    const callerSpec = getTerminalSpec(callerTerminalId);
-    const callerIsOsAgent = callerSpec?.meta?.agent_id === 'genie:workstation';
     const callerWs = callerWorkspaceId ? getWorkspace(callerWorkspaceId) : null;
     const decision = await resolveTargetWorkspace(requestedWorkspaceId, {
         callerWorkspaceId,
@@ -1362,11 +1361,11 @@ export async function resolveAgentTarget(
                 : Promise.resolve(new Set<string>()),
         // WORKSTATION OPERATOR (Tynn #248). Read from the caller's OWN workspace
         // row, never from the request: the authority has to come from what the
-        // machine was configured to trust, not from what a caller claims.
+        // machine was configured to trust, not from what a caller claims. The
+        // built-in operator's own row carries the designation, so it is
+        // authorized HERE rather than through the `osAgentCapability` escape
+        // hatch that existed only because it had no row to read.
         callerIsOperator: callerWorkspaceId ? isWorkstationOperator(callerWorkspaceId) : false,
-        ...(callerIsOsAgent && opts.osAgentCapability
-            ? { osAgentCapability: opts.osAgentCapability }
-            : {}),
     });
     const ws = decision.allowed ? getWorkspace(decision.workspaceId) ?? null : null;
     return { decision, ws };
@@ -1873,16 +1872,16 @@ export function restartAgentTerminal(id: string): RestartAgentResult {
     // Genie OSA is a recovery surface: restart means a complete teardown and a
     // fresh launch using CURRENT provider settings. It must work even when the
     // old TUI never captured a resumable session or its input path is wedged.
-    if (spec.meta?.system === true) {
-        // The OSA has NO workspace row -- by design, so deleting a project can
-        // never delete the workstation operator. This looked it up with
-        // `getWorkspace(spec.workspace_id!)`, asserting non-null on a value that
-        // is ALWAYS null here, so every restart failed with "Genie OS workspace
-        // is unavailable" and the operator could not be restarted at all.
-        //
-        // Its folder is its cwd, and `resolveAgentLaunch` takes the workspace
-        // optionally -- it needs a path, not a row.
-        const ws = { id: SYSTEM_WORKSPACE_ID, path: spec.cwd };
+    if (spec.meta?.agent_id === 'genie:workstation') {
+        // This used to key on `meta.system` and then rebuild a fake workspace
+        // (`{ id: '__system__', path: spec.cwd }`) because the operator
+        // had no row — an earlier version asserted `getWorkspace(spec.workspace_id!)`
+        // on a value that was ALWAYS null, so every restart failed with "Genie OS
+        // workspace is unavailable". The row exists now, so the workspace is
+        // looked up, not invented; what remains is the teardown-and-relaunch
+        // behaviour, which is about the operator's ROLE, not about its identity
+        // model.
+        const ws = getWorkspace(spec.workspace_id ?? '') ?? { id: '', path: spec.cwd };
         const command = resolveAgentLaunch(provider, undefined, ws);
         if (!command) return { ok: false, error: `No command configured for agent "${provider}".` };
         const identity = spec.meta.agent_id;
@@ -1890,7 +1889,7 @@ export function restartAgentTerminal(id: string): RestartAgentResult {
         killTerminalById(id);
         deleteTerminalSpec(id);
         const restarted = createAgentTerminal({
-            workspaceId: spec.workspace_id!, cwd: spec.cwd, label: spec.label,
+            workspaceId: spec.workspace_id ?? '', cwd: spec.cwd, label: spec.label,
             agentMeta: { agent: provider, command },
             agentInbox: {
                 purpose: spec.meta.whisper_purpose,
@@ -1899,7 +1898,7 @@ export function restartAgentTerminal(id: string): RestartAgentResult {
             },
         });
         const fresh = getTerminalSpec(restarted.id);
-        if (fresh) updateTerminalSpec(restarted.id, { meta: { ...preserved, ...fresh.meta, system: true, ...(identity ? { agent_id: identity } : {}) } });
+        if (fresh) updateTerminalSpec(restarted.id, { meta: { ...preserved, ...fresh.meta, ...(identity ? { agent_id: identity } : {}) } });
         broadcastTerminalSpecsChanged();
         return relaunchInFlight(id, restarted.id, provider, restarted.command ?? command);
     }
@@ -2123,9 +2122,7 @@ export async function registerAgentForMcp(
     callerTerminalId: string,
     req: RegisterAgentRequest,
 ): Promise<RegisterAgentResult> {
-    const { decision, ws } = await resolveAgentTarget(callerTerminalId, req.workspaceId, {
-        osAgentCapability: 'agent-register',
-    });
+    const { decision, ws } = await resolveAgentTarget(callerTerminalId, req.workspaceId);
     if (!decision.allowed || !ws) return { ok: false, error: decision.reason };
     return registerAgentInWorkspace(ws, req);
 }
@@ -2306,12 +2303,7 @@ export async function runAgentForMcp(
                 'project commands, instructions, and working-directory overrides are not allowed.',
         };
     }
-    const osAgentCapability = req.action === 'list' || req.action === 'start'
-        ? 'agent-start' as const
-        : undefined;
-    const { decision, ws } = await resolveAgentTarget(callerTerminalId, req.workspaceId, {
-        ...(osAgentCapability ? { osAgentCapability } : {}),
-    });
+    const { decision, ws } = await resolveAgentTarget(callerTerminalId, req.workspaceId);
     if (!decision.allowed || !ws) {
         return { ok: false, error: decision.reason };
     }
@@ -2516,13 +2508,11 @@ export async function agentInboxForMcp(
     req: AgentInboxRequest,
 ): Promise<AgentInboxResult> {
     const spec = callerTerminalId ? getTerminalSpec(callerTerminalId) : null;
-    // genie#321 — resolved through `callerWorkspaceDescriptor`, not by reading
-    // `spec.workspace_id` raw. The System Workspace has no `workspaces` row by
-    // design; its specs carry `workspace_id: null` + `meta.system === true`.
-    // Reading the column directly made the Genie OS agent — the one agent that
-    // is always a System spec — "not in a workspace", so it could not use the
-    // inbox, could not register a transport, and therefore could never signal
-    // boot complete. A terminal genuinely in no workspace is still refused.
+    // Resolved through `callerWorkspaceDescriptor` because a caller is a terminal
+    // OR a GApp and both have to get one answer — not because the System
+    // Workspace needs translating. AgentInbox identity is `workspaceId:purpose`,
+    // so a caller with no workspace has no identity and is refused, which is now
+    // simply what it says: no row, no inbox.
     const ws = spec ? callerWorkspaceDescriptor(spec, (id) => getWorkspace(id)) : null;
     if (!spec || !ws) {
         return { ok: false, error: 'This terminal is not in a workspace, so it can’t use agentinbox.' };
@@ -2893,17 +2883,12 @@ async function actionableWorkspaces(
     const callerWorkspaceId = callerTerminalId
         ? getTerminalSpec(callerTerminalId)?.workspace_id ?? null
         : null;
-    const callerIsOsAgent = getTerminalSpec(callerTerminalId)?.meta?.agent_id === 'genie:workstation';
     const callerWs = callerWorkspaceId ? getWorkspace(callerWorkspaceId) : null;
     const out: ManagedWorkspaceInfo[] = [];
-    if (callerIsOsAgent) {
-        return listWorkspaces().map((w) => ({
-            id: w.id,
-            name: w.project_name,
-            path: w.path,
-            relation: 'operator' as const,
-        }));
-    }
+    // The built-in operator used to get its own early return here — it had no
+    // workspace row, so the ordinary `self` + operator walk below produced
+    // nothing for it. Its row carries `workstation_operator` now, so it takes the
+    // same walk as any designated operator: itself first, then the machine.
     if (callerWs) {
         out.push({
             id: callerWs.id,

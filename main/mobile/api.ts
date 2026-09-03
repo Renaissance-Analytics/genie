@@ -574,8 +574,10 @@ export interface MobileDataDeps {
 // NEVER served or reachable, and every spawned pty is confined to the workspace
 // folder. All checks below fail CLOSED: an unknown/uncertain target is denied.
 
-/** Real (DB-backed) workspace ids the surface serves. The synthetic System
- *  workspace has NO row, so its id is never here — it is never served. */
+/** Real (DB-backed) workspace ids the surface serves. The System Workspace HAS a
+ *  row now, but it is protected — deliberately absent from `listWorkspaces()` —
+ *  so its id is still never here and it is still never served. That exclusion is
+ *  now structural rather than accidental, which is the stronger guarantee. */
 function servedWorkspaceIds(deps: MobileDataDeps): Set<string> {
     return new Set(deps.listWorkspaces().map((w) => w.id));
 }
@@ -1442,7 +1444,7 @@ export async function handleApi(
         // Verify the path is one of THIS host's REAL workspaces (a remote can't
         // point file ops at an arbitrary host path). The desktop carries the real
         // path in the WorkspaceRow it got from /api/desktop/workspaces. The
-        // synthetic System workspace has NO db row, so it is never matched here —
+        // protected System workspace is absent from `listWorkspaces()`, so it is never matched here —
         // file/editor access to it is impossible on the headless surface. Full-FS
         // is desktop-only regardless: this route never sets the `system` flag on
         // the files/ipc ops, so every request stays confined to the workspace.

@@ -29,7 +29,6 @@
 
 import crypto from 'crypto';
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
 import { app, utilityProcess, type UtilityProcess } from 'electron';
 import type {
@@ -38,7 +37,7 @@ import type {
     PluginToolResult,
 } from './registry';
 import { getWorkspace, type PluginRow } from '../db';
-import { workspaceIdOfTerminal, SYSTEM_WORKSPACE_ID } from '../terminal/workspace-of-terminal';
+import { workspaceIdOfTerminal } from '../terminal/workspace-of-terminal';
 import { runPluginFsOp, isPluginFsOp } from './fs-bridge';
 import { buildMinimalEnv, DENIED_BUILTINS } from './worker-sandbox';
 import type { PluginManifest } from './manifest';
@@ -55,14 +54,18 @@ const NET_MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
 
 /**
  * Resolve a call's AUTHORITATIVE workspace root from its terminal id — computed
- * host-side (trusted), NEVER supplied by the worker. A real workspace → its
- * path; the synthetic System workspace → the home directory (mirroring
- * openFileForUser / the env tools); unresolved → null (fs ops fail closed).
+ * host-side (trusted), NEVER supplied by the worker. A workspace → its path;
+ * unresolved → null (fs ops fail closed).
+ *
+ * The System workspace used to be substituted with the HOME directory, because
+ * it had no row to read a path from — which handed every plugin running under the
+ * operator the whole home directory as its sandbox. It has a row and a root
+ * (`~/.gosa`) now, so plugin fs ops there are confined exactly like everyone
+ * else's. That is a narrowing, and a deliberate one.
  */
 function rootForTerminal(terminalId: string): string | null {
     const wsId = terminalId ? workspaceIdOfTerminal(terminalId) : null;
     if (!wsId) return null;
-    if (wsId === SYSTEM_WORKSPACE_ID) return os.homedir();
     return getWorkspace(wsId)?.path ?? null;
 }
 

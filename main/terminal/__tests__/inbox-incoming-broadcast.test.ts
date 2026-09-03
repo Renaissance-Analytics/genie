@@ -45,7 +45,11 @@ vi.mock('../../db', () => ({
     getAllSettings: () => ({ track_cwd: 'off' }),
     getTerminalSpec: () => spec,
     getWorkspace: (id: string) =>
-        id === 'ws-1' ? { id: 'ws-1', project_name: 'tynn.ai' } : null,
+        id === 'ws-1'
+            ? { id: 'ws-1', project_name: 'tynn.ai' }
+            : id === '__system__'
+              ? { id: '__system__', project_name: 'System', path: '/home/w/.gosa' }
+              : null,
     listWorkspaces: () => [],
 }));
 
@@ -118,12 +122,24 @@ describe('announceInboxIncoming', () => {
         expect(p.title.trim()).not.toBe('');
     });
 
-    it('resolves the System Workspace, whose specs carry no workspace row', () => {
-        spec = { id: 'term-9', workspace_id: null, label: 'system', meta: { system: true } };
+    it('names the System Workspace from its own row, like any other', () => {
+        // The operator's spec carries a real `workspace_id` now, so the title
+        // comes off the row instead of a hard-coded literal.
+        spec = { id: 'term-9', workspace_id: '__system__', label: 'system', meta: {} };
         announceInboxIncoming('term-9', true);
 
         const p = incoming()[0]!.payload as { workspaceId: string | null; title: string };
         expect(p.workspaceId).toBe('__system__');
-        expect(p.title).toContain('System Workspace');
+        expect(p.title).toContain('System');
+    });
+
+    it('still groups an UNATTACHED System-Workspace spec under the System Workspace', () => {
+        // `meta.system` survives for panels and global processes, which root at
+        // their own cwd and must stay unattached. They still resolve for grouping.
+        spec = { id: 'term-10', workspace_id: null, label: 'system', meta: { system: true } };
+        announceInboxIncoming('term-10', true);
+
+        const p = incoming()[0]!.payload as { workspaceId: string | null };
+        expect(p.workspaceId).toBe('__system__');
     });
 });
