@@ -601,17 +601,28 @@ export class AgentInboxBroker {
         });
         if (!wake) return false;
         if (planNudge(a.draft).mode !== 'submit') return false;
-        a.lastWokenAt = this.now();
         try {
-            this.wakeSink({
-                terminalId,
-                text,
-                plan: planNudge(a.draft),
-            });
-            return true;
+            // The sink's `false` is a VETO, not noise: the terminal is parked on
+            // someone else's modal, or another notice already holds its input.
+            // Nothing was typed, so nothing may be reported as sent — same shape
+            // as {@link notifyNow} and `sendPendingNudge`.
+            if (
+                this.wakeSink({
+                    terminalId,
+                    text,
+                    plan: planNudge(a.draft),
+                }) === false
+            ) {
+                return false;
+            }
         } catch {
             return false;
         }
+        // Only a nudge that actually landed consumes this idle period; a vetoed
+        // one must stay retryable, or a single blocking modal silences the agent
+        // until it next finishes a turn.
+        a.lastWokenAt = this.now();
+        return true;
     }
 
     /**

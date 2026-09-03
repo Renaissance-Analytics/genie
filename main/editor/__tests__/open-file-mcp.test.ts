@@ -42,6 +42,11 @@ const sent: Array<{
 /** What the fake renderer replies with when a payload arrives. */
 let rendererReply: { reused: boolean; opened: boolean } | null = { reused: true, opened: false };
 
+/** Whether the fake main process has a master window to send into. `false` plays
+ *  the tray-resident case, where background.ts's real `sendOpenFile` returns
+ *  without sending. */
+let hasWindow = true;
+
 beforeAll(() => {
     (ipcMain as unknown as { handle: (ch: string, fn: ReplyHandler) => void }).handle = (
         ch,
@@ -68,9 +73,13 @@ beforeAll(() => {
             { id: 'ws-b', path: wsB },
         ],
         sendOpenFile: (payload) => {
+            // Tray-resident: no window, nothing sent. The real one takes this
+            // branch on `!masterWindow || masterWindow.isDestroyed()`.
+            if (!hasWindow) return false;
             sent.push(payload);
             // Play the renderer: answer the request main is awaiting.
             if (rendererReply) reply?.(null, payload.requestId, rendererReply);
+            return true;
         },
     });
 });
@@ -78,6 +87,7 @@ beforeAll(() => {
 afterEach(() => {
     sent.length = 0;
     rendererReply = { reused: true, opened: false };
+    hasWindow = true;
 });
 
 afterAll(() => {
@@ -158,6 +168,69 @@ describe('openFileForUser (main → Floor payload)', () => {
     it('an unattached terminal cannot open anything', async () => {
         const res = await openFileForUserForMcp('term-nope', { path: 'x.md' });
         expect(res.ok).toBe(false);
+        expect(sent).toHaveLength(0);
+    });
+});
+
+/**
+ * "Never report a success you have not verified" (CONTRIBUTING.md).
+ *
+ * `openedNew: reply ? !reply.reused : true` GUESSED on timeout — its own comment
+ * said "best-effort default" — so an agent was told a new editor panel had been
+ * opened by a renderer that had said nothing for six seconds. And with no master
+ * window at all, `sendOpenFile` returned silently, main waited out the full
+ * timeout, and the guess turned that into `ok: true, openedNew: true` for a file
+ * nothing had opened.
+ */
+describe('openFileForUser — reports only what the renderer confirmed', () => {
+    it('POSITIVE CONTROL: a renderer that answers is trusted, and carries no caveat', async () => {
+        // The whole point of the timeout branch is that it is DIFFERENT from
+        // this one. Without this assertion, "no openedNew" would also pass
+        // against a build that stopped reporting the outcome entirely.
+        rendererReply = { reused: false, opened: true };
+        const res = await openFileForUserForMcp('term-a', { path: '.ai/plans/roadmap.md' });
+        expect(res.ok).toBe(true);
+        expect(res.dispatched).toBe(true);
+        expect(res.openedNew).toBe(true);
+        expect(res.reused).toBe(false);
+        expect(res.note).toBeUndefined();
+    });
+
+    it('a silent renderer is reported as DISPATCHED, with no claim about the panel', async () => {
+        rendererReply = null; // the Floor never answers
+        const res = await openFileForUserForMcp(
+            'term-a',
+            { path: '.ai/plans/roadmap.md' },
+            // A seam, not a shortened product timeout: REPLY_TIMEOUT_MS is
+            // unchanged and this test would take 6s without it.
+            { replyTimeoutMs: 30 },
+        );
+        expect(sent).toHaveLength(1); // it really was handed to the Floor
+        expect(res.ok).toBe(true);
+        expect(res.dispatched).toBe(true);
+        // The two claims nobody established: OMITTED, not defaulted.
+        expect(res.openedNew).toBeUndefined();
+        expect(res.reused).toBeUndefined();
+        // …and the caller is told what would settle it.
+        expect(res.note).toMatch(/did not (reply|answer)|no reply/i);
+        expect(res.note).toMatch(/look|check|window/i);
+    });
+
+    it('no master window fails IMMEDIATELY instead of waiting out the timeout to guess', async () => {
+        hasWindow = false;
+        const started = Date.now();
+        const res = await openFileForUserForMcp(
+            'term-a',
+            { path: '.ai/plans/roadmap.md' },
+            { replyTimeoutMs: 5_000 },
+        );
+        const elapsed = Date.now() - started;
+        expect(res.ok).toBe(false);
+        expect(res.dispatched).toBe(false);
+        expect(res.error).toMatch(/window/i);
+        expect(res.openedNew).toBeUndefined();
+        // It must not have burned the wait to produce a falsehood.
+        expect(elapsed).toBeLessThan(1_000);
         expect(sent).toHaveLength(0);
     });
 });

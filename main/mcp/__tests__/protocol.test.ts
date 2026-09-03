@@ -13,7 +13,7 @@ function ctx(overrides: Partial<McpContext> = {}): McpContext {
         terminalId: 'term-1',
         serverName: 'genie',
         serverVersion: '0.7.0',
-        onImDone: vi.fn(),
+        onImDone: vi.fn().mockReturnValue({ attention: 1 }),
         onThumbsUp: vi.fn().mockResolvedValue({ ok: true, agentId: 'cfg-1' }),
         checkIssues: vi.fn().mockResolvedValue({
             connected: true,
@@ -569,6 +569,155 @@ describe('handleMcpMessage', () => {
         const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
         expect(text).toContain('Read 6 byte');
         expect(text).toContain('dropped');
+    });
+
+    it('manageTerminals write: an UNSUBMITTED body is said so in the summary line', async () => {
+        // The summary is what an agent skimming the result reads. "acted on t-1"
+        // over a body that is still sitting in the input box reads as sent.
+        const manageTerminals = vi.fn().mockResolvedValue({
+            ok: true,
+            terminals: [{ id: 't-1', label: 'x', cwd: '', agent: null }],
+            affectedId: 't-1',
+            delivered: true,
+            submitted: false,
+            note: 'The text reached the terminal but the submit Enter did not.',
+        });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 44,
+                method: 'tools/call',
+                params: { name: 'manageTerminals', arguments: { action: 'write', id: 't-1', data: 'x' } },
+            },
+            ctx({ manageTerminals }),
+        );
+        const summary = (res?.result as { content: Array<{ text: string }> }).content[0].text.split(
+            '\n\n',
+        )[0];
+        expect(summary).toMatch(/unsubmitted/i);
+    });
+
+    it('manageTerminals write: POSITIVE CONTROL — a submitted write says sent, not unsubmitted', async () => {
+        // Without this, the assertion above passes against a summary that warns
+        // on every write.
+        const manageTerminals = vi.fn().mockResolvedValue({
+            ok: true,
+            terminals: [{ id: 't-1', label: 'x', cwd: '', agent: null }],
+            affectedId: 't-1',
+            delivered: true,
+            submitted: true,
+        });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 45,
+                method: 'tools/call',
+                params: { name: 'manageTerminals', arguments: { action: 'write', id: 't-1', data: 'x' } },
+            },
+            ctx({ manageTerminals }),
+        );
+        const summary = (res?.result as { content: Array<{ text: string }> }).content[0].text.split(
+            '\n\n',
+        )[0];
+        expect(summary).not.toMatch(/unsubmitted/i);
+        expect(summary).toContain('t-1');
+    });
+
+    it('runAgent send: an UNSUBMITTED prompt is not summarized as "send ok"', async () => {
+        const runAgent = vi.fn().mockResolvedValue({
+            ok: true,
+            id: 't-agent',
+            delivered: true,
+            submitted: false,
+            note: 'The text reached the terminal but the submit Enter did not.',
+        });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 46,
+                method: 'tools/call',
+                params: { name: 'runAgent', arguments: { action: 'send', id: 't-agent', prompt: 'x' } },
+            },
+            ctx({ runAgent }),
+        );
+        const summary = (res?.result as { content: Array<{ text: string }> }).content[0].text.split(
+            '\n\n',
+        )[0];
+        expect(summary).toMatch(/unsubmitted/i);
+        expect(summary).not.toMatch(/send ok/i);
+    });
+
+    it('runAgent send: POSITIVE CONTROL — a submitted prompt still summarizes as ok', async () => {
+        const runAgent = vi.fn().mockResolvedValue({
+            ok: true,
+            id: 't-agent',
+            delivered: true,
+            submitted: true,
+        });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 47,
+                method: 'tools/call',
+                params: { name: 'runAgent', arguments: { action: 'send', id: 't-agent', prompt: 'x' } },
+            },
+            ctx({ runAgent }),
+        );
+        const summary = (res?.result as { content: Array<{ text: string }> }).content[0].text.split(
+            '\n\n',
+        )[0];
+        expect(summary).not.toMatch(/unsubmitted/i);
+        expect(summary).toContain('t-agent');
+    });
+
+    it('openFileForUser: an UNCONFIRMED open is not summarized as "opened a new editor panel"', async () => {
+        // `result.reused ? … : 'opened a new editor panel'` reads an ABSENT
+        // reused (the renderer never answered) as "not reused" — the same guess
+        // the result object stopped making.
+        const openFileForUser = vi.fn().mockResolvedValue({
+            ok: true,
+            file: '/w/a.md',
+            dispatched: true,
+            note: 'The request was handed to the Genie window, which did not reply.',
+        });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 48,
+                method: 'tools/call',
+                params: { name: 'openFileForUser', arguments: { path: 'a.md' } },
+            },
+            ctx({ openFileForUser }),
+        );
+        const summary = (res?.result as { content: Array<{ text: string }> }).content[0].text.split(
+            '\n\n',
+        )[0];
+        expect(summary).not.toMatch(/opened a new editor panel/i);
+        expect(summary).toMatch(/did not (reply|confirm)|unconfirmed|not confirmed/i);
+    });
+
+    it('openFileForUser: POSITIVE CONTROL — a CONFIRMED new panel still says so', async () => {
+        const openFileForUser = vi.fn().mockResolvedValue({
+            ok: true,
+            file: '/w/a.md',
+            dispatched: true,
+            reused: false,
+            openedNew: true,
+        });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 49,
+                method: 'tools/call',
+                params: { name: 'openFileForUser', arguments: { path: 'a.md' } },
+            },
+            ctx({ openFileForUser }),
+        );
+        const summary = (res?.result as { content: Array<{ text: string }> }).content[0].text.split(
+            '\n\n',
+        )[0];
+        expect(summary).toMatch(/opened a new editor panel/i);
+        expect(summary).not.toMatch(/did not reply/i);
     });
 
     it('manageTerminals says an EMPTY read came from a dead pty, not a quiet one', async () => {
@@ -1254,7 +1403,9 @@ describe('handleMcpMessage', () => {
     });
 
     it('invokes onImDone with the bound terminal id on tools/call', async () => {
-        const onImDone = vi.fn();
+        // The pulse count is part of onImDone's contract now — a mock that
+        // returns nothing is not a host Genie could have.
+        const onImDone = vi.fn().mockReturnValue({ attention: 1 });
         const res = await handleMcpMessage(
             {
                 jsonrpc: '2.0',
@@ -1310,6 +1461,110 @@ describe('handleMcpMessage', () => {
         const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
         expect(text).toContain('ready');
         expect(text).toContain('cfg-ready');
+    });
+
+    // --- imDone: "Never report a success you have not verified" --------------
+    // The ack said "this terminal is now glowing in Genie until you focus it"
+    // and "Saved to .ai/handoff/<agent>.md" unconditionally. Attention is a pure
+    // IPC event with NO persistence anywhere, so with zero local windows and no
+    // remote/mobile client — a tray-resident Genie, the normal state for a
+    // background agent — it reached nobody and a window opened a second later
+    // never showed it. And `onHandoff` drops the note for a System-workspace
+    // agent, for a terminal with no agent name, and on any fs failure, while
+    // `writeHandoff`'s own boolean was discarded.
+
+    it('imDone does NOT claim a glow when the attention signal reached nobody', async () => {
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 70, method: 'tools/call', params: { name: 'imDone', arguments: {} } },
+            ctx({ onImDone: vi.fn().mockReturnValue({ attention: 0 }) }),
+        );
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).not.toMatch(/now glowing/i);
+        // …and says what actually happened, so the agent can act on it.
+        expect(text).toMatch(/reached no|nobody|no one|nothing received|nothing is displaying/i);
+        expect(text).toMatch(/not stored|will not|won't/i);
+    });
+
+    it('POSITIVE CONTROL: imDone still reports the glow when something received it', async () => {
+        // Without this, "no glow claim" would also pass against an ack that
+        // stopped mentioning the glow at all.
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 71, method: 'tools/call', params: { name: 'imDone', arguments: {} } },
+            ctx({ onImDone: vi.fn().mockReturnValue({ attention: 2 }) }),
+        );
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toMatch(/now glowing/i);
+        expect(text).not.toMatch(/reached no/i);
+    });
+
+    it('imDone reports a handoff that was DROPPED, and why', async () => {
+        // The System-workspace case is the one that fires every time: the OS
+        // agent's spec has workspace_id null + meta.system, which maps to the
+        // System workspace, and onHandoff returns early on it.
+        const onHandoff = vi.fn().mockReturnValue({
+            saved: false,
+            reason: 'this terminal belongs to the System workspace, which has no folder to write it into',
+        });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 72,
+                method: 'tools/call',
+                params: { name: 'imDone', arguments: { handoff: 'mid-refactor, see PR #12' } },
+            },
+            ctx({ onHandoff }),
+        );
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(onHandoff).toHaveBeenCalled();
+        expect(text).toMatch(/not saved|was NOT saved|could not be saved/i);
+        expect(text).toContain('System workspace');
+    });
+
+    it('imDone reports a handoff whose WRITE failed rather than swallowing it', async () => {
+        // writeHandoff already returned a boolean ("Returns whether it landed")
+        // and server-deps discarded it — a full disk ate the note silently.
+        const onHandoff = vi.fn().mockReturnValue({
+            saved: false,
+            reason: 'writing .ai/handoff/moic.md failed',
+        });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 73,
+                method: 'tools/call',
+                params: { name: 'imDone', arguments: { handoff: 'note' } },
+            },
+            ctx({ onHandoff }),
+        );
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toMatch(/not saved|was NOT saved|could not be saved/i);
+        expect(text).toContain('.ai/handoff/moic.md');
+    });
+
+    it('POSITIVE CONTROL: imDone reports a handoff that LANDED as saved, with its path', async () => {
+        const onHandoff = vi.fn().mockReturnValue({ saved: true, path: '.ai/handoff/moic.md' });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 74,
+                method: 'tools/call',
+                params: { name: 'imDone', arguments: { handoff: 'note' } },
+            },
+            ctx({ onHandoff }),
+        );
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toMatch(/saved/i);
+        expect(text).not.toMatch(/not saved|NOT saved/i);
+        expect(text).toContain('.ai/handoff/moic.md');
+    });
+
+    it('imDone says nothing about a handoff when none was passed', async () => {
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 75, method: 'tools/call', params: { name: 'imDone', arguments: {} } },
+            ctx(),
+        );
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).not.toMatch(/handoff/i);
     });
 
     it('imDone reminds the agent to raise questions via ForceTheQuestion, not plaintext', async () => {
@@ -1535,7 +1790,9 @@ describe('handleMcpMessage', () => {
 
     it('imDone still acks if the IssueWatch snapshot throws (best-effort)', async () => {
         const checkIssues = vi.fn().mockRejectedValue(new Error('db down'));
-        const onImDone = vi.fn();
+        // The pulse count is part of onImDone's contract now — a mock that
+        // returns nothing is not a host Genie could have.
+        const onImDone = vi.fn().mockReturnValue({ attention: 1 });
         const res = await handleMcpMessage(
             { jsonrpc: '2.0', id: 52, method: 'tools/call', params: { name: 'imDone', arguments: {} } },
             ctx({ onImDone, checkIssues }),

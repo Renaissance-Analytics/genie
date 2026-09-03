@@ -19,7 +19,7 @@ function ctx(over: Partial<McpContext> = {}): McpContext {
         terminalId: 'term-1',
         serverName: 'genie',
         serverVersion: '0.7.0',
-        onImDone: vi.fn(),
+        onImDone: vi.fn().mockReturnValue({ attention: 1 }),
         checkIssues: vi.fn().mockResolvedValue({
             connected: true,
             workspaceResolved: true,

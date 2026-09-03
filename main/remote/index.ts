@@ -414,12 +414,19 @@ export function connKeyForWindow(wcId: number): string | null {
  * `__system__`) would otherwise make it navigate, glow, or refetch wrongly.
  * Host windows get their live events from `emitToConn` (the host's `/ws/events`).
  */
-export function broadcastLocal(channel: string, payload?: unknown): void {
+export function broadcastLocal(channel: string, payload?: unknown): number {
+    let delivered = 0;
     for (const w of BrowserWindow.getAllWindows()) {
         if (w.webContents.isDestroyed()) continue;
         if (isRemoteBoundWindow(w.webContents.id)) continue;
         w.webContents.send(channel, payload);
+        delivered += 1;
     }
+    // How many windows actually received it. Most callers ignore this; the ones
+    // that REPORT a broadcast to an agent must not, because these events have no
+    // persistence — a send with zero local windows reaches nobody and nothing
+    // replays it when a window opens later (CONTRIBUTING.md).
+    return delivered;
 }
 
 /** Per-window status — deliberately omits the token. */

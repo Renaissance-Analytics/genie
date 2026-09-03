@@ -1652,14 +1652,22 @@ export function announceInboxIncoming(id: string, landed: boolean, pending = tru
  * The renderer pulses the matching terminal's glow in the rail, the flyout row,
  * and the panel border until it gets focus. Called by the MCP `imDone` tool.
  */
-export function broadcastTerminalAttention(id: string, on: boolean): void {
+export function broadcastTerminalAttention(id: string, on: boolean): number {
     // LOCAL-only (mirrors broadcastWorkspacePulse): a host terminal's attention
     // arrives via its host's /ws/events, so a LOCAL terminal:attention must not
     // leak into remote-bound windows. Terminal ids are unique UUIDs so it's
     // harmless today, but broadcastLocal is the correct routing discipline.
-    broadcastLocal('terminal:attention', { id, on });
+    const local = broadcastLocal('terminal:attention', { id, on });
     // Mirror to the mobile dashboard push channel (no-op when the server is off).
-    mobileEmit('terminal:attention', { id, on });
+    // Remote and mobile clients receive the glow HERE, not through broadcastLocal
+    // — so a headless host with no local window at all can still have delivered
+    // it, and counting only windows would understate it exactly as badly.
+    const remote = mobileEmit('terminal:attention', { id, on });
+    // How many surfaces took it. ZERO is the real case a caller must not paper
+    // over: attention is a pure IPC event with no persistence anywhere, so with
+    // a tray-resident Genie and nothing connected it reaches nobody, is stored
+    // nowhere, and a window opened a second later never shows it.
+    return local + remote;
 }
 
 /**

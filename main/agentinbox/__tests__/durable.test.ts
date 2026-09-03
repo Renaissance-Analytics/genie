@@ -314,6 +314,53 @@ describe('AgentInbox durable inbox (Track B)', () => {
         expect(b.wakeTerminalIfIdle('nope', 'iw')).toBe(false);
     });
 
+    it('wakeTerminalIfIdle: a sink VETO is reported as false, not swallowed into a false success', () => {
+        // The sink's `false` is a real veto (background.ts: the terminal is
+        // parked on someone else's modal, or another notice already holds the
+        // input). Reporting `true` there tells the caller a nudge landed when
+        // nothing was typed -- and `manageAgentUpgrade` turns that into
+        // "Genie reconnected you", which the agent then acts on.
+        let clock = 1_000_000;
+        const idle = (b: AgentInboxBroker) => {
+            b.markTurnEnd('t-b');
+            clock += WAKE_QUIET_MS + 1;
+        };
+
+        // POSITIVE CONTROL: identical setup, sink accepts -> true. Without this
+        // the veto assertion below would also pass against a wake that is simply
+        // broken for every input.
+        const ok = new AgentInboxBroker();
+        ok.setStore(store);
+        ok.setClock(() => clock);
+        const landed: string[] = [];
+        ok.setWakeSink((d) => { landed.push(d.text); return true; });
+        join(ok, 'b');
+        idle(ok);
+        expect(ok.wakeTerminalIfIdle('t-b', 'iw text')).toBe(true);
+        expect(landed).toEqual(['iw text']);
+
+        // The veto.
+        const vetoed = new AgentInboxBroker();
+        vetoed.setStore(store);
+        vetoed.setClock(() => clock);
+        let asked = 0;
+        vetoed.setWakeSink(() => { asked += 1; return false; });
+        join(vetoed, 'b');
+        idle(vetoed);
+        expect(vetoed.wakeTerminalIfIdle('t-b', 'iw text')).toBe(false);
+        expect(asked).toBe(1); // the sink WAS consulted -- this is a veto, not an earlier gate
+
+        // A sink that returns nothing (the void-returning test sinks above, and
+        // any sink that simply performs the write) still counts as delivered.
+        const quiet = new AgentInboxBroker();
+        quiet.setStore(store);
+        quiet.setClock(() => clock);
+        quiet.setWakeSink(() => {});
+        join(quiet, 'b');
+        idle(quiet);
+        expect(quiet.wakeTerminalIfIdle('t-b', 'iw text')).toBe(true);
+    });
+
     it('read-receipts: a sent DM is unseen until the recipient receives it (#9)', async () => {
         const b = new AgentInboxBroker();
         b.setStore(store);

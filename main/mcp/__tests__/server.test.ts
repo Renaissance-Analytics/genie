@@ -184,7 +184,7 @@ const deps = (
     userDataDir: string,
     configuredPort: number,
     terminals: { ids: string[]; lastActive: string | null },
-    onImDone: (id: string) => void,
+    onImDone: (id: string) => unknown,
     onForceQuestion: () => Promise<{ cancelled: boolean; answers: any[] }> = async () => ({
         cancelled: true,
         answers: [],
@@ -218,7 +218,13 @@ const deps = (
     userDataDir,
     configuredPort: () => configuredPort,
     workspaceTerminals: () => terminals,
-    onImDone,
+    // These cases are about ROUTING (which terminal the pulse names), not about
+    // how many surfaces took it, so the spy stays a spy and the delivery count
+    // is supplied here — one window received it.
+    onImDone: (id: string) => {
+        onImDone(id);
+        return { attention: 1 };
+    },
     checkIssues: async () => ({
         connected: true,
         workspaceResolved: true,

@@ -356,16 +356,42 @@ export interface McpToolCallResult {
     isError?: boolean;
 }
 
+/** What an imDone pulse actually reached. */
+export interface ImDoneDelivery {
+    /** Surfaces that received the attention event — local windows PLUS connected
+     *  remote/mobile clients. Zero means nobody saw it. */
+    attention: number;
+}
+
+/** Whether a handoff note was persisted, and — when it was not — why not. */
+export interface HandoffOutcome {
+    saved: boolean;
+    /** Where it landed (workspace-relative), on `saved`. */
+    path?: string;
+    /** Why it did NOT land, as a sentence the agent can act on. */
+    reason?: string;
+}
+
 export interface McpContext {
     /** The terminal id this endpoint is bound to (from the URL token). */
     terminalId: string;
     serverName: string;
     serverVersion: string;
-    /** Side effect for the imDone tool — pulse the caller's terminal. */
-    onImDone: (terminalId: string) => void;
-    /** Persist the note an agent left for its own next run (genie handoff).
-     *  Optional so a host that has not wired it behaves exactly as before. */
-    onHandoff?: (terminalId: string, note: string) => void;
+    /**
+     * Side effect for the imDone tool — pulse the caller's terminal, and report
+     * HOW MANY surfaces received that pulse.
+     *
+     * Attention is a pure IPC event with no persistence: zero means it reached
+     * nobody and nothing will replay it, which is the normal state for a
+     * tray-resident Genie. imDone must not tell an agent its terminal is glowing
+     * when nothing is displaying a glow.
+     */
+    onImDone: (terminalId: string) => ImDoneDelivery;
+    /** Persist the note an agent left for its own next run (genie handoff), and
+     *  say whether it LANDED — it is dropped for a System-workspace terminal,
+     *  for one with no agent name, and on any fs failure. Optional so a host
+     *  that has not wired it behaves exactly as before. */
+    onHandoff?: (terminalId: string, note: string) => HandoffOutcome;
     onThumbsUp?: (
         terminalId: string,
         reason: 'boot' | 'ack' | 'shutdown',
@@ -663,6 +689,13 @@ export interface ManageProcessResult {
     processes: ManagedProcessInfo[];
     /** The process the action targeted/created, when applicable. */
     affectedId?: string;
+    /** start/restart: the spawn had not settled either way when this call
+     *  returned (it is in auto-restart backoff). NOT a started process. */
+    pending?: boolean;
+    /** start/restart: what Genie actually established — a spawn that survived a
+     *  short window is "alive when Genie last looked", never a health check.
+     *  Relay it instead of reporting the service as working. */
+    note?: string;
 }
 
 /** One governed child + its local workspace status (provisionWorkspaces). */
@@ -1226,6 +1259,17 @@ export interface ManageTerminalsResult {
      *  the scrollback that survived in the pty host), or 'exited' (its pty is not
      *  running, so there is nothing to read at all). */
     state?: TerminalReadState;
+    /** write: the input BODY reached the pty. False (with `ok: false`) means
+     *  NOTHING was sent — the terminal has no running pty. */
+    delivered?: boolean;
+    /** write: the submit keystroke landed too. A multi-line submit is two writes
+     *  (body, then Enter after a delay), so `delivered: true, submitted: false`
+     *  is a real outcome: the text is in the input box, UNSUBMITTED. */
+    submitted?: boolean;
+    /** write: what Genie actually established when that is not simply "sent" —
+     *  currently the unsubmitted-body case. Relay it; do not report the input as
+     *  delivered to the agent. */
+    note?: string;
 }
 
 // --- runAgent ----------------------------------------------------------------
@@ -1378,13 +1422,22 @@ export interface RunAgentResult {
     dropped?: boolean;
     /** read: what an EMPTY read means — see ManageTerminalsResult.state. */
     state?: TerminalReadState;
+    /** send: the prompt BODY reached the pty. False (with `ok: false`) means
+     *  NOTHING was sent — that agent terminal has no running pty. */
+    delivered?: boolean;
+    /** send: the submit keystroke landed too. A multi-line prompt is two writes
+     *  (body, then Enter after a delay), so `delivered: true, submitted: false`
+     *  is a real outcome: the prompt is in the TUI's input box, UNSUBMITTED, and
+     *  the agent has not seen it. */
+    submitted?: boolean;
     /**
-     * restart: what Genie actually established, in one line.
+     * restart / send: what Genie actually established, in one line.
      *
      * `ok` on a restart means the old agent was stopped and the resume command
      * was handed to a fresh terminal — NOT that the agent came back up, which
-     * Genie cannot see from inside the pty (genie#364). Relay this rather than
-     * reporting a recovery nobody has observed.
+     * Genie cannot see from inside the pty (genie#364). On a `send` it names the
+     * unsubmitted-prompt case. Relay this rather than reporting a recovery — or a
+     * delivery — nobody has observed.
      */
     note?: string;
 }
@@ -1598,10 +1651,18 @@ export interface OpenFileResult {
     file?: string;
     /** The workspace the file was opened in (incl the System workspace). */
     workspaceId?: string;
-    /** True when an editor panel already open for the workspace was reused. */
+    /** The request reached the Genie window. False (with `ok: false`) means
+     *  there was no window to send it to and NOTHING was opened. */
+    dispatched?: boolean;
+    /** True when an editor panel already open for the workspace was reused.
+     *  ABSENT when the renderer did not reply — nobody established it. */
     reused?: boolean;
-    /** True when a NEW editor panel was opened (none was open to reuse). */
+    /** True when a NEW editor panel was opened (none was open to reuse).
+     *  ABSENT when the renderer did not reply — see `note`. */
     openedNew?: boolean;
+    /** What Genie could NOT establish, and what would settle it — set when the
+     *  request was dispatched but the renderer never confirmed the outcome. */
+    note?: string;
 }
 
 const TERMINAL_ID_PROP = {
@@ -1615,7 +1676,7 @@ const TERMINAL_ID_PROP = {
 const IMDONE_TOOL = {
     name: 'imDone',
     description:
-        "Signal that the agent has finished its work in THIS terminal. Genie pulses the terminal's glow in the workspace rail, the flyout row, and the panel border until you focus it. Pass `terminalId` (from your GENIE_TERMINAL_ID env) to target this exact terminal. Required whenever the workspace has more than one terminal. Pass `handoff` to leave a note for the NEXT run of this agent — restarts are constant (an upgrade, a crash, a killed terminal) and without it the next run starts from nothing; Genie cannot write this for you, because it knows the terminal ended, not what you were in the middle of.",
+        "Signal that the agent has finished its work in THIS terminal. Genie pulses the terminal's glow in the workspace rail, the flyout row, and the panel border until you focus it. That pulse is a live event with NO persistence: if no Genie window is open and no remote/mobile client is connected it reaches nobody and is not replayed later, and the response says so instead of claiming a glow — read it, and reach the person another way when it says nothing received the signal. Pass `terminalId` (from your GENIE_TERMINAL_ID env) to target this exact terminal. Required whenever the workspace has more than one terminal. Pass `handoff` to leave a note for the NEXT run of this agent — restarts are constant (an upgrade, a crash, a killed terminal) and without it the next run starts from nothing; Genie cannot write this for you, because it knows the terminal ended, not what you were in the middle of. The response reports whether that note was actually saved.",
     inputSchema: {
         type: 'object',
         properties: {
@@ -1623,7 +1684,7 @@ const IMDONE_TOOL = {
             handoff: {
                 type: 'string',
                 description:
-                    'What the NEXT run of this agent needs to know: what you were doing, what is half-finished, what you would do next. Saved to `.ai/handoff/<agent>.md` (gitignored) and handed to that run at launch. REPLACES any previous note rather than appending. Omit it when there is genuinely nothing to carry forward — an empty handoff is worse than none, because it reads as "the last run had nothing to report".',
+                    'What the NEXT run of this agent needs to know: what you were doing, what is half-finished, what you would do next. When it CAN be saved it goes to `.ai/handoff/<agent>.md` (gitignored) in the workspace and is handed to that run at launch, REPLACING any previous note rather than appending. It can NOT always be saved — a System-workspace terminal has no project folder, a terminal with no agent name has no key to file it under, and a write can fail — so the response says whether it landed and, if not, why. Read that line: a dropped handoff means the next run starts from nothing. Omit the parameter when there is genuinely nothing to carry forward — an empty handoff is worse than none, because it reads as "the last run had nothing to report".',
             },
         },
         additionalProperties: false,
@@ -1651,7 +1712,7 @@ const CHECK_ISSUES_TOOL = {
 const OPEN_FILE_TOOL = {
     name: 'openFileForUser',
     description:
-        "Open a file in Genie's BUILT-IN editor for the USER to look at — surfaces it on the Floor in a Code panel. This REUSES an editor panel already open for this workspace (adds the file as a tab and focuses it — or just focuses the tab if the file is already open); if no editor panel is open for the workspace, it opens a NEW one with the file loaded. Use it to put a file in front of the user (a change you made, a result, something to review) instead of only describing it. Benign DISPLAY action — like imDone it just surfaces something, so there is NO approval prompt. `path` is workspace-relative (preferred) or absolute; for the System workspace pass an absolute/system path. A relative path resolves against the WORKSPACE ROOT (not your shell's cwd) and keeps its full subdirectory path; an absolute path inside ANOTHER Genie workspace opens in THAT workspace's editor, and one no workspace owns opens in the System workspace. Optional `line` reveals a 1-based line. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; required when the workspace has more than one terminal. Available to System-workspace agents too.",
+        "Open a file in Genie's BUILT-IN editor for the USER to look at — surfaces it on the Floor in a Code panel. This REUSES an editor panel already open for this workspace (adds the file as a tab and focuses it — or just focuses the tab if the file is already open); if no editor panel is open for the workspace, it opens a NEW one with the file loaded. Use it to put a file in front of the user (a change you made, a result, something to review) instead of only describing it. Benign DISPLAY action — like imDone it just surfaces something, so there is NO approval prompt. `path` is workspace-relative (preferred) or absolute; for the System workspace pass an absolute/system path. A relative path resolves against the WORKSPACE ROOT (not your shell's cwd) and keeps its full subdirectory path; an absolute path inside ANOTHER Genie workspace opens in THAT workspace's editor, and one no workspace owns opens in the System workspace. Optional `line` reveals a 1-based line. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; required when the workspace has more than one terminal. Available to System-workspace agents too. WHAT THE RESULT MEANS: `dispatched` is what Genie establishes on its own — the request reached the Genie window. `reused`/`openedNew` come from the window's own reply and are ABSENT when it did not answer in time; a `note` then says so. `ok:false` with `dispatched:false` means Genie is tray-resident with no window and NOTHING was opened — do not tell the user to look at a file that is not on screen.",
     inputSchema: {
         type: 'object',
         properties: {
@@ -1809,7 +1870,7 @@ const CONNECT_TO_GENIE_PROMPT = {
 const MANAGE_PROCESS_TOOL = {
     name: 'manageProcess',
     description:
-        "Manage this workspace's background processes AND scheduled tasks (Genie's Processes feature). Two shapes, one tool: a PROCESS is a long-running service (dev server, queue worker, SSR) supervised with status + crash auto-restart; a SCHEDULED TASK is the same thing with a `schedule` — it runs one-shot on a cron schedule instead of staying up, and because it lives on the Host it fires whether or not anyone has Genie open, and survives restarts. WHERE THEY RUN: on the HOST machine, NOT inside a workspace container — so a process's `localhost` is the HOST, and a sandboxed `manageSite` site does NOT share its network: reach a host process from a site at `${GENIE_HOST_GATEWAY}:<port>` (an env var manageSite injects), never `127.0.0.1`. Running a process INSIDE a workspace container is not available yet. Actions: `list` (everything + status; scheduled rows also carry `schedule`, `scheduleDescription`, `nextRunAt`, `lastRunAt`, `lastRunStatus`); `create` (register one — needs `label`, plus `command` for a process, optional `repo` to run inside repos/<repo>, optional `autostart` to start it now and on every launch; add `schedule` to make it a scheduled task); `start` / `stop` / `restart` (a service, by `id` from a prior list); `enable` / `disable` (suspend a task without deleting it — a disabled task never fires); `delete`; `run-now` (fire a scheduled task immediately without disturbing its schedule). SCHEDULING: `schedule` is a standard 5-field cron expression — minute hour day-of-month month day-of-week — in the HOST's local timezone, supporting `*`, `*/step`, `a-b` ranges and `a,b,c` lists (e.g. `*/15 * * * *` every 15 minutes, `0 3 * * *` daily at 03:00, `0 9 * * 1-5` weekday mornings). Set `scheduleKind` to `agent-nudge` (with `prompt` and `nudgeTerminalId` or `nudgeAgentId`) to have each fire deliver a prompt to an agent through AgentInbox instead of running a command — the nudge goes to the agent's inbox and only wakes the terminal when it is provably idle, so it can never interrupt a live turn. If a fire comes due while the previous run is still going it is SKIPPED, not overlapped, and runs missed while the Host was down are NOT caught up. SAFETY: creating a scheduled task is APPROVAL-GATED — when the workspace requires it (the default), it blocks on an OS modal showing the command and the recurrence until the user approves; deny means nothing is created. Returns the resulting process list. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; required when the workspace has more than one terminal.",
+        "Manage this workspace's background processes AND scheduled tasks (Genie's Processes feature). Two shapes, one tool: a PROCESS is a long-running service (dev server, queue worker, SSR) supervised with status + crash auto-restart; a SCHEDULED TASK is the same thing with a `schedule` — it runs one-shot on a cron schedule instead of staying up, and because it lives on the Host it fires whether or not anyone has Genie open, and survives restarts. WHERE THEY RUN: on the HOST machine, NOT inside a workspace container — so a process's `localhost` is the HOST, and a sandboxed `manageSite` site does NOT share its network: reach a host process from a site at `${GENIE_HOST_GATEWAY}:<port>` (an env var manageSite injects), never `127.0.0.1`. Running a process INSIDE a workspace container is not available yet. Actions: `list` (everything + status; scheduled rows also carry `schedule`, `scheduleDescription`, `nextRunAt`, `lastRunAt`, `lastRunStatus`); `create` (register one — needs `label`, plus `command` for a process, optional `repo` to run inside repos/<repo>, optional `autostart` to start it now and on every launch; add `schedule` to make it a scheduled task); `start` / `stop` / `restart` (a service, by `id` from a prior list); `enable` / `disable` (suspend a task without deleting it — a disabled task never fires); `delete`; `run-now` (fire a scheduled task immediately without disturbing its schedule). SCHEDULING: `schedule` is a standard 5-field cron expression — minute hour day-of-month month day-of-week — in the HOST's local timezone, supporting `*`, `*/step`, `a-b` ranges and `a,b,c` lists (e.g. `*/15 * * * *` every 15 minutes, `0 3 * * *` daily at 03:00, `0 9 * * 1-5` weekday mornings). Set `scheduleKind` to `agent-nudge` (with `prompt` and `nudgeTerminalId` or `nudgeAgentId`) to have each fire deliver a prompt to an agent through AgentInbox instead of running a command — the nudge goes to the agent's inbox and only wakes the terminal when it is provably idle, so it can never interrupt a live turn. If a fire comes due while the previous run is still going it is SKIPPED, not overlapped, and runs missed while the Host was down are NOT caught up. SAFETY: creating a scheduled task is APPROVAL-GATED — when the workspace requires it (the default), it blocks on an OS modal showing the command and the recurrence until the user approves; deny means nothing is created. Returns the resulting process list. WHAT A `start`/`restart` RESULT MEANS: Genie watches the spawn for a short window and reports what it OBSERVED. `ok:true` means the process was still alive when Genie last looked — a spawn is not a health check, so read the log before calling the service working. `ok:false` means it exited straight away (a bad command, a missing binary) and carries its last output. `pending:true` means it is in auto-restart backoff and has NOT been observed up — poll `list` rather than reporting it started. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; required when the workspace has more than one terminal.",
     inputSchema: {
         type: 'object',
         properties: {
@@ -2208,7 +2269,7 @@ const TARGET_WORKSPACE_PROP = {
 const MANAGE_TERMINALS_TOOL = {
     name: 'manageTerminals',
     description:
-        "Spawn and drive TERMINALS — real shell sessions — in your own workspace, or (for an Ops agent) a workspace you govern. This EXECUTES ARBITRARY CODE: `create` opens a pty, `write` sends input (by default it SUBMITS — an Enter is appended; pass `submit:false` to type without running), and the shell does whatever you tell it. Use it to run builds/tests/scripts and to operate interactive tools. Actions: `create` (spawn a terminal — optional `repo` (repos/<repo>) or `cwd`, optional `label`; returns its id + recent output); `write` (send `data` to terminal `id` — submitted by default; or deliver a single `key` (`enter`/`escape`/`ctrl-c`) on its own, e.g. a bare Enter to submit/clear a stuck buffer); `read` (recent output of `id` — pass a `cursor` from a prior read for just-what's-new, or `bytes` for the last N bytes; add `strip:true` for plain text with ANSI/escape codes removed); `list` (terminals in the workspace); `kill` (terminate `id`). Multi-line input is wrapped in bracketed paste with the Enter delivered separately, so it submits cleanly to a TUI. SAFETY: `create` and `write` are APPROVAL-GATED — when the target workspace requires approval (the default), each blocks on an OS modal until the user approves; when the user has turned approval OFF they run immediately. `read` and `list` never prompt. Output is read from a bounded buffer (oldest bytes age out), so a `read` after a long-running command may report `dropped:true`.",
+        "Spawn and drive TERMINALS — real shell sessions — in your own workspace, or (for an Ops agent) a workspace you govern. This EXECUTES ARBITRARY CODE: `create` opens a pty, `write` sends input (by default it SUBMITS — an Enter is appended; pass `submit:false` to type without running), and the shell does whatever you tell it. Use it to run builds/tests/scripts and to operate interactive tools. Actions: `create` (spawn a terminal — optional `repo` (repos/<repo>) or `cwd`, optional `label`; returns its id + recent output); `write` (send `data` to terminal `id` — submitted by default; or deliver a single `key` (`enter`/`escape`/`ctrl-c`) on its own, e.g. a bare Enter to submit/clear a stuck buffer); `read` (recent output of `id` — pass a `cursor` from a prior read for just-what's-new, or `bytes` for the last N bytes; add `strip:true` for plain text with ANSI/escape codes removed); `list` (terminals in the workspace); `kill` (terminate `id`). Multi-line input is wrapped in bracketed paste with the Enter delivered separately, so it submits cleanly to a TUI — which makes a `write` two writes, and its result says which landed: `delivered` (the body reached the pty) and `submitted` (the Enter did too). `delivered:true, submitted:false` means the text is sitting UNSUBMITTED in the input box, not that it ran; `ok:false` with `delivered:false` means nothing was sent at all. Genie reports what reached the pty — it cannot see what the program then did with it, so confirm with a `read`. SAFETY: `create` and `write` are APPROVAL-GATED — when the target workspace requires approval (the default), each blocks on an OS modal until the user approves; when the user has turned approval OFF they run immediately. `read` and `list` never prompt. Output is read from a bounded buffer (oldest bytes age out), so a `read` after a long-running command may report `dropped:true`.",
     inputSchema: {
         type: 'object',
         properties: {
@@ -3462,18 +3523,30 @@ export async function handleMcpMessage(
                 return ok(msg.id, { content: [{ type: 'text', text: `${text}\n\n${JSON.stringify(result, null, 2)}` }] });
             }
             if (params.name === 'imDone') {
-                ctx.onImDone(ctx.terminalId);
+                const pulse = ctx.onImDone(ctx.terminalId);
                 // The note for the NEXT run of this agent. Best-effort and
                 // deliberately after the glow: a handoff that cannot be written
                 // must never cost the human the signal that their agent
-                // finished, which is the thing imDone exists for.
+                // finished, which is the thing imDone exists for. Best-effort is
+                // not the same as silent, though — the outcome is reported.
                 const handoffNote = params.arguments?.handoff;
+                let handoffLine: string | null = null;
                 if (typeof handoffNote === 'string' && handoffNote.trim()) {
+                    let outcome: HandoffOutcome;
                     try {
-                        ctx.onHandoff?.(ctx.terminalId, handoffNote);
-                    } catch {
-                        /* best-effort — see above */
+                        outcome = ctx.onHandoff?.(ctx.terminalId, handoffNote) ?? {
+                            saved: false,
+                            reason: 'this Genie host has no handoff storage wired up',
+                        };
+                    } catch (e) {
+                        outcome = {
+                            saved: false,
+                            reason: `saving it threw: ${e instanceof Error ? e.message : String(e)}`,
+                        };
                     }
+                    handoffLine = outcome.saved
+                        ? `Handoff saved to ${outcome.path ?? 'this agent’s handoff file'} — the next run of this agent gets it at launch.`
+                        : `Handoff NOT saved: ${outcome.reason ?? 'Genie could not write it'}. The next run of this agent will start with nothing, so carry it forward another way if it matters.`;
                 }
                 // Fold the caller's workspace IssueWatch counts into the response
                 // so every "done" surfaces what's still open (issues/PRs/security
@@ -3498,8 +3571,14 @@ export async function handleMcpMessage(
                 } catch {
                     /* best-effort */
                 }
+                // The glow is an IPC event with NO persistence anywhere. With a
+                // tray-resident Genie and nothing connected it reaches nobody,
+                // is stored nowhere, and a window opened a second later never
+                // shows it — so the ack says which of those happened.
                 const base =
-                    'Done — this terminal is now glowing in Genie until you focus it.';
+                    pulse.attention > 0
+                        ? 'Done — this terminal is now glowing in Genie until you focus it.'
+                        : 'Done — but nothing received that signal: no Genie window is open and no remote or mobile client is connected. The glow is not stored anywhere, so it will NOT appear when a window opens later. If someone is waiting on this, reach them another way.';
                 // Always remind the agent to route questions/concerns through
                 // ForceTheQuestion. A plaintext question printed here goes UNSEEN
                 // — the Operator rarely watches THIS terminal — so it would just
@@ -3507,7 +3586,7 @@ export async function handleMcpMessage(
                 // conditional; it's appended on every imDone.
                 const ftqReminder =
                     'Questions or concerns for the Operator? Use ForceTheQuestion — never print a question and wait; a plaintext question goes unseen.';
-                const extras = [countsLine, mailLine, ftqReminder]
+                const extras = [handoffLine, countsLine, mailLine, ftqReminder]
                     .filter(Boolean)
                     .join('\n');
                 return ok(msg.id, {
@@ -3833,12 +3912,18 @@ ${body}` }],
                     bytes: a.bytes,
                     strip: a.strip,
                 });
+                const terminalsLine = `${result.terminals.length} terminal${result.terminals.length === 1 ? '' : 's'} in the workspace${
+                    result.affectedId ? ` (acted on ${result.affectedId})` : ''
+                }.`;
                 const summary = result.ok
                     ? action === 'read'
                         ? `Read ${result.data?.length ?? 0} byte(s)${result.dropped ? ' (some earlier output was dropped)' : ''}.${readStateNote(result.state)}`
-                        : `${result.terminals.length} terminal${result.terminals.length === 1 ? '' : 's'} in the workspace${
-                              result.affectedId ? ` (acted on ${result.affectedId})` : ''
-                          }.`
+                        : // A body that landed without its Enter belongs in the
+                          // SUMMARY, not only the JSON: "acted on t-1" over text
+                          // still sitting in the input box reads as sent.
+                          action === 'write' && result.submitted === false
+                          ? `Input reached ${result.affectedId ?? 'the terminal'} but is UNSUBMITTED — the Enter did not land. ${terminalsLine}`
+                          : terminalsLine
                     : `manageTerminals failed: ${result.error ?? 'unknown error'}`;
                 return ok(msg.id, {
                     content: [
@@ -3925,6 +4010,10 @@ ${body}` }],
                     summary = `${result.agents?.length ?? 0} saved agent(s) in this workspace.`;
                 } else if (action === 'read') {
                     summary = `Read ${result.data?.length ?? 0} byte(s)${result.dropped ? ' (some earlier output was dropped)' : ''}.${readStateNote(result.state)}`;
+                } else if (action === 'send' && result.submitted === false) {
+                    // The prompt is in the TUI's input box, unread. "send ok" is
+                    // exactly the false success the agent would act on.
+                    summary = `Prompt reached ${result.id ?? 'the agent terminal'} but is UNSUBMITTED — the Enter did not land, so the agent has not seen it.`;
                 } else {
                     summary = `runAgent ${action} ok${result.id ? ` (${result.id})` : ''}.`;
                 }
@@ -4132,13 +4221,18 @@ ${body}` }],
                     path: p,
                     line: typeof a.line === 'number' ? a.line : undefined,
                 });
-                const summary = result.ok
-                    ? `Opened ${result.file ?? p} for the user — ${
-                          result.reused
-                              ? 'reused the editor panel already open for this workspace'
-                              : 'opened a new editor panel'
-                      }.`
-                    : `openFileForUser failed: ${result.error ?? 'unknown error'}`;
+                // `reused` is ABSENT when the renderer never confirmed the
+                // outcome, and a ternary reads absent as "not reused" — the same
+                // guess the result object stopped making (CONTRIBUTING.md).
+                const summary = !result.ok
+                    ? `openFileForUser failed: ${result.error ?? 'unknown error'}`
+                    : result.reused === undefined
+                      ? `Sent ${result.file ?? p} to the Genie window, which did not confirm it — whether a panel was reused or opened is unknown. ${result.note ?? ''}`.trim()
+                      : `Opened ${result.file ?? p} for the user — ${
+                            result.reused
+                                ? 'reused the editor panel already open for this workspace'
+                                : 'opened a new editor panel'
+                        }.`;
                 return ok(msg.id, {
                     content: [
                         {

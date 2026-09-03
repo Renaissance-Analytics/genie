@@ -1876,12 +1876,16 @@ app.whenReady().then(async () => {
             // the request (after its content has loaded, on a cold open).
             showMasterWindow();
             const w = masterWindow;
-            if (!w || w.isDestroyed()) return;
+            // No window to open into. Say so, rather than returning silently and
+            // leaving the caller to wait out the reply timeout and then GUESS
+            // that a panel was opened (CONTRIBUTING.md).
+            if (!w || w.isDestroyed()) return false;
             const send = () => {
                 if (!w.isDestroyed()) w.webContents.send('editor:open-file', payload);
             };
             if (w.webContents.isLoading()) w.webContents.once('did-finish-load', send);
             else send();
+            return true;
         },
     });
     // Agent-integration MCP server (loopback). imDone pulses the caller's
