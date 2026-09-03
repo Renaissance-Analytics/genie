@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { test, expect, type ElectronApplication, type Page } from '@playwright/test';
 import { launchGenieE2E, readTynnImportSeed, type TynnImportSeed } from './helpers/launch';
 
@@ -108,15 +110,11 @@ test('an envelope-backed project never opens the wizard — it only asks where t
 
 test('the envelope it cloned is on disk, with its repos folder', async () => {
     // The clone is what makes the workspace usable; a registered row pointing at
-    // nothing would satisfy every DOM assertion above.
-    const present = await app.evaluate(async (_electron, dir) => {
-        const fs = await import('node:fs');
-        const path = await import('node:path');
-        return {
-            envelope: fs.existsSync(path.join(dir, 'project.json')),
-            repos: fs.existsSync(path.join(dir, 'repos')),
-        };
-    }, seed.expectedPath);
-
-    expect(present).toEqual({ envelope: true, repos: true });
+    // nothing would satisfy every DOM assertion above. Read from the spec
+    // process — Playwright drives Electron on THIS machine, so the folder the
+    // import created is right here.
+    expect({
+        envelope: fs.existsSync(path.join(seed.expectedPath, 'project.json')),
+        repos: fs.existsSync(path.join(seed.expectedPath, 'repos')),
+    }).toEqual({ envelope: true, repos: true });
 });
