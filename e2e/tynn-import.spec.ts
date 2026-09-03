@@ -53,17 +53,19 @@ test.afterAll(async () => {
 const WIZARD = /Upgrade to \.agi envelope/;
 
 /** Add workspace → Import from Tynn → choose one of the fixture projects. */
-async function chooseProject(label: string | RegExp): Promise<void> {
+async function chooseProject(projectId: string): Promise<void> {
     // The source card. At this stage nothing else carries that heading; the
     // step it opens has one of its own, which is why this runs first.
     await page.getByRole('heading', { name: 'Import from Tynn', exact: true }).click();
-    // react-fancy's Select is a combobox, not a native <select>.
-    await page.locator('[data-react-fancy-select]').click();
-    await page.getByRole('option', { name: label }).click();
+    // react-fancy's Select defaults to a NATIVE <select> (`variant` unset and
+    // not `multiple`), so it is driven by value, not by clicking an option.
+    const select = page.locator('[data-react-fancy-select]');
+    await expect(select).toBeVisible();
+    await select.selectOption(projectId);
 }
 
 test('a project with no envelope still reaches the upgrade wizard', async () => {
-    await chooseProject('Plain Product');
+    await chooseProject(seed.plainProjectId);
 
     await page.getByRole('button', { name: 'Inspect workspace' }).click();
 
@@ -79,7 +81,7 @@ test('an envelope-backed project never opens the wizard — it only asks where t
     await page.getByRole('button', { name: 'Cancel' }).click();
     await expect(page.getByRole('heading', { name: WIZARD })).toHaveCount(0);
 
-    await chooseProject('Enveloped Product');
+    await chooseProject(seed.envelopeProjectId);
     // Its button says what happens next, and it is not "inspect".
     await page.getByRole('button', { name: 'Choose location' }).click();
 
