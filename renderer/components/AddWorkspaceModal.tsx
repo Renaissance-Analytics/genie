@@ -28,7 +28,13 @@ import {
     GitHubErrorNotice,
 } from './GitHubConnect';
 import { useGithubCapabilities } from '../lib/githubCapabilities';
-import { ADD_WORKSPACE_SOURCES, availableTynnProjects, tynnProjectImportSource, tynnWorkspaceSource, workspaceWizardEntry, type AddWorkspaceSourceId } from '../lib/workspace-onboarding';
+import { ADD_WORKSPACE_SOURCES, workspaceWizardEntry, type AddWorkspaceSourceId } from '../lib/workspace-onboarding';
+import {
+    importTynnEnvelopeWorkspace,
+    tynnImportChoices,
+    tynnImportRoute,
+    type TynnImportRoute,
+} from '../lib/tynn-import';
 
 type Stage =
     | 'source'
@@ -37,6 +43,12 @@ type Stage =
     | 'agi-create'
     | 'agi-import'
     | 'tynn-import'
+    // genie#355: a Tynn project that already IS an `.agi` envelope. Ask where to
+    // put it, clone, register — the scan-and-convert wizard has nothing to do.
+    | 'tynn-envelope'
+    // …and one already registered on this machine: offer to open it rather than
+    // import a second copy of the same envelope.
+    | 'tynn-open-existing'
     | 'gapp-create'
     | 'agi-convert'
     | 'agi-interactive'
@@ -58,6 +70,11 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
     const [interactiveProjectId, setInteractiveProjectId] = useState('');
     const [createProjectId, setCreateProjectId] = useState('');
     const [createGappDev, setCreateGappDev] = useState(false);
+    // The Tynn project the import is acting on, plus the route `tynnImportRoute`
+    // chose for it — the envelope source to clone, or the workspace already here.
+    const [tynnProject, setTynnProject] = useState<TynnProject | null>(null);
+    const [tynnEnvelopeSource, setTynnEnvelopeSource] = useState<{ url: string; branch: string } | null>(null);
+    const [tynnExistingWorkspaceId, setTynnExistingWorkspaceId] = useState('');
 
     useEffect(() => {
         Promise.all([api().tynn.projects(), api().workspaces.list()])
@@ -191,12 +208,46 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
                         loading={loadingProjects}
                         loadError={projectsError}
                         onCancel={() => setStage('source')}
-                        onInspectProject={(project, source) => {
-                            setInteractiveMode(source ? 'remote' : 'local');
-                            setInteractiveSourceUrl(source?.url ?? '');
+                        // The routing decision is `tynnImportRoute`'s, not this
+                        // component's — genie#355 was one unconditional
+                        // `setStage('agi-interactive')` sitting exactly here.
+                        onRoute={(project, route) => {
+                            setTynnProject(project);
+                            if (route.stage === 'tynn-envelope') {
+                                setTynnEnvelopeSource(route.source);
+                                setStage('tynn-envelope');
+                                return;
+                            }
+                            if (route.stage === 'tynn-open-existing') {
+                                setTynnExistingWorkspaceId(route.workspaceId);
+                                setStage('tynn-open-existing');
+                                return;
+                            }
+                            setInteractiveMode(route.mode);
+                            setInteractiveSourceUrl(route.sourceUrl);
                             setInteractiveProjectId(project.id);
                             setStage('agi-interactive');
                         }}
+                    />
+                )}
+                {stage === 'tynn-envelope' && tynnProject && tynnEnvelopeSource && (
+                    <TynnEnvelopeImport
+                        project={tynnProject}
+                        source={tynnEnvelopeSource}
+                        onBack={() => setStage('tynn-import')}
+                        onCreated={(row) => {
+                            onAdded(row);
+                            setStage('done');
+                            onClose();
+                        }}
+                    />
+                )}
+                {stage === 'tynn-open-existing' && tynnProject && (
+                    <TynnAlreadyImported
+                        project={tynnProject}
+                        workspace={workspaces.find((w) => w.id === tynnExistingWorkspaceId) ?? null}
+                        onBack={() => setStage('tynn-import')}
+                        onOpened={onClose}
                     />
                 )}
             </Modal.Body>
@@ -210,46 +261,235 @@ function TynnImportWizard({
     loading,
     loadError,
     onCancel,
-    onInspectProject,
+    onRoute,
 }: {
     projects: TynnProject[];
     workspaces: WorkspaceRow[];
     loading: boolean;
     loadError: string | null;
     onCancel: () => void;
-    onInspectProject: (project: TynnProject, source: { url: string; branch: string } | null) => void;
+    onRoute: (project: TynnProject, route: TynnImportRoute) => void;
 }) {
-    const available = availableTynnProjects(projects, workspaces);
+    // Every accessible project, the already-linked ones INCLUDED and labelled:
+    // dropping them silently is what made "Genie can't see my project" and "this
+    // project is already here" look identical in the picker.
+    const choices = tynnImportChoices(projects, workspaces);
     const [projectId, setProjectId] = useState('');
 
-    const submit = async () => {
-        const project = available.find((candidate) => candidate.id === projectId);
-        const source = project ? tynnProjectImportSource(project) : null;
-        if (!project) return;
-        onInspectProject(project, source);
-    };
+    const chosen = choices.find((choice) => choice.project.id === projectId);
+    const route = chosen ? tynnImportRoute(chosen.project, workspaces) : null;
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div>
                 <Heading as="h3" size="sm">Import from Tynn</Heading>
                 <Text size="xs" className="text-zinc-500" style={{ display: 'block', marginTop: 4 }}>
-                    Choose any Tynn project not already linked to a Genie workspace. Genie uses its declared repository when available, or lets you choose a local source, then inspects it before registering the workspace.
+                    Choose one of your Tynn projects. A project that already has an <code>.agi</code> envelope is cloned straight onto this machine, submodules and all — Genie only asks where to put it. Anything else goes through the inspect-and-convert wizard first.
                 </Text>
             </div>
             <Select
                 value={projectId}
                 onValueChange={setProjectId}
-                list={available.map((project) => ({ value: project.id, label: project.name }))}
-                placeholder={loading ? 'Loading Tynn workspaces…' : available.length ? 'Choose a workspace…' : 'No importable Tynn workspaces'}
+                list={choices.map(({ project, linkedWorkspaceId }) => ({
+                    value: project.id,
+                    label: linkedWorkspaceId ? `${project.name} — already added` : project.name,
+                }))}
+                placeholder={loading ? 'Loading Tynn projects…' : choices.length ? 'Choose a project…' : 'No Tynn projects available'}
                 aria-label="Tynn workspace"
             />
+            {route?.stage === 'tynn-envelope' && (
+                <Text size="xs" className="text-emerald-500">
+                    Already an <code>.agi</code> envelope — Genie will clone {route.source.url} and register it. No conversion needed.
+                </Text>
+            )}
+            {route?.stage === 'tynn-open-existing' && (
+                <Text size="xs" className="text-amber-500">
+                    This project is already a workspace on this machine.
+                </Text>
+            )}
+            {route?.reason === 'envelope-repo-undeclared' && (
+                <Text size="xs" className="text-amber-500">
+                    Tynn marks this project as a workspace but does not say which repository holds its envelope, so Genie has nothing to clone. Continuing through the inspect-and-convert wizard.
+                </Text>
+            )}
             {loadError && (
                 <Text size="xs" className="text-rose-500">
                     Genie could not load Tynn workspaces: {loadError}
                 </Text>
             )}
-            <Footer onCancel={onCancel} onSubmit={() => void submit()} submitting={false} label="Inspect workspace" disabled={!projectId} />
+            <Footer
+                onCancel={onCancel}
+                onSubmit={() => {
+                    if (chosen && route) onRoute(chosen.project, route);
+                }}
+                submitting={false}
+                label={
+                    route?.stage === 'tynn-envelope'
+                        ? 'Choose location'
+                        : route?.stage === 'tynn-open-existing'
+                            ? 'Open workspace'
+                            : 'Inspect workspace'
+                }
+                disabled={!route}
+            />
+        </div>
+    );
+}
+
+/**
+ * genie#355 — the whole import for a project that is ALREADY an `.agi` envelope:
+ * ONE question, "where do you want it?", then clone + register. No repo picker
+ * (the envelope carries its repos as submodules, so asking which one to clone
+ * inverts the model) and no scan-and-convert wizard (there is nothing to
+ * convert).
+ */
+function TynnEnvelopeImport({
+    project,
+    source,
+    onBack,
+    onCreated,
+}: {
+    project: TynnProject;
+    source: { url: string; branch: string };
+    onBack: () => void;
+    onCreated: (row: WorkspaceRow) => void;
+}) {
+    const [parent, setParent] = useState('');
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [primaryWorkspace, setPrimaryWorkspace] = useState<string | undefined>();
+
+    useEffect(() => {
+        let live = true;
+        api()
+            .settings.get()
+            .then((s) => {
+                if (!live) return;
+                setPrimaryWorkspace(s.primary_workspace);
+                if (s.primary_workspace) setParent((p) => p || s.primary_workspace!);
+            })
+            .catch(() => {
+                /* no default parent; the user picks one below */
+            });
+        return () => {
+            live = false;
+        };
+    }, []);
+
+    const submit = async () => {
+        setBusy(true);
+        setError(null);
+        try {
+            const saved = await importTynnEnvelopeWorkspace(
+                { project, source, parentPath: parent },
+                {
+                    // `workspaces.clone` clones with `--recurse-submodules`, so the
+                    // envelope's repos are present when this returns.
+                    clone: (url, parentPath) => api().workspaces.clone(url, parentPath),
+                    defaultEnvFile: async () => (await api().settings.get()).default_env_file ?? '.env',
+                    addWorkspace: (row) => api().workspaces.add(row),
+                },
+            );
+            onCreated(saved);
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div>
+                <Heading as="h3" size="sm">Where should {project.name} live?</Heading>
+                <Text size="xs" className="text-zinc-500" style={{ display: 'block', marginTop: 4 }}>
+                    {project.name} is already an <code>.agi</code> workspace. Genie clones{' '}
+                    <code>{source.url}</code> ({source.branch}) with its submodules and registers it —
+                    there is nothing to scan or convert.
+                </Text>
+            </div>
+            <FolderRow
+                folder={parent}
+                onChoose={async () => {
+                    const p = await pickPath({ mode: 'directory', title: 'Choose where to clone the workspace' });
+                    if (p) setParent(p);
+                }}
+                description={
+                    primaryWorkspace
+                        ? `Parent folder (default: ${primaryWorkspace}). The envelope lands at <parent>/<repo>/.`
+                        : 'Parent folder. The envelope lands at <parent>/<repo>/.'
+                }
+            />
+            {error && (
+                <Text size="xs" className="text-rose-500">
+                    {error}
+                </Text>
+            )}
+            <Footer
+                onCancel={onBack}
+                onSubmit={() => void submit()}
+                submitting={busy}
+                label="Clone & add workspace"
+                disabled={!parent.trim()}
+            />
+        </div>
+    );
+}
+
+/**
+ * The project already has a workspace here. Importing again would clone a second
+ * copy of the same envelope and leave two rows pointing at one project, so the
+ * offer is to open the one that exists.
+ */
+function TynnAlreadyImported({
+    project,
+    workspace,
+    onBack,
+    onOpened,
+}: {
+    project: TynnProject;
+    workspace: WorkspaceRow | null;
+    onBack: () => void;
+    onOpened: () => void;
+}) {
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    const open = async () => {
+        if (!workspace) return;
+        setBusy(true);
+        setError(null);
+        try {
+            await api().workspaces.open(workspace.id);
+            onOpened();
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+            setBusy(false);
+        }
+    };
+
+    return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div>
+                <Heading as="h3" size="sm">{project.name} is already here</Heading>
+                <Text size="xs" className="text-zinc-500" style={{ display: 'block', marginTop: 4 }}>
+                    A workspace on this machine is already linked to this Tynn project
+                    {workspace ? <> at <code>{workspace.path}</code></> : null}. Open it instead of
+                    cloning a second copy.
+                </Text>
+            </div>
+            {error && (
+                <Text size="xs" className="text-rose-500">
+                    {error}
+                </Text>
+            )}
+            <Footer
+                onCancel={onBack}
+                onSubmit={() => void open()}
+                submitting={busy}
+                label="Open workspace"
+                disabled={!workspace}
+            />
         </div>
     );
 }

@@ -50,6 +50,7 @@ import {
 import type { MobileDataDeps } from '../mobile/api';
 import { listWorkspaces } from '../db';
 import { isE2EHosting, registerHostingE2EMocks } from './hosting';
+import { isE2ETynnImport, registerTynnImportE2EMocks } from './tynn-import';
 
 /** True only in E2E test mode. Everything in this module no-ops otherwise. */
 export function isE2E(): boolean {
@@ -428,6 +429,12 @@ export function registerE2EMocks(): void {
     // its own flag rather than registered for every E2E launch, so no other
     // spec ever runs against a faked hosting backend. See ./hosting.ts.
     if (isE2EHosting()) registerHostingE2EMocks();
+
+    // --- Tynn import (the e2e-tynn-import page only) ---------------------
+    // Scoped to its own page for the same reason: it fakes the Tynn project
+    // list and the git clone, and no other spec should ever run against
+    // either. See ./tynn-import.ts.
+    if (isE2ETynnImport()) registerTynnImportE2EMocks();
 }
 
 // ===========================================================================

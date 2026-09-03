@@ -126,19 +126,12 @@ export function tynnProjectImportSource(project: {
 }
 
 /**
- * Tynn is the project catalog, not merely a repository catalog. Every project
- * the signed-in user can access is importable until a local Genie workspace is
- * already linked to it; projects without repositories continue in the local
- * source branch of the interactive wizard.
+ * Tynn is the project catalog, not merely a repository catalog: every project the
+ * signed-in user can access appears in the import picker.
+ *
+ * WHICH projects the picker offers, and what it does with an already-linked one,
+ * now lives in `./tynn-import` — `tynnImportChoices` KEEPS the linked ones and
+ * labels them, so the modal can offer to open the workspace that exists rather
+ * than dropping the project out of the list as though Tynn had lost it
+ * (genie#355).
  */
-export function availableTynnProjects<T extends { id: string }>(
-    projects: readonly T[],
-    workspaces: readonly { project_id?: string | null; tynn_project_id?: string | null }[],
-): T[] {
-    const linked = new Set(
-        workspaces.flatMap((workspace) => [workspace.tynn_project_id, workspace.project_id])
-            .map((id) => id?.trim())
-            .filter((id): id is string => !!id),
-    );
-    return projects.filter((project) => !linked.has(project.id));
-}

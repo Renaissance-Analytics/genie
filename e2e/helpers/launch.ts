@@ -58,6 +58,7 @@ export type E2EHarnessPage =
     | 'repo-panel'
     | 'terminal-recovery'
     | 'tynn-health'
+    | 'tynn-import'
     | 'agent-pulse'
     | 'master';
 
@@ -70,6 +71,7 @@ const HARNESS_ROUTE: Record<E2EHarnessPage, string> = {
     'repo-panel': 'e2e-repo-panel',
     'terminal-recovery': 'e2e-terminal-recovery',
     'tynn-health': 'e2e-tynn-health',
+    'tynn-import': 'e2e-tynn-import',
     'agent-pulse': 'e2e-agent-pulse',
     master: 'master',
 };
@@ -420,6 +422,27 @@ export async function readMasterSeed(app: ElectronApplication): Promise<MasterSe
     return app.evaluate(() => {
         const h = (globalThis as Record<string, any>).__GENIE_E2E_MASTER__;
         return (h?.seed as MasterSeed) ?? null;
+    });
+}
+
+/** Mirrors `TynnImportSeed` in main/e2e/tynn-import.ts (genie#355). */
+export interface TynnImportSeed {
+    parentPath: string;
+    expectedPath: string;
+    envelopeProjectId: string;
+    plainProjectId: string;
+}
+
+/**
+ * Read the Tynn-import fixture's ids + the folder the envelope should land in.
+ * Null when seeding never ran, so the spec fails naming the cause.
+ */
+export async function readTynnImportSeed(
+    app: ElectronApplication,
+): Promise<TynnImportSeed | null> {
+    return app.evaluate(() => {
+        const seed = (globalThis as Record<string, any>).__GENIE_E2E_TYNN_IMPORT__;
+        return (seed as TynnImportSeed) ?? null;
     });
 }
 
