@@ -167,6 +167,25 @@ describe('awaitCaddyStart', () => {
         expect(res.error).toMatch(/443|caddy/i);
     });
 
+    it('bounds what it keeps from stderr, and stops keeping any once it has answered', async () => {
+        // The pipe is now REAL (it was `stdio: 'ignore'`), and `caddy start`
+        // hands it to the `caddy run` it daemonises — a process that then logs
+        // down it for as long as it lives. Draining it is required; retaining it
+        // is not, so the buffer is capped and abandoned at the answer.
+        const { child } = fakeStart();
+        const p = awaitCaddyStart(child, { timeoutMs: 5_000, stderrGraceMs: 50 });
+        child.stderr.emit('data', 'x'.repeat(50_000));
+        child.emit('exit', 1);
+        child.emit('close', 1);
+        const res = await p;
+        expect(res.ok).toBe(false);
+        expect((res.error ?? '').length).toBeLessThan(20_000);
+
+        const before = res.error;
+        child.stderr.emit('data', 'y'.repeat(50_000));
+        expect(res.error).toBe(before);
+    });
+
     it('releases the process handle once, whatever the outcome', async () => {
         const { child, unrefs } = fakeStart();
         const p = awaitCaddyStart(child, { timeoutMs: 5_000, stderrGraceMs: 1 });

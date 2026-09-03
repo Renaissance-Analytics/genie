@@ -58,6 +58,11 @@ export const HOST_CADDY_START_TIMEOUT_MS = 20_000;
 /** After a non-zero exit, how long to let the stderr pipe deliver the reason. */
 export const HOST_CADDY_START_STDERR_GRACE_MS = 150;
 
+/** How much of caddy's stderr is kept for the failure message. Caddy's reason
+ *  ("listen tcp :443: bind: address already in use") is one line; the daemon it
+ *  spawns may then log down the same pipe indefinitely. */
+const STDERR_KEEP_CHARS = 4_000;
+
 /**
  * WAIT for a `caddy start`, and report what it established.
  *
@@ -107,8 +112,13 @@ export function awaitCaddyStart(
                     `\`caddy start\` exited ${exitCode === null || exitCode === undefined ? 'without a code' : String(exitCode)}`,
             });
 
+        // DRAIN the pipe, but do not hoard it. `caddy start` hands its stderr to
+        // the `caddy run` it daemonises, which then logs down it for as long as
+        // it lives — so the listener stays (an unread pipe eventually blocks the
+        // writer) while what is retained is capped, and abandoned once answered.
         child.stderr?.on('data', (chunk) => {
-            stderr += String(chunk);
+            if (settled || stderr.length >= STDERR_KEEP_CHARS) return;
+            stderr = (stderr + String(chunk)).slice(0, STDERR_KEEP_CHARS);
         });
         child.on('error', (e) => done({ ok: false, error: e.message }));
         child.on('exit', (code) => {
