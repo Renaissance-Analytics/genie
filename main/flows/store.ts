@@ -1,176 +1,235 @@
 /**
- * Where flows live.
+ * Where Flows live, and what may become one.
  *
- * A flow row is stored graph JSON that Genie will later EXECUTE, which makes it
- * authority-adjacent even though it grants nothing by itself. The two properties
- * that follow from that live in the SCHEMA (migration v44), not in whoever
- * happens to be calling:
+ * ## Validation belongs at the WRITE
  *
- *   - every flow has an app, because a flow with no owner has no grant to be
- *     bounded by and nothing to ask `decideAppCall` about;
- *   - uninstalling an app cascades its flows away, because a scheduled flow that
- *     outlives its app is the thing that keeps firing after the user thought
- *     they had removed it.
+ * A Flow is judged against the event registry when it is SAVED, not only when it
+ * fires. That ordering is the whole reason registry entries declare their props:
+ * `sizeBtyes > 5MB` is a typo somebody can fix in the second they made it, and a
+ * silent night that nobody can explain if it is only discovered at 3am.
  *
- * ## Reading a stored graph never throws
+ * The failure this prevents is the specific one automation systems are famous
+ * for — a rule sitting in a list looking armed, doing nothing forever, with
+ * nothing anywhere looking wrong.
  *
- * A row can be hand-edited, half-written, or migrated from a shape that no longer
- * parses. Whatever is listing flows must not fall over because one of them is
- * corrupt, so a bad graph reads back as `null` and is refused downstream —
- * `decideFlowAdmission` already treats an unreadable graph as unrunnable.
+ * ## Reading a stored Flow never throws
+ *
+ * A row can be hand-edited, half-written, or migrated from a shape that no
+ * longer parses. Whatever is listing Flows must not fall over because one of
+ * them is corrupt, so an unreadable row reads back as `null` and is left out of
+ * the list — the same rule `main/apps/flows/store.ts` states for graphs. It is
+ * skipped rather than run: a Flow nobody can read is a Flow nobody consented to.
  *
  * ## Why every function takes a `Database`
  *
- * The `*In` functions are the real implementation and take the connection, so the
- * suite can exercise them against a real in-memory better-sqlite3. The exported
+ * The `*In` functions are the real implementation and take the connection, so
+ * the suite exercises them against a real in-memory better-sqlite3. The exported
  * wrappers bind Genie's singleton. Same code both ways — there is no test-only
  * path that could pass while production differs.
  */
 
 import type Database from 'better-sqlite3';
 import { getDb } from '../db';
-import { armableSchedules } from './triggers';
-import type { FlowGraphLike } from './admission';
-
-export interface FlowRow {
-    id: string;
-    appId: string;
-    name: string;
-    /** The stored graph, or null when it could not be parsed. */
-    graph: FlowGraphLike | null;
-    enabled: boolean;
-    createdAt: string;
-    updatedAt: string;
-}
-
-export interface FlowInput {
-    id: string;
-    appId: string;
-    name: string;
-    graph: unknown;
-    /** Default true. False stops a schedule without deleting the flow. */
-    enabled?: boolean;
-}
-
-/** A flow with a schedule Genie should arm, flattened for the scheduler. */
-export interface ScheduledFlow {
-    flowId: string;
-    appId: string;
-    name: string;
-    /** The trigger node that declared it — a graph may hold more than one. */
-    nodeId: string;
-    cron: string;
-}
+import type { FlowEventRegistry } from './events';
+import { validateFlowFilter } from './filter';
+import type { Flow, FlowRecipeRef, FlowScope, FlowTrigger } from './types';
 
 interface RawFlow {
     id: string;
-    app_id: string;
-    name: string;
-    graph_json: string;
+    title: string;
+    purpose: string;
+    description: string | null;
+    scope_json: string;
+    triggers_json: string;
+    recipe_json: string;
     enabled: number;
     created_at: string;
     updated_at: string;
 }
 
-const COLUMNS = 'id, app_id, name, graph_json, enabled, created_at, updated_at';
+const COLUMNS =
+    'id, title, purpose, description, scope_json, triggers_json, recipe_json, enabled, created_at, updated_at';
 
-function parseGraph(json: string): FlowGraphLike | null {
+/**
+ * Everything wrong with this Flow, in one list.
+ *
+ * All the problems rather than the first: an author fixing a Flow wants the
+ * whole list, and reporting one at a time turns a single edit into four rounds.
+ */
+export function validateFlow(flow: Flow, registry: FlowEventRegistry): string[] {
+    const errors: string[] = [];
+
+    if (!nonEmpty(flow.id)) errors.push('a Flow needs an id.');
+    if (!nonEmpty(flow.title)) errors.push('a Flow needs a title.');
+    if (!nonEmpty(flow.purpose)) {
+        errors.push('a Flow needs a purpose — the menu groups by it, so it cannot be inferred.');
+    }
+    if (!flow.recipe || flow.recipe.kind !== 'builtin' || !nonEmpty(flow.recipe.recipeId)) {
+        errors.push('a Flow needs a body: a recipe id.');
+    }
+
+    errors.push(...scopeErrors(flow.scope));
+
+    if (!Array.isArray(flow.triggers) || flow.triggers.length === 0) {
+        errors.push('a Flow needs at least one trigger, or nothing could ever start it.');
+    } else {
+        flow.triggers.forEach((trigger, i) => {
+            errors.push(...triggerErrors(trigger, i, registry));
+        });
+    }
+
+    return errors;
+}
+
+function nonEmpty(v: unknown): boolean {
+    return typeof v === 'string' && v.trim() !== '';
+}
+
+function scopeErrors(scope: FlowScope | undefined): string[] {
+    if (!scope || typeof scope !== 'object') return ['a Flow needs a scope.'];
+    switch (scope.kind) {
+        case 'system':
+            return [];
+        case 'workspace':
+            return nonEmpty(scope.workspaceId)
+                ? []
+                : ['a workspace-scoped Flow needs a workspaceId.'];
+        case 'gapp':
+            // The appId is the whole of a `gapp` scope: it says who owns the
+            // Flow AND who may see it. Without one the Flow belongs to nobody
+            // and appears to nobody.
+            return nonEmpty(scope.appId) ? [] : ['a gapp-scoped Flow needs an appId.'];
+        default:
+            return [`unknown scope "${String((scope as { kind?: unknown }).kind)}".`];
+    }
+}
+
+function triggerErrors(trigger: FlowTrigger, i: number, registry: FlowEventRegistry): string[] {
+    const where = `triggers[${i}]`;
+    if (!trigger || typeof trigger !== 'object') return [`${where} is not a trigger.`];
+    if (trigger.kind === 'manual') return [];
+    if (trigger.kind !== 'event') {
+        return [`${where}: unknown trigger kind "${String((trigger as { kind?: unknown }).kind)}".`];
+    }
+    const def = registry.get(trigger.event);
+    if (!def) {
+        return [
+            `${where}: nothing emits "${trigger.event}". ` +
+                `Known events: ${registry.list().map((d) => d.id).join(', ') || '(none)'}.`,
+        ];
+    }
+    return validateFlowFilter(trigger.filter, def).map((e) => `${where}: ${e}`);
+}
+
+/* ===== reading ========================================================= */
+
+function parse<T>(json: string): T | null {
     try {
-        const parsed: unknown = JSON.parse(json);
-        return parsed && typeof parsed === 'object' ? (parsed as FlowGraphLike) : null;
+        const value: unknown = JSON.parse(json);
+        return value && typeof value === 'object' ? (value as T) : null;
     } catch {
         return null;
     }
 }
 
-function toFlow(raw: RawFlow): FlowRow {
+/** `null` when the row cannot be read back as a Flow. Never throws. */
+function toFlow(raw: RawFlow): Flow | null {
+    const scope = parse<FlowScope>(raw.scope_json);
+    const triggers = parse<FlowTrigger[]>(raw.triggers_json);
+    const recipe = parse<FlowRecipeRef>(raw.recipe_json);
+    if (!scope || !Array.isArray(triggers) || !recipe) return null;
+
     return {
         id: raw.id,
-        appId: raw.app_id,
-        name: raw.name,
-        graph: parseGraph(raw.graph_json),
+        title: raw.title,
+        purpose: raw.purpose,
+        ...(raw.description ? { description: raw.description } : {}),
+        scope,
+        triggers,
+        recipe,
         enabled: raw.enabled !== 0,
-        createdAt: raw.created_at,
-        updatedAt: raw.updated_at,
     };
 }
 
-export function getFlowIn(d: Database.Database, id: string): FlowRow | null {
+export function getFlowIn(d: Database.Database, id: string): Flow | null {
     const raw = d
         .prepare<[string], RawFlow | undefined>(`SELECT ${COLUMNS} FROM flows WHERE id = ?`)
         .get(id);
     return raw ? toFlow(raw) : null;
 }
 
-export function listFlowsForAppIn(d: Database.Database, appId: string): FlowRow[] {
+/**
+ * Every readable Flow, ordered by purpose then title — the order the grouped
+ * menu wants, decided once here rather than re-sorted by each surface.
+ */
+export function listFlowsIn(d: Database.Database): Flow[] {
     return d
-        .prepare<[string], RawFlow>(`SELECT ${COLUMNS} FROM flows WHERE app_id = ? ORDER BY name`)
-        .all(appId)
-        .map(toFlow);
+        .prepare<[], RawFlow>(`SELECT ${COLUMNS} FROM flows ORDER BY purpose, title`)
+        .all()
+        .map(toFlow)
+        .filter((w): w is Flow => w !== null);
 }
 
-export function upsertFlowIn(d: Database.Database, input: FlowInput): void {
+/* ===== writing ========================================================= */
+
+/** Save a Flow. Throws with every problem when it could never fire. */
+export function upsertFlowIn(
+    d: Database.Database,
+    flow: Flow,
+    registry: FlowEventRegistry,
+): void {
+    const errors = validateFlow(flow, registry);
+    if (errors.length > 0) {
+        throw new Error(`Cannot save Flow "${flow.id}": ${errors.join(' ')}`);
+    }
+
     const now = new Date().toISOString();
     d.prepare(
-        `INSERT INTO flows (id, app_id, name, graph_json, enabled, created_at, updated_at)
-         VALUES (@id, @app_id, @name, @graph_json, @enabled, @now, @now)
+        `INSERT INTO flows (id, title, purpose, description, scope_json, triggers_json,
+                             recipe_json, enabled, created_at, updated_at)
+         VALUES (@id, @title, @purpose, @description, @scope_json, @triggers_json,
+                 @recipe_json, @enabled, @now, @now)
          ON CONFLICT(id) DO UPDATE SET
-             name       = excluded.name,
-             graph_json = excluded.graph_json,
-             enabled    = excluded.enabled,
-             updated_at = excluded.updated_at`,
+             title         = excluded.title,
+             purpose       = excluded.purpose,
+             description   = excluded.description,
+             scope_json    = excluded.scope_json,
+             triggers_json = excluded.triggers_json,
+             recipe_json   = excluded.recipe_json,
+             enabled       = excluded.enabled,
+             updated_at    = excluded.updated_at`,
     ).run({
-        id: input.id,
-        app_id: input.appId,
-        name: input.name,
-        graph_json: JSON.stringify(input.graph ?? {}),
-        enabled: input.enabled === false ? 0 : 1,
+        id: flow.id,
+        title: flow.title,
+        purpose: flow.purpose,
+        description: flow.description ?? null,
+        scope_json: JSON.stringify(flow.scope),
+        triggers_json: JSON.stringify(flow.triggers),
+        recipe_json: JSON.stringify(flow.recipe),
+        enabled: flow.enabled ? 1 : 0,
         now,
     });
+}
+
+/** Stop a Flow firing without losing how it was configured. */
+export function setFlowEnabledIn(d: Database.Database, id: string, enabled: boolean): void {
+    d.prepare('UPDATE flows SET enabled = ?, updated_at = ? WHERE id = ?').run(
+        enabled ? 1 : 0,
+        new Date().toISOString(),
+        id,
+    );
 }
 
 export function deleteFlowIn(d: Database.Database, id: string): void {
     d.prepare('DELETE FROM flows WHERE id = ?').run(id);
 }
 
-/**
- * Every flow whose graph declares a schedule Genie will actually arm.
- *
- * Three exclusions, all of them the difference between a timer that should exist
- * and one that should not:
- *
- *   - `enabled = 0` — the user turned it off;
- *   - a REVOKED app — revocation is total, and leaving the timer armed would mean
- *     firing every night purely to be refused by the bridge;
- *   - an unparseable graph or an invalid cron — arming a guess about when
- *     something runs is worse than plainly not running it.
- */
-export function listScheduledFlowsIn(d: Database.Database): ScheduledFlow[] {
-    const rows = d
-        .prepare<[], RawFlow>(
-            `SELECT f.id, f.app_id, f.name, f.graph_json, f.enabled, f.created_at, f.updated_at
-             FROM flows f
-             JOIN app_grants g ON g.app_id = f.app_id
-             WHERE f.enabled = 1 AND g.revoked = 0
-             ORDER BY f.name`,
-        )
-        .all();
+/* ===== bound to Genie's database ======================================= */
 
-    return rows.flatMap((raw) => {
-        const flow = toFlow(raw);
-        if (!flow.graph) return [];
-        return armableSchedules(flow.graph).map((s) => ({
-            flowId: flow.id,
-            appId: flow.appId,
-            name: flow.name,
-            nodeId: s.nodeId,
-            cron: s.cron,
-        }));
-    });
-}
-
-export const getFlow = (id: string): FlowRow | null => getFlowIn(getDb(), id);
-export const listFlowsForApp = (appId: string): FlowRow[] => listFlowsForAppIn(getDb(), appId);
-export const upsertFlow = (input: FlowInput): void => upsertFlowIn(getDb(), input);
+export const getFlow = (id: string): Flow | null => getFlowIn(getDb(), id);
+export const listFlows = (): Flow[] => listFlowsIn(getDb());
+export const upsertFlow = (flow: Flow, registry: FlowEventRegistry): void =>
+    upsertFlowIn(getDb(), flow, registry);
+export const setFlowEnabled = (id: string, enabled: boolean): void =>
+    setFlowEnabledIn(getDb(), id, enabled);
 export const deleteFlow = (id: string): void => deleteFlowIn(getDb(), id);
-export const listScheduledFlows = (): ScheduledFlow[] => listScheduledFlowsIn(getDb());

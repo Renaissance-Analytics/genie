@@ -1267,6 +1267,9 @@ export function runMigrations(d: Database.Database): void {
         {
             // v47: fancy-flow workflows owned by a Genie App.
             //
+            // RENAMED to `gapp_flows` by v67 (genie#394), which gave the general
+            // name `flows` to the general automation system.
+            //
             // The row is stored graph JSON that Genie will later EXECUTE, so two
             // things live in the SCHEMA rather than in whoever writes to it:
             //
@@ -2031,6 +2034,9 @@ export function runMigrations(d: Database.Database): void {
         {
             // v66 -- WISHES (Tynn story #270).
             //
+            // RENAMED to `flows` by v67 (genie#394). The `flows` named below is
+            // v47's GApp canvas table, which v67 renamed to `gapp_flows`.
+            //
             // A Wish is Genie's Workflow: a Recipe (what runs), Triggers (when)
             // and a Scope (who sees it). The recipe is referenced by ID rather
             // than stored, because the body of an unattended Wish must be
@@ -2067,6 +2073,79 @@ export function runMigrations(d: Database.Database): void {
                     );
                     CREATE INDEX IF NOT EXISTS idx_wishes_purpose ON wishes(purpose);
                 `);
+            },
+        },
+        {
+            // v67 -- WISHES BECOME FLOWS (genie#394).
+            //
+            // Genie's automation system is called Flows, and the module that
+            // shipped as Wishes in v0.7.0-beta.298 IS that system. The name was
+            // already spoken for by v47's table of fancy-flow canvas graphs
+            // owned by a Genie App -- the narrower thing, one GApp's workflows
+            // -- so that becomes `gapp_flows` and the general name goes to the
+            // general system. Order matters: `flows` vacates before `wishes`
+            // takes the name.
+            //
+            // ## The scope ladder collapses to three
+            //
+            // `system / workspace / gapp`, and `exposure` is GONE: a `gapp`
+            // scope IS internal to its GApp, which is all the field's
+            // `'internal'` value ever said.
+            //
+            // The value with nowhere else to go is `exposure: 'workstation'` --
+            // a GApp's Flow that appeared workstation-wide. Under three scopes
+            // the thing visible workstation-wide is `system`, so that is where
+            // it lands, losing the `appId` it carried. That id bought nothing:
+            // v66 deliberately declined the app foreign key and the uninstall
+            // cascade `flows` had, so no behaviour anywhere read it. Landing it
+            // on `gapp` instead would HIDE a Flow its author published, which is
+            // the worse of the two mistakes.
+            //
+            // Rewritten in JS rather than with `json_extract`, because a row can
+            // be hand-edited into something that is not JSON at all and the
+            // whole module's rule (`flows/store.ts`) is that such a row is left
+            // alone, not dropped and not thrown over.
+            version: 67,
+            runner: (db) => {
+                db.exec(`
+                    DROP INDEX IF EXISTS idx_flows_app;
+                    DROP INDEX IF EXISTS idx_wishes_purpose;
+                    ALTER TABLE flows RENAME TO gapp_flows;
+                    ALTER TABLE wishes RENAME TO flows;
+                    CREATE INDEX IF NOT EXISTS idx_gapp_flows_app ON gapp_flows(app_id);
+                    CREATE INDEX IF NOT EXISTS idx_flows_purpose ON flows(purpose);
+                `);
+
+                const rows = db
+                    .prepare<[], { id: string; scope_json: string }>(
+                        'SELECT id, scope_json FROM flows',
+                    )
+                    .all();
+                const update = db.prepare('UPDATE flows SET scope_json = ? WHERE id = ?');
+
+                for (const row of rows) {
+                    let scope: Record<string, unknown> | null = null;
+                    try {
+                        const parsed: unknown = JSON.parse(row.scope_json);
+                        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                            scope = parsed as Record<string, unknown>;
+                        }
+                    } catch {
+                        /* unreadable — left exactly as the author left it */
+                    }
+                    if (!scope) continue;
+
+                    let next: Record<string, unknown> | null = null;
+                    if (scope.kind === 'workstation') {
+                        next = { kind: 'system' };
+                    } else if (scope.kind === 'app') {
+                        next =
+                            scope.exposure === 'workstation'
+                                ? { kind: 'system' }
+                                : { kind: 'gapp', appId: String(scope.appId ?? '') };
+                    }
+                    if (next) update.run(JSON.stringify(next), row.id);
+                }
             },
         },
     ];
