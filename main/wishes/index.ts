@@ -36,7 +36,6 @@ import { listWishes } from './store';
 import { planWishFileWatches, type WatchableWorkspace } from './watch-plan';
 
 let registry: WishEventRegistry | null = null;
-let runtime: WishRuntime | null = null;
 let stopSource: (() => void) | null = null;
 /**
  * Watched root → workspace id, for the roots THIS module asked for.
@@ -54,11 +53,6 @@ let watched = new Map<string, string>();
 export function wishEventRegistry(): WishEventRegistry {
     if (!registry) registry = createWishEventRegistry();
     return registry;
-}
-
-/** The dispatcher, or null before {@link startWishes}. */
-export function wishRuntime(): WishRuntime | null {
-    return runtime;
 }
 
 /** `null` when the path is gone or unreadable — never throws. */
@@ -123,7 +117,6 @@ export function startWishes(): () => void {
             );
         },
     });
-    runtime = rt;
 
     // Subscribed BEFORE anything is watched — see the note at the top.
     stopSource = startWishFileSource({
@@ -141,7 +134,6 @@ export function startWishes(): () => void {
 export function stopWishes(): void {
     stopSource?.();
     stopSource = null;
-    runtime = null;
     for (const root of watched.keys()) unwatchWorkspace(root);
     watched = new Map();
 }
