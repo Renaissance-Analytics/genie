@@ -1,6 +1,7 @@
 import {
     deleteWorkspaceDevService,
     getWorkspaceDevServices,
+    listTerminalSpecs,
     setWorkspaceDevService,
     setWorkspaceDevServices,
 } from '../db';
@@ -18,6 +19,13 @@ import {
     switchActiveWarning,
 } from '../dev-server/services/services-config';
 import { devServiceManager } from '../dev-server/services/service-manager';
+import { terminalServiceEnv } from '../dev-server/services/env-wiring';
+import {
+    staleServiceTerminals,
+    staleTerminalNote,
+} from '../dev-server/services/stale-terminal-env';
+import { isTerminalLive } from '../terminal/ipc';
+import { workspaceIdOfSpec } from '../terminal/workspace-of-terminal';
 import { runtimeInfo } from './dev-site-tools';
 import { callerSeesWholeWorkstation, resolveAgentTarget } from './host-tools';
 import type { DevServiceRow } from '../dev-server/services/service-manager';
@@ -81,6 +89,36 @@ function toInfo(row: DevServiceRow): DevServiceInfo {
         ...(row.envKeys ? { envKeys: row.envKeys } : {}),
         ...(row.error ? { error: row.error } : {}),
     };
+}
+
+/**
+ * The open terminals in a workspace that are still dialling the OLD service
+ * address, said in the one place somebody is already asking (genie#222).
+ *
+ * A managed engine's published host port moves when its container is recreated,
+ * and a pty's environment cannot be rewritten after it starts — so every
+ * terminal that was already open keeps the `PG*` / `MYSQL_*` it was spawned
+ * with. The issue's residual is not that this happens (it is a property of
+ * ptys), it is that Genie held both values and said NOTHING: `onPortMoved`
+ * wrote to `console.warn`, which no user and no agent reads.
+ *
+ * The live side is narrowed through `terminalServiceEnv` so it is compared in
+ * exactly the form a terminal is handed, not the fuller set a site gets.
+ *
+ * Returns null when nothing is stale — the overwhelmingly common case, and a
+ * note that fires every time is a note nobody reads.
+ */
+function staleTerminalNoteFor(workspaceId: string): string | null {
+    const manager = devServiceManager();
+    if (!manager) return null;
+    const open = listTerminalSpecs()
+        .filter((spec) => workspaceIdOfSpec(spec) === workspaceId)
+        .map((spec) => spec.id)
+        .filter((id) => isTerminalLive(id));
+    if (open.length === 0) return null;
+    return staleTerminalNote(
+        staleServiceTerminals(terminalServiceEnv(manager.hostEnvFor(workspaceId)), open),
+    );
 }
 
 /**
@@ -317,18 +355,23 @@ export async function runManageService(
     try {
         switch (req.action) {
             case 'list':
-            case 'status':
+            case 'status': {
                 // Re-read the LIVE published ports first. An engine's publication
                 // is ephemeral, the endpoints were captured once at acquire, and
                 // this is the tool an agent calls to learn how to connect — an
                 // address nothing is listening on is worse than no answer.
                 await manager.refresh().catch(() => {});
+                // …and, having re-read them, say which open terminals were handed
+                // an EARLIER answer and cannot pick this one up (genie#222).
+                const stale = staleTerminalNoteFor(ws.id);
                 return {
                     ok: true,
                     services: services(),
                     runtime,
                     ...(req.id ? { affectedId: req.id } : {}),
+                    ...(stale ? { note: stale } : {}),
                 };
+            }
 
             case 'add': {
                 if (!isServiceEngine(req.engine)) {
@@ -434,6 +477,7 @@ export async function runManageService(
                 await manager.refresh().catch(() => {});
                 const target = targetService();
                 if ('error' in target) return fail(target.error);
+                const stale = staleTerminalNoteFor(ws.id);
                 return {
                     ok: true,
                     services: services(),
@@ -443,6 +487,9 @@ export async function runManageService(
                     // config without guessing at key names.
                     env: manager.envFor(ws.id),
                     runtime,
+                    // …and, when it differs, WHICH open terminals were handed an
+                    // earlier answer to this same question (genie#222).
+                    ...(stale ? { note: stale } : {}),
                 };
             }
 

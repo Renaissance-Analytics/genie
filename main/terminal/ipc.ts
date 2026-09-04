@@ -65,6 +65,7 @@ import { computeOrphans } from './orphans';
 import { buildProcessArgs } from './process-spawn';
 import { devServiceHostEnvFor } from '../dev-server';
 import { terminalServiceEnv } from '../dev-server/services/env-wiring';
+import { recordTerminalServiceEnv } from '../dev-server/services/stale-terminal-env';
 import { withoutManagedServiceKeys } from '../dev-server/services/env-sync';
 import {
     TerminalReadBuffer,
@@ -1136,6 +1137,13 @@ export function registerTerminalIpc(): void {
                 if (Object.keys(svcEnv).length) {
                     opts = { ...opts, env: { ...opts.env, ...svcEnv } };
                 }
+                // REMEMBER what this pty was handed (genie#222). It is a SNAPSHOT
+                // -- a pty's environment cannot be rewritten after it starts -- so
+                // when the engine is recreated on a new published port, every
+                // terminal already open keeps dialling the old one. Genie held
+                // both values and said nothing; `manageService` compares them now
+                // and names the terminals that need reopening.
+                recordTerminalServiceEnv(opts.id, svcEnv);
             }
             // Agent-integration MCP: when the spec's workspace has opted in, mint
             // this terminal's auto-wired endpoint and expose it as GENIE_MCP_URL
