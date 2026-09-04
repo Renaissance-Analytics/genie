@@ -1527,7 +1527,7 @@ ${body}
             'Use when entering, reinitializing, or learning a Genie workspace.',
             `# Genie workspace orientation
 
-Call \`connectToGenie\` once for a fresh or newly converted workspace. Follow its numbered plan, treat repos as the primary source, and review the Agent integration health section before starting work. Read the nearest AGENTS.md and repository instructions before changing code.`,
+Call \`connectToGenie\` once for a fresh or newly converted workspace. Follow its numbered plan — it is written for THIS workspace and says what your job here is — and review the Agent integration health section before starting. Read the nearest AGENTS.md and repository instructions before changing code.`,
         ),
         'genie-attention': skill(
             'genie-attention',
