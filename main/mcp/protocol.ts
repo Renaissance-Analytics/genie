@@ -44,6 +44,10 @@ import type { AskDeliverability } from '../ask/force-question';
 import { formatRepoCheckoutLine } from '../workspace/repo-checkout';
 import type { RepoCheckoutInfo } from '../workspace/repo-checkout';
 import type { AppCheckReport } from '../apps/checkup';
+// The ONE statement of what the operator is and is not, shared with its charter
+// and its boot brief. Orientation reaches the operator more often than either,
+// so it must not carry a fourth wording of its own.
+import { operatorRoleBrief } from '../agents/os-agent';
 
 export type { SetEnvRequest, SetEnvResult, CheckEnvRequest, CheckEnvResult };
 export type { AgentInboxScope, AgentInboxAgentInfo, AgentInboxChannelInfo, AgentInboxMessage };
@@ -211,6 +215,31 @@ export interface WorkspaceMap {
      * before it knows anything.
      */
     gappDev?: GappDevStatus;
+    /**
+     * Is this workspace the designated WORKSTATION OPERATOR (Tynn #248/#269)?
+     *
+     * Same shape and the same reasoning as {@link gappDev} directly above: this
+     * is not a fact about the repos, it changes what the agent is here to DO.
+     *
+     * The operator's charter and boot brief say outright that it does not do
+     * project work. Orientation said the opposite, and said it more often —
+     * "the repos are the PRIMARY resource — learn them first", "the main thing
+     * to learn", and a final numbered step telling it to ask the owner what
+     * they'd like to work on. Two instructions in direct contradiction, of which
+     * the contradicting one arrives on every `connectToGenie` call.
+     *
+     * Read from the DESIGNATION (`isWorkstationOperator`), never from the
+     * built-in operator's identity: a second workspace granted the designation
+     * has the same job and gets the same orientation, and branching on
+     * `agent_id` would be one more special case in a count that is deliberately
+     * pinned (`main/__tests__/osa-special-cases.test.ts`).
+     *
+     * OPTIONAL, and absence is not "no": a host that does not populate it gets
+     * exactly the ordinary orientation. Present-and-false is silent too — a line
+     * on every workspace announcing that it is NOT the operator would be noise
+     * on the one surface a fresh agent reads before it knows anything.
+     */
+    workstationOperator?: boolean;
 }
 
 /**
@@ -2723,23 +2752,53 @@ const KNOWLEDGE_TOOL = {
  * plan (envelope docs first, then each repo's README/AGENTS/CLAUDE + manifest,
  * then how they relate, then summarize back) followed by a machine-parseable
  * JSON block of the map. The repos are framed as the PRIMARY resource.
+ *
+ * Except for the WORKSTATION OPERATOR, for which every one of those framings is
+ * wrong. Its charter says it does not do project work; this said the repos were
+ * the primary resource and ended by telling it to ask which one to work on, and
+ * it said so on every `connectToGenie` call. The operator does not get the
+ * ordinary orientation with a warning bolted on top — it gets a different plan,
+ * because leaving the project-shaped steps in place while adding a prohibition
+ * above them is how an agent ends up holding both.
  */
 export function formatWorkspaceMap(map: WorkspaceMap): string {
+    // WHAT THIS AGENT IS HERE TO DO, decided before a single line is written.
+    // Keyed on the designation the map carries, never on who is calling.
+    const operator = map.workstationOperator === true;
     const lines: string[] = [];
     lines.push('# Genie workspace — orientation');
     lines.push('');
     lines.push(
-        map.isAgiEnvelope
-            ? `This is a \`.agi\` envelope at ${map.root}. The repos under \`repos/\` are the PRIMARY resource — learn them first.`
-            : `This is a simple (single-repo) workspace at ${map.root}.`,
+        operator
+            ? `This is the WORKSTATION OPERATOR's own workspace, at ${map.root}. It is not a project.`
+            : map.isAgiEnvelope
+              ? `This is a \`.agi\` envelope at ${map.root}. The repos under \`repos/\` are the PRIMARY resource — learn them first.`
+              : `This is a simple (single-repo) workspace at ${map.root}.`,
     );
     lines.push('');
 
+    if (operator) {
+        // The SAME words as the charter and the boot brief, from the same
+        // constant. A boundary maintained as several hand-written copies is one
+        // that will eventually disagree with itself, and the copy that drifts is
+        // the one nobody is reading when it matters.
+        lines.push('## You are the WORKSTATION OPERATOR');
+        lines.push('');
+        lines.push(operatorRoleBrief());
+        lines.push('');
+    }
+
     if (map.repos.length === 0) {
-        lines.push('No repos detected yet. Once repos are added, re-run this tool.');
+        lines.push(
+            operator
+                ? 'No repos here, and none are expected — this workspace holds your own notes and configuration.'
+                : 'No repos detected yet. Once repos are added, re-run this tool.',
+        );
     } else {
         lines.push(
-            `## Repos (${map.repos.length}) — the main thing to learn`,
+            operator
+                ? `## Repos (${map.repos.length}) in this folder — reference only, not your work`
+                : `## Repos (${map.repos.length}) — the main thing to learn`,
         );
         for (const r of map.repos) {
             const gh = r.owner && r.repo ? ` (${r.owner}/${r.repo})` : '';
@@ -2781,31 +2840,61 @@ export function formatWorkspaceMap(map: WorkspaceMap): string {
         lines.push('');
     }
 
-    lines.push('## How to learn this workspace');
+    lines.push(operator ? '## How to operate this workstation' : '## How to learn this workspace');
     let n = 1;
-    if (map.envelopeAgents || map.envelopeClaude) {
+    if (operator) {
+        // Note what is NOT in this plan: any step that reads a project's repos to
+        // learn them, and any step that ends by asking what to work on. Both are
+        // in the ordinary plan below, and handing either to the operator is the
+        // whole complaint.
         lines.push(
-            `${n++}. Read the envelope's ${
-                map.envelopeAgents ? 'AGENTS.md' : 'CLAUDE.md'
-            } at the root for the project-wide overview.`,
+            `${n++}. Verify your OWN wiring first — the Agent integration section below, your native AgentInbox transport, and Genie's system services. An operator that cannot be reached cannot report anything.`,
+        );
+        lines.push(
+            `${n++}. Find out what state the machine's agents are in: \`manageWorkspaces list\` for the workspaces you may act on, then \`runAgent diagnose\` for the ones that look wrong. Diagnose names the cause; it does not guess.`,
+        );
+        lines.push(
+            `${n++}. Repair with the verb that fits the cause — \`runAgent restart\` for a lost transport, \`runAgent start\` for an agent that is not running, \`registerAgent\` for a workspace that has no agent for the job. Creating an agent is the answer to "nobody is doing this", never doing it yourself.`,
+        );
+        if (map.envelopeAgents || map.envelopeClaude) {
+            lines.push(
+                `${n++}. Read this workspace's own ${map.envelopeAgents ? 'AGENTS.md' : 'CLAUDE.md'} and the operator charter it imports — your standing instructions for this machine.`,
+            );
+        }
+        if (map.knowledgeDir) {
+            lines.push(
+                `${n++}. Skim \`.ai/knowledge\` (${map.knowledgeDir}) and your \`.ai/memory\` for what earlier boots recorded about THIS workstation.`,
+            );
+        }
+    } else {
+        if (map.envelopeAgents || map.envelopeClaude) {
+            lines.push(
+                `${n++}. Read the envelope's ${
+                    map.envelopeAgents ? 'AGENTS.md' : 'CLAUDE.md'
+                } at the root for the project-wide overview.`,
+            );
+        }
+        if (map.knowledgeDir) {
+            lines.push(
+                `${n++}. Skim \`.ai/knowledge\` (${map.knowledgeDir}) for shared notes and design docs.`,
+            );
+        }
+        lines.push(
+            `${n++}. For EACH repo above, read its README, then its AGENTS.md/CLAUDE.md (if present), then its manifest — to learn its stack, purpose, and available scripts. The repos are the primary resource.`,
+        );
+        lines.push(
+            `${n++}. Note how the repos relate (which is the host/app, which are packages it consumes).`,
         );
     }
-    if (map.knowledgeDir) {
-        lines.push(
-            `${n++}. Skim \`.ai/knowledge\` (${map.knowledgeDir}) for shared notes and design docs.`,
-        );
-    }
-    lines.push(
-        `${n++}. For EACH repo above, read its README, then its AGENTS.md/CLAUDE.md (if present), then its manifest — to learn its stack, purpose, and available scripts. The repos are the primary resource.`,
-    );
-    lines.push(
-        `${n++}. Note how the repos relate (which is the host/app, which are packages it consumes).`,
-    );
+    // TRUE FOR EVERY AGENT, operator included: without it, whatever it finds is
+    // printed into a terminal nobody is watching.
     lines.push(
         `${n++}. Set up an on-finish hook so imDone fires automatically every time you hand back — if your harness supports one (Claude Code: a \`Stop\` hook in \`.claude/settings.json\`; Codex: \`notify\` in \`~/.codex/config.toml\`). Wire it to POST a tools/call for imDone to \`$GENIE_MCP_URL\` (passing \`$GENIE_TERMINAL_ID\`). Configure this in YOUR harness's own config yourself — Genie won't edit it. Call \`genieGuide\` for the exact curl snippet. Skip if your harness has no such hook.`,
     );
     lines.push(
-        `${n++}. Briefly summarize back to the user what this workspace is and what each repo does, then ask what they'd like to work on.`,
+        operator
+            ? `${n++}. Report the workstation's state back to the owner — what is healthy, what is broken, and what you propose to do about it. Offer the repair; do not ask which project to work on.`
+            : `${n++}. Briefly summarize back to the user what this workspace is and what each repo does, then ask what they'd like to work on.`,
     );
 
     const integration = map.agentIntegration;
