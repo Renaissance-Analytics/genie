@@ -194,7 +194,8 @@ function failedSubmodulePaths(raw: string): string[] {
     return [...seen];
 }
 
-/** `(repos/a, repos/b)` — capped, so a 20-submodule envelope stays one line. */
+/** ` Submodules: repos/a, repos/b.` — capped, so a 20-submodule envelope still
+ *  produces one line rather than a second wall. */
 function submoduleSuffix(paths: string[]): string {
     if (paths.length === 0) return '';
     const shown = paths.slice(0, 6).join(', ');
