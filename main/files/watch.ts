@@ -36,6 +36,59 @@ interface WatchEntry {
 
 const watchers = new Map<string, WatchEntry>();
 const DEBOUNCE_MS = 250;
+
+/**
+ * One raw filesystem event, as the OS reported it, for MAIN-SIDE consumers.
+ *
+ * Genie Wishes (Tynn #270) react to files appearing, and must do so whether or
+ * not a window is open — so they cannot ride the `files:tree-changed` broadcast,
+ * which exists to make a renderer re-list a tree. Starting a second recursive
+ * watcher over the same roots would mean twice the OS handles and two answers to
+ * "did that file appear", so the existing watcher grows a listener instead.
+ *
+ * Deliberately RAW rather than the debounced batch the renderer gets:
+ *
+ *  - `eventType` survives. `rename` means a path appeared or vanished and
+ *    `change` means existing content was written — which is the only signal
+ *    available for telling an ADDITION from an edit, and the tree does not care.
+ *  - No coalescing. The tree reloads once for a hundred files; a Wish has an
+ *    opinion about each of them.
+ *
+ * Only NAMED events are delivered: an event the platform could not name says
+ * nothing about which file, so there is nothing a consumer could do with it.
+ */
+export interface FileWatchEvent {
+    /** The workspace root as it was registered (not re-resolved). */
+    workspacePath: string;
+    eventType: 'rename' | 'change';
+    /** Forward-slashed, workspace-relative. */
+    relPath: string;
+}
+
+const fileWatchListeners = new Set<(event: FileWatchEvent) => void>();
+
+/**
+ * Subscribe to raw watch events from every watched workspace. Returns the
+ * unsubscribe. A listener that throws must not take the watcher down with it —
+ * one bad consumer would otherwise stop the Code view updating — so a throw is
+ * logged and the remaining listeners still run.
+ */
+export function onFileWatchEvent(listener: (event: FileWatchEvent) => void): () => void {
+    fileWatchListeners.add(listener);
+    return () => {
+        fileWatchListeners.delete(listener);
+    };
+}
+
+function notifyFileWatchListeners(event: FileWatchEvent): void {
+    for (const listener of fileWatchListeners) {
+        try {
+            listener(event);
+        } catch (e) {
+            console.error('[files:watch] observer threw', e);
+        }
+    }
+}
 /** Above this many distinct changed files in one window (e.g. an npm install),
  *  stop enumerating and signal "unknown" — the renderer reloads its open tabs,
  *  a set bounded by what's actually open, instead of shipping a huge list. */
@@ -103,13 +156,26 @@ export function watchWorkspace(workspacePath: string): void {
         changed: new Set(),
     };
 
-    watcher.on('change', (_event, filename) => {
+    watcher.on('change', (event, filename) => {
         // `filename` is workspace-relative (Buffer | string | null). Null means
         // the platform couldn't name it — we still schedule a broadcast (the tree
         // re-lists) but name nothing, so no open viewer is reloaded off it.
         const rel = filename == null ? '' : filename.toString();
         if (rel && isIgnoredPath(rel)) return;
-        if (rel) entry.changed.add(rel.replace(/\\/g, '/'));
+        if (rel) {
+            const relPath = rel.replace(/\\/g, '/');
+            entry.changed.add(relPath);
+            // Raw, undebounced, per workspace path this root was registered
+            // under — main-side consumers (Wishes) want each event, not the
+            // coalesced batch the tree reloads from.
+            for (const original of entry.paths) {
+                notifyFileWatchListeners({
+                    workspacePath: original,
+                    eventType: event === 'change' ? 'change' : 'rename',
+                    relPath,
+                });
+            }
+        }
         if (entry.timer) clearTimeout(entry.timer);
         entry.timer = setTimeout(() => {
             entry.timer = null;
