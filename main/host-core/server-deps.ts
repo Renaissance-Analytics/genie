@@ -39,9 +39,10 @@ import { pluginToolDescriptors, dispatchPluginTool } from '../plugins/registry';
 import { agentInboxBroker } from '../agentinbox/broker';
 import { agentPulse } from '../terminal/agent-pulse';
 import { agentShutdownReadiness } from '../agents/shutdown-readiness';
-import { authorizeOsAgentBoot, GENIE_OS_TERMINAL_ID } from '../agents/os-agent';
+import { authorizeOsAgentBoot, GENIE_OS_AGENT, GENIE_OS_TERMINAL_ID } from '../agents/os-agent';
 import { markOsAgentOriented } from '../agents/os-lifecycle';
 import { planHandoff, writeHandoff } from '../agents/handoff';
+import { getWorkspaceAgentByTerminal } from '../agents/lookup';
 import { harnessTransportRegistry, requiredHarnessTransport } from '../agentinbox/harness-transport';
 import { backendOfKind } from '../backend/registry';
 import { formatAgentInboxMailLine } from '../mcp/protocol';
@@ -246,6 +247,18 @@ export function buildHostServerDeps(
         manageGappDev: (terminalId, req) => manageGappDevForMcp(terminalId, req),
         provisionWorkspaces: (terminalId, req) => provisionWorkspacesForMcp(terminalId, req),
         manageTerminals: (terminalId, req) => manageTerminalsForMcp(terminalId, req),
+        // agentUpgrade's caller facts (genie#372). The tool answered from a
+        // frozen constant, so it handed the workstation operator a migration
+        // whose step 1 — `registerAgent` — is refused for it twice over: the
+        // operator is deliberately never persisted as a workspace agent, and
+        // `genie` is a reserved name the `__system__` row holds no grant for.
+        // The DECISION is pure (`agents/upgrade-guide.ts`); this only reads.
+        agentUpgradeCaller: (terminalId) => ({
+            workspaceId: workspaceIdOfTerminal(terminalId),
+            isWorkstationOperator:
+                getTerminalSpec(terminalId)?.meta?.agent_id === GENIE_OS_AGENT.id,
+            registeredAs: getWorkspaceAgentByTerminal(terminalId)?.name ?? null,
+        }),
         registerAgent: (terminalId, req) => registerAgentForMcp(terminalId, req),
         runAgent: (terminalId, req) => runAgentForMcp(terminalId, req),
         manageWorkspaces: (terminalId, req) => manageWorkspacesForMcp(terminalId, req),

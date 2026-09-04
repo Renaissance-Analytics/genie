@@ -11,6 +11,7 @@ import {
     type ServerNotification,
     type ServerPushStats,
 } from './server-push';
+import type { UpgradeCaller } from '../agents/upgrade-guide';
 import type { QuestionPriority } from '../ask/question-priority';
 import type { AskDeliverability } from '../ask/force-question';
 import {
@@ -102,6 +103,9 @@ export interface ServerDeps {
      *  it is dropped for a System-workspace terminal, one with no agent name,
      *  and on any fs failure. */
     onHandoff?: (terminalId: string, note: string) => HandoffOutcome;
+    /** The caller facts `agentUpgrade` checks before advertising a migration
+     *  whose first step would be refused for that caller (genie#372). */
+    agentUpgradeCaller?: (terminalId: string) => UpgradeCaller;
     onThumbsUp?: (
         terminalId: string,
         reason: 'boot' | 'ack' | 'shutdown',
@@ -679,6 +683,7 @@ async function handle(
         serverVersion: deps.serverVersion,
         onImDone: deps.onImDone,
         onHandoff: deps.onHandoff,
+        agentUpgradeCaller: deps.agentUpgradeCaller,
         onThumbsUp: deps.onThumbsUp,
         checkIssues: deps.checkIssues,
         agentInboxMailLine: deps.agentInboxMailLine,
