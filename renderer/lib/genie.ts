@@ -9,8 +9,45 @@ import type { BoardRead, ReviewOutcome } from './artboard-model';
 import { makeRemoteBridge } from './remote-bridge';
 import type { TynnHealth } from '../../main/mcp/tynn-health';
 import type { AgentTuiId, TuiDef } from '../../main/agents/registry';
+/* The agent MANAGER's wire types (Tynn #709 / story #263).
+ *
+ * From `agent-manager-types.ts` — a ZERO-IMPORT leaf — and from NOTHING else,
+ * including the modules that use them. `renderer/tsconfig.json` includes
+ * `./**\/*`, so anything a renderer file imports joins the renderer's program,
+ * and `import type` governs what is EMITTED, not what is COMPILED. Naming
+ * `main/agents/agent-manager` here pulled in `main/terminal/ipc` →
+ * `main/terminal/genie-adapter` — child-process spawning code, in the renderer.
+ *
+ * Every other `main/` module the renderer reaches is a leaf for the same
+ * reason: `agents/registry`, `mcp/tynn-health`, `terminal/replay`,
+ * `terminal/agent-cap`, `terminal/keystrokes`, `dev-server/serve-recipe`,
+ * `ask/inbox`. `__tests__/renderer-main-boundary.test.ts` holds the line.
+ *
+ * Imported rather than re-declared: a hand-copied shape is how
+ * `AgentRuntimeSpec.provider` stopped matching main's `tui` and the agent panel
+ * started throwing on undefined. */
+import type {
+    AgentManagerState,
+    AgentManagerMcp,
+    AgentManagerPersona,
+    AgentManagerSidecar,
+    AgentMcpServer,
+    McpServerInput,
+    PersonaEdit,
+    SidecarAction,
+} from '../../main/agents/agent-manager-types';
 
-export type { TynnHealth };
+export type {
+    TynnHealth,
+    AgentManagerState,
+    AgentManagerMcp,
+    AgentManagerPersona,
+    AgentManagerSidecar,
+    AgentMcpServer,
+    McpServerInput,
+    PersonaEdit,
+    SidecarAction,
+};
 
 export type BackendKind = 'tynn' | 'aionima';
 
@@ -4012,6 +4049,31 @@ export interface GenieApi {
             filesRemoved: boolean;
             workspaceTynnLinked: boolean;
         }>;
+        /* --- Agent manager (Tynn #709 / story #263) ----------------------
+           The agent's prompt and rules, the MCP servers it actually gets, and
+           its sidecar. See main/agents/agent-manager.ts. */
+        /** Everything the manager draws for one agent, in one read. */
+        managerState: (agentId: string) => Promise<AgentManagerState>;
+        /** Save an edit to the agent's AGENT.md. Only what the edit NAMES
+         *  changes — header keys Genie has no field for are carried through. */
+        savePersona: (
+            agentId: string,
+            edit: PersonaEdit,
+        ) => Promise<{ ok: boolean; error?: string }>;
+        /** Remove one MCP server. REFUSED for `genie` and its AgentInbox
+         *  channel: an agent without them starts, looks healthy, and cannot
+         *  reach the person who started it. */
+        mcpRemove: (agentId: string, name: string) => Promise<{ ok: boolean; error?: string }>;
+        mcpAdd: (
+            agentId: string,
+            input: McpServerInput,
+        ) => Promise<{ ok: boolean; error?: string }>;
+        /** Start / stop / restart the agent's sidecar. Stopping kills its
+         *  terminals and KEEPS its record — a pause, not a delete. */
+        sidecarAction: (
+            agentId: string,
+            action: SidecarAction,
+        ) => Promise<{ ok: boolean; error?: string }>;
     };
     ask: {
         onShow: (

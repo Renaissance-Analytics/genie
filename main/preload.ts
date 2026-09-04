@@ -32,6 +32,23 @@ export interface AgentRuntimePayload {
     terminalSpecId: string | null;
     fronted: boolean;
 }
+
+/* The agent MANAGER's wire types (Tynn #709). From `agent-manager-types.ts` —
+   the ZERO-IMPORT leaf — not from the modules that use them: the preload IS the
+   main/renderer boundary, so it is the last place that should reach across it.
+   Re-exported so the preload, the renderer and main cannot drift; a hand-copied
+   shape here is how `AgentRuntimeSpec.provider` stopped matching main's `tui`
+   and the agent panel started throwing. */
+export type {
+    AgentManagerState as AgentManagerStatePayload,
+    McpServerInput as McpServerInputPayload,
+    PersonaEdit as PersonaEditPayload,
+} from './agents/agent-manager-types';
+import type {
+    AgentManagerState as AgentManagerStatePayload,
+    McpServerInput as McpServerInputPayload,
+    PersonaEdit as PersonaEditPayload,
+} from './agents/agent-manager-types';
 import {
     TERMINAL_RECOVER_CHANNEL,
     TERMINAL_RECOVERY_STATUS_CHANNEL,
@@ -1416,6 +1433,39 @@ const api = {
                 error?: string;
                 filesRemoved: boolean;
                 workspaceTynnLinked: boolean;
+            }>,
+        /* --- Agent manager (Tynn #709 / story #263) ----------------------
+           The prompt, the rules, the MCP set and the sidecar — the surface
+           the owner asked for and the plumbing that already existed with no
+           way to reach it. See main/agents/agent-manager.ts. */
+        /** Everything the manager draws for one agent, in one read. */
+        managerState: (agentId: string) =>
+            ipcRenderer.invoke('agents:manager-state', agentId) as Promise<AgentManagerStatePayload>,
+        /** Save an edit to the agent's AGENT.md. Only what it names changes;
+         *  header keys Genie has no field for are carried through untouched. */
+        savePersona: (agentId: string, edit: PersonaEditPayload) =>
+            ipcRenderer.invoke('agents:save-persona', agentId, edit) as Promise<{
+                ok: boolean;
+                error?: string;
+            }>,
+        /** Remove one MCP server. REFUSED for `genie` and its AgentInbox
+         *  channel — an agent without them looks healthy and cannot reach you. */
+        mcpRemove: (agentId: string, name: string) =>
+            ipcRenderer.invoke('agents:mcp-remove', agentId, name) as Promise<{
+                ok: boolean;
+                error?: string;
+            }>,
+        mcpAdd: (agentId: string, input: McpServerInputPayload) =>
+            ipcRenderer.invoke('agents:mcp-add', agentId, input) as Promise<{
+                ok: boolean;
+                error?: string;
+            }>,
+        /** Start / stop / restart the agent's sidecar. Stopping kills its
+         *  terminals and keeps its record — it is a pause, not a delete. */
+        sidecarAction: (agentId: string, action: 'start' | 'stop' | 'restart') =>
+            ipcRenderer.invoke('agents:sidecar-action', agentId, action) as Promise<{
+                ok: boolean;
+                error?: string;
             }>,
     },
     ask: {

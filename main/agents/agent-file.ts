@@ -38,11 +38,35 @@ export interface AgentFileConfig {
     avatar: string | null;
 }
 
+/**
+ * One frontmatter line Genie has no field for: `[key, rawValue]`.
+ *
+ * Kept because the file belongs to a HUMAN and is tracked in git. An editor over
+ * this file (Tynn #709) saves by `parse → edit → render`, so every key the
+ * renderer does not draw passes through here — and the original parser dropped
+ * them, which meant opening an agent that carried `model:` or a teammate's
+ * `description:` and pressing Save would delete those lines with no error and a
+ * diff that looked deliberate.
+ */
+export type AgentFileExtra = [key: string, value: string];
+
 export interface ParsedAgentFile {
     config: AgentFileConfig;
     /** The system prompt, VERBATIM. */
     body: string;
+    /**
+     * Header keys Genie has no field for, in file order.
+     *
+     * Pass them back to {@link renderAgentFile} to write them out again. An
+     * editor may only change what it was asked to change; anything else is
+     * carried, not judged.
+     */
+    extra: AgentFileExtra[];
 }
+
+/** The keys {@link renderAgentFile} emits itself. Anything else is passthrough —
+ *  carrying a known key in `extra` too would write it twice. */
+const KNOWN_KEYS = new Set(['name', 'purpose', 'scope', 'tuis', 'avatar']);
 
 const EMPTY: AgentFileConfig = {
     name: '',
@@ -81,12 +105,19 @@ function parseList(value: string): string[] {
 export function parseAgentFile(raw: string): ParsedAgentFile {
     const { header, body } = split(raw);
     const config: AgentFileConfig = { ...EMPTY, tuis: [] };
+    const extra: AgentFileExtra[] = [];
     for (const line of header) {
         const at = line.indexOf(':');
+        // Not a key/value pair at all. Carrying it as one would write back
+        // something that never parsed in the first place.
         if (at === -1) continue;
         const key = line.slice(0, at).trim();
         const value = line.slice(at + 1).trim();
         if (!value) continue;
+        if (!KNOWN_KEYS.has(key)) {
+            extra.push([key, value]);
+            continue;
+        }
         switch (key) {
             case 'name':
                 config.name = value;
@@ -111,17 +142,41 @@ export function parseAgentFile(raw: string): ParsedAgentFile {
                 break;
         }
     }
-    return { config, body };
+    return { config, body, extra };
 }
 
-/** Write an AGENT.md. Omits what is absent rather than emitting empty keys. */
-export function renderAgentFile(config: AgentFileConfig, body: string): string {
+/**
+ * Write an AGENT.md. Omits what is absent rather than emitting empty keys.
+ *
+ * `extra` is the passthrough bag from {@link parseAgentFile} — hand it back and
+ * the keys Genie has no field for survive the write. It is OPTIONAL so the
+ * registration path, which composes a brand-new file from nothing, keeps its
+ * two-argument call.
+ *
+ * For a file in Genie's own key order this is a FIXED POINT: parse then render
+ * reproduces it byte for byte, so opening an agent and pressing Save with no
+ * edit produces no diff. A hand-written file that INTERLEAVES its own keys with
+ * Genie's is rewritten into that order on first save — reordered, never lost,
+ * which is the trade the alternative (tracking each key's original index) is not
+ * worth.
+ */
+export function renderAgentFile(
+    config: AgentFileConfig,
+    body: string,
+    extra: readonly AgentFileExtra[] = [],
+): string {
     const header = [FENCE, `name: ${config.name}`, `purpose: ${config.purpose}`];
     // A blank `scope:` reads as "scoped to nothing"; ABSENCE reads as "the whole
     // workspace", which is the actual default. Same for the rest.
     if (config.scope) header.push(`scope: ${config.scope}`);
     if (config.tuis.length > 0) header.push(`tuis: [${config.tuis.join(', ')}]`);
     if (config.avatar) header.push(`avatar: ${config.avatar}`);
+    for (const [key, value] of extra) {
+        // A key Genie renders itself would be written twice. `parseAgentFile`
+        // never puts one here; a hand-assembled `extra` might.
+        if (KNOWN_KEYS.has(key)) continue;
+        header.push(`${key}: ${value}`);
+    }
     header.push(FENCE, '');
     return `${header.join('\n')}\n${body.replace(/^\n+/, '')}`;
 }

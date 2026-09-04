@@ -4843,6 +4843,36 @@ body.gutter-dragging .grid-gutter {
     flex-direction: column;
     gap: 10px;
 }
+/* The AGENT MANAGER (Tynn #709) needs room the old identity-only dialog did
+   not: a tab strip across the top and a prompt editor under it. The wider
+   size is a MODIFIER, not a change to the base rule, so an orphaned spec —
+   which still gets the identity form alone — keeps the dialog it had. */
+.agent-settings-modal-manager {
+    width: 640px;
+    max-height: 88vh;
+}
+.agent-settings-modal-manager .agent-manager {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-height: 0;
+}
+/*
+ * FIXED height on the panel area, not the modal.
+ *
+ * The four tabs hold very different amounts — a one-line sidecar summary next
+ * to a 24-row prompt editor — so a modal sized to its content would resize on
+ * every tab click and slide the tab strip out from under the cursor. Pinning
+ * the panels instead keeps the chrome still and lets the long tabs scroll,
+ * while the narrow orphan dialog above stays sized to its content.
+ */
+.agent-manager-panels {
+    height: 440px;
+    max-height: 62vh;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-right: 4px;
+}
 .agent-settings-head .agent-settings-title {
     font-size: 13px;
     font-weight: 600;
