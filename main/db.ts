@@ -2028,6 +2028,47 @@ export function runMigrations(d: Database.Database): void {
                 ).run();
             },
         },
+        {
+            // v66 -- WISHES (Tynn story #270).
+            //
+            // A Wish is Genie's Workflow: a Recipe (what runs), Triggers (when)
+            // and a Scope (who sees it). The recipe is referenced by ID rather
+            // than stored, because the body of an unattended Wish must be
+            // first-party code that was reviewed when it was written -- a JSON
+            // row cannot carry a function, and that is the point rather than a
+            // limitation (see `wishes/admission.ts`).
+            //
+            // `purpose` is a COLUMN, not something inferred from the title: the
+            // menu groups by it, and a grouping key that is guessed from a
+            // string is a grouping that silently reshuffles when somebody
+            // renames a Wish.
+            //
+            // No app foreign key, unlike `flows`. A Wish may belong to a GApp,
+            // to a workspace, or to the workstation itself, so ownership lives
+            // in `scope_json` where all three shapes fit. What a GApp-owned Wish
+            // needs -- disappearing when its app does -- is the cascade
+            // `flows` gets from its column, and it is deliberately NOT built
+            // here: GApp-authored Wishes are not yet creatable, and a
+            // half-enforced ownership rule is worse than an absent one.
+            version: 66,
+            runner: (db) => {
+                db.exec(`
+                    CREATE TABLE IF NOT EXISTS wishes (
+                        id            TEXT PRIMARY KEY,
+                        title         TEXT NOT NULL,
+                        purpose       TEXT NOT NULL,
+                        description   TEXT,
+                        scope_json    TEXT NOT NULL,
+                        triggers_json TEXT NOT NULL,
+                        recipe_json   TEXT NOT NULL,
+                        enabled       INTEGER NOT NULL DEFAULT 1,
+                        created_at    TEXT NOT NULL,
+                        updated_at    TEXT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_wishes_purpose ON wishes(purpose);
+                `);
+            },
+        },
     ];
 
     const apply = d.transaction(

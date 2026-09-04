@@ -289,6 +289,7 @@ import {
 } from './updater/reopen-after-update';
 import { markDesktopRuntime, isHeadless } from './runtime-mode';
 import { registerFilesIpc } from './files/ipc';
+import { startWishes } from './wishes';
 import { registerGithubIpc } from './github/ipc';
 import { registerPluginsIpc } from './plugins/ipc';
 import { registerRepoIpc } from './repo/ipc';
@@ -1780,6 +1781,12 @@ app.whenReady().then(async () => {
         /* best-effort — knowledge is additive; a failure never blocks startup */
     }
     registerFilesIpc();
+    // Genie Wishes (Tynn #270): a Wish is a Recipe + Triggers + a Scope, and the
+    // trigger half is what starts here. It rides the SAME workspace watcher the
+    // Code view uses rather than opening a second one, so this must come after
+    // `registerFilesIpc`. Watches only the workspaces the stored Wishes actually
+    // need — with none stored, it watches nothing and costs nothing.
+    startWishes();
     registerGithubIpc();
     // Repository panel (the first plugin-panel consumer): host-side git ops.
     registerRepoIpc();
