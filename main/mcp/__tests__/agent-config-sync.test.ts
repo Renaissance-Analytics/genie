@@ -67,6 +67,7 @@ const coreSkillNames = [
     'genie-workspaces',
     'genie-knowledge',
     'genie-issuewatch',
+    'genie-new-project',
 ];
 const URL = 'http://127.0.0.1:51717/mcp/tok';
 
@@ -140,6 +141,23 @@ describe('writeWorkspaceAgentMcp — per-target sync gating', () => {
         // `connectToGenie` now tailors per workspace kind (ordinary / GApp dev /
         // operator). The skill defers to that plan instead of restating an
         // assumption about it.
+        // A NEW PROJECT is not automatically a code project, and the stack is
+        // not automatically PHP. The skill has to establish, in order: is this
+        // even an app, is there already a spec, and where will it LIVE — because
+        // a local-only tool and a deployed web app are different decisions.
+        const newProject = files.get(
+            path.join(WS, '.agents', 'skills', 'genie-new-project', 'SKILL.md'),
+        )!;
+        expect(newProject).toContain('spec');
+        expect(newProject).toContain('local');
+        // Stack guidance is a RECOMMENDATION with reasons, not a ban: the owner
+        // chose that over a hard rule, so PHP must still be reachable with a
+        // stated reason rather than refused.
+        expect(newProject).toMatch(/TypeScript|TS/);
+        expect(newProject).toContain('Python');
+        expect(newProject).toContain('PHP');
+        expect(newProject).not.toMatch(/never use PHP|PHP is forbidden|must not use PHP/i);
+
         const orientation = files.get(
             path.join(WS, '.agents', 'skills', 'genie-orientation', 'SKILL.md'),
         )!;

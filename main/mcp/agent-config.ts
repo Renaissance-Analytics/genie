@@ -1575,6 +1575,52 @@ Use \`checkIssues\` for the detailed workspace feed. \`imDone\` also reports ope
 
 The \`feedback:\` count is unresolved project feedback in Tynn — NOT a GitHub item and NOT a failure. It is input from outside the build waiting on triage: read it with the Tynn \`feedback\` tool and convert what should become work, but never close entries to bring the number down, because judging whether a piece of feedback is worth acting on is a human call.`,
         ),
+        'genie-new-project': skill(
+            'genie-new-project',
+            'Use when starting a NEW project or workspace, before choosing a stack or scaffolding anything.',
+            `# Starting a new project
+
+Establish these IN ORDER. Each one changes the answer to the next, and guessing
+any of them produces a scaffold nobody asked for.
+
+## 1. Is this a code project at all?
+
+Not every workspace is software. Plenty are administrative — a set of agents
+that run a process, watch something, or keep records. **Ask before assuming an
+app.** If it is not a code project, stop here: it needs agents and Flows, not a
+stack.
+
+## 2. Is there already a spec?
+
+If the workspace has a spec, a plan, or a written brief, **read it and follow
+it** — do not re-decide what has already been decided. Only when there is none do
+you ask for the rest.
+
+## 3. Where will it live?
+
+Ask whoever is driving — the user, or the agent that started this:
+
+- **Local only** — it runs on this machine and is never deployed.
+- **Deployed to a server** — public or customer-facing.
+- **Deployed inside a private network** — reachable, but not from the internet.
+- **Will it use Genie's curated agents and Flows?**
+
+## 4. Then choose the stack
+
+A recommendation with reasons, not a rule — you may still choose otherwise, but
+say why in the spec:
+
+- **Prefer TypeScript, or Python with a TypeScript front end.** This is the
+  default for a Genie App and for anything **local-only**: it starts fast, needs
+  no web server in front of it, and is what Genie's own tooling understands best.
+- **PHP is for web apps** — chiefly a Laravel app that will be **deployed** and
+  served over HTTP. Genie can host one (\`hostServe: php\`), but it brings a web
+  server, a FastCGI worker and an engine version to pin, which is a poor trade
+  for a tool that only ever runs on this machine.
+
+Record the answers in the workspace's spec, so the next agent does not ask
+again.`,
+        ),
         'genie-gdw': skill(
             'genie-gdw',
             'Use when building a Genie App in a GApp Development Workspace or updating one to the current shared schemas.',

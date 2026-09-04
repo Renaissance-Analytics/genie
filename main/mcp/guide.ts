@@ -64,8 +64,9 @@ the workspace.
 
 Genie automatically syncs a small routing skill plus focused skills for
 \`genie-orientation\`, \`genie-attention\`, \`genie-agentinbox\`,
-\`genie-terminals\`, \`genie-workspaces\`, \`genie-knowledge\`, and
-\`genie-issuewatch\`. Load the focused skill for the capability in use; call
+\`genie-terminals\`, \`genie-workspaces\`, \`genie-knowledge\`,
+\`genie-issuewatch\`, and \`genie-new-project\`. Load the focused skill for the
+capability in use; call
 \`genieGuide\` when the complete protocol is needed.
 
 ## Reading a result — \`ok\` is the verdict, not \`isError\`
