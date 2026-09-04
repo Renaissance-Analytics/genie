@@ -1,3 +1,4 @@
+import type { AgentTuiId } from './agents/registry';
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { TailscaleStatus } from './tailscale';
 import type { AgentInboxScope } from './agentinbox/types';
@@ -1154,7 +1155,7 @@ const api = {
          *  and launches it. Returns the created spec. */
         createAgent: (input: {
             workspace_id: string;
-            agent: 'claude' | 'codex' | 'kiwi' | 'genie' | 'custom';
+            agent: AgentTuiId;
             command?: string;
             cwd?: string;
             label?: string;

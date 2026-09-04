@@ -103,6 +103,7 @@ import {
 } from '../tynn/provision';
 import { tynnHealthService } from '../mcp/tynn-health-service';
 import type { ProjectJsonTynn } from '../workspace/project-json';
+import type { AgentTuiId } from '../agents/registry';
 
 /**
  * REST surface for the mobile remote-control server. Pure routing over the
@@ -424,7 +425,7 @@ export interface MobileDataDeps {
     };
     createSpecializedAgentTerminal?: (input: {
         workspace_id: string;
-        agent: 'claude' | 'codex' | 'kiwi' | 'genie' | 'custom';
+        agent: AgentTuiId;
         command?: string;
         cwd?: string;
         label?: string;
@@ -448,7 +449,7 @@ export interface MobileDataDeps {
               ok: true;
               oldId: string;
               newId: string;
-              agent: 'claude' | 'codex' | 'kiwi' | 'genie' | 'custom';
+              agent: AgentTuiId;
               command: string;
               /** The relaunch is IN FLIGHT — the host has not seen the agent come
                *  back up and does not claim to (genie#364). */

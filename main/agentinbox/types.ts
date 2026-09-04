@@ -10,6 +10,8 @@
  * is in-memory in the main process (the durable identity rides
  * `terminal_specs.meta`), local-only — no relay, no cross-host.
  */
+import type { AgentTuiId } from '../agents/registry';
+
 
 /**
  * Who can DM an agent — the INNER tier of AgentInbox access control. `self`
@@ -47,7 +49,7 @@ export interface WorkspaceAccessPolicy {
 export type AgentInboxStatus = 'online' | 'away' | 'offline';
 
 /** The AI TUI an agent terminal runs. Mirrors `AgentType` (mcp/protocol). */
-export type AgentInboxAgentType = 'claude' | 'codex' | 'kiwi' | 'genie' | 'custom';
+export type AgentInboxAgentType = AgentTuiId;
 
 /** A message's kind — a 1:1 direct message or a channel broadcast. */
 export type AgentInboxKind = 'dm' | 'channel';

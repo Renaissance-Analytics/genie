@@ -101,6 +101,7 @@ import { agentPulse } from './agent-pulse';
 import { InputHolds } from './input-hold';
 import { devChannelConsentReply } from './dev-channel-consent';
 import crypto from 'node:crypto';
+import type { AgentTuiId } from '../agents/registry';
 
 /**
  * Tier 2 resource cap. The number of terminals that may be RETAINED (kept
@@ -443,7 +444,7 @@ export function createAgentTerminal(opts: {
     rows?: number;
     /** Marks this terminal as running an agent (surfaced in the list). */
     agentMeta?: {
-        agent: 'claude' | 'codex' | 'kiwi' | 'genie' | 'custom';
+        agent: AgentTuiId;
         command: string;
         /** Positional opening prompt, rendered only after all provider options. */
         instructions?: string;
