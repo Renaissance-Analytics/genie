@@ -97,6 +97,24 @@ export const RETIRED_AGENT_COMMANDS: Record<string, string[]> = {
 };
 
 /**
+ * Whether `db` has a table by this name.
+ *
+ * Migrations are append-only and normally need no such question -- `IF NOT
+ * EXISTS` answers it inside the statement. `ALTER TABLE ... RENAME TO` has no
+ * such clause, so v67 (which renames two tables) and v47 (whose table v67
+ * renamed) ask it out loud instead.
+ */
+function migrationHasTable(db: Database.Database, name: string): boolean {
+    return (
+        (db
+            .prepare<[string], { n: number }>(
+                `SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = ?`,
+            )
+            .get(name)?.n ?? 0) > 0
+    );
+}
+
+/**
  * Run all pending append-only migrations against `d`. Exported so the
  * migration suite can exercise the runner against a fresh `:memory:`
  * database without the Electron `app.getPath` singleton path.
@@ -1267,6 +1285,9 @@ export function runMigrations(d: Database.Database): void {
         {
             // v47: fancy-flow workflows owned by a Genie App.
             //
+            // RENAMED to `gapp_flows` by v67 (genie#394), which gave the general
+            // name `flows` to the general automation system.
+            //
             // The row is stored graph JSON that Genie will later EXECUTE, so two
             // things live in the SCHEMA rather than in whoever writes to it:
             //
@@ -1282,6 +1303,15 @@ export function runMigrations(d: Database.Database): void {
             // turn off.
             version: 47,
             runner: (db) => {
+                // v67 moved this table to `gapp_flows` and gave the name `flows`
+                // to Genie's own automation system, whose rows have no `app_id`
+                // at all. On a REPLAY -- the suite rewinds `schema_version` to
+                // exercise an earlier migration and walks the tail again -- the
+                // `CREATE TABLE IF NOT EXISTS` below would find that other table
+                // sitting under the name and then index a column it does not
+                // have. The canvas table's presence under its later name is what
+                // says there is nothing to create here.
+                if (migrationHasTable(db, 'gapp_flows')) return;
                 db.exec(`
                     CREATE TABLE IF NOT EXISTS flows (
                         id         TEXT PRIMARY KEY,
@@ -2031,6 +2061,9 @@ export function runMigrations(d: Database.Database): void {
         {
             // v66 -- WISHES (Tynn story #270).
             //
+            // RENAMED to `flows` by v67 (genie#394). The `flows` named below is
+            // v47's GApp canvas table, which v67 renamed to `gapp_flows`.
+            //
             // A Wish is Genie's Workflow: a Recipe (what runs), Triggers (when)
             // and a Scope (who sees it). The recipe is referenced by ID rather
             // than stored, because the body of an unattended Wish must be
@@ -2067,6 +2100,102 @@ export function runMigrations(d: Database.Database): void {
                     );
                     CREATE INDEX IF NOT EXISTS idx_wishes_purpose ON wishes(purpose);
                 `);
+            },
+        },
+        {
+            // v67 -- WISHES BECOME FLOWS (genie#394).
+            //
+            // Genie's automation system is called Flows, and the module that
+            // shipped as Wishes in v0.7.0-beta.298 IS that system. The name was
+            // already spoken for by v47's table of fancy-flow canvas graphs
+            // owned by a Genie App -- the narrower thing, one GApp's workflows
+            // -- so that becomes `gapp_flows` and the general name goes to the
+            // general system. Order matters: `flows` vacates before `wishes`
+            // takes the name.
+            //
+            // ## The scope ladder collapses to three
+            //
+            // `system / workspace / gapp`, and `exposure` is GONE: a `gapp`
+            // scope IS internal to its GApp, which is all the field's
+            // `'internal'` value ever said.
+            //
+            // The value with nowhere else to go is `exposure: 'workstation'` --
+            // a GApp's Flow that appeared workstation-wide. Under three scopes
+            // the thing visible workstation-wide is `system`, so that is where
+            // it lands, losing the `appId` it carried. That id bought nothing:
+            // v66 deliberately declined the app foreign key and the uninstall
+            // cascade `flows` had, so no behaviour anywhere read it. Landing it
+            // on `gapp` instead would HIDE a Flow its author published, which is
+            // the worse of the two mistakes.
+            //
+            // Rewritten in JS rather than with `json_extract`, because a row can
+            // be hand-edited into something that is not JSON at all and the
+            // whole module's rule (`flows/store.ts`) is that such a row is left
+            // alone, not dropped and not thrown over.
+            //
+            // `ALTER TABLE ... RENAME TO` has no `IF NOT EXISTS`, so the rename
+            // states its own precondition -- the arrival of `gapp_flows` is what
+            // says this database has already taken v67. Re-running the migration
+            // must converge rather than throw, and it IS re-run: the suite's way
+            // to exercise an earlier migration is to rewind `schema_version` and
+            // replay the tail, which walks v66 (recreating an empty `wishes`)
+            // straight back into v67.
+            version: 67,
+            runner: (db) => {
+                if (migrationHasTable(db, 'gapp_flows')) {
+                    // Already renamed. A `wishes` table here is v66 replayed
+                    // after the fact: nothing has written to that name since the
+                    // rename, so an EMPTY one is the replay's own litter and
+                    // goes. One with rows in it is not litter and is left for a
+                    // human -- a migration that deletes data it never looked at
+                    // is a worse outcome than a stray table.
+                    const left =
+                        migrationHasTable(db, 'wishes') &&
+                        (db
+                            .prepare<[], { n: number }>('SELECT COUNT(*) AS n FROM wishes')
+                            .get()?.n ?? 0) === 0;
+                    if (left) db.exec('DROP TABLE wishes');
+                } else {
+                    db.exec(`
+                        DROP INDEX IF EXISTS idx_flows_app;
+                        DROP INDEX IF EXISTS idx_wishes_purpose;
+                        ALTER TABLE flows RENAME TO gapp_flows;
+                        ALTER TABLE wishes RENAME TO flows;
+                        CREATE INDEX IF NOT EXISTS idx_gapp_flows_app ON gapp_flows(app_id);
+                        CREATE INDEX IF NOT EXISTS idx_flows_purpose ON flows(purpose);
+                    `);
+                }
+
+                const rows = db
+                    .prepare<[], { id: string; scope_json: string }>(
+                        'SELECT id, scope_json FROM flows',
+                    )
+                    .all();
+                const update = db.prepare('UPDATE flows SET scope_json = ? WHERE id = ?');
+
+                for (const row of rows) {
+                    let scope: Record<string, unknown> | null = null;
+                    try {
+                        const parsed: unknown = JSON.parse(row.scope_json);
+                        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                            scope = parsed as Record<string, unknown>;
+                        }
+                    } catch {
+                        /* unreadable — left exactly as the author left it */
+                    }
+                    if (!scope) continue;
+
+                    let next: Record<string, unknown> | null = null;
+                    if (scope.kind === 'workstation') {
+                        next = { kind: 'system' };
+                    } else if (scope.kind === 'app') {
+                        next =
+                            scope.exposure === 'workstation'
+                                ? { kind: 'system' }
+                                : { kind: 'gapp', appId: String(scope.appId ?? '') };
+                    }
+                    if (next) update.run(JSON.stringify(next), row.id);
+                }
             },
         },
     ];

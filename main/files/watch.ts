@@ -40,7 +40,7 @@ const DEBOUNCE_MS = 250;
 /**
  * One raw filesystem event, as the OS reported it, for MAIN-SIDE consumers.
  *
- * Genie Wishes (Tynn #270) react to files appearing, and must do so whether or
+ * Genie Flows (Tynn #270) react to files appearing, and must do so whether or
  * not a window is open — so they cannot ride the `files:tree-changed` broadcast,
  * which exists to make a renderer re-list a tree. Starting a second recursive
  * watcher over the same roots would mean twice the OS handles and two answers to
@@ -51,7 +51,7 @@ const DEBOUNCE_MS = 250;
  *  - `eventType` survives. `rename` means a path appeared or vanished and
  *    `change` means existing content was written — which is the only signal
  *    available for telling an ADDITION from an edit, and the tree does not care.
- *  - No coalescing. The tree reloads once for a hundred files; a Wish has an
+ *  - No coalescing. The tree reloads once for a hundred files; a Flow has an
  *    opinion about each of them.
  *
  * Only NAMED events are delivered: an event the platform could not name says
@@ -166,7 +166,7 @@ export function watchWorkspace(workspacePath: string): void {
             const relPath = rel.replace(/\\/g, '/');
             entry.changed.add(relPath);
             // Raw, undebounced, per workspace path this root was registered
-            // under — main-side consumers (Wishes) want each event, not the
+            // under — main-side consumers (Flows) want each event, not the
             // coalesced batch the tree reloads from.
             for (const original of entry.paths) {
                 notifyFileWatchListeners({

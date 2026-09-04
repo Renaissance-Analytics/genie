@@ -3,13 +3,13 @@
  *
  * `watchWorkspace` existed to keep the Code view's tree fresh, so everything it
  * learned went straight to `webContents.send` and nothing in main could hear it.
- * Genie Wishes need the same events with no window involved at all — a
- * system-triggered Wish runs whether or not anyone has Genie open.
+ * Genie Flows need the same events with no window involved at all — a
+ * system-triggered Flow runs whether or not anyone has Genie open.
  *
  * Rather than starting a SECOND recursive watcher over the same trees (twice the
  * inotify handles, two answers to "did that file appear"), the existing one
  * grows a listener seam. These tests cover what the seam has to get right: the
- * raw `eventType` survives (the wish source needs it to tell an addition from an
+ * raw `eventType` survives (the flow source needs it to tell an addition from an
  * edit), the ignore rules still apply, and unwatching really stops it.
  */
 
