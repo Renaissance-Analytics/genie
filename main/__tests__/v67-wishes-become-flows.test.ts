@@ -99,6 +99,35 @@ function storedScope(d: Database.Database, id: string): unknown {
 }
 
 describe('v67 renames the tables', () => {
+    it('lands a FRESH database on both tables, fully formed', () => {
+        // v47 declines to create its table once `gapp_flows` exists, so the
+        // fresh path — where it must still create it, for v67 to rename — is
+        // asserted on its own rather than only through `preV67`'s rewind.
+        const d = new Database(':memory:');
+        runMigrations(d);
+
+        const t = tables(d);
+        expect(t.has('flows')).toBe(true);
+        expect(t.has('gapp_flows')).toBe(true);
+        expect(t.has('wishes')).toBe(false);
+
+        const i = indexes(d);
+        expect(i.has('idx_flows_purpose')).toBe(true);
+        expect(i.has('idx_gapp_flows_app')).toBe(true);
+
+        // The canvas table kept its foreign key through the rename: an
+        // ownerless graph is still refused.
+        d.pragma('foreign_keys = ON');
+        expect(() =>
+            d
+                .prepare(
+                    `INSERT INTO gapp_flows (id, app_id, name, graph_json, enabled, created_at, updated_at)
+                     VALUES ('f-x', 'no-such-app', 'n', '{}', 1, '', '')`,
+                )
+                .run(),
+        ).toThrow(/FOREIGN KEY/i);
+    });
+
     it('gives `flows` to the Flow definitions and `gapp_flows` to the canvas graphs', () => {
         const d = preV67();
         runMigrations(d);
@@ -255,5 +284,23 @@ describe('v67 collapses the scope ladder to system / workspace / gapp', () => {
         runMigrations(d);
         expect(() => runMigrations(d)).not.toThrow();
         expect(storedScope(d, 'w-station')).toEqual({ kind: 'system' });
+    });
+
+    it('survives a REPLAY from an earlier schema version', () => {
+        // `ALTER TABLE ... RENAME TO` is not idempotent the way
+        // `CREATE TABLE IF NOT EXISTS` is, and the suite's standard way to
+        // exercise one migration is to rewind `schema_version` and re-run the
+        // whole tail. Every one of those tests runs v67 a second time against a
+        // database where the rename already happened, so v67 has to notice.
+        const d = new Database(':memory:');
+        runMigrations(d);
+        d.prepare('DELETE FROM schema_version WHERE version >= 57').run();
+
+        expect(() => runMigrations(d)).not.toThrow();
+
+        const t = tables(d);
+        expect(t.has('flows')).toBe(true);
+        expect(t.has('gapp_flows')).toBe(true);
+        expect(t.has('wishes')).toBe(false);
     });
 });

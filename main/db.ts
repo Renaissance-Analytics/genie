@@ -97,6 +97,24 @@ export const RETIRED_AGENT_COMMANDS: Record<string, string[]> = {
 };
 
 /**
+ * Whether `db` has a table by this name.
+ *
+ * Migrations are append-only and normally need no such question -- `IF NOT
+ * EXISTS` answers it inside the statement. `ALTER TABLE ... RENAME TO` has no
+ * such clause, so v67 (which renames two tables) and v47 (whose table v67
+ * renamed) ask it out loud instead.
+ */
+function migrationHasTable(db: Database.Database, name: string): boolean {
+    return (
+        (db
+            .prepare<[string], { n: number }>(
+                `SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = ?`,
+            )
+            .get(name)?.n ?? 0) > 0
+    );
+}
+
+/**
  * Run all pending append-only migrations against `d`. Exported so the
  * migration suite can exercise the runner against a fresh `:memory:`
  * database without the Electron `app.getPath` singleton path.
@@ -1285,6 +1303,15 @@ export function runMigrations(d: Database.Database): void {
             // turn off.
             version: 47,
             runner: (db) => {
+                // v67 moved this table to `gapp_flows` and gave the name `flows`
+                // to Genie's own automation system, whose rows have no `app_id`
+                // at all. On a REPLAY -- the suite rewinds `schema_version` to
+                // exercise an earlier migration and walks the tail again -- the
+                // `CREATE TABLE IF NOT EXISTS` below would find that other table
+                // sitting under the name and then index a column it does not
+                // have. The canvas table's presence under its later name is what
+                // says there is nothing to create here.
+                if (migrationHasTable(db, 'gapp_flows')) return;
                 db.exec(`
                     CREATE TABLE IF NOT EXISTS flows (
                         id         TEXT PRIMARY KEY,
@@ -2105,16 +2132,39 @@ export function runMigrations(d: Database.Database): void {
             // be hand-edited into something that is not JSON at all and the
             // whole module's rule (`flows/store.ts`) is that such a row is left
             // alone, not dropped and not thrown over.
+            //
+            // `ALTER TABLE ... RENAME TO` has no `IF NOT EXISTS`, so the rename
+            // states its own precondition -- the arrival of `gapp_flows` is what
+            // says this database has already taken v67. Re-running the migration
+            // must converge rather than throw, and it IS re-run: the suite's way
+            // to exercise an earlier migration is to rewind `schema_version` and
+            // replay the tail, which walks v66 (recreating an empty `wishes`)
+            // straight back into v67.
             version: 67,
             runner: (db) => {
-                db.exec(`
-                    DROP INDEX IF EXISTS idx_flows_app;
-                    DROP INDEX IF EXISTS idx_wishes_purpose;
-                    ALTER TABLE flows RENAME TO gapp_flows;
-                    ALTER TABLE wishes RENAME TO flows;
-                    CREATE INDEX IF NOT EXISTS idx_gapp_flows_app ON gapp_flows(app_id);
-                    CREATE INDEX IF NOT EXISTS idx_flows_purpose ON flows(purpose);
-                `);
+                if (migrationHasTable(db, 'gapp_flows')) {
+                    // Already renamed. A `wishes` table here is v66 replayed
+                    // after the fact: nothing has written to that name since the
+                    // rename, so an EMPTY one is the replay's own litter and
+                    // goes. One with rows in it is not litter and is left for a
+                    // human -- a migration that deletes data it never looked at
+                    // is a worse outcome than a stray table.
+                    const left =
+                        migrationHasTable(db, 'wishes') &&
+                        (db
+                            .prepare<[], { n: number }>('SELECT COUNT(*) AS n FROM wishes')
+                            .get()?.n ?? 0) === 0;
+                    if (left) db.exec('DROP TABLE wishes');
+                } else {
+                    db.exec(`
+                        DROP INDEX IF EXISTS idx_flows_app;
+                        DROP INDEX IF EXISTS idx_wishes_purpose;
+                        ALTER TABLE flows RENAME TO gapp_flows;
+                        ALTER TABLE wishes RENAME TO flows;
+                        CREATE INDEX IF NOT EXISTS idx_gapp_flows_app ON gapp_flows(app_id);
+                        CREATE INDEX IF NOT EXISTS idx_flows_purpose ON flows(purpose);
+                    `);
+                }
 
                 const rows = db
                     .prepare<[], { id: string; scope_json: string }>(
