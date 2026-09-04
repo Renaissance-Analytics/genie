@@ -212,6 +212,36 @@ function setStatus(id: string, status: ProcessStatus): void {
  * 'failed', so those don't boot-loop.
  */
 function persistWasRunning(id: string, value: boolean): void {
+    persistIntent(id, 'was_running', value);
+}
+
+/**
+ * Persist the user's PAUSE — that they deliberately stopped this process and
+ * have not started it since (genie#407).
+ *
+ * `was_running` could not carry this. It is the answer to "was it up when Genie
+ * went down", so it is also false for a process that has never been started and
+ * for one whose retries were exhausted — neither of which is the user asking for
+ * anything. Boot needs to tell those apart, because a process it may restore and
+ * a process it must not restart are different processes.
+ *
+ * The reported bug is what the absence cost: `startAutostartProcesses()` started
+ * a spec when `autostart === true` OR `was_running === true`, and `autostart` is
+ * CONFIGURATION — "this is a service, run it on every launch". So a paused
+ * service came straight back, and an upgrade (a launch nobody chose) is where
+ * that was most visible. This is the fact that outranks it.
+ */
+function persistUserStopped(id: string, value: boolean): void {
+    persistIntent(id, 'user_stopped', value);
+}
+
+/**
+ * Write one boolean intent onto a process spec's meta. Only when it actually
+ * changes (no DB churn on every status transition), never for a SCHEDULED task
+ * (its schedule decides when it runs, so neither flag applies), and never
+ * fatally — a persistence failure must not break the supervisor.
+ */
+function persistIntent(id: string, key: 'was_running' | 'user_stopped', value: boolean): void {
     try {
         const spec = getTerminalSpec(id);
         if (!spec || spec.type !== 'process') return;
@@ -219,8 +249,8 @@ function persistWasRunning(id: string, value: boolean): void {
         // its schedule is re-armed instead (startSchedules), which is what
         // "survives restart" means for it.
         if (isScheduled(spec)) return;
-        if ((spec.meta?.was_running ?? false) === value) return; // no change
-        updateTerminalSpec(id, { meta: { ...spec.meta, was_running: value } });
+        if ((spec.meta?.[key] ?? false) === value) return; // no change
+        updateTerminalSpec(id, { meta: { ...spec.meta, [key]: value } });
     } catch {
         /* best-effort — persistence failure shouldn't break the supervisor */
     }
@@ -246,6 +276,12 @@ export function startProcess(specId: string): void {
     clearTimer(st);
     st.userStopped = false;
     st.restartRequested = false;
+    // The persisted twin of the line above (genie#407): an explicit start LIFTS
+    // the pause. Written here rather than after a successful spawn, because the
+    // fact being recorded is the ASK — a user who presses Start on a process
+    // whose command is broken has still un-paused it, and leaving it paused
+    // would mean the next launch silently disagreed with the last thing they did.
+    persistUserStopped(specId, false);
 
     const resolved = resolveDefaultShell(dbSettingsProvider());
     const shell = spec.shell || resolved.command;
@@ -349,9 +385,13 @@ export async function stopProcess(
         killed = false;
     }
 
-    // A deliberate stop clears the running intent so it does NOT auto-restore.
-    // Independent of the outcome: the user asked for it down either way.
+    // A deliberate stop clears the running intent so it does NOT auto-restore,
+    // and RECORDS the pause so nothing else restores it either (genie#407) —
+    // `autostart` most of all, which is configuration and used to win. Both are
+    // written independent of the outcome: the user asked for it down either way,
+    // and a kill Genie could not confirm is not the user changing their mind.
     persistWasRunning(specId, false);
+    persistUserStopped(specId, true);
 
     if (!killed) {
         setStatus(specId, 'stopped');
@@ -473,14 +513,25 @@ export function onProcessPtyExit(
  * `autostart`, AND those that were RUNNING when Genie last went down
  * (`was_running` — restored like a service). startProcess() no-ops if the pty
  * is already live (e.g. a detached host kept it alive and Genie reattached), so
- * this only spawns the ones that actually died. A deliberately-stopped or
- * permanently-failed process has `was_running === false`, so it stays down.
+ * this only spawns the ones that actually died. A permanently-failed process has
+ * `was_running === false`, so it stays down.
+ *
+ * And a process the user PAUSED stays down whatever its configuration says
+ * (genie#407). That guard is separate from `was_running` on purpose: the OR
+ * below is a union of reasons to start, so a stop expressed only by clearing one
+ * of them is outvoted by the other. `autostart` is exactly that other — set by
+ * every GApp service and by any agent calling `manageProcess {autostart:true}` —
+ * and it used to restart, on every launch, a process the user had just stopped.
+ * The user's own decision does not get outvoted by config.
  */
 export function startAutostartProcesses(): void {
     for (const spec of listTerminalSpecs()) {
         if (
             spec.type === 'process' &&
             spec.enabled !== false &&
+            // Genie may restore what IT stopped; it may never restart what the
+            // USER stopped. Only an explicit start lifts this.
+            spec.meta?.user_stopped !== true &&
             // Scheduled tasks are startSchedules()' business — starting one here
             // would run it at launch instead of at its scheduled time.
             !isScheduled(spec) &&

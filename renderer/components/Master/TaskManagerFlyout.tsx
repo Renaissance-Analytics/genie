@@ -24,9 +24,21 @@ const STATUS_LABEL: Record<ProcessStatus, string> = {
     failed: 'failed',
 };
 
-/** A running/restarting process is "live" — stop is the relevant action. */
+/** A running/restarting process is "live" — pause is the relevant action. */
 function isLive(status: ProcessStatus): boolean {
     return status === 'running' || status === 'restarting';
+}
+
+/**
+ * What this row is doing, in the user's terms (genie#407).
+ *
+ * `stopped` and `paused` are the same runtime fact and different futures: an
+ * ordinary stopped process may be brought back by the next launch, a paused one
+ * will not be. The list is where somebody looks to find out which, so it has to
+ * be the list that says.
+ */
+function statusLabel(p: ProcessListItem): string {
+    return p.paused && !isLive(p.status) ? 'paused' : STATUS_LABEL[p.status];
 }
 
 export default function TaskManagerFlyout({
@@ -149,7 +161,7 @@ export default function TaskManagerFlyout({
                                             <li key={p.id} className="tm-row">
                                                 <span
                                                     className={`tm-dot tm-${p.status}`}
-                                                    title={STATUS_LABEL[p.status]}
+                                                    title={statusLabel(p)}
                                                 />
                                                 <span
                                                     className="tm-kind"
@@ -182,7 +194,7 @@ export default function TaskManagerFlyout({
                                                     {p.workspace}
                                                 </span>
                                                 <span className="tm-status">
-                                                    {STATUS_LABEL[p.status]}
+                                                    {statusLabel(p)}
                                                 </span>
                                                 <span className="tm-actions">
                                                     {p.kind === 'process' ? (
@@ -191,7 +203,10 @@ export default function TaskManagerFlyout({
                                                                 <button
                                                                     type="button"
                                                                     className="gicon"
-                                                                    title="Stop"
+                                                                    // It has always been a pause GLYPH, and it is
+                                                                    // now genuinely a pause: the process stays down
+                                                                    // until somebody starts it, launches included.
+                                                                    title="Pause — stays stopped until you start it"
                                                                     onClick={() => void stop(p.id)}
                                                                 >
                                                                     <IconPause />

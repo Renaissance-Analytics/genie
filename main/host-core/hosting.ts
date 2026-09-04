@@ -26,6 +26,7 @@ import type {
     DevSiteProgress,
     DevWorkspace,
     ResolvedRuntimeLike,
+    SiteRunState,
 } from '../dev-server/site-manager';
 import { initDevServices, devServiceManager } from '../dev-server/services/service-manager';
 import type {
@@ -130,6 +131,19 @@ export interface HostingPorts {
     servicePorts?: DevServiceManagerDeps['servicePorts'];
     /** Live site START progress (pulling → building → starting → ready). */
     onSiteProgress: (progress: DevSiteProgress) => void;
+    /**
+     * The user's last explicit run decision per site (genie#407) — the MACHINE-
+     * LOCAL half that `enabled` could not carry, because `enabled` lives in the
+     * git-tracked envelope and a stop is not something a teammate should inherit
+     * or a `git pull` should undo. Desktop backs it with `site_run_state` in
+     * genie.db.
+     *
+     * Optional so a host that has not adopted it yet still compiles — absent ⇒
+     * nothing is remembered across a launch and boot resumes every enabled site,
+     * which is what every build did before this. Wire it: it is the difference
+     * between a stop and a pause until the next restart.
+     */
+    siteRunState?: SiteRunState;
     /** Open a `.gen` site in the viewer. Desktop wires the Testing Browser;
      *  headless omits it and `manageSite open` says so rather than pretending. */
     openInBrowser?: DevSiteToolsDeps['openInBrowser'];
@@ -279,6 +293,8 @@ export function buildHostingDeps(ports: HostingPorts): HostingDeps {
         engineMismatchNote: createEngineMismatchNote(),
         onChanged: ports.onChanged,
         onProgress: ports.onSiteProgress,
+        // A stop the USER asked for, remembered across the launch (genie#407).
+        ...(ports.siteRunState ? { runState: ports.siteRunState } : {}),
     };
 
     const lifecycle: DevServerLifecycleDeps = {

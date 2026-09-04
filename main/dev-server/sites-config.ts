@@ -143,7 +143,17 @@ export interface DevSiteConfig {
      * {@link HostServeConfig} and `serve-config.ts`.
      */
     hostServe?: HostServeConfig;
-    /** Strict opt-in: nothing runs until this is true. */
+    /**
+     * CONFIGURED to be served. Strict opt-in: nothing runs until this is true.
+     *
+     * Not "running right now" (genie#407). This field is persisted into the
+     * `.agi` envelope's project.json, which is git-TRACKED so the site definition
+     * travels with the repo — the right home for a fact about the PROJECT, and
+     * the wrong one for a fact about one person's machine at one moment. A stop
+     * is the second kind, so it lives in the host's machine-local run state
+     * (`site_run_state` in genie.db) and boot checks BOTH: a site is resumed only
+     * when it is enabled AND the user has not stopped it.
+     */
     enabled: boolean;
     /**
      * Opt-in (story #238): expose `<genName>` to REAL external browsers

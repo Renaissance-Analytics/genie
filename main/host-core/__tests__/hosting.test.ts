@@ -181,3 +181,51 @@ describe('a workspace service connection lands in the repo .env', () => {
         expect(fs.statSync(envPath).mtimeMs).toBe(mtime);
     });
 });
+
+/**
+ * genie#407 — the seam that makes a stop survive the launch, and the wiring that
+ * makes it exist at all.
+ *
+ * `siteRunState` is OPTIONAL on the ports, because a host that has not adopted
+ * it must still compile. That is also its danger: an unwired port is not a type
+ * error and not a test failure anywhere else — the manager simply forgets every
+ * stop, silently, and the bug this fixes comes straight back looking exactly
+ * like it did before. So both halves are pinned: the mapping here, and the
+ * desktop shell actually supplying it.
+ */
+describe('the desired run state reaches the site manager (genie#407)', () => {
+    it('forwards the port to the manager as `runState`', () => {
+        const calls: Array<[string, boolean]> = [];
+        const d = buildHostingDeps(
+            fakePorts({
+                siteRunState: {
+                    setStopped: (siteId, stopped) => calls.push([siteId, stopped]),
+                    isStopped: (siteId) => siteId === 'already-stopped',
+                },
+            }),
+        );
+
+        expect(d.sites.runState).toBeDefined();
+        d.sites.runState!.setStopped('site-1', true);
+        expect(calls).toEqual([['site-1', true]]);
+        expect(d.sites.runState!.isStopped('already-stopped')).toBe(true);
+        expect(d.sites.runState!.isStopped('site-1')).toBe(false);
+    });
+
+    it('omits it when the host does not supply one — the pre-#407 behaviour, intact', () => {
+        expect(buildHostingDeps(fakePorts()).sites.runState).toBeUndefined();
+    });
+
+    it('the DESKTOP shell supplies it, backed by genie.db', () => {
+        // Not reachable from a unit test: `background.ts` builds the port set
+        // inside a 2000-line Electron boot. An unwired port compiles, every test
+        // stays green, and every stop is forgotten — the precise shape of the
+        // failure being fixed, so it is pinned at the source.
+        const boot = fs.readFileSync(path.join(__dirname, '..', '..', 'background.ts'), 'utf8');
+        const wiring = boot.slice(boot.indexOf('siteRunState:'), boot.indexOf('siteRunState:') + 400);
+
+        expect(boot).toContain('siteRunState:');
+        expect(wiring).toContain('setSiteStoppedByUser');
+        expect(wiring).toContain('isSiteStoppedByUser');
+    });
+});

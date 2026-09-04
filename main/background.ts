@@ -66,6 +66,8 @@ import {
     workspaceTerminalApproval,
     removeWorkspace,
     getWorkspaceDevSites,
+    setSiteStoppedByUser,
+    isSiteStoppedByUser,
     setHostedSitesSync,
     getWorkspaceDevServices,
     getOrCreateDevServiceEngine,
@@ -1545,6 +1547,14 @@ app.whenReady().then(async () => {
         // card shows `pulling → building → starting → ready` with the build log
         // streaming, instead of a disabled button until the build finishes.
         onSiteProgress: (progress) => broadcastDevSiteProgress(progress),
+        // The user's last explicit run decision per site (genie#407), in genie.db
+        // — machine-local, because `enabled` (which lives in the git-tracked
+        // envelope) cannot say "this person stopped it here" without the whole
+        // team inheriting it and a `git pull` undoing it.
+        siteRunState: {
+            setStopped: (siteId, stopped) => setSiteStoppedByUser(siteId, stopped),
+            isStopped: (siteId) => isSiteStoppedByUser(siteId),
+        },
         // `manageSite open` — the ONE desktop-shaped action; the headless build
         // leaves it off and `open` says "no browser here" rather than failing.
         openInBrowser: (genName) =>

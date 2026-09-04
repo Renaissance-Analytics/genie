@@ -418,3 +418,52 @@ describe('production run modes this build cannot run (genie#191)', () => {
 
 /** The sites map a workspace holds, as the mocked db reports it. */
 export type { DevSites };
+
+// --- genie#407: a stop the user asked for survives the next launch -----------
+
+describe('a stop is the USER’s, and a stop is not an unconfigure (genie#407)', () => {
+    it('tells the manager whose stop it is, so it is remembered across the launch', async () => {
+        await runManageSite(WS, { action: 'stop', id: SITE_ID });
+
+        // The origin is the whole mechanism: a drain, a quit and a workspace
+        // removal all call the same `stop`, and every one of those is expected
+        // back. Only this one must not be.
+        expect(manager.stop).toHaveBeenCalledWith(SITE_ID, 'user');
+    });
+
+    it('leaves `enabled` alone — that flag is CONFIGURATION, and it is git-tracked', async () => {
+        // It used to write `enabled:false` here. `enabled` is persisted into the
+        // `.agi` envelope's project.json, so one developer's local stop became a
+        // tracked diff their teammates inherited, and a `git pull` or a fresh
+        // clone put `true` back — restarting, by a file, the site they stopped.
+        await runManageSite(WS, { action: 'stop', id: SITE_ID });
+
+        expect(db.setWorkspaceDevSite).not.toHaveBeenCalled();
+        expect(store.sites[SITE_ID]!.enabled).toBe(true);
+    });
+
+    it('still ENABLES on start — the positive control for the assertion above', async () => {
+        // Proves the config write is reachable from this path at all: without
+        // this, "stop wrote nothing" would also pass against a tool that had
+        // stopped writing config entirely.
+        store.sites[SITE_ID] = { ...SITE, enabled: false };
+        await runManageSite(WS, { action: 'start', id: SITE_ID });
+
+        expect(db.setWorkspaceDevSite).toHaveBeenCalledWith(
+            'acme',
+            expect.objectContaining({ siteId: SITE_ID, enabled: true }),
+        );
+        expect(store.sites[SITE_ID]!.enabled).toBe(true);
+    });
+
+    it('a REMOVE stops as Genie — the site is going away, not being paused', async () => {
+        await runManageSite(WS, { action: 'remove', id: SITE_ID });
+
+        // No 'user' origin: recording a pause against a site that is about to
+        // stop existing would leave a stop behind for whatever takes its id
+        // next — and the id is derived from workspace + name, so a site
+        // recreated under the same name gets exactly that id.
+        expect(manager.stop).toHaveBeenCalledWith(SITE_ID);
+        expect(db.deleteWorkspaceDevSite).toHaveBeenCalledWith('acme', SITE_ID);
+    });
+});

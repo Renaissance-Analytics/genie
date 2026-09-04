@@ -52,9 +52,14 @@ import type { TeardownResult } from './workspace-sandbox';
  * a human restarts it by hand, once per site — the reported "every time I update,
  * all our sites go down". `resumeEnabledSites()` closes that gap.
  *
- * The line it does NOT cross is the one that policy was always about: `enabled`
- * IS the user asking for the site to be served, and only those come back. A site
- * nobody enabled still starts nothing because Genie launched.
+ * Two lines it does NOT cross. `enabled` IS the user asking for the site to be
+ * served, and only those come back — a site nobody enabled still starts nothing
+ * because Genie launched. And a site the USER STOPPED stays stopped (genie#407):
+ * `enabled` says the site is CONFIGURED to be served, which is a different
+ * question from whether it should be running right now, and coming back from an
+ * upgrade is not permission to undo the last thing somebody asked for. Genie may
+ * restore what IT stopped on the user's behalf; it may never restart what the
+ * user stopped.
  *
  * **QUIT — stop nothing.** Not an omission. A service engine is created with
  * `restart: unless-stopped` precisely so it outlives the app; stopping it on
@@ -226,7 +231,9 @@ export function createDevServerLifecycle(deps: DevServerLifecycleDeps): DevServe
             // finds nothing and every one of them stays dark until a human restarts
             // it by hand, which is precisely the report: "every time I update, all
             // our sites go down and I have to manually restart most of them".
-            // `enabled` is the user asking for it to be served, so those resume.
+            // `enabled` is the user asking for it to be served, so those resume —
+            // except the ones they STOPPED, which the manager remembers and leaves
+            // exactly as they left them (genie#407).
             try {
                 await deps.sites()?.resumeEnabledSites();
             } catch {
