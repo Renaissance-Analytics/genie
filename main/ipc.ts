@@ -101,6 +101,16 @@ import {
 import { deleteRegisteredAgent, terminalsToStopFor } from './agents/deletion';
 import { requestHandoffBeforeStop } from './agents/handoff-request';
 import { getWorkspaceAgentById } from './agents/lookup';
+import {
+    addAgentMcpServer,
+    agentManagerState,
+    agentSidecarAction,
+    removeAgentMcpServer,
+    saveAgentPersona,
+    type McpServerInput,
+} from './agents/agent-manager';
+import type { PersonaEdit } from './agents/persona';
+import type { SidecarAction } from './agents/sidecar-control';
 import { agentInboxBroker } from './agentinbox/broker';
 import { type AgentInboxScope } from './agentinbox/types';
 import { appendLaunchFlags } from './agentinbox/session-capture';
@@ -790,6 +800,28 @@ export function registerIpcHandlers(): void {
                 bootFolder?: string;
             },
         ) => agentRecordCreate(input),
+    );
+    // --- Agent manager (Tynn #709 / story #263) ---------------------------
+    // The surface the owner asked for on 2026-09-02 -- "a full agent manager
+    // with agent prompt and rules and MCP management" -- and did not get. The
+    // plumbing already existed (`agents/agent-file.ts` reads and writes
+    // AGENT.md; `mcp/agent-config.ts` composes the MCP entries) with nothing
+    // wired to reach it, so these five handlers ARE the gap: read the whole
+    // state, save the persona, add/remove one MCP server, drive the sidecar.
+    ipcMain.handle('agents:manager-state', (_e, agentId: string) =>
+        agentManagerState(String(agentId ?? '')),
+    );
+    ipcMain.handle('agents:save-persona', (_e, agentId: string, edit: PersonaEdit) =>
+        saveAgentPersona(String(agentId ?? ''), edit ?? {}),
+    );
+    ipcMain.handle('agents:mcp-remove', (_e, agentId: string, name: string) =>
+        removeAgentMcpServer(String(agentId ?? ''), String(name ?? '')),
+    );
+    ipcMain.handle('agents:mcp-add', (_e, agentId: string, input: McpServerInput) =>
+        addAgentMcpServer(String(agentId ?? ''), input),
+    );
+    ipcMain.handle('agents:sidecar-action', async (_e, agentId: string, action: SidecarAction) =>
+        agentSidecarAction(String(agentId ?? ''), action),
     );
     ipcMain.handle('workspaces:add', (_e, row: WorkspaceRow) => {
         if (row.shape === 'simple') {

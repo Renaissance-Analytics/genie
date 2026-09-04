@@ -53,6 +53,7 @@ export type E2EHarnessPage =
     | 'issuewatch'
     | 'ghcaps'
     | 'agent-access'
+    | 'agent-manager'
     | 'picker-layer'
     | 'hosting'
     | 'repo-panel'
@@ -66,6 +67,7 @@ const HARNESS_ROUTE: Record<E2EHarnessPage, string> = {
     issuewatch: 'e2e-issuewatch',
     ghcaps: 'e2e-ghcaps',
     'agent-access': 'e2e-agent-access',
+    'agent-manager': 'e2e-agent-manager',
     'picker-layer': 'e2e-picker-layer',
     hosting: 'e2e-hosting',
     'repo-panel': 'e2e-repo-panel',
@@ -397,6 +399,58 @@ export async function readAgentAccessSeed(app: ElectronApplication): Promise<{
                 peerName: string;
             }) ?? null
         );
+    });
+}
+
+/** What `seedAgentManagerE2E` (main/e2e/agent-manager.ts) put on disk + in the db. */
+export interface AgentManagerSeed {
+    workspaceId: string;
+    workspacePath: string;
+    agentId: string;
+    agentName: string;
+    personaPath: string;
+    mcpPath: string;
+    sidecarName: string;
+    /** The `AGENT.md` header line Genie has NO field for. The round-trip
+     *  assertion turns on this surviving a save. */
+    unrenderedLine: string;
+}
+
+/** Read the agent-manager fixture (Tynn #709). Null when seeding never ran, so
+ *  the spec fails with a cause rather than asserting against undefined. */
+export async function readAgentManagerSeed(
+    app: ElectronApplication,
+): Promise<AgentManagerSeed | null> {
+    return app.evaluate(() => {
+        return (
+            ((globalThis as Record<string, any>).__GENIE_E2E_AGENT_MANAGER__ as {
+                workspaceId: string;
+                workspacePath: string;
+                agentId: string;
+                agentName: string;
+                personaPath: string;
+                mcpPath: string;
+                sidecarName: string;
+                unrenderedLine: string;
+            }) ?? null
+        );
+    });
+}
+
+/**
+ * `AGENT.md` as it exists ON DISK right now.
+ *
+ * The assertion the DOM cannot make. A renderer that held the edit in state and
+ * never wrote it looks exactly like one that saved; only the bytes tell them
+ * apart, and only the bytes show whether the header key the UI does not render
+ * survived the write.
+ */
+export async function readAgentManagerPersonaFile(app: ElectronApplication): Promise<string> {
+    return app.evaluate(() => {
+        const read = (globalThis as Record<string, any>).__GENIE_E2E_AGENT_MANAGER_READ__ as
+            | (() => string)
+            | undefined;
+        return read ? read() : '';
     });
 }
 

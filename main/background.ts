@@ -323,6 +323,7 @@ import {
     startTunnelE2EHarness,
 } from './e2e/tunnel';
 import { seedAgentAccessE2E } from './e2e/agent-access';
+import { seedAgentManagerE2E } from './e2e/agent-manager';
 import { seedRepoE2E } from './e2e/repo';
 import { seedAgentPulseE2E } from './e2e/agent-pulse';
 import { seedTynnImportE2E } from './e2e/tynn-import';
@@ -2627,6 +2628,7 @@ function showE2EWindow(): void {
         'e2e-ghcaps',
         'e2e-issuewatch',
         'e2e-agent-access',
+        'e2e-agent-manager',
         'e2e-picker-layer',
         'e2e-hosting',
         'e2e-repo-panel',
@@ -2648,6 +2650,18 @@ function showE2EWindow(): void {
             seedAgentAccessE2E();
         } catch (e) {
             console.error('[e2e] agent-access seed failed', e);
+        }
+    }
+    if (page === 'e2e-agent-manager') {
+        // Seed the workspace, its REAL AGENT.md and .mcp.json, and the agent +
+        // sidecar rows BEFORE the window loads — the harness page resolves its
+        // target by listing on mount. Re-seeded every run because the spec's own
+        // saves rewrite the file, and a leftover one would make the round-trip
+        // assertion pass against a value it did not write.
+        try {
+            seedAgentManagerE2E();
+        } catch (e) {
+            console.error('[e2e] agent-manager seed failed', e);
         }
     }
     if (page === 'e2e-repo-panel') {

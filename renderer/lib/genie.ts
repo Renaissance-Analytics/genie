@@ -9,8 +9,32 @@ import type { BoardRead, ReviewOutcome } from './artboard-model';
 import { makeRemoteBridge } from './remote-bridge';
 import type { TynnHealth } from '../../main/mcp/tynn-health';
 import type { AgentTuiId, TuiDef } from '../../main/agents/registry';
+/* The agent MANAGER's wire types (Tynn #709 / story #263), imported from the
+   modules that define them rather than re-declared here. A hand-copied shape is
+   how `AgentRuntimeSpec.provider` stopped matching main's `tui` and the agent
+   panel started throwing on undefined. */
+import type {
+    AgentManagerState,
+    AgentManagerMcp,
+    AgentManagerPersona,
+    AgentManagerSidecar,
+    McpServerInput,
+} from '../../main/agents/agent-manager';
+import type { PersonaEdit } from '../../main/agents/persona';
+import type { AgentMcpServer } from '../../main/agents/agent-mcp';
+import type { SidecarAction } from '../../main/agents/sidecar-control';
 
-export type { TynnHealth };
+export type {
+    TynnHealth,
+    AgentManagerState,
+    AgentManagerMcp,
+    AgentManagerPersona,
+    AgentManagerSidecar,
+    AgentMcpServer,
+    McpServerInput,
+    PersonaEdit,
+    SidecarAction,
+};
 
 export type BackendKind = 'tynn' | 'aionima';
 
@@ -4012,6 +4036,31 @@ export interface GenieApi {
             filesRemoved: boolean;
             workspaceTynnLinked: boolean;
         }>;
+        /* --- Agent manager (Tynn #709 / story #263) ----------------------
+           The agent's prompt and rules, the MCP servers it actually gets, and
+           its sidecar. See main/agents/agent-manager.ts. */
+        /** Everything the manager draws for one agent, in one read. */
+        managerState: (agentId: string) => Promise<AgentManagerState>;
+        /** Save an edit to the agent's AGENT.md. Only what the edit NAMES
+         *  changes — header keys Genie has no field for are carried through. */
+        savePersona: (
+            agentId: string,
+            edit: PersonaEdit,
+        ) => Promise<{ ok: boolean; error?: string }>;
+        /** Remove one MCP server. REFUSED for `genie` and its AgentInbox
+         *  channel: an agent without them starts, looks healthy, and cannot
+         *  reach the person who started it. */
+        mcpRemove: (agentId: string, name: string) => Promise<{ ok: boolean; error?: string }>;
+        mcpAdd: (
+            agentId: string,
+            input: McpServerInput,
+        ) => Promise<{ ok: boolean; error?: string }>;
+        /** Start / stop / restart the agent's sidecar. Stopping kills its
+         *  terminals and KEEPS its record — a pause, not a delete. */
+        sidecarAction: (
+            agentId: string,
+            action: SidecarAction,
+        ) => Promise<{ ok: boolean; error?: string }>;
     };
     ask: {
         onShow: (

@@ -34,6 +34,7 @@ import AgentPanel from '../components/Master/AgentPanel';
 import { questionBadgeCount } from '../lib/question-badge';
 import TerminalTypeSplitButton from '../components/Master/TerminalTypeSplitButton';
 import AgentTerminalForm from '../components/Master/AgentTerminalForm';
+import AgentManager from '../components/Master/AgentManager';
 import RecoveryBanner from '../components/Master/RecoveryBanner';
 import { bumpRecoverGen, type RecoveryState } from '../lib/host-loss-recovery';
 import GithubCapabilitiesFlyout from '../components/Master/GithubCapabilitiesFlyout';
@@ -2690,10 +2691,110 @@ function AgentSettingsModal({
         return () => window.removeEventListener('keydown', onKey);
     }, [onClose]);
 
+    /* The IDENTITY controls — driver, workspace default, purpose,
+       reachability, IssueWatch. Kept exactly as they were: Tynn #709
+       REPLACES this surface, it does not shrink it. They are now the
+       manager's first tab, beside the prompt, MCP and sidecar tabs the
+       owner asked for on 2026-09-02 and did not get. */
+    const identityPanel = (
+        <>
+            {record && (
+                <div className="agent-settings-record">
+                    <div className="agent-settings-row">
+                        <span className="agent-form-label">Drivers</span>
+                        <AgentTuiSwitcher
+                            agentId={record.id}
+                            runtimes={runtimes ?? []}
+                            onChanged={() => onRecordChanged?.()}
+                        />
+                    </div>
+                    <span className="agent-form-scope-desc">
+                        An agent is not its TUI. Switching keeps this agent — its inbox,
+                        history and prompt — and the driver it leaves keeps its
+                        conversation as a sidecar. Nothing is stopped by switching.
+                    </span>
+                    <label className="agent-form-wake">
+                        <input
+                            type="checkbox"
+                            checked={record.role === 'workspace'}
+                            onChange={(e) => {
+                                // The WORKSPACE AGENT is a designation, not an
+                                // agent named 'workspace'. Unticking clears it
+                                // rather than moving it to someone else.
+                                void api()
+                                    .agents.setDefault(
+                                        spec.workspace_id ?? '',
+                                        e.target.checked ? record.id : null,
+                                    )
+                                    .then(() => onRecordChanged?.())
+                                    .catch(() => {});
+                            }}
+                        />
+                        <span className="agent-form-wake-text">
+                            <span className="agent-form-label">
+                                Default agent for this workspace
+                            </span>
+                            <span className="agent-form-scope-desc">
+                                Boots from the workspace root and is the default target for
+                                actions that do not name an agent. One per workspace.
+                            </span>
+                        </span>
+                    </label>
+                </div>
+            )}
+            <AgentTerminalForm
+                agent={agent}
+                workspaces={workspaces}
+                ownWorkspaceId={spec.workspace_id}
+                initial={{
+                    // The persisted meta uses the `whisper_*` keys (see
+                    // createAgentTerminal / agentInbox:update-channel); read those, not the
+                    // bare `purpose`/`scope`, or the edit pre-fill is blank and Save
+                    // silently resets the agent's purpose→general and scope→self.
+                    purpose:
+                        typeof meta.whisper_purpose === 'string' ? meta.whisper_purpose : '',
+                    scope: (meta.whisper_scope as AgentInboxScope | undefined) ?? 'self',
+                    scopeWorkspaces: Array.isArray(meta.whisper_workspaces)
+                        ? (meta.whisper_workspaces as string[])
+                        : [],
+                    command: typeof meta.agent_command === 'string' ? meta.agent_command : '',
+                    issuewatchHandle: meta.issuewatch_handle === true,
+                }}
+                submitLabel="Save"
+                busy={busy}
+                error={error}
+                onCancel={onClose}
+                onSubmit={async (v) => {
+                    setBusy(true);
+                    setError(null);
+                    try {
+                        const res = await api().agentInbox.updateChannel(spec.id, {
+                            purpose: v.purpose,
+                            scope: v.scope,
+                            scope_workspaces:
+                                v.scope === 'specific' ? v.scopeWorkspaces : [],
+                            issuewatch_handle: v.issuewatchHandle,
+                        });
+                        if (res.ok) onSaved();
+                        else setError(res.error || 'Could not update the agent.');
+                    } catch {
+                        setError('Could not update the agent.');
+                    } finally {
+                        setBusy(false);
+                    }
+                }}
+            />
+        </>
+    );
+
     return (
         <div className="ctx-scrim" onMouseDown={onClose}>
             <div
-                className="agent-settings-modal"
+                className={`agent-settings-modal${
+                    // The manager needs room for a tab strip and a prompt
+                    // editor; an orphaned spec still gets the narrow dialog.
+                    record ? ' agent-settings-modal-manager' : ''
+                }`}
                 role="dialog"
                 aria-label="Agent settings"
                 onMouseDown={(e) => e.stopPropagation()}
@@ -2706,92 +2807,19 @@ function AgentSettingsModal({
                         Agent settings — {record?.name ?? spec.label}
                     </span>
                 </div>
-                {record && (
-                    <div className="agent-settings-record">
-                        <div className="agent-settings-row">
-                            <span className="agent-form-label">Drivers</span>
-                            <AgentTuiSwitcher
-                                agentId={record.id}
-                                runtimes={runtimes ?? []}
-                                onChanged={() => onRecordChanged?.()}
-                            />
-                        </div>
-                        <span className="agent-form-scope-desc">
-                            An agent is not its TUI. Switching keeps this agent — its inbox,
-                            history and prompt — and the driver it leaves keeps its
-                            conversation as a sidecar. Nothing is stopped by switching.
-                        </span>
-                        <label className="agent-form-wake">
-                            <input
-                                type="checkbox"
-                                checked={record.role === 'workspace'}
-                                onChange={(e) => {
-                                    // The WORKSPACE AGENT is a designation, not an
-                                    // agent named 'workspace'. Unticking clears it
-                                    // rather than moving it to someone else.
-                                    void api()
-                                        .agents.setDefault(
-                                            spec.workspace_id ?? '',
-                                            e.target.checked ? record.id : null,
-                                        )
-                                        .then(() => onRecordChanged?.())
-                                        .catch(() => {});
-                                }}
-                            />
-                            <span className="agent-form-wake-text">
-                                <span className="agent-form-label">
-                                    Default agent for this workspace
-                                </span>
-                                <span className="agent-form-scope-desc">
-                                    Boots from the workspace root and is the default target for
-                                    actions that do not name an agent. One per workspace.
-                                </span>
-                            </span>
-                        </label>
-                    </div>
+                {record ? (
+                    <AgentManager
+                        agentId={record.id}
+                        identity={identityPanel}
+                        onChanged={() => onRecordChanged?.()}
+                    />
+                ) : (
+                    /* An ORPHANED spec — a terminal no agent record owns. It
+                       has no AGENT.md, no MCP set of its own and no sidecar,
+                       so it gets the identity form alone rather than three
+                       tabs that would each have nothing to show. */
+                    identityPanel
                 )}
-                <AgentTerminalForm
-                    agent={agent}
-                    workspaces={workspaces}
-                    ownWorkspaceId={spec.workspace_id}
-                    initial={{
-                        // The persisted meta uses the `whisper_*` keys (see
-                        // createAgentTerminal / agentInbox:update-channel); read those, not the
-                        // bare `purpose`/`scope`, or the edit pre-fill is blank and Save
-                        // silently resets the agent's purpose→general and scope→self.
-                        purpose:
-                            typeof meta.whisper_purpose === 'string' ? meta.whisper_purpose : '',
-                        scope: (meta.whisper_scope as AgentInboxScope | undefined) ?? 'self',
-                        scopeWorkspaces: Array.isArray(meta.whisper_workspaces)
-                            ? (meta.whisper_workspaces as string[])
-                            : [],
-                        command: typeof meta.agent_command === 'string' ? meta.agent_command : '',
-                        issuewatchHandle: meta.issuewatch_handle === true,
-                    }}
-                    submitLabel="Save"
-                    busy={busy}
-                    error={error}
-                    onCancel={onClose}
-                    onSubmit={async (v) => {
-                        setBusy(true);
-                        setError(null);
-                        try {
-                            const res = await api().agentInbox.updateChannel(spec.id, {
-                                purpose: v.purpose,
-                                scope: v.scope,
-                                scope_workspaces:
-                                    v.scope === 'specific' ? v.scopeWorkspaces : [],
-                                issuewatch_handle: v.issuewatchHandle,
-                            });
-                            if (res.ok) onSaved();
-                            else setError(res.error || 'Could not update the agent.');
-                        } catch {
-                            setError('Could not update the agent.');
-                        } finally {
-                            setBusy(false);
-                        }
-                    }}
-                />
             </div>
         </div>
     );
