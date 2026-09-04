@@ -61,6 +61,44 @@ describe('allocateFreePort', () => {
         const p = await allocateFreePort(exclude);
         expect(exclude.has(p)).toBe(false);
     });
+
+    /**
+     * THE CORRECTION TO genie#226's RECORDED RESIDUAL.
+     *
+     * That issue says an orphaned dev server's port "returns to the free pool",
+     * so "a later `start` can be handed a port a surviving process still holds".
+     * It cannot: this allocator does not draw from a pool it maintains, it BINDS
+     * `:0` and takes what the OS gives, and no OS hands out a port that is
+     * currently bound. `exclude` guards the release-to-bind window for a port
+     * Genie has reserved but nothing is on yet — it is not what keeps an
+     * occupied port out.
+     *
+     * Stated as a mechanism rather than a coincidence, because "20 random
+     * ephemeral ports missed this one" would pass against nothing at all. The
+     * mechanism is `isPortFree`, which BINDS to answer — so the two assertions
+     * are the same fact from both ends: the port is unbindable while held, and
+     * bindable the moment it is released.
+     */
+    it('cannot hand out a port a live process is holding — and CAN once released', async () => {
+        const held = await new Promise<{ port: number; server: net.Server }>((resolve) => {
+            const server = net.createServer();
+            server.listen(0, '127.0.0.1', () => {
+                resolve({ port: (server.address() as net.AddressInfo).port, server });
+            });
+        });
+
+        // The mechanism: the OS refuses the bind, which is the same refusal that
+        // stops `allocateFreePort` ever returning this port.
+        expect(await isPortFree(held.port)).toBe(false);
+        for (let i = 0; i < 30; i++) {
+            expect(await allocateFreePort()).not.toBe(held.port);
+        }
+
+        // POSITIVE CONTROL: the assertion above would also pass against a port
+        // that is simply unusable. Releasing it must make it free again.
+        await new Promise<void>((resolve) => held.server.close(() => resolve()));
+        expect(await isPortFree(held.port)).toBe(true);
+    });
 });
 
 /** A long-lived self-signed cert/key (shared with the mobile site-proxy tests) —
