@@ -131,6 +131,22 @@ describe('writeWorkspaceAgentMcp — per-target sync gating', () => {
         expect(
             files.get(path.join(WS, '.agents', 'skills', 'genie-orientation', 'SKILL.md')),
         ).toContain('connectToGenie');
+
+        // The skill is installed into EVERY workspace, including the workstation
+        // operator's `~/.gosa` — which has no repos and whose whole charter is
+        // "you do NOT do project work". It used to assert `treat repos as the
+        // primary source`, which contradicted that charter for the one agent
+        // least able to afford a mixed message, and pre-empted the plan
+        // `connectToGenie` now tailors per workspace kind (ordinary / GApp dev /
+        // operator). The skill defers to that plan instead of restating an
+        // assumption about it.
+        const orientation = files.get(
+            path.join(WS, '.agents', 'skills', 'genie-orientation', 'SKILL.md'),
+        )!;
+        expect(orientation).not.toContain('treat repos as the primary source');
+        // POSITIVE CONTROL: "does not contain X" passes against an empty file, so
+        // prove the skill still says the thing it exists to say.
+        expect(orientation).toContain('numbered plan');
         expect(JSON.parse(files.get(mcpJson)!).mcpServers.genie.url).toBe(URL);
     });
 
