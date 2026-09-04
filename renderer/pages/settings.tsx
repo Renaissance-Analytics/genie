@@ -1583,6 +1583,7 @@ function GitHubSection() {
     const [activeClientId, setActiveClientId] = useState('');
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [storageOk, setStorageOk] = useState(true);
+    const [storageHint, setStorageHint] = useState<string | null>(null);
     const [needsReauth, setNeedsReauth] = useState(false);
     const [reauthFailure, setReauthFailure] = useState<{
         code: string;
@@ -1616,6 +1617,7 @@ function GitHubSection() {
         setUsingOverride(st.usingOverride);
         setActiveClientId(st.activeClientId);
         setStorageOk(st.storageOk);
+        setStorageHint(st.storageHint ?? null);
         setNeedsReauth(st.needsReauth);
         setReauthFailure(st.reauthFailure);
         // Where the App is installed — drives the zero-install prompt + the
@@ -1754,8 +1756,11 @@ function GitHubSection() {
         >
             {!storageOk && (
                 <div className="set-note bad">
+                    {/* Cause supplied by main — it can see the session bus and
+                        the selected backend. Naming missing packages was wrong
+                        on a machine that had them installed (genie#379). */}
                     OS keychain unavailable. Genie won't store a GitHub token
-                    unencrypted. On Linux: install gnome-keyring / libsecret.
+                    unencrypted.{storageHint ? ` ${storageHint}` : ''}
                 </div>
             )}
 

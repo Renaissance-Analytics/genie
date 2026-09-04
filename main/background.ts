@@ -42,6 +42,11 @@ import {
     agentRecordSetAvatar,
 } from './ipc';
 import { writeClipboardImagePng } from './clipboard-image';
+import {
+    chooseLinuxPasswordStore,
+    passwordStoreBusNames,
+    probeOwnedBusNames,
+} from './secrets/linux-password-store';
 import crypto from 'node:crypto';
 import os from 'node:os';
 import {
@@ -403,6 +408,27 @@ function notifyImDone(terminalId: string): void {
     // master window). Fires on every alert, like the glow — independent of the
     // sound/toast toggles above.
     demandWindowAttention(resolveAttentionWindow(null, masterWindow, hostWindows));
+}
+
+// Linux keychain backend (genie#379). Chromium picks its password store by
+// sniffing XDG_CURRENT_DESKTOP; on a desktop it doesn't know — Hyprland, sway,
+// river, i3 — it falls back to the PLAINTEXT `basic` store, safeStorage then
+// correctly reports encryption unavailable, and Genie correctly refuses to store
+// a token. Nothing is missing: the backend was simply never selected. So select
+// it from what actually owns the session bus, and do it on EVERY launch rather
+// than through a flag a self-restart can drop. Must run before app-ready:
+// Chromium reads this switch when OSCrypt initialises.
+try {
+    if (process.platform === 'linux') {
+        const backend = chooseLinuxPasswordStore({
+            platform: process.platform,
+            argv: process.argv,
+            ownedBusNames: probeOwnedBusNames(passwordStoreBusNames()),
+        });
+        if (backend) app.commandLine?.appendSwitch?.('password-store', backend);
+    }
+} catch {
+    /* a keychain preference must never block boot */
 }
 
 // Single-instance lock. If a second copy of Genie is launched (e.g. clicking

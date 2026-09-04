@@ -59,6 +59,8 @@ export interface GitHubAccount {
     /** True when the App is installed on the user's personal account. */
     personalInstalled: boolean;
     storageOk: boolean;
+    /** Why storage is unavailable, when it is — null while it works. */
+    storageHint: string | null;
     clientIdSet: boolean;
     flow: Flow;
     connect: () => Promise<void>;
@@ -94,6 +96,7 @@ interface GitHubAccountSnapshot {
     installationsLoaded: boolean;
     installationsError: string | null;
     storageOk: boolean;
+    storageHint: string | null;
     clientIdSet: boolean;
 }
 let accountCache: GitHubAccountSnapshot | null = null;
@@ -113,6 +116,9 @@ export function useGitHubAccount(): GitHubAccount {
         accountCache?.installationsError ?? null,
     );
     const [storageOk, setStorageOk] = useState(accountCache?.storageOk ?? true);
+    const [storageHint, setStorageHint] = useState<string | null>(
+        accountCache?.storageHint ?? null,
+    );
     const [clientIdSet, setClientIdSet] = useState(accountCache?.clientIdSet ?? false);
     const [flow, setFlow] = useState<Flow>({ kind: 'idle' });
     const polling = useRef(false);
@@ -131,6 +137,7 @@ export function useGitHubAccount(): GitHubAccount {
         setConnected(st.connected);
         setUsername(st.username);
         setStorageOk(st.storageOk);
+        setStorageHint(st.storageHint ?? null);
         setClientIdSet(st.clientIdSet);
         setLoaded(true);
         let nextInstallations: GitHubInstallationLite[] = [];
@@ -179,6 +186,7 @@ export function useGitHubAccount(): GitHubAccount {
             installationsLoaded: nextInstallationsLoaded,
             installationsError: nextInstallationsError,
             storageOk: st.storageOk,
+            storageHint: st.storageHint ?? null,
             clientIdSet: st.clientIdSet,
         };
         // Reflect the main-side flow outcome into local state.
@@ -325,6 +333,7 @@ export function useGitHubAccount(): GitHubAccount {
         noInstallations,
         personalInstalled,
         storageOk,
+        storageHint,
         clientIdSet,
         flow,
         connect,
@@ -437,6 +446,7 @@ export function GitHubConnect({ account }: { account: GitHubAccount }) {
         connected,
         username,
         storageOk,
+        storageHint,
         clientIdSet,
         flow,
         installations,
@@ -553,8 +563,12 @@ export function GitHubConnect({ account }: { account: GitHubAccount }) {
         <div className="gh-connect">
             {!storageOk && (
                 <Text size="xs" style={{ color: 'var(--rose-500)', display: 'block' }}>
+                    {/* The cause comes from main, which can see the session bus
+                        and the selected backend. The old text named missing
+                        packages and was wrong on a machine that had them
+                        (genie#379). */}
                     OS keychain unavailable — Genie won't store a token
-                    unencrypted. On Linux: install gnome-keyring / libsecret.
+                    unencrypted.{storageHint ? ` ${storageHint}` : ''}
                 </Text>
             )}
             {!clientIdSet && (

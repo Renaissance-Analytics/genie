@@ -3880,6 +3880,8 @@ export interface GenieApi {
             usingOverride: boolean;
             activeClientId: string;
             storageOk: boolean;
+            /** Why storage is unavailable, when it is — null while it works. */
+            storageHint: string | null;
             flow:
                 | { kind: 'idle' }
                 | {
