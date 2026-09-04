@@ -13,6 +13,7 @@ import { guideTopics, guideIndex, guideFor } from './guide-topics';
 import { GENIE_MCP_GUIDE, GENIE_PROTOCOL_BRIEF } from './guide';
 import { agentTuis } from '../agents/registry';
 import type { AgentTuiId } from '../agents/registry';
+import type { AgentDiagnosis } from '../agents/triage';
 import type { QuestionPriority } from '../ask/question-priority';
 import type { TerminalReadState } from '../terminal/read-buffer';
 import type {
@@ -1325,9 +1326,10 @@ export interface RunAgentRequest {
      *   exists, rather than minting a second one. New configurations are created
      *   by `registerAgent`, never as a side effect of starting.
      * - `list`: read-only — the workspace's saved agents.
+     * - `diagnose`: read-only — WHY an agent is wedged, and which repair fits.
      * - the rest act on a running agent terminal by `id`.
      */
-    action: 'start' | 'send' | 'read' | 'stop' | 'restart' | 'list' | 'switchTui';
+    action: 'start' | 'send' | 'read' | 'stop' | 'restart' | 'list' | 'switchTui' | 'diagnose';
     /** switchTui: the TUI to make this agent's visible driver. */
     tui?: string;
     /** Target workspace (own, or a governed child). Same rules as manageTerminals. */
@@ -1432,6 +1434,15 @@ export interface RunAgentResult {
     /** list (and any start refusal that needs to show the alternatives): the
      *  workspace's saved agents. */
     agents?: SavedAgentInfo[];
+    /**
+     * diagnose: one entry per agent examined, in the order they were found.
+     *
+     * The SHAPE of a finding is what makes this worth returning over the wire:
+     * each carries the ailment, what is actually wrong, and the existing verb
+     * that addresses it — so an agent reading the JSON does not have to infer a
+     * repair from a condition word. See `agents/triage.ts`.
+     */
+    diagnoses?: AgentDiagnosis[];
     /** read: the output bytes for this read. */
     data?: string;
     /** read: the cursor to continue from. */
@@ -2429,7 +2440,7 @@ const THUMBS_UP_TOOL = {
 const RUN_AGENT_TOOL = {
     name: 'runAgent',
     description:
-        "Start and control a REGISTERED coding agent (claude / codex / a custom CLI) in this workspace — or one you govern. Registration is a separate `registerAgent` call; `runAgent` never creates configuration. Actions: `list` (registered agents, including dormant ones); `start` (launch or resume the registered `name`; defaults to the Workspace Agent); `send`; `read`; `stop`; `restart`. A running agent uses a distinct AgentPanel on the Floor while its durable AMS identity survives TUI and panel restarts. SAFETY: first launch, `send`, and `restart` are approval-gated when the workspace requires it; listing, reading, and reattaching are read-only/already-approved.",
+        "Start and control a REGISTERED coding agent (claude / codex / a custom CLI) in this workspace — or one you govern. Registration is a separate `registerAgent` call; `runAgent` never creates configuration. Actions: `list` (registered agents, including dormant ones); `diagnose` (read-only — WHY an agent is wedged and which repair fits); `start` (launch or resume the registered `name`; defaults to the Workspace Agent); `send`; `read`; `stop`; `restart`. A running agent uses a distinct AgentPanel on the Floor while its durable AMS identity survives TUI and panel restarts. TRIAGE: `diagnose` joins the agent record, its runtime, its pty, its harness transport and its AgentInbox membership and reports a CAUSE — never joined the inbox, transport never verified, a binding lost to a Genie restart, boot never completed, a dead pty, a name collision — each with the existing verb that addresses it. Run it BEFORE a repair: a restart aimed at a healthy agent costs its conversation. With no `id`/`name` it examines every agent in the workspace; with no `workspaceId` a workstation operator sweeps the whole machine. SAFETY: first launch, `send`, and `restart` are approval-gated when the workspace requires it; listing, diagnosing, reading, and reattaching are read-only/already-approved.",
     inputSchema: {
         type: 'object',
         properties: {
@@ -2437,7 +2448,7 @@ const RUN_AGENT_TOOL = {
             ...TARGET_WORKSPACE_PROP,
             action: {
                 type: 'string',
-                enum: ['start', 'send', 'read', 'stop', 'restart', 'list', 'switchTui'],
+                enum: ['start', 'send', 'read', 'stop', 'restart', 'list', 'switchTui', 'diagnose'],
                 description: 'What to do.',
             },
             tui: {
@@ -4001,12 +4012,13 @@ ${body}` }],
                     action !== 'read' &&
                     action !== 'stop' &&
                     action !== 'restart' &&
-                    action !== 'list'
+                    action !== 'list' &&
+                    action !== 'diagnose'
                 ) {
                     return err(
                         msg.id,
                         -32602,
-                        'runAgent requires `action`: start | send | read | stop | restart | list.',
+                        'runAgent requires `action`: start | send | read | stop | restart | list | diagnose.',
                     );
                 }
                 const result = await ctx.runAgent(ctx.terminalId, {
@@ -4038,6 +4050,11 @@ ${body}` }],
                         : `Started registered agent ${result.ref ?? ''} as terminal ${result.id ?? '?'}.`;
                 } else if (action === 'list') {
                     summary = `${result.agents?.length ?? 0} saved agent(s) in this workspace.`;
+                } else if (action === 'diagnose') {
+                    // `triageSummary` is the line, built where the reasoning is.
+                    // Rebuilding it here from the JSON would be a second opinion
+                    // about the same facts, and the two would eventually differ.
+                    summary = result.note ?? 'runAgent diagnose ok.';
                 } else if (action === 'read') {
                     summary = `Read ${result.data?.length ?? 0} byte(s)${result.dropped ? ' (some earlier output was dropped)' : ''}.${readStateNote(result.state)}`;
                 } else if (action === 'send' && result.submitted === false) {

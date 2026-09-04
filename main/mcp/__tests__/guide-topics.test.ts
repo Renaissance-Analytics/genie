@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { guideTopics, guideIndex, guideFor } from '../guide-topics';
+import { GENIE_MCP_GUIDE } from '../guide';
+import { osAgentBootInstructions } from '../../agents/os-lifecycle';
 
 /**
  * `genieGuide` returned the WHOLE guide, every time.
@@ -111,5 +113,55 @@ describe('guideFor', () => {
         expect(got.ok).toBe(false);
         expect(got.text).toContain('nonsense');
         expect(got.text).toContain('imdone');
+    });
+});
+
+/**
+ * THE GUIDE HAS AN OPERATOR TOPIC, AND THE BOOT PROMPT'S POINTER RESOLVES.
+ *
+ * The guide never mentioned the workstation operator — not the role, not the
+ * first-boot/recovery distinction, not how to triage a wedged agent. So the one
+ * agent on this machine whose whole job is described nowhere else was reading
+ * the same text as every project agent, which is a fair part of why it behaved
+ * like one.
+ *
+ * Nothing about `genieGuide` had to become role-aware to fix that. Topics are
+ * derived from the guide's own `##` headings, so a section IS a topic — the
+ * operator's boot instruction names the id, and this pins that the id it names
+ * actually resolves. A prompt pointing at a topic that does not exist is worse
+ * than one pointing nowhere: it costs a call to find out.
+ */
+describe('the workstation-operator guide topic', () => {
+    const topics = guideTopics(GENIE_MCP_GUIDE);
+
+    it('is reachable under the id the operator boot prompt tells it to ask for', () => {
+        expect(osAgentBootInstructions('first-boot')).toContain('the-workstation-operator');
+
+        expect(guideFor(topics, 'the-workstation-operator').ok).toBe(true);
+    });
+
+    it('says what the operator must NOT do, not only what it does', () => {
+        const body = guideFor(topics, 'the-workstation-operator').text;
+
+        expect(body).toMatch(/do NOT/i);
+        expect(body).toMatch(/project/i);
+        expect(body).toMatch(/registerAgent/);
+    });
+
+    it('describes the triage the refusal hands off to', () => {
+        const body = guideFor(topics, 'the-workstation-operator').text;
+
+        expect(body).toMatch(/runAgent diagnose/);
+        expect(body).toMatch(/wedged|stuck/i);
+    });
+
+    it('POSITIVE CONTROL — it is one topic, not prose smeared across the guide', () => {
+        // A section that leaked into every topic would pass every assertion above
+        // while making `genieGuide` more expensive for every agent — the exact
+        // cost the topic split exists to avoid.
+        const imdone = guideFor(topics, 'imdone');
+
+        expect(imdone.ok).toBe(true);
+        expect(imdone.text).not.toMatch(/WORKSTATION OPERATOR/);
     });
 });

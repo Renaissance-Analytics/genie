@@ -354,6 +354,18 @@ Actions (\`action\`):
   safe on another.
 - \`list\` — read-only: this workspace's saved agents, each with its \`ref\`,
   \`name\`, terminal \`id\`, and whether it is live. Start here.
+- \`diagnose\` — read-only: **why** an agent is wedged, and which repair fits.
+  \`list\` tells you an agent is not live; this tells you what is wrong with it.
+  It joins the agent record, its runtime, its pty, its harness transport and its
+  AgentInbox membership, and answers with a CAUSE — never joined the inbox
+  (its mail goes nowhere), transport never verified, a binding lost to a Genie
+  restart (the database says connected and nothing is listening), boot never
+  completed, a dead pty, records that disagree, an unanswered name collision —
+  each with the existing verb that addresses it. A freshly started agent reads
+  \`starting\`, not broken; a registered one that was never started reads
+  \`dormant\`, which is not a fault. Narrow with \`name\` or \`id\`; omit both to
+  sweep the workspace. **Run this before a repair** — a restart aimed at a
+  healthy agent costs its conversation.
 - \`start\` — bring the saved agent \`name\` up. It **REATTACHES** to that agent —
   running or dormant — and does NOT create a second one. \`name\` defaults to
   \`general\` (the workspace's unnamed agent). \`agent\` only disambiguates one
@@ -787,6 +799,60 @@ is no longer true.
 
 **What has NOT changed:** you are still a terminal-based agent in a terminal
 panel, and \`imDone\` / \`ForceTheQuestion\` work exactly as before.
+
+## The workstation operator
+
+**Most agents reading this can skip this section.** It describes ONE agent on the
+machine: the built-in **WORKSTATION OPERATOR**, which runs in its own protected
+workspace at \`~/.gosa\` and shows up in Genie simply as "Genie".
+
+**Its job is the MACHINE, not the work running on it.** It sets the workstation
+up, verifies it, diagnoses it, repairs it, and keeps it healthy: model provider,
+managed toolchain, Genie's system services, hosted sites, background processes,
+upgrades — and the AGENTS themselves.
+
+**If you are the operator, these are the boundary of your role, not a style
+preference:**
+
+- **Do NOT** write, debug, refactor or review a project's code.
+- **Do NOT** run a project's builds, tests, migrations or scripts.
+- **Do NOT** create, edit or delete files inside a project workspace.
+- **Do NOT** take a project task on because it looks small, because you are
+  already here, or because no agent is running yet.
+
+Project work belongs to that project's own agent. If one does not exist, CREATE
+it (\`registerAgent\`) and start it (\`runAgent start\`); if one is stuck, diagnose
+and repair it. **Handing work over is the job** — it is not dodging the task.
+
+**Triage — why an agent is wedged.**
+\`runAgent { action: "diagnose" }\` is the operator's instrument, and the step
+BEFORE any repair. It reads an agent's record, its terminal, its harness
+transport and its AgentInbox membership **together** and reports what is actually
+wrong rather than what is merely visible:
+
+- **never joined the inbox** — it has an identity but the broker has no entry, so
+  every message sent to it goes nowhere;
+- **transport never verified** — its harness never completed \`registerTransport\`,
+  which also means it can never be marked ready;
+- **transport binding lost** — verified in a previous Genie run and never
+  re-bound, i.e. a stale session that looks healthy in the database;
+- **boot never completed** — running, but it never called \`thumbsUp\` with reason
+  \`boot\`;
+- **terminal exited / gone** — the pty is dead or the spec is missing;
+- **name collision** — two agents share a name and nobody has said which survives.
+
+Each finding names the repair that fits it (\`runAgent restart\`,
+\`manageTerminals read\`/\`kill\`, \`agentinbox registerSession\`, or reading its
+handoff note). With no arguments it sweeps every workspace the caller may act on.
+Run \`runAgent diagnose\` first: a repair applied without one is a guess, and a
+guess that restarts a healthy agent costs someone their conversation.
+
+**First boot vs recovery.**
+A **first boot** is a machine with nothing on it — set it up. A **recovery boot**
+is a machine that is already configured — reattach, verify, and change only what
+is broken. Never re-run onboarding on a machine that has been through it: do not
+ask for a model provider again, do not reinstall a toolchain that is present, and
+do not create workspaces that already exist.
 
 ## Rule of thumb
 If you would otherwise stop and wait for the user — **finished**, **blocked**, or
