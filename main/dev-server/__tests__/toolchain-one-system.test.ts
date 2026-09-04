@@ -3,6 +3,7 @@ import { buildInstallCommand, installIntentFor } from '../toolchain-adapters';
 import type { InstallStep } from '../toolchain-plan';
 import { scanToolchain, type ToolchainFs } from '../toolchain-scan';
 import {
+    PHP_REQUIRED_MODULES,
     genieToolchainRoot,
     joinFor,
     recipesFor,
@@ -223,23 +224,17 @@ describe('an install Genie reports is an install a new terminal can run', () => 
     });
 });
 
-/** The modules Genie's php.ini must produce, so a success case can be a success. */
-const PHP_MODULES = [
-    'curl',
-    'exif',
-    'fileinfo',
-    'gd',
-    'intl',
-    'mbstring',
-    'openssl',
-    'pdo_mysql',
-    'pdo_pgsql',
-    'pdo_sqlite',
-    'sockets',
-    'sodium',
-    'sqlite3',
-    'zip',
-];
+/**
+ * The modules Genie's php.ini must produce, so a success case can be a success.
+ *
+ * DERIVED from the real list rather than copied. Hand-copying it froze this
+ * fixture at fourteen names while `PHP_REQUIRED_MODULES` grew to thirty-two, so
+ * a correct install failed its own gate here and two unrelated tests — a PATH
+ * assertion and a prerequisite-ordering one — went red for a reason neither
+ * names. A fixture that restates a constant is a fixture that will disagree
+ * with it.
+ */
+const PHP_MODULES = [...PHP_REQUIRED_MODULES];
 
 // --- 3b. a prerequisite is Genie's job, not a link in an error message -------
 

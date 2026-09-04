@@ -98,3 +98,56 @@ describe('stale Genie-written php.ini files', () => {
         expect(stale).toEqual([]);
     });
 });
+
+/**
+ * A PECL extension that is PRESENT ON DISK must survive the ini refresh.
+ *
+ * `redis` is not in the official Windows build, so it cannot live in
+ * PHP_INI_EXTENSIONS: on a machine without the DLL that line would fail to load
+ * and print a warning on every php invocation — the exact fault this whole
+ * refresh feature exists to remove, and it would also fail the install gate,
+ * since PHP_REQUIRED_MODULES aliases the same list.
+ *
+ * But once the DLL IS beside the binary, the ini must name it. Without this the
+ * refresh silently DELETES `extension=redis` on the next launch and a working
+ * site starts returning `Class "Redis" not found` again — which is how
+ * `tynn.gen` spent a week at HTTP 500 (genie#392).
+ *
+ * So the rule is presence, not preference: an optional extension is enabled iff
+ * its DLL is on disk. `phpIniContents` stays PURE — the caller looks.
+ */
+describe('optional PECL extensions present on disk', () => {
+    it('names an optional extension when its DLL is beside the binary', () => {
+        const ini = phpIniContents('C:/genie/toolchain/php/8.4.24', 'win32', null, ['redis']);
+        expect(ini).toContain('extension=redis');
+        // POSITIVE CONTROL: prove the assertion can fail — the same call without
+        // it must NOT name redis, or the test above passes on any string.
+        expect(phpIniContents('C:/genie/toolchain/php/8.4.24', 'win32', null, [])).not.toContain(
+            'extension=redis',
+        );
+    });
+
+    it('does not rewrite an ini that already names the optional extension', () => {
+        const dir = 'C:/genie/toolchain/php/8.4.24';
+        const current = phpIniContents(dir, 'win32', null, ['redis']);
+        const stale = staleManagedInis({
+            installs: [install('genie', dir)],
+            platform: 'win32',
+            read: () => current,
+            extrasFor: () => ['redis'],
+        });
+        expect(stale).toEqual([]);
+    });
+
+    it('REPORTS an ini that is missing an optional extension the machine has', () => {
+        const dir = 'C:/genie/toolchain/php/8.4.24';
+        const stale = staleManagedInis({
+            installs: [install('genie', dir)],
+            platform: 'win32',
+            read: () => phpIniContents(dir, 'win32', null, []),
+            extrasFor: () => ['redis'],
+        });
+        expect(stale).toHaveLength(1);
+        expect(stale[0]!.contents).toContain('extension=redis');
+    });
+});

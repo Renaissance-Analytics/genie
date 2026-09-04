@@ -31,6 +31,7 @@ import {
     genieToolchainRoot,
     joinFor,
     parseToolchainDefaults,
+    PHP_OPTIONAL_EXTENSIONS,
     phpIniContents,
     serializeToolchainDefaults,
     type EngineInstall,
@@ -686,6 +687,10 @@ export function staleManagedInis(input: {
      *  ini names `curl.cainfo`/`openssl.cafile` only when there is one — pointing
      *  at a missing file swaps errno 60 for errno 77 and fixes nothing. */
     bundleFor?: (versionDir: string) => string | null;
+    /** Optional PECL extensions whose DLL is actually present in this install's
+     *  `ext/`. Without it the refresh DELETES a working `extension=redis` on the
+     *  next launch — see PHP_OPTIONAL_EXTENSIONS. */
+    extrasFor?: (versionDir: string) => readonly string[];
 }): Array<{ path: string; contents: string }> {
     const out: Array<{ path: string; contents: string }> = [];
     for (const install of input.installs) {
@@ -695,6 +700,7 @@ export function staleManagedInis(input: {
             install.dir,
             input.platform,
             input.bundleFor?.(install.dir) ?? null,
+            input.extrasFor?.(install.dir) ?? [],
         );
         let current: string | null = null;
         try {
@@ -873,6 +879,12 @@ export async function refreshManagedInis(): Promise<string[]> {
             platform: process.platform,
             read: (p) => fsSync.readFileSync(p, 'utf8'),
             bundleFor: (dir) => bundles.get(dir) ?? null,
+            // Look, do not assume: an optional extension is enabled iff its DLL
+            // is beside the binary.
+            extrasFor: (dir) =>
+                PHP_OPTIONAL_EXTENSIONS.filter((e) =>
+                    fsSync.existsSync(joinFor(process.platform, dir, 'ext', `php_${e}.dll`)),
+                ),
         });
         for (const file of stale) {
             try {

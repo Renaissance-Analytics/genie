@@ -308,3 +308,57 @@ describe('php.ini — Genie owns the CONFIG, not just the binaries', () => {
         );
     });
 });
+
+/**
+ * The owner's requirement: Genie's PHP is a batteries-included dev runtime, not
+ * a hand-picked subset. A missing extension surfaces as a cryptic failure deep
+ * inside a request — `Class "Redis" not found` had `tynn.gen` returning 500 on
+ * every request for a WEEK before anyone looked.
+ *
+ * The list is still not `ext/*.dll` blindly, because a failing `extension=`
+ * line prints a warning on EVERY php invocation, into every site log, forever.
+ * Each name below was verified against php-8.4.24-nts-Win32-vs17-x64 by loading
+ * the whole set at once and asserting php printed NOTHING but its own output.
+ *
+ * The four exclusions are deliberate and each has a reason:
+ *   - `opcache`      — `zend_extension=opcache` makes php-cgi.exe DIE at startup
+ *                      on Windows (ASLR fatal, exit 127), and php-cgi is what the
+ *                      PHP serve mode spawns. Already documented in phpIniContents.
+ *   - `pdo_firebird` — needs a Firebird client library the zip does not carry;
+ *                      emits "Unable to load dynamic library" (measured).
+ *   - `snmp`         — loads, but prints "Cannot find module (IP-MIB)" and six
+ *                      more on every invocation: the MIBs are not shipped.
+ *   - `dl_test`, `zend_test` — PHP's own internal test extensions.
+ */
+describe('PHP_INI_EXTENSIONS — everything the build ships that loads silently', () => {
+    const EXPECTED = [
+        'bz2', 'com_dotnet', 'curl', 'dba', 'enchant', 'exif', 'ffi', 'fileinfo',
+        'ftp', 'gd', 'gettext', 'gmp', 'intl', 'ldap', 'mbstring', 'mysqli',
+        'odbc', 'openssl', 'pdo_mysql', 'pdo_odbc', 'pdo_pgsql', 'pdo_sqlite',
+        'pgsql', 'shmop', 'soap', 'sockets', 'sodium', 'sqlite3', 'sysvshm',
+        'tidy', 'xsl', 'zip',
+    ];
+
+    it('enables every extension verified to load without a warning', () => {
+        expect([...PHP_INI_EXTENSIONS].sort()).toEqual([...EXPECTED].sort());
+    });
+
+    it('carries the extensions whose absence actually broke a site', () => {
+        // The regression this list exists to prevent. `pgsql` is the pointed one:
+        // `pdo_pgsql` was enabled while native `pgsql` was not, which reads as
+        // arbitrary to anyone hitting it.
+        for (const ext of ['mysqli', 'pgsql', 'soap', 'ldap', 'gmp', 'bz2', 'ftp', 'gettext']) {
+            expect(PHP_INI_EXTENSIONS).toContain(ext);
+        }
+    });
+
+    it('still excludes the four that cannot be enabled, and says why in the ini', () => {
+        for (const ext of ['opcache', 'pdo_firebird', 'snmp', 'dl_test', 'zend_test']) {
+            expect(PHP_INI_EXTENSIONS).not.toContain(ext);
+        }
+        // POSITIVE CONTROL: "does not contain" passes against an empty list, so
+        // prove the list is populated and the ini still explains the opcache call.
+        expect(PHP_INI_EXTENSIONS.length).toBeGreaterThan(30);
+        expect(phpIniContents('C:\php', 'win32')).toContain('opcache is OFF');
+    });
+});

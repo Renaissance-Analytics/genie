@@ -486,14 +486,30 @@ export function addableRecipes(
  *
  * ## Why this list, and not `ext\*.dll`
  *
- * Chosen for what Genie's `php` serve mode actually runs — a Laravel app out of
- * `public/` — plus what Composer itself needs. A MISSING extension surfaces as a
- * cryptic failure deep inside a request (`Class "PDO" not found`) that costs an
- * afternoon; an enabled-but-unused one costs a fraction of a megabyte. The
- * asymmetry decides it. But enabling EVERYTHING is worse than either: several
- * DLLs in `ext\` need libraries the zip does not carry, and a failing
- * `extension=` line prints a warning on every php invocation — into every site
- * log, forever.
+ * EVERYTHING the build ships that can actually be loaded. A MISSING extension
+ * surfaces as a cryptic failure deep inside a request; an enabled-but-unused one
+ * costs a fraction of a megabyte. The asymmetry decides it, and it was decided
+ * the wrong way once already: a hand-picked 14 left `redis` absent and `tynn.gen`
+ * returned 500 to every request for a WEEK before anyone looked, with the site
+ * still reporting `ready: true` (genie#392).
+ *
+ * It is still not `ext\*.dll` blindly, because a failing `extension=` line prints
+ * a warning on every php invocation — into every site log, forever. The list is
+ * the shipped set MINUS the ones measured to be unloadable or noisy on
+ * php-8.4.24-nts-Win32-vs17-x64, verified by loading the whole set at once and
+ * asserting php printed nothing but its own output:
+ *
+ *   - `pdo_firebird` — "Unable to load dynamic library": needs a Firebird client
+ *     library the zip does not carry.
+ *   - `snmp` — loads, then prints "Cannot find module (IP-MIB)" and six more on
+ *     EVERY invocation; the MIBs are not shipped.
+ *   - `dl_test`, `zend_test` — PHP's own internal test extensions.
+ *   - `opcache` — see the note in {@link phpIniContents}: as a `zend_extension` it
+ *     makes php-cgi.exe die at startup on Windows, and php-cgi is the binary the
+ *     PHP serve mode spawns. That exclusion is settled, not an oversight.
+ *
+ * `redis` is NOT here because it is not in the build at all — it is a PECL
+ * extension, and fetching it is tracked separately.
  *
  * Built-ins are deliberately absent: `ctype`, `dom`, `filter`, `hash`, `pcre`,
  * `session`, `tokenizer`, `xml`, `json` and `bcmath` are compiled into the
@@ -504,20 +520,40 @@ export function addableRecipes(
  * `php -m` lists all fourteen and prints no "Unable to load dynamic library".
  */
 export const PHP_INI_EXTENSIONS: readonly string[] = [
+    'bz2',
+    'com_dotnet',
     'curl',
+    'dba',
+    'enchant',
     'exif',
+    'ffi',
     'fileinfo',
+    'ftp',
     'gd',
+    'gettext',
+    'gmp',
     'intl',
+    'ldap',
     'mbstring',
+    'mysqli',
+    'odbc',
     'openssl',
     'pdo_mysql',
+    'pdo_odbc',
     'pdo_pgsql',
     'pdo_sqlite',
+    // Native pgsql, not only PDO. Enabling `pdo_pgsql` while leaving this off
+    // reads as arbitrary to anyone whose app calls pg_* directly.
+    'pgsql',
+    'shmop',
+    'soap',
     'sockets',
     // Laravel's encrypter and Composer's signature checks both reach for it.
     'sodium',
     'sqlite3',
+    'sysvshm',
+    'tidy',
+    'xsl',
     'zip',
 ];
 
@@ -530,6 +566,21 @@ export const PHP_INI_EXTENSIONS: readonly string[] = [
  * silent apart from a stderr warning, so asserting the ini's contents proves
  * nothing — the module list is the only evidence that the config did anything.
  */
+/**
+ * Extensions Genie will enable IF the machine has them, and never demand.
+ *
+ * `redis` is not in the official Windows PHP build at all — it is PECL, so a
+ * `extension=redis` line on a machine without the DLL prints a loader warning on
+ * every php invocation and (because PHP_REQUIRED_MODULES aliases
+ * PHP_INI_EXTENSIONS) would fail the install gate outright.
+ *
+ * It still has to be NAMED once the DLL is there, or the startup ini refresh
+ * deletes it on the next launch and a working site goes back to
+ * `Class "Redis" not found` — which is how `tynn.gen` spent a week at HTTP 500
+ * (genie#392). Presence decides it; the caller looks at the disk.
+ */
+export const PHP_OPTIONAL_EXTENSIONS: readonly string[] = ['redis'];
+
 export const PHP_REQUIRED_MODULES: readonly string[] = PHP_INI_EXTENSIONS;
 
 /** One trust anchor, as read out of the machine's root store. */
@@ -591,6 +642,13 @@ export function phpIniContents(
      *  unset — which reproduces the old behaviour exactly, and is right: naming a
      *  file that is not there swaps errno 60 for errno 77 and fixes nothing. */
     caBundle: string | null = null,
+    /**
+     * Optional extensions whose DLL the caller has SEEN on disk — see
+     * {@link PHP_OPTIONAL_EXTENSIONS}. Presence, not preference: naming one that
+     * is not there is the loader warning this file exists to avoid, so the
+     * caller looks and this stays pure.
+     */
+    presentOptional: readonly string[] = [],
 ): string {
     const extDir = joinFor(platform, versionDir, 'ext');
     const lines = [
@@ -600,6 +658,12 @@ export function phpIniContents(
         `extension_dir = "${extDir}"`,
         '',
         ...PHP_INI_EXTENSIONS.map((e) => `extension=${e}`),
+        // Present-on-disk PECL extensions. Kept OUT of PHP_INI_EXTENSIONS because
+        // that list is also PHP_REQUIRED_MODULES: a name there is a name the
+        // install gate demands, and redis ships with no official Windows build.
+        ...PHP_OPTIONAL_EXTENSIONS.filter((e) => presentOptional.includes(e)).map(
+            (e) => `extension=${e}`,
+        ),
         '',
         // The Windows PHP zip ships NO CA bundle, and its compiled-in default
         // points at `C:\Program Files\Common Files\SSL/cert.pem`, which does not
