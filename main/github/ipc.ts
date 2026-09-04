@@ -72,6 +72,9 @@ type FlowStatus =
 let status: FlowStatus = { kind: 'idle' };
 let abortCtl: AbortController | null = null;
 
+let hintCache: { at: number; hint: string } | null = null;
+const HINT_TTL_MS = 10_000;
+
 /**
  * Why secrets-at-rest is unavailable RIGHT NOW, or null while it works
  * (genie#379). Probes the session bus only in the broken case, so the healthy
@@ -79,6 +82,11 @@ let abortCtl: AbortController | null = null;
  */
 function keychainStorageHint(): string | null {
     if (isStorageAvailable()) return null;
+    // `github:status` is polled every few seconds during a device flow, and the
+    // probe below spawns a process. The session's bus state does not change on
+    // that timescale, so a short TTL keeps the broken path from shelling out on
+    // every poll while still noticing a keyring the user just started.
+    if (hintCache && Date.now() - hintCache.at < HINT_TTL_MS) return hintCache.hint;
     let selectedBackend: string | null = null;
     try {
         // Linux-only Electron API; absent on other platforms and older builds.
@@ -98,12 +106,14 @@ function keychainStorageHint(): string | null {
     } catch {
         /* no bus / no tooling — treated as "nothing is answering" */
     }
-    return keychainUnavailableHint({
+    const hint = keychainUnavailableHint({
         platform: process.platform,
         desktop: process.env.XDG_CURRENT_DESKTOP,
         secretServiceOwned,
         selectedBackend,
     });
+    hintCache = { at: Date.now(), hint };
+    return hint;
 }
 
 export function registerGithubIpc(): void {

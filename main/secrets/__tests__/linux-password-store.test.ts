@@ -5,6 +5,8 @@ import {
     keychainUnavailableHint,
     parseBusctlNames,
     parseDbusSendBoolean,
+    passwordStoreBusNames,
+    probeOwnedBusNames,
 } from '../linux-password-store';
 
 /**
@@ -163,5 +165,62 @@ describe('keychainUnavailableHint — say what is ACTUALLY wrong (genie#379)', (
         });
         expect(hint).not.toMatch(/gnome-keyring|libsecret|org\.freedesktop/);
         expect(hint.length).toBeGreaterThan(10);
+    });
+});
+
+describe('probeOwnedBusNames — boot must not wait on a dead bus', () => {
+    const BUSCTL_OK = [
+        'org.freedesktop.DBus     1 systemd  glenn :1.0  init.scope - -',
+        'org.freedesktop.secrets 812 gnome-ke glenn :1.42 -          - -',
+    ].join('\n');
+
+    it('answers for every name in ONE busctl call', () => {
+        const calls: string[][] = [];
+        const owned = probeOwnedBusNames(passwordStoreBusNames(), (cmd, args) => {
+            calls.push([cmd, ...args]);
+            return BUSCTL_OK;
+        });
+        expect(owned).toEqual([SECRET_SERVICE_NAME]);
+        expect(calls).toHaveLength(1);
+        expect(calls[0][0]).toBe('busctl');
+    });
+
+    it('falls back to dbus-send and STOPS at the first owned name', () => {
+        const asked: string[] = [];
+        const owned = probeOwnedBusNames(['org.kde.kwalletd6', SECRET_SERVICE_NAME, 'org.x.later'], (cmd, args) => {
+            if (cmd === 'busctl') throw Object.assign(new Error('spawn busctl ENOENT'), { code: 'ENOENT' });
+            asked.push(args[args.length - 1]);
+            return args[args.length - 1].includes('secrets')
+                ? 'method return …\n   boolean true\n'
+                : 'method return …\n   boolean false\n';
+        });
+        expect(owned).toEqual([SECRET_SERVICE_NAME]);
+        // Asked for kwallet, then secrets, and then stopped — `org.x.later`
+        // was never asked for.
+        expect(asked).toEqual(['string:org.kde.kwalletd6', `string:${SECRET_SERVICE_NAME}`]);
+    });
+
+    it('gives up immediately when neither tool is installed', () => {
+        let calls = 0;
+        const owned = probeOwnedBusNames(passwordStoreBusNames(), () => {
+            calls += 1;
+            throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        });
+        expect(owned).toEqual([]);
+        // busctl once, dbus-send once — NOT once per name.
+        expect(calls).toBe(2);
+    });
+
+    it('treats a hung / refusing bus as "nothing owned" rather than throwing', () => {
+        expect(() =>
+            probeOwnedBusNames([SECRET_SERVICE_NAME], () => {
+                throw Object.assign(new Error('ETIMEDOUT'), { code: 'ETIMEDOUT' });
+            }),
+        ).not.toThrow();
+        expect(
+            probeOwnedBusNames([SECRET_SERVICE_NAME], () => {
+                throw Object.assign(new Error('ETIMEDOUT'), { code: 'ETIMEDOUT' });
+            }),
+        ).toEqual([]);
     });
 });

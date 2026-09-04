@@ -83,7 +83,13 @@ export function parseDbusSendBoolean(stdout: string): boolean {
 type Run = (cmd: string, args: string[]) => string;
 
 const defaultRun: Run = (cmd, args) =>
-    execFileSync(cmd, args, { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] });
+    execFileSync(cmd, args, { encoding: 'utf8', timeout: 1200, stdio: ['ignore', 'pipe', 'ignore'] });
+
+/** True for the "that program is not installed" spawn failure. */
+function isMissingTool(e: unknown): boolean {
+    const code = (e as { code?: unknown })?.code;
+    return code === 'ENOENT' || code === 'EACCES';
+}
 
 /**
  * Impure probe: which of `names` currently have an owner on the SESSION bus.
@@ -91,17 +97,20 @@ const defaultRun: Run = (cmd, args) =>
  * Runs BEFORE `app.whenReady()` (Chromium reads `--password-store` when OSCrypt
  * initialises), so it is synchronous and short-timeout, and every failure —
  * no tool, no bus, a hang — resolves to "nothing owned", i.e. today's behaviour.
- * `busctl` answers for every name in one call; `dbus-send` is the fallback and
- * is asked per name.
+ * `busctl` answers for every name in ONE call and is present wherever systemd
+ * is; `dbus-send` is the fallback and must be asked per name, so it stops at
+ * the first hit and gives up entirely when the tool isn't there. Boot must
+ * never wait on a dead bus for longer than a blink.
  */
 export function probeOwnedBusNames(names: string[], run: Run = defaultRun): string[] {
     try {
-        const listed = new Set(parseBusctlNames(run('busctl', ['--user', 'list', '--no-legend', '--no-pager'])));
+        const listed = new Set(
+            parseBusctlNames(run('busctl', ['--user', 'list', '--no-legend', '--no-pager'])),
+        );
         return names.filter((n) => listed.has(n));
     } catch {
         /* busctl absent (non-systemd) or no session bus — try dbus-send */
     }
-    const owned: string[] = [];
     for (const name of names) {
         try {
             const out = run('dbus-send', [
@@ -113,12 +122,15 @@ export function probeOwnedBusNames(names: string[], run: Run = defaultRun): stri
                 'org.freedesktop.DBus.NameHasOwner',
                 `string:${name}`,
             ]);
-            if (parseDbusSendBoolean(out)) owned.push(name);
-        } catch {
-            /* no dbus-send either — treat as not owned */
+            // Callers rank `names` in the order they'd pick them, so the first
+            // owned one settles it — no reason to keep asking.
+            if (parseDbusSendBoolean(out)) return [name];
+        } catch (e) {
+            if (isMissingTool(e)) return [];
+            /* a per-name failure (bus refused, timed out) → not owned */
         }
     }
-    return owned;
+    return [];
 }
 
 /** Every bus name {@link chooseLinuxPasswordStore} can act on. */
