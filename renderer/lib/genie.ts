@@ -9,20 +9,33 @@ import type { BoardRead, ReviewOutcome } from './artboard-model';
 import { makeRemoteBridge } from './remote-bridge';
 import type { TynnHealth } from '../../main/mcp/tynn-health';
 import type { AgentTuiId, TuiDef } from '../../main/agents/registry';
-/* The agent MANAGER's wire types (Tynn #709 / story #263), imported from the
-   modules that define them rather than re-declared here. A hand-copied shape is
-   how `AgentRuntimeSpec.provider` stopped matching main's `tui` and the agent
-   panel started throwing on undefined. */
+/* The agent MANAGER's wire types (Tynn #709 / story #263).
+ *
+ * From `agent-manager-types.ts` — a ZERO-IMPORT leaf — and from NOTHING else,
+ * including the modules that use them. `renderer/tsconfig.json` includes
+ * `./**\/*`, so anything a renderer file imports joins the renderer's program,
+ * and `import type` governs what is EMITTED, not what is COMPILED. Naming
+ * `main/agents/agent-manager` here pulled in `main/terminal/ipc` →
+ * `main/terminal/genie-adapter` — child-process spawning code, in the renderer.
+ *
+ * Every other `main/` module the renderer reaches is a leaf for the same
+ * reason: `agents/registry`, `mcp/tynn-health`, `terminal/replay`,
+ * `terminal/agent-cap`, `terminal/keystrokes`, `dev-server/serve-recipe`,
+ * `ask/inbox`. `__tests__/renderer-main-boundary.test.ts` holds the line.
+ *
+ * Imported rather than re-declared: a hand-copied shape is how
+ * `AgentRuntimeSpec.provider` stopped matching main's `tui` and the agent panel
+ * started throwing on undefined. */
 import type {
     AgentManagerState,
     AgentManagerMcp,
     AgentManagerPersona,
     AgentManagerSidecar,
+    AgentMcpServer,
     McpServerInput,
-} from '../../main/agents/agent-manager';
-import type { PersonaEdit } from '../../main/agents/persona';
-import type { AgentMcpServer } from '../../main/agents/agent-mcp';
-import type { SidecarAction } from '../../main/agents/sidecar-control';
+    PersonaEdit,
+    SidecarAction,
+} from '../../main/agents/agent-manager-types';
 
 export type {
     TynnHealth,

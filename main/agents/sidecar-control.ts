@@ -1,4 +1,5 @@
 import { isSidecarName, sidecarNameFor } from './sidecar';
+import type { SidecarAction } from './agent-manager-types';
 
 /**
  * Which rows are THIS agent's sidecars, so a human can start, stop and restart
@@ -58,7 +59,9 @@ export function sidecarsOf<T extends SidecarSubject>(
     );
 }
 
-export type SidecarAction = 'start' | 'stop' | 'restart';
+/* Defined in the ZERO-IMPORT leaf `agent-manager-types.ts` so the renderer
+   can name it without pulling this module's graph in. */
+export type { SidecarAction } from './agent-manager-types';
 
 /**
  * Which controls the manager may offer.

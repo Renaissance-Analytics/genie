@@ -46,6 +46,18 @@ const body = (p: Page) => p.locator('[data-testid="agent-manager-body"]');
 const purpose = (p: Page) => p.locator('[data-testid="agent-manager-purpose"]');
 const save = (p: Page) => p.locator('[data-testid="agent-manager-save"]');
 const mcpRows = (p: Page) => p.locator('[data-testid="agent-manager-mcp-row"]');
+/**
+ * ONE row, by exact server name.
+ *
+ * Not `filter({ hasText })`: that is a substring match, and `genie` is a
+ * substring of `genie-agentinbox-channel` -- the two entries this surface most
+ * needs to tell apart, since both are refused for different stated reasons.
+ * `data-server` is the row's identity and matches exactly.
+ */
+const mcpRow = (p: Page, name: string) =>
+    p.locator(`[data-testid="agent-manager-mcp-row"][data-server="${name}"]`);
+const removeBtn = (p: Page, name: string) =>
+    mcpRow(p, name).locator('[data-testid="agent-manager-mcp-remove"]');
 
 test('the surface the owner asked for is actually there', async () => {
     // The complaint: *Agent settings — moic* offered a driver picker, a purpose
@@ -99,38 +111,67 @@ test('★ an edit round-trips to disk WITHOUT mangling what it did not touch', a
 
 test('the MCP tab lists the servers this agent actually gets', async () => {
     await tab(page, 'mcp').click();
-    // The seed writes exactly three, and this agent's TUI is claude → .mcp.json.
-    await expect(mcpRows(page)).toHaveCount(3);
-    await expect(mcpRows(page).filter({ hasText: 'genie' })).toHaveCount(1);
-    await expect(mcpRows(page).filter({ hasText: 'playwright' })).toHaveCount(1);
+
+    // Asserted BY NAME, never by total.
+    //
+    // The seed writes three servers, then Genie's own boot sync adds two more:
+    // `background.ts` calls `writeWorkspaceAgentMcp` for every `mcp_enabled`
+    // workspace at launch, which upserts `genie` and `genie-agentinbox-channel`
+    // into this very file. The row count is therefore a product of the fixture
+    // AND a background sync -- a number that would be a flake even on the run
+    // where it happened to be right.
+    //
+    // Naming rows is also the stronger assertion: it is what the tab CLAIMS --
+    // "these are the servers this agent gets" -- and it holds whatever else
+    // Genie legitimately manages.
+    for (const name of ['genie', 'playwright', 'fetch']) {
+        await expect(mcpRow(page, name), `${name} should be listed`).toHaveCount(1);
+    }
+    // Written by Genie itself, never by the fixture -- so this doubles as proof
+    // the tab reads the REAL file rather than the seed's copy of it.
+    await expect(mcpRow(page, 'genie-agentinbox-channel')).toHaveCount(1);
+
     // A stdio server shows its command rather than an empty cell.
-    await expect(mcpRows(page).filter({ hasText: 'playwright' })).toContainText(
-        'npx @playwright/mcp',
-    );
+    await expect(mcpRow(page, 'playwright')).toContainText('npx @playwright/mcp');
+
+    // POSITIVE CONTROL: the locator really discriminates. Without it, every
+    // assertion above would also pass against a tab that rendered one row
+    // carrying every name.
+    await expect(mcpRow(page, 'not-a-real-server')).toHaveCount(0);
+    expect(await mcpRows(page).count()).toBeGreaterThan(1);
 });
 
 test('★ removing the genie server is REFUSED, and says why', async () => {
     await tab(page, 'mcp').click();
-    const genieRow = mcpRows(page).filter({ hasText: 'genie' }).first();
-    const remove = genieRow.locator('[data-testid="agent-manager-mcp-remove"]');
+    const remove = removeBtn(page, 'genie');
     await expect(remove).toBeDisabled();
-    // Not a silent disable — the reason is on the control.
+    // Not a silent disable -- the reason is on the control.
     await expect(remove).toHaveAttribute('title', /cannot reach you/i);
+
+    // The AgentInbox channel is the SAME lifeline on the delivery side, and it
+    // is here to be asserted on only because Genie's boot sync writes it. The
+    // unit guard covers the rule; this is the wired proof.
+    await expect(removeBtn(page, 'genie-agentinbox-channel')).toBeDisabled();
 });
 
 test('★ POSITIVE CONTROL: an ordinary server CAN be removed, and really goes', async () => {
-    // Without this the test above passes on a surface where every Remove is
-    // dead — which is a different bug wearing the same clothes.
+    // Without this the refusal test above passes on a surface where every
+    // Remove is dead -- a different bug wearing the same clothes.
     await tab(page, 'mcp').click();
-    const fetchRow = mcpRows(page).filter({ hasText: 'fetch' }).first();
-    await fetchRow.locator('[data-testid="agent-manager-mcp-remove"]').click();
+    const before = await mcpRows(page).count();
+
+    await removeBtn(page, 'fetch').click();
 
     await expect(page.locator('[data-testid="agent-manager-error"]')).toHaveCount(0);
     // Re-read from main, which re-reads `.mcp.json`. An optimistic UI update
     // would look identical without a byte reaching the file.
-    await expect(mcpRows(page)).toHaveCount(2);
-    await expect(mcpRows(page).filter({ hasText: 'fetch' })).toHaveCount(0);
-    await expect(mcpRows(page).filter({ hasText: 'genie' })).toHaveCount(1);
+    await expect(mcpRow(page, 'fetch')).toHaveCount(0);
+    // EXACTLY one row went, and it was that one. Relative rather than absolute:
+    // the total also carries Genie's managed entries, and this is the real
+    // invariant anyway -- "removing fetch removes fetch, and nothing else".
+    await expect(mcpRows(page)).toHaveCount(before - 1);
+    await expect(mcpRow(page, 'genie')).toHaveCount(1);
+    await expect(mcpRow(page, 'playwright')).toHaveCount(1);
 });
 
 test('the sidecar tab finds the agent’s sidecar', async () => {

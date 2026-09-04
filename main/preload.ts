@@ -33,18 +33,22 @@ export interface AgentRuntimePayload {
     fronted: boolean;
 }
 
-/* The agent MANAGER's wire types (Tynn #709). Re-exported from the modules that
-   define them so the preload, the renderer and main cannot drift — a hand-copied
+/* The agent MANAGER's wire types (Tynn #709). From `agent-manager-types.ts` —
+   the ZERO-IMPORT leaf — not from the modules that use them: the preload IS the
+   main/renderer boundary, so it is the last place that should reach across it.
+   Re-exported so the preload, the renderer and main cannot drift; a hand-copied
    shape here is how `AgentRuntimeSpec.provider` stopped matching main's `tui`
    and the agent panel started throwing. */
 export type {
     AgentManagerState as AgentManagerStatePayload,
     McpServerInput as McpServerInputPayload,
-} from './agents/agent-manager';
-export type { PersonaEdit as PersonaEditPayload } from './agents/persona';
-import type { AgentManagerState as AgentManagerStatePayload } from './agents/agent-manager';
-import type { McpServerInput as McpServerInputPayload } from './agents/agent-manager';
-import type { PersonaEdit as PersonaEditPayload } from './agents/persona';
+    PersonaEdit as PersonaEditPayload,
+} from './agents/agent-manager-types';
+import type {
+    AgentManagerState as AgentManagerStatePayload,
+    McpServerInput as McpServerInputPayload,
+    PersonaEdit as PersonaEditPayload,
+} from './agents/agent-manager-types';
 import {
     TERMINAL_RECOVER_CHANNEL,
     TERMINAL_RECOVERY_STATUS_CHANNEL,

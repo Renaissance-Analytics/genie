@@ -29,21 +29,14 @@ import {
  * module wrote, and delegates every write back to its `applyServer`.
  */
 
-export type McpConfigSource = 'claude' | 'cursor' | 'codex';
-
-export interface AgentMcpServer {
-    name: string;
-    /** The config file the agent's TUI reads this from. */
-    source: McpConfigSource;
-    /** How the agent reaches it — a url, or the command it spawns. For display;
-     *  a blank cell for a stdio server would read as a bug. */
-    detail: string;
-    /** Genie's own lifeline. Removal is refused — see {@link mcpRemovalGuard}. */
-    required: boolean;
-    /** Genie writes this entry itself, so removing it comes back on the next
-     *  workspace sync. Saying so beats the human doing it twice. */
-    managed: boolean;
-}
+/* The shapes live in `agent-manager-types.ts` — a ZERO-IMPORT leaf — because
+   the renderer needs them and this module reaches `mcp/agent-config.ts`, which
+   reaches electron and the filesystem. Importing them from here would drag all
+   of that into the renderer's compilation. See that file's header. */
+export type { AgentMcpServer, McpConfigSource } from './agent-manager-types';
+// Re-exporting does NOT bind the names locally, and this module uses both in
+// its own signatures.
+import type { AgentMcpServer, McpConfigSource } from './agent-manager-types';
 
 /** The entries Genie writes and re-writes. */
 const MANAGED = new Set<string>([

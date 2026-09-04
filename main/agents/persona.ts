@@ -1,4 +1,5 @@
 import { parseAgentFile, renderAgentFile, type AgentFileExtra } from './agent-file';
+import type { PersonaEdit, PersonaView } from './agent-manager-types';
 
 /**
  * Editing an agent's `AGENT.md` — its prompt AND its rules — from the app.
@@ -21,44 +22,15 @@ import { parseAgentFile, renderAgentFile, type AgentFileExtra } from './agent-fi
  * would look deliberate and nothing would report an error.
  */
 
-/**
- * What the manager may change.
- *
- * `name` is deliberately ABSENT. Identity is (workspace, name) — the roster, the
- * AgentInbox channel, `.agents/<name>/` and `persona_path` all key on it — so a
- * rename is a migration, not a text field, and offering it here would
- * desynchronise every one of them from a control that looks harmless.
- *
- * Every field is optional and `undefined` means "not edited", which is what
- * makes an empty edit a genuine no-op rather than a reset to defaults.
- */
-export interface PersonaEdit {
-    purpose?: string;
-    /** null clears it back to the whole workspace. */
-    scope?: string | null;
-    tuis?: string[];
-    avatar?: string | null;
-    /** The system prompt, verbatim. */
-    body?: string;
-}
-
-/** One header key Genie has no field for, shown read-only so a human can SEE it
- *  was not lost rather than having to diff the file to find out. */
-export interface PersonaExtraView {
-    key: string;
-    value: string;
-}
-
-/** An `AGENT.md`, as the manager draws it. */
-export interface PersonaView {
-    name: string;
-    purpose: string;
-    scope: string | null;
-    tuis: string[];
-    avatar: string | null;
-    body: string;
-    extra: PersonaExtraView[];
-}
+/* The shapes live in `agent-manager-types.ts` — a ZERO-IMPORT leaf — because
+   the renderer needs them and this module reaches `agent-file.ts`, which
+   imports `node:fs`. See that file's header for why a type-only import is not
+   enough to keep it out of the renderer's compilation. */
+export type {
+    PersonaEdit,
+    PersonaExtraView,
+    PersonaView,
+} from './agent-manager-types';
 
 /** Read an `AGENT.md`'s text into the shape the manager renders. */
 export function personaView(raw: string): PersonaView {

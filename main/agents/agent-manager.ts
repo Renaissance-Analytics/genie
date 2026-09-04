@@ -17,24 +17,27 @@ import { restartAgentTerminal, startRegisteredAgent } from '../mcp/host-tools';
 import { isTerminalLive, killTerminalById } from '../terminal/ipc';
 import { broadcastAgentsChanged } from '../ipc';
 import { getWorkspaceAgentById } from './lookup';
+import type {
+    AgentManagerMcp,
+    AgentManagerPersona,
+    AgentManagerSidecar,
+    AgentManagerState,
+    McpServerInput,
+    SidecarAction,
+    WriteResult,
+} from './agent-manager-types';
 import {
     agentMcpServers,
     MCP_CONFIG_RELATIVE_PATH,
     mcpConfigDrift,
     mcpRemovalGuard,
     mcpSourceForTui,
-    type AgentMcpServer,
-    type McpConfigSource,
 } from './agent-mcp';
-import {
-    applyPersonaEdit,
-    blankPersona,
-    personaView,
-    type PersonaEdit,
-    type PersonaView,
-} from './persona';
+import type { McpConfigSource } from './agent-manager-types';
+import { applyPersonaEdit, blankPersona, personaView } from './persona';
+import type { PersonaEdit } from './agent-manager-types';
 import { isSidecarName } from './sidecar';
-import { sidecarActions, sidecarsOf, type SidecarAction } from './sidecar-control';
+import { sidecarActions, sidecarsOf } from './sidecar-control';
 
 /**
  * The agent management surface's HOST side — Tynn #709, story #263.
@@ -54,73 +57,21 @@ import { sidecarActions, sidecarsOf, type SidecarAction } from './sidecar-contro
  * landed.
  */
 
-export interface AgentManagerPersona extends PersonaView {
-    /** Absolute path to `AGENT.md`, or null for an agent with no `persona_path`. */
-    path: string | null;
-    /** False when the path is known but nothing is on disk yet — agents
-     *  registered before registration started writing the file. */
-    exists: boolean;
-}
-
-export interface AgentManagerMcp {
-    source: McpConfigSource;
-    /** Workspace-relative, so the human can find the file it came from. */
-    configPath: string;
-    servers: AgentMcpServer[];
-    /**
-     * Whether the running session can be PROVED to predate this config. The
-     * three TUIs read their servers once, at session start; nothing said so, and
-     * that silence is what cost an afternoon.
-     */
-    drift: 'not-running' | 'stale' | 'unproven';
-    /** False for Codex: its servers live in a TOML file Genie only partly owns,
-     *  so this surface reads it and does not rewrite it. */
-    editable: boolean;
-}
-
-export interface AgentManagerSidecar {
-    /** The sidecar's record id, when it has one. */
-    id: string | null;
-    name: string | null;
-    exists: boolean;
-    running: boolean;
-    /** The terminal a graceful restart acts on, or null when it is not running. */
-    terminalSpecId: string | null;
-    actions: SidecarAction[];
-    /** How this sidecar was matched — the FK, or the name convention it falls
-     *  back to. Surfaced because the two mean different things for #708. */
-    matchedBy: 'parent' | 'name' | null;
-}
-
-export interface AgentManagerState {
-    ok: boolean;
-    error?: string;
-    agent: {
-        id: string;
-        workspaceId: string;
-        name: string;
-        purpose: string;
-        avatar: string | null;
-        role: string;
-        tui: string | null;
-        running: boolean;
-        isSidecar: boolean;
-        /**
-         * The live terminal a graceful restart acts on, or null when the agent
-         * is dormant.
-         *
-         * Surfaced because the MCP tab's Restart must go through
-         * `restartAgentTerminal` (wish #88) — which relaunches with the
-         * provider's RESUME grammar so the conversation survives — and NOT
-         * through `agents.start`, which reattaches a bound terminal and would
-         * reload nothing while reporting success.
-         */
-        terminalSpecId: string | null;
-    } | null;
-    persona: AgentManagerPersona | null;
-    mcp: AgentManagerMcp | null;
-    sidecar: AgentManagerSidecar | null;
-}
+/* Every shape below lives in `agent-manager-types.ts` — a ZERO-IMPORT leaf.
+   The renderer names them, and this module reaches `../db`, `../ipc`,
+   `../mcp/host-tools` and `../terminal/ipc` (which spawns child processes).
+   A type-only import is NOT enough to keep that graph out of the renderer's
+   compilation — `renderer/tsconfig.json` includes anything an included file
+   imports, and TypeScript checks every file in the program. Re-exported here
+   so main-side callers keep one obvious place to look. */
+export type {
+    AgentManagerMcp,
+    AgentManagerPersona,
+    AgentManagerSidecar,
+    AgentManagerState,
+    McpServerInput,
+    WriteResult,
+} from './agent-manager-types';
 
 const FAILED: AgentManagerState = {
     ok: false,
@@ -267,11 +218,6 @@ export function agentManagerState(agentId: string): AgentManagerState {
     };
 }
 
-export interface WriteResult {
-    ok: boolean;
-    error?: string;
-}
-
 /**
  * Save an edit to the agent's `AGENT.md`.
  *
@@ -332,11 +278,6 @@ export function saveAgentPersona(agentId: string, edit: PersonaEdit): WriteResul
     }
     return { ok: true };
 }
-
-/** What a human may add: a remote endpoint, or a command Genie spawns. */
-export type McpServerInput =
-    | { kind: 'http'; name: string; url: string }
-    | { kind: 'stdio'; name: string; command: string; args: string[] };
 
 function writeJsonConfig(file: string, next: unknown): WriteResult {
     try {
