@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { operatorRoleBrief } from './os-agent';
 
 const ORIENTED_MARKER = '.genie-osa-oriented';
 export type OsAgentBootMode = 'first-boot' | 'recovery';
@@ -87,8 +88,56 @@ export function markOsAgentOriented(userDataDir: string): void {
     });
 }
 
+/**
+ * The operator's opening turn — the ROLE first, then this boot's script.
+ *
+ * It used to be one sentence per mode, describing the task and nothing else. Two
+ * things were wrong with that, and they compound:
+ *
+ *  1. **No boundary.** Neither string said what the operator must NOT do, so the
+ *     agent responsible for the machine took on the work running on it. That is
+ *     the owner's actual complaint, and {@link operatorRoleBrief} — carried in
+ *     BOTH modes, because an operator on its ninth restart is exactly the one
+ *     that starts picking up project work — is the answer to it.
+ *
+ *  2. **The two modes barely differed.** genie#352 fixed the DETECTION (the
+ *     marker was never written before beta.296, so every restart claimed to be a
+ *     first boot); it did not make the two scripts say different things. A
+ *     recovery boot now refuses onboarding in as many words: do not ask for a
+ *     model provider again, do not reinstall a toolchain that is present, do not
+ *     create workspaces that already exist.
+ *
+ * Kept SHORT on purpose. This is delivered as one double-quoted argv element
+ * typed into the TUI (`withProviderStartupInstructions`) — the long form is the
+ * charter, which the harness loads as memory instead. That distinction is why
+ * the AgentBuilder skill was removed from here: a file is instructions, 1.2KB
+ * retyped into the terminal on every relaunch is noise.
+ */
 export function osAgentBootInstructions(mode: OsAgentBootMode): string {
-    return mode === 'first-boot'
-        ? 'This is the workstation first boot. Orient yourself, verify your native AgentInbox transport and Genie system services, then guide the owner through model provider, toolchain, Tynn, optional GitHub, Genie OS backup, and workspace setup. Only after those checks call thumbsUp with reason boot; that is the sole setup-complete signal.'
-        : 'This is a workstation recovery boot. Reattach to and verify the Genie host services, native AgentInbox transport, managed toolchain, and prior Genie OS workspace and memory. Preserve existing configuration. Call thumbsUp with reason boot after recovery and orientation complete.';
+    const thisBoot = mode === 'first-boot'
+        ? [
+              'THIS BOOT is the workstation FIRST BOOT: nothing is set up yet.',
+              'Verify your native AgentInbox transport and the Genie system',
+              'services, then guide the owner through model provider, toolchain,',
+              'Tynn, optional GitHub, Genie OS backup, and workspace setup. Call',
+              'thumbsUp with reason boot only after those checks pass; that is the',
+              'sole setup-complete signal. Your operator charter is in AGENTS.md,',
+              'and genieGuide with topic the-workstation-operator has the full',
+              'protocol.',
+          ]
+        : [
+              'THIS BOOT is a workstation RECOVERY boot: this machine is already',
+              'set up, so do NOT re-run onboarding. Reattach to and verify what is',
+              'already here: the Genie host services, your native AgentInbox',
+              'transport, the managed toolchain, and the existing Genie OS',
+              'workspace and memory. Do not ask the owner to choose a model',
+              'provider again, do not reinstall a toolchain that is present, and',
+              'do not create workspaces that already exist. Preserve existing',
+              'configuration, change only what you find broken, and report what',
+              'you verified. Call thumbsUp with reason boot after recovery and',
+              'orientation are complete. Your operator charter is in AGENTS.md,',
+              'and genieGuide with topic the-workstation-operator has the full',
+              'protocol.',
+          ];
+    return `${operatorRoleBrief()} ${thisBoot.join(' ')}`;
 }

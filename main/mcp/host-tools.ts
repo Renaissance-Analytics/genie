@@ -22,6 +22,7 @@ import {
     listAgentRuntimes,
     createAgentRuntime,
     frontAgentRuntime,
+    frontedAgentRuntime,
     createWorkspaceAgent,
     listWorkspaceAgents,
     bindWorkspaceAgentTerminal,
@@ -75,6 +76,11 @@ import { agentName, agentRef, savedAgentKey, type AgentTui } from '../agents/ide
 import { agentAllowedTuis, agentScopeFor, renderAgentFile } from '../agents/agent-file';
 import { agentBootPrompt } from '../agents/boot-prompt';
 import { handoffPath } from '../agents/handoff';
+import {
+    diagnoseAgent,
+    triageSummary,
+    type AgentObservation,
+} from '../agents/triage';
 import { firstAgentRole } from '../agents/first-agent-role';
 import { decideTuiSwitch } from '../agents/tui-switch';
 import { resolveWorkstationTui } from '../agents/tui';
@@ -112,6 +118,7 @@ import {
 import { describeCron, isValidCron } from '../terminal/cron';
 import { capturedSessionId, resolveRestartCommand } from '../agentinbox/session-capture';
 import { launchBlockReason } from '../agents/availability';
+import type { AgentTuiId } from '../agents/registry';
 import { detectFolder } from '../workspace/detect';
 import { workspaceDocHealth } from '../workspace/create-agi';
 import { repoCheckoutInfo } from '../workspace/repo-checkout';
@@ -2281,6 +2288,110 @@ function savedAgentInfo(agent: SavedAgent): SavedAgentInfo {
     };
 }
 
+/** `fs.existsSync` that cannot take a diagnosis down with it. */
+function fileExists(file: string): boolean {
+    try {
+        return fs.existsSync(file);
+    } catch {
+        return false;
+    }
+}
+
+/** Why a graceful restart of this terminal would be refused, or null. */
+function restartRefusalFor(spec: TerminalSpecRow | null | undefined): string | null {
+    if (!spec) return null;
+    try {
+        // The SAME on-disk transcript check `restartAgentTerminal` uses, so this
+        // answers the question the restart would actually ask rather than a
+        // simplified version of it.
+        const decision = resolveRestartCommand(spec, (sid) =>
+            agentSessionTranscriptExists(spec, sid),
+        );
+        return 'error' in decision ? decision.error : null;
+    } catch {
+        // Not knowing is not the same as "a restart would fail" — say nothing
+        // rather than warn about a refusal that may not happen.
+        return null;
+    }
+}
+
+/**
+ * Gather what `diagnoseAgent` reasons over, for every registered agent in one
+ * workspace. All the I/O lives here; none of it lives in `agents/triage.ts`.
+ *
+ * ★ THE TWO IDS. An AMS agent has a `workspace_agents.id`, and the terminal it
+ * runs in carries a SEPARATE `meta.agent_id` minted per terminal. The AgentInbox
+ * broker and the harness-transport registry are keyed on the SECOND; `ready_at`,
+ * `transport_verified_at` and `transport_error` live on the FIRST. Reading one id
+ * for both is not a subtle bug — it reports every healthy agent on the machine as
+ * unreachable, which is exactly the kind of confident wrongness a triage tool
+ * must not have.
+ */
+function observeWorkspaceAgents(
+    ws: WorkspaceRow,
+    observedAt: number,
+): AgentObservation[] {
+    return listWorkspaceAgents(ws.id)
+        // Same filter `list` uses: a row with no TUI is not something any other
+        // surface shows, and it has no failure this can name.
+        .filter((agent) => !!agent.tui)
+        .map((agent) => {
+            // `agent_runtimes` owns the binding; `workspace_agents.terminal_spec_id`
+            // mirrors it. Both are reported so the diagnosis can notice when they
+            // disagree.
+            const runtime = frontedAgentRuntime(agent.id);
+            const runtimeTerminalId = runtime?.terminal_spec_id ?? null;
+            const terminalId = runtimeTerminalId ?? agent.terminal_spec_id;
+            const spec = terminalId ? getTerminalSpec(terminalId) : undefined;
+            const inboxId =
+                typeof spec?.meta?.agent_id === 'string' ? spec.meta.agent_id : null;
+            const required = requiredHarnessTransport(agent.tui);
+            const handoff = handoffPath(ws.path, agent.name);
+            return {
+                agentId: agent.id,
+                name: agent.name,
+                workspaceId: ws.id,
+                workspaceName: ws.project_name,
+                tui: agent.tui,
+                recordTerminalId: agent.terminal_spec_id,
+                runtimeTerminalId,
+                terminalSpecExists: !!spec,
+                ptyLive: !!terminalId && isTerminalLive(terminalId),
+                requiredTransport: required,
+                transportVerifiedAt: agent.transport_verified_at,
+                transportError: agent.transport_error,
+                transportBoundNow:
+                    !!inboxId &&
+                    !!required &&
+                    harnessTransportRegistry.isVerified(inboxId, required),
+                readyAt: agent.ready_at,
+                joinedInbox: !!inboxId && !!agentInboxBroker.getInfo(inboxId),
+                collisionGroup: agent.collision_group,
+                // The row's `tui` is a string column; `launchBlockReason` is a
+                // Map lookup that answers `undefined` for anything it has not
+                // seen, so a value outside the registry reads as "no known
+                // block" rather than throwing.
+                launchBlocked: launchBlockReason(agent.tui as AgentTuiId) ?? null,
+                handoffPath: fileExists(handoff) ? handoff : null,
+                // Asked HERE, of the same `resolveRestartCommand` the restart
+                // itself uses, rather than left for the operator to discover by
+                // being refused. Most repairs below say "restart it", and a
+                // recommendation that would bounce is the same class of
+                // confident wrongness this tool exists to remove.
+                restartRefusal: restartRefusalFor(spec),
+                // The best available proxy for "started recently". Both
+                // `bindWorkspaceAgentTerminal` and `markWorkspaceAgentTransportState`
+                // stamp it, and both also NULL `ready_at` — so it moves on exactly
+                // the transitions after which an agent legitimately has nothing
+                // verified yet. Its error is one-directional: it can only read too
+                // RECENT, which errs toward "still starting" rather than toward a
+                // false alarm.
+                boundAt: terminalId ? runtime?.updated_at ?? agent.updated_at : null,
+                observedAt,
+            };
+        });
+}
+
 /** Back the runAgent MCP tool (start/reattach + drive a coding agent; gated). */
 export async function runAgentForMcp(
     callerTerminalId: string,
@@ -2335,6 +2446,36 @@ export async function runAgentForMcp(
                         ...(agent.ready_at ? { readyAt: agent.ready_at } : {}),
                     })),
                 };
+            }
+            case 'diagnose': {
+                // SCOPE is "the workspaces this caller may act on" — the ordinary
+                // Tynn #248 answer, not a rule about the operator. An explicit
+                // `workspaceId` was already authorized above and is used as given;
+                // with none, a caller whose workspace carries the operator
+                // designation sweeps the machine and everybody else gets their
+                // own workspace. Nothing here reads an agent's identity.
+                const scope: WorkspaceRow[] = [ws];
+                if (!req.workspaceId && callerSeesWholeWorkstation(callerTerminalId)) {
+                    for (const other of listWorkspaces()) {
+                        if (!scope.some((known) => known.id === other.id)) scope.push(other);
+                    }
+                }
+                const observedAt = Date.now();
+                const wanted = req.name?.trim();
+                const diagnoses = scope
+                    .flatMap((target) => observeWorkspaceAgents(target, observedAt))
+                    .filter((obs) => !wanted || obs.name === wanted)
+                    .filter(
+                        (obs) =>
+                            !req.id ||
+                            obs.recordTerminalId === req.id ||
+                            obs.runtimeTerminalId === req.id,
+                    )
+                    .map(diagnoseAgent);
+                // `note` carries the one line, built by the module that did the
+                // reasoning. Re-deriving a summary at the protocol layer would be
+                // a second opinion about the same facts.
+                return { ok: true, diagnoses, note: triageSummary(diagnoses) };
             }
             case 'start':
                 // Delegated so the UI can start an agent by exactly this path.

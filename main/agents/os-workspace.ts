@@ -3,6 +3,7 @@ import path from 'path';
 import { simpleGit } from 'simple-git';
 import { createAgiEnvelope } from '../workspace/create-agi';
 import { osAgentBuilderSkill, writeWorkspaceAgentMcp } from '../mcp/agent-config';
+import { operatorCharter } from './os-agent';
 
 /**
  * The workstation operator's envelope folder, in the user's HOME directory.
@@ -259,6 +260,26 @@ export function wireGenieOsWorkspace(workspacePath: string, mcpUrl: string | nul
     // which then could not resolve. Hence the boolean: a caller must be able to
     // tell "did nothing" from "wired", instead of reading void as success.
     if (!mcpUrl) return false;
+
+    // THE OPERATOR CHARTER — written FIRST, because the sync below decides the
+    // router's `@` imports from what is on disk when it runs. A charter written
+    // afterwards would be linked one boot late, and on a machine that never
+    // restarts, never.
+    //
+    // Rewritten unconditionally rather than seeded once: this is Genie's own
+    // managed content under `.agents/_genie/` (gitignored, regenerated on every
+    // sync alongside `shared.md`), not the operator's notes. Seed-once would mean
+    // an improved boundary reaching only NEW installs — and the machines that
+    // have been running longest are exactly the ones whose operator has had the
+    // most chances to wander off and start doing project work.
+    const managedRoot = path.join(workspacePath, '.agents', '_genie');
+    try {
+        fs.mkdirSync(managedRoot, { recursive: true });
+        fs.writeFileSync(path.join(managedRoot, 'operator.md'), operatorCharter());
+    } catch {
+        /* best-effort: the sync below still wires the tools, and a missing
+           charter degrades the operator rather than stopping it booting */
+    }
 
     // `writeWorkspaceAgentMcp` returns early unless an agents doc already
     // exists — it deliberately does not litter one into projects that do not use

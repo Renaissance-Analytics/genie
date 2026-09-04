@@ -28,11 +28,22 @@ import { wireGenieOsWorkspace } from '../os-workspace';
  * a row in the database.
  */
 
-let syncCalls: Array<{ path: string; enabled: boolean; url: string | null }> = [];
+let syncCalls: Array<{
+    path: string;
+    enabled: boolean;
+    url: string | null;
+    /** Whether the operator charter was ALREADY on disk when the sync ran. */
+    charterPresent: boolean;
+}> = [];
 
 vi.mock('../../mcp/agent-config', () => ({
     writeWorkspaceAgentMcp: (p: string, enabled: boolean, url: string | null) => {
-        syncCalls.push({ path: p, enabled, url });
+        syncCalls.push({
+            path: p,
+            enabled,
+            url,
+            charterPresent: fs.existsSync(path.join(p, '.agents', '_genie', 'operator.md')),
+        });
     },
     osAgentBuilderSkill: () =>
         ['---', 'name: genie-agent-builder', 'description: d', '---', '', 'body', ''].join(
@@ -85,6 +96,39 @@ describe('wiring the Genie OS workspace', () => {
         wireGenieOsWorkspace(folder, 'http://x/mcp/t');
 
         expect(fs.readFileSync(path.join(folder, 'AGENTS.md'), 'utf8')).toBe('# Mine\n');
+    });
+
+    it('installs the operator charter BEFORE the sync that has to link it', () => {
+        // `syncAgentsMd` decides the router's imports from what is on disk when
+        // it runs. A charter written afterwards would be linked one boot late —
+        // and on a machine that never boots twice, never.
+        const folder = path.join(tmpRoot, 'charter.agi');
+        fs.mkdirSync(folder, { recursive: true });
+
+        wireGenieOsWorkspace(folder, 'http://x/mcp/t');
+
+        const charter = path.join(folder, '.agents', '_genie', 'operator.md');
+        expect(fs.existsSync(charter)).toBe(true);
+        expect(syncCalls[0]?.charterPresent).toBe(true);
+        expect(fs.readFileSync(charter, 'utf8')).toMatch(/WORKSTATION OPERATOR/);
+        expect(fs.readFileSync(charter, 'utf8')).toMatch(/do NOT do project work/i);
+    });
+
+    it('rewrites the charter every boot, so an improved one reaches old installs', () => {
+        // Seeded-once content goes stale exactly where it matters: the machines
+        // that have been running longest are the ones whose operator has had the
+        // most chances to wander off and do project work.
+        const folder = path.join(tmpRoot, 'charter-stale.agi');
+        const managed = path.join(folder, '.agents', '_genie');
+        fs.mkdirSync(managed, { recursive: true });
+        fs.writeFileSync(path.join(managed, 'operator.md'), '# stale\n');
+
+        wireGenieOsWorkspace(folder, 'http://x/mcp/t');
+
+        expect(fs.readFileSync(path.join(managed, 'operator.md'), 'utf8')).not.toBe('# stale\n');
+        expect(fs.readFileSync(path.join(managed, 'operator.md'), 'utf8')).toMatch(
+            /WORKSTATION OPERATOR/,
+        );
     });
 
     it('does not sync when there is no endpoint to point at', () => {

@@ -1093,6 +1093,22 @@ export const AGENT_DOC_FILES: Record<AgentDocHarness, string> = {
 export interface AgentDocsContext {
     readme?: boolean;
     rules?: boolean;
+    /**
+     * This workspace holds an OPERATOR CHARTER (`.agents/_genie/operator.md`).
+     *
+     * A workstation-wide role has to be readable in every session, and a harness
+     * only loads what its instructions file imports — so the charter needs a
+     * line here or it is a file nobody opens.
+     *
+     * Deliberately a fact about a FILE, not about a role. The obvious shape was
+     * "if this is the operator's workspace, add the import", and that shape is
+     * what `main/__tests__/osa-special-cases.test.ts` is a ceiling on: thirty-one
+     * surfaces each remembering what the operator is. This one links a charter
+     * when a charter exists, the same uniform rule README.md and RULES.md get.
+     * Only `wireGenieOsWorkspace` writes that file, so only `~/.gosa` gets the
+     * import — without this function ever learning why.
+     */
+    operator?: boolean;
 }
 
 export function agentDocsRouter(
@@ -1107,13 +1123,30 @@ export function agentDocsRouter(
         context.rules ? '@RULES.md' : '',
         '@.agents/_genie/shared.md',
         `@.agents/_genie/genie-${harness}.md`,
+        // LAST on purpose: the charter is the most specific instruction in the
+        // file, and the harnesses read these in order.
+        context.operator ? '@.agents/_genie/operator.md' : '',
         '',
     ].filter((line, index, lines) => line !== '' || index < 2 || index === lines.length - 1).join('\n');
 }
 
+/**
+ * Every router shape this function has ever produced.
+ *
+ * The stakes are why it enumerates rather than pattern-matches: a router on disk
+ * that no longer matches is not recognised as Genie-managed, and `syncAgentsMd`
+ * then treats it as the USER's instructions — backing it up and migrating it
+ * into RULES.md. Adding a context flag doubles the enumeration; it must never
+ * shrink it.
+ */
 function isManagedAgentDocsRouter(content: string, filename: string): boolean {
-    return [false, true].some((readme) =>
-        [false, true].some((rules) => content === agentDocsRouter(filename, { readme, rules })),
+    const flags = [false, true];
+    return flags.some((readme) =>
+        flags.some((rules) =>
+            flags.some(
+                (operator) => content === agentDocsRouter(filename, { readme, rules, operator }),
+            ),
+        ),
     );
 }
 
@@ -1374,6 +1407,7 @@ function syncAgentsMd(workspacePath: string, enabled: boolean): void {
             const context = {
                 readme: fs.existsSync(path.join(workspacePath, 'README.md')),
                 rules: fs.existsSync(path.join(workspacePath, 'RULES.md')),
+                operator: fs.existsSync(path.join(managedRoot, 'operator.md')),
             };
             fs.writeFileSync(
                 path.join(workspacePath, AGENT_DOC_FILES.codex),
