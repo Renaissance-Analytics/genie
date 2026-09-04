@@ -314,9 +314,13 @@ approves; when the user turned approval OFF they run immediately. \`read\` /
 
 ### agentUpgrade
 **Move an agent in an old terminal into AMS without replacing its chat.** Call
-\`agentUpgrade\` for the current, ordered migration checklist. It registers the
-durable identity, binds the live harness session, verifies Claude Channels or
-Codex app-server, and finishes with \`thumbsUp(reason:'boot')\`. Never paste an
+\`agentUpgrade\` and it answers FOR YOU: it checks what this terminal is before
+it advertises anything. A pre-AMS agent in a workspace gets the ordered
+checklist — register the durable identity, bind the live harness session, verify
+Claude Channels or Codex app-server, finish with \`thumbsUp(reason:'boot')\`. An
+agent already registered, a terminal attached to no workspace, and the
+workstation operator (which is deliberately never a workspace agent) are each
+told so instead, because for them step 1 would be refused. Never paste an
 upgrade prompt into the terminal input and never mint a duplicate agent.
 
 ### registerAgent

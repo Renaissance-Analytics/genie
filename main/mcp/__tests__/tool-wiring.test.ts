@@ -38,6 +38,11 @@ const DEPS = fs.readFileSync(
  * different noun for the same thing (`connectToGenie` is served by the
  * workspace MAP). `genieGuide` has no dep at all: the protocol answers it from
  * the guide constant, so there is nothing for a shell to inject.
+ *
+ * `agentUpgrade` USED to be one of those constant-answered tools, and that was
+ * the whole of genie#372: it handed every caller the same five-step migration
+ * without establishing that step 1 would be accepted for them. It now needs the
+ * caller's facts, so it needs a dep, so it belongs in this guard.
  */
 const DEP_FOR_TOOL: Readonly<Record<string, string | null>> = {
     imDone: 'onImDone',
@@ -45,7 +50,7 @@ const DEP_FOR_TOOL: Readonly<Record<string, string | null>> = {
     ForceTheQuestion: 'onForceQuestion',
     agentinbox: 'agentInbox',
     connectToGenie: 'describeWorkspace',
-    agentUpgrade: null,
+    agentUpgrade: 'agentUpgradeCaller',
     genieGuide: null,
 };
 

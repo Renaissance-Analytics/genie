@@ -12,6 +12,8 @@ import { guideTopics, guideIndex, guideFor } from './guide-topics';
 
 import { GENIE_MCP_GUIDE, GENIE_PROTOCOL_BRIEF } from './guide';
 import { agentTuis } from '../agents/registry';
+import { agentUpgradeGuide } from '../agents/upgrade-guide';
+import type { UpgradeCaller } from '../agents/upgrade-guide';
 import type { AgentTuiId } from '../agents/registry';
 import type { AgentDiagnosis } from '../agents/triage';
 import type { QuestionPriority } from '../ask/question-priority';
@@ -422,6 +424,18 @@ export interface McpContext {
      *  for one with no agent name, and on any fs failure. Optional so a host
      *  that has not wired it behaves exactly as before. */
     onHandoff?: (terminalId: string, note: string) => HandoffOutcome;
+    /**
+     * The three facts `agentUpgrade` needs about its caller before it hands out
+     * a migration that starts with `registerAgent` (genie#372).
+     *
+     * The tool used to answer from a frozen constant, which is why it kept
+     * telling the workstation operator — the agent that takes the upgrade notice
+     * most often, since every upgrade restarts it — to register an identity that
+     * is deliberately never registered. Optional in the same way every other dep
+     * here is: a host that has not wired it gets the tool saying so, rather than
+     * the protocol guessing on its behalf.
+     */
+    agentUpgradeCaller?: (terminalId: string) => UpgradeCaller;
     onThumbsUp?: (
         terminalId: string,
         reason: 'boot' | 'ack' | 'shutdown',
@@ -2421,22 +2435,10 @@ const REGISTER_AGENT_TOOL = {
     },
 };
 
-const AGENT_UPGRADE_GUIDE = `# Upgrade this agent to AMS
-
-This terminal predates Genie's Agent Management System. Preserve the conversation; do not create a replacement chat.
-
-1. Call \`registerAgent\` with this agent's stable name, purpose, provider, and boot folder.
-2. Call \`agentinbox\` with \`action: "registerSession"\` to bind the current harness session to that durable agent.
-3. Verify the native transport: Claude Code must report \`claude-channel\`; Codex must report \`codex-app-server\`. Never deliver through terminal input.
-4. Call \`thumbsUp\` with \`reason: "boot"\`. Genie refuses readiness until the required transport is verified.
-5. Future starts use \`runAgent start\` and resume this registered agent.
-
-If registration reports an existing name, list agents first and bind this session to the matching identity; do not mint a duplicate.`;
-
 const AGENT_UPGRADE_TOOL = {
     name: 'agentUpgrade',
     description:
-        'Return the migration guide for an agent running in an old terminal to join AMS without losing or duplicating its conversation.',
+        'Say whether THIS terminal can join AMS, and how. A pre-AMS agent in a workspace gets the ordered migration guide; an agent already registered, a terminal attached to no workspace, and the workstation operator are each told that plainly instead — the migration starts with `registerAgent`, which is refused for all three.',
     inputSchema: {
         type: 'object',
         properties: { ...TERMINAL_ID_PROP },
@@ -4088,8 +4090,21 @@ ${body}` }],
                 });
             }
             if (params.name === 'agentUpgrade') {
+                // genie#372 — ESTABLISH that this caller can run step 1 before
+                // handing it an ordered guide that begins with it. The operator
+                // never can (it is deliberately never a workspace agent, and its
+                // name is reserved), an unattached terminal never can, and an
+                // agent already in AMS would mint a duplicate by trying.
+                if (!ctx.agentUpgradeCaller) {
+                    return err(msg.id, -32603, 'agentUpgrade is unavailable in this Genie runtime.');
+                }
                 return ok(msg.id, {
-                    content: [{ type: 'text', text: AGENT_UPGRADE_GUIDE }],
+                    content: [
+                        {
+                            type: 'text',
+                            text: agentUpgradeGuide(ctx.agentUpgradeCaller(ctx.terminalId)).text,
+                        },
+                    ],
                 });
             }
             if (params.name === 'runAgent') {
