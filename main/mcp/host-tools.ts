@@ -48,6 +48,7 @@ import {
 } from '../agentinbox/harness-transport';
 import { devLifecycle } from '../dev-server/lifecycle';
 import { getKnowledgeStore } from '../knowledge/store';
+import type { GenieScope } from '../genie-scope';
 import { workspaceSlug } from '../agentinbox/slug';
 import { appendLaunchFlags } from '../agentinbox/session-capture';
 import { registerAgentInboxSession } from '../agentinbox/session-registration';
@@ -2953,16 +2954,66 @@ export async function agentInboxForMcp(
 }
 
 /**
- * Back the workstation Knowledge Graph MCP `knowledge` tool. Unlike the other
- * tools this is NOT workspace-scoped — the store is workstation-wide (one shared
- * store across every workspace), so any agent in any workspace reads/writes it
- * and the caller's terminal is not resolved to a workspace here. Dispatches
- * against the shared {@link getKnowledgeStore}:
- *   - `search {query, limit?, tags?, class?}` — keyword (FTS) retrieval.
+ * WHERE a node an agent writes should be FILED (spec §4.2).
+ *
+ * The default is the caller's own workspace, which is the whole point: a default
+ * does more encouraging than any amount of prose, and an agent's notes almost
+ * always belong where it is working. A caller with no workspace falls back to
+ * `system`, which is what the store did for everything before scope existed.
+ *
+ * `all` is refused rather than coerced. It is a question about what to READ;
+ * there is no such place to put a node, and quietly picking one would file the
+ * memory somewhere nobody asked for. Same for a `gapp` write from a caller that
+ * is not a GApp: there is no app id to file it under, and inventing one would be
+ * worse than the error.
+ */
+function knowledgeWriteScope(
+    asked: KnowledgeToolRequest['scope'],
+    workspaceId: string | null,
+    appId: string | null,
+): { scope: GenieScope } | { error: string } {
+    if (asked === 'all') {
+        return {
+            error: '`all` is a read scope — it says which memories to search, not where to put one. Use system, workspace or gapp.',
+        };
+    }
+    if (asked === 'system') return { scope: { kind: 'system' } };
+    if (asked === 'workspace') {
+        return workspaceId
+            ? { scope: { kind: 'workspace', workspaceId } }
+            : { error: 'This caller is not in a workspace, so there is no workspace to file this under. Use scope `system`.' };
+    }
+    if (asked === 'gapp') {
+        return appId
+            ? { scope: { kind: 'gapp', appId } }
+            : { error: 'Only a Genie App may write at `gapp` scope. Use `workspace` or `system`.' };
+    }
+    return workspaceId
+        ? { scope: { kind: 'workspace', workspaceId } }
+        : { scope: { kind: 'system' } };
+}
+
+/**
+ * Back the workstation Knowledge Graph MCP `knowledge` tool. Dispatches against
+ * the shared {@link getKnowledgeStore}:
+ *   - `search {query, limit?, tags?, class?, scope?, cursor?}` — keyword (FTS) retrieval.
  *   - `get {id}` — one node + its resolved links.
- *   - `add {title, body?, tags?, links?, class?}` — create a node (source `agent`).
- *   - `list {tag?, limit?, class?}` — recent nodes.
+ *   - `add {title, body?, tags?, links?, class?, scope?}` — create a node (source `agent`).
+ *   - `list {tag?, limit?, class?, scope?, cursor?}` — recent nodes.
  *   - `link {from, to}` — add an edge.
+ *
+ * ★ This used to take a `_callerTerminalId` and deliberately IGNORE it, on the
+ * reasoning that the store is workstation-wide so the caller does not matter.
+ * That was true of a store with no scope, and it is exactly why every
+ * agent-written memory landed in one undifferentiated pile: the tool could not
+ * say where a note belonged, so no note said. The caller now resolves through
+ * `resolveCallerFor` — the same path every other tool uses, which already handles
+ * terminals AND GApp callers — so reads narrow to the caller's own scopes and a
+ * write lands where the agent is working.
+ *
+ * ★ SCOPE IS NOISE REDUCTION, NOT A SECURITY BOUNDARY. `scope: 'all'` is
+ * ALLOWED from every caller and returns every node on the machine. Nothing here
+ * refuses a read, and nothing built on top of this may assume otherwise.
  *
  * `class` (Tynn #250) is the agent saying WHICH memory it means — profile,
  * episodic, procedural or knowledge. It is forwarded as given: the store owns
@@ -2971,48 +3022,65 @@ export async function agentInboxForMcp(
  * under the wrong kind, where it would answer a question nobody asked.
  */
 export async function knowledgeForMcp(
-    _callerTerminalId: string,
+    callerId: string,
     req: KnowledgeToolRequest,
 ): Promise<KnowledgeToolResult> {
     try {
         const store = getKnowledgeStore();
+        const caller = resolveCallerFor(callerId);
+        const workspaceId = caller.workspaceId;
+        const appId = caller.kind === 'app' ? caller.appId : null;
+        // `kind: undefined` is the CALLER DEFAULT (system + own workspace + own
+        // app), not "no filter" — the store draws that distinction.
+        const scope = { kind: req.scope, workspaceId, appId };
+
         switch (req.action) {
             case 'search': {
                 const query = String(req.query ?? '').trim();
                 if (!query) return { ok: false, error: 'search needs a non-empty `query`.' };
-                const results = store.search({
+                const page = store.searchPage({
                     query,
                     limit: req.limit,
                     tags: req.tags,
                     class: req.class,
+                    scope,
+                    cursor: req.cursor,
                 });
-                return { ok: true, results };
+                return { ok: true, results: page.results, nextCursor: page.nextCursor };
             }
             case 'get': {
                 const id = String(req.id ?? '').trim();
                 if (!id) return { ok: false, error: 'get needs an `id`.' };
+                // No scope filter: an id is already the answer to "which one", and
+                // refusing to fetch a node the caller can name would be treating
+                // scope as a permission.
                 return { ok: true, node: store.get(id) };
             }
             case 'add': {
                 const title = String(req.title ?? '').trim();
                 if (!title) return { ok: false, error: 'add needs a `title`.' };
+                const where = knowledgeWriteScope(req.scope, workspaceId, appId);
+                if ('error' in where) return { ok: false, error: where.error };
                 const node = store.add({
                     title,
                     body: req.body,
                     tags: req.tags,
                     links: req.links,
                     class: req.class,
+                    scope: where.scope,
                     source: 'agent',
                 });
                 return { ok: true, id: node.id };
             }
             case 'list': {
-                const nodes = store.list({
+                const page = store.listPage({
                     tag: req.tag,
                     limit: req.limit,
                     class: req.class,
+                    scope,
+                    cursor: req.cursor,
                 });
-                return { ok: true, nodes };
+                return { ok: true, nodes: page.nodes, nextCursor: page.nextCursor };
             }
             case 'link': {
                 const from = String(req.from ?? '').trim();

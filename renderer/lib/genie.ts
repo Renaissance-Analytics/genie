@@ -2647,6 +2647,63 @@ export type PluginActionResult<T = { id: string; name: string; version: string }
 // workspace's on-disk knowledge FOLDERS; this is the cross-workspace memory
 // STORE that replaces bloated system-wide agent prompt instructions.
 
+/**
+ * WHICH memory a node is — the four kinds answer four different questions, and a
+ * store that cannot tell them apart answers the wrong one.
+ */
+export type MemoryClass = 'profile' | 'episodic' | 'procedural' | 'knowledge';
+
+export const MEMORY_CLASSES: readonly MemoryClass[] = [
+    'profile',
+    'episodic',
+    'procedural',
+    'knowledge',
+];
+
+/**
+ * WHOSE REASONING a memory belongs in. NOT a permission — this window shows
+ * every scope, and any agent may read every scope. It exists so an agent's
+ * context is not polluted by knowledge it has no business acting on.
+ *
+ * Field-for-field the main process's `GenieScope` (and so Flows' `FlowScope`).
+ * This file mirrors main's types by hand because it declares the contextBridge
+ * surface, which is exactly where a mirror can drift — so
+ * `lib/__tests__/knowledge-scope.test.ts` asserts the two are mutually
+ * assignable, and stops type-checking if either side moves alone.
+ */
+export type KnowledgeScope =
+    | { kind: 'system' }
+    | { kind: 'workspace'; workspaceId: string }
+    | { kind: 'gapp'; appId: string };
+
+export type KnowledgeScopeKind = KnowledgeScope['kind'];
+
+/** A `[[wikilink]]` that went nowhere. `ambiguous` means several memories share
+ *  that title and the link resolves to NEITHER rather than to a guess. */
+export interface UnresolvedLink {
+    ref: string;
+    reason: 'ambiguous' | 'missing' | 'out-of-namespace';
+    candidates: number;
+}
+
+/**
+ * One link the tightened resolver stopped resolving, recorded once by the
+ * migration that tightened it.
+ *
+ * Ambiguous links used to point at whichever memory was stored last. They now
+ * point at nothing, which is safer — but a link that worked by luck stopping
+ * silently is exactly the kind of change nobody notices, so each one is named
+ * here. Titles are null when the memory has since been deleted.
+ */
+export interface LinkAuditEntry {
+    fromId: string;
+    fromTitle: string | null;
+    toRef: string;
+    wasId: string;
+    wasTitle: string | null;
+    candidates: number;
+}
+
 /** One memory in the Knowledge Graph store. */
 export interface KnowledgeNode {
     id: string;
@@ -2658,8 +2715,17 @@ export interface KnowledgeNode {
      *  from the body's `[[wikilinks]]` (by title/slug, at read time) PLUS any
      *  explicit links passed to add/update. */
     links: string[];
+    /** Refs in the body that resolved to nothing, and why. */
+    unresolved: UnresolvedLink[];
     /** Who wrote it: an agent (RAG/MCP) or the user (this window). */
     source: 'agent' | 'user';
+    class: MemoryClass;
+    scope: KnowledgeScope;
+    /** Where the text came from: the user/an agent (`local`), Genie's own guides
+     *  (`genie`), or an installed Knowledge Pack (`pack`). */
+    origin: 'local' | 'genie' | 'pack';
+    /** The managed namespace (a pack id, or `genie`), or null. */
+    ns: string | null;
     /** Epoch ms. */
     createdAt: number;
     updatedAt: number;
@@ -2674,6 +2740,10 @@ export interface KnowledgeSearchResult {
     /** Relevance score (higher = better). The result ORDER is authoritative. */
     score: number;
     tags: string[];
+    class: MemoryClass;
+    scope: KnowledgeScope;
+    /** The managed namespace, or null — two packs may both ship a "Volume 1". */
+    ns: string | null;
 }
 
 /** A directed edge: `source` (the memory containing the link) → `target` (the
@@ -2700,6 +2770,22 @@ export interface KnowledgeInput {
     body?: string;
     tags?: string[];
     links?: string[];
+    /** Which memory this is. Defaults to `knowledge` main-side. */
+    class?: MemoryClass;
+    /** Whose reasoning it belongs in. Defaults to `system` main-side — the whole
+     *  workstation, which is where every memory lived before scope existed. */
+    scope?: KnowledgeScope;
+}
+
+/**
+ * WHICH SCOPES a window read covers. Omitted entirely means EVERY scope, which is
+ * what this window wants: it is the human's view of the whole workstation store,
+ * not one agent's working set.
+ */
+export interface KnowledgeScopeFilter {
+    kind?: KnowledgeScopeKind | 'all';
+    workspaceId?: string | null;
+    appId?: string | null;
 }
 
 /** What the Host reports for one scheduled task, for display only. The HOST owns
@@ -3586,13 +3672,25 @@ export interface GenieApi {
      * anything added here is `'user'`.
      */
     knowledge: {
-        /** Full-text search across memories; results are pre-ranked by `score`. */
+        /** Full-text search across memories; results are pre-ranked by `score`.
+         *  `class` and `scope` narrow inside SQL, so a filtered search cannot be
+         *  starved by unfiltered matches crowding out the candidates. */
         search: (
             query: string,
-            opts?: { limit?: number; tags?: string[] },
+            opts?: {
+                limit?: number;
+                tags?: string[];
+                class?: MemoryClass;
+                scope?: KnowledgeScopeFilter;
+            },
         ) => Promise<KnowledgeSearchResult[]>;
-        /** Every memory (optionally filtered by tag / capped), newest first. */
-        list: (opts?: { tag?: string; limit?: number }) => Promise<KnowledgeNode[]>;
+        /** Every memory (optionally filtered by tag / class / scope, capped), newest first. */
+        list: (opts?: {
+            tag?: string;
+            limit?: number;
+            class?: MemoryClass;
+            scope?: KnowledgeScopeFilter;
+        }) => Promise<KnowledgeNode[]>;
         get: (id: string) => Promise<KnowledgeNode | null>;
         add: (input: KnowledgeInput) => Promise<KnowledgeNode>;
         update: (
@@ -3602,6 +3700,11 @@ export interface GenieApi {
         delete: (id: string) => Promise<{ ok: boolean }>;
         /** The whole store as nodes + edges, for the relationship view. */
         graph: () => Promise<KnowledgeGraphData>;
+        /** Links that used to resolve by luck and now resolve to nothing, still
+         *  unreviewed. Empty on most machines — that is the audit doing its job. */
+        linkAudit: () => Promise<LinkAuditEntry[]>;
+        /** Mark every outstanding audit entry reviewed. The rows are KEPT. */
+        dismissLinkAudit: () => Promise<{ ok: boolean; reviewed: number }>;
         /** Open the standalone Knowledge Graph window (the header button). */
         openWindow: () => Promise<{ ok: boolean }>;
     };

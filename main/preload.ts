@@ -13,6 +13,15 @@ import type { TypeCounts } from './issue-watch';
 import type { TynnHealth } from './mcp/tynn-health';
 import type { HostToolName } from './dev-server/toolchain-detect';
 import type { AskDraftEntry } from './ask/draft-store';
+// The knowledge argument shapes, from the modules that OWN them, for the reason
+// stated above `TypeCounts`: a hand-written duplicate at a boundary cannot
+// disagree with anything, so it drifts silently.
+import type { MemoryClass, KnowledgeScopeFilter } from './knowledge/types';
+import type { GenieScope } from './genie-scope';
+
+type KnowledgeClassArg = MemoryClass;
+type KnowledgeScopeArg = GenieScope;
+type KnowledgeScopeFilterArg = KnowledgeScopeFilter;
 
 /** One registered agent, as the renderer receives it. */
 export interface AgentRecordPayload {
@@ -1235,26 +1244,55 @@ const api = {
      *  CRUD here stamps source 'user'; agents write via the `knowledge` MCP tool
      *  (source 'agent'). Both share one workstation store. */
     knowledge: {
-        /** Keyword (FTS) search → ranked `{ id, title, snippet, score, tags }[]`. */
-        search: (query: string, opts?: { limit?: number; tags?: string[] }) =>
-            ipcRenderer.invoke('knowledge:search', query, opts),
-        /** Recent nodes (optional `tag`, `limit`). */
-        list: (opts?: { tag?: string; limit?: number }) =>
-            ipcRenderer.invoke('knowledge:list', opts),
+        /** Keyword (FTS) search → ranked `{ id, title, snippet, score, tags, class, scope, ns }[]`.
+         *  `class` and `scope` narrow in SQL — see the ipc handler. */
+        search: (
+            query: string,
+            opts?: {
+                limit?: number;
+                tags?: string[];
+                class?: KnowledgeClassArg;
+                scope?: KnowledgeScopeFilterArg;
+            },
+        ) => ipcRenderer.invoke('knowledge:search', query, opts),
+        /** Recent nodes (optional `tag`, `class`, `scope`, `limit`). */
+        list: (opts?: {
+            tag?: string;
+            limit?: number;
+            class?: KnowledgeClassArg;
+            scope?: KnowledgeScopeFilterArg;
+        }) => ipcRenderer.invoke('knowledge:list', opts),
         /** One node by id (with its resolved linked node ids), or null. */
         get: (id: string) => ipcRenderer.invoke('knowledge:get', id),
         /** Create a node (source 'user'); returns the created node. */
-        add: (input: { title: string; body?: string; tags?: string[]; links?: string[] }) =>
-            ipcRenderer.invoke('knowledge:add', input),
+        add: (input: {
+            title: string;
+            body?: string;
+            tags?: string[];
+            links?: string[];
+            class?: KnowledgeClassArg;
+            scope?: KnowledgeScopeArg;
+        }) => ipcRenderer.invoke('knowledge:add', input),
         /** Patch a node; returns the updated node (or null when unknown). */
         update: (
             id: string,
-            patch: { title?: string; body?: string; tags?: string[]; links?: string[] },
+            patch: {
+                title?: string;
+                body?: string;
+                tags?: string[];
+                links?: string[];
+                class?: KnowledgeClassArg;
+                scope?: KnowledgeScopeArg;
+            },
         ) => ipcRenderer.invoke('knowledge:update', id, patch),
         /** Delete a node; returns `{ ok }`. */
         delete: (id: string) => ipcRenderer.invoke('knowledge:delete', id),
         /** The whole graph — `{ nodes, edges }`. */
         graph: () => ipcRenderer.invoke('knowledge:graph'),
+        /** Links the tightened resolver stopped resolving, still unreviewed. */
+        linkAudit: () => ipcRenderer.invoke('knowledge:link-audit'),
+        /** Mark every outstanding audit row reviewed (the rows are kept). */
+        dismissLinkAudit: () => ipcRenderer.invoke('knowledge:link-audit-dismiss'),
         /** Open (or focus) the Knowledge Graph window. */
         openWindow: () => ipcRenderer.invoke('knowledge:open-window'),
     },

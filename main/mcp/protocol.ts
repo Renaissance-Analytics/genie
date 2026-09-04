@@ -39,6 +39,9 @@ import type {
 // A VALUE, not a type: the advertised `class` enum is generated from it, so a
 // class added to the store cannot ship without the tool offering it.
 import { MEMORY_CLASSES } from '../knowledge/types';
+// Same reasoning for the scope ladder — the advertised `scope` enum is generated
+// from the one definition, so a rung added to it cannot ship unadvertised.
+import { GENIE_SCOPE_KINDS, type GenieScopeKind } from '../genie-scope';
 import { formatGappDevStatus, gappDevBrief } from '../workspace/gapp-dev-status';
 import type { GappDevStatus } from '../workspace/gapp-dev-status';
 import { forceQuestionRefusal } from '../ask/force-question';
@@ -1675,6 +1678,20 @@ export interface KnowledgeToolRequest {
      * so an existing caller finds exactly what it found before.
      */
     class?: MemoryClass;
+    /**
+     * WHOSE REASONING this belongs in — `system` | `workspace` | `gapp`, plus
+     * `all` on reads.
+     *
+     * On `search`/`list`, which scopes to cover; absent covers the caller's own
+     * (system + its workspace + its app). On `add`, where to file the node;
+     * absent files it in the caller's workspace, or `system` when it has none.
+     *
+     * ★ NOT A PERMISSION. `all` is allowed from every caller and returns every
+     * node on the machine.
+     */
+    scope?: GenieScopeKind | 'all';
+    /** search / list (optional): a cursor from a previous page's `nextCursor`. */
+    cursor?: string;
     /** list (optional): restrict to nodes carrying this tag. */
     tag?: string;
     /** get: the node id. */
@@ -1703,6 +1720,9 @@ export interface KnowledgeToolResult {
     id?: string;
     /** list: the nodes. */
     nodes?: KnowledgeNode[];
+    /** search / list: pass this back as `cursor` for the next page. Null at the
+     *  end — so "is there more?" is answered, not guessed at from a short page. */
+    nextCursor?: string | null;
 }
 
 // --- openFileForUser ---------------------------------------------------------
@@ -2693,7 +2713,7 @@ const AGENTINBOX_TOOL = {
 const KNOWLEDGE_TOOL = {
     name: 'knowledge',
     description:
-        "Read + write Genie's workstation KNOWLEDGE GRAPH — a workstation-wide, LOCAL knowledge/memory store shared across EVERY workspace on this Genie instance (one store, not per-workspace). Use it to STASH durable, reusable context as small markdown \"memory\" nodes and RETRIEVE it on demand — so shared, system-wide knowledge lives here instead of bloating every workspace's AGENTS.md/CLAUDE.md. Nodes link to each other with `[[wikilink]]` references in their body (each becomes a graph edge). MEMORY CLASSES (`class`) — every memory is one of FOUR kinds, because they answer four different questions: `profile` (what is true of the user / what they prefer), `episodic` (what happened, and when), `procedural` (what was learned from doing this before), `knowledge` (where this is in the documents — the DEFAULT). SET `class` when you add, and PASS it when you search/list so you get the kind you meant: \"what does the user prefer?\" and \"find the section about X\" are different questions, and asking one without a class gets you the other's answers. Actions (`action`): `search` (keyword retrieval — needs `query`; optional `limit`, `class` to restrict to ONE memory class, `tags` to restrict to nodes carrying ALL those tags — returns ranked `{ id, title, snippet, score, tags, class }` hits; USE THIS FIRST to check what's already known); `get` (`id` → the full node incl. its linked node ids); `add` (create a node — needs `title`, optional markdown `body` (put `[[wikilink]]`s to related nodes in it), optional `class`, optional `tags`, optional explicit `links` (ids/titles/slugs) → returns the new `id`); `list` (recent nodes — optional `class`, `tag`, `limit`; this is how you ask an EPISODIC question like \"what happened recently\", which has no query string to search for); `link` (add an edge from node `from` to `to` (an id, title, or slug)). Search is keyword-based and always available (no API key, no setup, works offline). Wikilinks cross classes freely — it is still ONE graph, so a `procedural` memory should cite the `knowledge` node it was learned from. Prefer searching before adding a duplicate, and cross-link related memories with `[[wikilink]]`s so the graph stays connected.",
+        "Read + write Genie's workstation KNOWLEDGE GRAPH — a workstation-wide, LOCAL knowledge/memory store shared across EVERY workspace on this Genie instance (one store, not per-workspace). Use it to STASH durable, reusable context as small markdown \"memory\" nodes and RETRIEVE it on demand — so shared, system-wide knowledge lives here instead of bloating every workspace's AGENTS.md/CLAUDE.md. Nodes link to each other with `[[wikilink]]` references in their body (each becomes a graph edge). MEMORY CLASSES (`class`) — every memory is one of FOUR kinds, because they answer four different questions: `profile` (what is true of the user / what they prefer), `episodic` (what happened, and when), `procedural` (what was learned from doing this before), `knowledge` (where this is in the documents — the DEFAULT). SET `class` when you add, and PASS it when you search/list so you get the kind you meant: \"what does the user prefer?\" and \"find the section about X\" are different questions, and asking one without a class gets you the other's answers. Actions (`action`): `search` (keyword retrieval — needs `query`; optional `limit`, `class` to restrict to ONE memory class, `tags` to restrict to nodes carrying ALL those tags — returns ranked `{ id, title, snippet, score, tags, class }` hits; USE THIS FIRST to check what's already known); `get` (`id` → the full node incl. its linked node ids); `add` (create a node — needs `title`, optional markdown `body` (put `[[wikilink]]`s to related nodes in it), optional `class`, optional `tags`, optional explicit `links` (ids/titles/slugs) → returns the new `id`); `list` (recent nodes — optional `class`, `tag`, `limit`; this is how you ask an EPISODIC question like \"what happened recently\", which has no query string to search for); `link` (add an edge from node `from` to `to` (an id, title, or slug)). Search is keyword-based and always available (no API key, no setup, works offline). Wikilinks cross classes freely — it is still ONE graph, so a `procedural` memory should cite the `knowledge` node it was learned from. Prefer searching before adding a duplicate, and cross-link related memories with `[[wikilink]]`s so the graph stays connected. SCOPE (`scope`) — every memory also says WHOSE REASONING it belongs in: `system` (the whole workstation), `workspace` (the one you are working in), `gapp` (internal to one Genie App). On `search`/`list` it says which to cover and DEFAULTS to your own — system plus your workspace plus your app; pass `all` to cover every scope on the machine. On `add` it says where to file the node, and defaults to your workspace (or `system` when you are not in one), so say `scope: 'system'` for something every agent on this machine should find. **SCOPE IS NOISE REDUCTION IN YOUR REASONING. IT IS NOT A SECURITY BOUNDARY** — `all` is allowed from every caller and returns everything, so scope exists only so your context is not polluted by knowledge you have no business acting on. Never treat it as a permission, and never put anything in here that must actually be withheld from an agent. PAGING — `search` and `list` return `nextCursor`; pass it back as `cursor` for the next page, and `null` means that was the last one. LINKS — a `[[wikilink]]` that matches SEVERAL nodes resolves to NOTHING rather than guessing; a node's `unresolved` array names each such ref with `ambiguous` (say which one you meant — link by id) or `missing` (nothing has that title yet, which is fine for a forward reference).",
     inputSchema: {
         type: 'object',
         properties: {
@@ -2724,6 +2744,19 @@ const KNOWLEDGE_TOOL = {
                 enum: [...MEMORY_CLASSES],
                 description:
                     'WHICH memory. add: file the node under this class (default `knowledge`). search / list: restrict to this ONE class — omit to cover every class. `profile` = what is true of the user / what they prefer; `episodic` = what happened and when; `procedural` = what was learned from doing this before; `knowledge` = where this is in the documents.',
+            },
+            scope: {
+                type: 'string',
+                // Generated from GENIE_SCOPE_KINDS, plus the read-only `all`, so
+                // the tool cannot advertise a different ladder than the store has.
+                enum: [...GENIE_SCOPE_KINDS, 'all'],
+                description:
+                    'WHOSE REASONING this belongs in. search / list: which scopes to cover — omit for your own (system + your workspace + your app), or `all` for every node on the machine. add: where to file it — omit to file it in your workspace, `system` for something every agent here should find. NOT A SECURITY BOUNDARY: `all` is always allowed and returns everything; scope only keeps knowledge you have no business acting on out of your context.',
+            },
+            cursor: {
+                type: 'string',
+                description:
+                    'search / list (optional): the `nextCursor` from the previous page. Omit for the first page.',
             },
             id: { type: 'string', description: 'get: the node id to fetch.' },
             title: { type: 'string', description: 'add: the node title (required).' },
@@ -4332,6 +4365,13 @@ ${body}` }],
                     // is the one authority on what a class may be, and it REFUSES
                     // an unknown one rather than filing the memory under a guess.
                     class: a.class,
+                    // Same pass-through for scope and the page cursor. `scope` is
+                    // constrained by the advertised enum; the host decides what an
+                    // absent one means (the caller's own scopes on a read, the
+                    // caller's workspace on a write), because only the host knows
+                    // who is calling.
+                    scope: a.scope,
+                    cursor: a.cursor,
                     id: a.id,
                     title: a.title,
                     body: a.body,
