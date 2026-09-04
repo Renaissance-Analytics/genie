@@ -4086,7 +4086,10 @@ function TailscaleSection() {
             } else if (r.authUrl) {
                 await api().tailscale.openAuth(r.authUrl);
                 setMsg('Opened the Tailscale login — sign in, then click Refresh.');
-            } else {
+            } else if (!r.command) {
+                // A classified failure carries a command, and the refresh below
+                // re-reads the same state — so its remedy note says this once.
+                // Only an UNRECOGNISED failure needs the raw error surfaced here.
                 setMsg(r.message ?? 'Could not bring Tailscale online.');
             }
             await refresh();
