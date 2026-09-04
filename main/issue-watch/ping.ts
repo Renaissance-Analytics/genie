@@ -11,6 +11,8 @@
  * agent) are injected by the caller.
  */
 
+import { attentionNudgeMode, type AgentMode } from '../agents/agent-mode';
+
 /** How an agent reacts to an IssueWatch ping. */
 export type IssueWatchAction = 'notify' | 'wake';
 
@@ -118,9 +120,15 @@ export function hasNewOrChangedItems(
     return false;
 }
 
-/** The canned wake nudge injected to an idle handler when an IssueWatch ping
- *  fires — benign + self-describing, like the AgentInbox wake text, so a turn it
- *  starts is obviously an IssueWatch wake and not smuggled instructions. */
-export function issueWatchWakeText(): string {
-    return 'A watched GitHub item changed (IssueWatch); open the IssueWatch panel to see what needs attention.';
+/**
+ * The canned wake nudge injected to an idle handler when an IssueWatch ping
+ * fires — benign + self-describing, like the AgentInbox wake text, so a turn it
+ * starts is obviously an IssueWatch wake and not smuggled instructions.
+ *
+ * `mode` is required (genie#408). *"Open the IssueWatch panel to see what needs
+ * attention"* is an imperative, and a Manual agent handed it will go and act on
+ * whatever it finds. GUIDANCE only — the ping still fires for both modes.
+ */
+export function issueWatchWakeText(mode: AgentMode): string {
+    return `A watched GitHub item changed (IssueWatch); open the IssueWatch panel to see what needs attention. ${attentionNudgeMode(mode)}`;
 }

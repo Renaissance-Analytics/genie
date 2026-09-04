@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { relative as pathRelative } from 'node:path';
 import { PROVIDER_IDS } from './registry';
+import { agentMode, parseAgentMode, type AgentMode } from './agent-mode';
 
 /**
  * `.agents/<slug>/AGENT.md` — an agent's config AND its system prompt, in one
@@ -36,6 +37,15 @@ export interface AgentFileConfig {
     /** The TUIs this agent may run under; the first is its default driver. */
     tuis: string[];
     avatar: string | null;
+    /**
+     * Automated or Manual (genie#408), or null when the file declares neither.
+     *
+     * NULL IS NOT `manual`, even though it RESOLVES to it. The distinction is
+     * what keeps `renderAgentFile` from writing a `mode:` line into every
+     * AGENT.md that never had one — which would be a diff on every agent and a
+     * lit Save button on every one of them. Resolve it with `agentMode`.
+     */
+    mode: AgentMode | null;
 }
 
 /**
@@ -66,7 +76,7 @@ export interface ParsedAgentFile {
 
 /** The keys {@link renderAgentFile} emits itself. Anything else is passthrough —
  *  carrying a known key in `extra` too would write it twice. */
-const KNOWN_KEYS = new Set(['name', 'purpose', 'scope', 'tuis', 'avatar']);
+const KNOWN_KEYS = new Set(['name', 'purpose', 'scope', 'tuis', 'avatar', 'mode']);
 
 const EMPTY: AgentFileConfig = {
     name: '',
@@ -74,6 +84,7 @@ const EMPTY: AgentFileConfig = {
     scope: null,
     tuis: [],
     avatar: null,
+    mode: null,
 };
 
 const FENCE = '---';
@@ -131,6 +142,13 @@ export function parseAgentFile(raw: string): ParsedAgentFile {
             case 'avatar':
                 config.avatar = value;
                 break;
+            case 'mode':
+                // An unrecognised mode reads as UNDECLARED, which resolves to
+                // Manual — the same treatment `tuis` gives a provider Genie
+                // cannot launch, and for the same reason: a typo must not be
+                // guessed into the one answer that tells an agent to act alone.
+                config.mode = parseAgentMode(value);
+                break;
             case 'tuis':
                 // Drop anything that is not a provider Genie can actually launch.
                 // Carrying it would fail at start, far from the file at fault.
@@ -171,6 +189,11 @@ export function renderAgentFile(
     if (config.scope) header.push(`scope: ${config.scope}`);
     if (config.tuis.length > 0) header.push(`tuis: [${config.tuis.join(', ')}]`);
     if (config.avatar) header.push(`avatar: ${config.avatar}`);
+    // Absent means UNDECLARED, which reads as Manual. Emitting `mode: manual`
+    // for every undeclared agent would put a line in every AGENT.md and light
+    // Save on every one — so only a mode someone actually declared is written,
+    // in EITHER direction: choosing Manual is a declaration, not a blank.
+    if (config.mode) header.push(`mode: ${config.mode}`);
     for (const [key, value] of extra) {
         // A key Genie renders itself would be written twice. `parseAgentFile`
         // never puts one here; a hand-assembled `extra` might.
@@ -212,5 +235,25 @@ export function agentAllowedTuis(personaPath: string | null): string[] {
         // every switch because a file is missing would strand agents registered
         // before AGENT.md was written at all.
         return [];
+    }
+}
+
+/**
+ * The mode an agent's own file declares, RESOLVED — Manual unless the file says
+ * otherwise (genie#408).
+ *
+ * Reads the file for the same reason {@link agentAllowedTuis} does: the file is
+ * the source of truth, and a human who edits `mode:` expects it to take effect
+ * without a re-registration they have no reason to know about.
+ *
+ * Never throws. A missing or unreadable file reads as undeclared, which is
+ * Manual — the direction that tells an agent to do LESS on its own.
+ */
+export function agentModeOf(personaPath: string | null | undefined): AgentMode {
+    if (!personaPath) return agentMode(null);
+    try {
+        return agentMode(parseAgentFile(readFileSync(personaPath, 'utf8')).config.mode);
+    } catch {
+        return agentMode(null);
     }
 }

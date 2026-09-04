@@ -1,6 +1,7 @@
 import { NEVER_NUDGED_AGENT_NAME } from './reserved-names';
 import { GENIE_OS_AGENT } from './os-agent';
 import { MANUAL_RECOVERY, recoveryInstruction, type McpRecovery } from './mcp-reconnect';
+import { DEFAULT_AGENT_MODE, upgradeNoticeMode, type AgentMode } from './agent-mode';
 
 /**
  * How long the announcement waits before it nudges ANYONE (genie#346).
@@ -101,16 +102,25 @@ export function nudgeableAgents(agents: readonly UpgradeAnnouncementTarget[]): s
  * optional because a caller that cannot say how this agent recovers cannot
  * write an honest notice — it passes {@link MANUAL_RECOVERY} and tells the
  * agent to reconnect itself.
+ *
+ * `mode` is required for the same reason (genie#408): this notice ENDS in an
+ * instruction, and whether that instruction may be imperative is the one thing
+ * the composer cannot work out for itself. A caller that cannot say passes
+ * `manual` — the default, and the direction that tells an agent to do less on
+ * its own. It is GUIDANCE, not a permission boundary: the facts, the recovery
+ * and the migration step are identical for both modes, and only the framing
+ * differs.
  */
 export function formatAgentUpgradeMessage(
     version: string,
     changes: string[],
     recovery: McpRecovery,
+    mode: AgentMode,
 ): string {
     const summary = changes.length > 0
         ? ` What changed:\n${changes.map((change) => `- ${change}`).join('\n')}`
         : '';
-    return `Genie upgraded to v${version}.${summary}\n\nYour \`genie\` MCP connection was replaced by the upgrade, so its tools do not answer until it is restored. ${recoveryInstruction(recovery)}\n\nOnce \`genie\` answers again: if this terminal predates AMS, call agentUpgrade and follow its ordered migration guide.\n\nThis is a system notice; no reply is needed.`;
+    return `Genie upgraded to v${version}.${summary}\n\nYour \`genie\` MCP connection was replaced by the upgrade, so its tools do not answer until it is restored. ${recoveryInstruction(recovery)}\n\nOnce \`genie\` answers again: if this terminal predates AMS, call agentUpgrade and follow its ordered migration guide.\n\n${upgradeNoticeMode(mode)}\n\nThis is a system notice; no reply is needed.`;
 }
 
 /** One agent the announcement may reach. */
@@ -145,6 +155,16 @@ export function announceAgentUpgrade(input: {
      * Genie does not know that anything was repaired, so it says so.
      */
     reconnect?: (agentId: string) => McpRecovery | void;
+    /**
+     * THIS agent's mode (genie#408). The mode belongs to the AGENT, not the
+     * fleet: one workspace can hold a supervising Automated agent and a Manual
+     * one a person drives, and both are woken by this one announcement.
+     *
+     * Optional, and a throw is caught, because resolving it means a database
+     * read and a file on disk — neither may be able to cost an agent its
+     * upgrade notice. Absent or failed degrades to {@link DEFAULT_AGENT_MODE}.
+     */
+    mode?: (agentId: string) => AgentMode;
     persist: (version: string) => void;
     /**
      * The stagger's clock (genie#353). Defaults to `setTimeout`; tests pass a
@@ -178,6 +198,15 @@ export function announceAgentUpgrade(input: {
      * guess was wrong for every provider Genie cannot reconnect.
      */
     const nudge = (agentId: string): void => {
+        let mode: AgentMode = DEFAULT_AGENT_MODE;
+        try {
+            mode = input.mode?.(agentId) ?? DEFAULT_AGENT_MODE;
+        } catch {
+            // A mode that cannot be read is an UNDECLARED mode, and undeclared
+            // is Manual. Losing the whole notice over it would trade a wording
+            // difference for silence.
+            mode = DEFAULT_AGENT_MODE;
+        }
         let recovery: McpRecovery = MANUAL_RECOVERY;
         try {
             recovery = input.reconnect?.(agentId) ?? MANUAL_RECOVERY;
@@ -189,7 +218,10 @@ export function announceAgentUpgrade(input: {
             // a message that assumes the tools are live.
             recovery = MANUAL_RECOVERY;
         }
-        input.send(agentId, formatAgentUpgradeMessage(input.currentVersion, input.changes, recovery));
+        input.send(
+            agentId,
+            formatAgentUpgradeMessage(input.currentVersion, input.changes, recovery, mode),
+        );
     };
 
     // NOTHING goes out in the boot tick, not even the first agent: the grace is

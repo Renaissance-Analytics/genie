@@ -1,4 +1,5 @@
 import { parseAgentFile, renderAgentFile, type AgentFileExtra } from './agent-file';
+import { agentMode } from './agent-mode';
 import type { PersonaEdit, PersonaView } from './agent-manager-types';
 
 /**
@@ -27,6 +28,7 @@ import type { PersonaEdit, PersonaView } from './agent-manager-types';
    imports `node:fs`. See that file's header for why a type-only import is not
    enough to keep it out of the renderer's compilation. */
 export type {
+    AgentMode,
     PersonaEdit,
     PersonaExtraView,
     PersonaView,
@@ -38,6 +40,10 @@ export function personaView(raw: string): PersonaView {
     return {
         name: parsed.config.name,
         purpose: parsed.config.purpose,
+        // RESOLVED for the surface: a file that declares nothing is Manual, and
+        // a control showing "unset" would ask a human to reason about a default
+        // instead of telling them how their agent will be spoken to.
+        mode: agentMode(parsed.config.mode),
         scope: parsed.config.scope,
         tuis: parsed.config.tuis,
         avatar: parsed.config.avatar,
@@ -69,6 +75,10 @@ export function applyPersonaEdit(raw: string, edit: PersonaEdit): string {
             scope: edit.scope === undefined ? parsed.config.scope : edit.scope,
             tuis: edit.tuis ?? parsed.config.tuis,
             avatar: edit.avatar === undefined ? parsed.config.avatar : edit.avatar,
+            // An edit that does not NAME the mode leaves it exactly as it was —
+            // including undeclared, which is what keeps an empty save a no-op on
+            // the thousands of files that have never carried the key.
+            mode: edit.mode ?? parsed.config.mode,
         },
         edit.body ?? parsed.body,
         extra,
@@ -92,7 +102,9 @@ export function personaEditIsEmpty(raw: string, edit: PersonaEdit): boolean {
  */
 export function blankPersona(name: string, purpose: string, tuis: string[]): string {
     return renderAgentFile(
-        { name, purpose, scope: null, tuis, avatar: null },
+        // `mode: null` — undeclared, which reads as Manual. A brand-new agent is
+        // not declared automated by the act of being created.
+        { name, purpose, scope: null, tuis, avatar: null, mode: null },
         `You are ${name}. ${purpose}\n`,
     );
 }

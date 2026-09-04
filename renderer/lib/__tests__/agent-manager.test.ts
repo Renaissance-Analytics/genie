@@ -5,6 +5,8 @@ import {
     agentManagerTabs,
     mcpDriftNotice,
     mcpRowAction,
+    personaDraftFrom,
+    personaEditFrom,
     personaIsDirty,
     sidecarSummary,
     type PersonaDraft,
@@ -49,6 +51,8 @@ function state(over: Partial<AgentManagerState> = {}): AgentManagerState {
             scope: 'repos/genie',
             tuis: ['claude', 'codex'],
             avatar: null,
+            // The default every undeclared AGENT.md resolves to (genie#408).
+            mode: 'manual',
             body: 'You are moic.\n',
             extra: [{ key: 'model', value: 'opus' }],
         },
@@ -192,6 +196,7 @@ describe('personaIsDirty', () => {
         purpose: loaded.purpose,
         scope: loaded.scope ?? '',
         tuis: loaded.tuis,
+        mode: loaded.mode,
         body: loaded.body,
         ...over,
     });
@@ -217,6 +222,10 @@ describe('personaIsDirty', () => {
 
     it('notices a driver added or removed', () => {
         expect(personaIsDirty(loaded, draft({ tuis: ['claude'] }))).toBe(true);
+    });
+
+    it('notices the mode being changed', () => {
+        expect(personaIsDirty(loaded, draft({ mode: 'automated' }))).toBe(true);
     });
 
     it('POSITIVE CONTROL: reordering the same drivers is not an edit', () => {
@@ -286,5 +295,55 @@ describe('sidecarSummary', () => {
             matchedBy: null,
         };
         expect(sidecarSummary(none)).toMatch(/no sidecar/i);
+    });
+});
+
+/**
+ * Automated or Manual, in the surface a human uses (genie#408).
+ *
+ * The setting is durable and it changes what every later notice SAYS to the
+ * agent, so a human who cannot see it cannot know which of their agents will
+ * act unprompted.
+ */
+describe('the agent mode in the manager', () => {
+    const loaded = state().persona!;
+    const draft = (over: Partial<PersonaDraft> = {}): PersonaDraft => ({
+        purpose: loaded.purpose,
+        scope: loaded.scope ?? '',
+        tuis: loaded.tuis,
+        mode: loaded.mode,
+        body: loaded.body,
+        ...over,
+    });
+
+    it('opens on the mode the file resolves to', () => {
+        expect(personaDraftFrom(loaded).mode).toBe('manual');
+        expect(personaDraftFrom({ ...loaded, mode: 'automated' }).mode).toBe('automated');
+    });
+
+    it('sends the mode ONLY when it changed', () => {
+        // An agent whose AGENT.md has never carried `mode:` must keep it that
+        // way through an unrelated save — otherwise every save writes a line
+        // into every file and every diff grows one.
+        expect(personaEditFrom(loaded, draft({ purpose: 'something else' })).mode).toBeUndefined();
+        // POSITIVE CONTROL: it IS sent when a human actually changed it.
+        expect(personaEditFrom(loaded, draft({ mode: 'automated' })).mode).toBe('automated');
+        // …and in the other direction, stated rather than dropped: choosing
+        // Manual is a declaration a human made, not a reversion to a blank.
+        expect(
+            personaEditFrom({ ...loaded, mode: 'automated' }, draft({ mode: 'manual' })).mode,
+        ).toBe('manual');
+    });
+
+    it('badges the Prompt & rules tab for an Automated agent, and only that one', () => {
+        // WHICH agents act unprompted is worth seeing without opening the tab.
+        // Manual is the default and therefore almost every agent, so badging it
+        // too would be noise on all of them.
+        const tabOf = (persona: AgentManagerState['persona']) =>
+            agentManagerTabs({ ...state(), persona } as AgentManagerState).find(
+                (t) => t.id === 'prompt',
+            );
+        expect(tabOf({ ...loaded, mode: 'automated' })?.badge).toBe('Automated');
+        expect(tabOf(loaded)?.badge).toBeUndefined();
     });
 });

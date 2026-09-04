@@ -4,11 +4,23 @@ import {
     Button,
     Callout,
     Input,
+    Select,
     Tabs,
     Text,
     Textarea,
 } from '@particle-academy/react-fancy';
-import { api, type AgentManagerState, type SidecarAction } from '../../lib/genie';
+import { api, type AgentManagerState, type AgentMode, type SidecarAction } from '../../lib/genie';
+/* A ZERO-RUNTIME-IMPORT leaf, like `agents/registry` and `agent-manager-types`
+   next to it — see `renderer/lib/__tests__/renderer-main-boundary.test.ts`. The
+   labels and the framing sentence come FROM the module that hands them to the
+   agent, so what a human is shown here and what the agent is actually told
+   cannot drift apart. */
+import {
+    AGENT_MODES,
+    agentModeLabel,
+    agentModeSummary,
+    attentionNudgeMode,
+} from '../../../main/agents/agent-mode';
 import {
     agentManagerTabs,
     mcpDriftNotice,
@@ -223,6 +235,41 @@ export default function AgentManager({
                                         }
                                     />
                                 </Field>
+
+                                <Field
+                                    label="Mode"
+                                    hint={agentModeSummary(draft.mode)}
+                                >
+                                    <Select
+                                        data-testid="agent-manager-mode"
+                                        value={draft.mode}
+                                        onValueChange={(next: string) =>
+                                            setDraft({ ...draft, mode: next as AgentMode })
+                                        }
+                                        list={AGENT_MODES.map((mode) => ({
+                                            value: mode,
+                                            label: agentModeLabel(mode),
+                                        }))}
+                                    />
+                                </Field>
+
+                                {/* The exact sentence, not a paraphrase of it.
+                                    The wording IS the feature, so a human
+                                    choosing between the two modes is shown what
+                                    their agent will actually be handed. */}
+                                <Callout color="slate">
+                                    <Text size="xs">
+                                        Genie’s notices to this agent — the upgrade
+                                        announcement, AgentInbox notices, attention nudges and
+                                        the boot prompt — will carry:{' '}
+                                        <em>{attentionNudgeMode(draft.mode)}</em> This changes
+                                        how Genie <strong>words</strong> what it tells the
+                                        agent. It is not a permission boundary: what an agent
+                                        is allowed to do is decided by the approval gates on{' '}
+                                        <code>runAgent</code>, <code>manageProcess</code> and
+                                        the rest, whichever mode it is in.
+                                    </Text>
+                                </Callout>
 
                                 <Field
                                     label="Scope"

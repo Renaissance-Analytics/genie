@@ -25,6 +25,8 @@
  * jammed the guard that used to live here.
  */
 
+import { inboxNoticeMode, type AgentMode } from '../agents/agent-mode';
+
 /**
  * Split a `terminal:write` chunk into the LITERAL bytes (what a person's
  * keypresses put on the wire) and the ESCAPE SEQUENCES around them.
@@ -131,6 +133,15 @@ export function containsHumanInput(data: string): boolean {
 export interface InboxNotice {
     /** The sender's label. */
     from: string;
+    /**
+     * Whether this agent is expected to act unattended (genie#408).
+     *
+     * Required, so a caller cannot forget it and hand a Manual agent an
+     * imperative by omission. GUIDANCE only: the notice names the tool and the
+     * urgency identically for both modes — a mode that withheld the tool would
+     * be a permission boundary, and this is deliberately not one.
+     */
+    mode: AgentMode;
     /** Set when the message was posted to a channel rather than DMed. */
     channel?: string;
     /** `high` = the sender marked it urgent (an `interrupt` DM). */
@@ -157,18 +168,21 @@ export interface InboxNotice {
  */
 export function inboxNoticeText(n: InboxNotice): string {
     const read = 'read it with the agentinbox tool (action: "receive")';
+    // The mode clause CLOSES the notice: it is a rider on what was just said,
+    // and putting it first would read as the headline.
+    const mode = ` ${inboxNoticeMode(n.mode)}`;
     // An answer to YOUR question is not "a message from you". It is the user
     // unblocking a decision you asked for and are waiting on, and it must be
     // distinguishable at a glance from ordinary mail.
     if (n.kind === 'ftq-answer') {
         const what = 'The user answered a question you asked';
         return n.priority === 'high'
-            ? `[Genie] ${what} — it was marked urgent, so read it now: ${read}.`
-            : `[Genie] ${what}: ${read}.`;
+            ? `[Genie] ${what} — it was marked urgent, so read it now: ${read}.${mode}`
+            : `[Genie] ${what}: ${read}.${mode}`;
     }
     const source = n.channel ? `in the #${n.channel} channel` : 'as a DM';
     const what = `You just received a message from ${n.from} ${source}`;
     return n.priority === 'high'
-        ? `[Genie] ${what}, marked HIGH PRIORITY — check it immediately: ${read}.`
-        : `[Genie] ${what}. It is not urgent — check it when you are not busy: ${read}.`;
+        ? `[Genie] ${what}, marked HIGH PRIORITY — check it immediately: ${read}.${mode}`
+        : `[Genie] ${what}. It is not urgent — check it when you are not busy: ${read}.${mode}`;
 }

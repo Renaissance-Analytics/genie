@@ -134,32 +134,32 @@ describe('containsHumanInput', () => {
 
 describe('inboxNoticeText', () => {
     it('names the sender and says it arrived as a DM', () => {
-        const text = inboxNoticeText({ from: 'guardian', priority: 'normal' });
+        const text = inboxNoticeText({ from: 'guardian', priority: 'normal', mode: 'manual' });
         expect(text).toContain('guardian');
         expect(text).toContain('as a DM');
         expect(text).toContain('[Genie]');
     });
 
     it('a high-priority notice says to check it immediately', () => {
-        const text = inboxNoticeText({ from: 'guardian', priority: 'high' });
+        const text = inboxNoticeText({ from: 'guardian', priority: 'high', mode: 'manual' });
         expect(text).toMatch(/HIGH PRIORITY/);
         expect(text).toMatch(/immediately/i);
     });
 
     it('a normal notice says it can wait until the agent is free', () => {
-        const text = inboxNoticeText({ from: 'guardian', priority: 'normal' });
+        const text = inboxNoticeText({ from: 'guardian', priority: 'normal', mode: 'manual' });
         expect(text).toMatch(/not urgent/i);
         expect(text).toMatch(/when you are not busy/i);
     });
 
     it('a channel post names the channel instead', () => {
-        const text = inboxNoticeText({ from: 'guardian', channel: 'ops', priority: 'normal' });
+        const text = inboxNoticeText({ from: 'guardian', channel: 'ops', priority: 'normal', mode: 'manual' });
         expect(text).toContain('#ops');
         expect(text).toContain('channel');
     });
 
     it('always says HOW to read it — mail with no instructions is just noise', () => {
-        expect(inboxNoticeText({ from: 'x', priority: 'high' })).toMatch(/agentinbox/i);
-        expect(inboxNoticeText({ from: 'x', priority: 'high' })).toMatch(/receive/);
+        expect(inboxNoticeText({ from: 'x', priority: 'high', mode: 'manual' })).toMatch(/agentinbox/i);
+        expect(inboxNoticeText({ from: 'x', priority: 'high', mode: 'manual' })).toMatch(/receive/);
     });
 });

@@ -26,9 +26,21 @@
  * that does nothing — it costs the agent a call and a wrong belief.
  */
 
+import { bootPromptMode, type AgentMode } from './agent-mode';
+
 export interface AgentBootContext {
     /** True once the workspace can actually serve the genie MCP tools. */
     genieAvailable: boolean;
+    /**
+     * Automated or Manual (genie#408). Required, not optional: the boot prompt
+     * is where an agent learns how to READ every later notice, and one that
+     * omitted the mode would leave the agent to infer it from the imperative
+     * voice of the first nudge it got — which is the defect this closes.
+     *
+     * GUIDANCE, not a permission boundary. In particular it says nothing about
+     * `extra` — the instructions a person launched this agent WITH.
+     */
+    mode: AgentMode;
     /** The previous run's note, if one was left. */
     handoffPath?: string | null;
     /** Set when this workspace is linked to a Tynn project. */
@@ -43,6 +55,14 @@ export function agentBootPrompt(ctx: AgentBootContext): string {
     const lines: string[] = [];
 
     if (ctx.genieAvailable) {
+        // FIRST, because it frames everything after it — including the notices
+        // this agent gets hours from now, long after the prompt scrolled away.
+        //
+        // Gated on Genie for the same reason every other line is: without it
+        // there are no Genie notices to frame, and a prompt injected into an
+        // otherwise bare launch is exactly what `agentBootPrompt({genieAvailable:
+        // false}) === ''` exists to prevent.
+        lines.push(bootPromptMode(ctx.mode));
         lines.push(
             'Start by calling `connectToGenie` — it orients you in this workspace and is your only channel back to the user. ' +
                 'Nothing you print in this terminal is read by anyone.',

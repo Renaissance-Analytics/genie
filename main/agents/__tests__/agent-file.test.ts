@@ -31,6 +31,9 @@ describe('AGENT.md', () => {
         scope: 'repos/tynn',
         tuis: ['claude', 'codex'],
         avatar: '🧪',
+        // Declared, so the round-trip below covers the `mode:` line too. Its
+        // ABSENCE — the ordinary case — is pinned in `agent-mode.test.ts`.
+        mode: 'automated',
     };
 
     it('round-trips config and prompt', () => {

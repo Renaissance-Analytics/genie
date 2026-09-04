@@ -147,6 +147,7 @@ import { createHarnessTransportSink } from './agentinbox/transport-sink';
 import { agentShutdownReadiness } from './agents/shutdown-readiness';
 import { setPluginPanelOpenSink } from './plugins/registry';
 import { announceAgentUpgrade, withWorkstationOperator } from './agents/upgrade-announcement';
+import { agentModeById, agentModeByTerminal } from './agents/agent-mode-source';
 import { MANUAL_RECOVERY, reconnectStrategy, type McpRecovery } from './agents/mcp-reconnect';
 import { terminalIsBlocked } from './agents/injection-guard';
 import { getChangelog } from './updater/changelog';
@@ -1180,6 +1181,12 @@ function announceUpgradeToAgents(): void {
                         .map((agent) => ({ agentId: agent.agentId, name: agent.purpose })),
                 ),
                 changes: changelog.groups.flatMap((group) => group.changes).slice(0, 8),
+                // PER AGENT (genie#408). The upgrade notice is the one the
+                // issue was filed about: "restore your connection and migrate"
+                // is what a Manual agent then does, and #407 is what that looks
+                // like from the outside. An agent that has not been declared
+                // Automated is told the same facts, informationally.
+                mode: agentModeById,
                 // Reconnect the agent's `genie` server BEFORE telling it
                 // anything: the upgrade replaced the process behind the
                 // endpoint, so the notice would otherwise arrive telling it
@@ -1694,6 +1701,11 @@ app.whenReady().then(async () => {
     try {
         installAgentInboxPresence();
         agentInboxBroker.setStore(dbAgentInboxStore);
+        // Which agents are Automated and which are Manual (genie#408), so an
+        // inbox notice or an attention nudge is worded for the agent it reaches.
+        // GUIDANCE only -- it changes one sentence, never whether a message is
+        // delivered or a nudge fires.
+        agentInboxBroker.setAgentModeSource(agentModeById);
         // The broker decides WHAT to say and HOW it may land (see agentinbox/
         // draft.ts); this sink performs it. Returns false when it cannot start,
         // so the broker can fall back to the idle-only wake.
@@ -1846,7 +1858,14 @@ app.whenReady().then(async () => {
     // rule + change-dedup are pure in issue-watch/ping.ts.
     setIssueWatchPingSinks({
         notify: (terminalId) => broadcastTerminalAttention(terminalId, true),
-        wake: (terminalId) => agentInboxBroker.wakeTerminalIfIdle(terminalId, issueWatchWakeText()),
+        // Worded for the agent BOUND TO this terminal (genie#408): "open the
+        // IssueWatch panel to see what needs attention" is an imperative, and a
+        // Manual agent handed it goes and acts on whatever it finds.
+        wake: (terminalId) =>
+            agentInboxBroker.wakeTerminalIfIdle(
+                terminalId,
+                issueWatchWakeText(agentModeByTerminal(terminalId)),
+            ),
     });
     // E2E test mode (GENIE_E2E=1): OVERRIDE the GitHub + Issue Watch channels
     // with scriptable mocks so a Playwright test can drive the device-flow /

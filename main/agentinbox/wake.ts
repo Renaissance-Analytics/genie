@@ -46,6 +46,8 @@
  * one-wake-per-idle-period guard. Pure so every branch is unit-tested.
  */
 
+import { attentionNudgeMode, type AgentMode } from '../agents/agent-mode';
+
 /** Minimum quiet time (ms) since the turn ended before a wake — a margin past the
  *  imDone output flush, and long enough that a genuinely-working turn would have
  *  emitted SOMETHING. Conservative on purpose. */
@@ -93,13 +95,19 @@ export function shouldWakeAgent(s: WakeState): boolean {
     return true;
 }
 
-/** The canned nudge submitted to a woken agent — benign + self-describing, so a
- *  turn it starts is obviously an AgentInbox wake, not smuggled instructions. */
-export function wakeNudgeText(unread: number): string {
+/**
+ * The canned nudge submitted to a woken agent — benign + self-describing, so a
+ * turn it starts is obviously an AgentInbox wake, not smuggled instructions.
+ *
+ * `mode` is required (genie#408) so a Manual agent is not told to follow this
+ * up on its own. GUIDANCE only: the count and the tool are named identically
+ * either way — the nudge is never withheld.
+ */
+export function wakeNudgeText(unread: number, mode: AgentMode): string {
     const n = Math.max(1, unread);
     return `You have ${n} unread AgentInbox message${n === 1 ? '' : 's'}; read ${
         n === 1 ? 'it' : 'them'
-    } with the agentinbox tool (action: "receive").`;
+    } with the agentinbox tool (action: "receive"). ${attentionNudgeMode(mode)}`;
 }
 
 /** Unchecked this long after delivery and the recipient has failed to look. */

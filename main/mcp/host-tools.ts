@@ -73,7 +73,12 @@ import {
     isTerminalLive,
 } from '../terminal/ipc';
 import { agentName, agentRef, savedAgentKey, type AgentTui } from '../agents/identity';
-import { agentAllowedTuis, agentScopeFor, renderAgentFile } from '../agents/agent-file';
+import {
+    agentAllowedTuis,
+    agentModeOf,
+    agentScopeFor,
+    renderAgentFile,
+} from '../agents/agent-file';
 import { agentBootPrompt } from '../agents/boot-prompt';
 import { handoffPath } from '../agents/handoff';
 import {
@@ -2218,6 +2223,11 @@ export async function registerAgentInWorkspace(
                         scope: agentScopeFor(ws.path, resolved.bootCwd),
                         tuis: [tui],
                         avatar: null,
+                        // UNDECLARED, so no `mode:` line is written and the
+                        // agent reads as Manual (genie#408). Registering an
+                        // agent is not declaring it automated -- a human does
+                        // that, in the agent manager or in this file.
+                        mode: null,
                     },
                     `You are ${resolved.name}. ${resolved.purpose}
 `,
@@ -3285,6 +3295,11 @@ export async function startRegisteredAgent(
                 const handoff = handoffPath(ws.path, config.name);
                 const bootInstructions = agentBootPrompt({
                     genieAvailable: true,
+                    // From the agent's OWN file (genie#408), so it knows how to
+                    // read every Genie notice it gets from here on. Undeclared
+                    // is Manual, which changes nothing for an agent launched
+                    // WITH instructions -- those are a person asking.
+                    mode: agentModeOf(config.persona_path),
                     handoffPath: fs.existsSync(handoff) ? handoff : null,
                     tynnLinked: !!readTynnLink(ws.path),
                     personaPath:
