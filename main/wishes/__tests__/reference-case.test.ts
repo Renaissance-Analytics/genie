@@ -134,6 +134,12 @@ function startGenie(root: string) {
 describe('the 5 MB reference case', () => {
     it('moves a large file into the untracked folder, and leaves a small one alone', async () => {
         const root = tempWorkspace();
+        // Created BEFORE the watcher starts. A recursive watcher registers a
+        // newly created subdirectory asynchronously on Linux, so a file written
+        // in the same breath as its parent directory can be missed — an OS
+        // behaviour, not a property of this feature, and not something a test of
+        // this feature should be racing.
+        fs.mkdirSync(path.join(root, 'assets'), { recursive: true });
         const genie = startGenie(root);
 
         const big = path.join(root, 'assets', 'big.bin');
@@ -172,6 +178,13 @@ describe('the 5 MB reference case', () => {
 
     it('does not move the file it just moved — and still fires for the next one', async () => {
         const root = tempWorkspace();
+        // The destination exists BEFORE the watcher starts, so the echo of the
+        // move is guaranteed to be reported on every platform. Without this the
+        // test could pass on Linux for the wrong reason — a recursive watcher
+        // registers a new subdirectory asynchronously, so "no second move" could
+        // mean "the guard worked" or "the event never arrived", and those two
+        // are indistinguishable from the assertion.
+        fs.mkdirSync(path.join(root, RELOCATION_DIR), { recursive: true });
         const genie = startGenie(root);
 
         writeFileOfSize(path.join(root, 'first.bin'), 6 * 1024 * 1024);
