@@ -89,6 +89,7 @@ import {
 import type { SavedPrompt } from '../components/Master/GenieCommandWindow';
 import { ToolchainSetupWizard } from '../components/Master/ToolchainSetupWizard';
 import { checkedAgoLabel, pluginSummaryLine } from '../lib/plugins-view';
+import { tailscalePanelView } from '../lib/tailscale-panel';
 import {
     engineActionAvailability,
     engineGroups,
@@ -4094,38 +4095,23 @@ function TailscaleSection() {
         }
     };
 
-    const installed = status?.installed ?? false;
     const running = status?.running ?? false;
-    const state = status?.state ?? 'unknown';
-    const selfIp = status?.self?.ip ?? null;
     const onlinePeers = (status?.peers ?? []).filter((p) => p.online);
 
-    // Each state gets its OWN label. "Installed · offline" used to cover four
-    // situations — absent, daemon down, not an operator, not logged in — only
-    // one of which the Install button below could fix (genie#380, genie#396).
-    const label = !status
-        ? '—'
-        : state === 'absent'
-            ? 'Not installed'
-            : state === 'running'
-                ? `Connected${selfIp ? ` · ${selfIp}` : ''}`
-                : state === 'stopped'
-                    ? 'Installed · service not running'
-                    : state === 'needs-operator'
-                        ? 'Installed · not permitted'
-                        : state === 'needs-login'
-                            ? 'Installed · not connected'
-                            : 'Installed · state unknown';
-    const color = !status
-        ? 'var(--fg-3)'
-        : state === 'absent'
-            ? 'var(--rose-500)'
-            : running
-                ? 'var(--emerald-600)'
-                : 'var(--amber-600)';
-    // The remedy Genie could name for the current state, and the command that
-    // clears it (a stopped daemon / a missing operator grant are one line each).
-    const remedy = status?.remedy ?? null;
+    // Which label, which affordance and which remedy — a PURE decision, so the
+    // thing genie#380/#396 were about is unit-tested rather than living in JSX.
+    // Four situations used to share "Installed · offline", and Install was
+    // offered in three where Tailscale was already installed.
+    const view = tailscalePanelView(status);
+    const { label, remedy } = view;
+    const color =
+        view.tone === 'neutral'
+            ? 'var(--fg-3)'
+            : view.tone === 'bad'
+                ? 'var(--rose-500)'
+                : view.tone === 'ok'
+                    ? 'var(--emerald-600)'
+                    : 'var(--amber-600)';
 
     return (
         <SetSection
@@ -4133,7 +4119,7 @@ function TailscaleSection() {
             desc="The encrypted network Work Mode runs over"
             status={label}
             statusColor={color}
-            statusIcon={!installed ? 'alert-triangle' : running ? 'check' : 'circle'}
+            statusIcon={view.tone === 'bad' ? 'alert-triangle' : running ? 'check' : 'circle'}
         >
             <SettingRow
                 label="Connection"
@@ -4143,7 +4129,7 @@ function TailscaleSection() {
                 {/* Install is offered ONLY when Tailscale is genuinely absent.
                     Offering it for a stopped daemon or a missing operator grant
                     sends the user to reinstall software that is already there. */}
-                {state === 'absent' && (
+                {view.showInstall && (
                     <Action
                         size="sm"
                         color="blue"
@@ -4154,7 +4140,7 @@ function TailscaleSection() {
                         Install
                     </Action>
                 )}
-                {installed && !running && (
+                {view.showBringOnline && (
                     <Action
                         size="sm"
                         color="blue"
@@ -4197,7 +4183,7 @@ function TailscaleSection() {
                 a `tailscaled` that was never enabled and a user who is not a
                 Tailscale operator each need one command, and neither used to be
                 distinguishable from "not installed" (genie#396). */}
-            {remedy && !running && (
+            {remedy && (
                 <div className="set-note">
                     {remedy.message}
                     {remedy.command && (
