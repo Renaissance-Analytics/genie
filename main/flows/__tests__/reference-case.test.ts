@@ -64,6 +64,37 @@ function writeFileOfSize(target: string, bytes: number): void {
     fs.writeFileSync(target, Buffer.alloc(bytes, 7));
 }
 
+/**
+ * The file's contents, or `null` while it is not there — or not there YET.
+ *
+ * The recipe writes with `fsp.writeFile`, which is `open` then `write` then
+ * `close` with event-loop turns in between, so there is a real window in which
+ * the file EXISTS and holds nothing. A poll on `fs.existsSync` resolves inside
+ * that window and hands the next assertion an empty string; measured on this
+ * machine, ~4% of observations land there.
+ *
+ * So nothing below waits on existence. Waiting on the content collapses the
+ * window: a file that is not there and a file that is not written yet are the
+ * same answer, and the only thing that ends the wait is the thing the test came
+ * to check.
+ */
+function readIfPresent(file: string): string | null {
+    try {
+        return fs.readFileSync(file, 'utf8');
+    } catch {
+        return null;
+    }
+}
+
+/** The file's size, or `null` while it is not there. Never throws. */
+function sizeIfPresent(file: string): number | null {
+    try {
+        return fs.statSync(file).size;
+    } catch {
+        return null;
+    }
+}
+
 afterEach(() => {
     for (const stop of stops.splice(0)) stop();
     stopAllWatchers();
@@ -131,6 +162,40 @@ function startGenie(root: string) {
     return { logs, runtime, flow };
 }
 
+/**
+ * ★ THE INSTRUMENT, CHECKED BEFORE IT IS TRUSTED.
+ *
+ * Everything below waits for the filesystem to catch up, and what it waits FOR
+ * decides what it can prove. `fs.existsSync` answers "was this created", which
+ * is not the question any of these tests are actually asking.
+ */
+describe('waiting for a file', () => {
+    it('tells a file that was CREATED from one that was WRITTEN', async () => {
+        const root = tempWorkspace();
+        const target = path.join(root, 'ignore-like.txt');
+
+        // The window `fsp.writeFile` opens: open() has returned, write() has
+        // not. The file is there and holds nothing.
+        fs.writeFileSync(target, '');
+
+        expect(
+            await until(() => fs.existsSync(target), 150),
+            'the file is there, so a poll must not still be waiting for it',
+        ).toBe(true);
+        expect(
+            await until(() => readIfPresent(target)?.includes('*') === true, 150),
+            'but being there is not being written — an empty file must not satisfy this',
+        ).toBe(false);
+
+        fs.writeFileSync(target, '# a comment\n*\n');
+
+        expect(
+            await until(() => readIfPresent(target)?.includes('*') === true, 2_000),
+            'and once the content lands, it must',
+        ).toBe(true);
+    });
+});
+
 describe('the 5 MB reference case', () => {
     it('moves a large file into the untracked folder, and leaves a small one alone', async () => {
         const root = tempWorkspace();
@@ -147,10 +212,14 @@ describe('the 5 MB reference case', () => {
         writeFileOfSize(big, 6 * 1024 * 1024);
         writeFileOfSize(small, 1024 * 1024);
 
+        // Waits for the whole 6 MB, not for the name to appear. `move` renames
+        // when it can, which is atomic — but its EXDEV fallback is copy+unlink,
+        // and a copy in flight is a destination that exists and is short. The
+        // assertion below is about the SIZE, so the wait is too.
         const relocated = path.join(root, RELOCATION_DIR, 'big.bin');
         expect(
-            await until(() => fs.existsSync(relocated)),
-            'the >5MB file should have been relocated',
+            await until(() => sizeIfPresent(relocated) === 6 * 1024 * 1024),
+            'the >5MB file should have been relocated, whole',
         ).toBe(true);
 
         expect(fs.existsSync(big), 'the original should be gone').toBe(false);
@@ -169,8 +238,14 @@ describe('the 5 MB reference case', () => {
         startGenie(root);
         writeFileOfSize(path.join(root, 'big.bin'), 6 * 1024 * 1024);
 
+        // Waits for the CONTENT, never for the file. `fsp.writeFile` creates it
+        // empty first, and a poll on existence resolves in that window and then
+        // reads nothing — see `readIfPresent` and the test above it.
         const ignore = path.join(root, RELOCATION_DIR, '.gitignore');
-        expect(await until(() => fs.existsSync(ignore))).toBe(true);
+        expect(
+            await until(() => readIfPresent(ignore)?.includes('*') === true),
+            'the destination should have been made self-ignoring',
+        ).toBe(true);
         // A self-ignoring folder: nothing in it is ever staged, and the user's
         // own root .gitignore is not edited behind their back.
         expect(fs.readFileSync(ignore, 'utf8')).toContain('*');
