@@ -246,6 +246,27 @@ describe('getTailscaleStatus — five distinguishable states (genie#380, genie#3
         expect(s.remedy).toBeNull();
     });
 
+    it('does not read NON-JSON stdout as a live daemon answering', async () => {
+        // The stdout branch exists because a stopped/needs-login node still
+        // PRINTS its status JSON on a non-zero exit. Noise on stdout is not
+        // that, and must not outrank what the error actually says.
+        const s = await getTailscaleStatus({
+            cliPath: () => '/usr/bin/tailscale',
+            platform: 'linux',
+            run: () =>
+                Promise.reject(
+                    Object.assign(new Error('exit 1'), {
+                        stdout: 'Access denied.\n',
+                        stderr:
+                            'Access denied: watch IPN bus access denied\n' +
+                            "To not require root, use 'sudo tailscale set --operator=$USER' once.",
+                    }),
+                ),
+        });
+        expect(s.state).toBe('needs-operator');
+        expect(s.remedy?.command).toBe('sudo tailscale set --operator=$USER');
+    });
+
     it('an unrecognised failure keeps installed:true but does NOT invent a state', async () => {
         const s = await getTailscaleStatus({
             cliPath: () => '/usr/bin/tailscale',

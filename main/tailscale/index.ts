@@ -343,6 +343,19 @@ function runCli(
 
 const EMPTY = { self: null, peers: [] as TailnetPeer[] };
 
+/** Is this stdout the status document, rather than noise printed alongside an
+ *  error? The "parse the stdout of a non-zero exit" path is only valid for the
+ *  former — otherwise a denial with a line on stdout would outrank what its
+ *  stderr plainly says. */
+function looksLikeStatusJson(stdout: string): boolean {
+    try {
+        const v = JSON.parse(stdout);
+        return !!v && typeof v === 'object';
+    } catch {
+        return false;
+    }
+}
+
 /** Build a status from a state alone (no tailnet data to report). */
 function statusFor(state: TailscaleState, platform: NodeJS.Platform): TailscaleStatus {
     return {
@@ -379,7 +392,7 @@ export async function getTailscaleStatus(deps: TailscaleCliDeps = {}): Promise<T
         // `tailscale status` exits non-zero when the node is stopped / needs
         // login but still prints the JSON on stdout — parse that before giving
         // up: the daemon answered, so this is not a daemon problem.
-        if (err?.stdout) {
+        if (err?.stdout && looksLikeStatusJson(err.stdout)) {
             const parsed = parseTailscaleStatus(err.stdout);
             const state: TailscaleState = parsed.running ? 'running' : 'needs-login';
             return {
