@@ -149,6 +149,39 @@ This applies to code and to prose equally. A tool DESCRIPTION in `protocol.ts` i
 read by an agent as a promise about behaviour; if the code does not do what the
 description says, the description is a bug of exactly this kind.
 
+### Two ways a check quietly answers a weaker question
+
+Both of these have shipped here. Both looked like guards and neither was one.
+
+**A SQLite `CHECK` whose expression can evaluate to NULL passes.** NULL is not
+FALSE. So this constraint, written to make a denormalisation impossible to get
+wrong, does not:
+
+```sql
+CHECK (origin_ns IS NULL OR origin_key LIKE origin_ns || '/%')
+```
+
+```
+ACCEPTED : ns="pack1" key="pack1/node"     -- correct
+REJECTED : ns="pack1" key="other/node"     -- catches a WRONG key
+ACCEPTED : ns="pack1" key=NULL             -- misses a MISSING one
+```
+
+It catches a wrong value and misses an absent one — the exact case it existed to
+prevent. The general shape: `a IS NULL OR b <op> ...` is unguarded whenever `b`
+is NULL. Spell out the `IS NOT NULL`.
+
+**`toContain` over a large document is a coincidence detector, not a check.** A
+guide-sync test asserting the 43KB agent guide contains `unresolved`, `ambiguous`
+and `all` passed before any of that feature existed — the words occur in an
+unrelated IssueWatch section, inside *"unambiguous"*, and somewhere in 43KB. A
+green test standing where the check should be is worse than no test.
+
+Both are the same fault as the bugs this codebase keeps finding in its product: a
+lookup that always finds *something* and never reports that it was the wrong
+something. When you write a guard, make it fail first — and make it fail for the
+reason you think it will.
+
 ---
 
 ## Known constraints — decided, not discovered
