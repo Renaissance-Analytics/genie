@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { GENIE_AGENTS_BRIEF, GENIE_MCP_GUIDE } from '../guide';
+import { guideTopics } from '../guide-topics';
 import { handleMcpMessage, type McpContext } from '../protocol';
 
 /**
@@ -530,5 +531,89 @@ describe('the protocol is stated once', () => {
     it('still points the agent at the entry point and the reference', () => {
         expect(GENIE_AGENTS_BRIEF).toContain('connectToGenie');
         expect(GENIE_AGENTS_BRIEF).toContain('genieGuide');
+    });
+});
+
+/**
+ * SCOPE has to reach the guide for the same reason the memory classes did, and
+ * for one more that is sharper.
+ *
+ * Agents plan from the guide's prose. A rung nobody is told about is one nobody
+ * files a memory under — that is the memory-class argument, and it applies here
+ * unchanged. The extra reason: scope is the most mis-readable thing in this
+ * design. It looks exactly like a permission, and the moment somebody believes it
+ * is one, something security-bearing gets built on a filter that refuses nothing.
+ * So the sentence saying what it is NOT has to be where agents actually read.
+ *
+ * ★ These assert against the `knowledge` SECTION, not the whole guide. Asserting
+ * over the whole document passed before any of it was written: `unresolved`
+ * appears in the IssueWatch feedback bucket, `ambiguous` inside "unambiguous" in
+ * the imDone section, and `` `all` `` somewhere in 43KB of prose. A guide-sync
+ * test that green-lights an undocumented feature is worse than no test, because
+ * it is the thing standing where the check should be.
+ */
+async function knowledgeScopeEnum(): Promise<string[]> {
+    const res = await handleMcpMessage({ jsonrpc: '2.0', id: 14, method: 'tools/list' }, makeCtx());
+    const tools = (res?.result as { tools: Array<{ name: string; inputSchema?: unknown }> }).tools;
+    const tool = tools.find((t) => t.name === 'knowledge');
+    if (!tool) throw new Error('knowledge tool not advertised');
+    const props = (tool.inputSchema as { properties?: Record<string, { enum?: string[] }> })
+        .properties;
+    return props?.scope?.enum ?? [];
+}
+
+/** The guide's own `### knowledge` section, split by the same code `genieGuide`
+ *  serves topics with — so this reads exactly what an agent asking for the topic
+ *  would receive. */
+function knowledgeTopic(): string {
+    const topic = guideTopics(GENIE_MCP_GUIDE).find((t) => t.id === 'knowledge');
+    if (!topic) throw new Error('the guide has no `knowledge` topic');
+    return topic.body;
+}
+
+describe('the agent guide stays in sync with the knowledge scope ladder', () => {
+    it('POSITIVE CONTROL — the knowledge topic is found and is not empty', () => {
+        // Every assertion below reads this one string. If the topic id ever
+        // changes, they would all pass against `''`.toContain(...) failing loudly
+        // — but a helper that threw would take them all down at once with a
+        // confusing message, so the health of the fixture is asserted first.
+        expect(knowledgeTopic().length).toBeGreaterThan(500);
+        expect(knowledgeTopic()).toContain('wikilink');
+    });
+
+    it('documents every scope the tool accepts, IN the knowledge section', async () => {
+        const scopes = await knowledgeScopeEnum();
+        const topic = knowledgeTopic();
+
+        expect(scopes.length).toBeGreaterThan(0);
+        for (const scope of scopes) {
+            expect(
+                topic,
+                `the knowledge guide never mentions the \`${scope}\` scope — an agent cannot use what it is not told about`,
+            ).toContain(`\`${scope}\``);
+        }
+    });
+
+    it('says scope is NOT a security boundary', () => {
+        // The one sentence that must appear wherever scope is explained. Without
+        // it the design's most likely failure is a reader concluding the opposite
+        // from the word "scope" alone.
+        expect(knowledgeTopic().toLowerCase()).toContain('not a security boundary');
+    });
+
+    it('tells agents `all` is allowed, so the sentence is not just a disclaimer', () => {
+        // A claim with no visible mechanism reads as boilerplate. The mechanism is
+        // that `all` works from every caller, and the guide has to say so or the
+        // reader has no reason to believe the sentence above.
+        expect(knowledgeTopic()).toMatch(/`all`/);
+    });
+
+    it('tells agents an ambiguous wikilink resolves to NOTHING, and names `unresolved`', () => {
+        // A behaviour change agents will otherwise meet as a mystery: a link they
+        // wrote, which used to work, silently stops appearing. Naming the field
+        // puts the diagnosis one read away.
+        const topic = knowledgeTopic();
+        expect(topic).toContain('unresolved');
+        expect(topic).toMatch(/ambiguous/i);
     });
 });

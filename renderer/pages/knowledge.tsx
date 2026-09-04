@@ -7,7 +7,7 @@ import React, {
     useState,
     type CSSProperties,
 } from 'react';
-import { ContentRenderer, Heading, Pillbox, Text } from '@particle-academy/react-fancy';
+import { ContentRenderer, Heading, Pillbox, Select, Text } from '@particle-academy/react-fancy';
 import {
     IconGraph,
     IconListTree,
@@ -19,11 +19,24 @@ import {
 import {
     api,
     hasGenieBridge,
+    MEMORY_CLASSES,
     type KnowledgeGraphData,
     type KnowledgeNode,
+    type KnowledgeScope,
+    type KnowledgeScopeKind,
     type KnowledgeSearchResult,
+    type LinkAuditEntry,
+    type MemoryClass,
+    type WorkspaceRow,
 } from '../lib/genie';
 import { circleLayout } from '../lib/knowledge-graph';
+// Pure, and tested without a window: the two places this page could silently
+// misreport where a memory lives.
+import {
+    knowledgeScopeLabel,
+    parseKnowledgeScopeValue,
+    scopePickerValue,
+} from '../lib/knowledge-scope';
 
 /**
  * The Workstation Knowledge Graph window (Wish #87). A separate Genie-skinned
@@ -54,6 +67,42 @@ const BORDER = '1px solid rgba(255,255,255,0.08)';
 type Mode = 'view' | 'edit' | 'create';
 type LeftView = 'list' | 'graph';
 
+/** `all` is the window's default for both filters, and it is not a courtesy: this
+ *  is the human's view of the WHOLE workstation store, so narrowing it is
+ *  something the user asks for rather than something the window assumes. */
+type ClassFilter = MemoryClass | 'all';
+type ScopeFilter = KnowledgeScopeKind | 'all';
+
+// Both label maps are exhaustive `Record`s, so a class or a scope rung added to
+// the store and not to this window is a COMPILE error rather than a filter that
+// silently cannot reach half the store.
+const CLASS_LABELS: Record<MemoryClass, string> = {
+    knowledge: 'Knowledge — where this is in the documents',
+    profile: 'Profile — what is true of you',
+    episodic: 'Episodic — what happened, and when',
+    procedural: 'Procedural — what was learned from doing this',
+};
+
+const CLASS_OPTIONS = [
+    { value: 'all', label: 'Every kind' },
+    ...MEMORY_CLASSES.map((c) => ({ value: c as string, label: CLASS_LABELS[c] })),
+];
+
+const SCOPE_LABELS: Record<KnowledgeScopeKind, string> = {
+    system: 'Workstation',
+    workspace: 'Workspaces',
+    gapp: 'Genie Apps',
+};
+
+const SCOPE_FILTER_OPTIONS = [
+    { value: 'all', label: 'Every scope' },
+    ...(Object.keys(SCOPE_LABELS) as KnowledgeScopeKind[]).map((k) => ({
+        value: k as string,
+        label: SCOPE_LABELS[k],
+    })),
+];
+
+
 function truncate(s: string, n: number): string {
     return s.length > n ? `${s.slice(0, n - 1)}…` : s;
 }
@@ -66,6 +115,12 @@ export default function KnowledgePage() {
 
     const [query, setQuery] = useState('');
     const [results, setResults] = useState<KnowledgeSearchResult[] | null>(null);
+    const [classFilter, setClassFilter] = useState<ClassFilter>('all');
+    const [scopeFilter, setScopeFilter] = useState<ScopeFilter>('all');
+    /** Only for LABELS and the editor's scope picker — a workspace id in the UI
+     *  is a lookup the reader has to do by hand. */
+    const [workspaces, setWorkspaces] = useState<WorkspaceRow[]>([]);
+    const [linkAudit, setLinkAudit] = useState<LinkAuditEntry[]>([]);
 
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [leftView, setLeftView] = useState<LeftView>('list');
@@ -83,12 +138,38 @@ export default function KnowledgePage() {
     // selecting never needs a second round-trip for a memory already in view).
     const reload = useCallback(async () => {
         const [ns, g] = await Promise.all([
-            api().knowledge.list(),
+            api().knowledge.list({
+                class: classFilter === 'all' ? undefined : classFilter,
+                // Narrowed in SQL main-side. Filtering the returned page here
+                // instead would show a short list and call it the whole store.
+                scope: scopeFilter === 'all' ? undefined : { kind: scopeFilter },
+            }),
             api().knowledge.graph(),
         ]);
         setNodes(ns);
         setGraph(g);
         return ns;
+    }, [classFilter, scopeFilter]);
+
+    // The workspace list is fetched once, for labels and the editor's scope
+    // picker. It is not knowledge data and never gates the page: a failure here
+    // costs a friendly name, not a memory.
+    useEffect(() => {
+        if (!hasGenieBridge()) return;
+        void api()
+            .workspaces.list()
+            .then(setWorkspaces)
+            .catch(() => setWorkspaces([]));
+    }, []);
+
+    // The one-time audit of links the tightened resolver stopped resolving. Empty
+    // on most machines, which is the audit doing its job rather than a wasted one.
+    useEffect(() => {
+        if (!hasGenieBridge()) return;
+        void api()
+            .knowledge.linkAudit()
+            .then(setLinkAudit)
+            .catch(() => setLinkAudit([]));
     }, []);
 
     useEffect(() => {
@@ -132,12 +213,15 @@ export default function KnowledgePage() {
         }
         const t = setTimeout(() => {
             void api()
-                .knowledge.search(q)
+                .knowledge.search(q, {
+                    class: classFilter === 'all' ? undefined : classFilter,
+                    scope: scopeFilter === 'all' ? undefined : { kind: scopeFilter },
+                })
                 .then(setResults)
                 .catch(() => setResults([]));
         }, 200);
         return () => clearTimeout(t);
-    }, [query]);
+    }, [query, classFilter, scopeFilter]);
 
     const selectNode = useCallback(
         async (id: string) => {
@@ -158,7 +242,14 @@ export default function KnowledgePage() {
     );
 
     const saveMemory = useCallback(
-        async (draft: { id?: string; title: string; tags: string[]; body: string }) => {
+        async (draft: {
+            id?: string;
+            title: string;
+            tags: string[];
+            body: string;
+            class: MemoryClass;
+            scope: KnowledgeScope;
+        }) => {
             setBusy(true);
             try {
                 // Edges are derived main-side from the body's `[[wikilinks]]`
@@ -169,6 +260,8 @@ export default function KnowledgePage() {
                     title: draft.title,
                     body: draft.body,
                     tags: draft.tags,
+                    class: draft.class,
+                    scope: draft.scope,
                 };
                 const saved = draft.id
                     ? await api().knowledge.update(draft.id, input)
@@ -222,6 +315,9 @@ export default function KnowledgePage() {
             snippet: '',
             score: 0,
             tags: n.tags,
+            class: n.class,
+            scope: n.scope,
+            ns: n.ns,
         }));
 
     return (
@@ -273,6 +369,18 @@ export default function KnowledgePage() {
                 </div>
             )}
 
+            <LinkAuditNotice
+                entries={linkAudit}
+                onOpen={(id) => void selectNode(id)}
+                onDismiss={() => {
+                    // Optimistic: the rows are marked reviewed, not deleted, so
+                    // the worst case of a failed write is the notice returning on
+                    // the next open — not a finding lost.
+                    setLinkAudit([]);
+                    void api().knowledge.dismissLinkAudit().catch(() => {});
+                }}
+            />
+
             <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
                 {/* Left: search + list / graph. */}
                 <div
@@ -317,6 +425,25 @@ export default function KnowledgePage() {
                                 </button>
                             )}
                         </div>
+                        {/* Both filters narrow the SQL, not the returned page — a
+                            filtered view that quietly showed a truncated slice of
+                            an unfiltered fetch would be worse than no filter. */}
+                        <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                                <Select
+                                    value={classFilter}
+                                    onValueChange={(v) => setClassFilter(v as ClassFilter)}
+                                    list={CLASS_OPTIONS}
+                                />
+                            </div>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                                <Select
+                                    value={scopeFilter}
+                                    onValueChange={(v) => setScopeFilter(v as ScopeFilter)}
+                                    list={SCOPE_FILTER_OPTIONS}
+                                />
+                            </div>
+                        </div>
                     </div>
 
                     {leftView === 'list' ? (
@@ -347,6 +474,21 @@ export default function KnowledgePage() {
                                                 }}
                                             >
                                                 <span style={listTitleStyle}>{r.title}</span>
+                                                <span
+                                                    style={{
+                                                        display: 'flex',
+                                                        flexWrap: 'wrap',
+                                                        gap: 4,
+                                                        marginTop: 3,
+                                                    }}
+                                                >
+                                                    <ScopeChip
+                                                        scope={r.scope}
+                                                        workspaces={workspaces}
+                                                    />
+                                                    <ClassChip value={r.class} />
+                                                    {r.ns && <NsChip ns={r.ns} />}
+                                                </span>
                                                 {r.snippet && (
                                                     <span style={snippetStyle}>{r.snippet}</span>
                                                 )}
@@ -379,6 +521,7 @@ export default function KnowledgePage() {
                             <MemoryView
                                 node={selected}
                                 nodesById={nodesById}
+                                workspaces={workspaces}
                                 backlinks={nodes.filter((n) => n.links?.includes(selected.id))}
                                 onOpen={(id) => void selectNode(id)}
                                 onEdit={() => setMode('edit')}
@@ -403,9 +546,24 @@ export default function KnowledgePage() {
                                           title: selected.title,
                                           tags: selected.tags,
                                           body: selected.body,
+                                          class: selected.class,
+                                          scope: selected.scope,
                                       }
-                                    : { title: '', tags: [], body: '' }
+                                    : {
+                                          title: '',
+                                          tags: [],
+                                          body: '',
+                                          class: 'knowledge' as MemoryClass,
+                                          // A memory written HERE is the human's,
+                                          // and this window is workstation-wide —
+                                          // so `system` is the honest default. An
+                                          // agent's writes default to its own
+                                          // workspace instead, because an agent
+                                          // has one.
+                                          scope: { kind: 'system' } as KnowledgeScope,
+                                      }
                             }
+                            workspaces={workspaces}
                             busy={busy}
                             onCancel={() => setMode('view')}
                             onSave={(draft) => void saveMemory(draft)}
@@ -569,6 +727,7 @@ function GraphView({
 function MemoryView({
     node,
     nodesById,
+    workspaces,
     backlinks,
     onOpen,
     onEdit,
@@ -577,6 +736,7 @@ function MemoryView({
 }: {
     node: KnowledgeNode;
     nodesById: Map<string, KnowledgeNode>;
+    workspaces: WorkspaceRow[];
     backlinks: KnowledgeNode[];
     onOpen: (id: string) => void;
     onEdit: () => void;
@@ -607,10 +767,21 @@ function MemoryView({
                     <Heading as="h2" size="md">
                         {node.title || 'Untitled memory'}
                     </Heading>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+                    <div
+                        style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            flexWrap: 'wrap',
+                            gap: 8,
+                            marginTop: 6,
+                        }}
+                    >
                         <span style={sourceBadgeStyle(node.source)}>
                             {node.source === 'agent' ? 'agent' : 'you'}
                         </span>
+                        <ScopeChip scope={node.scope} workspaces={workspaces} />
+                        <ClassChip value={node.class} />
+                        {node.ns && <NsChip ns={node.ns} />}
                         <Text size="xs" className="text-zinc-500">
                             updated {updatedLabel}
                         </Text>
@@ -641,6 +812,8 @@ function MemoryView({
             </div>
 
             <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px', minHeight: 0 }}>
+                <UnresolvedNotice unresolved={node.unresolved ?? []} />
+
                 <article className="prose prose-invert max-w-3xl">
                     <ContentRenderer value={node.body || '_No content._'} format="markdown" />
                 </article>
@@ -664,6 +837,136 @@ function MemoryView({
                     </div>
                 )}
             </div>
+        </div>
+    );
+}
+
+/**
+ * The ONE-TIME notice for links that link resolution stopped resolving.
+ *
+ * Link resolution used to point an ambiguous `[[wikilink]]` at whichever memory
+ * happened to be stored last. It now points at nothing — safer, but a link that
+ * worked by luck stopping silently is the kind of change nobody notices, and a
+ * graph that quietly gets sparser is exactly what the change was meant to prevent.
+ * So each one is named here, once, with what it used to point at.
+ *
+ * Dismissing marks them reviewed; it does not delete them.
+ */
+function LinkAuditNotice({
+    entries,
+    onOpen,
+    onDismiss,
+}: {
+    entries: LinkAuditEntry[];
+    onOpen: (id: string) => void;
+    onDismiss: () => void;
+}) {
+    if (entries.length === 0) return null;
+    return (
+        <div
+            style={{
+                padding: '10px 16px',
+                borderBottom: BORDER,
+                background: 'rgba(251,191,36,0.07)',
+            }}
+        >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Text size="xs" style={{ color: '#fcd34d' }}>
+                    {entries.length === 1
+                        ? '1 link became ambiguous when link resolution was tightened.'
+                        : `${entries.length} links became ambiguous when link resolution was tightened.`}{' '}
+                    They used to point at one memory by luck; now they point at none. Link by id to
+                    say which you meant.
+                </Text>
+                <span style={{ flex: 1 }} />
+                <button type="button" style={secondaryBtnStyle} onClick={onDismiss}>
+                    Dismiss
+                </button>
+            </div>
+            <ul style={{ margin: '6px 0 0', padding: '0 0 0 16px' }}>
+                {entries.slice(0, 8).map((e) => (
+                    <li key={`${e.fromId}:${e.toRef}`} style={{ fontSize: 12, color: '#d4d4d8' }}>
+                        <button
+                            type="button"
+                            onClick={() => onOpen(e.fromId)}
+                            style={{ ...linkChipStyle, padding: '0 4px' }}
+                            title="Open this memory"
+                        >
+                            {e.fromTitle ?? e.fromId}
+                        </button>{' '}
+                        <code>[[{e.toRef}]]</code> — was “{e.wasTitle ?? e.wasId}”, one of{' '}
+                        {e.candidates}.
+                    </li>
+                ))}
+                {entries.length > 8 && (
+                    <li style={{ fontSize: 12, color: '#a1a1aa' }}>
+                        …and {entries.length - 8} more.
+                    </li>
+                )}
+            </ul>
+        </div>
+    );
+}
+
+/** Whose reasoning this memory belongs in. NOT a padlock — every scope is
+ *  readable from here and from any agent; the chip is orientation, not access. */
+function ScopeChip({ scope, workspaces }: { scope: KnowledgeScope; workspaces: WorkspaceRow[] }) {
+    return (
+        <span style={metaChipStyle('rgba(56,189,248,0.35)', '#7dd3fc')}>
+            {knowledgeScopeLabel(scope, workspaces)}
+        </span>
+    );
+}
+
+/** Which memory this is — the four kinds answer four different questions. */
+function ClassChip({ value }: { value: MemoryClass }) {
+    return <span style={metaChipStyle('rgba(163,163,163,0.3)', '#a1a1aa')}>{value}</span>;
+}
+
+/** The managed namespace a memory came from — Genie's own guides, or a pack.
+ *  Two packs may legitimately both ship a "Volume 1", so a title alone does not
+ *  say which one you are reading. */
+function NsChip({ ns }: { ns: string }) {
+    return <span style={metaChipStyle('rgba(251,191,36,0.35)', '#fcd34d')}>{ns}</span>;
+}
+
+/**
+ * The `[[wikilinks]]` in this memory that went nowhere.
+ *
+ * Ambiguity now resolves to NOTHING rather than to whichever memory happened to
+ * be scanned last, which is safer only if the drop is VISIBLE — a graph that
+ * quietly gets sparser is the failure the rule was meant to prevent, wearing the
+ * fix's clothes. `missing` is normal and says so: a forward reference links up on
+ * its own once the target exists.
+ */
+function UnresolvedNotice({ unresolved }: { unresolved: KnowledgeNode['unresolved'] }) {
+    const ambiguous = unresolved.filter((u) => u.reason !== 'missing');
+    if (ambiguous.length === 0) return null;
+    return (
+        <div
+            style={{
+                marginBottom: 16,
+                padding: '10px 12px',
+                border: '1px solid rgba(251,191,36,0.3)',
+                background: 'rgba(251,191,36,0.07)',
+                borderRadius: 8,
+            }}
+        >
+            <Text size="xs" style={{ color: '#fcd34d' }}>
+                {ambiguous.length === 1
+                    ? '1 link on this memory does not resolve.'
+                    : `${ambiguous.length} links on this memory do not resolve.`}
+            </Text>
+            <ul style={{ margin: '6px 0 0', padding: '0 0 0 16px' }}>
+                {ambiguous.map((u) => (
+                    <li key={`${u.reason}:${u.ref}`} style={{ fontSize: 12, color: '#d4d4d8' }}>
+                        <code>[[{u.ref}]]</code>{' '}
+                        {u.reason === 'ambiguous'
+                            ? `matches ${u.candidates} memories — link by id, or rename one, to say which you meant.`
+                            : `exists only outside what this memory may link to (${u.candidates}).`}
+                    </li>
+                ))}
+            </ul>
         </div>
     );
 }
@@ -703,23 +1006,72 @@ function LinkGroup({
 /** Add / edit a memory via the react-fancy markdown Editor. */
 function MemoryEditor({
     initial,
+    workspaces,
     busy,
     onCancel,
     onSave,
 }: {
-    initial: { id?: string; title: string; tags: string[]; body: string };
+    initial: {
+        id?: string;
+        title: string;
+        tags: string[];
+        body: string;
+        class: MemoryClass;
+        scope: KnowledgeScope;
+    };
+    workspaces: WorkspaceRow[];
     busy: boolean;
     onCancel: () => void;
-    onSave: (draft: { id?: string; title: string; tags: string[]; body: string }) => void;
+    onSave: (draft: {
+        id?: string;
+        title: string;
+        tags: string[];
+        body: string;
+        class: MemoryClass;
+        scope: KnowledgeScope;
+    }) => void;
 }) {
     const [title, setTitle] = useState(initial.title);
     const [tags, setTags] = useState<string[]>(initial.tags);
     const [body, setBody] = useState(initial.body);
+    const [memoryClass, setMemoryClass] = useState<MemoryClass>(initial.class);
+    // One flat picker rather than a kind + a ref: "which scope" and "which
+    // workspace" are one decision to the person making it, and splitting them
+    // into two controls invents a state (kind=workspace, ref=none) that cannot
+    // be saved.
+    const [scopeValue, setScopeValue] = useState<string>(scopePickerValue(initial.scope));
+
+    const scopeOptions = [
+        { value: 'system', label: 'Workstation — every agent, every workspace' },
+        ...workspaces.map((w) => ({
+            value: `workspace:${w.id}`,
+            label: `Workspace — ${w.project_name}`,
+        })),
+        // A gapp scope is not offered: a GApp's internal memory is written by
+        // that app, and a picker listing apps the human is not inside would be
+        // offering a filing cabinet nobody opens. An existing one is preserved
+        // below rather than silently rewritten.
+        ...(initial.scope.kind === 'gapp'
+            ? [
+                  {
+                      value: `gapp:${initial.scope.appId}`,
+                      label: `Genie App — ${initial.scope.appId}`,
+                  },
+              ]
+            : []),
+    ];
 
     const canSave = title.trim().length > 0 && !busy;
     const submit = () => {
         if (!canSave) return;
-        onSave({ id: initial.id, title: title.trim(), tags, body });
+        onSave({
+            id: initial.id,
+            title: title.trim(),
+            tags,
+            body,
+            class: memoryClass,
+            scope: parseKnowledgeScopeValue(scopeValue),
+        });
     };
 
     return (
@@ -765,9 +1117,28 @@ function MemoryEditor({
                     onChange={setTags}
                     placeholder="Add a tag and press Enter…"
                 />
+                <div style={{ display: 'flex', gap: 8 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                        <Text size="xs" className="text-zinc-500">
+                            Kind of memory
+                        </Text>
+                        <Select
+                            value={memoryClass}
+                            onValueChange={(v) => setMemoryClass(v as MemoryClass)}
+                            list={CLASS_OPTIONS.filter((o) => o.value !== 'all')}
+                        />
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                        <Text size="xs" className="text-zinc-500">
+                            Whose reasoning it belongs in
+                        </Text>
+                        <Select value={scopeValue} onValueChange={setScopeValue} list={scopeOptions} />
+                    </div>
+                </div>
                 <Text size="xs" className="text-zinc-500">
                     Link to another memory by its title with {'[[Memory Title]]'} — resolved
-                    links become graph edges.
+                    links become graph edges. A title that matches several memories links to
+                    none of them; link by id to say which you meant.
                 </Text>
             </div>
 
@@ -796,6 +1167,22 @@ function MemoryEditor({
 }
 
 // --- styles ----------------------------------------------------------------
+
+/** A small outlined chip for a node's scope / class / namespace. */
+function metaChipStyle(border: string, color: string): CSSProperties {
+    return {
+        display: 'inline-flex',
+        alignItems: 'center',
+        padding: '1px 6px',
+        borderRadius: 999,
+        border: `1px solid ${border}`,
+        color,
+        fontSize: 10,
+        lineHeight: '15px',
+        whiteSpace: 'nowrap',
+    };
+}
+
 
 const primaryBtnStyle: CSSProperties = {
     display: 'inline-flex',

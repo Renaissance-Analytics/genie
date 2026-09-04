@@ -5,6 +5,9 @@ import path from 'path';
 import fs from 'fs';
 import { randomUUID } from 'node:crypto';
 import { SYSTEM_WORKSPACE_ROW_ID } from './workspace/system-workspace-id';
+// Pure (no store, no electron): the v68 audit has to resolve links both the old
+// way and the new way, and importing the STORE here would be a cycle.
+import { buildLegacyResolver, buildLinkResolver } from './knowledge/resolve';
 import {
     devSiteIdFor,
     parseDevSites,
@@ -96,6 +99,23 @@ export const RETIRED_AGENT_COMMANDS: Record<string, string[]> = {
     genie: ['genie-tui'],
 };
 
+/** What a migration pass has to report back to whoever ran it. */
+export interface MigrationResult {
+    /** The versions applied in THIS pass (empty when the db was already current). */
+    applied: number[];
+    /**
+     * v68's one-time link audit: how many `[[wikilinks]]` used to resolve by
+     * last-row-wins and now resolve to nothing (spec §6.5). Null when v68 did not
+     * run in this pass.
+     *
+     * It rides out on the result rather than living only in
+     * `knowledge_link_audit` so the count can be SAID -- a graph that quietly got
+     * sparser is the failure the audit exists to prevent, and an audit nobody
+     * hears is the same silence one table further along.
+     */
+    ambiguousLinks: number | null;
+}
+
 /**
  * Whether `db` has a table by this name.
  *
@@ -119,7 +139,7 @@ function migrationHasTable(db: Database.Database, name: string): boolean {
  * migration suite can exercise the runner against a fresh `:memory:`
  * database without the Electron `app.getPath` singleton path.
  */
-export function runMigrations(d: Database.Database): void {
+export function runMigrations(d: Database.Database): MigrationResult {
     d.exec(`CREATE TABLE IF NOT EXISTS schema_version (
         version INTEGER PRIMARY KEY
     )`);
@@ -129,6 +149,8 @@ export function runMigrations(d: Database.Database): void {
         )
         .get();
     const current = row?.version ?? 0;
+    const applied: number[] = [];
+    let ambiguousLinks: number | null = null;
 
     const migrations: Array<{ version: number; runner: (db: Database.Database) => void }> = [
         {
@@ -2198,6 +2220,139 @@ export function runMigrations(d: Database.Database): void {
                 }
             },
         },
+        {
+            // v68 -- KNOWLEDGE SCOPE + PROVENANCE, and the one-time link audit
+            // (genie#395; knowledge graph spec §4.1, §6.2, §6.5).
+            //
+            // Guarded throughout -- column-exists before every ADD COLUMN,
+            // IF NOT EXISTS on every index and table, INSERT OR IGNORE in the
+            // audit -- because the migration suite REWINDS `schema_version` and
+            // replays the tail, so this runs again against a database that
+            // already has everything it creates. v47 learned that the hard way:
+            // `ALTER TABLE ... RENAME TO` has no IF NOT EXISTS and took 36 tests
+            // in four unrelated files down with it until it was guarded.
+            //
+            // ## Scope
+            //
+            // A node says WHOSE REASONING it belongs in --
+            // `system | workspace | gapp`. Every existing node becomes `system`
+            // with no ref, `origin='local'`, `role='part'`, which is EXACTLY
+            // today's behaviour: the store has always been workstation-wide and
+            // every node has always been visible from everywhere. Nothing moves
+            // and nothing disappears. Same safe direction as v38's
+            // `class='knowledge'` backfill.
+            //
+            // Nodes are deliberately NOT retro-assigned to a workspace. There is
+            // no evidence in the row about which one wrote them -- the tool never
+            // resolved a workspace at all -- and a wrong guess HIDES knowledge,
+            // which is the one outcome worse than showing too much.
+            //
+            // Columns rather than a `scope_json` blob (which is what `wishes`
+            // uses): a wish is read whole and filtered in memory, while a
+            // knowledge node is filtered on EVERY retrieval, inside SQL, under an
+            // FTS join. `json_extract` per candidate cannot be indexed the way
+            // `(scope_kind, scope_ref)` can.
+            //
+            // ## Provenance
+            //
+            // `origin`/`origin_ns`/`origin_key`/`origin_revision`/`origin_hash`
+            // plus a pending-update slot are what a later converger needs to tell
+            // "Genie wrote this and the user never touched it" from "the user
+            // edited it" -- so an improved guide can be offered without clobbering
+            // somebody's edit.
+            //
+            // `origin_ns` and `origin_key` are LIVE from this migration: link
+            // resolution reads them to decide which nodes a `[[wikilink]]` inside
+            // a given node may reach. The rest -- revision, hash, the pending slot
+            // -- are inert until the converger lands, deliberately: the schema
+            // change and the behaviour change are separate releases.
+            //
+            // `origin_ns` duplicates the prefix of `origin_key`, and the CHECK is
+            // what keeps the one denormalisation honest: a row where the two
+            // disagree cannot be written at all. It is spelled slightly stronger
+            // than the spec's version -- `origin_key IS NOT NULL AND ...` --
+            // because a CHECK whose expression evaluates to NULL PASSES in SQLite,
+            // so `origin_ns` set with no `origin_key` would otherwise slip
+            // through.
+            //
+            // ## The one-time link audit
+            //
+            // Link resolution stops guessing: where two nodes share a title, the
+            // shipped resolver's map let the LAST row silently win, and it now
+            // resolves to nothing instead. That is safe in one direction only --
+            // it can turn a WRONG link into no link, never a right link into a
+            // wrong one -- but a link that "worked" by luck stops working and the
+            // user has no reason to look. A graph that quietly gets sparser is
+            // exactly the kind of silent change this design objects to everywhere
+            // else.
+            //
+            // So this walks every edge ONCE, with the OLD title map, before the
+            // new resolver is live, and records each ref that used to resolve and
+            // now would not. The count rides out on the migration result so it can
+            // be said out loud rather than left in a column. Rows are kept, never
+            // deleted, so "I dismissed it and now I want it back" has an answer.
+            //
+            // Empty is the expected result on most machines. An audit that reports
+            // nothing is the audit doing its job, not a wasted one.
+            version: 68,
+            runner: (db) => {
+                const cols = tableColumns(db, 'knowledge_nodes');
+                const add = (name: string, decl: string): void => {
+                    if (!cols.has(name)) {
+                        db.exec(`ALTER TABLE knowledge_nodes ADD COLUMN ${name} ${decl}`);
+                    }
+                };
+                add('scope_kind', `TEXT NOT NULL DEFAULT 'system'`);
+                add('scope_ref', 'TEXT');
+                add('origin', `TEXT NOT NULL DEFAULT 'local'`);
+                // origin_key first: origin_ns's CHECK references it.
+                add('origin_key', 'TEXT');
+                add(
+                    'origin_ns',
+                    `TEXT CHECK (origin_ns IS NULL
+                                 OR (origin_key IS NOT NULL AND origin_key LIKE origin_ns || '/%'))`,
+                );
+                add('origin_revision', 'INTEGER');
+                add('origin_hash', 'TEXT');
+                add('role', `TEXT NOT NULL DEFAULT 'part'`);
+                add('sort_order', 'INTEGER NOT NULL DEFAULT 0');
+                add('pending_revision', 'INTEGER');
+                add('pending_body', 'TEXT');
+                add('pending_hash', 'TEXT');
+
+                db.exec(`
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_nodes_origin_key
+                        ON knowledge_nodes(origin_key) WHERE origin_key IS NOT NULL;
+                    CREATE INDEX IF NOT EXISTS idx_knowledge_nodes_scope
+                        ON knowledge_nodes(scope_kind, scope_ref);
+                    CREATE INDEX IF NOT EXISTS idx_knowledge_nodes_ns
+                        ON knowledge_nodes(origin_ns, sort_order);
+                    CREATE INDEX IF NOT EXISTS idx_knowledge_nodes_title
+                        ON knowledge_nodes(title COLLATE NOCASE);
+
+                    -- Without this, a user deleting a Genie guide node or a pack
+                    -- node gets it back on the next converge, forever -- the same
+                    -- clobber the hash comparison exists to prevent, in a
+                    -- different hat.
+                    CREATE TABLE IF NOT EXISTS knowledge_origin_tombstones (
+                        origin_key TEXT PRIMARY KEY,
+                        deleted_at INTEGER NOT NULL,
+                        reason     TEXT
+                    );
+
+                    CREATE TABLE IF NOT EXISTS knowledge_link_audit (
+                        from_id     TEXT NOT NULL,
+                        to_ref      TEXT NOT NULL,
+                        was_id      TEXT NOT NULL,
+                        candidates  INTEGER NOT NULL,
+                        reviewed_at INTEGER,
+                        PRIMARY KEY (from_id, to_ref)
+                    );
+                `);
+
+                ambiguousLinks = auditTightenedLinks(db);
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -2210,8 +2365,68 @@ export function runMigrations(d: Database.Database): void {
     );
 
     for (const m of migrations) {
-        if (m.version > current) apply(m);
+        if (m.version > current) {
+            apply(m);
+            applied.push(m.version);
+        }
     }
+    return { applied, ambiguousLinks };
+}
+
+/**
+ * WHAT THE TIGHTENED RESOLVER BREAKS, named once, before it goes live.
+ *
+ * Walks every edge with BOTH resolvers -- the shipped last-row-wins title map and
+ * the unique-or-null rule replacing it -- and records each ref that used to
+ * resolve and now would not. Returns how many it found.
+ *
+ * Only a ref that USED to resolve is recorded. A forward reference (`[[Foo]]`
+ * written before Foo exists) resolved to nothing before and resolves to nothing
+ * now; reporting it would bury the real findings under the normal ones.
+ *
+ * `INSERT OR IGNORE`, so a re-run keeps a `reviewed_at` the user has already set
+ * rather than resurrecting a notice they dismissed. The count returned is what
+ * the audit FOUND, not what it inserted, so a second pass reports the same
+ * number rather than zero.
+ *
+ * Cost is one pass over `knowledge_edges` against a map already in memory, at a
+ * moment when no pack exists and no graph is large.
+ */
+function auditTightenedLinks(db: Database.Database): number {
+    const nodes = db
+        .prepare<[], { id: string; title: string; slug: string }>(
+            'SELECT id, title, slug FROM knowledge_nodes',
+        )
+        .all();
+    if (nodes.length === 0) return 0;
+
+    const legacy = buildLegacyResolver(nodes);
+    // Every node is `origin='local'` at this point -- the backfill has just run
+    // and nothing has ever written a namespace -- so the new ladder is its rule
+    // 6: a bare title across everything, unique-or-null.
+    const tightened = buildLinkResolver(
+        nodes.map((n) => ({ ...n, originNs: null, originKey: null })),
+    );
+
+    const edges = db
+        .prepare<[], { from_id: string; to_ref: string }>(
+            'SELECT DISTINCT from_id, to_ref FROM knowledge_edges',
+        )
+        .all();
+    const record = db.prepare(
+        `INSERT OR IGNORE INTO knowledge_link_audit (from_id, to_ref, was_id, candidates)
+         VALUES (?, ?, ?, ?)`,
+    );
+
+    let found = 0;
+    for (const e of edges) {
+        const before = legacy(e.to_ref);
+        if (!before.id) continue;
+        if (tightened(null, e.to_ref).id) continue;
+        found++;
+        record.run(e.from_id, e.to_ref, before.id, before.candidates);
+    }
+    return found;
 }
 
 function workspaceColumns(d: Database.Database): Set<string> {

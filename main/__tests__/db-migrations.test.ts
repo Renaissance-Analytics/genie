@@ -2180,3 +2180,240 @@ describe('db migration v65 (sweep the no-op channel flag)', () => {
         expect(storedCommand(db, 'mine')).toBe('claude --model opus --dangerously-skip-permissions');
     });
 });
+
+/**
+ * v68 — SCOPE + PROVENANCE on knowledge nodes, and the one-time link audit
+ * (knowledge graph spec §4.1, §6.2, §6.5).
+ *
+ * Two guarantees, and the second is the one that is easy to get wrong.
+ *
+ * The BACKFILL must be a no-op in behaviour: every existing node becomes
+ * `scope_kind='system'`, `origin='local'`, `role='part'` — which is exactly what
+ * the store already did, since it has always been workstation-wide and every
+ * node has always been visible everywhere. Nothing moves, nothing disappears.
+ * Nodes are deliberately NOT retro-assigned to a workspace: nothing in the row
+ * says which one wrote them, and a wrong guess HIDES knowledge.
+ *
+ * The AUDIT exists because §4.5 changes ambiguous link resolution from
+ * last-row-wins to null. That is safer, but a link that "worked" today by luck
+ * stops working and the user has no reason to look. So v68 walks every edge ONCE
+ * with the old title map, before the new resolver goes live, and records each ref
+ * that used to resolve and now would not. Empty is the expected result on most
+ * machines — an audit that reports nothing is the audit doing its job.
+ */
+describe('db migration v68 (knowledge scope + provenance + link audit)', () => {
+    /** Re-run v68 against a db that already holds knowledge rows. */
+    function rerun68(db: Database.Database): ReturnType<typeof runMigrations> {
+        db.prepare('DELETE FROM schema_version WHERE version >= 68').run();
+        return runMigrations(db);
+    }
+
+    function addNode(db: Database.Database, id: string, title: string, slug = ''): void {
+        db.prepare(
+            `INSERT INTO knowledge_nodes (id, title, slug, body, tags, source, created_at, updated_at)
+             VALUES (?, ?, ?, '', '[]', 'user', 1, 1)`,
+        ).run(id, title, slug || title.toLowerCase().replace(/[^a-z0-9]+/g, '-'));
+    }
+
+    function addEdge(db: Database.Database, from: string, ref: string): void {
+        db.prepare(
+            `INSERT INTO knowledge_edges (from_id, to_ref, kind) VALUES (?, ?, 'wiki')`,
+        ).run(from, ref);
+    }
+
+    it('adds the scope, provenance and pending columns to knowledge_nodes', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        const c = cols(db, 'knowledge_nodes');
+        for (const col of [
+            'scope_kind',
+            'scope_ref',
+            'origin',
+            'origin_ns',
+            'origin_key',
+            'origin_revision',
+            'origin_hash',
+            'role',
+            'sort_order',
+            'pending_revision',
+            'pending_body',
+            'pending_hash',
+        ]) {
+            expect(c.has(col), `knowledge_nodes is missing ${col}`).toBe(true);
+        }
+    });
+
+    it('a node written before scope existed reads back system / local / part', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        addNode(db, 'legacy', 'Legacy note');
+
+        const row = db
+            .prepare<
+                [string],
+                {
+                    scope_kind: string;
+                    scope_ref: string | null;
+                    origin: string;
+                    role: string;
+                    sort_order: number;
+                }
+            >(
+                'SELECT scope_kind, scope_ref, origin, role, sort_order FROM knowledge_nodes WHERE id = ?',
+            )
+            .get('legacy');
+
+        expect(row).toEqual({
+            scope_kind: 'system',
+            scope_ref: null,
+            origin: 'local',
+            role: 'part',
+            sort_order: 0,
+        });
+    });
+
+    it('creates the tombstone and link-audit tables', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        const tables = new Set(
+            db
+                .prepare<[], { name: string }>(`SELECT name FROM sqlite_master WHERE type = 'table'`)
+                .all()
+                .map((r) => r.name),
+        );
+        expect(tables.has('knowledge_origin_tombstones')).toBe(true);
+        expect(tables.has('knowledge_link_audit')).toBe(true);
+    });
+
+    it('refuses a row whose origin_ns and origin_key disagree', () => {
+        // The one denormalisation in the schema, kept honest by storage rather
+        // than by discipline.
+        const db = new Database(':memory:');
+        runMigrations(db);
+        addNode(db, 'n1', 'A node');
+
+        expect(() =>
+            db
+                .prepare(`UPDATE knowledge_nodes SET origin_ns = ?, origin_key = ? WHERE id = ?`)
+                .run('pack.a', 'pack.b/thing', 'n1'),
+        ).toThrow(/CHECK/i);
+
+        // Positive control: the agreeing pair is accepted.
+        expect(() =>
+            db
+                .prepare(`UPDATE knowledge_nodes SET origin_ns = ?, origin_key = ? WHERE id = ?`)
+                .run('pack.a', 'pack.a/thing', 'n1'),
+        ).not.toThrow();
+    });
+
+    it('refuses two nodes claiming the same origin_key', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        addNode(db, 'n1', 'One');
+        addNode(db, 'n2', 'Two');
+        db.prepare(
+            `UPDATE knowledge_nodes SET origin_ns = 'p', origin_key = 'p/x' WHERE id = 'n1'`,
+        ).run();
+
+        expect(() =>
+            db
+                .prepare(`UPDATE knowledge_nodes SET origin_ns = 'p', origin_key = 'p/x' WHERE id = 'n2'`)
+                .run(),
+        ).toThrow(/UNIQUE/i);
+    });
+
+    it('records a link that used to resolve by luck and now would not', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        addNode(db, 'v1a', 'Volume 1');
+        addNode(db, 'v1b', 'Volume 1');
+        addNode(db, 'idx', 'Index');
+        addEdge(db, 'idx', 'Volume 1');
+
+        const result = rerun68(db);
+
+        const rows = db
+            .prepare<
+                [],
+                {
+                    from_id: string;
+                    to_ref: string;
+                    was_id: string;
+                    candidates: number;
+                    reviewed_at: number | null;
+                }
+            >(
+                'SELECT from_id, to_ref, was_id, candidates, reviewed_at FROM knowledge_link_audit',
+            )
+            .all();
+        expect(rows).toEqual([
+            { from_id: 'idx', to_ref: 'Volume 1', was_id: 'v1b', candidates: 2, reviewed_at: null },
+        ]);
+        expect(result.ambiguousLinks).toBe(1);
+    });
+
+    it('records nothing when every link is unambiguous — the expected result', () => {
+        // The positive control for the case above: this must be empty because the
+        // links are FINE, not because the audit never runs.
+        const db = new Database(':memory:');
+        runMigrations(db);
+        addNode(db, 'v1', 'Volume 1');
+        addNode(db, 'idx', 'Index');
+        addEdge(db, 'idx', 'Volume 1');
+
+        const result = rerun68(db);
+
+        expect(db.prepare('SELECT COUNT(*) n FROM knowledge_link_audit').get()).toEqual({ n: 0 });
+        expect(result.ambiguousLinks).toBe(0);
+    });
+
+    it('does not record a link that never resolved in the first place', () => {
+        // A forward reference is not a regression: it did not resolve before and
+        // it does not resolve now. Reporting it would bury the real findings.
+        const db = new Database(':memory:');
+        runMigrations(db);
+        addNode(db, 'idx', 'Index');
+        addEdge(db, 'idx', 'Never Written');
+
+        rerun68(db);
+
+        expect(db.prepare('SELECT COUNT(*) n FROM knowledge_link_audit').get()).toEqual({ n: 0 });
+    });
+
+    it('is idempotent — re-running converges without throwing', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        addNode(db, 'v1a', 'Volume 1');
+        addNode(db, 'v1b', 'Volume 1');
+        addNode(db, 'idx', 'Index');
+        addEdge(db, 'idx', 'Volume 1');
+        rerun68(db);
+
+        expect(() => rerun68(db)).not.toThrow();
+        expect(db.prepare('SELECT COUNT(*) n FROM knowledge_link_audit').get()).toEqual({ n: 1 });
+        const c = cols(db, 'knowledge_nodes');
+        expect(c.has('scope_kind')).toBe(true);
+        expect(c.has('origin_key')).toBe(true);
+    });
+
+    it('keeps a review the user has already done when the audit runs again', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        addNode(db, 'v1a', 'Volume 1');
+        addNode(db, 'v1b', 'Volume 1');
+        addNode(db, 'idx', 'Index');
+        addEdge(db, 'idx', 'Volume 1');
+        rerun68(db);
+        db.prepare('UPDATE knowledge_link_audit SET reviewed_at = 999').run();
+
+        rerun68(db);
+
+        expect(
+            db
+                .prepare<[], { reviewed_at: number | null }>(
+                    'SELECT reviewed_at FROM knowledge_link_audit',
+                )
+                .get()?.reviewed_at,
+        ).toBe(999);
+    });
+});

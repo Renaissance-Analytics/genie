@@ -127,6 +127,8 @@ import {
 import { groupPendingByWorkspace, pendingCount } from './ask/inbox';
 import type { ForceAnswer } from './mcp/protocol';
 import { getKnowledgeStore } from './knowledge/store';
+import type { MemoryClass, KnowledgeScopeFilter } from './knowledge/types';
+import type { GenieScope } from './genie-scope';
 import { writeWorkspaceAgentMcp } from './mcp/agent-config';
 import {
     TYNN_HEALTH_CHANNEL,
@@ -1909,30 +1911,65 @@ export function registerIpcHandlers(): void {
     // Mutations broadcast `knowledge:changed` (via the store's emitter) so a live
     // window re-fetches — incl. nodes an agent added over MCP. openWindow
     // create-or-focuses the singleton Genie-skinned window.
+    // `class` and `scope` cross this boundary too. Shipping scope without class
+    // would leave the human surface unable to express half the model — the window
+    // was class-blind, so every user-written memory landed as `knowledge` and no
+    // filter existed for the other three. `scope` here is a FILTER shape, and
+    // omitting it covers every scope: this window is the human's view of the whole
+    // workstation store, not one agent's working set.
     ipcMain.handle(
         'knowledge:search',
-        (_e, query: string, opts?: { limit?: number; tags?: string[] }) =>
+        (
+            _e,
+            query: string,
+            opts?: {
+                limit?: number;
+                tags?: string[];
+                class?: MemoryClass;
+                scope?: KnowledgeScopeFilter;
+            },
+        ) =>
             getKnowledgeStore().search({
                 query: String(query ?? ''),
                 limit: opts?.limit,
                 tags: opts?.tags,
+                class: opts?.class,
+                scope: opts?.scope,
             }),
     );
-    ipcMain.handle('knowledge:list', (_e, opts?: { tag?: string; limit?: number }) =>
-        getKnowledgeStore().list(opts ?? {}),
+    ipcMain.handle(
+        'knowledge:list',
+        (
+            _e,
+            opts?: {
+                tag?: string;
+                limit?: number;
+                class?: MemoryClass;
+                scope?: KnowledgeScopeFilter;
+            },
+        ) => getKnowledgeStore().list(opts ?? {}),
     );
     ipcMain.handle('knowledge:get', (_e, id: string) => getKnowledgeStore().get(id));
     ipcMain.handle(
         'knowledge:add',
         (
             _e,
-            input: { title: string; body?: string; tags?: string[]; links?: string[] },
+            input: {
+                title: string;
+                body?: string;
+                tags?: string[];
+                links?: string[];
+                class?: MemoryClass;
+                scope?: GenieScope;
+            },
         ) =>
             getKnowledgeStore().add({
                 title: input?.title ?? '',
                 body: input?.body,
                 tags: input?.tags,
                 links: input?.links,
+                class: input?.class,
+                scope: input?.scope,
                 source: 'user',
             }),
     );
@@ -1941,11 +1978,26 @@ export function registerIpcHandlers(): void {
         (
             _e,
             id: string,
-            patch: { title?: string; body?: string; tags?: string[]; links?: string[] },
+            patch: {
+                title?: string;
+                body?: string;
+                tags?: string[];
+                links?: string[];
+                class?: MemoryClass;
+                scope?: GenieScope;
+            },
         ) => getKnowledgeStore().update(id, patch ?? {}),
     );
     ipcMain.handle('knowledge:delete', (_e, id: string) => getKnowledgeStore().delete(id));
     ipcMain.handle('knowledge:graph', () => getKnowledgeStore().graph());
+    // The one-time link audit (spec §6.5). Ambiguous `[[wikilinks]]` used to
+    // resolve to whichever row was scanned last and now resolve to nothing; the
+    // migration recorded every link that changed, and this is how the window says
+    // it out loud instead of leaving it in a column.
+    ipcMain.handle('knowledge:link-audit', () => getKnowledgeStore().linkAudit());
+    ipcMain.handle('knowledge:link-audit-dismiss', () =>
+        getKnowledgeStore().dismissLinkAudit(),
+    );
     ipcMain.handle('knowledge:open-window', () => {
         showKnowledgeWindow();
         return { ok: true };

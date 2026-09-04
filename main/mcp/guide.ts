@@ -554,19 +554,49 @@ kind you meant. Omitting it on a read covers every class, exactly as before.
 It is still ONE graph — \`[[wikilink]]\`s cross classes freely, so a \`procedural\`
 memory should cite the \`knowledge\` node it was learned from.
 
+**Every memory also has a SCOPE** (\`scope\`) — whose reasoning it belongs in:
+- \`system\` — the whole workstation. Every agent, every workspace.
+- \`workspace\` — the one workspace it was written in.
+- \`gapp\` — internal to one Genie App.
+
+On \`search\`/\`list\` it says which scopes to cover, and **omitting it covers your
+own** — \`system\`, plus your workspace, plus your app. Pass \`all\` to cover every
+scope on the machine. On \`add\` it says where to FILE the memory, and defaults to
+**your workspace** (or \`system\` when you are not in one) — so say
+\`scope: 'system'\` deliberately for something every agent on this machine should
+find.
+
+> **SCOPE IS NOISE REDUCTION IN YOUR REASONING. IT IS NOT A SECURITY BOUNDARY.**
+> \`all\` is allowed from every caller and returns every memory on the machine —
+> nothing here refuses a read. Scope exists so your context is not polluted by
+> knowledge you have no business acting on, and nothing else. Never treat it as a
+> permission, and never put anything in this store that must actually be withheld
+> from an agent.
+
+**LINKS: an ambiguous \`[[wikilink]]\` resolves to NOTHING.** When several memories
+share the title you wrote, the link points at NEITHER rather than at whichever one
+happened to be stored last. Every node you read carries an \`unresolved\` array
+naming each such ref: \`ambiguous\` (say which you meant — link by \`id\`) or
+\`missing\` (nothing has that title yet, which is fine — a forward reference links
+itself up once the target exists).
+
 Actions (\`action\`):
 - \`search\` — keyword retrieval (needs \`query\`; optional \`limit\`, \`class\` to
-  restrict to ONE class, and \`tags\` to restrict to nodes carrying ALL those
-  tags). Returns ranked hits carrying their own \`class\`. **Search FIRST** to see
-  what's already known.
-- \`get\` — a node by \`id\` (full body + its linked node ids).
+  restrict to ONE class, \`scope\`, \`cursor\`, and \`tags\` to restrict to nodes
+  carrying ALL those tags). Returns ranked hits carrying their own \`class\`,
+  \`scope\` and \`ns\`. **Search FIRST** to see what's already known.
+- \`get\` — a node by \`id\` (full body + its linked node ids + \`unresolved\`).
 - \`add\` — create a node: \`title\` (required), optional markdown \`body\` (put
-  \`[[wikilink]]\`s to related nodes in it), optional \`class\`, optional \`tags\`,
-  optional explicit \`links\` (ids/titles/slugs). Returns the new \`id\`.
-- \`list\` — recent nodes (optional \`class\`, \`tag\`, \`limit\`). This is how you ask
-  an EPISODIC question — "what happened recently" is ordered by recency and has
-  no query string to search for.
+  \`[[wikilink]]\`s to related nodes in it), optional \`class\`, optional \`scope\`,
+  optional \`tags\`, optional explicit \`links\` (ids/titles/slugs). Returns the
+  new \`id\`.
+- \`list\` — recent nodes (optional \`class\`, \`scope\`, \`tag\`, \`limit\`, \`cursor\`).
+  This is how you ask an EPISODIC question — "what happened recently" is ordered
+  by recency and has no query string to search for.
 - \`link\` — add an edge from node \`from\` to \`to\` (an id, title, or slug).
+
+\`search\` and \`list\` return \`nextCursor\`: pass it back as \`cursor\` for the next
+page, and \`null\` means that was the last one.
 Keyword search is always available (no API key, no setup, works offline). Prefer
 searching before adding a duplicate, and cross-link related memories with
 \`[[wikilink]]\`s so the graph stays connected.
