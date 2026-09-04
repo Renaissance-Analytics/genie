@@ -13,8 +13,11 @@ const pexecFile = promisify(execFile);
  * status and bring the node online, so the Work Mode settings can surface the
  * tailnet + reachable peers and a one-click "connect" without a separate app.
  *
- * The JSON mapping (`parseTailscaleStatus`) is PURE so it's unit-tested without a
- * real tailnet; the CLI-invoking wrappers are thin around it.
+ * Everything platform- or output-dependent is a PURE function — the JSON mapping
+ * (`parseTailscaleStatus`), the CLI lookup (`resolveTailscaleCliPath`), the
+ * failure classifier (`classifyTailscaleFailure`) and the remedy text
+ * (`tailscaleRemedy`) — so Linux behaviour is unit-tested from any dev box and
+ * the CLI-invoking wrappers stay thin.
  */
 
 export interface TailnetPeer {
@@ -27,16 +30,52 @@ export interface TailnetPeer {
     dnsName: string | null;
 }
 
+/**
+ * What Genie could establish about Tailscale on this machine. These are five
+ * DIFFERENT situations with five different remedies; before genie#380/#396 the
+ * first four all rendered as "Installed · offline" and offered an Install button
+ * that fixes only one of them.
+ *
+ *  - `absent`         — no `tailscale` binary. Install it.
+ *  - `stopped`        — the CLI is here, the local `tailscaled` daemon is not
+ *                       reachable. On Arch `pacman -S tailscale` does NOT enable
+ *                       the unit, so this is the normal post-install state.
+ *  - `needs-operator` — the daemon is up but this user may not drive it.
+ *  - `needs-login`    — daemon reachable and permitted, node not up. "Bring
+ *                       online" is the remedy (it may hand back a login URL).
+ *  - `running`        — BackendState === 'Running'.
+ *  - `unknown`        — the CLI failed in a way we do not recognise. We say so
+ *                       and surface the raw error rather than guess a remedy.
+ */
+export type TailscaleState =
+    | 'absent'
+    | 'stopped'
+    | 'needs-operator'
+    | 'needs-login'
+    | 'running'
+    | 'unknown';
+
+/** What to tell the user, and the exact command that fixes it (when there is one). */
+export interface TailscaleRemedy {
+    message: string;
+    /** A shell command the user can run verbatim. Absent when none applies. */
+    command?: string;
+}
+
 export interface TailscaleStatus {
-    /** The `tailscale` CLI was found on this machine. */
+    /** The `tailscale` CLI was found on this machine. Derived from `state`. */
     installed: boolean;
     /** BackendState === 'Running' — the node is up + authenticated. */
     running: boolean;
+    /** The specific state, so the UI stops collapsing four of them into "offline". */
+    state: TailscaleState;
     /** This node's tailnet identity (null before the first `up`). */
     self: { ip: string | null; hostname: string; online: boolean; dnsName: string | null } | null;
     peers: TailnetPeer[];
     /** A login URL Tailscale surfaces when the node needs interactive auth. */
     authUrl?: string | null;
+    /** How to get out of `state`; null when nothing is wrong (or nothing is known). */
+    remedy?: TailscaleRemedy | null;
 }
 
 /** First IPv4 in a TailscaleIPs[] (the list also carries the IPv6 ULA). */
@@ -50,22 +89,181 @@ function stripDnsDot(name?: string): string | null {
     return n || null;
 }
 
-/** Resolve the `tailscale` CLI path for this platform, or null when not installed. */
-export function tailscaleCliPath(): string | null {
-    if (process.platform === 'win32') {
+/**
+ * Directories a Linux Tailscale lands in, for the case where Genie's inherited
+ * PATH is not the user's shell PATH (a GUI/AppImage launch usually isn't).
+ */
+const LINUX_TAILSCALE_DIRS = [
+    '/usr/bin',
+    '/usr/local/bin',
+    '/usr/sbin',
+    '/opt/tailscale/bin',
+    '/snap/bin',
+    '/home/linuxbrew/.linuxbrew/bin',
+];
+
+/**
+ * PURE: resolve the `tailscale` CLI for `platform`, or null when it is not
+ * installed. Fed the filesystem predicate and `PATH` so every platform's branch
+ * is unit-tested from any dev box.
+ *
+ * genie#380: Linux used to return the bare string `'tailscale'` with NO check,
+ * so `installed` was never established there — it was assumed, and the caller's
+ * `installed: false` branch was dead code. Linux now looks the binary up on
+ * PATH and then along {@link LINUX_TAILSCALE_DIRS}, exactly as the other two
+ * platforms already checked their candidates.
+ */
+export function resolveTailscaleCliPath(
+    platform: NodeJS.Platform,
+    exists: (p: string) => boolean,
+    pathEnv: string | undefined,
+): string | null {
+    if (platform === 'win32') {
         const p = 'C:\\Program Files\\Tailscale\\tailscale.exe';
-        return fs.existsSync(p) ? p : null;
+        return exists(p) ? p : null;
     }
-    if (process.platform === 'darwin') {
+    if (platform === 'darwin') {
         const candidates = [
             '/Applications/Tailscale.app/Contents/MacOS/Tailscale',
             '/usr/local/bin/tailscale',
             '/opt/homebrew/bin/tailscale',
         ];
-        return candidates.find((c) => fs.existsSync(c)) ?? null;
+        return candidates.find((c) => exists(c)) ?? null;
     }
-    // Linux: the CLI is on PATH (the package installs to /usr/bin/tailscale).
-    return 'tailscale';
+    // POSIX PATH separator — NOT path.delimiter, which is ';' when these tests
+    // (or a cross-platform caller) run on Windows.
+    const fromPath = (pathEnv ?? '')
+        .split(':')
+        .map((dir) => dir.trim().replace(/\/+$/, ''))
+        .filter(Boolean);
+    for (const dir of [...fromPath, ...LINUX_TAILSCALE_DIRS]) {
+        const candidate = `${dir}/tailscale`;
+        if (exists(candidate)) return candidate;
+    }
+    return null;
+}
+
+/** Resolve the `tailscale` CLI path for this machine, or null when not installed. */
+export function tailscaleCliPath(): string | null {
+    return resolveTailscaleCliPath(process.platform, fs.existsSync, process.env.PATH);
+}
+
+/** The error shape `child_process` rejects with (plus whatever the CLI printed). */
+export interface TailscaleCliFailure {
+    /** 'ENOENT' / 'EACCES' for a spawn failure; the exit code for a run failure. */
+    code?: string | number;
+    stdout?: string;
+    stderr?: string;
+    message?: string;
+}
+
+/** A Tailscale login URL anywhere in the CLI's output. */
+const AUTH_URL = /(https:\/\/login\.tailscale\.com\/[^\s]+)/;
+
+/**
+ * PURE: what does this failed `tailscale` invocation mean?
+ *
+ * The matchers below are Tailscale's ACTUAL messages, not invented ones:
+ *   - `cmd/tailscale/cli/diag.go` prints the "failed to connect to local
+ *     tailscaled; it doesn't appear to be running (sudo systemctl start
+ *     tailscaled ?)" family, and a distinct "(which appears to be running as …)"
+ *     variant for a daemon that IS up but whose socket refused us.
+ *   - `client/local/local.go` prefixes a denial with `Access denied: `, and
+ *     `cmd/tailscale/cli/cli.go` appends "To not require root, use 'sudo
+ *     tailscale set --operator=$USER' once."
+ *
+ * Anything unmatched is 'unknown' — the caller then surfaces the raw error
+ * rather than naming a remedy that may not apply.
+ */
+export function classifyTailscaleFailure(
+    f: TailscaleCliFailure,
+): Exclude<TailscaleState, 'running'> {
+    const text = `${f.stdout ?? ''}\n${f.stderr ?? ''}\n${f.message ?? ''}`;
+
+    // The binary is gone (or unusable). NEVER read this as "installed, offline".
+    if (typeof f.code === 'string' && ['ENOENT', 'EACCES', 'ENOTDIR'].includes(f.code)) {
+        return 'absent';
+    }
+    if (/\b(ENOENT|ENOTDIR)\b/.test(text)) return 'absent';
+
+    // Interactive auth — the one case the old code handled.
+    if (AUTH_URL.test(text) || /to authenticate, visit/i.test(text)) return 'needs-login';
+
+    // Denied by the daemon: not root, not an operator. Checked BEFORE the
+    // connect-failure family because diag.go's "appears to be running as …,
+    // pid …" wrapper carries both.
+    if (
+        /access denied/i.test(text) ||
+        /--operator=/.test(text) ||
+        /operator access/i.test(text) ||
+        /permission denied/i.test(text) ||
+        /(must be run as|requires) root/i.test(text)
+    ) {
+        return 'needs-operator';
+    }
+
+    // The daemon isn't there to talk to.
+    if (
+        /failed to connect to (the )?local (tailscaled|tailscale)/i.test(text) ||
+        /doesn't appear to be running/i.test(text) ||
+        /is (the )?tailscale(d)? (service |daemon )?running\?/i.test(text)
+    ) {
+        return 'stopped';
+    }
+
+    return 'unknown';
+}
+
+/**
+ * PURE: the one-line explanation + the exact command that clears `state` on
+ * `platform`. Null when there is nothing to fix, or nothing we can name.
+ *
+ * We never guess a package manager — an install is the download page / the
+ * Install button, not a `pacman`/`apt` line we cannot know is right.
+ */
+export function tailscaleRemedy(
+    state: TailscaleState,
+    platform: NodeJS.Platform,
+): TailscaleRemedy | null {
+    switch (state) {
+        case 'absent':
+            return { message: 'Tailscale is not installed on this machine.' };
+        case 'stopped':
+            if (platform === 'linux') {
+                return {
+                    message:
+                        'Tailscale is installed, but the tailscaled service is not running. ' +
+                        'Installing the package does not enable the unit.',
+                    command: 'sudo systemctl enable --now tailscaled',
+                };
+            }
+            if (platform === 'darwin') {
+                return { message: 'Tailscale is installed but not running — open the Tailscale app.' };
+            }
+            return {
+                message:
+                    'Tailscale is installed but the Tailscale service is not running — ' +
+                    'start Tailscale, then refresh.',
+            };
+        case 'needs-operator':
+            if (platform === 'win32') {
+                return {
+                    message:
+                        'Tailscale refused this account. Bring the node online from the Tailscale ' +
+                        'app (or run Genie as an administrator), then refresh.',
+                };
+            }
+            return {
+                message: 'Tailscale will not take commands from this user yet — grant it once.',
+                command: 'sudo tailscale set --operator=$USER',
+            };
+        case 'needs-login':
+            return { message: 'Tailscale needs you to log in.' };
+        default:
+            // 'running' — nothing wrong. 'unknown' — we do not know, so we do
+            // not invent a remedy; the caller surfaces the raw error instead.
+            return null;
+    }
 }
 
 /**
@@ -75,7 +273,9 @@ export function tailscaleCliPath(): string | null {
  * `TailscaleIPs[]` (IPv4 first), `HostName`, `Online`, `OS`. Malformed input maps
  * to a safe "not running, no peers" result rather than throwing.
  */
-export function parseTailscaleStatus(json: string): Omit<TailscaleStatus, 'installed'> {
+export function parseTailscaleStatus(
+    json: string,
+): Omit<TailscaleStatus, 'installed' | 'state' | 'remedy'> {
     let data: {
         BackendState?: string;
         AuthURL?: string;
@@ -116,41 +316,160 @@ export function parseTailscaleStatus(json: string): Omit<TailscaleStatus, 'insta
     };
 }
 
-/** Read the tailnet status. `installed: false` when the CLI isn't present. */
-export async function getTailscaleStatus(): Promise<TailscaleStatus> {
-    const cli = tailscaleCliPath();
-    if (!cli) return { installed: false, running: false, self: null, peers: [] };
+/**
+ * Seams for the two CLI wrappers below, so their Linux behaviour is testable
+ * without a Linux box (or a real tailnet). Defaults are the real thing.
+ */
+export interface TailscaleCliDeps {
+    /** Where the CLI is; null = not installed. */
+    cliPath?: () => string | null;
+    /** Runs the CLI; rejects with a {@link TailscaleCliFailure}-shaped error. */
+    run?: (
+        cli: string,
+        args: string[],
+        timeoutMs: number,
+    ) => Promise<{ stdout: string; stderr: string }>;
+    /** The platform whose remedies apply. */
+    platform?: NodeJS.Platform;
+}
+
+function runCli(
+    cli: string,
+    args: string[],
+    timeoutMs: number,
+): Promise<{ stdout: string; stderr: string }> {
+    return pexecFile(cli, args, { windowsHide: true, timeout: timeoutMs });
+}
+
+const EMPTY = { self: null, peers: [] as TailnetPeer[] };
+
+/** Is this stdout the status document, rather than noise printed alongside an
+ *  error? The "parse the stdout of a non-zero exit" path is only valid for the
+ *  former — otherwise a denial with a line on stdout would outrank what its
+ *  stderr plainly says. */
+function looksLikeStatusJson(stdout: string): boolean {
     try {
-        const { stdout } = await pexecFile(cli, ['status', '--json'], {
-            windowsHide: true,
-            timeout: 8000,
-        });
-        return { installed: true, ...parseTailscaleStatus(stdout) };
-    } catch (e) {
-        // `tailscale status` exits non-zero when stopped / needs-login but still
-        // prints the JSON on stdout — parse that before giving up.
-        const stdout = (e as { stdout?: string })?.stdout;
-        if (stdout) return { installed: true, ...parseTailscaleStatus(stdout) };
-        return { installed: true, running: false, self: null, peers: [] };
+        const v = JSON.parse(stdout);
+        return !!v && typeof v === 'object';
+    } catch {
+        return false;
     }
 }
 
+/** Build a status from a state alone (no tailnet data to report). */
+function statusFor(state: TailscaleState, platform: NodeJS.Platform): TailscaleStatus {
+    return {
+        installed: state !== 'absent',
+        running: state === 'running',
+        state,
+        ...EMPTY,
+        remedy: tailscaleRemedy(state, platform),
+    };
+}
+
 /**
- * Bring this node online (`tailscale up`). Returns the login URL when interactive
- * auth is needed (Tailscale prints it to stderr) so the caller can open it.
+ * Read the tailnet status. Distinguishes absent / stopped / needs-operator /
+ * needs-login / running (genie#380, genie#396) — `installed` is ESTABLISHED from
+ * the resolved binary and the failure code, never assumed.
  */
-export async function tailscaleUp(): Promise<{ ok: boolean; authUrl?: string | null; message?: string }> {
-    const cli = tailscaleCliPath();
-    if (!cli) return { ok: false, message: 'Tailscale is not installed.' };
+export async function getTailscaleStatus(deps: TailscaleCliDeps = {}): Promise<TailscaleStatus> {
+    const platform = deps.platform ?? process.platform;
+    const cli = (deps.cliPath ?? tailscaleCliPath)();
+    if (!cli) return statusFor('absent', platform);
+    const run = deps.run ?? runCli;
     try {
-        await pexecFile(cli, ['up'], { windowsHide: true, timeout: 30000 });
-        return { ok: true };
+        const { stdout } = await run(cli, ['status', '--json'], 8000);
+        const parsed = parseTailscaleStatus(stdout);
+        const state: TailscaleState = parsed.running ? 'running' : 'needs-login';
+        return {
+            installed: true,
+            state,
+            ...parsed,
+            remedy: tailscaleRemedy(state, platform),
+        };
     } catch (e) {
-        const err = e as { stdout?: string; stderr?: string; message?: string };
-        const out = `${err.stdout ?? ''}\n${err.stderr ?? ''}`;
-        const url = /(https:\/\/login\.tailscale\.com\/[^\s]+)/.exec(out)?.[1] ?? null;
-        if (url) return { ok: false, authUrl: url, message: 'Tailscale needs you to log in.' };
-        return { ok: false, message: (err.message ?? 'tailscale up failed').slice(0, 300) };
+        const err = e as TailscaleCliFailure;
+        // `tailscale status` exits non-zero when the node is stopped / needs
+        // login but still prints the JSON on stdout — parse that before giving
+        // up: the daemon answered, so this is not a daemon problem.
+        if (err?.stdout && looksLikeStatusJson(err.stdout)) {
+            const parsed = parseTailscaleStatus(err.stdout);
+            const state: TailscaleState = parsed.running ? 'running' : 'needs-login';
+            return {
+                installed: true,
+                state,
+                ...parsed,
+                remedy: tailscaleRemedy(state, platform),
+            };
+        }
+        return statusFor(classifyTailscaleFailure(err ?? {}), platform);
+    }
+}
+
+export interface TailscaleUpResult {
+    ok: boolean;
+    /** Present when Tailscale wants an interactive login. */
+    authUrl?: string | null;
+    message?: string;
+    /** What blocked the bring-online, so the UI offers the RIGHT affordance. */
+    state?: TailscaleState;
+    /** The exact command that clears `state`, when there is one. */
+    command?: string;
+}
+
+/**
+ * Bring this node online (`tailscale up`).
+ *
+ * genie#396: this used to recognise exactly ONE failure — an auth URL — and
+ * return a truncated raw error for everything else, which is what both standard
+ * Linux failures hit (a `tailscaled` that was never enabled, and a user who is
+ * not a Tailscale operator). Neither ever produces a login URL. Each failure is
+ * now classified and answered with the command that fixes it; an unrecognised
+ * failure still hands back the raw error rather than a guess.
+ */
+export async function tailscaleUp(deps: TailscaleCliDeps = {}): Promise<TailscaleUpResult> {
+    const platform = deps.platform ?? process.platform;
+    const cli = (deps.cliPath ?? tailscaleCliPath)();
+    if (!cli) {
+        const remedy = tailscaleRemedy('absent', platform);
+        return { ok: false, state: 'absent', message: remedy?.message };
+    }
+    const run = deps.run ?? runCli;
+    try {
+        await run(cli, ['up'], 30000);
+        return { ok: true, state: 'running' };
+    } catch (e) {
+        const err = e as TailscaleCliFailure;
+        const out = `${err?.stdout ?? ''}\n${err?.stderr ?? ''}\n${err?.message ?? ''}`;
+        const state = classifyTailscaleFailure(err ?? {});
+        if (state === 'needs-login') {
+            const url = AUTH_URL.exec(out)?.[1] ?? null;
+            return {
+                ok: false,
+                state,
+                authUrl: url,
+                message: url
+                    ? 'Tailscale needs you to log in.'
+                    : (tailscaleRemedy(state, platform)?.message ?? 'Tailscale needs you to log in.'),
+            };
+        }
+        const remedy = tailscaleRemedy(state, platform);
+        if (remedy) {
+            return {
+                ok: false,
+                state,
+                message: remedy.command
+                    ? `${remedy.message} Run: ${remedy.command}`
+                    : remedy.message,
+                ...(remedy.command ? { command: remedy.command } : {}),
+            };
+        }
+        // Unrecognised — surface the real error rather than invent a cause.
+        return {
+            ok: false,
+            state,
+            message: (err?.message ?? 'tailscale up failed').slice(0, 300),
+        };
     }
 }
 

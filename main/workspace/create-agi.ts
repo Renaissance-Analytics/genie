@@ -15,7 +15,12 @@ import { identityToApply } from './commit-identity';
 import { applyAgentsSection, hasGenieAgentsSection } from '../mcp/agent-config';
 import { getAllSettings } from '../db';
 import { getToken } from '../github/storage';
-import { githubCloneAuth, isHostGithubGhConfigured, redactSecrets } from './git-auth';
+import {
+    explainCloneFailure,
+    githubCloneAuth,
+    isHostGithubGhConfigured,
+    redactSecrets,
+} from './git-auth';
 
 const execFileAsync = promisify(execFile);
 
@@ -858,8 +863,10 @@ export async function cloneAgiEnvelope(
             ['--recurse-submodules'],
         );
     } catch (e) {
-        // Scrub the token before the error propagates (callers wrap + log it).
-        throw new Error(redactSecrets((e as Error).message, auth.secrets));
+        // Scrub the token before the error propagates (callers wrap + log it),
+        // then collapse a per-submodule SSH wall into its one remedy (genie#378).
+        const raw = redactSecrets((e as Error).message, auth.secrets);
+        throw new Error(explainCloneFailure(raw) ?? raw);
     }
     return { path: dest };
 }

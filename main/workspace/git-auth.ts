@@ -36,6 +36,18 @@ export function githubSshToHttps(url: string): string {
 }
 
 /**
+ * Is this URL an HTTPS github.com clone URL (optionally carrying userinfo)?
+ *
+ * Decides whether a NO-TOKEN clone still pins its submodule pass to HTTPS: when
+ * the parent goes over HTTPS, whatever authenticated it (gh's credential helper,
+ * a cached credential, or nothing at all for a public repo) covers the
+ * submodules too. An SSH parent is left alone — see {@link githubCloneAuth}.
+ */
+export function isGithubHttpsUrl(url: string): boolean {
+    return /^https?:\/\/([^@/]*@)?github\.com\//i.test(url.trim());
+}
+
+/**
  * Base64 the `x-access-token:<token>` basic-auth credential GitHub expects for
  * an App/OAuth token over HTTPS git. Used to build the extraheader value; the
  * result carries the token, so it is NEVER logged and is scrubbed from surfaced
@@ -124,9 +136,19 @@ export interface GitHubCloneAuthOpts {
  *    The token is ignored and no secrets are surfaced.
  *  - else WITH a token: rewrite a github SSH URL to HTTPS and authenticate the
  *    whole recursive tree over HTTPS with the token (see {@link githubAuthConfig}).
- *  - else WITHOUT a token: hand back the trimmed URL and NO config, preserving
- *    the exact ambient-auth behavior (SSH agent / credential helper, local
- *    `file://` submodules) for users who haven't connected GitHub to Genie.
+ *  - else WITHOUT a token: hand back the trimmed URL — so an SSH parent still
+ *    clones over SSH with the user's ambient auth — and add config only when the
+ *    parent is an HTTPS github.com URL, where the {@link githubInsteadOfRewrites}
+ *    keep the SUBMODULE pass on the same auth path the parent just used.
+ *
+ * genie#378: that last case is a real Omarchy failure. With no Genie token the
+ * parent cloned fine over HTTPS (gh's credential helper answered) and then every
+ * `git@github.com:` submodule failed with `Host key verification failed` — one
+ * clone spanning two credential systems, only one of which Genie has ever
+ * verified or can prompt for. The rewrites carry NO credential, so adding them
+ * cannot leak anything; they only stop the recursion switching schemes. An SSH
+ * parent must NOT be rewritten: that would take a working SSH clone onto HTTPS,
+ * where a user with no token has no credential at all.
  */
 export function githubCloneAuth(
     rawUrl: string,
@@ -142,7 +164,13 @@ export function githubCloneAuth(
             secrets: [],
         };
     }
-    if (!token) return { url: trimmed, config: [], secrets: [] };
+    if (!token) {
+        return {
+            url: trimmed,
+            config: isGithubHttpsUrl(trimmed) ? githubInsteadOfRewrites() : [],
+            secrets: [],
+        };
+    }
     return {
         url: githubSshToHttps(trimmed),
         config: githubAuthConfig(token),
@@ -150,6 +178,95 @@ export function githubCloneAuth(
         // error could carry either.
         secrets: [token, basicAuthValue(token)],
     };
+}
+
+/**
+ * The submodule paths git named as failed, in order, de-duplicated. Git prints
+ * `Failed to clone 'repos/x'. Retry scheduled` once per submodule, so a wide
+ * envelope produces the same five lines ten times over.
+ */
+function failedSubmodulePaths(raw: string): string[] {
+    const seen = new Set<string>();
+    for (const m of raw.matchAll(/Failed to clone '([^']+)'/g)) {
+        const p = m[1].trim();
+        if (p) seen.add(p);
+    }
+    return [...seen];
+}
+
+/** ` Submodules: repos/a, repos/b.` — capped, so a 20-submodule envelope still
+ *  produces one line rather than a second wall. */
+function submoduleSuffix(paths: string[]): string {
+    if (paths.length === 0) return '';
+    const shown = paths.slice(0, 6).join(', ');
+    const more = paths.length > 6 ? `, +${paths.length - 6} more` : '';
+    return ` ${paths.length === 1 ? 'Submodule' : 'Submodules'}: ${shown}${more}.`;
+}
+
+/**
+ * PURE: translate a failed `git clone` into ONE actionable line, or null when
+ * we do not recognise it (the caller then surfaces the raw error — we never
+ * replace a real message with a guess).
+ *
+ * genie#378: a recursive clone that fails on SSH repeats the same five lines per
+ * submodule, and the one line that matters — `Host key verification failed` —
+ * is buried at about one part in ten. Worse, its most visible line reads
+ * `ssh_askpass: exec(/usr/lib/ssh/ssh-askpass): No such file or directory`,
+ * which looks like a missing Genie dependency and is not: git is running with no
+ * tty, so ssh cannot ask "trust this host?" on a terminal, escalates to
+ * SSH_ASKPASS, finds nothing, and fails closed. The actionable content is a
+ * single `ssh -T git@github.com`.
+ */
+export function explainCloneFailure(raw: string): string | null {
+    const text = raw ?? '';
+    if (!text.trim()) return null;
+    const subs = submoduleSuffix(failedSubmodulePaths(text));
+
+    // github.com's host key was never accepted on this machine. `ssh_askpass`
+    // is the same fault wearing a different hat — ssh had no way to ask.
+    if (/host key verification failed/i.test(text) || /ssh_askpass/i.test(text)) {
+        return (
+            "GitHub's SSH host key is not trusted on this machine, so the SSH half of this " +
+            'clone could not run.' +
+            subs +
+            ' Run `ssh -T git@github.com` once to accept it and retry — or connect GitHub in ' +
+            'Settings, and Genie will clone the whole tree over HTTPS instead.'
+        );
+    }
+
+    // The host key is fine; the key itself was refused.
+    if (/permission denied \(publickey/i.test(text)) {
+        return (
+            'GitHub rejected this machine’s SSH key.' +
+            subs +
+            ' Add the key to your GitHub account, or connect GitHub in Settings so Genie ' +
+            'clones over HTTPS instead.'
+        );
+    }
+
+    // HTTPS with no usable credential — git could not even prompt for one.
+    if (
+        /could not read (username|password)/i.test(text) ||
+        /terminal prompts disabled/i.test(text) ||
+        /authentication failed/i.test(text) ||
+        /invalid username or password/i.test(text)
+    ) {
+        return (
+            'GitHub would not authenticate this clone.' +
+            subs +
+            ' Connect GitHub in Settings, then retry.'
+        );
+    }
+
+    if (/repository not found/i.test(text) || /remote:\s*not found/i.test(text)) {
+        return (
+            'GitHub returned "repository not found" — the repo is private, renamed, or not ' +
+            'visible to the account Genie is connected as.' +
+            subs
+        );
+    }
+
+    return null;
 }
 
 /**

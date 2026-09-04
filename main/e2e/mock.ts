@@ -336,6 +336,7 @@ export function registerE2EMocks(): void {
             usingOverride: false,
             activeClientId: 'Iv1.e2e…dev',
             storageOk: true,
+            storageHint: null,
             flow: g.flow,
         };
     });

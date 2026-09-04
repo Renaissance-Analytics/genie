@@ -89,6 +89,7 @@ import {
 import type { SavedPrompt } from '../components/Master/GenieCommandWindow';
 import { ToolchainSetupWizard } from '../components/Master/ToolchainSetupWizard';
 import { checkedAgoLabel, pluginSummaryLine } from '../lib/plugins-view';
+import { tailscalePanelView } from '../lib/tailscale-panel';
 import {
     engineActionAvailability,
     engineGroups,
@@ -1583,6 +1584,7 @@ function GitHubSection() {
     const [activeClientId, setActiveClientId] = useState('');
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [storageOk, setStorageOk] = useState(true);
+    const [storageHint, setStorageHint] = useState<string | null>(null);
     const [needsReauth, setNeedsReauth] = useState(false);
     const [reauthFailure, setReauthFailure] = useState<{
         code: string;
@@ -1616,6 +1618,7 @@ function GitHubSection() {
         setUsingOverride(st.usingOverride);
         setActiveClientId(st.activeClientId);
         setStorageOk(st.storageOk);
+        setStorageHint(st.storageHint ?? null);
         setNeedsReauth(st.needsReauth);
         setReauthFailure(st.reauthFailure);
         // Where the App is installed — drives the zero-install prompt + the
@@ -1754,8 +1757,11 @@ function GitHubSection() {
         >
             {!storageOk && (
                 <div className="set-note bad">
+                    {/* Cause supplied by main — it can see the session bus and
+                        the selected backend. Naming missing packages was wrong
+                        on a machine that had them installed (genie#379). */}
                     OS keychain unavailable. Genie won't store a GitHub token
-                    unencrypted. On Linux: install gnome-keyring / libsecret.
+                    unencrypted.{storageHint ? ` ${storageHint}` : ''}
                 </div>
             )}
 
@@ -4080,7 +4086,10 @@ function TailscaleSection() {
             } else if (r.authUrl) {
                 await api().tailscale.openAuth(r.authUrl);
                 setMsg('Opened the Tailscale login — sign in, then click Refresh.');
-            } else {
+            } else if (!r.command) {
+                // A classified failure carries a command, and the refresh below
+                // re-reads the same state — so its remedy note says this once.
+                // Only an UNRECOGNISED failure needs the raw error surfaced here.
                 setMsg(r.message ?? 'Could not bring Tailscale online.');
             }
             await refresh();
@@ -4089,25 +4098,23 @@ function TailscaleSection() {
         }
     };
 
-    const installed = status?.installed ?? false;
     const running = status?.running ?? false;
-    const selfIp = status?.self?.ip ?? null;
     const onlinePeers = (status?.peers ?? []).filter((p) => p.online);
 
-    const label = !status
-        ? '—'
-        : !installed
-            ? 'Not installed'
-            : running
-                ? `Connected${selfIp ? ` · ${selfIp}` : ''}`
-                : 'Installed · offline';
-    const color = !status
-        ? 'var(--fg-3)'
-        : !installed
-            ? 'var(--rose-500)'
-            : running
-                ? 'var(--emerald-600)'
-                : 'var(--amber-600)';
+    // Which label, which affordance and which remedy — a PURE decision, so the
+    // thing genie#380/#396 were about is unit-tested rather than living in JSX.
+    // Four situations used to share "Installed · offline", and Install was
+    // offered in three where Tailscale was already installed.
+    const view = tailscalePanelView(status);
+    const { label, remedy } = view;
+    const color =
+        view.tone === 'neutral'
+            ? 'var(--fg-3)'
+            : view.tone === 'bad'
+                ? 'var(--rose-500)'
+                : view.tone === 'ok'
+                    ? 'var(--emerald-600)'
+                    : 'var(--amber-600)';
 
     return (
         <SetSection
@@ -4115,14 +4122,17 @@ function TailscaleSection() {
             desc="The encrypted network Work Mode runs over"
             status={label}
             statusColor={color}
-            statusIcon={!installed ? 'alert-triangle' : running ? 'check' : 'circle'}
+            statusIcon={view.tone === 'bad' ? 'alert-triangle' : running ? 'check' : 'circle'}
         >
             <SettingRow
                 label="Connection"
                 keywords="tailscale install online connect network vpn tailnet"
                 desc="Genie manages Tailscale for you — no separate app. Work Mode binds only to your tailnet, so your projects are reachable from your own devices and nothing else."
             >
-                {!installed && (
+                {/* Install is offered ONLY when Tailscale is genuinely absent.
+                    Offering it for a stopped daemon or a missing operator grant
+                    sends the user to reinstall software that is already there. */}
+                {view.showInstall && (
                     <Action
                         size="sm"
                         color="blue"
@@ -4133,7 +4143,7 @@ function TailscaleSection() {
                         Install
                     </Action>
                 )}
-                {installed && !running && (
+                {view.showBringOnline && (
                     <Action
                         size="sm"
                         color="blue"
@@ -4170,6 +4180,22 @@ function TailscaleSection() {
                                   .join(', ')}`}
                     </Text>
                 </SettingRow>
+            )}
+
+            {/* Name the remedy for whatever is actually blocking the tailnet —
+                a `tailscaled` that was never enabled and a user who is not a
+                Tailscale operator each need one command, and neither used to be
+                distinguishable from "not installed" (genie#396). */}
+            {remedy && (
+                <div className="set-note">
+                    {remedy.message}
+                    {remedy.command && (
+                        <>
+                            {' '}
+                            <code>{remedy.command}</code>
+                        </>
+                    )}
+                </div>
             )}
 
             {msg && <div className="set-note">{msg}</div>}

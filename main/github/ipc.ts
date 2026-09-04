@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron';
+import { ipcMain, safeStorage } from 'electron';
 import { genieInstallUrl } from '../config';
 import {
     DeviceCodeResponse,
@@ -20,6 +20,11 @@ import {
     reauthFailureMessage,
     saveTokenSet,
 } from './storage';
+import {
+    SECRET_SERVICE_NAME,
+    keychainUnavailableHint,
+    probeOwnedBusNames,
+} from '../secrets/linux-password-store';
 import {
     createRepo,
     forkRepo,
@@ -67,6 +72,50 @@ type FlowStatus =
 let status: FlowStatus = { kind: 'idle' };
 let abortCtl: AbortController | null = null;
 
+let hintCache: { at: number; hint: string } | null = null;
+const HINT_TTL_MS = 10_000;
+
+/**
+ * Why secrets-at-rest is unavailable RIGHT NOW, or null while it works
+ * (genie#379). Probes the session bus only in the broken case, so the healthy
+ * path costs nothing.
+ */
+function keychainStorageHint(): string | null {
+    if (isStorageAvailable()) return null;
+    // `github:status` is polled every few seconds during a device flow, and the
+    // probe below spawns a process. The session's bus state does not change on
+    // that timescale, so a short TTL keeps the broken path from shelling out on
+    // every poll while still noticing a keyring the user just started.
+    if (hintCache && Date.now() - hintCache.at < HINT_TTL_MS) return hintCache.hint;
+    let selectedBackend: string | null = null;
+    try {
+        // Linux-only Electron API; absent on other platforms and older builds.
+        const get = (safeStorage as { getSelectedStorageBackend?: () => string })
+            .getSelectedStorageBackend;
+        if (process.platform === 'linux' && typeof get === 'function') {
+            selectedBackend = get.call(safeStorage) ?? null;
+        }
+    } catch {
+        /* a diagnostic must never throw into the status handler */
+    }
+    let secretServiceOwned = false;
+    try {
+        secretServiceOwned =
+            process.platform === 'linux' &&
+            probeOwnedBusNames([SECRET_SERVICE_NAME]).includes(SECRET_SERVICE_NAME);
+    } catch {
+        /* no bus / no tooling — treated as "nothing is answering" */
+    }
+    const hint = keychainUnavailableHint({
+        platform: process.platform,
+        desktop: process.env.XDG_CURRENT_DESKTOP,
+        secretServiceOwned,
+        selectedBackend,
+    });
+    hintCache = { at: Date.now(), hint };
+    return hint;
+}
+
 export function registerGithubIpc(): void {
     ipcMain.handle('github:status', async (): Promise<{
         connected: boolean;
@@ -82,6 +131,8 @@ export function registerGithubIpc(): void {
         usingOverride: boolean;
         activeClientId: string;
         storageOk: boolean;
+        /** Why storage is unavailable, when it is — null while it works. */
+        storageHint: string | null;
         flow: FlowStatus;
     }> => {
         const override = getClientIdOverride();
@@ -113,6 +164,10 @@ export function registerGithubIpc(): void {
             // actually in play without leaking it to logs/screenshots.
             activeClientId: maskClientId(active),
             storageOk: isStorageAvailable(),
+            // genie#379: the old renderer text named missing packages as the cause,
+            // which was confidently wrong on a machine that had them. Say what is
+            // actually true of THIS session instead.
+            storageHint: keychainStorageHint(),
             flow: status,
         };
     });
