@@ -378,6 +378,17 @@ export async function describeWorkspaceForMcp(
         // an agent that learns the repos but not this orients itself as if this
         // were an ordinary project, which is exactly what happened.
         gappDev: gappDevStatusFor(terminalId),
+        // …and the other answer to the same question (Tynn #269). The operator's
+        // charter says it does not do project work; orientation told it the repos
+        // were the primary resource and ended by asking which one to work on.
+        //
+        // Read from the DESIGNATION the workspace row carries, never from the
+        // caller's `agent_id`. That identity branch would be one more entry in a
+        // deliberately pinned count (`main/__tests__/osa-special-cases.test.ts`),
+        // and it would also be the wrong question: a second workspace granted the
+        // designation has the same job, so it gets the same orientation. One
+        // indexed lookup on a row this function has already resolved.
+        workstationOperator: isWorkstationOperator(ws.id),
         docHealth: (() => {
             const dh = workspaceDocHealth(root);
             return {
