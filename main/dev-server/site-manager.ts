@@ -808,9 +808,75 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
     const lastFailure = new Map<string, DevSiteStatus>();
     const starting = new Map<string, Promise<DevSiteStatus>>();
 
-    /** Ports currently held by live sites — passed to the allocator so a new site
-     *  can never be handed a port another live site already holds. */
-    const livePortSet = () => new Set([...live.values()].map((e) => e.caddyHostPort));
+    /**
+     * A process Genie asked to stop and did NOT get, kept so it stays REACHABLE
+     * (genie#226).
+     *
+     * `stop` removes the entry from `live` before it attempts the stop, so a
+     * process that refused to die was simply forgotten: no later `stop` could
+     * reach it, and its port was no longer excluded from allocation. #367 made
+     * that visible in the response; this stops it happening.
+     *
+     * The issue records the residual as "a later `start` can be handed a port a
+     * surviving process still holds". That exact harm cannot occur —
+     * `allocateFreePort` binds `:0` and takes what the OS gives, and no OS hands
+     * out a port that is currently bound (`port-probe.test.ts` proves it). What
+     * excluding these ports genuinely closes is the narrower window where the
+     * orphan has been spawned but has not bound its port yet — the same window
+     * `exclude` exists for in the first place.
+     */
+    interface OrphanProcess {
+        /** The spawn id — the site's, or its FastCGI worker's. */
+        spawnId: string;
+        /** The loopback port it was holding when Genie lost track of it. */
+        port?: number;
+    }
+    const orphans = new Map<string, OrphanProcess[]>();
+
+    /** Ports currently held by live sites, plus those an orphan is still on —
+     *  passed to the allocator so a new site can never be handed one of them. */
+    const livePortSet = () =>
+        new Set([
+            ...[...live.values()].map((e) => e.caddyHostPort),
+            ...[...orphans.values()].flatMap((list) =>
+                list.map((o) => o.port).filter((p): p is number => p !== undefined),
+            ),
+        ]);
+
+    /** Stop every candidate, THEN ask which survived. Ordered that way on
+     *  purpose: a FastCGI worker often exits with the site it serves, and
+     *  probing it before its parent has been asked to stop would manufacture an
+     *  orphan out of a process that was about to go. */
+    async function stopEach(candidates: OrphanProcess[]): Promise<OrphanProcess[]> {
+        if (!deps.hostSpawn) return [];
+        for (const c of candidates) await deps.hostSpawn.stop(c.spawnId).catch(() => {});
+        const survivors: OrphanProcess[] = [];
+        for (const c of candidates) if (await stillAlive(c.spawnId)) survivors.push(c);
+        return survivors;
+    }
+
+    /** Ask a site's recorded orphans to die again, forgetting the ones that
+     *  have. The ONLY path that can reach them, since they left `live`. */
+    async function retryOrphans(siteId: string): Promise<OrphanProcess[]> {
+        const held = orphans.get(siteId);
+        if (!held) return [];
+        const survivors = await stopEach(held);
+        if (survivors.length > 0) orphans.set(siteId, survivors);
+        else orphans.delete(siteId);
+        return survivors;
+    }
+
+    /** Drop orphans that have since died, without asking them to stop again.
+     *  Run before a start, so a dead orphan cannot hold a port out of the pool
+     *  for the rest of the session. */
+    async function pruneOrphans(): Promise<void> {
+        for (const [siteId, held] of [...orphans]) {
+            const alive: OrphanProcess[] = [];
+            for (const o of held) if (await stillAlive(o.spawnId)) alive.push(o);
+            if (alive.length > 0) orphans.set(siteId, alive);
+            else orphans.delete(siteId);
+        }
+    }
 
     const changed = () => {
         try {
@@ -1624,6 +1690,9 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
     async function start(workspaceId: string, siteId: string): Promise<DevSiteStatus> {
         const pending = starting.get(siteId);
         if (pending) return pending;
+        // An orphan that has since died must not keep its port out of the pool
+        // for the rest of the session (genie#226).
+        await pruneOrphans();
         const promise = startOnce(workspaceId, siteId)
             .then((status) => {
                 if (status.state === 'running') lastFailure.delete(siteId);
@@ -1656,35 +1725,38 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             // site may still have a `.gen` hosts line / host-Caddy vhost from a prior
             // run, so fire changed() to let the host-browser reconcile DRAIN it. A
             // redundant schedule is harmless (the reconcile no-ops when in sync).
+            //
+            // A process an earlier stop asked to die and did not get is owed a
+            // RETRY here (genie#226). It left `live` at that failed stop, so this
+            // branch is the only one that can reach it — and returning a clean
+            // `orphaned: []` was reporting nothing to do about a process Genie
+            // had already established was still running.
+            const survivors = await retryOrphans(siteId);
             changed();
-            return { orphaned: [], external: false };
+            return { orphaned: survivors.map((o) => o.spawnId), external: false };
         }
         live.delete(siteId);
         // MANAGED HOST-NATIVE (story #238): Genie owns the dev server process — stop
         // it. No container runtime involved.
         if (entry.config.runMode === 'host') {
-            const orphaned: string[] = [];
-            if (deps.hostSpawn) {
-                await deps.hostSpawn.stop(siteId).catch(() => {});
-                // Stop the PHP FastCGI worker companion too — a no-op for a static or
-                // proxy site, which has no such process tracked.
-                await deps.hostSpawn.stop(fcgiSiteId(siteId)).catch(() => {});
-                // …and ASK whether either survived (genie#226). Both stops above
-                // swallow their failure, and the entry has already left `live` —
-                // so a process that did not die is one `livePortSet()` no longer
-                // excludes and no later stop can reach. Reporting "stopped"
-                // regardless is the success nobody verified; `alive()` is the
-                // check, and it was already here (it is what `adopt` and the
-                // worker watchdog use).
-                if (await stillAlive(siteId)) orphaned.push(siteId);
-                // The worker is only probed for a site that HAD one; asking about
-                // a companion that never existed would manufacture an orphan.
-                if (entry.fcgiPort !== undefined && (await stillAlive(fcgiSiteId(siteId)))) {
-                    orphaned.push(fcgiSiteId(siteId));
-                }
+            // The site, plus the PHP FastCGI worker companion — the latter only
+            // for a site that HAD one, since asking about a companion that never
+            // existed would manufacture an orphan.
+            const candidates: OrphanProcess[] = [{ spawnId: siteId, port: entry.caddyHostPort }];
+            if (entry.fcgiPort !== undefined) {
+                candidates.push({ spawnId: fcgiSiteId(siteId), port: entry.fcgiPort });
             }
+            // ASK whether either survived (genie#226). `hostSpawn.stop` swallows
+            // its failure and the entry has already left `live`, so a process
+            // that did not die is one no later stop could reach — until it is
+            // REMEMBERED here. Reporting "stopped" regardless is the success
+            // nobody verified; `alive()` is the check, and it was already here
+            // (it is what `adopt` and the worker watchdog use).
+            const survivors = await stopEach(candidates);
+            if (survivors.length > 0) orphans.set(siteId, survivors);
+            else orphans.delete(siteId);
             changed();
-            return { orphaned, external: false };
+            return { orphaned: survivors.map((o) => o.spawnId), external: false };
         }
         const { runtime } = await deps.resolveRuntime();
         // An EXTERNAL host-native site (hostPort, no container) runs no process Genie

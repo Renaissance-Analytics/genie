@@ -2027,3 +2027,138 @@ describe('a restart says what it established (genie#226)', () => {
         expect((await m.stop(SITE_ID)).orphaned).toEqual([]);
     });
 });
+
+/**
+ * WHAT A FAILED STOP LEAVES BEHIND (genie#226, the residual after #367).
+ *
+ * #367 made `stop` and `restart` REPORT the orphan. It did not make Genie do
+ * anything about it: the entry leaves `live` before the stop is attempted, so a
+ * process that refused to die became untracked — no later `stop` could reach it,
+ * and its port was no longer in `livePortSet()`.
+ *
+ * The issue's recorded residual is stated as "a later `start` can be handed a
+ * port a surviving process still holds". That specific harm CANNOT happen, and
+ * the proof is in `port-probe.test.ts`: `allocateFreePort` binds `:0` and asks
+ * the OS for an ephemeral port, and no OS hands out a port that is currently
+ * bound. `exclude` guards the release→bind window, not a port in active use.
+ *
+ * The residual that IS real is one step earlier: Genie forgets a process it
+ * knows is alive. That is the thing being fixed here — the orphan stays tracked
+ * until it is gone, which makes a later stop able to reach it and closes the
+ * narrow window where an orphan has been spawned but has not bound its port yet.
+ */
+describe('an orphaned dev server stays reachable (genie#226)', () => {
+    /** `alive` flips, so a test can kill the orphan between calls. */
+    function flakyStopFake(initiallyAlive: boolean) {
+        const state = { alive: initiallyAlive };
+        const stopped: string[] = [];
+        const started: string[] = [];
+        return {
+            state,
+            stopped,
+            started,
+            hostSpawn: {
+                start: async (o: { siteId: string }) => {
+                    started.push(o.siteId);
+                    return { ok: true as const, pid: 4242 };
+                },
+                stop: async (id: string) => {
+                    stopped.push(id);
+                },
+                alive: async () => state.alive,
+                readLog: async () => '',
+            },
+        };
+    }
+
+    it('a second stop RETRIES the process the first one could not kill', async () => {
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const { hostSpawn, stopped } = flakyStopFake(true);
+        const m = manager(
+            runtime,
+            { [SITE_ID]: HOST_SITE },
+            { hostSpawn, probeReady: async () => true, allocateFreePort: async () => 5321 },
+        );
+        await m.start('acme', SITE_ID);
+
+        expect((await m.stop(SITE_ID)).orphaned).toContain(SITE_ID);
+        stopped.length = 0;
+
+        // Before this fix the entry was gone from `live`, so the second stop took
+        // the "not live" early return and reported a clean nothing-to-do about a
+        // process it had just established was still running.
+        const again = await m.stop(SITE_ID);
+        expect(stopped).toContain(SITE_ID);
+        expect(again.orphaned).toContain(SITE_ID);
+    });
+
+    it('stops reporting the orphan once it is actually gone', async () => {
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const fake = flakyStopFake(true);
+        const m = manager(
+            runtime,
+            { [SITE_ID]: HOST_SITE },
+            { hostSpawn: fake.hostSpawn, probeReady: async () => true, allocateFreePort: async () => 5321 },
+        );
+        await m.start('acme', SITE_ID);
+        expect((await m.stop(SITE_ID)).orphaned).toContain(SITE_ID);
+
+        // The user killed it by hand, which is what the note tells them to do.
+        fake.state.alive = false;
+        expect((await m.stop(SITE_ID)).orphaned).toEqual([]);
+        // …and it is forgotten, so it can never be reported again.
+        expect((await m.stop(SITE_ID)).orphaned).toEqual([]);
+    });
+
+    it('never hands a new start a port the orphan is still holding', async () => {
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const { hostSpawn } = flakyStopFake(true);
+        const excludes: number[][] = [];
+        const m = manager(
+            runtime,
+            { [SITE_ID]: HOST_SITE },
+            {
+                hostSpawn,
+                probeReady: async () => true,
+                allocateFreePort: async (exclude: Set<number>) => {
+                    excludes.push([...exclude]);
+                    return 5321 + excludes.length;
+                },
+            },
+        );
+        await m.start('acme', SITE_ID);
+        const orphanPort = 5322;
+        await m.stop(SITE_ID);
+
+        excludes.length = 0;
+        await m.start('acme', SITE_ID);
+        expect(excludes).toHaveLength(1);
+        expect(excludes[0]).toContain(orphanPort);
+    });
+
+    it('excludes only ports it has a reason to — positive control', async () => {
+        // The assertion above passes against an allocator handed EVERY port ever
+        // used, which would be its own bug. A clean stop must leave the set empty.
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const { hostSpawn } = flakyStopFake(false);
+        const excludes: number[][] = [];
+        const m = manager(
+            runtime,
+            { [SITE_ID]: HOST_SITE },
+            {
+                hostSpawn,
+                probeReady: async () => true,
+                allocateFreePort: async (exclude: Set<number>) => {
+                    excludes.push([...exclude]);
+                    return 5321 + excludes.length;
+                },
+            },
+        );
+        await m.start('acme', SITE_ID);
+        await m.stop(SITE_ID);
+
+        excludes.length = 0;
+        await m.start('acme', SITE_ID);
+        expect(excludes[0]).toEqual([]);
+    });
+});
