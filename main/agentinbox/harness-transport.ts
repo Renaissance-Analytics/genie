@@ -1,6 +1,7 @@
 import type { WorkspaceAgentTransport } from '../db';
+import type { AgentTuiId } from '../agents/registry';
 
-export type HarnessAgentProvider = 'claude' | 'codex' | 'kiwi' | 'genie' | 'custom';
+export type HarnessAgentProvider = AgentTuiId;
 
 export function requiredHarnessTransport(
     provider: HarnessAgentProvider | string | null | undefined,

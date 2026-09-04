@@ -1244,7 +1244,7 @@ export interface ManagedTerminalInfo {
     /** cwd relative to the workspace root, or '' for the root. */
     cwd: string;
     /** True when this terminal is currently running an agent (via runAgent). */
-    agent?: 'claude' | 'codex' | 'kiwi' | 'genie' | 'custom' | null;
+    agent?: AgentTuiId | null;
     /** The captured AI chat-session uuid for an agent terminal, or null. */
     chatSessionId?: string | null;
 }

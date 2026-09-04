@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { tuiSettingDefaults } from './agents/registry';
-import type { ProviderSettingKeys } from './agents/registry';
+import type { AgentTuiId, ProviderSettingKeys } from './agents/registry';
 import path from 'path';
 import fs from 'fs';
 import { randomUUID } from 'node:crypto';
@@ -4678,7 +4678,7 @@ export interface TerminalSpecMeta {
     gapp_agent?: string;
     gapp_persona?: string;
     /** Agent terminals (runAgent / specialized): which AI TUI this runs. */
-    agent?: 'claude' | 'codex' | 'kiwi' | 'genie' | 'custom';
+    agent?: AgentTuiId;
     /** Agent terminals: the CLI command line that was launched (display). */
     agent_command?: string;
     /** Who asked for this terminal (Tynn #117). Absent on terminals created before

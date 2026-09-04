@@ -85,6 +85,7 @@ import {
 } from './workspace/envelope';
 import { stopProcess, forgetProcess } from './terminal/process-supervisor';
 import { isTuiId, providerDef } from './agents/registry';
+import type { AgentTuiId } from './agents/registry';
 import { osAgentLaunchCommand, osAgentMetaForProvider } from './agents/os-agent';
 import { requestWorkstationReset } from './workstation/reset';
 import { osAgentBootMode, readWorkstationEvidence } from './agents/os-lifecycle';
@@ -1782,7 +1783,7 @@ export function registerIpcHandlers(): void {
             _e,
             input: {
                 workspace_id: string;
-                agent: 'claude' | 'codex' | 'kiwi' | 'genie' | 'custom';
+                agent: AgentTuiId;
                 command?: string;
                 cwd?: string;
                 label?: string;
