@@ -3,7 +3,7 @@ import { cloneConfigFor, materializeAgentDocLinks } from './clone-symlinks';
 import path from 'path';
 import { simpleGit } from 'simple-git';
 import { getToken } from '../github/storage';
-import { githubCloneAuth, redactSecrets } from './git-auth';
+import { explainCloneFailure, githubCloneAuth, redactSecrets } from './git-auth';
 
 /** Derive a destination folder name from a git URL (the repo leaf, sans .git). */
 export function repoNameFromUrl(url: string): string {
@@ -63,10 +63,18 @@ export async function cloneRepo(opts: CloneRepoOpts): Promise<{ path: string }> 
         }).clone(auth.url, dest, ['--recurse-submodules']);
     } catch (e) {
         // Scrub the token from the git error before it's surfaced/logged.
+        const raw = redactSecrets((e as Error).message, auth.secrets);
+        // A recursive clone that fails on SSH repeats the same five lines per
+        // submodule; translate that into the one command that fixes it rather
+        // than handing the user the wall (genie#378). Unrecognised failures keep
+        // the raw git error — we never replace a real message with a guess.
+        const explained = explainCloneFailure(raw);
         throw new Error(
-            `Clone failed: ${redactSecrets((e as Error).message, auth.secrets)}. Check the URL ` +
-                'and that you have access to the repository (connect GitHub in Settings, ' +
-                'or set up an SSH key / credential helper).',
+            explained
+                ? `Clone failed: ${explained}`
+                : `Clone failed: ${raw}. Check the URL ` +
+                      'and that you have access to the repository (connect GitHub in Settings, ' +
+                      'or set up an SSH key / credential helper).',
         );
     }
 

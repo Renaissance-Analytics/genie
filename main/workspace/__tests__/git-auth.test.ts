@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+    explainCloneFailure,
     ghIsGitCredentialHelper,
     githubAuthConfig,
     githubCloneAuth,
@@ -254,5 +255,116 @@ describe('redactSecrets', () => {
 
     it('ignores empty-string secrets without corrupting the message', () => {
         expect(redactSecrets('a-b-c', [''])).toBe('a-b-c');
+    });
+});
+
+/**
+ * genie#378 — a recursive `.agi` clone must not span two credential systems.
+ *
+ * Reported from Omarchy: the PARENT cloned fine over HTTPS (gh's credential
+ * helper answered), then every submodule pinned to `git@github.com:` failed with
+ * `Host key verification failed`, because Genie has never verified — and cannot
+ * prompt for — the SSH half. The one submodule with an HTTPS URL in the same
+ * `.gitmodules` succeeded: same clone, same instant, only the scheme differed.
+ */
+describe('githubCloneAuth — the submodule pass follows the PARENT auth path (genie#378)', () => {
+    it('no token + an HTTPS github parent → SSH submodules are fetched over HTTPS too', () => {
+        const auth = githubCloneAuth('https://github.com/org/thing.agi', null);
+        expect(auth.url).toBe('https://github.com/org/thing.agi');
+        // The rewrites carry NO credential — they only keep the whole recursive
+        // tree on the scheme the parent already authenticated on.
+        expect(auth.config).toEqual(githubInsteadOfRewrites());
+        expect(auth.secrets).toEqual([]);
+    });
+
+    it('no token + an SSH parent → left ALONE (the user’s ambient SSH auth still works)', () => {
+        // Rewriting here would take a working SSH clone off SSH and onto HTTPS,
+        // where a user with no token has no credential at all.
+        expect(githubCloneAuth('git@github.com:o/r.git', null)).toEqual({
+            url: 'git@github.com:o/r.git',
+            config: [],
+            secrets: [],
+        });
+        expect(githubCloneAuth('ssh://git@github.com/o/r', null)).toEqual({
+            url: 'ssh://git@github.com/o/r',
+            config: [],
+            secrets: [],
+        });
+    });
+
+    it('no token + a non-github HTTPS parent → no rewrites (our rewrite is github-only)', () => {
+        expect(githubCloneAuth('https://gitlab.com/o/r.git', null).config).toEqual([]);
+        expect(githubCloneAuth('/local/env.agi', null).config).toEqual([]);
+        expect(githubCloneAuth('file:///tmp/x', null).config).toEqual([]);
+    });
+
+    it('accepts an HTTPS github URL carrying userinfo', () => {
+        expect(githubCloneAuth('https://user@github.com/o/r.git', null).config).toEqual(
+            githubInsteadOfRewrites(),
+        );
+    });
+});
+
+/** The wall of text the Omarchy clone actually produced, repeated per submodule. */
+const HOST_KEY_WALL = [
+    "Cloning into '/home/u/Work/thing.agi/repos/alpha'...",
+    'ssh_askpass: exec(/usr/lib/ssh/ssh-askpass): No such file or directory',
+    'Host key verification failed.',
+    'fatal: Could not read from remote repository.',
+    "fatal: clone of 'git@github.com:org/alpha.git' into submodule path '/home/u/Work/thing.agi/repos/alpha' failed",
+    "Failed to clone 'repos/alpha'. Retry scheduled",
+    'ssh_askpass: exec(/usr/lib/ssh/ssh-askpass): No such file or directory',
+    'Host key verification failed.',
+    'fatal: Could not read from remote repository.',
+    "fatal: clone of 'git@github.com:org/beta.git' into submodule path '/home/u/Work/thing.agi/repos/beta' failed",
+    "Failed to clone 'repos/beta'. Retry scheduled",
+].join('\n');
+
+describe('explainCloneFailure — one actionable line, not one wall per submodule (genie#378)', () => {
+    it('translates the host-key wall into the single command that fixes it', () => {
+        const msg = explainCloneFailure(HOST_KEY_WALL);
+        expect(msg).not.toBeNull();
+        expect(msg).toContain('ssh -T git@github.com');
+        expect(msg).toMatch(/host key/i);
+        // The submodules that failed are NAMED once, not repeated per line.
+        expect(msg).toContain('repos/alpha');
+        expect(msg).toContain('repos/beta');
+        expect(msg!.split('\n').length).toBeLessThanOrEqual(2);
+        // Positive control for the "one line" assertion: the input really was a
+        // multi-line wall, so the collapse is doing work.
+        expect(HOST_KEY_WALL.split('\n').length).toBeGreaterThan(5);
+    });
+
+    it('names an askpass failure as the same host-key problem, not a missing dependency', () => {
+        const msg = explainCloneFailure(
+            'ssh_askpass: exec(/usr/lib/ssh/ssh-askpass): No such file or directory\n' +
+                'fatal: Could not read from remote repository.',
+        );
+        expect(msg).toMatch(/host key/i);
+        expect(msg).not.toMatch(/ssh_askpass/);
+    });
+
+    it('distinguishes a rejected key from an untrusted host key', () => {
+        const msg = explainCloneFailure(
+            'git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.',
+        );
+        expect(msg).toMatch(/ssh key/i);
+        expect(msg).not.toContain('ssh -T git@github.com');
+    });
+
+    it('names the HTTPS credential problem when git could not ask for one', () => {
+        expect(
+            explainCloneFailure(
+                "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+            ),
+        ).toMatch(/connect github/i);
+        expect(
+            explainCloneFailure('remote: Invalid username or password.\nfatal: Authentication failed'),
+        ).toMatch(/connect github/i);
+    });
+
+    it('returns null for anything it does not recognise — the raw error still wins', () => {
+        expect(explainCloneFailure('fatal: destination path already exists')).toBeNull();
+        expect(explainCloneFailure('')).toBeNull();
     });
 });
