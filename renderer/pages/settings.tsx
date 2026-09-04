@@ -4091,23 +4091,36 @@ function TailscaleSection() {
 
     const installed = status?.installed ?? false;
     const running = status?.running ?? false;
+    const state = status?.state ?? 'unknown';
     const selfIp = status?.self?.ip ?? null;
     const onlinePeers = (status?.peers ?? []).filter((p) => p.online);
 
+    // Each state gets its OWN label. "Installed · offline" used to cover four
+    // situations — absent, daemon down, not an operator, not logged in — only
+    // one of which the Install button below could fix (genie#380, genie#396).
     const label = !status
         ? '—'
-        : !installed
+        : state === 'absent'
             ? 'Not installed'
-            : running
+            : state === 'running'
                 ? `Connected${selfIp ? ` · ${selfIp}` : ''}`
-                : 'Installed · offline';
+                : state === 'stopped'
+                    ? 'Installed · service not running'
+                    : state === 'needs-operator'
+                        ? 'Installed · not permitted'
+                        : state === 'needs-login'
+                            ? 'Installed · not connected'
+                            : 'Installed · state unknown';
     const color = !status
         ? 'var(--fg-3)'
-        : !installed
+        : state === 'absent'
             ? 'var(--rose-500)'
             : running
                 ? 'var(--emerald-600)'
                 : 'var(--amber-600)';
+    // The remedy Genie could name for the current state, and the command that
+    // clears it (a stopped daemon / a missing operator grant are one line each).
+    const remedy = status?.remedy ?? null;
 
     return (
         <SetSection
@@ -4122,7 +4135,10 @@ function TailscaleSection() {
                 keywords="tailscale install online connect network vpn tailnet"
                 desc="Genie manages Tailscale for you — no separate app. Work Mode binds only to your tailnet, so your projects are reachable from your own devices and nothing else."
             >
-                {!installed && (
+                {/* Install is offered ONLY when Tailscale is genuinely absent.
+                    Offering it for a stopped daemon or a missing operator grant
+                    sends the user to reinstall software that is already there. */}
+                {state === 'absent' && (
                     <Action
                         size="sm"
                         color="blue"
@@ -4170,6 +4186,22 @@ function TailscaleSection() {
                                   .join(', ')}`}
                     </Text>
                 </SettingRow>
+            )}
+
+            {/* Name the remedy for whatever is actually blocking the tailnet —
+                a `tailscaled` that was never enabled and a user who is not a
+                Tailscale operator each need one command, and neither used to be
+                distinguishable from "not installed" (genie#396). */}
+            {remedy && !running && (
+                <div className="set-note">
+                    {remedy.message}
+                    {remedy.command && (
+                        <>
+                            {' '}
+                            <code>{remedy.command}</code>
+                        </>
+                    )}
+                </div>
             )}
 
             {msg && <div className="set-note">{msg}</div>}

@@ -1476,13 +1476,34 @@ export interface TailnetPeer {
     os: string;
 }
 
+/**
+ * What Genie established about Tailscale on this machine (mirrors main/tailscale).
+ * Five DIFFERENT situations with five different remedies — the panel used to
+ * collapse the first four into "Installed · offline" (genie#380, genie#396).
+ */
+export type TailscaleState =
+    | 'absent'
+    | 'stopped'
+    | 'needs-operator'
+    | 'needs-login'
+    | 'running'
+    | 'unknown';
+
+/** What to tell the user, and the exact command that fixes it (when there is one). */
+export interface TailscaleRemedy {
+    message: string;
+    command?: string;
+}
+
 /** Tailscale lifecycle status for the Work Mode settings (mirrors main/tailscale). */
 export interface TailscaleStatus {
     installed: boolean;
     running: boolean;
+    state: TailscaleState;
     self: { ip: string | null; hostname: string; online: boolean } | null;
     peers: TailnetPeer[];
     authUrl?: string | null;
+    remedy?: TailscaleRemedy | null;
 }
 
 /** A Genie host discovered on the tailnet (Work Mode remote). */
@@ -3086,7 +3107,13 @@ export interface GenieApi {
     };
     tailscale: {
         status: () => Promise<TailscaleStatus>;
-        up: () => Promise<{ ok: boolean; authUrl?: string | null; message?: string }>;
+        up: () => Promise<{
+            ok: boolean;
+            authUrl?: string | null;
+            message?: string;
+            state?: TailscaleState;
+            command?: string;
+        }>;
         openAuth: (url: string) => Promise<{ ok: boolean }>;
         install: () => Promise<{ started: boolean; url?: string; message?: string }>;
     };

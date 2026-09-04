@@ -409,6 +409,8 @@ const api = {
                 ok: boolean;
                 authUrl?: string | null;
                 message?: string;
+                state?: TailscaleStatus['state'];
+                command?: string;
             }>,
         openAuth: (url: string) =>
             ipcRenderer.invoke('tailscale:open-auth', url) as Promise<{ ok: boolean }>,
