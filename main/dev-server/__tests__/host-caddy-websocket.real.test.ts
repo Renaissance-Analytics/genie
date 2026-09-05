@@ -231,13 +231,22 @@ async function startCaddy(dir: string, config: string, label: string): Promise<C
     return proc;
 }
 
-/** Poll until the TLS port answers, so the test never races Caddy's startup. */
-async function waitForTls(port: number, timeoutMs = 30_000): Promise<boolean> {
+/**
+ * Poll until the TLS port answers, so the test never races Caddy's startup.
+ *
+ * VERIFIES the certificate against the CA this test minted, rather than skipping
+ * verification. Turning verification off would be the easy way to write a
+ * readiness probe and CodeQL is right to call it out — the test has the CA in
+ * hand, so there is no reason to. It also makes the probe say more: the port is
+ * not merely open, Caddy is serving the leaf the generated config pointed it at.
+ */
+async function waitForTls(port: number, caPath: string, timeoutMs = 30_000): Promise<boolean> {
+    const ca = fs.readFileSync(caPath);
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
         const up = await new Promise<boolean>((resolve) => {
             const s = tls.connect(
-                { host: '127.0.0.1', port, servername: HOST, rejectUnauthorized: false },
+                { host: '127.0.0.1', port, servername: HOST, ca: [ca], rejectUnauthorized: true },
                 () => {
                     s.destroy();
                     resolve(true);
@@ -307,12 +316,12 @@ describe.skipIf(!canRun)('the host front door carries a real WebSocket (genie: w
         );
 
         expect(
-            await waitForTls(shippedPort),
+            await waitForTls(shippedPort, certPath),
             `shipped Caddy never came up:
 ${caddyLog.get('shipped')}`,
         ).toBe(true);
         expect(
-            await waitForTls(unfixedPort),
+            await waitForTls(unfixedPort, certPath),
             `control Caddy never came up:
 ${caddyLog.get('unfixed')}`,
         ).toBe(true);
