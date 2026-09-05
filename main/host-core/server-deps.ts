@@ -39,6 +39,7 @@ import { pluginToolDescriptors, dispatchPluginTool } from '../plugins/registry';
 import { agentInboxBroker } from '../agentinbox/broker';
 import { agentPulse } from '../terminal/agent-pulse';
 import { agentShutdownReadiness } from '../agents/shutdown-readiness';
+import { agentUpgradeDrain } from '../agents/drain-service';
 import { authorizeOsAgentBoot, GENIE_OS_AGENT, GENIE_OS_TERMINAL_ID } from '../agents/os-agent';
 import { markOsAgentOriented } from '../agents/os-lifecycle';
 import { planHandoff, writeHandoff } from '../agents/handoff';
@@ -181,6 +182,12 @@ export function buildHostServerDeps(
                 ...(to ? { to } : {}),
             });
             agentShutdownReadiness.acknowledge(agent.id, reason);
+            // …and the UPGRADE DRAIN (genie#389). Two barriers, deliberately:
+            // a full shutdown is bounded and proceeds on a timeout, while a
+            // drain never proceeds without every row — it labels the stragglers
+            // and waits for a person. Both are satisfied by the same thumb, so
+            // an agent that answers once answers whichever is running.
+            agentUpgradeDrain.acknowledge(agent.id, reason);
             return { ok: true, agentId: agent.id };
         },
         checkIssues: (terminalId) => checkIssuesForMcp(terminalId),

@@ -117,8 +117,20 @@ export interface OpenResult {
 export interface DevServerLifecycle {
     onWorkspaceOpen(workspaceId: string): Promise<OpenResult>;
     onWorkspaceRemove(workspaceId: string): Promise<TeardownResult>;
-    /** Re-attach to everything already running. Boot only. Never throws. */
-    onBoot(): Promise<void>;
+    /**
+     * Re-attach to everything already running, then resume what did not
+     * survive. Boot only. Never throws.
+     *
+     * `beforeResume` runs BETWEEN the two — after adoption, before
+     * {@link DevSiteManager.resumeEnabledSites}. That is the only place a
+     * caller can start sites itself and still have the ordinary resume behave:
+     * before adoption it would double-start a container site that survived, and
+     * after the resume there is nothing left to order. genie#389's staggered
+     * restore is the caller; it brings back what was running when the drain
+     * began, three seconds apart, and the resume that follows finds those live
+     * and skips them.
+     */
+    onBoot(opts?: { beforeResume?: () => Promise<void> }): Promise<void>;
 }
 
 const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -207,7 +219,7 @@ export function createDevServerLifecycle(deps: DevServerLifecycleDeps): DevServe
             return { ...result, errors: [...errors, ...result.errors] };
         },
 
-        async onBoot() {
+        async onBoot(opts) {
             // Services before sites, the same order as the rest of the stack: a
             // site adopted first would be listed before the engine it points at
             // is known, and the one broadcast at the end would show a
@@ -234,6 +246,16 @@ export function createDevServerLifecycle(deps: DevServerLifecycleDeps): DevServe
             // `enabled` is the user asking for it to be served, so those resume —
             // except the ones they STOPPED, which the manager remembers and leaves
             // exactly as they left them (genie#407).
+            //
+            // A drained upgrade gets its staggered restore FIRST (genie#389), so
+            // the resume below finds those sites already live and skips them —
+            // which is what keeps a restore that is deliberately paced from
+            // being overtaken by one that is not.
+            try {
+                await opts?.beforeResume?.();
+            } catch {
+                /* a restore that failed must not cost the ordinary resume */
+            }
             try {
                 await deps.sites()?.resumeEnabledSites();
             } catch {

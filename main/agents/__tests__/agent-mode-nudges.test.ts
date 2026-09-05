@@ -2,10 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 import {
     attentionNudgeMode,
     bootPromptMode,
+    drainNudgeMode,
     inboxNoticeMode,
     upgradeNoticeMode,
     type AgentMode,
 } from '../agent-mode';
+import { drainNudgeText } from '../drain';
 import { announceAgentUpgrade, formatAgentUpgradeMessage } from '../upgrade-announcement';
 import { MANUAL_RECOVERY } from '../mcp-reconnect';
 import { agentBootPrompt } from '../boot-prompt';
@@ -55,6 +57,15 @@ const SURFACES: readonly {
         name: 'the boot prompt',
         render: (mode) => agentBootPrompt({ genieAvailable: true, mode }),
         clause: bootPromptMode,
+    },
+    {
+        // genie#389. The SIXTH surface, and the one where the Manual clause is
+        // an ask rather than a disclaimer — the upgrade is held until this
+        // agent answers, so silence is the failure. The mode still changes the
+        // wording; what it changes here is the SCOPE.
+        name: 'the upgrade drain nudge',
+        render: drainNudgeText,
+        clause: drainNudgeMode,
     },
 ];
 

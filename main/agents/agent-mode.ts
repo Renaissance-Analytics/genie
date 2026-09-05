@@ -168,6 +168,42 @@ export function attentionNudgeMode(mode: AgentMode): string {
 }
 
 /**
+ * The DRAIN nudge's clause (genie#389) — and the one surface where the Manual
+ * agent is asked to act.
+ *
+ * Every other notice here tells a Manual agent that what it just received is
+ * for its awareness. This one cannot, and the reason is structural rather than
+ * a preference: **the upgrade does not proceed until this agent answers.** A
+ * Manual agent that reads "do not act unless a person asks" and stays silent
+ * turns itself into the wedged row the drain then has to be rescued from by
+ * hand — which is the exact failure genie#389 exists to remove.
+ *
+ * A person HAS asked, in the only way this surface has: they started the drain.
+ *
+ * So the mode still changes the wording, and what it changes is the SCOPE. Both
+ * modes are asked to stop, hand off and answer. Automated is additionally told
+ * to wind down what it owns, because it owns things. Manual is told the
+ * opposite in as many words — the same genie#407 mis-inference the upgrade
+ * notice rules out by name, restated here because "stop everything you are
+ * doing" is a sentence an agent can read as "and stop everything else too".
+ */
+export function drainNudgeMode(mode: AgentMode): string {
+    if (mode === 'automated') {
+        return (
+            `You are an Automated agent. ${AUTOMATED_FRAMING} Wind down what you own — finish ` +
+            'or checkpoint it — and then answer.'
+        );
+    }
+    return (
+        'You are a Manual agent, and this one is addressed to you directly: Genie is waiting on ' +
+        'your answer and holds the upgrade until it arrives, so do this now rather than waiting ' +
+        'to be asked. It is scoped to exactly that. Stopping yourself is not a reason to stop or ' +
+        'restart terminals, sites, services or processes — Genie brings back everything it stops ' +
+        'here, by itself.'
+    );
+}
+
+/**
  * The boot prompt's clause.
  *
  * The one surface where a person HAS just asked for something: `runAgent`'s

@@ -2487,6 +2487,51 @@ export function runMigrations(d: Database.Database): MigrationResult {
                 }
             },
         },
+        {
+            // v72 -- THE DRAIN ROSTER (genie#389).
+            //
+            // The drain builds a list of everything that was RUNNING when it
+            // began -- agents, sites, background processes -- nudges the agents
+            // to hand off, and holds the upgrade until the roster clears. That
+            // same list is the RESTORE list on the other side of the restart.
+            //
+            // It has to be a table because of where it is used: it is written
+            // by one process image and read by the next one, and an in-memory
+            // roster is gone at exactly the moment the restore needs it. The
+            // symptom would be the one the issue is about -- an upgrade that
+            // leaves everything down and the user to work out what was up.
+            //
+            // WHAT WAS RUNNING, not what is configured. Restoring on a broader
+            // rule restarts what the user deliberately switched off (genie#407),
+            // at the moment they are least able to tell it from Genie's doing.
+            // The restore filters this list AGAIN through the durable desired
+            // state genie#412 landed (`site_run_state`, `meta.user_stopped`), so
+            // a stop between the drain and the restore still wins.
+            //
+            // Keyed on (kind, ref): a site id and a process spec id are separate
+            // namespaces, and one row per pair means recording a roster twice is
+            // not restarting anything twice.
+            //
+            // (v71 is taken by the websockets engine rename, which landed on
+            // main while this was in review. Two entries numbered the same
+            // would BOTH run on a database at v70 -- `current` is read once,
+            // before the loop -- but a database that already reached 71 by
+            // running only the other one would never get this table at all.)
+            version: 72,
+            runner: (db) => {
+                db.exec(`
+                    CREATE TABLE IF NOT EXISTS drain_roster (
+                        kind         TEXT NOT NULL,
+                        ref          TEXT NOT NULL,
+                        label        TEXT NOT NULL DEFAULT '',
+                        workspace_id TEXT NOT NULL DEFAULT '',
+                        seq          INTEGER NOT NULL DEFAULT 0,
+                        recorded_at  INTEGER NOT NULL,
+                        PRIMARY KEY (kind, ref)
+                    );
+                `);
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -4838,6 +4883,73 @@ export function isSiteStoppedByUser(siteId: string): boolean {
 export function forgetSiteRunState(siteId: string): void {
     if (!siteId) return;
     getDb().prepare('DELETE FROM site_run_state WHERE site_id = ?').run(siteId);
+}
+
+// The DRAIN ROSTER (genie#389) ------------------------------------------------
+//
+// What was running when a drain began, so the boot on the other side of the
+// upgrade can bring exactly that back — no more (which would restart what the
+// user stopped) and no less (which would leave them to work out what was up).
+//
+// The `db` is passed rather than reached for, so the store is exercised against
+// a real in-memory database without standing an app up around it.
+
+/** One thing that was running when the drain began. */
+export interface DrainRosterRow {
+    kind: 'agent' | 'site' | 'process';
+    /** The agent id / site id / process spec id — whatever starts it again. */
+    ref: string;
+    label: string;
+    workspaceId: string;
+}
+
+/**
+ * Replace the roster with this one.
+ *
+ * REPLACE, not append: a roster is a snapshot of one moment, and merging a new
+ * drain into an old one restores a set nobody drained. Recording an EMPTY list
+ * is therefore meaningful — it says this drain found nothing running — and
+ * clears the table rather than leaving the previous drain's list to be restored.
+ */
+export function recordDrainRoster(
+    d: Database.Database,
+    entries: readonly DrainRosterRow[],
+): void {
+    const now = Date.now();
+    const write = d.transaction((rows: readonly DrainRosterRow[]) => {
+        d.prepare('DELETE FROM drain_roster').run();
+        const insert = d.prepare(
+            `INSERT INTO drain_roster (kind, ref, label, workspace_id, seq, recorded_at)
+             VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT(kind, ref) DO NOTHING`,
+        );
+        rows.forEach((row, index) => {
+            if (!row.ref) return;
+            insert.run(row.kind, row.ref, row.label ?? '', row.workspaceId ?? '', index, now);
+        });
+    });
+    write(entries);
+}
+
+/** The roster, in the order it was recorded. Empty when no drain is pending. */
+export function readDrainRoster(d: Database.Database): DrainRosterRow[] {
+    return d
+        .prepare<[], { kind: string; ref: string; label: string; workspace_id: string }>(
+            'SELECT kind, ref, label, workspace_id FROM drain_roster ORDER BY seq ASC',
+        )
+        .all()
+        .map((row) => ({
+            kind: row.kind as DrainRosterRow['kind'],
+            ref: row.ref,
+            label: row.label,
+            workspaceId: row.workspace_id,
+        }));
+}
+
+/** Consume the roster. Called once the restore has run, so an ordinary launch
+ *  after it restores nothing — the list describes one upgrade, not a policy. */
+export function clearDrainRoster(d: Database.Database): void {
+    d.prepare('DELETE FROM drain_roster').run();
 }
 
 // Dev services (the container Dev Server, #234 P3) ------------------------

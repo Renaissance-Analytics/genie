@@ -65,6 +65,13 @@ import {
     type WorkspaceViewState,
 } from '../lib/view-state';
 import { planCommitStep, shouldDriveRestart } from '../lib/updater-flow';
+import {
+    canSatisfyDrainRow,
+    drainRosterSummary,
+    drainRowIcon,
+    drainRowStatusLabel,
+} from '../lib/drain-roster';
+import type { DrainSnapshot } from '../../main/agents/drain';
 import { autoOpenWhatsNew } from '../lib/whats-new';
 import { emitOpenInPanel, openFileInEditor, surfaceMaximized } from '../lib/editor-open';
 import { pluginPanelSpecMeta } from '../lib/panel-routing';
@@ -88,6 +95,7 @@ import {
     IconMenu,
     IconAlert,
     IconWand,
+    IconThumbUp,
     IconX,
 } from '../components/Master/icons';
 import {
@@ -2299,6 +2307,7 @@ function MasterInner() {
                         setupIncomplete={onboardingOpen}
                     />
                     <UpdateReadyBanner />
+                    <DrainRosterFlyout />
                     <Toolbar
                         activeWorkspace={
                             activeWorkspaceId
@@ -3037,9 +3046,22 @@ function UpdatePill() {
             ? `${heldChats} active agent chat${heldChats === 1 ? '' : 's'}`
             : `${heldTerminals} terminal${heldTerminals === 1 ? '' : 's'}`;
     const confirmHeldRestart = (): void => {
-        restartedRef.current = true;
         void (async () => {
-            const r = await api().updater.restart();
+            // A REJECTED call and a REFUSED one are different, and only the
+            // second is a reason to quit. `!ok` is phase-1 saying it has no
+            // installer, where quitting so the user relaunches is the honest
+            // fallback; a rejection is the IPC failing, and quitting Genie over
+            // that would turn a transient error into lost work. Leave the
+            // button clickable instead.
+            const r = await api().updater.restart().catch(() => null);
+            if (!r) return;
+            // genie#389 — `draining` means nothing restarted: the agents are
+            // being asked to finish and hand off first, and the roster flyout is
+            // now on screen. The apply follows on its own when it clears, so the
+            // ref stays disarmed — a cancelled drain must leave this button
+            // clickable again.
+            if (r.draining) return;
+            restartedRef.current = true;
             if (!r.ok) await api().app.quit();
         })();
     };
@@ -3066,11 +3088,11 @@ function UpdatePill() {
                 <button
                     type="button"
                     className="update-pill ready"
-                    title={`Restarting to update v${version} will close ${heldNoun}. Finish or save your work first, or restart now.`}
+                    title={`Updating to v${version} closes ${heldNoun}. Genie asks each agent to finish and write a handoff first, and shows you who it is waiting on.`}
                     onClick={confirmHeldRestart}
                 >
                     <span className="up-dot" />
-                    Restart &amp; update{heldChats > 0 ? ` · ${heldChats} chat${heldChats === 1 ? '' : 's'}` : ''}
+                    Drain &amp; update{heldChats > 0 ? ` · ${heldChats} chat${heldChats === 1 ? '' : 's'}` : ''}
                 </button>
             ) : actionable ? (
                 <button
@@ -3103,6 +3125,122 @@ function UpdatePill() {
                     heldTerminals={heldTerminals}
                 />
             )}
+        </div>
+    );
+}
+
+/**
+ * THE "WAITING ON" ROSTER (genie#389).
+ *
+ * The upgrade is being held while every live agent is asked to stop, write its
+ * handoff and call `thumbsUp`. One row per agent: an EMPTY thumb while it is
+ * still working, a filled green one the moment its answer lands.
+ *
+ * The per-row thumb is a BUTTON, and that is the part that makes this
+ * shippable. An agent can wedge — mid-tool-call, or with a dead harness — and a
+ * drain that could only end when every agent cooperates would hang forever on
+ * one of them, which is worse than the kill it replaces. So the user shuts that
+ * one down by hand and presses its thumb, and the drain proceeds.
+ *
+ * There is no auto-dismiss and no timeout. Cancel is explicit, and it abandons
+ * the upgrade rather than applying it — a roster that gave up and installed
+ * anyway would be the kill again, wearing a delay.
+ */
+function DrainRosterFlyout() {
+    const [snapshot, setSnapshot] = useState<DrainSnapshot | null>(null);
+    const [busy, setBusy] = useState<string | null>(null);
+
+    useEffect(() => {
+        let alive = true;
+        void api()
+            .drain.snapshot()
+            .then((s) => alive && setSnapshot(s))
+            .catch(() => {});
+        // PUSHED, never polled: a thumb has to fill at the instant it lands, or
+        // the user is watching a roster that lies for as long as the interval.
+        const off = api().on.drainChanged((s) => setSnapshot(s));
+        return () => {
+            alive = false;
+            off();
+        };
+    }, []);
+
+    // `complete` keeps it on screen for the last beat before the restart, so
+    // the roster's final state is the one the user actually sees. A snapshot
+    // that is neither active nor complete was CANCELLED — nothing to show.
+    if (!snapshot || snapshot.rows.length === 0) return null;
+    if (!snapshot.active && !snapshot.complete) return null;
+
+    const summary = drainRosterSummary(snapshot);
+    const press = (agentId: string) => {
+        setBusy(agentId);
+        void api()
+            .drain.satisfy(agentId)
+            .then((s) => setSnapshot(s))
+            .catch(() => {})
+            .finally(() => setBusy(null));
+    };
+
+    return (
+        <div className="drain-roster" role="dialog" aria-label="Waiting on agents">
+            <div className="dr-head">
+                <strong>Draining agents before the upgrade</strong>
+                <span>
+                    {summary.green}/{snapshot.rows.length}
+                </span>
+            </div>
+            <div className="dr-sub">{summary.headline}</div>
+            <ul className="dr-rows">
+                {snapshot.rows.map((row) => {
+                    const icon = drainRowIcon(row);
+                    const canPress = canSatisfyDrainRow(row);
+                    return (
+                        <li key={row.agentId} className={`dr-row is-${icon}`}>
+                            <button
+                                type="button"
+                                className="dr-thumb"
+                                disabled={!canPress || busy === row.agentId}
+                                onClick={() => press(row.agentId)}
+                                title={
+                                    canPress
+                                        ? `Mark ${row.name} as done — use this after you have shut it down yourself`
+                                        : drainRowStatusLabel(row)
+                                }
+                                aria-label={`${row.name}: ${drainRowStatusLabel(row)}`}
+                            >
+                                <IconThumbUp size={14} />
+                            </button>
+                            <div className="dr-who">
+                                <span className="dr-name">{row.name}</span>
+                                <span className="dr-note">{drainRowStatusLabel(row)}</span>
+                            </div>
+                        </li>
+                    );
+                })}
+            </ul>
+            {summary.stuck > 0 && (
+                <div className="dr-warn" role="alert">
+                    {summary.stuck === 1 ? 'One agent has' : `${summary.stuck} agents have`} stopped
+                    answering. Shut{' '}
+                    {summary.stuck === 1 ? 'it' : 'them'} down yourself, then press the thumb to let
+                    the upgrade go ahead.
+                </div>
+            )}
+            <div className="dr-actions">
+                <button
+                    type="button"
+                    className="dr-cancel"
+                    onClick={() => {
+                        void api()
+                            .drain.cancel()
+                            .then((s) => setSnapshot(s))
+                            .catch(() => {});
+                    }}
+                    disabled={summary.done}
+                >
+                    Cancel the upgrade
+                </button>
+            </div>
         </div>
     );
 }
@@ -3149,6 +3287,10 @@ function UpdateReadyBanner() {
         setBusy(true);
         try {
             const r = await api().updater.restart();
+            // genie#389 — `draining` is not a failure and not a restart: live
+            // agents are being asked to hand off, and the roster flyout takes
+            // over from here.
+            if (r.draining) return;
             // Phase-1 (git checkout) has no installer; quitting is the honest
             // fallback so a manual relaunch picks up the new code.
             if (!r.ok) await api().app.quit();
@@ -3224,8 +3366,10 @@ function UpdatePopover({
                     {heldChats > 0
                         ? `${heldChats} active agent chat${heldChats === 1 ? '' : 's'}`
                         : `${heldTerminals} terminal${heldTerminals === 1 ? '' : 's'}`}
-                    . It won't restart on its own — finish or save your work, then
-                    click <strong>Restart &amp; update</strong>.
+                    . It won't restart on its own — click{' '}
+                    <strong>Drain &amp; update</strong> and Genie asks each agent to
+                    stop and write a handoff first, showing you who it is waiting
+                    on. Everything it stops comes back afterwards.
                 </div>
             ) : willRestartPtyHost ? (
                 <div className="up-warn" role="alert">

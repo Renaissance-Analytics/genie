@@ -204,6 +204,43 @@ for the reason you think it will. Then check the other half: that your FIXTURE
 reaches the code you are guarding. A green that measured less than it appeared to
 is the failure this repository keeps meeting in new clothes.
 
+### And one no per-PR check can see at all
+
+The three above are checks that measured less than they appeared to. This one is
+different in kind: **there is no check to weaken, because the thing that breaks
+exists in neither branch.**
+
+> Two PRs each green against `main` and never rebased onto each other still never
+> run the array containing both — only a merge queue or a rebase-before-merge
+> rule catches that.
+
+Both greens are honest. Each PR's CI ran a tree that contained its own change and
+not the other's, and the tree that contains both is first assembled by the merge
+itself, after every check has passed. There is no merge queue here, so nothing
+ever builds that tree before it is `main`.
+
+It happened twice in three hours:
+
+- **#427 and #428** — #428 was rebased before #427 merged, so neither one's CI
+  ever saw the other's change. Two true greens, one red `main`. Fixed in #430.
+- **#422 and #428** — both added a migration numbered **71**. Git merges that
+  cleanly; they are separate elements of the same array. `schema_version.version`
+  is an `INTEGER PRIMARY KEY` and the applier's transaction has no catch, so the
+  second entry's INSERT would have thrown out of `initDatabase` and **Genie would
+  not have booted for anyone.** Caught by hand during a rebase, and fixed in #422.
+
+`main/__tests__/db-migrations.test.ts` now guards the migration case
+specifically: it scans the declared version numbers and names any that repeat,
+and applies them all against a real in-memory database. **That converts the
+migration instance from "silent until somebody upgrades" into "loud on the next
+rebase" — it does not close the class.** Nothing in a per-PR check can, and no
+test elsewhere makes the general case visible either.
+
+What actually helps, until there is a merge queue: rebase onto `origin/main` and
+re-run CI **immediately before** merging, and report the head SHA alongside the
+conclusion. A conclusion without the SHA it belongs to is how a stale green gets
+read as a current one.
+
 ---
 
 ## Known constraints — decided, not discovered

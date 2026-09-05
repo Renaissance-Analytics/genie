@@ -14,6 +14,15 @@ import { getChangelog, type Changelog } from './changelog';
 import { hostBackendKind, detachedHostPinsBinary } from '../terminal/host-service';
 import { liveHostTerminals } from '../terminal/quit-confirm';
 import { mobileEmit } from '../mobile/bus';
+import { restartPlanForUpgrade, type DrainSnapshot } from '../agents/drain';
+import {
+    beginUpgradeDrain,
+    cancelUpgradeDrain,
+    drainSnapshot,
+    markUpgradeDrainCleared,
+    satisfyDrainRow,
+    upgradeDrainCleared,
+} from '../agents/drain-service';
 
 /**
  * What a restart-to-apply would tear down RIGHT NOW — the probe the auto-updater
@@ -47,6 +56,63 @@ export function describeRestartInterruption(): RestartInterruption {
         }
     }
     return { terminals: live.length, agentChats };
+}
+
+// --- the drain's state, for the life of this process (genie#389) -------------
+//
+// Whether a drain CLEARED lives in `drain-service`, because two callers need
+// it: the restart below, and the quit-time readiness barrier in `background.ts`
+// that would otherwise ask every drained agent the same question a second time.
+
+let drainInFlight = false;
+/** Wired by {@link registerUpdaterIpc}: what to run once the roster clears. */
+let applyDrainedUpdate: (() => void) | null = null;
+
+/** The input `restartPlanForUpgrade` needs, probed defensively. */
+function currentRestartPlanInput(): { liveAgents: number | null; drainComplete: boolean } {
+    let liveAgents: number | null = null;
+    try {
+        liveAgents = describeRestartInterruption().agentChats;
+    } catch {
+        // Unknown, NOT zero. `restartPlanForUpgrade` reads null as "there may be
+        // agents" and drains, which is the direction that cannot kill one.
+        liveAgents = null;
+    }
+    return { liveAgents, drainComplete: upgradeDrainCleared() };
+}
+
+/**
+ * Start the drain, once, and apply the update when the roster clears.
+ *
+ * A drain already running is returned as-is rather than restarted: a second
+ * `begin` would nudge every agent a second time and leave two rosters
+ * disagreeing about which upgrade is being held.
+ *
+ * A drain that ends INCOMPLETE was cancelled, and a cancelled drain must not
+ * apply anything — that is the whole difference between it and a timeout.
+ */
+export function startUpgradeDrain(): DrainSnapshot {
+    if (drainInFlight) return drainSnapshot();
+    drainInFlight = true;
+    let started: DrainSnapshot;
+    try {
+        const done = beginUpgradeDrain();
+        started = drainSnapshot();
+        void done
+            .then((snapshot) => {
+                drainInFlight = false;
+                if (!snapshot.complete) return;
+                markUpgradeDrainCleared();
+                applyDrainedUpdate?.();
+            })
+            .catch(() => {
+                drainInFlight = false;
+            });
+    } catch (e) {
+        drainInFlight = false;
+        throw e;
+    }
+    return started;
 }
 
 /**
@@ -136,23 +202,77 @@ export function registerUpdaterIpc(): void {
         },
     );
 
-    ipcMain.handle('updater:restart', (): { ok: boolean; error?: string } => {
-        if (mode === 'phase1') {
-            // Phase 1's "restart" is just app.quit + user re-launch — the
-            // Settings UI has a separate path for this via app.quit. We
-            // could automate but it's a separate IPC.
-            return { ok: false, error: 'Phase 1 updater does not handle restart here.' };
-        }
-        // No agent guard here: the auto-updater already HOLDS a downloaded build
-        // (does not auto-apply) when a restart would tear down live terminals, and
-        // the renderer shows the held-restart confirm. Reaching this IPC means the
-        // user already confirmed there — re-prompting would double up.
+    ipcMain.handle(
+        'updater:restart',
+        (): { ok: boolean; error?: string; draining?: boolean } => {
+            if (mode === 'phase1') {
+                // Phase 1's "restart" is just app.quit + user re-launch — the
+                // Settings UI has a separate path for this via app.quit. We
+                // could automate but it's a separate IPC.
+                return { ok: false, error: 'Phase 1 updater does not handle restart here.' };
+            }
+            // THE DRAIN GATE (genie#389). The old comment here said no agent
+            // guard was needed because the renderer had already confirmed —
+            // and confirming is not the same as ASKING THE AGENTS. Every door
+            // to `restartAndApply` passes through `restartPlanForUpgrade`, so
+            // adding a door cannot skip the drain by accident.
+            if (restartPlanForUpgrade(currentRestartPlanInput()) === 'drain') {
+                try {
+                    startUpgradeDrain();
+                } catch (e) {
+                    // A drain that cannot even START must not apply the update
+                    // behind the user's back, and must not reject this call
+                    // either — the renderer has no handler for that and would
+                    // leave the pill mid-click. Say what happened instead.
+                    return {
+                        ok: false,
+                        error: `The agent drain could not start: ${
+                            e instanceof Error ? e.message : String(e)
+                        }`,
+                    };
+                }
+                return { ok: true, draining: true };
+            }
+            try {
+                a.restartAndApply();
+                return { ok: true };
+            } catch (e) {
+                return { ok: false, error: e instanceof Error ? e.message : String(e) };
+            }
+        },
+    );
+
+    // --- the drain (genie#389) ----------------------------------------------
+    //
+    // Registered beside the updater because the drain IS the step before
+    // `restartAndApply`: it exists only to make that restart safe, and holding
+    // it is the whole feature.
+
+    /** Apply the update for real. Reached only once the roster has cleared. */
+    applyDrainedUpdate = () => {
         try {
             a.restartAndApply();
-            return { ok: true };
-        } catch (e) {
-            return { ok: false, error: e instanceof Error ? e.message : String(e) };
+        } catch {
+            /* surfaced via the status stream, as every other apply failure is */
         }
+    };
+
+    ipcMain.handle('drain:snapshot', (): DrainSnapshot => drainSnapshot());
+    ipcMain.handle('drain:begin', (): DrainSnapshot => {
+        try {
+            return startUpgradeDrain();
+        } catch {
+            // Same reason as above: the roster surface reads a snapshot, and a
+            // rejected invoke would leave it blank with no explanation.
+            return drainSnapshot();
+        }
+    });
+    ipcMain.handle('drain:satisfy', (_e, agentId: string): DrainSnapshot =>
+        satisfyDrainRow(String(agentId ?? '')),
+    );
+    ipcMain.handle('drain:cancel', (): DrainSnapshot => {
+        cancelUpgradeDrain();
+        return drainSnapshot();
     });
 
     ipcMain.handle(

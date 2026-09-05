@@ -2482,3 +2482,107 @@ describe('db migration v69 (site run state)', () => {
         ).toBe(1);
     });
 });
+
+/**
+ * TWO MIGRATIONS MAY NEVER CLAIM THE SAME VERSION (genie#389 follow-on).
+ *
+ * Two branches each added an entry numbered 71 — one on `main`, one in review —
+ * and git merges them cleanly, because they are separate elements of the same
+ * array. Nothing anywhere said no.
+ *
+ * ## What the duplicate actually does, which is not what it looks like
+ *
+ * `current` is read ONCE, before the loop (`const current = row?.version ?? 0`),
+ * so both entries are ATTEMPTED on a database at v70. That much reads like
+ * "both simply run". They do not. `schema_version.version` is an
+ * `INTEGER PRIMARY KEY` and `apply` is a transaction with no catch around it:
+ *
+ *   1. the first entry's runner succeeds and inserts 71;
+ *   2. the second entry's runner succeeds — and its INSERT raises
+ *      `SQLITE_CONSTRAINT_PRIMARYKEY`;
+ *   3. that transaction rolls back, so the second migration's schema change is
+ *      undone and never applied;
+ *   4. the throw escapes `runMigrations` → `initDatabase`.
+ *
+ * **Genie fails to boot, for everyone, on every launch.** Not a missing table
+ * for some subset — a brick. Confirmed by running the applier's exact shape
+ * against a real better-sqlite3 rather than reasoning about SQLite's semantics,
+ * which is how the survivable-sounding version of this was first written down.
+ *
+ * ## Why the SOURCE is scanned as well as the behaviour
+ *
+ * The behavioural half below cannot say WHICH number is doubled — it fails with
+ * a constraint error from inside a transaction. The scan names it, in the
+ * failure, which is the difference between a minute and an afternoon.
+ *
+ * What this does NOT close: two PRs each green against `main` and never rebased
+ * onto each other never run the array containing both, so no per-PR check can
+ * see the collision at all. This makes it loud on the next rebase instead of
+ * silent until somebody upgrades. See CONTRIBUTING.md.
+ */
+describe('no two migrations claim the same version', () => {
+    /** Every `version: N,` declared inside the migrations array, in file order.
+     *  Anchored on the exact indentation of an entry's object literal, so the
+     *  `{ version: number; … }` in the array's own TYPE is not counted. */
+    function declaredVersions(): number[] {
+        const src = fs.readFileSync(path.resolve(__dirname, '../db.ts'), 'utf8');
+        return [...src.matchAll(/^ {12}version: (\d+),$/gm)].map((m) => Number(m[1]));
+    }
+
+    it('declares each version exactly once', () => {
+        const versions = declaredVersions();
+        const seen = new Map<number, number>();
+        for (const v of versions) seen.set(v, (seen.get(v) ?? 0) + 1);
+        const duplicated = [...seen.entries()]
+            .filter(([, count]) => count > 1)
+            .map(([version, count]) => `version ${version} is declared ${count} times`);
+
+        expect(
+            duplicated,
+            'Two migrations share a version number. Both are attempted, the second ' +
+                'one\'s INSERT violates schema_version\'s PRIMARY KEY, its transaction ' +
+                'rolls back so its schema change never lands, and the throw escapes ' +
+                'initDatabase — Genie will not boot. Renumber the newer one to the ' +
+                'next free version.',
+        ).toEqual([]);
+
+        // POSITIVE CONTROL. A regex that stopped matching — an indentation
+        // change, a reformat — would report "no duplicates" over an empty list
+        // forever, which is the fault shape CONTRIBUTING.md's "three ways a
+        // check quietly answers a weaker question" is about.
+        expect(versions.length).toBeGreaterThan(60);
+        expect(versions[0]).toBe(1);
+    });
+
+    it('declares them in ascending order, so the next free number is the last + 1', () => {
+        const versions = declaredVersions();
+        const outOfOrder = versions
+            .map((v, i) => (i > 0 && v <= versions[i - 1]! ? `${versions[i - 1]} then ${v}` : null))
+            .filter((x): x is string => x !== null);
+        expect(outOfOrder).toEqual([]);
+    });
+
+    it('applies cleanly on a fresh database — one row per version, none repeated', () => {
+        // The behavioural half. The scan above reads the file; this runs it, so
+        // a duplicate that somehow escaped the regex still cannot pass both.
+        const db = new Database(':memory:');
+        const { applied } = runMigrations(db);
+
+        const rows = db
+            .prepare<[], { version: number; n: number }>(
+                'SELECT version, COUNT(*) AS n FROM schema_version GROUP BY version HAVING n > 1',
+            )
+            .all();
+        expect(rows).toEqual([]);
+
+        // …and the run itself recorded every migration exactly once. A rollback
+        // would leave `applied` and `schema_version` disagreeing.
+        expect(applied).toEqual([...new Set(applied)]);
+        expect(
+            db.prepare<[], { n: number }>('SELECT COUNT(*) AS n FROM schema_version').get()?.n,
+        ).toBe(applied.length);
+        // POSITIVE CONTROL: it actually applied the migrations, rather than
+        // finding an empty table and agreeing with itself.
+        expect(applied.length).toBe(declaredVersions().length);
+    });
+});
