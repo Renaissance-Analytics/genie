@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import http2 from 'node:http2';
 import net from 'node:net';
+import type { Duplex } from 'node:stream';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import tls from 'node:tls';
@@ -29,9 +30,8 @@ import { buildHostCaddyfile } from '../host-caddyfile';
  * h2 is not exotic on this front door, it is the norm. Every `.gen` name shares
  * ONE leaf certificate on ONE address, so a browser COALESCES a socket to the
  * WebSocket service's own `.gen` name onto the h2 connection it already holds for
- * the page and
- * sends it as an RFC 8441 Extended CONNECT stream (`:method: CONNECT` +
- * `:protocol: websocket`). That is what this test does, with `node:http2` — the
+ * the page, and sends it as an RFC 8441 Extended CONNECT stream
+ * (`:method: CONNECT` + `:protocol: websocket`). That is what this test does, with `node:http2` — the
  * same wire protocol the browser used, and no browser anywhere near it.
  *
  * ## What makes it non-vacuous
@@ -84,20 +84,34 @@ async function freePort(): Promise<number> {
     });
 }
 
-/** A WebSocket upstream that completes the handshake and immediately sends one
- *  text frame. Deliberately hand-rolled: the point is the bytes on the wire. */
-function startUpstream(port: number): http.Server {
+/**
+ * A WebSocket upstream that completes the handshake and immediately sends one
+ * text frame. Deliberately hand-rolled: the point is the bytes on the wire.
+ *
+ * Every socket is tracked so teardown can DESTROY them. `server.close()` waits
+ * for connections to end on their own, and an upgraded socket never does — which
+ * hung `afterAll` for the full 60s hook timeout on CI and failed a run in which
+ * all 22 assertions had passed.
+ */
+function startUpstream(port: number): { server: http.Server; sockets: Set<Duplex> } {
+    // Duplex, not net.Socket: an UPGRADED connection arrives as the wider type.
+    const sockets = new Set<Duplex>();
+    const track = (s: Duplex) => {
+        sockets.add(s);
+        // Killing Caddy at teardown resets every connection it still holds here.
+        // An unhandled 'error' on a socket is an UNCAUGHT exception in the test
+        // process, which fails the run even though every assertion passed — so
+        // the reset is expected, and swallowed.
+        s.on('error', () => {});
+        s.on('close', () => sockets.delete(s));
+    };
     const server = http.createServer((_req, res) => {
         res.writeHead(200);
         res.end('http-ok');
     });
-    // Killing Caddy at teardown resets every connection it still holds to this
-    // upstream. An unhandled 'error' on a socket is an UNCAUGHT exception in the
-    // test process, which fails the run even though every assertion passed — so
-    // the reset is expected here, and swallowed.
-    server.on('connection', (s) => s.on('error', () => {}));
+    server.on('connection', track);
     server.on('upgrade', (req, socket) => {
-        socket.on('error', () => {});
+        track(socket);
         const accept = crypto
             .createHash('sha1')
             .update(String(req.headers['sec-websocket-key'] ?? '') + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')
@@ -110,7 +124,7 @@ function startUpstream(port: number): http.Server {
         socket.write(Buffer.concat([Buffer.from([0x81, payload.length]), payload]));
     });
     server.listen(port, '127.0.0.1');
-    return server;
+    return { server, sockets };
 }
 
 /**
@@ -243,7 +257,7 @@ async function waitForTls(port: number, timeoutMs = 30_000): Promise<boolean> {
 
 describe.skipIf(!canRun)('the host front door carries a real WebSocket (genie: wss on .gen)', () => {
     let dir = '';
-    let upstream: http.Server | null = null;
+    let upstream: { server: http.Server; sockets: Set<Duplex> } | null = null;
     let shipped: ChildProcess | null = null;
     let unfixed: ChildProcess | null = null;
     let shippedPort = 0;
@@ -305,13 +319,19 @@ ${caddyLog.get('unfixed')}`,
     }, 120_000);
 
     afterAll(async () => {
-        // Caddy first, then a beat for the resets it causes to land on the
-        // upstream's (now error-handled) sockets, then the upstream itself.
+        // Caddy first, then DESTROY every upstream socket, then close the server.
+        // Destroying is the load-bearing step: `close()` waits for connections to
+        // end on their own and an upgraded socket never does, which hung this hook
+        // for the full 60s timeout on CI and failed a run whose assertions had all
+        // passed. Racing the close as well, so teardown can never be the thing
+        // that fails this file.
         shipped?.kill();
         unfixed?.kill();
-        await new Promise((r) => setTimeout(r, 300));
-        upstream?.closeAllConnections?.();
-        await new Promise<void>((r) => (upstream ? upstream.close(() => r()) : r()));
+        for (const s of upstream?.sockets ?? []) s.destroy();
+        await Promise.race([
+            new Promise<void>((r) => (upstream ? upstream.server.close(() => r()) : r())),
+            new Promise((r) => setTimeout(r, 5_000)),
+        ]);
         try {
             fs.rmSync(dir, { recursive: true, force: true });
         } catch {
