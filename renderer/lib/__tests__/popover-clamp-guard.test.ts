@@ -59,11 +59,19 @@ const rel = (file: string) => path.relative(RENDERER, file).replace(/\\/g, '/');
  * "this used to read `window.innerWidth - width - 8`" is the sentence that stops
  * the next reader reintroducing it, and a guard that punishes the explanation
  * trains people to delete the explanation.
+ *
+ * Stripping is LINE-BASED, then flattened — not a block-comment SPAN regex
+ * (genie#404). A span cannot tell a real block comment from a slash-star inside
+ * a STRING LITERAL: it opens at the literal, runs to the next real star-slash,
+ * and deletes every line between them from the scan, after which the guard
+ * reports the file CLEAN. This file was written with that bug and the fixture
+ * below is what caught it.
  */
 function codeOnly(src: string): string {
     return src
-        .replace(/\/\*[\s\S]*?\*\//g, ' ')
-        .replace(/\/\/[^\n]*/g, ' ')
+        .split('\n')
+        .map((line) => (/^\s*(\/\/|\*|\/\*)/.test(line) ? '' : line.replace(/\/\/.*$/, '')))
+        .join(' ')
         .replace(/\s+/g, ' ');
 }
 
@@ -123,6 +131,16 @@ describe('the renderer never re-derives the popover viewport clamp', () => {
         expect(handRolledClamps(`// was: window.innerWidth - rect.width - 8`)).toEqual([]);
         // Flattening must not swallow the CODE after a line comment.
         expect(handRolledClamps(`// note\nconst x = window.innerWidth - rect.width;`)).toHaveLength(1);
+        // A `/*` INSIDE A STRING LITERAL must not open a comment span (genie#404).
+        // A span regex matches the first `/*` anywhere and runs to the next `*/`,
+        // deleting every line between them from the scan -- and the guard then
+        // reports the file CLEAN. This guard was written with that bug; it is
+        // line-based for the same reason the main/-side provider guard is.
+        const blinded = `const hint = 'a block comment opens with /*';
+const left = Math.min(x, window.innerWidth - width - 8);
+/** a real docblock, which closes the span that literal opened */
+const after = 1;`;
+        expect(handRolledClamps(blinded)).toHaveLength(1);
 
         expect(COMPUTED_INLINE_TOP.test(`style={{ top: coords.top, left: coords.left }}`)).toBe(true);
         expect(COMPUTED_INLINE_TOP.test(`style={{ position: 'fixed', left: position.x, top: position.y }}`)).toBe(true);
