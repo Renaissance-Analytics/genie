@@ -65,14 +65,14 @@ function sorted(entries: ProvisionedService[]): ProvisionedService[] {
 }
 
 /**
- * The secret for a workspace's Reverb app: HMAC-SHA256 of the app id, keyed by
- * the engine's master secret. The shared genie-reverb server derives the EXACT
- * same value from the same master (`hash_hmac('sha256', $appId, $master)`), so
- * the site and the server agree on a per-workspace app with NO registration —
- * and no workspace can forge another's secret without the master. This formula
- * is a CONTRACT: keep it in lockstep with the server's app provider.
+ * The secret for a workspace's app on the WebSocket server: HMAC-SHA256 of the
+ * app id, keyed by the engine's master secret. The shared Sockudo server derives
+ * the EXACT same value from the same master (`hash_hmac('sha256', $appId,
+ * $master)`), so the site and the server agree on a per-workspace app with NO
+ * registration — and no workspace can forge another's secret without the master.
+ * This formula is a CONTRACT: keep it in lockstep with the server's app provider.
  */
-export function reverbAppSecret(master: string, appId: string): string {
+export function websocketAppSecret(master: string, appId: string): string {
     return createHmac('sha256', master).update(appId).digest('hex');
 }
 
@@ -228,25 +228,51 @@ export function serviceEnv(entries: ProvisionedService[]): Record<string, string
                 break;
             }
 
-            case 'reverb': {
+            case 'websockets': {
                 const appId = slice.identifier;
                 // Namespace isolation: shared master, per-workspace app whose
                 // secret is DERIVED so the server needs no registration.
                 const secret = entry.adminPassword
-                    ? reverbAppSecret(entry.adminPassword, appId)
+                    ? websocketAppSecret(entry.adminPassword, appId)
                     : '';
+                // BACKEND path: the site reaches the shared server by CONTAINER
+                // name on its container port over http — never the published
+                // loopback. The BROWSER-facing wss route (`VITE_*` →
+                // `websockets.<ws>.gen`) is injected at the site layer, where the
+                // `.gen` name is known.
                 Object.assign(env, {
-                    BROADCAST_CONNECTION: 'reverb',
-                    REVERB_APP_ID: appId,
+                    // CANONICAL. Vendor-neutral, and true whatever server Genie
+                    // bundles — the engine used to be keyed `reverb`, which named
+                    // a product Genie does not ship (this is Sockudo).
+                    GENIE_WS_APP_ID: appId,
                     // The app KEY is the public client identifier — the workspace
                     // slug is fine, it is not a secret.
+                    GENIE_WS_APP_KEY: appId,
+                    GENIE_WS_APP_SECRET: secret,
+                    GENIE_WS_HOST: host,
+                    GENIE_WS_PORT: String(port),
+                    GENIE_WS_SCHEME: 'http',
+
+                    // DEPRECATED ALIASES — kept, and not on a deprecation clock.
+                    //
+                    // These names are NOT Genie's vocabulary, which is the whole
+                    // reason they survive the rename: `REVERB_*` is Laravel's
+                    // reverb-driver contract, read by `config/broadcasting.php` in
+                    // every Laravel app Genie hosts. Sockudo speaks the same Pusher
+                    // protocol that driver speaks, so the values are correct; only
+                    // the WORD is Laravel's rather than ours. Dropping them would
+                    // break every hosted app at its next restart, to no one's
+                    // benefit — so they stay until an app can be pointed at the
+                    // canonical names above without Genie choosing that for it.
+                    //
+                    // `PUSHER_*` is deliberately NOT emitted: it would be the
+                    // natural third spelling for a Pusher-protocol server, but an
+                    // app configured against hosted Pusher would find its real
+                    // credentials silently replaced by a local socket server.
+                    BROADCAST_CONNECTION: 'reverb',
+                    REVERB_APP_ID: appId,
                     REVERB_APP_KEY: appId,
                     REVERB_APP_SECRET: secret,
-                    // BACKEND path: the site reaches the shared server by
-                    // CONTAINER name on its container port over http — never the
-                    // published loopback. The BROWSER-facing wss route
-                    // (VITE_REVERB_* → reverb.<ws>.gen) is injected at the site
-                    // layer, where the `.gen` name is known.
                     REVERB_HOST: host,
                     REVERB_PORT: String(port),
                     REVERB_SCHEME: 'http',

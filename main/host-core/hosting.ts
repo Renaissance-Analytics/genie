@@ -52,16 +52,31 @@ import type { ImagePullConsent } from '../dev-server/workspace-sandbox';
 import type { HostIds } from '../dev-server/host-ids';
 import { workspaceDnsName } from '../dev-server/services/catalog';
 
-/** Add the trusted browser endpoint while leaving server-to-server traffic internal. */
+/**
+ * Add the trusted browser endpoint while leaving server-to-server traffic
+ * internal.
+ *
+ * Emitted twice, on purpose. `VITE_GENIE_WS_*` is canonical and vendor-neutral;
+ * `VITE_REVERB_*` is a DEPRECATED ALIAS carrying the identical values, because
+ * that is the name Laravel's `echo.js` reads (`import.meta.env.VITE_REVERB_HOST`)
+ * in every app Genie hosts. The alias is what keeps the rename from breaking
+ * them — see the longer note in `env-wiring.ts`.
+ */
 export function browserWebSocketEnv(
     workspaceId: string,
     env: Record<string, string>,
 ): Record<string, string> {
-    if (!env.REVERB_APP_KEY) return env;
+    const appKey = env.GENIE_WS_APP_KEY ?? env.REVERB_APP_KEY;
+    if (!appKey) return env;
+    const host = `websockets.${workspaceDnsName(workspaceId)}.gen`;
     return {
         ...env,
-        VITE_REVERB_APP_KEY: env.REVERB_APP_KEY,
-        VITE_REVERB_HOST: `reverb.${workspaceDnsName(workspaceId)}.gen`,
+        VITE_GENIE_WS_APP_KEY: appKey,
+        VITE_GENIE_WS_HOST: host,
+        VITE_GENIE_WS_PORT: '443',
+        VITE_GENIE_WS_SCHEME: 'https',
+        VITE_REVERB_APP_KEY: appKey,
+        VITE_REVERB_HOST: host,
         VITE_REVERB_PORT: '443',
         VITE_REVERB_SCHEME: 'https',
     };

@@ -131,7 +131,7 @@ export function buildHostCaddyfile(sites: HostCaddySite[], tls: HostCaddyTls): s
         // over h1 the rewriter is harmless, and with h2 available it swallows every
         // frame. h2 is the norm here rather than the exception — every `.gen` name
         // shares ONE leaf on ONE address, so Chromium coalesces a socket to
-        // `reverb.<ws>.gen` onto the connection it already holds for the page and
+        // `websockets.<ws>.gen` onto the connection it already holds for the page and
         // sends it as an Extended CONNECT stream. A site's own same-origin `wss://`
         // (Vite HMR, Echo on the app's host) rides the same coalesced connection.
         //

@@ -29,22 +29,33 @@ describe('the catalog', () => {
             'meilisearch',
             'minio',
             'mailpit',
-            'reverb',
+            'websockets',
             'custom',
         ]);
     });
 
+    it("no longer answers to 'reverb' — the bundled server is Sockudo, not Reverb", () => {
+        // The engine key is Genie's own vocabulary and it named the wrong product.
+        // The Laravel-facing REVERB_* env names are a separate thing and are kept
+        // (see env-wiring) — this is only about what Genie calls the engine.
+        expect(isServiceEngine('reverb')).toBe(false);
+        expect(isServiceEngine('websockets')).toBe(true);
+        // Positive control: a name that never existed is also false, so the
+        // assertion above is not passing because the guard rejects everything.
+        expect(isServiceEngine('not-an-engine')).toBe(false);
+    });
+
     it('models WebSockets as a bundled Host-native, namespace-isolated Sockudo engine', () => {
-        const reverb = engineSpecFor('reverb');
+        const ws = engineSpecFor('websockets');
         // Namespace isolation (shared master, per-workspace app) — NOT a
         // per-workspace credential engine, exactly like MinIO/Meilisearch.
-        expect(reverb.provision).toBe('namespace');
-        expect(reverb.runtime).toBe('host');
-        expect(reverb.distribution).toEqual({ project: 'sockudo/sockudo', version: '4.7.0' });
+        expect(ws.provision).toBe('namespace');
+        expect(ws.runtime).toBe('host');
+        expect(ws.distribution).toEqual({ project: 'sockudo/sockudo', version: '4.7.0' });
         // Stateless — no data volume to persist.
-        expect(reverb.volumes).toEqual([]);
-        expect(reverb.image('1')).toBe('');
-        expect(reverb.ports).toEqual([
+        expect(ws.volumes).toEqual([]);
+        expect(ws.image('1')).toBe('');
+        expect(ws.ports).toEqual([
             { name: 'websocket', container: 6001, kind: 'http', primary: true },
         ]);
     });

@@ -2435,6 +2435,58 @@ export function runMigrations(d: Database.Database): MigrationResult {
                 `);
             },
         },
+        {
+            // v71 — the bundled WebSocket engine stops being called `reverb`.
+            //
+            // Genie ships Sockudo, not Laravel's Reverb, and keying the engine
+            // `reverb` stated otherwise in the services UI, the `manageService`
+            // enum and the `.gen` hostname. The engine key is STORED, in the
+            // `dev_services` JSON blob, so renaming the catalog alone would leave
+            // an existing workspace holding an engine that no longer exists —
+            // `engineSpecFor` returns undefined and the service disappears
+            // instead of being renamed.
+            //
+            // Only the key moves. The workspace's password is untouched (it is
+            // what the running server derives every app secret from), and the
+            // `REVERB_*` environment names are NOT part of this: those are
+            // Laravel's driver contract, are still emitted, and are the reason
+            // this rename costs no hosted app anything. See `env-wiring.ts`.
+            version: 71,
+            runner: (db) => {
+                const rows = db
+                    .prepare<[], { id: string; dev_services: string | null }>(
+                        `SELECT id, dev_services FROM workspaces
+                          WHERE dev_services IS NOT NULL AND dev_services != ''`,
+                    )
+                    .all();
+                const write = db.prepare(
+                    'UPDATE workspaces SET dev_services = ? WHERE id = ?',
+                );
+                for (const row of rows) {
+                    let parsed: unknown;
+                    try {
+                        parsed = JSON.parse(row.dev_services ?? '');
+                    } catch {
+                        // A blob that does not parse is already unreadable to the
+                        // store; rewriting it here would only turn one corrupt
+                        // value into a different corrupt value.
+                        continue;
+                    }
+                    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+                    const services = parsed as Record<string, { engine?: unknown }>;
+                    let moved = false;
+                    for (const entry of Object.values(services)) {
+                        if (entry && typeof entry === 'object' && entry.engine === 'reverb') {
+                            entry.engine = 'websockets';
+                            moved = true;
+                        }
+                    }
+                    // Only rewrite what actually changed — an untouched blob keeps
+                    // its exact bytes and its key order.
+                    if (moved) write.run(JSON.stringify(services), row.id);
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
