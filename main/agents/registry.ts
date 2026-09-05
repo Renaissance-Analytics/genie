@@ -99,6 +99,17 @@ export interface ResumeGrammar {
      * fresh launch instead.
      */
     continueFlag?: string;
+    /**
+     * Short forms that ALSO mean "this command is already resuming", for
+     * detection only — never for rendering, which always emits the long form.
+     *
+     * Per-provider rather than a shared list, because the same short flag means
+     * different things to different CLIs: `-c` is claude's `--continue`, while
+     * codex's `-c` is a TOML config override and has nothing to do with
+     * resuming. A shared alias list would read a codex `-c` as a resume and skip
+     * the session-id injection the launch needed (genie#261 category C).
+     */
+    aliases?: string[];
 }
 
 export interface TuiDef {
@@ -163,7 +174,7 @@ export const TUI_REGISTRY: Record<AgentTuiId, TuiDef> = {
         // `claude --resume <id>`, plus `--continue` for the most-recent chat in
         // the cwd when the captured id has drifted. Both flags confirmed against
         // `claude --help` at build time.
-        resume: { kind: 'flag', token: '--resume', continueFlag: '--continue' },
+        resume: { kind: 'flag', token: '--resume', continueFlag: '--continue', aliases: ['-r', '-c'] },
     },
     codex: {
         id: 'codex',

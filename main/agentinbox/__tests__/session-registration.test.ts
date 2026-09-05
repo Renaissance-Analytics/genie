@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { registerAgentInboxSession } from '../session-registration';
+import { LAUNCH_PROFILES } from '../session-capture';
+import { PROVIDER_IDS } from '../../agents/registry';
 
 describe('registerAgentInboxSession', () => {
     it('rebinds a generated Codex session id to the existing durable agent in place', () => {
@@ -148,5 +150,45 @@ describe('registerAgentInboxSession is idempotent', () => {
             meta: { agent: 'codex', agent_id: 'agent-1', chat_session_id: 'session-b' },
         });
         expect(setChatSession).toHaveBeenCalledWith('agent-1', 'session-b');
+    });
+});
+
+/**
+ * Late binding is a PROVIDER CAPABILITY, not a name (genie#261 category C).
+ *
+ * The gate read `spec.meta?.agent !== 'codex'`. But `LAUNCH_PROFILES` gives
+ * `genie` the SAME `strategy: 'hook'` -- it mints its session id after launch
+ * and reports it back exactly as codex does -- and this refused it, so a Genie
+ * TUI agent's chat id could never bind. Nothing failed to compile and nothing
+ * was logged; the agent simply had no conversation attached.
+ */
+describe('registerAgentInboxSession gates on the capability, not the provider name', () => {
+    const spec = (agent: string) => ({
+        id: 'term-1',
+        meta: { agent, agent_id: 'agent-1' },
+    });
+    const call = (agent: string) =>
+        registerAgentInboxSession('term-1', 'session-a', {
+            getTerminalSpec: vi.fn(() => spec(agent)),
+            updateTerminalSpec: vi.fn(),
+            setChatSession: vi.fn(),
+        });
+
+    it.each(
+        PROVIDER_IDS.filter((id) => LAUNCH_PROFILES[id].strategy === 'hook'),
+    )('accepts a late bind from %s, which reports its id through a startup hook', (agent) => {
+        // `toMatchObject`, not `toEqual`: the GATE is what this test is about,
+        // and the result's exact key set is owned by the idempotence work on
+        // genie#229, whose own tests assert it precisely.
+        expect(call(agent)).toMatchObject({ ok: true, agentId: 'agent-1' });
+    });
+
+    it.each(
+        PROVIDER_IDS.filter((id) => LAUNCH_PROFILES[id].strategy !== 'hook'),
+    )('refuses a late bind from %s, which does not bind after launch', (agent) => {
+        // POSITIVE CONTROL for the accept above: the gate is still a gate, so
+        // "accepted" is not simply what this function now does for everyone.
+        const result = call(agent);
+        expect(result.ok).toBe(false);
     });
 });

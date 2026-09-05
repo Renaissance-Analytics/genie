@@ -58,9 +58,26 @@ function sourceFiles(dir: string, out: string[] = []): string[] {
  * used to say `agent === 'claude'`" is the sentence that stops the next reader
  * reintroducing it. A guard that punishes the explanation trains people to
  * delete the explanation, which is the opposite of what it is for.
+ *
+ * LINE-BASED, matching the main/-side guard in
+ * `main/agents/__tests__/provider-union-guard.test.ts` (genie#404). This file
+ * used a block-comment SPAN regex, which cannot tell a real block comment from
+ * a slash-star inside a STRING LITERAL: the span opened at the literal and ran
+ * to the next real star-slash, deleting every line between them from the scan
+ * — and the guard then reported the file CLEAN. The main/-side draft of this
+ * same idea hit it for real, calling `main/ipc.ts` clean while line 1785 held
+ * the union in plain code. A negative assertion with a silent blind spot is
+ * worse than no assertion, because it is believed.
+ *
+ * The known cost of going line-based: a `//` inside a string (a URL) truncates
+ * the rest of THAT line. That loses one line rather than an arbitrary span of
+ * them, and it cannot be triggered from a neighbouring line.
  */
 function codeOnly(src: string): string {
-    return src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ');
+    return src
+        .split('\n')
+        .map((line) => (/^\s*(\/\/|\*|\/\*)/.test(line) ? '' : line.replace(/\/\/.*$/, '')))
+        .join('\n');
 }
 
 const IDS = PROVIDER_IDS.join('|');
@@ -115,6 +132,19 @@ describe('the renderer never restates the provider set', () => {
             codeOnly(`const gate = a === 'claude'; // was: a === 'codex'`).match(PROVIDER_COMPARE),
         ).toHaveLength(1);
         expect(providerLists(`// v === 'claude' || v === 'codex'`)).toEqual([]);
+
+        // A `/*` INSIDE A STRING LITERAL must not open a comment span (genie#404).
+        // The old span regex matched the first `/*` anywhere and ran to the next
+        // `*/`, so one such literal deleted every line between them from the scan
+        // and the guard reported the file clean. Not hypothetical: the span
+        // version of the main/-side guard read `main/ipc.ts` and called it clean
+        // while line 1785 held the union in plain code.
+        const blinded = `const hint = 'a block comment opens with /*';
+const gate = v === 'claude' || v === 'codex';
+/** a real docblock, which closes the span that literal opened */
+const after = 1;`;
+        expect(providerLists(blinded)).toHaveLength(1);
+        expect(codeOnly(blinded).match(PROVIDER_COMPARE) ?? []).toHaveLength(2);
     });
 
     it('has no file writing the provider set out by hand', () => {
