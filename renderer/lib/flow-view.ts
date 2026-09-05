@@ -157,3 +157,32 @@ export function relativeTime(at: number, now: number = Date.now()): string {
         day: 'numeric',
     });
 }
+
+/**
+ * Whose Flows the manager is showing, when that is not obvious.
+ *
+ * A remote window drives another machine and every other surface in it is about
+ * the HOST. The Flow Manager is not: `api().flows.*` is not routed over the
+ * remote bridge, so it reads THIS workstation's flows, and `broadcastLocal`
+ * skips host-bound windows, so no run activity from either machine reaches it.
+ *
+ * A panel that looks identical to the local case while being about a different
+ * computer is worse than an unsupported feature — the user is not warned,
+ * because nothing looks wrong. So the panel names the machine, every time, and
+ * the host it is NOT showing.
+ *
+ * Returns `null` for a local window: that is the case where the panel means what
+ * it appears to mean, and a caveat there would be noise that trains people to
+ * skip the one that matters.
+ */
+export function describeFlowSource(opts: {
+    remote: boolean;
+    hostName?: string;
+}): string | null {
+    if (!opts.remote) return null;
+    // The host is named where it is known. Where it is not — the status
+    // round-trip may not have landed yet — the sentence still says which machine
+    // these Flows belong to rather than falling silent and looking local.
+    const host = opts.hostName ? `“${opts.hostName}”` : 'the machine this window is driving';
+    return `These are this workstation's Flows, not ${host}'s. Flows are not yet read over a remote connection.`;
+}

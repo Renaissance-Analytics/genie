@@ -7098,3 +7098,17 @@ body.gutter-dragging .grid-gutter {
     font-weight: 600;
     color: var(--fg-1);
 }
+
+/* "These are this workstation's Flows, not <host>'s." Shown only in a remote
+   window, above the list, because the list is the thing that would otherwise
+   mislead — a remote Flow Manager looks identical to a local one and is about a
+   different computer. Blue: informational, not a warning. */
+.flowmgr-source {
+    margin: 0 2px 8px;
+    padding: 7px 9px;
+    border-radius: 6px;
+    border: 1px solid rgba(59, 130, 246, 0.35);
+    background: rgba(59, 130, 246, 0.08);
+    color: var(--fg-2, #d4d4d8);
+    font-size: 11.5px;
+}

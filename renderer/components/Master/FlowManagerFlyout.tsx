@@ -4,6 +4,7 @@ import { IconAlert, IconChevronDown, IconFlow, IconX } from './icons';
 import {
     api,
     hasGenieBridge,
+    isRemoteWindow,
     type FlowListPayload,
     type FlowRunLog,
     type FlowRunRecord,
@@ -11,6 +12,7 @@ import {
 } from '../../lib/genie';
 import {
     describeClause,
+    describeFlowSource,
     describeOutcome,
     describeTrigger,
     relativeTime,
@@ -63,6 +65,26 @@ export default function FlowManagerFlyout({
     const [error, setError] = useState<string | null>(null);
     /** The Flow awaiting an explicit "yes, arm it" — see {@link ArmConfirm}. */
     const [confirming, setConfirming] = useState<FlowSummary | null>(null);
+    /** The host this window drives, for the "whose Flows are these" note. */
+    const [hostName, setHostName] = useState<string | undefined>(undefined);
+    const remote = isRemoteWindow();
+
+    // A remote window's Flow Manager reads THIS workstation, because `flows.*`
+    // is not routed over the bridge. Naming the host it is NOT showing needs the
+    // host's name, so fetch it — only in the case that uses it.
+    useEffect(() => {
+        if (!open || !remote || !hasGenieBridge()) return;
+        let alive = true;
+        api()
+            .remote.status()
+            .then((s) => {
+                if (alive) setHostName(s.host?.hostname);
+            })
+            .catch(() => {});
+        return () => {
+            alive = false;
+        };
+    }, [open, remote]);
 
     const reload = useCallback(async () => {
         if (!hasGenieBridge()) return;
@@ -196,6 +218,7 @@ export default function FlowManagerFlyout({
         }
     };
 
+    const sourceNote = describeFlowSource({ remote, hostName });
     const flows = payload?.flows ?? [];
     const groups = groupByPurpose(flows);
     const liveCount = running.length;
@@ -236,6 +259,11 @@ export default function FlowManagerFlyout({
                 </div>
 
                 <div className="iw-body">
+                    {/* Named before anything is listed, because the list is the
+                        thing that would otherwise mislead. A remote window's
+                        Flow Manager looks identical to a local one and is about
+                        a different computer. */}
+                    {sourceNote && <div className="flowmgr-source">{sourceNote}</div>}
                     {!hasGenieBridge() ? (
                         <div className="iw-muted">This runs inside Genie.</div>
                     ) : error ? (

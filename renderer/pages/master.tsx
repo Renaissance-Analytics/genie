@@ -499,6 +499,13 @@ function MasterInner() {
     const [flowsBusy, setFlowsBusy] = useState(false);
     useEffect(() => {
         if (!hasGenieBridge()) return;
+        // NEVER in a remote window. `flows.*` is not routed over the bridge, so
+        // the seed would report THIS workstation's runs — and `broadcastLocal`
+        // skips host-bound windows, so no push would ever arrive to clear it.
+        // The icon would animate for the wrong machine's work and then stay lit
+        // forever, which is the stuck badge this whole feature is careful not to
+        // produce. The manager itself says whose Flows it is listing.
+        if (isRemoteWindow()) return;
         let alive = true;
         api()
             .flows.list()
