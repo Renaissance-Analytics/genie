@@ -2417,3 +2417,68 @@ describe('db migration v68 (knowledge scope + provenance + link audit)', () => {
         ).toBe(999);
     });
 });
+
+/**
+ * v69 — WHERE A SITE'S DESIRED RUN STATE LIVES (genie#407).
+ *
+ * `DevSiteConfig.enabled` was carrying two meanings at once: *configured, this
+ * site should be served* and *should be running right now*. They want different
+ * storage, which is the clearest sign they are different facts. `enabled` lives
+ * in the `.agi` envelope's project.json — git-TRACKED, so the site definition
+ * travels with the repo, which is the whole point of it. A stop wants none of
+ * that: it is one person's decision on one machine, and writing it into a
+ * tracked file made it a diff their teammates inherited and something a `git
+ * pull` could silently undo.
+ *
+ * So the run state gets a table of its own here, in genie.db, which is local by
+ * construction. No backfill: under the old code a stop wrote `enabled:false`,
+ * and a site in that state still does not resume — the outcome the user asked
+ * for is already what they get.
+ */
+describe('db migration v69 (site run state)', () => {
+    const cols69 = (db: Database.Database) => cols(db, 'site_run_state');
+
+    it('creates the machine-local run-state table', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        const c = cols69(db);
+        expect(c.has('site_id')).toBe(true);
+        expect(c.has('stopped')).toBe(true);
+        expect(c.has('updated_at')).toBe(true);
+    });
+
+    it('keys on the site id, so one site holds exactly one answer', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        const put = db.prepare(
+            `INSERT INTO site_run_state (site_id, stopped, updated_at) VALUES (?, ?, ?)
+             ON CONFLICT(site_id) DO UPDATE SET stopped = excluded.stopped`,
+        );
+        put.run('site-a', 1, 1);
+        put.run('site-a', 0, 2);
+
+        const rows = db
+            .prepare<[], { site_id: string; stopped: number }>('SELECT * FROM site_run_state')
+            .all();
+        expect(rows).toEqual([{ site_id: 'site-a', stopped: 0, updated_at: 1 }]);
+    });
+
+    it('is idempotent — re-running converges without throwing', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        db.prepare(
+            'INSERT INTO site_run_state (site_id, stopped, updated_at) VALUES (?, ?, ?)',
+        ).run('kept', 1, 7);
+
+        expect(() => runMigrations(db)).not.toThrow();
+        // A migration that recreated the table would take the user's stop with
+        // it — and the whole point of the row is that it survives a launch.
+        expect(
+            db
+                .prepare<[string], { stopped: number }>(
+                    'SELECT stopped FROM site_run_state WHERE site_id = ?',
+                )
+                .get('kept')?.stopped,
+        ).toBe(1);
+    });
+});

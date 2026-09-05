@@ -1744,6 +1744,9 @@ export interface ProcessListItem {
     workspaceId: string | null;
     status: ProcessStatus;
     autostart: boolean;
+    /** The user PAUSED this process: stopped deliberately, and it stays down
+     *  through the next launch (genie#407). Always false for a terminal. */
+    paused: boolean;
 }
 
 /** Per-type spec metadata. Code views persist the open file's relative path. */

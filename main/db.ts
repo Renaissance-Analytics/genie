@@ -2353,6 +2353,39 @@ export function runMigrations(d: Database.Database): MigrationResult {
                 ambiguousLinks = auditTightenedLinks(db);
             },
         },
+        {
+            // v69 -- A STOP THAT SURVIVES THE NEXT LAUNCH (genie#407).
+            //
+            // (v68 is taken by work in flight elsewhere.)
+            //
+            // A site's `enabled` flag was answering two questions at once:
+            // "is this site configured to be served" and "should it be running
+            // right now". Boot read the first to decide the second, so a site
+            // the user stopped came back on the next launch -- and an upgrade is
+            // just a launch nobody chose, which is where it was noticed.
+            //
+            // They cannot share a field because they do not want the same
+            // storage. `enabled` belongs in the `.agi` envelope's project.json:
+            // git-TRACKED, so the site definition travels with the repo. A stop
+            // is the opposite kind of fact -- one person, one machine, one
+            // moment -- and putting it there made it a diff teammates inherited
+            // and something a `git pull` could silently undo. So the desired RUN
+            // state lives here, in genie.db, which is local by construction.
+            //
+            // No backfill. Under the old code a stop wrote `enabled:false`, and
+            // a site in that state still does not resume, so nobody's stop is
+            // lost by this arriving empty.
+            version: 69,
+            runner: (db) => {
+                db.exec(`
+                    CREATE TABLE IF NOT EXISTS site_run_state (
+                        site_id    TEXT PRIMARY KEY,
+                        stopped    INTEGER NOT NULL DEFAULT 0,
+                        updated_at INTEGER NOT NULL
+                    );
+                `);
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -4661,6 +4694,49 @@ export function deleteWorkspaceDevSite(id: string, siteId: string): void {
     const next = { ...current };
     delete next[siteId];
     setWorkspaceDevSites(id, next);
+    // The site is gone; its run state is about a site that no longer exists.
+    // Leaving the row would also mean a site recreated under the same name (the
+    // id is derived from workspace + name) inherited a stop nobody asked for.
+    forgetSiteRunState(siteId);
+}
+
+// A site's DESIRED RUN STATE (genie#407) --------------------------------------
+//
+// Deliberately NOT part of `DevSites`, and so deliberately not in project.json.
+// `enabled` says the site is configured to be served and belongs in the tracked
+// envelope, where a teammate's clone gets it. Whether the user wants it running
+// on THIS machine right now is a different fact with a different lifetime, and
+// keeping it here is what stops one person's stop becoming a tracked diff and a
+// `git pull` becoming a way to restart a site somebody deliberately stopped.
+//
+// Absence means "not stopped": a site nobody has ever stopped has no row.
+
+/** Record (or lift) the user's stop for one site. Best-effort. */
+export function setSiteStoppedByUser(siteId: string, stopped: boolean): void {
+    if (!siteId) return;
+    getDb()
+        .prepare(
+            `INSERT INTO site_run_state (site_id, stopped, updated_at) VALUES (?, ?, ?)
+             ON CONFLICT(site_id) DO UPDATE SET stopped = excluded.stopped, updated_at = excluded.updated_at`,
+        )
+        .run(siteId, stopped ? 1 : 0, Date.now());
+}
+
+/** Did the user stop this site, and not start it since? */
+export function isSiteStoppedByUser(siteId: string): boolean {
+    if (!siteId) return false;
+    const row = getDb()
+        .prepare<[string], { stopped: number }>(
+            'SELECT stopped FROM site_run_state WHERE site_id = ?',
+        )
+        .get(siteId);
+    return row?.stopped === 1;
+}
+
+/** Forget a site's run state (it was removed, or renamed to a new id). */
+export function forgetSiteRunState(siteId: string): void {
+    if (!siteId) return;
+    getDb().prepare('DELETE FROM site_run_state WHERE site_id = ?').run(siteId);
 }
 
 // Dev services (the container Dev Server, #234 P3) ------------------------
@@ -4940,6 +5016,21 @@ export interface TerminalSpecMeta {
      * user opts into); this tracks live state.
      */
     was_running?: boolean;
+    /**
+     * Process views: the user PAUSED this process — they deliberately stopped it
+     * and have not started it since (genie#407). Persisted, and boot honours it:
+     * `startAutostartProcesses()` skips a spec carrying it, whatever `autostart`
+     * says.
+     *
+     * Distinct from both its neighbours, and it has to be. `autostart` is
+     * CONFIGURATION ("this is a service"); `was_running` is the answer to "was it
+     * up when Genie went down", which is also false for a process that has never
+     * run and for one whose retries were exhausted. Neither can say "the user
+     * asked for this to be down", and Genie's rule needs exactly that: it may
+     * restore what IT stopped on the user's behalf, never restart what the USER
+     * stopped. Only an explicit start clears it.
+     */
+    user_stopped?: boolean;
     /**
      * SCHEDULED TASK: a 5-field cron expression (min hour dom month dow), in the
      * HOST's local time. Its PRESENCE is what makes a process spec a scheduled

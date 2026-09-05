@@ -464,14 +464,67 @@ export interface DevSiteManagerDeps {
      * pull/start log chunk. A listener must never throw.
      */
     onProgress?: (progress: DevSiteProgress) => void;
+    /**
+     * The user's last explicit run decision per site (genie#407). Absent ⇒ the
+     * manager remembers nothing across a launch and boot resumes every enabled
+     * site, which is the behaviour every build had before it. See
+     * {@link SiteRunState}.
+     */
+    runState?: SiteRunState;
+}
+
+/**
+ * WHO asked for this site to stop (genie#407).
+ *
+ * The rule it exists to encode: **Genie may restore what IT stopped on the
+ * user's behalf; it may never restart what the USER stopped.** A drain before an
+ * upgrade, a quit, a workspace removal and a restart's own internal stop are all
+ * `'genie'` — every one of them is temporary and the site is expected back. Only
+ * a stop the user (or an agent acting for them, through `manageSite stop`) asked
+ * for is `'user'`, and only that one survives the launch.
+ *
+ * `'genie'` is the DEFAULT because the internal callers are the ones that must
+ * never mark a site paused by accident; making the durable choice the explicit
+ * one means a new call site cannot acquire it by omission.
+ */
+export type DevSiteStopOrigin = 'user' | 'genie';
+
+/**
+ * The user's desired RUN state for a site — persisted, and MACHINE-LOCAL.
+ *
+ * Split out from `DevSiteConfig.enabled`, which was carrying both meanings at
+ * once (genie#407): *configured, this site should be served* and *should be
+ * running right now*. They cannot share a field, because they do not even want
+ * the same storage. `enabled` belongs in the `.agi` envelope's project.json,
+ * which is git-TRACKED and travels with the repo — that is the point of it, so a
+ * teammate who clones gets the site definition. A stop does not want any of
+ * that: it is one person's decision on one machine at one moment, and putting it
+ * in a tracked file made it a diff their teammates inherited and something a
+ * `git pull` could silently undo — restarting, by a file, the site the user had
+ * stopped.
+ *
+ * So this is backed by genie.db on the real host. Injected rather than imported
+ * so the manager stays provable without a database.
+ */
+export interface SiteRunState {
+    /** Record (or lift) the user's stop. Must never throw. */
+    setStopped(siteId: string, stopped: boolean): void;
+    /** Did the user stop this site, and not start it since? Must never throw. */
+    isStopped(siteId: string): boolean;
 }
 
 export interface DevSiteManager {
     /** Start one configured site. Never throws — a failure is a failed status. */
     start(workspaceId: string, siteId: string): Promise<DevSiteStatus>;
-    /** Stop one site, and report what that ESTABLISHED — see
-     *  {@link DevSiteStopReport}. Never throws. */
-    stop(siteId: string): Promise<DevSiteStopReport>;
+    /**
+     * Stop one site, and report what that ESTABLISHED — see
+     * {@link DevSiteStopReport}. Never throws.
+     *
+     * `origin` says whose stop it is, and a `'user'` one is REMEMBERED so the
+     * next launch leaves the site down (genie#407). Defaults to `'genie'`: an
+     * internal stop must never acquire that by omission.
+     */
+    stop(siteId: string, origin?: DevSiteStopOrigin): Promise<DevSiteStopReport>;
     /**
      * Stop, then start. The returned status carries {@link DevSiteStatus.notes}
      * when the restart was not what "restart" implies: a stop Genie could not
@@ -515,12 +568,16 @@ export interface DevSiteManager {
     refresh(workspaceId?: string): Promise<void>;
     /** A bounded log tail for a running site. Never throws. */
     logs(siteId: string, tail?: number): Promise<string>;
-    /** Start every enabled site and stop everything that no longer is. */
+    /**
+     * Start every enabled site and stop everything that no longer is. A site the
+     * user stopped is neither: it is left exactly as they left it (genie#407).
+     */
     reconcile(): Promise<void>;
     /**
      * Bring back the ENABLED sites that are not running (genie#190, genie#216).
      * Boot only, and strictly after {@link adopt} — what survived is adopted, what
-     * did not is started. A site nobody enabled is never started. Never throws.
+     * did not is started. A site nobody enabled is never started, and neither is
+     * one the user stopped (genie#407). Never throws.
      */
     resumeEnabledSites(): Promise<void>;
     /** RUNNING http sites as Testing-Browser rows. Synchronous. */
@@ -1688,6 +1745,16 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
     }
 
     async function start(workspaceId: string, siteId: string): Promise<DevSiteStatus> {
+        // Starting a site LIFTS the stop that was remembered for it (genie#407).
+        // Every caller means the same thing by it — the user clicked Start, an
+        // agent ran `manageSite start`, a restart is going through — and boot
+        // only reaches here for sites that are not stopped, so this is a no-op
+        // there rather than an exception to it.
+        try {
+            deps.runState?.setStopped(siteId, false);
+        } catch {
+            /* the run state is a memory aid, never a reason a start fails */
+        }
         const pending = starting.get(siteId);
         if (pending) return pending;
         // An orphan that has since died must not keep its port out of the pool
@@ -1706,6 +1773,22 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
     }
 
     /**
+     * Is this site one the USER stopped (genie#407)?
+     *
+     * Reads FALSE when there is no run state and when the store throws. Both are
+     * the same judgement: an unanswerable question about the user's last wish
+     * must not silently pause a site they never touched. The failure this guards
+     * is the loud one — a site that never comes back and no button explains.
+     */
+    function isStoppedByUser(siteId: string): boolean {
+        try {
+            return deps.runState?.isStopped(siteId) === true;
+        } catch {
+            return false;
+        }
+    }
+
+    /**
      * Did the process Genie asked to stop actually go? Best effort, and a probe
      * that cannot be answered is read as GONE rather than as an orphan — the
      * point is to catch a stop that demonstrably failed, not to invent one.
@@ -1715,7 +1798,23 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         return await deps.hostSpawn.alive(spawnId).catch(() => false);
     }
 
-    async function stop(siteId: string): Promise<DevSiteStopReport> {
+    async function stop(
+        siteId: string,
+        origin: DevSiteStopOrigin = 'genie',
+    ): Promise<DevSiteStopReport> {
+        // Record the ASK first, before anything that can fail (genie#407). What
+        // follows talks to a container runtime and to host processes, and either
+        // can be unreachable — but "the user wants this site down" is already
+        // true by the time this function is entered, and losing it because
+        // Docker did not answer is exactly how a stopped site came back at the
+        // next launch.
+        if (origin === 'user') {
+            try {
+                deps.runState?.setStopped(siteId, true);
+            } catch {
+                /* best-effort — a persistence failure must not swallow the stop */
+            }
+        }
         // A stop clears the remembered failure: the site is off because it was
         // asked to be, which is not the same as being broken.
         lastFailure.delete(siteId);
@@ -2026,6 +2125,11 @@ ${hint}` : main;
             for (const workspace of deps.listWorkspaces()) {
                 for (const [siteId, config] of Object.entries(deps.devSitesFor(workspace.id))) {
                     if (!config.enabled) continue;
+                    // The user stopped it. `wanted` is deliberately not marked
+                    // either: a paused site is not something reconcile owes a
+                    // start, and the sweep below only stops what is LIVE — which
+                    // a stopped site is not.
+                    if (isStoppedByUser(siteId)) continue;
                     wanted.add(siteId);
                     await start(workspace.id, siteId);
                 }
@@ -2049,9 +2153,17 @@ ${hint}` : main;
             }
             for (const workspace of deps.listWorkspaces()) {
                 for (const [siteId, config] of Object.entries(deps.devSitesFor(workspace.id))) {
-                    // `enabled` IS the ask. A site nobody enabled still starts
-                    // nothing, which is the policy `adopt()` states and this keeps.
+                    // `enabled` IS the ask that this site be SERVED — configured,
+                    // and stored in the git-tracked envelope. A site nobody
+                    // enabled still starts nothing, which is the policy `adopt()`
+                    // states and this keeps.
                     if (!config.enabled) continue;
+                    // …and this is the ask that it be running RIGHT NOW, which is
+                    // a different question and a machine-local answer (genie#407).
+                    // A site the user stopped stays stopped: an upgrade is just a
+                    // launch, and coming back from one is not permission to undo
+                    // what they last asked for.
+                    if (isStoppedByUser(siteId)) continue;
                     // Adopted a moment ago (it survived), or started by a concurrent
                     // caller — either way it is already serving.
                     if (live.has(siteId)) continue;

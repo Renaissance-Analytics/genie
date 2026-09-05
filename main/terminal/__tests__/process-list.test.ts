@@ -69,6 +69,7 @@ describe('buildProcessList', () => {
                 workspaceId: 'ws-1',
                 status: 'running',
                 autostart: false,
+                paused: false,
             },
             {
                 id: 'p2',
@@ -79,6 +80,8 @@ describe('buildProcessList', () => {
                 workspaceId: 'ws-2',
                 status: 'stopped', // no entry → default
                 autostart: false,
+                // Stopped, but not by anybody: the next launch may restore it.
+                paused: false,
             },
         ]);
     });
@@ -127,5 +130,28 @@ describe('buildProcessList', () => {
             new Set(),
         );
         expect(rows[0].autostart).toBe(true);
+    });
+});
+
+describe('a paused process says so (genie#407)', () => {
+    /** A spec carrying the persisted pause `stopProcess` writes. */
+    function paused(id: string): TerminalSpecRow {
+        const s = spec(id, 'ws-1', 'worker', 'npm run worker');
+        return { ...s, meta: { ...s.meta, user_stopped: true } };
+    }
+
+    it('marks the row the user stopped, and leaves an ordinary stopped one unmarked', () => {
+        // Both read `stopped` — the runtime fact is identical. What differs is
+        // whether the next launch will bring it back, which is the only thing the
+        // user actually wants to know when they look at this list.
+        const rows = buildProcessList(
+            [paused('paused'), spec('idle', 'ws-1', 'other', 'npm run other')],
+            new Map([['ws-1', 'Tynn']]),
+            {},
+            new Set(),
+        );
+
+        expect(rows.find((r) => r.id === 'paused')?.paused).toBe(true);
+        expect(rows.find((r) => r.id === 'idle')?.paused).toBe(false);
     });
 });

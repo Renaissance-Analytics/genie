@@ -36,6 +36,16 @@ export interface ProcessListItem {
     workspaceId: string | null;
     status: ProcessStatus;
     autostart: boolean;
+    /**
+     * The user PAUSED this process — stopped it deliberately, and it will stay
+     * down through the next launch (genie#407). Always false for a terminal.
+     *
+     * Reported beside `status` rather than folded into it because they answer
+     * different questions. `stopped` is what the process is doing; this is what
+     * Genie will do about it, and it is the half a user cannot otherwise see —
+     * two rows both reading `stopped` behave differently on the next launch.
+     */
+    paused: boolean;
 }
 
 /**
@@ -82,6 +92,8 @@ export function buildProcessList(
                         ? 'running'
                         : 'stopped',
                 autostart: s.meta?.autostart === true,
+                // A terminal has no supervisor and so nothing to pause.
+                paused: isProcess && s.meta?.user_stopped === true,
             };
         });
 }

@@ -818,10 +818,22 @@ export async function runManageSite(
                 if ('error' in target) return fail(target.error);
                 // A stop that could not confirm the process died leaves an ORPHAN
                 // Genie has already forgotten — reported, not swallowed (#226).
-                const report = await manager.stop(target.siteId);
-                // Persisted, so it stays stopped across a restart rather than
-                // being started again by the boot reconcile.
-                setWorkspaceDevSite(ws.id, { siteId: target.siteId, enabled: false });
+                //
+                // `'user'` is what makes it survive the next launch (genie#407).
+                // This is the ONE stop path a person or an agent acting for them
+                // can reach; a drain, a quit, a workspace removal and a restart's
+                // own internal stop are Genie's, and every one of those is
+                // expected back.
+                const report = await manager.stop(target.siteId, 'user');
+                // It used to write `enabled: false` here, and that was the bug's
+                // other half. `enabled` is CONFIGURATION — "this site should be
+                // served" — and it is persisted into the `.agi` envelope's
+                // project.json, which is git-TRACKED so the definition travels
+                // with the repo. Writing a local, momentary stop into it made one
+                // developer's pause a diff their teammates inherited, and made a
+                // `git pull` or a fresh clone a way to restart a site somebody had
+                // deliberately stopped. The stop now lives in the machine-local
+                // run state the manager owns, and `enabled` says only what it means.
                 const notes = stopNotes(report);
                 return {
                     ok: true,

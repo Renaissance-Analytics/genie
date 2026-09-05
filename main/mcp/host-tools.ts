@@ -490,6 +490,9 @@ function processInfo(workspaceRoot: string, statuses: Record<string, string>) {
             autostart: spec.meta?.autostart === true,
             cwd: rel,
             enabled: spec.enabled !== false,
+            // Only when true: an ordinary process leaves it absent, so a list
+            // reads the same as it always did unless there is a pause to report.
+            ...(spec.meta?.user_stopped === true ? { paused: true } : {}),
         };
         // Scheduled tasks carry their recurrence + run history. Ordinary
         // processes leave every one of these fields ABSENT, so an agent reading
