@@ -597,12 +597,44 @@ const flowsRoot = () =>
 const flowsPanel = () => page.locator('[role="dialog"][aria-label="Flows"]');
 const flowRow = (title: string) => flowsPanel().locator('.flowmgr-row', { hasText: title });
 
-async function flowAnimations(selector: string): Promise<number> {
-    return page.evaluate((sel) => {
-        const el = document.querySelector(sel);
-        if (!el) return -1;
-        return el.getAnimations().filter((a) => a.playState === 'running').length;
-    }, selector);
+/**
+ * What is animating on the Flows icon, split by KIND.
+ *
+ * `getAnimations()` returns CSS **transitions** as well as CSS animations, and
+ * `.gicon` transitions two properties — `background` and `color`, 150ms each —
+ * on hover. The first version of this counted everything and went red with
+ * `Received: 2`, seven milliseconds after the previous test had clicked the
+ * button and left the pointer on it. Two transitioned properties, two effects,
+ * 7ms into a 150ms transition: the icon was not animating, it was finishing a
+ * hover.
+ *
+ * Asking the compositor is still the right instrument — it is the only thing
+ * that knows whether a rule actually applied, which a class check cannot see —
+ * but the question has to name the KIND, or the answer includes everything the
+ * element happens to be doing for unrelated reasons.
+ *
+ * Both lists are returned so a failure says WHAT was running rather than only
+ * that something was. That is what turned the last failure from a guess into a
+ * measurement, and the next person should not have to re-derive it.
+ */
+async function flowIconEffects(): Promise<{ animations: string[]; transitions: string[] }> {
+    return page.evaluate(() => {
+        const el = document.querySelector('.gicon.flows-button');
+        if (!el) return { animations: ['NO ELEMENT MATCHED'], transitions: [] };
+        const live = el.getAnimations().filter((a) => a.playState === 'running');
+        return {
+            animations: live
+                .filter((a): a is Animation & { animationName: string } => 'animationName' in a)
+                .map((a) => a.animationName)
+                .sort(),
+            transitions: live
+                .filter((a): a is Animation & { transitionProperty: string } =>
+                    'transitionProperty' in a,
+                )
+                .map((a) => a.transitionProperty)
+                .sort(),
+        };
+    });
 }
 
 /** Push run state from main, exactly as the runtime's callbacks do. */
@@ -641,18 +673,35 @@ test('the Flows button sits in the icon cluster and opens the manager', async ()
 test('the Flows icon is still while nothing runs, and animates while one does', async () => {
     await setFlowsRunning([]);
     await expect(flowsButton()).not.toHaveClass(/is-running/);
-    // The control: zero here and non-zero below is what makes the assertion
-    // about Flow state rather than about some animation the header always has.
-    expect(await flowAnimations('.gicon.flows-button')).toBe(0);
+    // EMPTY, not "does not contain flows-running": an unexpected animation on
+    // this icon should fail here too. The transitions are reported in the
+    // message so a failure names what was running instead of implying it.
+    const still = await flowIconEffects();
+    expect(still.animations, `transitions also live: ${still.transitions.join(', ')}`).toEqual([]);
 
     await setFlowsRunning(['e2e-flow-manual']);
     await expect(flowsButton()).toHaveClass(/is-running/);
-    expect(await flowAnimations('.gicon.flows-button')).toBeGreaterThan(0);
+    // The control, and it NAMES the animation — "something is animating" is
+    // satisfied by the hover transition this test previously mistook for one.
+    //
+    // Polled rather than sampled: the class lands one style recalc before the
+    // animation object exists, and a single read can arrive in the gap.
+    await expect
+        .poll(async () => (await flowIconEffects()).animations, {
+            message: 'the flows-running animation should start when a Flow runs',
+        })
+        .toEqual(['flows-running']);
 
     await setFlowsRunning([]);
     await expect(flowsButton()).not.toHaveClass(/is-running/);
-    // A stuck badge is worse than no badge. This is what catches one.
-    expect(await flowAnimations('.gicon.flows-button')).toBe(0);
+    // A stuck badge is worse than no badge. This is what catches one — and it
+    // asserts EMPTY rather than "no flows-running", so anything unexpected that
+    // starts animating this icon fails here too.
+    await expect
+        .poll(async () => (await flowIconEffects()).animations, {
+            message: 'the flows-running animation must STOP when the run ends',
+        })
+        .toEqual([]);
 });
 
 test('the Flow Manager lists the seeded Flows, and warns about the one that cannot fire', async () => {
