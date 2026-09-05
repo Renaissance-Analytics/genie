@@ -2444,6 +2444,22 @@ app.whenReady().then(async () => {
     // Deferred and fire-and-forget: nothing here is a reason to hold up startup,
     // and the push at the end is what lights the rail's sites icon on a cold
     // start, since nothing polls for it.
+    // The autostart pass the drain guard deferred, run AT MOST ONCE and NEVER
+    // skipped (genie#389).
+    //
+    // It is deferred so the staggered restore goes first; it must still happen
+    // whatever becomes of that restore. Every way the block below can end
+    // early — no dev-server lifecycle at all, an `onBoot` that throws before it
+    // reaches the seam, a restore that rejects — would otherwise mean this pass
+    // never runs and every configured service stays down for the whole session,
+    // silently, only after an upgrade. So the `finally` calls it too, and the
+    // flag is what keeps the two callers from running it twice.
+    let deferredAutostartDone = false;
+    const runDeferredAutostart = (): void => {
+        if (!drainRestorePending || deferredAutostartDone) return;
+        deferredAutostartDone = true;
+        startAutostartProcesses();
+    };
     void (async () => {
         // Hold the external-browser reconcile for the WHOLE restore (genie#225).
         // onBoot brings every enabled site back one at a time and each start fires
@@ -2462,20 +2478,23 @@ app.whenReady().then(async () => {
                 // upgrade they did not choose.
                 beforeResume: async () => {
                     if (!drainRestorePending) return;
-                    await runPendingDrainRestore({
-                        onOutcome: (outcome) => {
-                            if (outcome.status === 'started') return;
-                            console.log(
-                                `[drain] restore ${outcome.status}: ${outcome.entry.kind} ` +
-                                    `${outcome.entry.label} — ${outcome.reason ?? ''}`,
-                            );
-                        },
-                    });
-                    // The catch-all the guard above deferred: anything
-                    // configured to autostart that the roster did not carry.
-                    // The restored ones are live by now, and the pass leaves a
-                    // live process alone.
-                    startAutostartProcesses();
+                    try {
+                        await runPendingDrainRestore({
+                            onOutcome: (outcome) => {
+                                if (outcome.status === 'started') return;
+                                console.log(
+                                    `[drain] restore ${outcome.status}: ${outcome.entry.kind} ` +
+                                        `${outcome.entry.label} — ${outcome.reason ?? ''}`,
+                                );
+                            },
+                        });
+                    } finally {
+                        // The restored processes are live by now, and the pass
+                        // leaves a live process alone — so this only picks up
+                        // what is configured to autostart and was not on the
+                        // roster.
+                        runDeferredAutostart();
+                    }
                 },
             });
         } catch (e) {
@@ -2483,6 +2502,7 @@ app.whenReady().then(async () => {
         } finally {
             // In a finally: a failed restore must not leave reconciles suspended
             // for the rest of the session.
+            runDeferredAutostart();
             await resumeHostBrowser?.();
         }
         broadcastDevServerChanged();
