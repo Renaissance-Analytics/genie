@@ -595,3 +595,45 @@ describe('AgentInboxBroker — what reaches the chat', () => {
         expect(pty).toHaveBeenCalledTimes(1);
     });
 });
+
+/**
+ * `setChatSession` is the broker half of Codex's late session binding, and its
+ * hook re-fires (`matcher = "startup|resume|clear"`), so it is routinely handed
+ * the id it is already holding. Emitting presence for that pushes
+ * `agentinbox:presence` to every window, and `AgentInboxFlyout` reloads its
+ * whole directory on each one -- work with nothing behind it (genie#229).
+ */
+describe('AgentInboxBroker — re-binding an unchanged chat session', () => {
+    function bound(): { broker: AgentInboxBroker; events: AgentInboxBrokerEvent[] } {
+        const broker = fresh();
+        const events: AgentInboxBrokerEvent[] = [];
+        broker.join(input({ agentId: 'a1', agentType: 'codex' }));
+        broker.setEmitter((ev) => events.push(ev));
+        return { broker, events };
+    }
+
+    it('POSITIVE CONTROL: a FIRST binding does emit presence', () => {
+        // "no presence" would pass just as well against a broker that had
+        // stopped emitting presence at all, or an agent id that never existed.
+        const { broker, events } = bound();
+        broker.setChatSession('a1', 'session-a');
+        expect(events.filter((e) => e.type === 'presence')).toHaveLength(1);
+    });
+
+    it('emits nothing when the session id is the one already held', () => {
+        const { broker, events } = bound();
+        broker.setChatSession('a1', 'session-a');
+        events.length = 0;
+        broker.setChatSession('a1', 'session-a');
+        expect(events).toEqual([]);
+    });
+
+    it('still emits when the session id genuinely changes', () => {
+        const { broker, events } = bound();
+        broker.setChatSession('a1', 'session-a');
+        events.length = 0;
+        broker.setChatSession('a1', 'session-b');
+        expect(events.filter((e) => e.type === 'presence')).toHaveLength(1);
+        expect(broker.getInfo('a1')?.chatSessionId).toBe('session-b');
+    });
+});

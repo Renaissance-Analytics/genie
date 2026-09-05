@@ -993,6 +993,11 @@ export class AgentInboxBroker {
     setChatSession(agentId: string, chatSessionId: string): void {
         const a = this.agents.get(agentId);
         if (!a) return;
+        // Codex's SessionStart hook matcher is `startup|resume|clear`, so a
+        // resume hands back the id already held. Presence goes to every
+        // window and AgentInboxFlyout reloads its whole directory on it, so
+        // announcing a change that did not happen is pure cost (genie#229).
+        if (a.chatSessionId === chatSessionId) return;
         a.chatSessionId = chatSessionId;
         this.emitPresence(a);
     }
