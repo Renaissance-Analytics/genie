@@ -384,6 +384,10 @@ const ENGINE_LABELS: Readonly<Record<string, string>> = {
     meilisearch: 'Meilisearch',
     minio: 'MinIO',
     mailpit: 'Mailpit',
+    // Named here rather than left to the fallback below: without an entry
+    // `serviceTitle` shows the raw catalog key, which is how the old `reverb`
+    // key — a product Genie does not ship — got onto a user's screen.
+    websockets: 'WebSockets',
     custom: 'Custom image',
 };
 
