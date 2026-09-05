@@ -47,8 +47,47 @@
  * of shell quoting regardless.
  */
 
-/** The AI TUIs Genie can launch. Adding one starts here and nowhere else. */
-export const PROVIDER_IDS = ['claude', 'codex', 'kiwi', 'genie', 'custom'] as const;
+/**
+ * The AI TUIs Genie can launch. Adding one starts here and nowhere else.
+ *
+ * `claude`, `codex` and Genie's own TUI lead; the rest are alphabetical, because
+ * any other ordering is an editorial claim about which vendor matters and
+ * nothing here is qualified to make one. `custom` is last: it is not a product.
+ *
+ * `kiwi` USED TO BE HERE and is gone. It was labelled "Kiwi Code" and its own
+ * registry comment admitted no public source for a `kiwi` binary could be found.
+ * There is a reason for that: no such product exists. Searching the npm registry
+ * and the open web turns up nothing — the `kiwi-cli` package is an unrelated
+ * general-purpose tool. The real neighbours are Kilo Code (`@kilocode/cli`, bin
+ * `kilo`) and Kimi Code (`@moonshot-ai/kimi-code`, bin `kimi`); the owner
+ * confirmed Kilo was meant. So `kiwi` becomes `kilo`, and db migration v73
+ * carries existing installs across — the same shape as v58, which fixed
+ * `genie-tui`, and for the same reason: a provider that cannot resolve is a
+ * provider that fails at launch with nothing on screen to explain it.
+ */
+export const PROVIDER_IDS = [
+    'claude',
+    'codex',
+    'genie',
+    'aider',
+    'amp',
+    'auggie',
+    'cline',
+    'continue',
+    'copilot',
+    'crush',
+    'cursor',
+    'droid',
+    'gemini',
+    'goose',
+    'iflow',
+    'kilo',
+    'kimi',
+    'opencode',
+    'qwen',
+    'vibe',
+    'custom',
+] as const;
 
 export type AgentTuiId = (typeof PROVIDER_IDS)[number];
 
@@ -189,23 +228,6 @@ export const TUI_REGISTRY: Record<AgentTuiId, TuiDef> = {
         // No `continueFlag`: codex has no generic "continue the last chat".
         resume: { kind: 'subcommand', token: 'resume' },
     },
-    kiwi: {
-        id: 'kiwi',
-        label: 'Kiwi Code',
-        hint: 'Launch the native Kiwi Code CLI',
-        defaultCommand: 'kiwi',
-        commandSettingKey: 'agent_command_kiwi',
-        flagsSettingKey: 'agent_flags_kiwi',
-        // Genie ships this one (genie#313) — same "command not found" gap the
-        // `genie` provider had. No `install`: there is no known public source
-        // for the `kiwi` binary this codebase can point npm (or anything else)
-        // at, so the detect pass can only surface the gap, not close it.
-        ownedBinary: true,
-        // No documented resume grammar, so a "restart" would silently start a
-        // NEW conversation. Withholding the button is the honest answer until
-        // the CLI's own resume syntax is known.
-        resume: null,
-    },
     genie: {
         id: 'genie',
         label: 'Genie TUI',
@@ -230,6 +252,259 @@ export const TUI_REGISTRY: Record<AgentTuiId, TuiDef> = {
         // could most easily grow one, and this is the line to fill in when it
         // does — nothing else needs editing.
         resume: null,
+    },
+    // --- the rest of the field, alphabetically ------------------------------
+    //
+    // Every entry below names a real, shipping coding-agent CLI. Its BINARY was
+    // read from that package's own manifest on the public npm registry, or from
+    // the vendor's install docs where it does not ship on npm — never recalled.
+    // Six recalled answers were wrong when this list was assembled, so the rule
+    // is evidence or nothing.
+    //
+    // `ownedBinary` is FALSE for all of them: these are other people's CLIs, and
+    // the boot-time auto-install pass must never run `npm i -g` over somebody
+    // else's tool. How Genie installs one when a person ASKS is the agent-CLI
+    // catalog's `install`, which is a consented action and a different question.
+    //
+    // `resume` is `null` unless the syntax was read from the vendor's own
+    // documentation, and the citation is in the comment. This is the field that
+    // can lose work: a wrong resume flag does not error, it starts a FRESH
+    // conversation while the UI says "restart".
+    aider: {
+        id: 'aider',
+        label: 'Aider',
+        hint: 'Launch the Aider pair-programming CLI',
+        defaultCommand: 'aider',
+        commandSettingKey: 'agent_command_aider',
+        flagsSettingKey: 'agent_flags_aider',
+        ownedBinary: false,
+        // aider.chat/docs/usage.html documents no resume or continue flag.
+        resume: null,
+    },
+    amp: {
+        id: 'amp',
+        label: 'Amp',
+        hint: 'Launch Sourcegraph Amp',
+        defaultCommand: 'amp',
+        commandSettingKey: 'agent_command_amp',
+        flagsSettingKey: 'agent_flags_amp',
+        ownedBinary: false,
+        // ampcode.com/manual documents no resume/continue flag for threads.
+        resume: null,
+    },
+    auggie: {
+        id: 'auggie',
+        label: 'Auggie',
+        hint: 'Launch the Augment Code CLI',
+        defaultCommand: 'auggie',
+        commandSettingKey: 'agent_command_auggie',
+        flagsSettingKey: 'agent_flags_auggie',
+        ownedBinary: false,
+        // `auggie --resume <sessionId>` (-r) resumes a specific session;
+        // `--continue` (-c) resumes the most recent. Read from
+        // docs.augmentcode.com/cli/reference.
+        resume: { kind: 'flag', token: '--resume', continueFlag: '--continue', aliases: ['-r', '-c'] },
+    },
+    cline: {
+        id: 'cline',
+        label: 'Cline',
+        hint: 'Launch the Cline CLI',
+        defaultCommand: 'cline',
+        commandSettingKey: 'agent_command_cline',
+        flagsSettingKey: 'agent_flags_cline',
+        ownedBinary: false,
+        // A `--id <sessionId>` form appears in third-party write-ups of the
+        // non-interactive mode, but not in vendor documentation that could be
+        // read here. Third-party prose is exactly the evidence standard this
+        // list refuses, so: null.
+        resume: null,
+    },
+    continue: {
+        id: 'continue',
+        label: 'Continue',
+        hint: 'Launch the Continue CLI',
+        // `cn`, not `continue` — the package's own manifest says so, and
+        // `continue` is not a binary it ships.
+        defaultCommand: 'cn',
+        commandSettingKey: 'agent_command_continue',
+        flagsSettingKey: 'agent_flags_continue',
+        ownedBinary: false,
+        // The CLI reference page redirects and served no content to read.
+        // Unverified is null.
+        resume: null,
+    },
+    copilot: {
+        id: 'copilot',
+        label: 'GitHub Copilot CLI',
+        hint: 'Launch the GitHub Copilot CLI',
+        defaultCommand: 'copilot',
+        commandSettingKey: 'agent_command_copilot',
+        flagsSettingKey: 'agent_flags_copilot',
+        ownedBinary: false,
+        // github/copilot-cli's README documents no resume or continue flag.
+        resume: null,
+    },
+    crush: {
+        id: 'crush',
+        label: 'Crush',
+        hint: 'Launch the Charm Crush TUI',
+        defaultCommand: 'crush',
+        commandSettingKey: 'agent_command_crush',
+        flagsSettingKey: 'agent_flags_crush',
+        ownedBinary: false,
+        // Crush re-enters a conversation through an INTERACTIVE session picker,
+        // not a flag — its README says each invocation "starts in its own fresh
+        // session by default" and points at the picker. There is nothing a
+        // command line can carry, so a restart cannot preserve the thread.
+        resume: null,
+    },
+    cursor: {
+        id: 'cursor',
+        label: 'Cursor CLI',
+        // The installer writes `cursor-agent`; posix also gets the alias
+        // `agent`, which is far too generic a name for Genie to spawn.
+        defaultCommand: 'cursor-agent',
+        hint: 'Launch the Cursor agent CLI',
+        commandSettingKey: 'agent_command_cursor',
+        flagsSettingKey: 'agent_flags_cursor',
+        ownedBinary: false,
+        // `--resume [chatId]` resumes a chat; `--continue` is the vendor's own
+        // documented alias for `--resume=-1`, the previous session. Read from
+        // cursor.com/docs/cli/reference/parameters.
+        resume: { kind: 'flag', token: '--resume', continueFlag: '--continue' },
+    },
+    droid: {
+        id: 'droid',
+        label: 'Factory Droid',
+        hint: 'Launch the Factory Droid CLI',
+        defaultCommand: 'droid',
+        commandSettingKey: 'agent_command_droid',
+        flagsSettingKey: 'agent_flags_droid',
+        ownedBinary: false,
+        // `-r, --resume [sessionId]` — and a BARE `--resume` resumes the last
+        // modified session, which is why it is its own `continueFlag` rather
+        // than a second flag. Read from
+        // docs.factory.ai/cli/configuration/cli-reference.
+        resume: { kind: 'flag', token: '--resume', continueFlag: '--resume', aliases: ['-r'] },
+    },
+    gemini: {
+        id: 'gemini',
+        label: 'Gemini CLI',
+        hint: 'Launch Google Gemini CLI',
+        defaultCommand: 'gemini',
+        commandSettingKey: 'agent_command_gemini',
+        flagsSettingKey: 'agent_flags_gemini',
+        ownedBinary: false,
+        // Its README advertises "conversation checkpointing to save and resume",
+        // but documents no CLI flag for it — the feature is reached from inside
+        // the TUI. An advertised capability with no command line is not a resume
+        // grammar.
+        resume: null,
+    },
+    goose: {
+        id: 'goose',
+        label: 'Goose',
+        hint: 'Launch the Block Goose CLI',
+        defaultCommand: 'goose',
+        commandSettingKey: 'agent_command_goose',
+        flagsSettingKey: 'agent_flags_goose',
+        ownedBinary: false,
+        // Goose DOES document a resume: `goose session --resume --session-id
+        // <id>`. It is null anyway, because {@link ResumeGrammar} cannot express
+        // it — that shape is a subcommand AND a flag, while `kind: 'subcommand'`
+        // puts the id positionally last (`goose session <id>`, which Goose does
+        // not accept). Wiring a third kind is the fix; guessing with the two
+        // that exist would build a command the CLI never documented.
+        resume: null,
+    },
+    iflow: {
+        id: 'iflow',
+        label: 'iFlow CLI',
+        hint: 'Launch the iFlow CLI',
+        defaultCommand: 'iflow',
+        commandSettingKey: 'agent_command_iflow',
+        flagsSettingKey: 'agent_flags_iflow',
+        ownedBinary: false,
+        // No resume syntax read from vendor documentation.
+        resume: null,
+    },
+    kilo: {
+        id: 'kilo',
+        label: 'Kilo Code',
+        hint: 'Launch the Kilo Code CLI',
+        // `@kilocode/cli` publishes TWO bins, `kilo` and `kilocode`, pointing at
+        // the same entry point. `kilo` is the one its own docs lead with, so it
+        // is the one Genie launches and probes; a machine carrying only the
+        // longer alias reads as not-installed, which is the safe direction to be
+        // wrong.
+        defaultCommand: 'kilo',
+        commandSettingKey: 'agent_command_kilo',
+        flagsSettingKey: 'agent_flags_kilo',
+        // Kilo's binary, not Genie's. The `kiwi` entry this replaces claimed
+        // `ownedBinary: true` ("Genie ships this one"), which was never true of
+        // anything and is certainly not true of another vendor's CLI.
+        ownedBinary: false,
+        // Kilo DOES document `--continue` (`-c`) to resume the last conversation
+        // in the workspace — but no resume-BY-ID, and `renderAgentResume`
+        // appends the captured session id to `token`, so any grammar here would
+        // render `kilo --continue <id>`: a command the CLI never documented.
+        // Null until `ResumeGrammar` can express continue-only, at which point
+        // this is a one-line change. `resolveRestartCommand` refuses the restart
+        // and says why, which beats silently starting over.
+        resume: null,
+    },
+    kimi: {
+        id: 'kimi',
+        label: 'Kimi Code',
+        hint: 'Launch the Moonshot Kimi Code CLI',
+        defaultCommand: 'kimi',
+        commandSettingKey: 'agent_command_kimi',
+        flagsSettingKey: 'agent_flags_kimi',
+        ownedBinary: false,
+        // No resume syntax read from vendor documentation.
+        resume: null,
+    },
+    opencode: {
+        id: 'opencode',
+        label: 'opencode',
+        hint: 'Launch the provider-neutral opencode TUI',
+        defaultCommand: 'opencode',
+        commandSettingKey: 'agent_command_opencode',
+        flagsSettingKey: 'agent_flags_opencode',
+        ownedBinary: false,
+        // `--session <id>` (-s) continues a specific session; `--continue` (-c)
+        // continues the last one. Read from opencode.ai/docs/cli, which lists
+        // both on `tui`, `run` and `attach`.
+        resume: { kind: 'flag', token: '--session', continueFlag: '--continue', aliases: ['-s', '-c'] },
+    },
+    qwen: {
+        id: 'qwen',
+        label: 'Qwen Code',
+        hint: 'Launch the Qwen Code CLI',
+        defaultCommand: 'qwen',
+        commandSettingKey: 'agent_command_qwen',
+        flagsSettingKey: 'agent_flags_qwen',
+        ownedBinary: false,
+        // Its documentation lists interactive, headless, daemon and bot modes,
+        // and no session resumption.
+        resume: null,
+    },
+    vibe: {
+        id: 'vibe',
+        label: 'Mistral Vibe',
+        hint: 'Launch the Mistral Vibe CLI',
+        // `vibe`. NOT `mistral-code` — the npm package of that name is published
+        // at 0.0.0 and is not the product; Mistral's terminal agent is Mistral
+        // Vibe, distributed through PyPI and a vendor install script.
+        defaultCommand: 'vibe',
+        commandSettingKey: 'agent_command_vibe',
+        flagsSettingKey: 'agent_flags_vibe',
+        ownedBinary: false,
+        // `--resume SESSION_ID` resumes a specific session (bare `--resume`
+        // opens a picker, which is why the id form is the token); `--continue`
+        // (-c) continues the most recent. Read from the mistralai/mistral-vibe
+        // README.
+        resume: { kind: 'flag', token: '--resume', continueFlag: '--continue', aliases: ['-c'] },
     },
     custom: {
         id: 'custom',
@@ -279,8 +554,10 @@ export function canResumeTui(value: unknown): boolean {
  * The provider half of the settings shape. Intersected into `Settings` in
  * `db.ts`, so adding a provider adds its two keys with no edit there.
  */
+export type ProviderSettingKey = `agent_command_${AgentTuiId}` | `agent_flags_${AgentTuiId}`;
+
 export type ProviderSettingKeys = {
-    [K in `agent_command_${AgentTuiId}` | `agent_flags_${AgentTuiId}`]?: string;
+    [K in ProviderSettingKey]?: string;
 };
 
 /**

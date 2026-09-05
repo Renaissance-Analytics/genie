@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { HostToolName, HostToolProbe, ToolchainReport } from '../toolchain-detect';
-import { DEFAULT_TOOLCHAIN, defaultToolchainFor } from '../toolchain-detect';
+import { DEFAULT_TOOLCHAIN, MANAGED_TOOLCHAIN, defaultToolchainFor } from '../toolchain-detect';
+import { AGENT_CLI_IDS } from '../../agents/agent-cli-catalog';
 import { INSTALL_ORDER, planToolchainInstall, planToolUpdate } from '../toolchain-plan';
 
 /**
@@ -433,5 +434,71 @@ describe('planToolchainInstall — the Windows VC++ runtime prerequisite', () =>
             wanted: ['vcredist', 'php'],
         });
         expect(toolsOf(steps)).toEqual(['php']);
+    });
+});
+
+/**
+ * The agent CLIs Genie can now install (the Toolchain page's Agent CLIs tab).
+ *
+ * Two rules matter here and they pull in opposite directions:
+ *
+ *   - a CLI the page LISTS must be one the planner can plan, or its Install
+ *     button is a button that fails;
+ *   - a CLI the page lists must NOT thereby join the first-run wizard's
+ *     unattended install set. Listing seventeen agents is a catalogue; installing
+ *     seventeen agents on a fresh machine is a hijacking.
+ *
+ * `DEFAULT_TOOLCHAIN` is the wizard's set and stays small; the page's set is
+ * wider, and the two being separate is the whole point.
+ */
+describe('agent CLIs beyond the original two', () => {
+    it('plans a newly catalogued CLI as npm-global, waiting on npm', () => {
+        const steps = planToolchainInstall({
+            detected: reportWith(['node', 'npm']),
+            os: 'linux',
+            pmChoice: 'apt',
+            wanted: ['gemini-cli' as HostToolName],
+        });
+        expect(steps).toHaveLength(1);
+        expect(steps[0]).toMatchObject({ tool: 'gemini-cli', method: 'npm-global' });
+        expect(steps[0].dependsOn).toEqual(['npm']);
+        // `npm i -g` into Genie's own prefix never needs a UAC prompt (genie#214).
+        expect(steps[0].requiresElevation).toBe(false);
+    });
+
+    it('never routes an agent CLI through a system package manager', () => {
+        for (const tool of AGENT_CLI_IDS) {
+            const step = planToolUpdate(tool, 'win32', 'winget');
+            expect(step.method, tool).toBe('npm-global');
+        }
+    });
+
+    it('orders every agent CLI after npm and before docker', () => {
+        const order = INSTALL_ORDER as readonly HostToolName[];
+        for (const tool of AGENT_CLI_IDS) {
+            expect(order, tool).toContain(tool);
+            expect(order.indexOf(tool), tool).toBeGreaterThan(order.indexOf('npm'));
+            expect(order.indexOf(tool), tool).toBeLessThan(order.indexOf('docker'));
+        }
+    });
+
+    it('keeps the first-run wizard installing the SAME small set as before', () => {
+        expect([...DEFAULT_TOOLCHAIN]).toEqual([
+            'git',
+            'node',
+            'npm',
+            'php',
+            'composer',
+            'docker',
+            'claude-code',
+            'codex',
+        ]);
+    });
+
+    it('but lets the PAGE see every agent CLI, which is what the tab lists', () => {
+        for (const tool of AGENT_CLI_IDS) {
+            expect(MANAGED_TOOLCHAIN, tool).toContain(tool);
+        }
+        expect(MANAGED_TOOLCHAIN.length).toBeGreaterThan(DEFAULT_TOOLCHAIN.length);
     });
 });

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Action, Card, Heading, Icon, Modal, Text } from '@particle-academy/react-fancy';
 import { agentTuis, providerDef, type AgentTuiId } from '../../../main/agents/registry';
+import { agentCliToolByProvider } from '../../../main/agents/agent-cli-catalog';
 import { api, type BackendUser, type HostToolName, type WorkspaceRow } from '../../lib/genie';
 import { GitHubConnect, OwnerSelect, useGitHubAccount } from '../GitHubConnect';
 import AddWorkspaceModal from '../AddWorkspaceModal';
@@ -9,10 +10,17 @@ import { canFinishFirstRun } from '../../lib/workspace-onboarding';
 
 type Step = 'welcome' | 'drivers' | 'toolchain' | 'tynn' | 'github' | 'os' | 'workspace';
 
-const DRIVER_TOOL: Partial<Record<AgentTuiId, HostToolName>> = {
-    claude: 'claude-code',
-    codex: 'codex',
-};
+/**
+ * Which host tool each provider's driver IS, so the wizard can tick one that is
+ * already on the machine.
+ *
+ * DERIVED from the agent-CLI catalog. Written out, this was a third copy of the
+ * provider→tool fact (the registry, the renderer's `AGENT_CLI_TOOLS`, and here),
+ * and the one with the quietest failure: a provider missing from it has no tool,
+ * so the wizard cannot tell whether its CLI is installed and offers to install a
+ * driver that is already there.
+ */
+const DRIVER_TOOL: Partial<Record<AgentTuiId, HostToolName>> = agentCliToolByProvider();
 
 export function FirstRunOnboarding({
     open,

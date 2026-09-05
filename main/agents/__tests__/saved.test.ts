@@ -74,7 +74,7 @@ describe('reading saved agents off terminal specs', () => {
 
     it('ignores a spec whose tui is not one Genie runs', () => {
         const saved = savedAgentsOf(
-            [{ id: 's1', workspace_id: 'ws', meta: { agent: 'gemini' } }],
+            [{ id: 's1', workspace_id: 'ws', meta: { agent: 'notatui' } }],
             'ws',
             () => true,
         );

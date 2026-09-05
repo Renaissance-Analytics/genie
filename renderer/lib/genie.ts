@@ -10,6 +10,7 @@ import { makeRemoteBridge } from './remote-bridge';
 import type { TynnHealth } from '../../main/mcp/tynn-health';
 import type { DrainSnapshot } from '../../main/agents/drain';
 import type { AgentTuiId, TuiDef } from '../../main/agents/registry';
+import type { AgentCliToolId } from '../../main/agents/agent-cli-catalog';
 /* The agent MANAGER's wire types (Tynn #709 / story #263).
  *
  * From `agent-manager-types.ts` — a ZERO-IMPORT leaf — and from NOTHING else,
@@ -719,6 +720,17 @@ export interface DevWorkstationInfo {
 // Mirrors main/dev-server (toolchain-detect / -plan / -choice / -setup): the
 // renderer can't import main types, so the wizard's shapes are restated here.
 
+/**
+ * The tools the toolchain IPC talks about.
+ *
+ * The agent CLIs are NOT listed: they come from the same catalog `main` derives
+ * its own `HostToolName` from, so this mirror cannot fall behind. It used to
+ * write out `claude-code | codex`, which made this the FOURTH copy of that fact
+ * — after `toolchain-detect.ts`, the renderer's `AGENT_CLI_TOOLS`, and the
+ * onboarding wizard's driver map — and the only kind of copy that fails
+ * silently: a tool `main` sends that this union does not know is a compile error
+ * nowhere and a row nobody renders.
+ */
 export type HostToolName =
     | 'git'
     | 'node'
@@ -726,13 +738,12 @@ export type HostToolName =
     | 'php'
     | 'composer'
     | 'docker'
-    | 'claude-code'
-    | 'codex'
     // A Windows PREREQUISITE rather than a tool anyone picks: every
     // windows.php.net build links against the Visual C++ runtime, so php
     // installs and then cannot start without it (genie#209). It appears in the
     // setup plan on Windows only.
-    | 'vcredist';
+    | 'vcredist'
+    | AgentCliToolId;
 export type ToolchainPackageManager = 'winget' | 'brew' | 'apt' | 'dnf';
 export type ToolchainInstallMethod = 'pm' | 'direct' | 'npm-global';
 
@@ -872,6 +883,10 @@ export interface ToolUpdate {
     source: ToolchainUpdateSource;
     /** Who installed it and where, when the path could be resolved. */
     origin?: ToolInstallOrigin;
+    /** FALSE when Genie deliberately never looked for this tool — its binary
+     *  name is too generic to check without risking a false "installed". The row
+     *  then makes no claim either way. Absent on every ordinary answer. */
+    probed?: boolean;
 }
 
 // --- multi-version languages (the Toolchain page) --------------------------

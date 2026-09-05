@@ -78,18 +78,17 @@ export type ReconnectStrategy =
  * this file compiling until it has a path, so genie#346's "none is left on
  * `{kind:'none'}`" is enforced by the compiler instead of by memory.
  */
-const RECONNECT_STRATEGIES: Record<AgentTuiId, ReconnectStrategy> = {
+const RECONNECT_STRATEGIES: Partial<Record<AgentTuiId, ReconnectStrategy>> = {
     claude: { kind: 'command', text: '/mcp reconnect genie' },
     // Out of band, never typed. Codex parks on key-driven modals -- update
     // pickers, approval requests, trust prompts -- where injected text is read
     // as an answer, and on the update picker option 1 runs a global npm install.
     codex: { kind: 'restart' },
-    // No known reconnect grammar, and no resumable restart (`renderAgentResume`
-    // covers claude + codex only), so a restart would cost the conversation.
-    kiwi: { kind: 'notice', text: MANUAL_RECONNECT_NOTICE },
-    genie: { kind: 'notice', text: MANUAL_RECONNECT_NOTICE },
-    // A custom agent IS its command; Genie knows nothing about its prompt.
-    custom: { kind: 'notice', text: MANUAL_RECONNECT_NOTICE },
+    // Everything else falls to the manual notice below. That was already the
+    // value for `kiwi`, `genie` and `custom`, and it is the right one for every
+    // provider whose reconnect grammar Genie has not verified: no known command
+    // to type, and no resumable restart, so a restart would cost the
+    // conversation.
 };
 
 const KNOWN_PROVIDERS = new Set<string>(PROVIDER_IDS);
@@ -101,7 +100,15 @@ export function reconnectStrategy(provider: string | null | undefined): Reconnec
     if (typeof provider !== 'string' || !KNOWN_PROVIDERS.has(provider)) {
         return { kind: 'notice', text: MANUAL_RECONNECT_NOTICE };
     }
-    return RECONNECT_STRATEGIES[provider as AgentTuiId];
+    // A KNOWN provider with no wired strategy lands on the same notice, and by
+    // the same reasoning: the previous exhaustive table could not return
+    // `undefined`, and neither can this. The `??` is what preserves that.
+    return (
+        RECONNECT_STRATEGIES[provider as AgentTuiId] ?? {
+            kind: 'notice',
+            text: MANUAL_RECONNECT_NOTICE,
+        }
+    );
 }
 
 /**

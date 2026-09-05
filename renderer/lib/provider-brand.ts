@@ -17,21 +17,22 @@ import { PROVIDER_IDS, type AgentTuiId } from '../../main/agents/registry';
  *
  * A user-set avatar overrides all of this; these are only the defaults.
  */
-export const PROVIDER_BRAND_MARKS: Record<AgentTuiId, string | null> = {
+export const PROVIDER_BRAND_MARKS: Partial<Record<AgentTuiId, string | null>> = {
     claude: 'anthropic',
     codex: 'openai',
     // Genie's own TUI gets GENIE's mark, never Tynn's — different products, and
     // the logo is not shared.
     genie: 'genie',
-    // Kiwi and a custom CLI have no mark of their own, and borrowing another
-    // vendor's would assert a relationship that does not exist. NULL, so the
-    // caller falls back to the agent's initial — honest about being unknown.
+    // EVERY other provider is absent, which {@link providerBrandMark} reads as
+    // null: the caller falls back to the agent's initial, honest about not
+    // knowing. Borrowing another vendor's mark would assert a relationship that
+    // does not exist, and guessing an icon NAME that the set does not carry
+    // renders nothing at all — a blank where a letter would have done.
     //
-    // These three said `'genie'` while the comment above them claimed they fell
-    // back to an initial. The comment was the intent; the code was the bug, and
-    // it put a borrowed logo on two providers that have none.
-    kiwi: null,
-    custom: null,
+    // `kiwi`, `genie` and `custom` once said `'genie'` while the comment above
+    // them claimed they fell back to an initial. The comment was the intent; the
+    // code was the bug, and it put a borrowed logo on providers that have none.
+    // Absence cannot drift from its own comment the same way.
 };
 
 /**

@@ -116,8 +116,8 @@ describe('the canonical ref', () => {
         expect(parseAgentRef('tynn')).toMatchObject({ name: 'tynn', chatSessionId: null });
         // A name that is not one of Genie's TUIs is just a name, not a
         // broken legacy ref.
-        expect(parseAgentRef('gemini:tynn')).toMatchObject({
-            name: 'gemini',
+        expect(parseAgentRef('notatui:tynn')).toMatchObject({
+            name: 'notatui',
             chatSessionId: 'tynn',
         });
     });
@@ -125,7 +125,11 @@ describe('the canonical ref', () => {
     it('knows which TUIs are ours', () => {
         expect(isAgentTui('claude')).toBe(true);
         expect(isAgentTui('codex')).toBe(true);
-        expect(isAgentTui('kiwi')).toBe(true);
+        // `kiwi` was here and is gone: no product of that name exists, and the
+        // provider it was reaching for is Kilo Code (db migration v73 moves
+        // stored ids across).
+        expect(isAgentTui('kiwi')).toBe(false);
+        expect(isAgentTui('kilo')).toBe(true);
         expect(isAgentTui('genie')).toBe(true);
         expect(isAgentTui('custom')).toBe(true);
         expect(isAgentTui('CLAUDE')).toBe(false);

@@ -48,13 +48,34 @@ export interface ProviderSettingsGroup {
     keywords: string;
 }
 
-/** Extra search terms per provider, so searching a vendor's name finds its rows. */
-const EXTRA_KEYWORDS: Record<AgentTuiId, string> = {
+/**
+ * Extra search terms per provider, so searching a VENDOR's name finds its rows.
+ *
+ * Only the terms the label does not already carry. The row's keywords always
+ * include the provider id, its label and its hint, so an entry here earns its
+ * place by adding a name a person might type that none of those contain —
+ * "anthropic" for Claude Code, "moonshot" for Kimi. A provider whose label IS
+ * the searchable name needs nothing.
+ */
+const EXTRA_KEYWORDS: Partial<Record<AgentTuiId, string>> = {
     claude: 'anthropic claude code',
     codex: 'openai codex',
-    kiwi: 'kiwi code native cli',
     genie: 'genie tui local first',
     custom: 'custom own binary bring your own',
+    gemini: 'google gemini',
+    copilot: 'github copilot',
+    amp: 'sourcegraph amp',
+    crush: 'charm charmbracelet crush',
+    qwen: 'alibaba qwen',
+    kimi: 'moonshot kimi',
+    kilo: 'kilo code kilocode',
+    auggie: 'augment augmentcode auggie',
+    droid: 'factory droid',
+    cursor: 'cursor agent',
+    vibe: 'mistral vibe devstral',
+    goose: 'block goose',
+    continue: 'continue cn',
+    opencode: 'opencode sst',
 };
 
 export function providerSettingsGroups(): ProviderSettingsGroup[] {
@@ -69,7 +90,7 @@ export function providerSettingsGroups(): ProviderSettingsGroup[] {
             commandPlaceholder:
                 id === 'custom' ? 'e.g. my-agent --interactive' : def.defaultCommand,
             ownedBinary: def.ownedBinary,
-            keywords: `${id} ${def.label} ${EXTRA_KEYWORDS[id]} agent tui command flags launch specialized terminal`,
+            keywords: `${id} ${def.label} ${EXTRA_KEYWORDS[id] ?? ''} agent tui command flags launch specialized terminal`,
         };
     });
 }

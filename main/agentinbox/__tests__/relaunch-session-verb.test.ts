@@ -111,7 +111,7 @@ describe('genie#364 — a relaunch resumes the captured id, never re-creates it'
     });
 
     it('never hands a non-resumable provider a resume command it cannot run', () => {
-        for (const agent of ['custom', 'kiwi', 'genie'] as const) {
+        for (const agent of ['custom', 'kilo', 'genie'] as const) {
             const decision = resolveRestartCommand(
                 {
                     meta: {

@@ -6,6 +6,7 @@ import {
     resolveGappProvider,
     withPersonaBriefing,
 } from '../agent-provider';
+import { PROVIDER_IDS } from '../../agents/registry';
 
 /**
  * WHICH TUI a GApp's declared agents launch under, and how the persona reaches it
@@ -49,7 +50,9 @@ describe('which TUI a GApp agent launches under', () => {
         expect(resolveGappProvider({ gapp_ai_provider: 'rm -rf /', agent_default: 'codex' })).toBe(
             'codex',
         );
-        expect([...GAPP_PROVIDERS]).toEqual(['claude', 'codex', 'kiwi', 'genie', 'custom']);
+        // Every registered provider — a GApp's declared agent runs on the
+        // owner's machine under their subscription, so which one is their call.
+        expect([...GAPP_PROVIDERS]).toEqual([...PROVIDER_IDS]);
     });
 });
 

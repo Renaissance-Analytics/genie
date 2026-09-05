@@ -306,9 +306,9 @@ describe('how an agent is shown to a PERSON (Tynn #254)', () => {
             provider: null,
             name: 'strategist',
         });
-        expect(agentDisplayOf({ agentType: 'gemini', label: 'gemini · x' })).toEqual({
+        expect(agentDisplayOf({ agentType: 'notatui', label: 'notatui · x' })).toEqual({
             provider: null,
-            name: 'gemini · x',
+            name: 'notatui · x',
         });
     });
 

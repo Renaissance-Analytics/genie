@@ -1,4 +1,5 @@
 import type { AgentTui } from '../agents/identity';
+import { PROVIDER_IDS, TUI_REGISTRY } from '../agents/registry';
 
 /**
  * PURE. What the `imDone` OS toast SAYS.
@@ -50,13 +51,9 @@ export function clean(v: string | null | undefined): string | null {
  * that would be a LOGO in the UI is spelled out here instead. Same information,
  * same convention: tui + name, never the chat id.
  */
-const PROVIDER_LABEL: Record<AgentTui, string> = {
-    claude: 'Claude Code',
-    codex: 'Codex',
-    kiwi: 'Kiwi Code',
-    genie: 'Genie TUI',
-    custom: 'Custom agent',
-};
+const PROVIDER_LABEL: Record<AgentTui, string> = Object.fromEntries(
+    PROVIDER_IDS.map((id) => [id, TUI_REGISTRY[id].label]),
+) as Record<AgentTui, string>;
 
 /**
  * The facts every attention notice is named from, cleaned. Shared so two

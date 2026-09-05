@@ -4478,6 +4478,12 @@ function toolToneBadge(tone: ToolUpdateTone): { color: 'amber' | 'emerald' | 'zi
             return { color: 'zinc', label: 'Not installed' };
         case 'unknown':
             return { color: 'zinc', label: 'Installed' };
+        // Genie never looked, so the badge must not say either. "Not installed"
+        // here would be the claim `probe: false` exists to avoid — and it was
+        // exactly what this row printed until an E2E read the whole row rather
+        // than the one field a unit test was checking.
+        case 'not-checked':
+            return { color: 'zinc', label: 'Not checked' };
     }
 }
 
@@ -4514,12 +4520,20 @@ function ToolUpdateList({
                                 <Text size="sm" style={{ fontWeight: 600 }}>
                                     {row.label}
                                 </Text>
-                                <Text size="xs" className="text-zinc-500">
-                                    {row.installed ? `Installed ${row.installed}` : 'Not installed'}
-                                    {row.tone === 'update-available' && row.latest
-                                        ? ` — ${row.latest} available`
-                                        : ''}
-                                </Text>
+                                {/* "Not installed" is a CLAIM. A tool Genie
+                                    deliberately never probed gets no version
+                                    line at all, because nothing checked — its
+                                    gap note below carries the whole story. */}
+                                {row.probed !== false && (
+                                    <Text size="xs" className="text-zinc-500">
+                                        {row.installed
+                                            ? `Installed ${row.installed}`
+                                            : 'Not installed'}
+                                        {row.tone === 'update-available' && row.latest
+                                            ? ` — ${row.latest} available`
+                                            : ''}
+                                    </Text>
+                                )}
                                 {/* WHO installed it and WHERE — the same two facts
                                     the Languages tab has always shown, which this
                                     tab could not answer (genie#213). On a machine
@@ -4573,6 +4587,26 @@ function ToolUpdateList({
                                 )}
                             </div>
                         </div>
+                        {/* A tool Genie cannot install SAYS SO, right where the
+                            Install button would have been. Listing an agent CLI
+                            with no button and no reason is the state the owner
+                            was already looking at; an Install that throws "no
+                            npm package" would be worse. Both are avoided by
+                            naming the limit and pointing somewhere useful. */}
+                        {row.installGap && (
+                            <div className="set-note" data-testid={`devtool-gap-${row.name}`}>
+                                {row.installGap}
+                                {row.docsUrl && (
+                                    <>
+                                        {' '}
+                                        <a href={row.docsUrl} target="_blank" rel="noreferrer">
+                                            Install it yourself
+                                        </a>
+                                        .
+                                    </>
+                                )}
+                            </div>
+                        )}
                     </div>
                 );
             })}

@@ -8,7 +8,7 @@ import { PROVIDER_IDS } from '../registry';
  * (genie#261, category A).
  *
  * The registry exports `AgentTuiId`. Writing
- * `'claude' | 'codex' | 'kiwi' | 'genie' | 'custom'` out by hand instead is the
+ * `'claude' | 'codex' | 'kilo' | 'genie' | 'custom'` out by hand instead is the
  * category the issue calls "the good ones" — the compiler does walk you through
  * them when the union widens — and that is exactly why they survived the
  * registry landing: nothing was broken, so nothing was fixed. They were still
@@ -32,7 +32,7 @@ import { PROVIDER_IDS } from '../registry';
  * different type and converting it would be a widening nobody asked for:
  *
  *   - `mcp/agent-config.ts`'s `'codex' | 'claude'` names the two providers whose
- *     MCP configuration Genie writes. `kiwi` and `genie` have no such file to
+ *     MCP configuration Genie writes. `kilo` and `genie` have no such file to
  *     sync, so admitting them would make the signature lie.
  *   - `agents/agent-manager-types.ts` unions `'cursor'`, which is not a Genie
  *     provider at all.

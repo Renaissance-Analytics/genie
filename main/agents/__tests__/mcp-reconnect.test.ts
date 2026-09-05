@@ -54,7 +54,7 @@ describe('mcpReconnectCommand', () => {
         // where injected text is read as an answer, and on the update picker
         // option 1 runs a global npm install. That much is unchanged; what
         // changed is that NOT typing no longer means doing nothing.
-        expect(mcpReconnectCommand('kiwi')).toBeNull();
+        expect(mcpReconnectCommand('kilo')).toBeNull();
         expect(mcpReconnectCommand('custom')).toBeNull();
         expect(mcpReconnectCommand('genie')).toBeNull();
     });
@@ -64,7 +64,7 @@ describe('mcpReconnectCommand', () => {
  * genie#346's first acceptance clause: *"every provider has a recovery path and
  * none is left on `{kind:'none'}`."*
  *
- * The old table answered `none` for `kiwi`, `genie` and `custom`, and the share
+ * The old table answered `none` for `kilo`, `genie` and `custom`, and the share
  * of agents with no recovery grew with the TUI registry. So this asserts over
  * the REGISTRY rather than a hand-written list — a provider added to
  * `PROVIDER_IDS` without a recovery path fails here instead of shipping silent.
@@ -76,7 +76,7 @@ describe('every provider has a recovery path (genie#346)', () => {
         // able to FAIL, and it only can if there are providers to check.
         expect(PROVIDER_IDS.length).toBeGreaterThan(0);
         expect(PROVIDER_IDS).toEqual(Object.keys(TUI_REGISTRY));
-        expect(PROVIDER_IDS).toContain('kiwi');
+        expect(PROVIDER_IDS).toContain('kilo');
 
         for (const provider of PROVIDER_IDS) {
             const strategy = reconnectStrategy(provider);
@@ -89,13 +89,13 @@ describe('every provider has a recovery path (genie#346)', () => {
         }
     });
 
-    it('gives kiwi, the Genie TUI and a custom agent a NOTICE, not silence', () => {
+    it('gives kilo, the Genie TUI and a custom agent a NOTICE, not silence', () => {
         // None of the three can be restarted without losing the conversation:
         // `renderAgentResume` renders a resume command for `claude` and `codex`
         // only, so `restartAgentTerminal` REFUSES the rest rather than drop an
         // agent into a fresh, context-less session. A notice is what is left,
         // and it is strictly more than the silence it replaces.
-        for (const provider of ['kiwi', 'genie', 'custom'] as const) {
+        for (const provider of ['kilo', 'genie', 'custom'] as const) {
             expect(reconnectStrategy(provider)).toEqual({
                 kind: 'notice',
                 text: MANUAL_RECONNECT_NOTICE,

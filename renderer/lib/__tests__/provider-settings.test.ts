@@ -11,10 +11,10 @@ import { providerSettingsGroups, gappProviderOptions } from '../provider-setting
  * places, of which only ~11 were compiler-enforced: *"they do not fail to
  * BUILD, they fail to WORK"*. The settings page was one of the unenforced
  * ones, and it had already drifted — it hand-rolled a command row and a flags
- * row for `claude`, `codex` and `custom`, and knew nothing about `kiwi` or
+ * row for `claude`, `codex` and `custom`, and knew nothing about `kilo` or
  * `genie`.
  *
- * That is not cosmetic. `agent_command_kiwi`, `agent_flags_kiwi`,
+ * That is not cosmetic. `agent_command_kilo`, `agent_flags_kilo`,
  * `agent_command_genie` and `agent_flags_genie` are real settings keys the
  * launcher reads — so both providers were launchable but had no way for the
  * owner to set their command or flags. The "Custom agent" row was the only
@@ -46,7 +46,7 @@ describe('provider settings model', () => {
         // The regression this file exists for, named outright so it cannot be
         // refactored away as an incidental assertion.
         const ids = providerSettingsGroups().map((g) => g.id);
-        expect(ids).toContain('kiwi');
+        expect(ids).toContain('kilo');
         expect(ids).toContain('genie');
     });
 
@@ -125,7 +125,7 @@ describe('the settings page does not hand-roll provider rows', () => {
  * so their VALUES must come from + write to it" — `resolveAgentLaunch` reads
  * them on the host when it spawns an agent. A provider missing from this list
  * does not merely look wrong; its command and flags are read from, and written
- * to, the wrong side. `kiwi` and `genie` were both missing, so even once the
+ * to, the wrong side. `kilo` and `genie` were both missing, so even once the
  * page rendered their rows the values would not have reached the launcher.
  */
 describe('every provider key is host-sourced', () => {

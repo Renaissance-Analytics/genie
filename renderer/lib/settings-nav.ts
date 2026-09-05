@@ -5,6 +5,22 @@
  */
 
 import type { Settings } from './genie';
+import { providerSettingKeys } from '../../main/agents/registry';
+
+/**
+ * Both launch keys for every provider, in registry order.
+ *
+ * The HOST spawns the TUI, so the command and always-on flags it resolves must
+ * be read from and written to the host whatever window the owner is typing in.
+ * True of every provider identically — which is exactly why enumerating them was
+ * a list that could only go wrong by omission, and did.
+ */
+function providerLaunchKeys(): (keyof Settings)[] {
+    return providerSettingKeys().flatMap(({ command, flags }) => [
+        command as keyof Settings,
+        flags as keyof Settings,
+    ]);
+}
 
 /** The Settings sidebar sections. */
 export type SectionId =
@@ -123,7 +139,7 @@ export const NAV_GROUPS: NavGroup[] = [
  * in main/mobile/api.ts, which enforces the SAME allow-list server-side (a remote
  * can only read/set these host keys — never arbitrary ones like a github token).
  */
-export const HOST_SOURCED_SETTINGS_KEYS = [
+export const HOST_SOURCED_SETTINGS_KEYS: readonly (keyof Settings)[] = [
     // Ai.System — the workspace-instructions injected into every host workspace's
     // AGENTS.md (read lazily on the host at doc-sync time).
     'ai_system',
@@ -137,23 +153,15 @@ export const HOST_SOURCED_SETTINGS_KEYS = [
     // Specialized-terminal launch: the command + always-on flags the HOST resolves
     // when it spawns each agent type (resolveAgentLaunch reads these on the host).
     // Badged "On the host" in Settings, so their VALUES must come from + write to it.
-    // EVERY provider in the registry, not the three this list used to name.
-    // `kiwi` and `genie` were missing, so their command and flags were read
-    // from — and written to — the CLIENT in a remote window, while the host is
-    // what actually spawns them. Kept explicit rather than spread from the
-    // registry so the `satisfies keyof Settings` check below stays a compile
-    // error; `provider-settings.test.ts` fails if a provider is ever added
-    // without appearing here.
-    'agent_command_claude',
-    'agent_flags_claude',
-    'agent_command_codex',
-    'agent_flags_codex',
-    'agent_command_kiwi',
-    'agent_flags_kiwi',
-    'agent_command_genie',
-    'agent_flags_genie',
-    'agent_command_custom',
-    'agent_flags_custom',
+    // EVERY provider in the registry, DERIVED. This used to be written out, and
+    // the comment defending that said the explicit list kept `satisfies keyof
+    // Settings` a compile error. It did — and the list was still wrong: `kiwi`
+    // and `genie` were missing for two releases, so their command and flags were
+    // read from and written to the CLIENT in a remote window while the HOST is
+    // what spawns them. An exhaustive list you have to remember to extend is not
+    // a compile-time guarantee; `providerSettingKeys()` is one, because it
+    // cannot name a provider that does not exist or miss one that does.
+    ...providerLaunchKeys(),
     // GApp AI Provider: which TUI a Genie App's declared agents run as. The HOST
     // launches them, so the value has to come from — and write to — the host.
     'gapp_ai_provider',
@@ -163,7 +171,7 @@ export const HOST_SOURCED_SETTINGS_KEYS = [
     'agent_default',
     'agent_enabled',
     'genie_os_backup_repo',
-] as const satisfies readonly (keyof Settings)[];
+];
 
 export type HostSourcedSettingKey = (typeof HOST_SOURCED_SETTINGS_KEYS)[number];
 

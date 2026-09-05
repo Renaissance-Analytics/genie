@@ -63,7 +63,31 @@ async function advertisedAgentTools(): Promise<Array<{ name: string; inputSchema
 
 describe('the registry is the source of truth', () => {
     it('knows the providers Genie ships', () => {
-        expect(REGISTRY_IDS).toEqual(['claude', 'codex', 'custom', 'genie', 'kiwi']);
+        // The snapshot. Adding or removing a provider is a product decision, so
+        // it should have to be typed here on purpose rather than absorbed.
+        expect(REGISTRY_IDS).toEqual([
+            'aider',
+            'amp',
+            'auggie',
+            'claude',
+            'cline',
+            'codex',
+            'continue',
+            'copilot',
+            'crush',
+            'cursor',
+            'custom',
+            'droid',
+            'gemini',
+            'genie',
+            'goose',
+            'iflow',
+            'kilo',
+            'kimi',
+            'opencode',
+            'qwen',
+            'vibe',
+        ]);
     });
 
     it('gives every tui a complete definition', () => {
@@ -77,7 +101,13 @@ describe('the registry is the source of truth', () => {
     });
 
     it('lists providers in a stable order, so every derived UI agrees', () => {
-        expect(agentTuis()).toEqual(['claude', 'codex', 'kiwi', 'genie', 'custom']);
+        // The two that have always shipped, then Genie's own, then
+        // alphabetical, then `custom` — which is not a product and belongs last.
+        expect(agentTuis().slice(0, 3)).toEqual(['claude', 'codex', 'genie']);
+        expect(agentTuis().at(-1)).toBe('custom');
+        const middle = agentTuis().slice(3, -1);
+        expect(middle, 'the field is alphabetical').toEqual([...middle].sort());
+        expect(agentTuis()).toEqual([...PROVIDER_IDS]);
         expect(agentTuis()).toEqual(Object.keys(TUI_REGISTRY));
     });
 });
@@ -104,7 +134,7 @@ describe('every tui list is DERIVED, not restated', () => {
         for (const id of agentTuis()) {
             expect(isAgentTui(id), `isAgentTui(${id})`).toBe(true);
         }
-        for (const notOne of ['gemini', 'cursor', 'aider', '', 'CLAUDE']) {
+        for (const notOne of ['notatui', 'kiwi', 'definitely-not-a-provider', '', 'CLAUDE']) {
             expect(isAgentTui(notOne), `isAgentTui(${notOne})`).toBe(false);
         }
     });
@@ -211,7 +241,7 @@ describe('the silent skip this refactor exists to close', () => {
 
     it('still drops a spec whose agent is not a tui at all', () => {
         const found = savedAgentsOf(
-            [{ id: 's1', workspace_id: 'ws-1', meta: { agent: 'gemini' } }],
+            [{ id: 's1', workspace_id: 'ws-1', meta: { agent: 'notatui' } }],
             'ws-1',
             () => false,
         );
@@ -250,7 +280,7 @@ describe('tui default commands', () => {
     it('names the real binary for each tui', () => {
         expect(TUI_REGISTRY.claude.defaultCommand).toBe('claude');
         expect(TUI_REGISTRY.codex.defaultCommand).toBe('codex');
-        expect(TUI_REGISTRY.kiwi.defaultCommand).toBe('kiwi');
+        expect(TUI_REGISTRY.kilo.defaultCommand).toBe('kilo');
         expect(TUI_REGISTRY.genie.defaultCommand).toBe('genie');
     });
 
@@ -282,8 +312,10 @@ describe('tui default commands', () => {
 describe('tui ownership — genie#313', () => {
     it('marks only the providers Genie ships as owned', () => {
         expect(TUI_REGISTRY.claude.ownedBinary).toBe(false);
+        // Every third-party CLI is UNOWNED: the unattended boot pass must never
+        // `npm i -g` over another vendor's tool. Only Genie's own TUI is owned.
         expect(TUI_REGISTRY.codex.ownedBinary).toBe(false);
-        expect(TUI_REGISTRY.kiwi.ownedBinary).toBe(true);
+        expect(TUI_REGISTRY.kilo.ownedBinary).toBe(false);
         expect(TUI_REGISTRY.genie.ownedBinary).toBe(true);
         expect(TUI_REGISTRY.custom.ownedBinary).toBe(false);
     });
@@ -303,14 +335,14 @@ describe('tui ownership — genie#313', () => {
      * package (`@genie/tui`) is private and unpublished, and its shipped `bin`
      * name is still `genie-tui` — installing it as-is would silently reproduce
      * the exact naming bug this ticket's sibling already fixed, just one layer
-     * later (npm would put `genie-tui` on PATH, not `genie`). `kiwi` has no
-     * known public install source at all. Leaving `install` unset for both is a
-     * deliberate, documented choice, not an oversight — this pins it so a future
-     * edit has to make that choice consciously rather than by accident.
+     * later (npm would put `genie-tui` on PATH, not `genie`). It is now the
+     * ONLY owned provider — `kiwi` claimed ownership of a product that does not
+     * exist, and Kilo Code is Kilo's binary, not Genie's. Leaving `install` unset
+     * is deliberate, so a future edit has to choose consciously.
      */
-    it('leaves `install` unset for both owned providers until a real source exists', () => {
+    it('leaves `install` unset until a real source exists', () => {
         expect(TUI_REGISTRY.genie.install).toBeUndefined();
-        expect(TUI_REGISTRY.kiwi.install).toBeUndefined();
+        expect(TUI_REGISTRY.kilo.install).toBeUndefined();
     });
 
     it('never sets `install` on a tui Genie does not own', () => {

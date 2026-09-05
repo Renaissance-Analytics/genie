@@ -1,5 +1,6 @@
 import { probeRuntime } from './runtime-detect';
 import type { CommandRunner } from './container-runtime';
+import { AGENT_CLI_IDS, agentCliSpecs, type AgentCliToolId } from '../agents/agent-cli-catalog';
 
 /**
  * "What creating tools does this machine already have, and what is missing?"
@@ -40,20 +41,29 @@ import type { CommandRunner } from './container-runtime';
  *
  * `node`/`npm` are separate binaries deliberately — a machine can have one
  * without the other (a bare node build, or a node whose npm was removed), and
- * the agent-TUI install step depends specifically on `npm` being resolvable.
- * `claude-code`/`codex` are the agent TUIs; their bin names are `claude`/`codex`
- * (see {@link TOOL_SPECS}) — the tool name is the npm PACKAGE identity, the bin
- * is what lands on PATH.
+ * the agent-CLI install step depends specifically on `npm` being resolvable.
+ *
+ * The AGENT CLIs are not listed here. They come from
+ * {@link import('../agents/agent-cli-catalog')}, which is also where the
+ * provider registry's CLIs come from — so a provider Genie can launch cannot be
+ * a tool the toolchain has never heard of. `claude-code`/`codex` used to be
+ * written out in this union AND in a `['claude-code', 'codex']` literal in the
+ * renderer, and that second copy is what capped the Toolchain page's Agent CLIs
+ * tab at two rows on a machine Genie already knew more providers for.
+ *
+ * A tool name is the PRODUCT identity (`claude-code`); the bin is what lands on
+ * PATH (`claude`). See {@link TOOL_SPECS}.
  */
-export type HostToolName =
+export type HostToolName = DevHostToolName | AgentCliToolId;
+
+/** The non-agent half: languages, dev tools, and the one Windows prerequisite. */
+export type DevHostToolName =
     | 'git'
     | 'node'
     | 'npm'
     | 'php'
     | 'composer'
     | 'docker'
-    | 'claude-code'
-    | 'codex'
     | 'vcredist';
 
 /** The full zero-setup toolchain, in a stable order (install order is the
@@ -71,6 +81,26 @@ export const DEFAULT_TOOLCHAIN: readonly HostToolName[] = [
     'docker',
     'claude-code',
     'codex',
+];
+
+/**
+ * Everything the Toolchain PAGE knows about: the default toolchain plus every
+ * agent CLI in the catalog.
+ *
+ * Wider than {@link DEFAULT_TOOLCHAIN}, and the gap between them is deliberate.
+ * `DEFAULT_TOOLCHAIN` is what the first-run wizard INSTALLS on a fresh machine;
+ * this is what the page LISTS. Collapsing the two would mean that cataloguing
+ * every known agent CLI silently turned first-run setup into a twenty-agent
+ * install — a catalogue is not a shopping list, and nobody consented to the
+ * second one.
+ *
+ * `claude-code` and `codex` are in both because they were already in both: they
+ * are the two the wizard has always offered, and this change is not the place to
+ * decide that a fresh machine should get more or fewer of them.
+ */
+export const MANAGED_TOOLCHAIN: readonly HostToolName[] = [
+    ...DEFAULT_TOOLCHAIN,
+    ...AGENT_CLI_IDS.filter((id) => !DEFAULT_TOOLCHAIN.includes(id)),
 ];
 
 /**
@@ -134,6 +164,16 @@ export interface HostToolSpec {
      * paths that must ALL exist, given the machine's system root.
      */
     files?: (systemRoot: string) => string[];
+    /**
+     * FALSE to list the tool without ever looking for it.
+     *
+     * For a binary whose name is too generic to check safely — Amazon Q's is
+     * `q`, and probing it would report any unrelated `q` on PATH as an installed
+     * coding agent. That FALSE POSITIVE is the fault this whole surface exists to
+     * remove, so the honest answer is a row that says what the tool is and makes
+     * no claim about whether you have it. Absent (the default) means probe.
+     */
+    probe?: boolean;
 }
 
 /**
@@ -150,8 +190,6 @@ export const TOOL_SPECS: Record<HostToolName, HostToolSpec> = {
     php: { name: 'php', bin: 'php', versionArgv: ['--version'] },
     composer: { name: 'composer', bin: 'composer', versionArgv: ['--version'] },
     docker: { name: 'docker', bin: 'docker', versionArgv: ['--version'] },
-    'claude-code': { name: 'claude-code', bin: 'claude', versionArgv: ['--version'] },
-    codex: { name: 'codex', bin: 'codex', versionArgv: ['--version'] },
     // Not a program. `bin` is carried for the shape's sake and never spawned.
     vcredist: {
         name: 'vcredist',
@@ -159,6 +197,10 @@ export const TOOL_SPECS: Record<HostToolName, HostToolSpec> = {
         versionArgv: [],
         files: vcRuntimeFiles,
     },
+    // The agent CLIs, DERIVED — `claude-code` → `claude`, and every other CLI in
+    // the catalog on the same terms. This is `Record<HostToolName, …>`, so a
+    // catalog entry with no spec would not compile.
+    ...agentCliSpecs(),
 };
 
 export function validateHostToolSelection(value: unknown): HostToolName[] | undefined {
@@ -191,6 +233,15 @@ export interface HostToolProbe {
     running?: boolean;
     /** Redacted output explaining a non-answer. */
     detail?: string;
+    /**
+     * FALSE when Genie deliberately did not look (see {@link HostToolSpec.probe}).
+     *
+     * Distinct from `installed: false`, and the distinction is the point: one
+     * says "it is not here", the other says "nothing checked". Absent on an
+     * ordinary probe, so a surface reading this cannot mistake a real answer for
+     * a declined one.
+     */
+    probed?: boolean;
     /** Absolute path of the binary that ANSWERED, when it could be resolved.
      *  Present only for an installed tool: it is what lets a row say which of
      *  three gits on PATH replied, and which of them Genie may update
@@ -363,9 +414,17 @@ export interface DetectToolchainOptions {
 /**
  * Probe the wanted toolchain and return the present/missing split.
  *
- * Serial, not parallel: the set is tiny (≤8), the probes are cheap, and a serial
- * loop keeps `probes` in the requested order — which the wizard renders top to
- * bottom. Docker routes through {@link probeDocker}; everything else through
+ * Serial, not parallel. The set is no longer tiny — {@link MANAGED_TOOLCHAIN} is
+ * ~25 tools now that every agent CLI is catalogued, where this comment once said
+ * "≤8" — but serial is still right: a probe is a `--version` that answers in
+ * milliseconds, the caller that walks the WIDE set (the update scan) also shells
+ * out to `winget upgrade` / `brew outdated`, which costs seconds and dwarfs all
+ * of them put together, and its answer is cached for six hours. Firing 25
+ * concurrent shells to save a fraction of one slow command's time would spend
+ * the owner's CPU for nothing. Serial also keeps `probes` in the requested
+ * order, which the wizard renders top to bottom.
+ *
+ * Docker routes through {@link probeDocker}; everything else through
  * {@link probeHostTool}.
  */
 export async function detectToolchain(opts: DetectToolchainOptions): Promise<ToolchainReport> {
@@ -379,17 +438,26 @@ export async function detectToolchain(opts: DetectToolchainOptions): Promise<Too
         const spec = TOOL_SPECS[name];
         const bin = opts.binFor?.(name);
         probes.push(
-            name === 'docker'
-                ? await probeDocker(opts.runner, bin)
-                : spec.files
-                  ? await probeLibrary(spec, systemRoot, opts.fileExists)
-                  : await probeHostTool(spec, opts.runner, bin, {
-                        ...(opts.resolvePath ? { resolvePath: opts.resolvePath } : {}),
-                    }),
+            // Declined FIRST, before anything can spawn: a tool marked
+            // `probe: false` must never reach a runner, because the whole reason
+            // it is marked is that its answer could not be trusted.
+            spec.probe === false
+                ? { name, installed: false, probed: false }
+                : name === 'docker'
+                  ? await probeDocker(opts.runner, bin)
+                  : spec.files
+                    ? await probeLibrary(spec, systemRoot, opts.fileExists)
+                    : await probeHostTool(spec, opts.runner, bin, {
+                          ...(opts.resolvePath ? { resolvePath: opts.resolvePath } : {}),
+                      }),
         );
     }
 
+    // An unprobed tool is in NEITHER list. `missing` drives the install plan and
+    // the wizard's "what is absent" copy, and putting a tool nothing looked at
+    // in there would be the detection claim this is avoiding — stated by a
+    // different surface, in the same voice.
     const present = probes.filter((p) => p.installed).map((p) => p.name);
-    const missing = probes.filter((p) => !p.installed).map((p) => p.name);
+    const missing = probes.filter((p) => !p.installed && p.probed !== false).map((p) => p.name);
     return { platform, probes, present, missing };
 }

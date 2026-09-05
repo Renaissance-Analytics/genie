@@ -146,6 +146,62 @@ describe('buildInstallCommand — npm-global (agent TUIs)', () => {
         const cmd = asRun(buildInstallCommand(step({ tool: 'codex', method: 'npm-global' }), { os: 'darwin' }));
         expect(cmd.args).toEqual(['install', '-g', '@openai/codex']);
     });
+
+    /**
+     * The agent CLIs Genie learned to install (genie#313 follow-up). The package
+     * names are the ones each project's own npm manifest publishes — checked
+     * against the registry rather than recalled, because this ecosystem renames
+     * itself and a wrong package name is an install that fails at the user.
+     */
+    it('installs every catalogued agent CLI from ITS package, not a guessed one', () => {
+        const expected: Record<string, string> = {
+            'gemini-cli': '@google/gemini-cli',
+            opencode: 'opencode-ai',
+            'copilot-cli': '@github/copilot',
+            crush: '@charmland/crush',
+            amp: '@sourcegraph/amp',
+        };
+        for (const [tool, pkg] of Object.entries(expected)) {
+            const cmd = asRun(
+                buildInstallCommand(
+                    step({ tool: tool as never, method: 'npm-global' }),
+                    { os: 'linux' },
+                ),
+            );
+            expect(cmd.args, tool).toEqual(['install', '-g', pkg]);
+        }
+    });
+
+    /**
+     * A tool with no installer must never produce a command. The adapter throwing
+     * is the loud version of the drift `toolchain-packages.ts` already guards
+     * against: the planner is not supposed to emit an `npm-global` step for a
+     * tool with no package, so reaching here means two tables disagreed.
+     */
+    it('refuses to invent an npm package for a tool that has none', () => {
+        expect(() =>
+            buildInstallCommand(step({ tool: 'genie' as never, method: 'npm-global' }), {
+                os: 'win32',
+            }),
+        ).toThrow(/no npm package/i);
+    });
+
+    it('puts a newly catalogued CLI in Genie’s own prefix, so a terminal can find it', () => {
+        const cmd = asRun(
+            buildInstallCommand(step({ tool: 'gemini-cli' as never, method: 'npm-global' }), {
+                os: 'win32',
+                genieRoot: 'C:\\g',
+            }),
+        );
+        expect(cmd.args).toEqual([
+            'install',
+            '-g',
+            '--prefix',
+            'C:\\g\\npm-global',
+            '@google/gemini-cli',
+        ]);
+        expect(cmd.pathAdd).toBe('C:\\g\\npm-global');
+    });
 });
 
 describe('buildInstallCommand — direct downloads', () => {

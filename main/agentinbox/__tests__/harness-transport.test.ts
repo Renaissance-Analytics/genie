@@ -9,7 +9,7 @@ describe('AMS harness-native transport registry', () => {
     it('maps only providers with implemented native adapters', () => {
         expect(requiredHarnessTransport('claude')).toBe('claude-channel');
         expect(requiredHarnessTransport('codex')).toBe('codex-app-server');
-        expect(requiredHarnessTransport('kiwi')).toBeNull();
+        expect(requiredHarnessTransport('kilo')).toBeNull();
         expect(requiredHarnessTransport('genie')).toBeNull();
         expect(requiredHarnessTransport('custom')).toBeNull();
     });

@@ -29,6 +29,10 @@ export interface ToolUpdate {
     /** True only when {@link latest} is strictly newer than {@link installed}. */
     updateAvailable: boolean;
     source: UpdateSource;
+    /** FALSE when Genie deliberately never looked (see `HostToolSpec.probe`).
+     *  Carried so a row can decline to say "not installed" about a tool nothing
+     *  checked — absent on every ordinary answer. */
+    probed?: boolean;
     /** WHO installed it and WHERE, when the binary's path could be resolved
      *  (genie#213). Distinct from {@link source}, which says where the LATEST
      *  version number was learned — the two answer different questions and the
@@ -81,10 +85,22 @@ export function isUpdateAvailable(installed: string | undefined, latest: string 
 /**
  * Fold the detection report + a latest-source into a per-tool update report.
  *
- * Only INSTALLED tools appear — a missing tool is the install wizard's job (#240),
- * not this manager's. Each present tool is asked of the source (which may fail or
- * answer null); the outcome is a clean `{ installed, latest?, updateAvailable,
- * source }`. Serial, because the set is tiny and the source is often a process.
+ * EVERY probed tool appears, present or not. That is a change, and it is the
+ * change that makes installing possible at all: this used to `continue` past
+ * anything not installed, under "a missing tool is the install wizard's job
+ * (#240), not this manager's". The page stopped agreeing the moment
+ * `toolRowAction` grew an `install` action for an absent tool — and because
+ * nothing absent ever reached it, that button was unreachable code. The
+ * Toolchain page could REPORT that a tool was missing and OFFER nothing to fix
+ * it; the owner hit exactly that trying to install the Genie TUI.
+ *
+ * A present tool is asked of the source (which may fail or answer null); a
+ * MISSING one is not asked at all — there is no installed version to compare a
+ * latest against, and spending a `winget upgrade` on a tool that is not there
+ * buys nothing. It comes back as `{ updateAvailable: false }` with no
+ * `installed`, which is precisely the shape the Install row is built from.
+ *
+ * Serial, because the set is small and the source is often a process.
  */
 export async function detectToolUpdates(
     report: ToolchainReport,
@@ -93,18 +109,18 @@ export async function detectToolUpdates(
 ): Promise<ToolUpdate[]> {
     const updates: ToolUpdate[] = [];
     for (const probe of report.probes) {
-        if (!probe.installed) continue;
-
         let latest: string | undefined;
         let source: UpdateSource = 'unknown';
-        try {
-            const answer = await latestFor(probe.name, probe.version);
-            if (answer) {
-                latest = answer.version;
-                source = answer.source ?? 'unknown';
+        if (probe.installed) {
+            try {
+                const answer = await latestFor(probe.name, probe.version);
+                if (answer) {
+                    latest = answer.version;
+                    source = answer.source ?? 'unknown';
+                }
+            } catch {
+                // A failed lookup is "no update known", never a crash.
             }
-        } catch {
-            // A failed lookup is "no update known", never a crash.
         }
 
         // Pure, and only when there is a path to read: no probing, no
@@ -117,6 +133,7 @@ export async function detectToolUpdates(
             ...(latest ? { latest } : {}),
             updateAvailable: isUpdateAvailable(probe.version, latest),
             source,
+            ...(probe.probed === false ? { probed: false } : {}),
             ...(installOrigin ? { origin: installOrigin } : {}),
         });
     }

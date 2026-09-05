@@ -1,4 +1,22 @@
 import type { Settings } from './genie';
+import { providerSettingKeys, type ProviderSettingKey } from '../../main/agents/registry';
+
+/**
+ * Both per-provider launch keys, for every provider, all `workstation`.
+ *
+ * The HOST spawns the TUI, so the command and flags it resolves have to come
+ * from — and be written to — the host, whatever window the owner is typing in.
+ * That is true of every provider identically, which is why this is a derivation
+ * rather than two lines each.
+ */
+function providerSettingTiers(): Record<ProviderSettingKey, SettingTier> {
+    const out = {} as Record<ProviderSettingKey, SettingTier>;
+    for (const { command, flags } of providerSettingKeys()) {
+        out[command as ProviderSettingKey] = 'workstation';
+        out[flags as ProviderSettingKey] = 'workstation';
+    }
+    return out;
+}
 
 /**
  * WHO OWNS a setting, and how it travels (owner directive 2026-09-02).
@@ -131,16 +149,13 @@ export const SETTING_TIERS: Record<keyof Settings, SettingTier> = {
     agent_enabled: 'workstation',
     genie_os_backup_repo: 'workstation',
     // The launch command + flags the HOST resolves when it spawns each TUI.
-    agent_command_claude: 'workstation',
-    agent_flags_claude: 'workstation',
-    agent_command_codex: 'workstation',
-    agent_flags_codex: 'workstation',
-    agent_command_kiwi: 'workstation',
-    agent_flags_kiwi: 'workstation',
-    agent_command_genie: 'workstation',
-    agent_flags_genie: 'workstation',
-    agent_command_custom: 'workstation',
-    agent_flags_custom: 'workstation',
+    // DERIVED: every provider's two keys are `workstation`, without exception,
+    // and there is no per-provider judgement to make — so listing them by hand
+    // was forty-two lines that could only ever be wrong by omission. Which is
+    // exactly what happened before: `kiwi` and `genie` were missing, so their
+    // command and flags were read from and written to the CLIENT in a remote
+    // window while the HOST is what spawns them.
+    ...providerSettingTiers(),
 
     /* ── workspace: none yet — see the docblock above ───────────────────── */
 };

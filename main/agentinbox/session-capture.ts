@@ -3,7 +3,7 @@ import os from 'os';
 import path from 'path';
 import crypto from 'crypto';
 import type { AgentInboxAgentType } from './types';
-import { isTuiId, providerDef } from '../agents/registry';
+import { PROVIDER_IDS, isTuiId, providerDef } from '../agents/registry';
 
 /**
  * Capture an AI TUI's CHAT-SESSION identity when Genie launches it, so a
@@ -32,14 +32,31 @@ interface LaunchProfile {
     flagTemplate?: string;
 }
 
-/** Per-agent launch profiles. Codex binds through the managed SessionStart hook. */
-export const LAUNCH_PROFILES: Record<AgentInboxAgentType, LaunchProfile> = {
+/**
+ * Per-agent launch profiles. Codex binds through the managed SessionStart hook.
+ *
+ * Only the providers Genie has actually WIRED a capture path for are named. Every
+ * other provider falls to `detect` — the profile `kiwi` and `custom` already
+ * carried, and the only honest one for a CLI whose session bookkeeping Genie has
+ * not integrated with: it captures nothing, so nothing claims a session id it
+ * does not have, and `resolveRestartCommand` refuses a restart rather than
+ * starting a fresh conversation the user thinks is their old one.
+ *
+ * Deriving the default rather than listing twenty identical rows is deliberate:
+ * an exhaustive `Record` was worth its cost when it forced a decision per
+ * provider, but forcing eighteen copies of the same decision is noise, and noise
+ * is where a wrong row hides.
+ */
+const WIRED_LAUNCH_PROFILES: Partial<Record<AgentInboxAgentType, LaunchProfile>> = {
     claude: { strategy: 'flag', flagTemplate: '--session-id {id}' },
     codex: { strategy: 'hook' },
-    kiwi: { strategy: 'detect' },
     genie: { strategy: 'hook' },
-    custom: { strategy: 'detect' },
 };
+
+/** The profile for every provider, wired or not. Never `undefined`. */
+export const LAUNCH_PROFILES: Record<AgentInboxAgentType, LaunchProfile> = Object.fromEntries(
+    PROVIDER_IDS.map((id) => [id, WIRED_LAUNCH_PROFILES[id] ?? { strategy: 'detect' as const }]),
+) as Record<AgentInboxAgentType, LaunchProfile>;
 
 /** A launch already carries a session id / is resuming — don't inject a flag. */
 const SESSION_FLAG_RE = /(^|\s)--session-id(=|\s)/;
