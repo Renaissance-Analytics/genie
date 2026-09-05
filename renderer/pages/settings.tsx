@@ -1750,7 +1750,7 @@ function GitHubSection() {
     return (
         <SetSection
             title="GitHub"
-            desc="GitHub App (Device Flow) · used to create .agi repos"
+            desc="GitHub App (Device Flow) · used to create workspace repositories"
             status={connected && username ? `Connected as ${username}` : undefined}
             statusColor="var(--emerald-600)"
             statusIcon={connected && username ? 'check' : undefined}
@@ -1796,7 +1796,7 @@ function GitHubSection() {
 
             <SettingRow
                 label="Account"
-                desc="Connect the Genie IDE GitHub App via Device Flow to create and fork .agi repos."
+                desc="Connect the Genie IDE GitHub App via Device Flow to create and fork workspace repositories."
                 keywords="github connect device flow app repos install account org disconnect advanced refresh"
                 grow
             >

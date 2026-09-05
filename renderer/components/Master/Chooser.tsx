@@ -2377,7 +2377,7 @@ function AgiHealth({ ws }: { ws: WorkspaceRow }) {
             const n = r.servers.length;
             setMcpDone(
                 r.gitignored
-                    ? `Wrote config for ${n} server${n === 1 ? '' : 's'} to the envelope root. Local sessions use it now; not committed — these files are gitignored (they can hold MCP tokens).`
+                    ? `Wrote config for ${n} server${n === 1 ? '' : 's'} to the workspace root. Local sessions use it now; not committed — these files are gitignored (they can hold MCP tokens).`
                     : !r.committed
                         ? 'MCP config already up to date.'
                         : r.pushed
@@ -2398,7 +2398,7 @@ function AgiHealth({ ws }: { ws: WorkspaceRow }) {
                 className="agi-health-dot"
                 role="button"
                 tabIndex={0}
-                title="Envelope is missing structure docs"
+                title="Workspace is missing structure docs"
                 onClick={(e) => {
                     e.stopPropagation();
                     setOpen((o) => !o);
@@ -2417,7 +2417,7 @@ function AgiHealth({ ws }: { ws: WorkspaceRow }) {
                         style={{ top: coords.top, left: coords.left }}
                         onClick={(e) => e.stopPropagation()}
                     >
-                        <div className="ahp-title">Envelope needs attention</div>
+                        <div className="ahp-title">Workspace needs attention</div>
 
                         {docsMissing && (
                             <div className="ahp-section">
@@ -2466,11 +2466,11 @@ function AgiHealth({ ws }: { ws: WorkspaceRow }) {
                                                 </span>
                                             ))}{' '}
                                             defined in repos aren't surfaced at the
-                                            envelope root.
+                                            workspace root.
                                         </>
                                     ) : (
                                         <>
-                                            The envelope's <code>.mcp.json</code> and{' '}
+                                            The workspace's <code>.mcp.json</code> and{' '}
                                             <code>.cursor/mcp.json</code> are out of
                                             sync.
                                         </>

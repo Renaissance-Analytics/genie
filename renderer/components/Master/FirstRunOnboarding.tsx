@@ -209,7 +209,7 @@ export function FirstRunOnboarding({
                     {step === 'os' && (
                         <OnboardingPage
                             title="Set up Genie OS"
-                            body="Genie has its own private AGI workspace and memory. It operates this workstation, never your project folders. You can optionally back that workspace up to a private GitHub repository."
+                            body="Genie has its own private workspace and memory. It operates this workstation, never your project folders. You can optionally back that workspace up to a private GitHub repository."
                         >
                             <Text size="xs" className="text-zinc-500">Workspace: <code>{osPath || 'Preparing…'}</code></Text>
                             {github.connected && !osSynced && (

@@ -341,6 +341,7 @@ import { seedAgentManagerE2E } from './e2e/agent-manager';
 import { seedRepoE2E } from './e2e/repo';
 import { seedAgentPulseE2E } from './e2e/agent-pulse';
 import { seedTynnImportE2E } from './e2e/tynn-import';
+import { seedWorkspaceCreateE2E } from './e2e/workspace-create';
 import { seedMasterE2E } from './e2e/master';
 import { seedFlowsE2E } from './e2e/flows';
 
@@ -2774,6 +2775,7 @@ function showE2EWindow(): void {
         'e2e-terminal-recovery',
         'e2e-tynn-health',
         'e2e-tynn-import',
+        'e2e-workspace-create',
         'e2e-agent-pulse',
         // The product page, not a harness (genie#228). See the doc comment.
         'master',
@@ -2820,6 +2822,16 @@ function showE2EWindow(): void {
             seedAgentPulseE2E();
         } catch (e) {
             console.error('[e2e] agent-pulse seed failed', e);
+        }
+    }
+    if (page === 'e2e-workspace-create') {
+        // Empty the destination folder, drop any workspace a previous run left
+        // in it, and pre-set the primary workspace folder BEFORE the window
+        // loads — the form reads it on mount as the default location (genie#431).
+        try {
+            seedWorkspaceCreateE2E();
+        } catch (e) {
+            console.error('[e2e] workspace-create seed failed', e);
         }
     }
     if (page === 'e2e-tynn-import') {

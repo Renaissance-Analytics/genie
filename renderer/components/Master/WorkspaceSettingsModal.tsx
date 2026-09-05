@@ -1510,7 +1510,7 @@ function OpsReposPanel({ workspacePath }: { workspacePath: string }) {
     return (
         <Section
             title="Ops-managed repos"
-            sub="Kept in sync with governed projects' *.agi repos — you approve each sync"
+            sub="Kept in sync with governed projects' workspace repos — you approve each sync"
         >
             {inSync ? (
                 <Text size="xs" style={{ color: 'var(--emerald-600)', paddingTop: 4 }}>
@@ -1631,7 +1631,7 @@ function OpsWorkspacesPanel({ workspacePath }: { workspacePath: string }) {
     return (
         <Section
             title="Ops-managed workspaces"
-            sub="Stand up a local workspace per governed child by cloning its *.agi repo"
+            sub="Stand up a local workspace per governed child by cloning its workspace repo"
         >
             <Row
                 label="Auto-provision child workspaces"
@@ -1681,8 +1681,8 @@ function OpsWorkspacesPanel({ workspacePath }: { workspacePath: string }) {
 
             {unresolved.length > 0 && (
                 <Text size="xs" style={{ color: 'var(--amber-600)' }}>
-                    {unresolved.length} governed project(s) have no resolvable{' '}
-                    <code>*.agi</code> repo URL
+                    {unresolved.length} governed project(s) have no resolvable
+                    workspace repository URL
                     ({unresolved.map((m) => m.name).join(', ')}) — can&apos;t auto-clone these.
                 </Text>
             )}

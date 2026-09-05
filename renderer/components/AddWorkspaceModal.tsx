@@ -2,20 +2,17 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { projectPickerOptions } from '../lib/project-picker';
 import {
     Action,
-    Badge,
     Card,
     Heading,
     Icon,
     Input,
     Modal,
-    Popover,
     Select,
     Text,
 } from '@particle-academy/react-fancy';
 import { api, ulid } from '../lib/genie';
 import { pickPath } from './FilePickerModal';
 import type {
-    DetectResult,
     OwnerOption,
     TynnProject,
     WorkspaceRow,
@@ -23,12 +20,21 @@ import type {
 import InteractiveUpgradeWizard from './InteractiveUpgradeWizard';
 import {
     useGitHubAccount,
-    GitHubConnect,
     OwnerSelect,
     GitHubErrorNotice,
 } from './GitHubConnect';
 import { useGithubCapabilities } from '../lib/githubCapabilities';
-import { ADD_WORKSPACE_SOURCES, workspaceWizardEntry, type AddWorkspaceSourceId } from '../lib/workspace-onboarding';
+import {
+    ADD_WORKSPACE_SOURCES,
+    containerRepoPlan,
+    workspaceFolderName,
+    workspacePathPreview,
+    workspaceSlug,
+    workspaceWizardEntry,
+    type AddWorkspaceSource,
+    type AddWorkspaceSourceId,
+    type ContainerRepoPlan,
+} from '../lib/workspace-onboarding';
 import {
     importTynnEnvelopeWorkspace,
     tynnImportChoices,
@@ -38,20 +44,20 @@ import {
 
 type Stage =
     | 'source'
-    | 'simple'
-    | 'agi-pick'
-    | 'agi-create'
-    | 'agi-import'
+    // genie#431: MAKING a workspace. Name + location, straight to `agi.create`.
+    // There is nothing to inspect, so nothing inspects.
+    | 'create'
     | 'tynn-import'
-    // genie#355: a Tynn project that already IS an `.agi` envelope. Ask where to
+    // genie#355: a Tynn project that already IS a Genie workspace. Ask where to
     // put it, clone, register — the scan-and-convert wizard has nothing to do.
     | 'tynn-envelope'
     // …and one already registered on this machine: offer to open it rather than
-    // import a second copy of the same envelope.
+    // import a second copy of the same thing.
     | 'tynn-open-existing'
     | 'gapp-create'
-    | 'agi-convert'
-    | 'agi-interactive'
+    // ADOPTING something that exists: a folder, or a repository. This is the one
+    // route that scans, because it is the only one with something to read.
+    | 'inspect'
     | 'done';
 
 interface Props {
@@ -71,7 +77,7 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
     const [createProjectId, setCreateProjectId] = useState('');
     const [createGappDev, setCreateGappDev] = useState(false);
     // The Tynn project the import is acting on, plus the route `tynnImportRoute`
-    // chose for it — the envelope source to clone, or the workspace already here.
+    // chose for it — the source to clone, or the workspace already here.
     const [tynnProject, setTynnProject] = useState<TynnProject | null>(null);
     const [tynnEnvelopeSource, setTynnEnvelopeSource] = useState<{ url: string; branch: string } | null>(null);
     const [tynnExistingWorkspaceId, setTynnExistingWorkspaceId] = useState('');
@@ -93,9 +99,9 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
         setProjects((prev) => [p, ...prev.filter((x) => x.id !== p.id)]);
 
     return (
-        // The interactive upgrade wizard carries step tables — give it the
-        // widest modal so nothing clips; the simpler flows stay at lg.
-        <Modal open onClose={onClose} size={stage === 'agi-interactive' ? 'xl' : 'lg'}>
+        // The inspect wizard carries step tables — give it the widest modal so
+        // nothing clips; the simpler flows stay at lg.
+        <Modal open onClose={onClose} size={stage === 'inspect' ? 'xl' : 'lg'}>
             <Modal.Header>
                 <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                     <Icon name="folder-plus" size="sm" /> Add workspace
@@ -103,12 +109,19 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
             </Modal.Header>
             <Modal.Body>
                 {stage === 'source' && <ManagedSourcePicker onPick={(source) => {
+                    // One route per KIND of act. `create` makes something and so
+                    // has nothing to read; `local`/`remote` adopt something and so
+                    // read it first (genie#431).
                     const entry = workspaceWizardEntry(source);
                     if (entry.mode === 'tynn') setStage('tynn-import');
                     else if (entry.mode === 'gapp') setStage('gapp-create');
-                    else {
+                    else if (entry.mode === 'create') {
+                        setCreateProjectId('');
+                        setCreateGappDev(false);
+                        setStage('create');
+                    } else {
                         setInteractiveMode(entry.mode);
-                        setStage('agi-interactive');
+                        setStage('inspect');
                     }
                 }} />}
                 {stage === 'gapp-create' && (
@@ -119,33 +132,11 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
                             onProjectCreated(project);
                             setCreateProjectId(project.id);
                             setCreateGappDev(true);
-                            setStage('agi-create');
+                            setStage('create');
                         }}
                     />
                 )}
-                {stage === 'simple' && (
-                    <SimpleWizard
-                        projects={projects}
-                        loadingProjects={loadingProjects}
-                        onProjectCreated={onProjectCreated}
-                        onCancel={() => setStage('source')}
-                        onCreated={(row) => {
-                            onAdded(row);
-                            setStage('done');
-                            onClose();
-                        }}
-                    />
-                )}
-                {stage === 'agi-pick' && (
-                    <AgiPicker
-                        onCreate={() => setStage('agi-create')}
-                        onImport={() => setStage('agi-import')}
-                        onConvert={() => setStage('agi-convert')}
-                        onInteractive={() => setStage('agi-interactive')}
-                        onBack={() => setStage('source')}
-                    />
-                )}
-                {stage === 'agi-interactive' && (
+                {stage === 'inspect' && (
                     <InteractiveUpgradeWizard
                         initialSourceMode={interactiveMode}
                         initialSourceUrl={interactiveSourceUrl}
@@ -160,36 +151,10 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
                         }}
                     />
                 )}
-                {stage === 'agi-convert' && (
-                    <AgiConvertWizard
-                        projects={projects}
-                        loadingProjects={loadingProjects}
-                        onProjectCreated={onProjectCreated}
-                        onCancel={() => setStage('source')}
-                        onCreated={(row) => {
-                            onAdded(row);
-                            setStage('done');
-                            onClose();
-                        }}
-                    />
-                )}
-                {stage === 'agi-create' && (
-                    <AgiCreateWizard
+                {stage === 'create' && (
+                    <CreateWorkspaceForm
                         initialProjectId={createProjectId}
-                        initialGappDev={createGappDev}
-                        projects={projects}
-                        loadingProjects={loadingProjects}
-                        onProjectCreated={onProjectCreated}
-                        onCancel={() => setStage('source')}
-                        onCreated={(row) => {
-                            onAdded(row);
-                            setStage('done');
-                            onClose();
-                        }}
-                    />
-                )}
-                {stage === 'agi-import' && (
-                    <AgiImportWizard
+                        gappDev={createGappDev}
                         projects={projects}
                         loadingProjects={loadingProjects}
                         onProjectCreated={onProjectCreated}
@@ -210,7 +175,7 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
                         onCancel={() => setStage('source')}
                         // The routing decision is `tynnImportRoute`'s, not this
                         // component's — genie#355 was one unconditional
-                        // `setStage('agi-interactive')` sitting exactly here.
+                        // `setStage('inspect')` sitting exactly here.
                         onRoute={(project, route) => {
                             setTynnProject(project);
                             if (route.stage === 'tynn-envelope') {
@@ -226,7 +191,7 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
                             setInteractiveMode(route.mode);
                             setInteractiveSourceUrl(route.sourceUrl);
                             setInteractiveProjectId(project.id);
-                            setStage('agi-interactive');
+                            setStage('inspect');
                         }}
                     />
                 )}
@@ -284,7 +249,7 @@ function TynnImportWizard({
             <div>
                 <Heading as="h3" size="sm">Import from Tynn</Heading>
                 <Text size="xs" className="text-zinc-500" style={{ display: 'block', marginTop: 4 }}>
-                    Choose one of your Tynn projects. A project that already has an <code>.agi</code> envelope is cloned straight onto this machine, submodules and all — Genie only asks where to put it. Anything else goes through the inspect-and-convert wizard first.
+                    Choose one of your Tynn projects. A project that is already a Genie workspace is cloned straight onto this machine, repositories and all — Genie only asks where to put it. Anything else is inspected first, and you approve the plan before anything is written.
                 </Text>
             </div>
             <Select
@@ -299,7 +264,7 @@ function TynnImportWizard({
             />
             {route?.stage === 'tynn-envelope' && (
                 <Text size="xs" className="text-emerald-500">
-                    Already an <code>.agi</code> envelope — Genie will clone {route.source.url} and register it. No conversion needed.
+                    Already a Genie workspace — Genie will clone {route.source.url} and register it. Nothing to set up.
                 </Text>
             )}
             {route?.stage === 'tynn-open-existing' && (
@@ -309,7 +274,7 @@ function TynnImportWizard({
             )}
             {route?.reason === 'envelope-repo-undeclared' && (
                 <Text size="xs" className="text-amber-500">
-                    Tynn marks this project as a workspace but does not say which repository holds its envelope, so Genie has nothing to clone. Continuing through the inspect-and-convert wizard.
+                    Tynn marks this project as a workspace but does not say which repository holds it, so Genie has nothing to clone. Genie will inspect the project instead.
                 </Text>
             )}
             {loadError && (
@@ -337,9 +302,9 @@ function TynnImportWizard({
 }
 
 /**
- * genie#355 — the whole import for a project that is ALREADY an `.agi` envelope:
+ * genie#355 — the whole import for a project that is ALREADY a Genie workspace:
  * ONE question, "where do you want it?", then clone + register. No repo picker
- * (the envelope carries its repos as submodules, so asking which one to clone
+ * (the workspace carries its repos as submodules, so asking which one to clone
  * inverts the model) and no scan-and-convert wizard (there is nothing to
  * convert).
  */
@@ -403,9 +368,9 @@ function TynnEnvelopeImport({
             <div>
                 <Heading as="h3" size="sm">Where should {project.name} live?</Heading>
                 <Text size="xs" className="text-zinc-500" style={{ display: 'block', marginTop: 4 }}>
-                    {project.name} is already an <code>.agi</code> workspace. Genie clones{' '}
-                    <code>{source.url}</code> ({source.branch}) with its submodules and registers it —
-                    there is nothing to scan or convert.
+                    {project.name} is already a Genie workspace. Genie clones{' '}
+                    <code>{source.url}</code> ({source.branch}) with all its repositories and
+                    registers it — there is nothing to inspect.
                 </Text>
             </div>
             <FolderRow
@@ -416,8 +381,8 @@ function TynnEnvelopeImport({
                 }}
                 description={
                     primaryWorkspace
-                        ? `Parent folder (default: ${primaryWorkspace}). The envelope lands at <parent>/<repo>/.`
-                        : 'Parent folder. The envelope lands at <parent>/<repo>/.'
+                        ? `Parent folder (default: ${primaryWorkspace}). The workspace lands at <parent>/<repo>/.`
+                        : 'Parent folder. The workspace lands at <parent>/<repo>/.'
                 }
             />
             {error && (
@@ -500,14 +465,59 @@ function ManagedSourcePicker({ onPick }: { onPick: (source: AddWorkspaceSourceId
             <div>
                 <Heading as="h3" size="sm">How should Genie start?</Heading>
                 <Text size="xs" className="text-zinc-500" style={{ display: 'block', marginTop: 4 }}>
-                    Every choice is inspected first. Genie shows the workspace plan and only writes after you approve it.
+                    Start something new, or bring in what you already have — Genie reads a folder or
+                    repository before it writes anything, and shows you the plan first.
                 </Text>
             </div>
-            <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(2, 1fr)' }}>
-                {ADD_WORKSPACE_SOURCES.map((source) => (
+            {/* Two groups, because there are two acts (genie#431) — and a flat
+                row of five cards would say they were all the same one. */}
+            <SourceGroup
+                label="Start something new"
+                sources={ADD_WORKSPACE_SOURCES.filter((s) => s.group === 'create')}
+                columns={2}
+                onPick={onPick}
+            />
+            <SourceGroup
+                label="Bring in what you already have"
+                sources={ADD_WORKSPACE_SOURCES.filter((s) => s.group === 'adopt')}
+                columns={3}
+                onPick={onPick}
+            />
+        </div>
+    );
+}
+
+function SourceGroup({
+    label,
+    sources,
+    columns,
+    onPick,
+}: {
+    label: string;
+    sources: readonly AddWorkspaceSource[];
+    columns: number;
+    onPick: (source: AddWorkspaceSourceId) => void;
+}) {
+    return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <Text
+                size="xs"
+                className="text-zinc-500"
+                style={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.04em' }}
+            >
+                {label}
+            </Text>
+            <div
+                style={{
+                    display: 'grid',
+                    gap: 12,
+                    gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+                }}
+            >
+                {sources.map((source) => (
                     <Card
                         key={source.id}
-                        style={{ padding: 16, cursor: 'pointer', minHeight: 150 }}
+                        style={{ padding: 16, cursor: 'pointer', minHeight: 140 }}
                         onClick={() => onPick(source.id)}
                     >
                         <Icon name={source.icon as never} size="lg" className="text-violet-500" />
@@ -522,789 +532,26 @@ function ManagedSourcePicker({ onPick }: { onPick: (source: AddWorkspaceSourceId
     );
 }
 
-function ShapePicker({ onPick }: { onPick: (s: Stage) => void }) {
-    return (
-        <div style={{ display: 'grid', gap: 12, gridTemplateColumns: '1fr 1fr' }}>
-            <Card
-                style={{ padding: 16, cursor: 'pointer' }}
-                onClick={() => onPick('simple')}
-            >
-                <Icon name="folder" size="lg" className="text-blue-500" />
-                <Heading as="h3" size="sm" style={{ marginTop: 8 }}>
-                    Simple
-                </Heading>
-                <Text size="xs" className="text-zinc-500" style={{ display: 'block', marginTop: 4 }}>
-                    Point Genie at any existing repo, monorepo, or folder. No
-                    git scaffolding. Path can be anywhere on disk.
-                </Text>
-            </Card>
-
-            <Card
-                style={{
-                    padding: 16,
-                    cursor: 'pointer',
-                    border: '1px solid var(--violet-500)',
-                    position: 'relative',
-                }}
-                onClick={() => onPick('agi-pick')}
-            >
-                <Badge
-                    color="violet"
-                    variant="solid"
-                    size="sm"
-                    style={{ position: 'absolute', top: 12, right: 12 }}
-                >
-                    Preferred
-                </Badge>
-                <Icon name="box" size="lg" className="text-violet-500" />
-                <Heading as="h3" size="sm" style={{ marginTop: 8 }}>
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                        .agi envelope
-                        <EnvelopeHelp />
-                    </span>
-                </Heading>
-                <Text size="xs" className="text-zinc-500" style={{ display: 'block', marginTop: 4 }}>
-                    Aionima format: <code>{'{slug}.agi'}</code> git envelope
-                    with submodules in <code>repos/</code> + shared knowledge
-                    in <code>.ai/</code>. Compatible with the AGI gateway.
-                </Text>
-            </Card>
-        </div>
-    );
-}
-
 /**
- * The little "?" affordance on the ".agi envelope" shape card. On hover it
- * pops a Fancy Popover explaining what an Aionima envelope is, why it helps,
- * and how Genie uses it — with a "Learn more" link out to the full docs page.
- * The wrapper stops click propagation so poking the icon never selects the
- * card behind it (which would kick off the envelope flow).
+ * Making a workspace — the whole of it (genie#431).
+ *
+ * Name it, say where it lives, done. No scan, no plan to approve, no wizard:
+ * the folder does not exist yet, so there is nothing to read and nothing to
+ * decide. "New workspace" used to open the inspect-and-convert wizard and ask
+ * which existing folder to convert, which is a question with no answer when you
+ * are starting from nothing — so there was no way to create an empty workspace
+ * at all.
+ *
+ * The container repository is DERIVED, never asked (`containerRepoPlan`): GitHub
+ * connected means the workspace gets one, and GitHub absent or unhappy means it
+ * does not. Either way the workspace is created — a repository the user did not
+ * ask for must never be able to stop them making a folder. When GitHub does let
+ * them down, the workspace is already on disk and the form says so instead of
+ * closing as though everything went to plan.
  */
-function EnvelopeHelp() {
-    return (
-        <span
-            onClick={(e) => e.stopPropagation()}
-            style={{ display: 'inline-flex', alignItems: 'center' }}
-        >
-            <Popover hover placement="bottom" offset={8}>
-                <Popover.Trigger>
-                    <Icon
-                        name="circle-help"
-                        size="xs"
-                        className="text-zinc-400 hover:text-violet-500"
-                        style={{ cursor: 'help' }}
-                    />
-                </Popover.Trigger>
-                <Popover.Content className="max-w-xs">
-                    <Text
-                        size="xs"
-                        style={{ display: 'block', fontWeight: 600, marginBottom: 4 }}
-                    >
-                        What's an Aionima envelope?
-                    </Text>
-                    <Text
-                        size="xs"
-                        className="text-zinc-500"
-                        style={{ display: 'block', lineHeight: 1.5 }}
-                    >
-                        A portable <code>{'{slug}.agi'}</code> git folder that
-                        bundles a whole project: your code repos as submodules in{' '}
-                        <code>repos/</code>, shared knowledge in <code>.ai/</code>,
-                        and a <code>project.json</code> that ties them together.
-                    </Text>
-                    <Text
-                        size="xs"
-                        className="text-zinc-500"
-                        style={{ display: 'block', lineHeight: 1.5, marginTop: 6 }}
-                    >
-                        Genie clones or scaffolds it, surfaces its repos in the
-                        tree, and lets your agents share the <code>.ai/</code>{' '}
-                        knowledge. It's compatible with the AGI gateway, and Tynn
-                        treats an envelope-backed project as a workspace.
-                    </Text>
-                    <a
-                        href="https://tynn.ai/docs/aionima-envelope"
-                        onClick={(e) => {
-                            e.preventDefault();
-                            api().tynn.openInBrowser(
-                                'https://tynn.ai/docs/aionima-envelope',
-                            );
-                        }}
-                        className="text-blue-600 hover:underline dark:text-blue-400"
-                        style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 4,
-                            marginTop: 8,
-                            fontSize: 12,
-                        }}
-                    >
-                        <Icon name="external-link" size="xs" /> Learn more
-                    </a>
-                </Popover.Content>
-            </Popover>
-        </span>
-    );
-}
-
-function SimpleWizard({
-    projects,
-    loadingProjects,
-    onProjectCreated,
-    onCancel,
-    onCreated,
-}: {
-    projects: TynnProject[];
-    loadingProjects: boolean;
-    onProjectCreated: (p: TynnProject) => void;
-    onCancel: () => void;
-    onCreated: (row: WorkspaceRow) => void;
-}) {
-    const [folder, setFolder] = useState<string>('');
-    // Source: a local folder (default) OR a remote git repo Genie clones into a
-    // chosen parent and then registers as the workspace.
-    const [sourceMode, setSourceMode] = useState<'local' | 'remote'>('local');
-    const [sourceUrl, setSourceUrl] = useState<string>('');
-    const [cloneParent, setCloneParent] = useState<string>('');
-    const [projectId, setProjectId] = useState<string>('');
-    const [submitting, setSubmitting] = useState(false);
-    const [error, setError] = useState<string | null>(null);
-
-    // Aionima upgrade — when checked, the chosen folder becomes a submodule
-    // inside a fresh `{slug}.agi` envelope. The envelope is what Genie
-    // registers as the workspace; the original folder is unchanged.
-    const [upgradeToAgi, setUpgradeToAgi] = useState(false);
-    const [agiSlug, setAgiSlug] = useState<string>('');
-    const [agiParent, setAgiParent] = useState<string>('');
-    const [agiSubName, setAgiSubName] = useState<string>('');
-    const [primaryWorkspace, setPrimaryWorkspace] = useState<string | undefined>();
-
-    useEffect(() => {
-        api()
-            .settings.get()
-            .then((s) => {
-                setPrimaryWorkspace(s.primary_workspace);
-                if (!agiParent && s.primary_workspace) {
-                    setAgiParent(s.primary_workspace);
-                }
-                if (s.primary_workspace) {
-                    setCloneParent((c) => c || s.primary_workspace!);
-                }
-            });
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
-
-    // Whenever the source folder or selected project changes, refresh the
-    // auto-suggested slug + submodule name. We only overwrite if the user
-    // hasn't typed something custom yet.
-    useEffect(() => {
-        const project = projects.find((p) => p.id === projectId);
-        const folderLeaf = folder
-            ? folder.replace(/[\\/]+$/, '').split(/[\\/]/).pop()
-            : '';
-        if (project && !agiSlug) setAgiSlug(project.slug || folderLeaf || '');
-        if (folderLeaf && !agiSubName) setAgiSubName(folderLeaf);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [folder, projectId]);
-
-    const choose = async () => {
-        const p = await pickPath({ mode: 'directory', title: 'Choose project folder' });
-        if (p) setFolder(p);
-    };
-    const chooseAgiParent = async () => {
-        const p = await pickPath({
-            mode: 'directory',
-            title: 'Choose where the new .agi envelope folder will be created',
-        });
-        if (p) setAgiParent(p);
-    };
-    const chooseCloneParent = async () => {
-        const p = await pickPath({ mode: 'directory', title: 'Choose where to clone the repo' });
-        if (p) setCloneParent(p);
-    };
-
-    const submit = async () => {
-        setSubmitting(true);
-        setError(null);
-        try {
-            // Associating a project is OPTIONAL — Tynn is never required to add a
-            // workspace. When none is picked the workspace gets its own id and
-            // empty project fields (folder name is used for display).
-            const project = projects.find((p) => p.id === projectId);
-
-            // Resolve the source folder: a local pick, or a fresh clone of a remote repo.
-            let sourceFolder = folder;
-            if (sourceMode === 'remote') {
-                if (!sourceUrl.trim()) throw new Error('Enter the repository URL.');
-                if (!cloneParent.trim()) throw new Error('Pick where to clone the repo.');
-                const cloned = await api().workspaces.clone(
-                    sourceUrl.trim(),
-                    cloneParent.trim(),
-                );
-                sourceFolder = cloned.path;
-            }
-            if (!sourceFolder) throw new Error('Pick a folder.');
-            const settings = await api().settings.get();
-
-            // Name for the .agi envelope / display when no project is chosen:
-            // the project name, else the slug, else the source folder's leaf.
-            const folderLeaf =
-                sourceFolder.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || 'workspace';
-            const envelopeName = project?.name || agiSlug.trim() || folderLeaf;
-
-            let workspacePath = sourceFolder;
-            let shape: WorkspaceRow['shape'] = 'simple';
-            let createdByGenie = 0;
-
-            if (upgradeToAgi) {
-                if (!agiSlug.trim()) throw new Error('Slug for the new envelope is required.');
-                if (!agiParent.trim()) throw new Error('Pick a destination parent folder for the new envelope.');
-                if (!agiSubName.trim()) throw new Error('Submodule directory name is required.');
-                const res = await api().agi.convert({
-                    slug: agiSlug.trim(),
-                    name: envelopeName,
-                    parent_path: agiParent.trim(),
-                    source: { kind: 'local', path: sourceFolder },
-                    sub_name: agiSubName.trim(),
-                });
-                workspacePath = res.path;
-                shape = 'agi';
-                createdByGenie = 1;
-            }
-
-            const row: WorkspaceRow = {
-                id: project?.id ?? ulid(),
-                backend: project?.backend ?? 'tynn',
-                project_id: project?.id ?? '',
-                project_name: project?.name ?? '',
-                tynn_project_id: project?.id ?? '',
-                tynn_project_name: project?.name ?? '',
-                shape,
-                path: workspacePath,
-                editor: null,
-                editor_cmd: null,
-                start_cmd: null,
-                env_file: settings.default_env_file ?? '.env',
-                last_opened_at: null,
-                created_by_genie: createdByGenie,
-            };
-            const saved = await api().workspaces.add(row);
-            onCreated(saved);
-        } catch (e: unknown) {
-            setError(e instanceof Error ? e.message : String(e));
-        } finally {
-            setSubmitting(false);
-        }
-    };
-
-    return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div>
-                <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-                    {(['local', 'remote'] as const).map((m) => (
-                        <Action
-                            key={m}
-                            size="sm"
-                            variant={sourceMode === m ? 'default' : 'ghost'}
-                            color={sourceMode === m ? 'blue' : undefined}
-                            onClick={() => setSourceMode(m)}
-                        >
-                            {m === 'local' ? 'Local folder' : 'Remote repo'}
-                        </Action>
-                    ))}
-                </div>
-                {sourceMode === 'local' ? (
-                    <FolderRow folder={folder} onChoose={choose} />
-                ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                        <Input
-                            label="Repository URL"
-                            description="Genie clones it with your existing git auth (SSH key / credential helper); submodules included."
-                            value={sourceUrl}
-                            onValueChange={setSourceUrl}
-                            placeholder="git@github.com:owner/repo.git"
-                        />
-                        <FolderRow
-                            folder={cloneParent}
-                            onChoose={chooseCloneParent}
-                            description={
-                                primaryWorkspace
-                                    ? `Clone destination parent (default: ${primaryWorkspace}). The repo lands at <parent>/<repo>/.`
-                                    : 'Where to clone the repo. It lands at <parent>/<repo>/.'
-                            }
-                        />
-                    </div>
-                )}
-            </div>
-            <ProjectPicker
-                value={projectId}
-                onChange={setProjectId}
-                projects={projects}
-                loading={loadingProjects}
-                onProjectCreated={(p) => {
-                    onProjectCreated(p);
-                    setProjectId(p.id);
-                }}
-            />
-            <AgiUpgradeBlock
-                checked={upgradeToAgi}
-                onCheckedChange={setUpgradeToAgi}
-                slug={agiSlug}
-                onSlugChange={setAgiSlug}
-                parent={agiParent}
-                onParentChoose={chooseAgiParent}
-                subName={agiSubName}
-                onSubNameChange={setAgiSubName}
-                primaryWorkspace={primaryWorkspace}
-            />
-
-            {error && <Text size="xs" style={{ color: 'var(--rose-500)' }}>{error}</Text>}
-            <Footer
-                onCancel={onCancel}
-                onSubmit={submit}
-                submitting={submitting}
-                label={upgradeToAgi ? 'Upgrade and add' : 'Add workspace'}
-                disabled={
-                    (sourceMode === 'local'
-                        ? !folder
-                        : !sourceUrl.trim() || !cloneParent.trim()) ||
-                    (upgradeToAgi && (!agiSlug.trim() || !agiParent.trim() || !agiSubName.trim()))
-                }
-            />
-        </div>
-    );
-}
-
-function AgiUpgradeBlock({
-    checked,
-    onCheckedChange,
-    slug,
-    onSlugChange,
-    parent,
-    onParentChoose,
-    subName,
-    onSubNameChange,
-    primaryWorkspace,
-}: {
-    checked: boolean;
-    onCheckedChange: (v: boolean) => void;
-    slug: string;
-    onSlugChange: (v: string) => void;
-    parent: string;
-    onParentChoose: () => void;
-    subName: string;
-    onSubNameChange: (v: string) => void;
-    primaryWorkspace?: string;
-}) {
-    return (
-        <Card style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <label
-                style={{
-                    display: 'flex',
-                    alignItems: 'flex-start',
-                    gap: 10,
-                    cursor: 'pointer',
-                }}
-            >
-                <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={(e) => onCheckedChange(e.target.checked)}
-                    style={{ marginTop: 2 }}
-                />
-                <span style={{ flex: 1 }}>
-                    <Text size="sm" style={{ display: 'block', fontWeight: 600 }}>
-                        Upgrade to Aionima format (simple)
-                    </Text>
-                    <Text size="xs" className="text-zinc-500" style={{ display: 'block', marginTop: 2 }}>
-                        Wrap the folder above as a single submodule inside a new{' '}
-                        <code>{'{slug}.agi'}</code> envelope. The original repo is
-                        untouched. The envelope adds <code>repos/</code> (for
-                        submodules) + <code>.ai/</code> (shared knowledge:{' '}
-                        <code>plans</code>, <code>knowledge</code>,{' '}
-                        <code>pm</code>, <code>chat</code>, <code>memory</code>,{' '}
-                        <code>issues</code>), compatible with the AGI gateway.{' '}
-                        <em>
-                            For sources with multiple nested repos / existing
-                            knowledge folders, cancel and use{' '}
-                            <strong>.agi envelope → Interactive upgrade</strong>{' '}
-                            instead.
-                        </em>
-                    </Text>
-                </span>
-            </label>
-
-            {checked && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10, paddingTop: 4 }}>
-                    <Input
-                        label="Envelope slug"
-                        description={`Becomes the folder name: ${slug || '{slug}'}.agi`}
-                        value={slug}
-                        onValueChange={onSlugChange}
-                        placeholder="brain-v2"
-                    />
-                    <FolderRow
-                        folder={parent}
-                        onChoose={onParentChoose}
-                        description={
-                            primaryWorkspace
-                                ? `Default: ${primaryWorkspace}. Result: <parent>/${slug || '{slug}'}.agi/`
-                                : `Pick where the .agi envelope will be created. Result: <parent>/${slug || '{slug}'}.agi/`
-                        }
-                    />
-                    <Input
-                        label="Submodule directory name"
-                        description={`Source lands at repos/${subName || '…'}/ inside the envelope.`}
-                        value={subName}
-                        onValueChange={onSubNameChange}
-                        placeholder="brain"
-                    />
-                </div>
-            )}
-        </Card>
-    );
-}
-
-function AgiPicker({
-    onCreate,
-    onImport,
-    onConvert,
-    onInteractive,
-    onBack,
-}: {
-    onCreate: () => void;
-    onImport: () => void;
-    onConvert: () => void;
-    onInteractive: () => void;
-    onBack: () => void;
-}) {
-    return (
-        <div>
-            <div className="grid grid-cols-2 gap-3">
-                <Card className="cursor-pointer p-4" onClick={onCreate}>
-                    <Icon name="sparkles" size="lg" className="text-emerald-500" />
-                    <Heading as="h3" size="sm" className="mt-2">
-                        Create new envelope
-                    </Heading>
-                    <Text size="xs" className="mt-1 block text-zinc-500">
-                        Scaffold a fresh <code>{'{slug}.agi'}</code> folder
-                        with the full Aionima skeleton + initial git commit.
-                    </Text>
-                </Card>
-                <Card className="cursor-pointer p-4" onClick={onConvert}>
-                    <Icon name="git-merge" size="lg" className="text-blue-500" />
-                    <Heading as="h3" size="sm" className="mt-2">
-                        Convert single project
-                    </Heading>
-                    <Text size="xs" className="mt-1 block text-zinc-500">
-                        Wrap one local folder or remote git repo as a submodule
-                        inside a brand-new <code>{'{slug}.agi'}</code>.
-                    </Text>
-                </Card>
-                <Card
-                    className="cursor-pointer p-4"
-                    onClick={onInteractive}
-                    style={{ borderColor: 'var(--agent)' }}
-                >
-                    <Icon name="layers" size="lg" className="text-indigo-500" />
-                    <Heading as="h3" size="sm" className="mt-2">
-                        Interactive upgrade
-                        <span
-                            style={{
-                                marginLeft: 6,
-                                fontSize: 10,
-                                fontWeight: 600,
-                                color: 'var(--agent)',
-                                background: 'var(--agent-soft)',
-                                borderRadius: 4,
-                                padding: '1px 5px',
-                            }}
-                        >
-                            new
-                        </span>
-                    </Heading>
-                    <Text size="xs" className="mt-1 block text-zinc-500">
-                        Source has multiple repos and loose knowledge folders.
-                        Scan, pick which sub-repos become <code>repos/</code>
-                        submodules and which folders move into{' '}
-                        <code>.ai/</code>.
-                    </Text>
-                </Card>
-                <Card className="cursor-pointer p-4" onClick={onImport}>
-                    <Icon name="folder-input" size="lg" className="text-amber-500" />
-                    <Heading as="h3" size="sm" className="mt-2">
-                        Import existing envelope
-                    </Heading>
-                    <Text size="xs" className="mt-1 block text-zinc-500">
-                        Folder already IS a <code>.agi</code>. Walk it, detect
-                        repos, register as a workspace.
-                    </Text>
-                </Card>
-            </div>
-            <div className="mt-3">
-                <Action variant="ghost" size="sm" onClick={onBack} icon="arrow-left">
-                    Back
-                </Action>
-            </div>
-        </div>
-    );
-}
-
-function AgiConvertWizard({
-    projects,
-    loadingProjects,
-    onProjectCreated,
-    onCancel,
-    onCreated,
-}: {
-    projects: TynnProject[];
-    loadingProjects: boolean;
-    onProjectCreated: (p: TynnProject) => void;
-    onCancel: () => void;
-    onCreated: (row: WorkspaceRow) => void;
-}) {
-    const [projectId, setProjectId] = useState('');
-    const [slug, setSlug] = useState('');
-    const [primaryWorkspace, setPrimaryWorkspace] = useState<string | undefined>();
-    const [parentFolder, setParentFolder] = useState<string>('');
-    const [sourceMode, setSourceMode] = useState<'local' | 'remote'>('local');
-    const [sourcePath, setSourcePath] = useState<string>('');
-    const [sourceUrl, setSourceUrl] = useState<string>('');
-    const [subName, setSubName] = useState<string>('');
-    const [remoteMode, setRemoteMode] = useState<'none' | 'paste'>('none');
-    const [envelopeRemoteUrl, setEnvelopeRemoteUrl] = useState('');
-    const [submitting, setSubmitting] = useState(false);
-    const [error, setError] = useState<string | null>(null);
-
-    useEffect(() => {
-        api()
-            .settings.get()
-            .then((s) => {
-                setPrimaryWorkspace(s.primary_workspace);
-                if (!parentFolder && s.primary_workspace) {
-                    setParentFolder(s.primary_workspace);
-                }
-            });
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
-
-    useEffect(() => {
-        const project = projects.find((p) => p.id === projectId);
-        if (project && !slug) setSlug(project.slug);
-    }, [projectId, projects, slug]);
-
-    // Auto-suggest the submodule directory name from whichever source is active.
-    useEffect(() => {
-        const candidate = sourceMode === 'local' ? sourcePath : sourceUrl;
-        if (!candidate || subName) return;
-        const trimmed = candidate.replace(/[\\/]+$/, '');
-        const last = trimmed.split(/[/\\:]/).pop() ?? '';
-        const cleaned = last.replace(/\.git$/i, '');
-        if (cleaned) setSubName(cleaned);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [sourceMode, sourcePath, sourceUrl]);
-
-    const chooseSource = async () => {
-        const p = await pickPath({ mode: 'directory', title: 'Choose existing project folder' });
-        if (p) setSourcePath(p);
-    };
-
-    const chooseParent = async () => {
-        const p = await pickPath({ mode: 'directory', title: 'Choose destination parent folder' });
-        if (p) setParentFolder(p);
-    };
-
-    const submit = async () => {
-        setSubmitting(true);
-        setError(null);
-        try {
-            // Project association is optional (Tynn is never required).
-            const project = projects.find((p) => p.id === projectId);
-            if (!slug) throw new Error('Slug is required.');
-            if (!parentFolder) throw new Error('Pick a destination parent folder.');
-            const source =
-                sourceMode === 'local'
-                    ? sourcePath
-                        ? { kind: 'local' as const, path: sourcePath }
-                        : null
-                    : sourceUrl.trim()
-                        ? { kind: 'remote' as const, url: sourceUrl.trim() }
-                        : null;
-            if (!source) {
-                throw new Error(
-                    sourceMode === 'local'
-                        ? 'Pick the source folder.'
-                        : 'Enter the source remote URL.',
-                );
-            }
-
-            const remote =
-                remoteMode === 'paste'
-                    ? { kind: 'paste' as const, url: envelopeRemoteUrl }
-                    : { kind: 'none' as const };
-
-            const res = await api().agi.convert({
-                slug,
-                name: project?.name || slug,
-                parent_path: parentFolder,
-                source,
-                sub_name: subName || undefined,
-                remote,
-            });
-
-            const settings = await api().settings.get();
-            const row: WorkspaceRow = {
-                id: project?.id ?? ulid(),
-                backend: project?.backend ?? 'tynn',
-                project_id: project?.id ?? '',
-                project_name: project?.name ?? '',
-                tynn_project_id: project?.id ?? '',
-                tynn_project_name: project?.name ?? '',
-                shape: 'agi',
-                path: res.path,
-                editor: null,
-                editor_cmd: null,
-                start_cmd: null,
-                env_file: settings.default_env_file ?? '.env',
-                last_opened_at: null,
-                created_by_genie: 1,
-            };
-            const saved = await api().workspaces.add(row);
-            onCreated(saved);
-        } catch (e: unknown) {
-            setError(e instanceof Error ? e.message : String(e));
-        } finally {
-            setSubmitting(false);
-        }
-    };
-
-    const disabled =
-        !slug ||
-        !parentFolder ||
-        (sourceMode === 'local' ? !sourcePath : !sourceUrl.trim());
-
-    return (
-        <div className="flex flex-col gap-3">
-            <ProjectPicker
-                value={projectId}
-                onChange={setProjectId}
-                projects={projects}
-                loading={loadingProjects}
-                onProjectCreated={(p) => {
-                    onProjectCreated(p);
-                    setProjectId(p.id);
-                }}
-            />
-
-            <div>
-                <Text size="xs" className="mb-1.5 block font-semibold">
-                    Source project
-                </Text>
-                <div className="mb-2 flex gap-2">
-                    {(['local', 'remote'] as const).map((m) => (
-                        <Action
-                            key={m}
-                            size="sm"
-                            variant={sourceMode === m ? 'default' : 'ghost'}
-                            color={sourceMode === m ? 'blue' : undefined}
-                            onClick={() => setSourceMode(m)}
-                        >
-                            {m === 'local' ? 'Local folder' : 'Remote URL'}
-                        </Action>
-                    ))}
-                </div>
-                {sourceMode === 'local' ? (
-                    <FolderRow
-                        folder={sourcePath}
-                        onChoose={chooseSource}
-                        description="Pick the project folder. Must already be a git repo (has .git). The folder is never modified."
-                    />
-                ) : (
-                    <Input
-                        label="Source remote URL"
-                        description="The git URL Genie will register as a submodule (e.g. git@github.com:owner/repo.git)."
-                        value={sourceUrl}
-                        onValueChange={setSourceUrl}
-                        placeholder="git@github.com:owner/repo.git"
-                    />
-                )}
-            </div>
-
-            <Input
-                label="Submodule directory name"
-                description={`Where the source lands inside the new envelope: repos/${subName || '…'}/`}
-                value={subName}
-                onValueChange={setSubName}
-                placeholder="e.g. brain, web, api"
-            />
-
-            <Input
-                label="New envelope slug"
-                description="Becomes the folder name: {slug}.agi"
-                value={slug}
-                onValueChange={setSlug}
-                placeholder="brain-v2"
-            />
-
-            <FolderRow
-                folder={parentFolder}
-                onChoose={chooseParent}
-                description={
-                    primaryWorkspace
-                        ? `Default: ${primaryWorkspace}. The new envelope will be created at <parent>/${slug || '{slug}'}.agi/`
-                        : `Pick where the new envelope folder will be created. Result: <parent>/${slug || '{slug}'}.agi/`
-                }
-            />
-
-            <div>
-                <Text size="xs" className="mb-1.5 block font-semibold">
-                    Envelope remote (optional)
-                </Text>
-                <div className="flex gap-2">
-                    {(['none', 'paste'] as const).map((m) => (
-                        <Action
-                            key={m}
-                            size="sm"
-                            variant={remoteMode === m ? 'default' : 'ghost'}
-                            color={remoteMode === m ? 'blue' : undefined}
-                            onClick={() => setRemoteMode(m)}
-                        >
-                            {m === 'none' ? 'No remote' : 'Paste URL'}
-                        </Action>
-                    ))}
-                </div>
-                {remoteMode === 'paste' && (
-                    <div className="mt-2">
-                        <Input
-                            label="New envelope remote URL"
-                            description="A git URL for the new {slug}.agi envelope itself (not the source)."
-                            value={envelopeRemoteUrl}
-                            onValueChange={setEnvelopeRemoteUrl}
-                            placeholder="git@github.com:owner/{slug}.agi.git"
-                        />
-                    </div>
-                )}
-            </div>
-
-            {error && (
-                <Text size="xs" className="text-rose-500">
-                    {error}
-                </Text>
-            )}
-            <Footer
-                onCancel={onCancel}
-                onSubmit={submit}
-                submitting={submitting}
-                label="Create envelope"
-                disabled={disabled}
-            />
-        </div>
-    );
-}
-
-function AgiCreateWizard({
+function CreateWorkspaceForm({
     initialProjectId = '',
-    initialGappDev = false,
+    gappDev = false,
     projects,
     loadingProjects,
     onProjectCreated,
@@ -1312,7 +559,8 @@ function AgiCreateWizard({
     onCreated,
 }: {
     initialProjectId?: string;
-    initialGappDev?: boolean;
+    /** Set by the "New GApp workspace" route; the plain route never asks. */
+    gappDev?: boolean;
     projects: TynnProject[];
     loadingProjects: boolean;
     onProjectCreated: (p: TynnProject) => void;
@@ -1320,99 +568,99 @@ function AgiCreateWizard({
     onCreated: (row: WorkspaceRow) => void;
 }) {
     const [projectId, setProjectId] = useState(initialProjectId);
-    const [gappDev, setGappDev] = useState(initialGappDev);
-    const [slug, setSlug] = useState('');
+    const [name, setName] = useState('');
+    const [nameTouched, setNameTouched] = useState(false);
+    const [parentFolder, setParentFolder] = useState('');
     const [primaryWorkspace, setPrimaryWorkspace] = useState<string | undefined>();
-    const [parentFolder, setParentFolder] = useState<string>('');
-    const [remoteMode, setRemoteMode] = useState<'none' | 'auto' | 'paste'>('none');
-    const [remoteOwner, setRemoteOwner] = useState('');
-    const [remoteUrl, setRemoteUrl] = useState('');
+    const [owner, setOwner] = useState('');
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    // Created, but GitHub did not go to plan. The workspace EXISTS, so this is
+    // not an error state — it is a finished one with something to say.
+    const [partial, setPartial] = useState<{ row: WorkspaceRow; problem: string } | null>(null);
     const account = useGitHubAccount();
-    // Proactive gate: auto-creating a remote needs the App's `contents` write
-    // permission. When it's missing, warn here rather than letting the create
-    // 403 mid-flow.
+    // Creating a repo needs the App's `contents` write permission. Without it
+    // the workspace is local-only rather than a 403 halfway through the flow.
     const { caps: githubCaps } = useGithubCapabilities();
-    const provisionGated =
-        githubCaps.connected && githubCaps.missing.includes('github.provision');
 
     useEffect(() => {
         api()
             .settings.get()
             .then((s) => {
                 setPrimaryWorkspace(s.primary_workspace);
-                if (!parentFolder && s.primary_workspace) {
-                    setParentFolder(s.primary_workspace);
-                }
+                if (s.primary_workspace) setParentFolder((p) => p || s.primary_workspace!);
+            })
+            .catch(() => {
+                /* no default parent; the user picks one below */
             });
     }, []);
 
+    // A chosen Tynn project names the workspace until the user names it themselves.
     useEffect(() => {
         const project = projects.find((p) => p.id === projectId);
-        if (project && !slug) setSlug(project.slug);
-    }, [projectId, projects, slug]);
+        if (project && !nameTouched) setName(project.name);
+    }, [projectId, projects, nameTouched]);
 
-    const choose = async () => {
-        const p = await pickPath({ mode: 'directory', title: 'Choose parent folder for new envelope' });
-        if (p) setParentFolder(p);
-    };
+    const folder = workspaceFolderName(name);
+    const plan = containerRepoPlan({
+        githubConnected: account.connected,
+        githubCanProvision: !(
+            githubCaps.connected && githubCaps.missing.includes('github.provision')
+        ),
+        owner: owner || account.username || '',
+        slug: name,
+    });
 
     const submit = async () => {
         setSubmitting(true);
         setError(null);
         try {
-            // Project association is optional (Tynn is never required).
             const project = projects.find((p) => p.id === projectId);
-            if (!slug) throw new Error('Slug is required.');
-            if (!parentFolder) throw new Error('Pick the parent folder.');
+            const slug = workspaceSlug(name);
+            if (!slug) throw new Error('Give the workspace a name.');
+            if (!parentFolder) throw new Error('Choose where the workspace should live.');
 
-            // 'auto' actually mints the repo on GitHub under the chosen
-            // owner BEFORE building the envelope, then pushes — same flow
-            // as the interactive wizard. (createAgiEnvelope's own 'auto'
-            // only records a local remote URL without creating/pushing, so
-            // we drive create+push here and hand it a concrete paste URL.)
-            let remote:
-                | { kind: 'none' }
-                | { kind: 'paste'; url: string }
-                | { kind: 'auto'; owner: string } = { kind: 'none' };
-            let pushAfter = false;
-            if (remoteMode === 'paste') {
-                remote = { kind: 'paste', url: remoteUrl };
-            } else if (remoteMode === 'auto') {
-                if (!account.connected) {
-                    throw new Error('Connect GitHub to auto-create the repo.');
+            // The repository has to exist before the first push, so it is made
+            // first — but a failure here is a NOTE, not a stop. Genie carries on
+            // and creates the workspace on this machine.
+            let remote: { kind: 'none' } | { kind: 'paste'; url: string } = { kind: 'none' };
+            let problem: string | null = null;
+            if (plan.kind === 'github') {
+                try {
+                    const created = await api().github.createRepo({
+                        name: plan.repo,
+                        owner: owner || null,
+                        // Pre-target the install chooser at the chosen org if Genie
+                        // isn't installed there, so the prompt lands on the right
+                        // account instead of failing.
+                        ownerId: owner
+                            ? account.installations.find((i) => i.login === owner)?.id ?? null
+                            : null,
+                        description: `Genie workspace for ${project?.name || name.trim()}`,
+                        private: true,
+                    });
+                    remote = { kind: 'paste', url: created.clone_url };
+                } catch (cause) {
+                    problem = `Genie could not create ${plan.owner ? `${plan.owner}/` : ''}${
+                        plan.repo
+                    } on GitHub: ${cause instanceof Error ? cause.message : String(cause)}`;
                 }
-                const created = await api().github.createRepo({
-                    name: `${slug}.agi`,
-                    owner: remoteOwner || null,
-                    // Pre-target the install chooser at the chosen org if Genie
-                    // isn't installed there (so the prompt lands on the right
-                    // account instead of failing).
-                    ownerId: remoteOwner
-                        ? account.installations.find((i) => i.login === remoteOwner)?.id ?? null
-                        : null,
-                    description: `Aionima envelope for ${project?.name || slug}`,
-                    private: true,
-                });
-                remote = { kind: 'paste', url: created.clone_url };
-                pushAfter = true;
             }
 
             const res = await api().agi.create({
                 slug,
-                name: project?.name || slug,
+                name: project?.name || name.trim(),
                 parent_path: parentFolder,
                 remote,
             });
 
-            if (pushAfter) {
+            if (remote.kind === 'paste') {
                 try {
                     await api().agi.push(res.path, 'main');
-                } catch (pushErr) {
-                    setError(
-                        pushErr instanceof Error ? pushErr.message : String(pushErr),
-                    );
+                } catch (cause) {
+                    problem = `The workspace is on this machine, but Genie could not push it to ${
+                        remote.url
+                    }: ${cause instanceof Error ? cause.message : String(cause)}`;
                 }
             }
 
@@ -1421,7 +669,7 @@ function AgiCreateWizard({
                 id: project?.id ?? ulid(),
                 backend: project?.backend ?? 'tynn',
                 project_id: project?.id ?? '',
-                project_name: project?.name ?? '',
+                project_name: project?.name ?? name.trim(),
                 tynn_project_id: project?.id ?? '',
                 tynn_project_name: project?.name ?? '',
                 shape: 'agi',
@@ -1435,7 +683,8 @@ function AgiCreateWizard({
                 gapp_dev: gappDev ? 1 : 0,
             };
             const saved = await api().workspaces.add(row);
-            onCreated(saved);
+            if (problem) setPartial({ row: saved, problem });
+            else onCreated(saved);
         } catch (e: unknown) {
             setError(e instanceof Error ? e.message : String(e));
         } finally {
@@ -1443,339 +692,167 @@ function AgiCreateWizard({
         }
     };
 
+    if (partial) {
+        return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <div>
+                    <Heading as="h3" size="sm">
+                        {partial.row.project_name || name.trim()} is ready
+                    </Heading>
+                    <Text size="xs" className="text-zinc-500" style={{ display: 'block', marginTop: 4 }}>
+                        The workspace is at <code>{partial.row.path}</code>. GitHub did not go to
+                        plan, which does not affect the workspace — you can connect it to a
+                        repository later.
+                    </Text>
+                </div>
+                <Text size="xs" className="text-amber-500">
+                    {partial.problem}
+                </Text>
+                <Footer
+                    onCancel={onCancel}
+                    onSubmit={() => onCreated(partial.row)}
+                    submitting={false}
+                    label="Open workspace"
+                    disabled={false}
+                />
+            </div>
+        );
+    }
+
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div>
+                <Heading as="h3" size="sm">
+                    {gappDev ? 'New GApp workspace' : 'New workspace'}
+                </Heading>
+                <Text size="xs" className="text-zinc-500" style={{ display: 'block', marginTop: 4 }}>
+                    {gappDev
+                        ? 'Genie creates the folder, its first commit, and the GApp build and preview workflows.'
+                        : 'Genie creates the folder and its first commit. Nothing is scanned and nothing existing is touched.'}
+                </Text>
+            </div>
+
+            <Input
+                label="Workspace name"
+                // The Fancy `label` prop draws the caption; the accessible name
+                // is set explicitly so it matches what is on screen.
+                aria-label="Workspace name"
+                value={name}
+                onValueChange={(v: string) => {
+                    setName(v);
+                    setNameTouched(true);
+                }}
+                placeholder="Acme Storefront"
+            />
+
+            <FolderRow
+                folder={parentFolder}
+                onChoose={async () => {
+                    const p = await pickPath({
+                        mode: 'directory',
+                        title: 'Choose where the workspace should live',
+                    });
+                    if (p) setParentFolder(p);
+                }}
+                description={
+                    folder && parentFolder
+                        ? `Lands at ${workspacePathPreview(parentFolder, folder)}`
+                        : primaryWorkspace
+                            ? `Default: ${primaryWorkspace}`
+                            : 'Pick the folder your workspaces live in.'
+                }
+            />
+
+            <ContainerRepoNote plan={plan} account={account} owner={owner} onOwnerChange={setOwner} />
+
             <ProjectPicker
                 value={projectId}
-                onChange={setProjectId}
+                onChange={(id: string) => {
+                    setProjectId(id);
+                    if (!id) setNameTouched(true);
+                }}
                 projects={projects}
                 loading={loadingProjects}
-                onProjectCreated={(p) => {
+                onProjectCreated={(p: TynnProject) => {
                     onProjectCreated(p);
                     setProjectId(p.id);
                 }}
             />
-            <label style={{ display: 'flex', gap: 10, alignItems: 'flex-start', cursor: 'pointer' }}>
-                <input type="checkbox" checked={gappDev} onChange={(event) => setGappDev(event.target.checked)} />
-                <span>
-                    <Text size="sm" style={{ display: 'block', fontWeight: 600 }}>GApp Development Workspace</Text>
-                    <Text size="xs" className="text-zinc-500">Create this empty envelope as a GDW.</Text>
-                </span>
-            </label>
-            <Input
-                label="Slug"
-                description="Becomes the {slug}.agi folder name and GitHub remote."
-                value={slug}
-                onValueChange={setSlug}
-                placeholder="brain-v2"
-            />
-            <FolderRow
-                folder={parentFolder}
-                onChoose={choose}
-                description={
-                    primaryWorkspace
-                        ? `Default: ${primaryWorkspace}`
-                        : 'Pick where the envelope folder will be created.'
-                }
-            />
-
-            <div>
-                <Text size="xs" style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>
-                    GitHub remote
-                </Text>
-                <div style={{ display: 'flex', gap: 8 }}>
-                    {(['none', 'auto', 'paste'] as const).map((m) => (
-                        <Action
-                            key={m}
-                            size="sm"
-                            variant={remoteMode === m ? 'default' : 'ghost'}
-                            color={remoteMode === m ? 'blue' : undefined}
-                            onClick={() => setRemoteMode(m)}
-                        >
-                            {m === 'none'
-                                ? 'No remote'
-                                : m === 'auto'
-                                    ? 'Auto-create'
-                                    : 'Paste URL'}
-                        </Action>
-                    ))}
-                </div>
-                {remoteMode === 'auto' && (
-                    <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                        <GitHubConnect account={account} />
-                        {provisionGated && (
-                            <Text
-                                size="xs"
-                                style={{
-                                    display: 'block',
-                                    color: 'var(--amber-600)',
-                                    lineHeight: 1.4,
-                                }}
-                            >
-                                Genie's GitHub App can't create repos yet — it's
-                                missing <strong>repository contents</strong> write
-                                access. Approve the permission on GitHub and
-                                reconnect (see the warning in the title bar), or
-                                use a pasted remote / no remote for now.
-                            </Text>
-                        )}
-                        {account.connected && (
-                            <OwnerSelect
-                                account={account}
-                                value={remoteOwner}
-                                onChange={setRemoteOwner}
-                                label="Create under"
-                            />
-                        )}
-                    </div>
-                )}
-                {remoteMode === 'paste' && (
-                    <Input
-                        label="Remote URL"
-                        value={remoteUrl}
-                        onValueChange={setRemoteUrl}
-                        placeholder="git@github.com:owner/{slug}.agi.git"
-                        style={{ marginTop: 8 }}
-                    />
-                )}
-            </div>
 
             {error && <GitHubErrorNotice message={error} />}
             <Footer
                 onCancel={onCancel}
                 onSubmit={submit}
                 submitting={submitting}
-                label="Create envelope"
-                disabled={!slug || !parentFolder}
+                label="Create workspace"
+                disabled={!folder || !parentFolder}
             />
         </div>
     );
 }
 
-function AgiImportWizard({
-    projects,
-    loadingProjects,
-    onProjectCreated,
-    onCancel,
-    onCreated,
+/**
+ * What happens on GitHub, stated rather than asked (genie#431). There is no
+ * "No remote / Auto-create / Paste URL" choice any more: the answer follows from
+ * whether an account is connected, so the form reports the consequence and, when
+ * there is more than one account to land in, asks the only question left — which.
+ */
+function ContainerRepoNote({
+    plan,
+    account,
+    owner,
+    onOwnerChange,
 }: {
-    projects: TynnProject[];
-    loadingProjects: boolean;
-    onProjectCreated: (p: TynnProject) => void;
-    onCancel: () => void;
-    onCreated: (row: WorkspaceRow) => void;
+    plan: ContainerRepoPlan;
+    account: ReturnType<typeof useGitHubAccount>;
+    owner: string;
+    onOwnerChange: (v: string) => void;
 }) {
-    const [folder, setFolder] = useState<string>('');
-    const [projectId, setProjectId] = useState('');
-    const [detection, setDetection] = useState<DetectResult | null>(null);
-    const [submitting, setSubmitting] = useState(false);
-    const [error, setError] = useState<string | null>(null);
-    // Source: an existing LOCAL .agi folder (default) OR a REMOTE .agi repo Genie
-    // clones into a chosen parent, then inspects + registers exactly like a local
-    // one. Reuses the same workspaces.clone path the Simple/Convert wizards use.
-    const [sourceMode, setSourceMode] = useState<'local' | 'remote'>('local');
-    const [sourceUrl, setSourceUrl] = useState<string>('');
-    const [cloneParent, setCloneParent] = useState<string>('');
-    const [primaryWorkspace, setPrimaryWorkspace] = useState<string | undefined>();
-    const [cloning, setCloning] = useState(false);
-
-    useEffect(() => {
-        api()
-            .settings.get()
-            .then((s) => {
-                setPrimaryWorkspace(s.primary_workspace);
-                if (s.primary_workspace) {
-                    setCloneParent((c) => c || s.primary_workspace!);
-                }
-            });
-    }, []);
-
-    // Detect + remember a folder (after a local pick or a remote clone) so the
-    // detection card + Register footer light up the same way for both sources.
-    const inspect = async (p: string) => {
-        setFolder(p);
-        try {
-            setDetection(await api().agi.detect(p));
-        } catch (e) {
-            setError(e instanceof Error ? e.message : String(e));
-        }
-    };
-
-    const choose = async () => {
-        const p = await pickPath({ mode: 'directory', title: 'Choose existing folder' });
-        if (!p) return;
-        await inspect(p);
-    };
-
-    const chooseCloneParent = async () => {
-        const p = await pickPath({ mode: 'directory', title: 'Choose where to clone the repo' });
-        if (p) setCloneParent(p);
-    };
-
-    const clone = async () => {
-        if (!sourceUrl.trim()) {
-            setError('Enter the repository URL.');
-            return;
-        }
-        if (!cloneParent.trim()) {
-            setError('Pick where to clone the repo.');
-            return;
-        }
-        setCloning(true);
-        setError(null);
-        try {
-            const cloned = await api().workspaces.clone(
-                sourceUrl.trim(),
-                cloneParent.trim(),
-            );
-            await inspect(cloned.path);
-        } catch (e) {
-            setError(e instanceof Error ? e.message : String(e));
-        } finally {
-            setCloning(false);
-        }
-    };
-
-    const submit = async () => {
-        setSubmitting(true);
-        setError(null);
-        try {
-            // Project association is optional (Tynn is never required).
-            const project = projects.find((p) => p.id === projectId);
-            if (!folder) throw new Error('Pick a folder.');
-
-            const settings = await api().settings.get();
-            const row: WorkspaceRow = {
-                id: project?.id ?? ulid(),
-                backend: project?.backend ?? 'tynn',
-                project_id: project?.id ?? '',
-                project_name: project?.name ?? '',
-                tynn_project_id: project?.id ?? '',
-                tynn_project_name: project?.name ?? '',
-                shape: 'agi',
-                path: folder,
-                editor: null,
-                editor_cmd: null,
-                start_cmd: null,
-                env_file: settings.default_env_file ?? '.env',
-                last_opened_at: null,
-                created_by_genie: 0,
-            };
-            const saved = await api().workspaces.add(row);
-            onCreated(saved);
-        } catch (e: unknown) {
-            setError(e instanceof Error ? e.message : String(e));
-        } finally {
-            setSubmitting(false);
-        }
-    };
-
-    return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div>
-                <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-                    {(['local', 'remote'] as const).map((m) => (
-                        <Action
-                            key={m}
-                            size="sm"
-                            variant={sourceMode === m ? 'default' : 'ghost'}
-                            color={sourceMode === m ? 'blue' : undefined}
-                            onClick={() => setSourceMode(m)}
-                        >
-                            {m === 'local' ? 'Local folder' : 'Remote repo'}
-                        </Action>
-                    ))}
-                </div>
-                {sourceMode === 'local' ? (
-                    <FolderRow
-                        folder={folder}
-                        onChoose={choose}
-                        description="Pick the existing envelope (or pre-init) folder."
+    if (plan.kind === 'github') {
+        return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <Text size="xs" className="text-zinc-500">
+                    <Icon name="github" size="xs" /> Backed up to GitHub as{' '}
+                    <code>
+                        {plan.owner ? `${plan.owner}/` : ''}
+                        {plan.repo}
+                    </code>{' '}
+                    (private), pushed once it exists.
+                </Text>
+                {account.installations.length > 1 && (
+                    <OwnerSelect
+                        account={account}
+                        value={owner}
+                        onChange={onOwnerChange}
+                        label="Create under"
                     />
-                ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                        <Input
-                            label="Repository URL"
-                            description="Genie clones the .agi envelope with your existing git auth (SSH key / credential helper); submodules included."
-                            value={sourceUrl}
-                            onValueChange={setSourceUrl}
-                            placeholder="git@github.com:owner/repo.agi.git"
-                        />
-                        <FolderRow
-                            folder={cloneParent}
-                            onChoose={chooseCloneParent}
-                            description={
-                                primaryWorkspace
-                                    ? `Clone destination parent (default: ${primaryWorkspace}). The repo lands at <parent>/<repo>/.`
-                                    : 'Where to clone the repo. It lands at <parent>/<repo>/.'
-                            }
-                        />
-                        <div>
-                            <Action
-                                size="sm"
-                                color="blue"
-                                icon="download"
-                                disabled={cloning || !sourceUrl.trim() || !cloneParent.trim()}
-                                onClick={clone}
-                            >
-                                {cloning ? 'Cloning…' : 'Clone & inspect'}
-                            </Action>
-                            {folder && !cloning && (
-                                <Text
-                                    size="xs"
-                                    className="text-zinc-500"
-                                    style={{ display: 'block', marginTop: 4 }}
-                                >
-                                    Cloned to {folder}
-                                </Text>
-                            )}
-                        </div>
-                    </div>
                 )}
             </div>
-            {detection && (
-                <Card style={{ padding: 12 }}>
-                    <Text size="xs" className="text-zinc-500" style={{ display: 'block', marginBottom: 4 }}>
-                        Detected
-                    </Text>
-                    <Badge
-                        color={
-                            detection.state === 'FULL_ENVELOPE'
-                                ? 'emerald'
-                                : detection.state === 'PRE_INIT'
-                                    ? 'amber'
-                                    : 'zinc'
-                        }
-                        variant="soft"
-                    >
-                        {detection.state}
-                    </Badge>
-                    <Text size="xs" style={{ display: 'block', marginTop: 6 }}>
-                        Repos found: {detection.repos.length}
-                    </Text>
-                </Card>
-            )}
-            <ProjectPicker
-                value={projectId}
-                onChange={setProjectId}
-                projects={projects}
-                loading={loadingProjects}
-                onProjectCreated={(p) => {
-                    onProjectCreated(p);
-                    setProjectId(p.id);
-                }}
-            />
-            {error && <Text size="xs" style={{ color: 'var(--rose-500)' }}>{error}</Text>}
-            <Footer
-                onCancel={onCancel}
-                onSubmit={submit}
-                submitting={submitting}
-                label="Register"
-                disabled={!folder}
-            />
-        </div>
-    );
+        );
+    }
+
+    if (plan.reason === 'missing-permission') {
+        return (
+            <Text size="xs" style={{ color: 'var(--amber-600)', lineHeight: 1.4 }}>
+                Genie's GitHub App is missing <strong>repository contents</strong> write access, so
+                this workspace stays on this machine. Approve the permission on GitHub and reconnect
+                (see the warning in the title bar) to back it up.
+            </Text>
+        );
+    }
+
+    if (plan.reason === 'not-connected') {
+        return (
+            <Text size="xs" className="text-zinc-500">
+                Kept on this machine. Connect GitHub in Settings and new workspaces are backed up to
+                a private repository as they are created.
+            </Text>
+        );
+    }
+
+    return null;
 }
+
 
 function FolderRow({
     folder,
