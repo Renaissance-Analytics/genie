@@ -51,7 +51,7 @@
  * install that fails in front of the user.
  */
 
-import { TUI_REGISTRY, type AgentTuiId } from './registry';
+import type { AgentTuiId } from './registry';
 
 /**
  * How Genie puts an agent CLI on the machine.
@@ -416,11 +416,6 @@ export function agentCliDef(id: string): AgentCliDef | undefined {
     return AGENT_CLI_CATALOG.find((e) => e.id === id);
 }
 
-/** True when `id` names an agent CLI. The one membership test. */
-export function isAgentCliTool(id: string): id is AgentCliToolId {
-    return AGENT_CLI_CATALOG.some((e) => e.id === id);
-}
-
 /** The CLI a provider launches, or undefined for a provider with no fixed
  *  binary. */
 export function agentCliForProvider(provider: AgentTuiId): AgentCliDef | undefined {
@@ -484,14 +479,4 @@ export function agentCliToolByProvider(): Partial<Record<AgentTuiId, AgentCliToo
         if (entry.provider) out[entry.provider] = entry.id;
     }
     return out;
-}
-
-/**
- * The label to show for a provider's CLI, preferring the registry's own — the
- * two are asserted equal in tests, and reading the registry here means a rename
- * there cannot leave this page saying the old name.
- */
-export function agentCliLabel(id: AgentCliToolId): string {
-    const entry = agentCliDef(id)!;
-    return entry.provider ? TUI_REGISTRY[entry.provider].label : entry.label;
 }
