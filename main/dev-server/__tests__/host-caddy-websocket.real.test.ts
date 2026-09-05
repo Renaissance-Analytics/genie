@@ -19,6 +19,17 @@ import { buildHostCaddyfile } from '../host-caddyfile';
  * reads like a broken upgrade and is not one — the upgrade succeeds and the body
  * rewriter eats everything after it.
  *
+ * ## The blast radius was every hosted site, not one workspace's Echo
+ *
+ * Worth stating plainly, because the bug was REPORTED as one app's broadcasting
+ * being down and that badly understates it. Nothing about this is specific to a
+ * WebSocket SERVICE, or to Echo, or to Laravel: the rewriter sat in front of
+ * every `.gen` vhost, so it ate the frames of any WebSocket a hosted site opened
+ * — including a site's OWN same-origin socket. **Vite HMR was broken on every
+ * host-native `.gen` site**, which presents as "hot reload just stops working"
+ * and gets blamed on the dev server rather than on the front door. If you are
+ * reading this because HMR or a socket went quiet, start here.
+ *
  * ## Why this test has to speak HTTP/2
  *
  * The defect needs BOTH the `replace` directive AND h2, and neither alone shows
@@ -31,8 +42,9 @@ import { buildHostCaddyfile } from '../host-caddyfile';
  * ONE leaf certificate on ONE address, so a browser COALESCES a socket to the
  * WebSocket service's own `.gen` name onto the h2 connection it already holds for
  * the page, and sends it as an RFC 8441 Extended CONNECT stream
- * (`:method: CONNECT` + `:protocol: websocket`). That is what this test does, with `node:http2` — the
- * same wire protocol the browser used, and no browser anywhere near it.
+ * (`:method: CONNECT` + `:protocol: websocket`). That is what this test does,
+ * with `node:http2` — the same wire protocol the browser used, and no browser
+ * anywhere near it.
  *
  * ## What makes it non-vacuous
  *

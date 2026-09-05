@@ -147,7 +147,17 @@ describe('buildHostingDeps — the host-core hosting seam', () => {
         const report = await buildHostingDeps(ports).sites.serviceHostEnvReportFor!('Workspace A');
 
         expect(report.env).toMatchObject({
-            VITE_REVERB_HOST: 'reverb.ws-workspace-a-3bbd1699.gen',
+            // Canonical, post-rename (#428).
+            VITE_GENIE_WS_HOST: 'websockets.ws-workspace-a-3bbd1699.gen',
+            VITE_GENIE_WS_PORT: '443',
+            VITE_GENIE_WS_SCHEME: 'https',
+            VITE_GENIE_WS_APP_KEY: 'workspace_a',
+            // The DEPRECATED ALIASES ride the same path and carry the same values.
+            // Asserted here too, because these are the names Laravel's `echo.js`
+            // actually reads — a rename that quietly stopped emitting them into a
+            // site's env would break every hosted app and pass a test that only
+            // checked the canonical set.
+            VITE_REVERB_HOST: 'websockets.ws-workspace-a-3bbd1699.gen',
             VITE_REVERB_PORT: '443',
             VITE_REVERB_SCHEME: 'https',
             VITE_REVERB_APP_KEY: 'workspace_a',
