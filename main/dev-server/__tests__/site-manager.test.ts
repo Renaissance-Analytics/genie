@@ -2001,6 +2001,37 @@ describe('a restart says what it established (genie#226)', () => {
         expect(stopNotes(report).join(' ')).toMatch(/did not stop|still running/i);
     });
 
+    it('a stop on a hostPort site is external even when runMode says host', async () => {
+        // genie#226's ACTUAL configuration: `runMode: host` AND `hostPort`, a
+        // proxy in front of a manageProcess-managed dev server.
+        //
+        // `start` asks `hostNativeRoute(config)` FIRST and takes the route-only
+        // path -- it spawns nothing. `stop` asked `runMode === 'host'` first and
+        // took the managed-process path, so it reported `external: false` about a
+        // site Genie never ran. The two entry points disagreed about what shape
+        // the site is, and `stop` lost the note saying the dev server is still
+        // up -- the same lie #367 removed from `restart`, one action over.
+        //
+        // The existing external test above uses `runMode: 'explicit'`, which
+        // never reaches the disputed branch, which is why this survived it.
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const { hostSpawn } = spawnFake(false);
+        const external: DevSiteConfig = {
+            name: 'web',
+            genName: 'web.acme.gen',
+            repo: 'app',
+            runMode: 'host',
+            hostPort: 8001,
+            kind: 'http',
+            enabled: true,
+        };
+        const m = manager(runtime, { [SITE_ID]: external }, { hostSpawn, probeReady: async () => true });
+        await m.start('acme', SITE_ID);
+        const report = await m.stop(SITE_ID);
+        expect(report.external).toBe(true);
+        expect(stopNotes(report).join(' ')).toMatch(/did not stop|still running/i);
+    });
+
     it('a stop on a MANAGED site is not called external — positive control', async () => {
         const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
         const { hostSpawn } = spawnFake(false);

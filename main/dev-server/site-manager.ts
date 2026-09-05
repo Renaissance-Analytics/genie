@@ -1835,9 +1835,19 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             return { orphaned: survivors.map((o) => o.spawnId), external: false };
         }
         live.delete(siteId);
+        // WHICH SHAPE this site is has to be decided the way `start` decides it,
+        // and `start` asks `hostNativeRoute` FIRST: a site with `hostPort` takes
+        // the route-only path and spawns NOTHING, whatever its `runMode` says.
+        // Asking `runMode === 'host'` first made `stop` disagree — genie#226's
+        // own configuration is `runMode: host` AND `hostPort`, so it reported
+        // `external: false` about a dev server Genie never ran, and `stopNotes`
+        // dropped the sentence saying that server is still up. The same lie #367
+        // removed from `restart`, surviving one action over because `restart`
+        // reads the CONFIG rather than this report.
+        const external = hostNativeRoute(entry.config) !== null;
         // MANAGED HOST-NATIVE (story #238): Genie owns the dev server process — stop
         // it. No container runtime involved.
-        if (entry.config.runMode === 'host') {
+        if (!external && entry.config.runMode === 'host') {
             // The site, plus the PHP FastCGI worker companion — the latter only
             // for a site that HAD one, since asking about a companion that never
             // existed would manufacture an orphan.
@@ -1857,11 +1867,10 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             changed();
             return { orphaned: survivors.map((o) => o.spawnId), external: false };
         }
-        const { runtime } = await deps.resolveRuntime();
         // An EXTERNAL host-native site (hostPort, no container) runs no process Genie
         // owns — dropping its route above IS the stop; the dev server it points at is
         // the user's own host process (via manageProcess), left running.
-        const external = hostNativeRoute(entry.config) !== null;
+        const { runtime } = await deps.resolveRuntime();
         if (runtime && entry.containerId) {
             // Stop ONLY this site's process group — never the shared sandbox, which
             // holds the toolchain and the other sites. Then re-point Caddy at what
