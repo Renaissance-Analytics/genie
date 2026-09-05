@@ -255,6 +255,23 @@ describe('the stuck path — nothing hangs forever', () => {
         expect(fired).toHaveLength(0);
     });
 
+    it('cancel is a NO-OP once the drain has completed', async () => {
+        // The completed snapshot is what the caller acted on: the upgrade is
+        // already applying, and the restore list has already been written.
+        // A late cancel that re-settled — or that let its caller clear that
+        // list — would delete the record of everything about to come back.
+        const { d } = drain();
+        const done = d.begin(AGENTS);
+        d.acknowledge('ws1:moic', 'shutdown');
+        d.acknowledge('ws1:hand', 'shutdown');
+        await expect(done).resolves.toMatchObject({ complete: true });
+
+        expect(d.active()).toBe(false);
+        d.cancel();
+        // Still complete — the roster was not rewritten by the late call.
+        expect(d.snapshot().rows.every((row) => row.state === 'ready')).toBe(true);
+    });
+
     it('refuses a second drain while one is running', () => {
         const { d } = drain();
         void d.begin(AGENTS);

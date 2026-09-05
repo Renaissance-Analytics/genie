@@ -137,8 +137,17 @@ export function beginUpgradeDrain(opts: { stuckAfterMs?: number } = {}): Promise
     return agentUpgradeDrain.begin(targets, opts);
 }
 
-/** Abandon the drain, and the restore list with it — nothing was stopped. */
+/**
+ * Abandon the drain, and the restore list with it — nothing was stopped.
+ *
+ * A drain that is no longer RUNNING is left entirely alone, roster included.
+ * By then it has either completed — the upgrade is applying and that list is
+ * the record of everything about to come back — or it was cancelled already.
+ * Clearing unconditionally would make a late click on a disabled-looking button
+ * delete the restore list of an upgrade in flight.
+ */
 export function cancelUpgradeDrain(): void {
+    if (!agentUpgradeDrain.active()) return;
     agentUpgradeDrain.cancel();
     try {
         clearDrainRoster(getDb());
