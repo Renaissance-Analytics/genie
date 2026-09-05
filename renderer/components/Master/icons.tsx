@@ -584,3 +584,17 @@ export const IconSwap = ({ size = 12, ...p }: Props) =>
         p.className,
         p.style,
     );
+/** Two nodes joined by an elbow — Genie's automation Flows (not the GApp
+ *  canvas, which lives behind the app's own chrome). Distinct at 16px from
+ *  IconGraph's triangle of circles, which sits beside it in the header. */
+export const IconFlow = ({ size = 16, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <rect x="3" y="3" width="7.5" height="7.5" rx="2" />
+            <rect x="13.5" y="13.5" width="7.5" height="7.5" rx="2" />
+            <path d="M6.75 10.5v4a2.5 2.5 0 0 0 2.5 2.5h4.25" />
+        </>,
+        p.className,
+        p.style,
+    );

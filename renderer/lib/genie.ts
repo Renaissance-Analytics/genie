@@ -2709,6 +2709,99 @@ export interface LinkAuditEntry {
     candidates: number;
 }
 
+/* ===== Flows — Genie's automation system ============================== */
+
+/** How a run ended. `ran` and `failed` are the only two that executed a body. */
+export type FlowRunOutcome = 'ran' | 'failed' | 'refused' | 'blocked' | 'handoff' | 'error';
+
+/** Who a Flow belongs to and who may see it. */
+export type FlowScope =
+    | { kind: 'system' }
+    | { kind: 'workspace'; workspaceId: string }
+    | { kind: 'gapp'; appId: string };
+
+/** One predicate in a trigger's filter, with its prop resolved to a label. */
+export interface FlowSummaryClause {
+    /** `all` must hold, `any` is a disjunction, `none` must not hold. */
+    group: 'all' | 'any' | 'none';
+    prop: string;
+    propLabel: string;
+    op: string;
+    value: string | number | boolean | readonly (string | number | boolean)[];
+}
+
+export type FlowSummaryTrigger =
+    | { kind: 'manual' }
+    | {
+          kind: 'event';
+          event: string;
+          eventLabel: string;
+          /** False when NOTHING emits this event — the Flow cannot fire on it. */
+          known: boolean;
+          clauses: FlowSummaryClause[];
+      };
+
+/** One finished run, as the manager shows it. */
+export interface FlowRunRecord {
+    runId: string;
+    flowId: string;
+    event?: string;
+    outcome: FlowRunOutcome;
+    reason?: string;
+    startedAt: number;
+    finishedAt: number;
+}
+
+/** What `flows.run()` resolves with — including a refusal and its reason. */
+export interface FlowRunLog {
+    flowId: string;
+    runId: string;
+    event?: string;
+    outcome: FlowRunOutcome;
+    reason?: string;
+    at: number;
+}
+
+/** One Flow, joined with everything the manager's list needs. */
+export interface FlowSummary {
+    id: string;
+    title: string;
+    purpose: string;
+    description?: string;
+    enabled: boolean;
+    scope: FlowScope;
+    /** Who owns it, in words — the workspace's NAME, or that it is gone. */
+    scopeLabel: string;
+    triggers: FlowSummaryTrigger[];
+    manuallyRunnable: boolean;
+    /**
+     * Anything at all could still start it. False for a disabled Flow, one whose
+     * every event trigger is unregistered, and one scoped to a workspace that no
+     * longer exists — the last two look armed and can never run again.
+     */
+    canEverFire: boolean;
+    running: boolean;
+    lastRun?: FlowRunRecord;
+    recipeId: string;
+}
+
+/** One event kind a Flow can trigger on, as the registry declares it. */
+export interface FlowEventDefinition {
+    id: string;
+    label: string;
+    purpose?: string;
+    props: { key: string; type: 'string' | 'number' | 'boolean'; label: string; description?: string }[];
+}
+
+export interface FlowListPayload {
+    flows: FlowSummary[];
+    /** Every event kind that currently has a producer. */
+    events: FlowEventDefinition[];
+    /** Flow ids with a run in flight, right now. */
+    running: string[];
+    busy: boolean;
+}
+
 /** One memory in the Knowledge Graph store. */
 export interface KnowledgeNode {
     id: string;
@@ -3019,11 +3112,15 @@ export interface GenieApi {
     /**
      * fancy-flow workflows owned by a Genie App — Genie's own editing surface.
      *
+     * `gappFlows`, not `flows`: the bare name belongs to Genie's AUTOMATION
+     * system (see `flows` below), matching the `gapp_flows` table this module
+     * was renamed to in v67.
+     *
      * Saving grants nothing. A graph reaching past the app's permissions saves
      * fine, because an author is allowed to be mid-edit; it is refused at RUN.
      * `check` is how the canvas shows that before anyone waits for 3am.
      */
-    flows: {
+    gappFlows: {
         list: (appId: string) => Promise<FlowSummaryView[]>;
         get: (flowId: string) => Promise<FlowView | null>;
         save: (input: {
@@ -3716,6 +3813,26 @@ export interface GenieApi {
         /** Open the standalone Knowledge Graph window (the header button). */
         openWindow: () => Promise<{ ok: boolean }>;
     };
+    /**
+     * Flows — Genie's automation system (a Recipe, the Triggers that start it,
+     * and the Scope it may touch), and the Flow Manager that runs it.
+     *
+     * Not to be confused with `renderer/components/Flows/`, which is a GApp's
+     * node-graph canvas: a different thing at a different scope.
+     */
+    flows: {
+        /** Every Flow, joined with its last run — plus the LIVE snapshot, so a
+         *  window that opened after the last `flowActivity` push is not left
+         *  blank waiting for the next one. */
+        list: () => Promise<FlowListPayload>;
+        /** One Flow's run history, newest first. */
+        runs: (flowId: string, limit?: number) => Promise<FlowRunRecord[]>;
+        /** Arm or disarm. Reconciles the file watchers, not just the row. */
+        setEnabled: (flowId: string, enabled: boolean) => Promise<{ ok: boolean }>;
+        /** Start a Flow by hand. Resolves with the run log — a refusal carries
+         *  the reason, which is the only useful thing to show when one happens. */
+        run: (flowId: string) => Promise<FlowRunLog>;
+    };
     process: {
         /** Start a background Process service runner. */
         start: (id: string) => Promise<{ ok: boolean }>;
@@ -4343,6 +4460,21 @@ export interface GenieApi {
         agentPulse: (
             cb: (payload: { workspaceId: string; active: boolean; bytes: number }) => void,
         ) => () => void;
+        /** A Flow started or finished. `busy` drives the header button's
+         *  animation, `running` the per-row live state, and `finished` carries
+         *  the closing run so an open manager updates that row without a round
+         *  trip. Pushed from the Flow runtime's own start/finish callbacks —
+         *  nothing in this path polls. */
+        flowActivity: (
+            cb: (payload: {
+                running: string[];
+                busy: boolean;
+                finished?: FlowRunRecord;
+            }) => void,
+        ) => () => void;
+        /** The stored Flows changed — armed, disarmed, added or removed. A live
+         *  manager re-reads. Distinct from `flowActivity`, which is about runs. */
+        flowsChanged: (cb: () => void) => () => void;
         /** A workspace was "opened" (tray / menu / MCP) — focus it in the master
          *  window and open its in-app editor scoped to the workspace folder. */
         workspaceOpen: (

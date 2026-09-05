@@ -6883,3 +6883,199 @@ body.gutter-dragging .grid-gutter {
     border-color: var(--agent-ring, var(--agent));
     color: var(--fg-1);
 }
+
+/* ===== Flows — the header button and the manager flyout ================ */
+
+/* The header icon animates while a Flow is RUNNING. Driven by real run state
+   pushed from the Flow runtime (`flows:activity`), never a timer: the movement
+   means a body is executing on this machine right now, and a badge that moved
+   for any other reason would be a badge nobody trusts.
+
+   A slow breathing pulse rather than a spinner. A spinner reads as "the UI is
+   waiting for something", which is not what this says — Genie is fine, and a
+   Flow is working in the background. */
+.gicon.flows-button.is-running {
+    color: var(--accent, #3b82f6);
+    animation: flows-running 1.9s var(--ease-out, ease-in-out) infinite;
+}
+@keyframes flows-running {
+    0%,
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+    50% {
+        opacity: 0.55;
+        transform: scale(0.9);
+    }
+}
+/* Reduced motion still has to SAY something is running — the state is
+   information, not decoration — so the movement goes and the colour stays. */
+@media (prefers-reduced-motion: reduce) {
+    .gicon.flows-button.is-running {
+        animation: none;
+    }
+}
+
+.flowmgr-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 7px;
+    padding: 22px 4px;
+    color: var(--fg-4);
+    max-width: 42ch;
+}
+
+.flowmgr-row {
+    border: 1px solid var(--bd-1, rgba(255, 255, 255, 0.07));
+    border-radius: 8px;
+    padding: 8px 9px;
+    margin-bottom: 6px;
+    background: var(--bg-1, transparent);
+}
+.flowmgr-row.is-running {
+    border-color: rgba(59, 130, 246, 0.45);
+}
+.flowmgr-main {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+}
+.flowmgr-disclose {
+    background: none;
+    border: none;
+    padding: 2px;
+    margin-top: 1px;
+    color: var(--fg-4);
+    cursor: pointer;
+    display: inline-flex;
+    transition: transform var(--dur-fast, 120ms) var(--ease-out, ease);
+}
+.flowmgr-disclose.open {
+    transform: rotate(180deg);
+}
+.flowmgr-identity {
+    flex: 1;
+    min-width: 0;
+}
+.flowmgr-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--fg-1);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+/* The per-row twin of the header animation, so a glance at an open manager and
+   a glance at the header agree about what is happening. */
+.flowmgr-live {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent, #3b82f6);
+    animation: flows-running 1.9s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+    .flowmgr-live {
+        animation: none;
+    }
+}
+.flowmgr-desc {
+    font-size: 11.5px;
+    color: var(--fg-4);
+    margin-top: 2px;
+}
+.flowmgr-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 5px;
+}
+.flowmgr-state {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 3px;
+    flex-shrink: 0;
+}
+.flowmgr-last {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 3px;
+}
+.flowmgr-when {
+    font-size: 10.5px;
+    color: var(--fg-4);
+    white-space: nowrap;
+}
+.flowmgr-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+/* Amber, not red: a Flow that cannot fire is misconfigured, not broken — the
+   same distinction .iw-feedback-note draws. */
+.flowmgr-warn {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    margin-top: 7px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid rgba(251, 191, 36, 0.35);
+    background: rgba(251, 191, 36, 0.08);
+    color: var(--fg-2, #d4d4d8);
+    font-size: 11.5px;
+}
+.flowmgr-result {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-top: 7px;
+    font-size: 11.5px;
+    color: var(--fg-3);
+}
+.flowmgr-history {
+    margin-top: 8px;
+    padding-top: 6px;
+    border-top: 1px solid var(--bd-1, rgba(255, 255, 255, 0.07));
+}
+.flowmgr-clauses {
+    margin: 0 0 4px;
+    padding-left: 16px;
+    font-size: 11.5px;
+    color: var(--fg-3);
+}
+.flowmgr-runs {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.flowmgr-run {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    font-size: 11.5px;
+    color: var(--fg-3);
+}
+.flowmgr-run-event {
+    font-family: var(--mono, ui-monospace, monospace);
+    font-size: 10.5px;
+    color: var(--fg-4);
+}
+/* The reason is the point of the row, so it takes the leftover width and
+   ellipsises rather than pushing the outcome badge out of view. */
+.flowmgr-run-reason {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--fg-4);
+}

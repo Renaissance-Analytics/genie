@@ -26,6 +26,7 @@ import DocsFlyout from '../components/Master/DocsFlyout';
 import IssueWatchFlyout from '../components/Master/IssueWatchFlyout';
 import TaskManagerFlyout from '../components/Master/TaskManagerFlyout';
 import AgentInboxFlyout from '../components/Master/AgentInboxFlyout';
+import FlowManagerFlyout from '../components/Master/FlowManagerFlyout';
 import QuestionInboxFlyout from '../components/Master/QuestionInboxFlyout';
 import AppStoreFlyout from '../components/Master/AppStoreFlyout';
 import AppTray from '../components/Master/AppTray';
@@ -82,6 +83,7 @@ import {
     IconCpu,
     IconMessage,
     IconMailQuestion,
+    IconFlow,
     IconGraph,
     IconMenu,
     IconAlert,
@@ -477,6 +479,34 @@ function MasterInner() {
         };
         seed();
         const off = api().on.agentInboxLag?.((p) => setAgentInboxLag(p.count));
+        return () => {
+            alive = false;
+            off?.();
+        };
+    }, []);
+    // Flows: the manager flyout + whether ANYTHING is running, which is what the
+    // header icon animates on.
+    //
+    // Seed then subscribe, like the AgentInbox lag above. Both halves are
+    // load-bearing: `flows:activity` is a broadcast with no persistence and
+    // nothing replays it, so a Flow that started before this window existed would
+    // leave the icon still while work was in flight. The seed is the answer to
+    // "what is true right now"; the subscription is every change after.
+    //
+    // There is no interval anywhere in this path. A poller would both lag the
+    // thing it reports and keep waking the renderer to be told nothing happened.
+    const [flowsOpen, setFlowsOpen] = useState(false);
+    const [flowsBusy, setFlowsBusy] = useState(false);
+    useEffect(() => {
+        if (!hasGenieBridge()) return;
+        let alive = true;
+        api()
+            .flows.list()
+            .then((r) => {
+                if (alive) setFlowsBusy(r.busy);
+            })
+            .catch(() => {});
+        const off = api().on.flowActivity?.((p) => setFlowsBusy(p.busy));
         return () => {
             alive = false;
             off?.();
@@ -2239,6 +2269,8 @@ function MasterInner() {
                                 void api().knowledge.openWindow().catch(() => {});
                             }
                         }}
+                        onShowFlows={() => setFlowsOpen((o) => !o)}
+                        flowsBusy={flowsBusy}
                         onShowIssueWatch={() =>
                             activeWorkspaceId && openIssueWatch(activeWorkspaceId)
                         }
@@ -2395,6 +2427,7 @@ function MasterInner() {
                 open={agentInboxOpen}
                 onClose={() => setAgentInboxOpen(false)}
             />
+            <FlowManagerFlyout open={flowsOpen} onClose={() => setFlowsOpen(false)} />
             {/* The store lists installed apps AND a ribboned launcher for every
                 workspace that BUILDS one, so a developer finds their own app
                 where they already look for everyone else's. It is handed the
@@ -3292,6 +3325,8 @@ function TitleBar({
     questionCount = 0,
     onShowAppStore,
     onShowKnowledge,
+    onShowFlows,
+    flowsBusy = false,
     onShowIssueWatch,
     issueWatchUnread = 0,
     issueWatchUnknown = false,
@@ -3314,6 +3349,10 @@ function TitleBar({
     questionCount?: number;
     onShowAppStore?: () => void;
     onShowKnowledge?: () => void;
+    onShowFlows?: () => void;
+    /** A Flow is running RIGHT NOW — animates the Flows icon. Pushed from the
+     *  Flow runtime's start/finish callbacks; nothing here polls. */
+    flowsBusy?: boolean;
     onShowIssueWatch?: () => void;
     issueWatchUnread?: number;
     issueWatchUnknown?: boolean;
@@ -3432,6 +3471,23 @@ function TitleBar({
                 onClick={() => onShowKnowledge?.()}
             >
                 <IconGraph size={16} />
+            </button>
+            {/* Flows — Genie's automation. Animates while one is RUNNING, off
+                real run state pushed from main, so the movement means a body is
+                executing on this machine right now and nothing else. */}
+            <button
+                type="button"
+                className={`gicon flows-button${flowsBusy ? ' is-running' : ''}`}
+                title={
+                    flowsBusy
+                        ? 'Flows — a Flow is running now'
+                        : 'Flows — Genie’s automation'
+                }
+                aria-label="Flow Manager"
+                data-running={flowsBusy ? 'true' : undefined}
+                onClick={() => onShowFlows?.()}
+            >
+                <IconFlow size={16} />
             </button>
             <button
                 type="button"

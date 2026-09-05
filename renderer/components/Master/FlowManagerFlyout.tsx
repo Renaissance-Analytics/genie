@@ -1,0 +1,480 @@
+import { useCallback, useEffect, useState } from 'react';
+import { Action, Badge, Switch, Text } from '@particle-academy/react-fancy';
+import { IconAlert, IconChevronDown, IconFlow, IconX } from './icons';
+import {
+    api,
+    hasGenieBridge,
+    type FlowListPayload,
+    type FlowRunLog,
+    type FlowRunRecord,
+    type FlowSummary,
+} from '../../lib/genie';
+import {
+    describeClause,
+    describeOutcome,
+    describeTrigger,
+    relativeTime,
+} from '../../lib/flow-view';
+
+/**
+ * The Flow Manager — the first surface Genie's automation system has ever had.
+ *
+ * `main/flows/` shipped a complete model, store and runtime with no IPC and no
+ * UI: nothing in the app could see a Flow, arm one, or find out whether one had
+ * ever run. This is that surface.
+ *
+ * ## What it is for
+ *
+ * Not a browser. An automation system's manager exists to answer ONE question —
+ * why did, or did not, this happen — and everything here serves it:
+ *
+ *  - the last run's OUTCOME, refusals included, because "the loop guard held it"
+ *    is the answer somebody is looking for and a list of successes hides it;
+ *  - a standing warning on a Flow that CANNOT FIRE, which otherwise looks
+ *    completely normal — enabled, titled, and pointing at an event nothing emits
+ *    or a workspace that has been removed;
+ *  - the run history behind each row, so "it worked yesterday" is checkable.
+ *
+ * ## Live state is pushed, never polled
+ *
+ * The list fetches once on open and then subscribes to `flowActivity` and
+ * `flowsChanged`. The fetch is not redundant with the subscription: a broadcast
+ * has no persistence and nothing replays it, so a window that opened after the
+ * last push would otherwise sit blank until something else happened to run.
+ *
+ * ## Not `renderer/components/Flows/`
+ *
+ * That is a GApp's node-graph canvas — a different thing at a different scope,
+ * reached through `api().gappFlows`.
+ */
+export default function FlowManagerFlyout({
+    open,
+    onClose,
+}: {
+    open: boolean;
+    onClose: () => void;
+}) {
+    const [payload, setPayload] = useState<FlowListPayload | null>(null);
+    const [running, setRunning] = useState<readonly string[]>([]);
+    const [expanded, setExpanded] = useState<string | null>(null);
+    const [history, setHistory] = useState<Record<string, FlowRunRecord[]>>({});
+    const [pending, setPending] = useState<string | null>(null);
+    const [result, setResult] = useState<FlowRunLog | null>(null);
+    const [error, setError] = useState<string | null>(null);
+
+    const reload = useCallback(async () => {
+        if (!hasGenieBridge()) return;
+        try {
+            const next = await api().flows.list();
+            setPayload(next);
+            setRunning(next.running);
+            setError(null);
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+        }
+    }, []);
+
+    // Fetch on open, then subscribe. Both halves are needed — see the note above.
+    useEffect(() => {
+        if (!open) return;
+        void reload();
+    }, [open, reload]);
+
+    useEffect(() => {
+        if (!open || !hasGenieBridge()) return;
+        const offActivity = api().on.flowActivity((p) => {
+            setRunning(p.running);
+            // The closing run rides along, so a finished row updates its outcome
+            // without a round trip.
+            if (p.finished) {
+                const finished = p.finished;
+                setPayload((prev) =>
+                    prev
+                        ? {
+                              ...prev,
+                              flows: prev.flows.map((f) =>
+                                  f.id === finished.flowId ? { ...f, lastRun: finished } : f,
+                              ),
+                          }
+                        : prev,
+                );
+                setHistory((prev) =>
+                    prev[finished.flowId]
+                        ? {
+                              ...prev,
+                              [finished.flowId]: [
+                                  finished,
+                                  ...prev[finished.flowId]!.filter(
+                                      (r) => r.runId !== finished.runId,
+                                  ),
+                              ],
+                          }
+                        : prev,
+                );
+            }
+        });
+        const offChanged = api().on.flowsChanged(() => void reload());
+        return () => {
+            offActivity();
+            offChanged();
+        };
+    }, [open, reload]);
+
+    useEffect(() => {
+        if (!open) return;
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                onClose();
+            }
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [open, onClose]);
+
+    const toggle = async (flow: FlowSummary) => {
+        setPending(flow.id);
+        try {
+            await api().flows.setEnabled(flow.id, !flow.enabled);
+            await reload();
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+        } finally {
+            setPending(null);
+        }
+    };
+
+    const runNow = async (flow: FlowSummary) => {
+        setPending(flow.id);
+        setResult(null);
+        try {
+            // The LOG comes back, not `{ ok }`: "this Flow has no manual
+            // trigger" and "its body needs the wizard" are the useful answers,
+            // and a generic failure would hide both.
+            setResult(await api().flows.run(flow.id));
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+        } finally {
+            setPending(null);
+        }
+    };
+
+    const showHistory = async (flow: FlowSummary) => {
+        if (expanded === flow.id) {
+            setExpanded(null);
+            return;
+        }
+        setExpanded(flow.id);
+        if (history[flow.id]) return;
+        try {
+            const runs = await api().flows.runs(flow.id, 20);
+            setHistory((prev) => ({ ...prev, [flow.id]: runs }));
+        } catch {
+            setHistory((prev) => ({ ...prev, [flow.id]: [] }));
+        }
+    };
+
+    const flows = payload?.flows ?? [];
+    const groups = groupByPurpose(flows);
+    const liveCount = running.length;
+
+    return (
+        <div className={`docs-flyout-root${open ? ' open' : ''}`} aria-hidden={!open}>
+            <div className="docs-scrim" onClick={onClose} />
+            <aside
+                className="docs-flyout iw-flyout"
+                role="dialog"
+                aria-label="Flows"
+                aria-modal="false"
+            >
+                <div className="docs-head">
+                    <span
+                        className="docs-title"
+                        style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+                    >
+                        <IconFlow size={15} />
+                        Flows
+                    </span>
+                    {liveCount > 0 && (
+                        <Badge color="blue" size="sm">
+                            {liveCount} running
+                        </Badge>
+                    )}
+                    <span className="grow" />
+                    <button
+                        type="button"
+                        className="gicon"
+                        onClick={onClose}
+                        title="Close"
+                        aria-label="Close"
+                    >
+                        <IconX />
+                    </button>
+                </div>
+
+                <div className="iw-body">
+                    {!hasGenieBridge() ? (
+                        <div className="iw-muted">This runs inside Genie.</div>
+                    ) : error ? (
+                        <div className="iw-muted">{error}</div>
+                    ) : payload === null ? (
+                        <div className="iw-muted">Reading your Flows…</div>
+                    ) : flows.length === 0 ? (
+                        <EmptyState events={payload.events.length} />
+                    ) : (
+                        groups.map(([purpose, rows]) => (
+                            <div key={purpose}>
+                                <div className="iw-section-head">{purpose}</div>
+                                {rows.map((flow) => (
+                                    <FlowRow
+                                        key={flow.id}
+                                        flow={flow}
+                                        running={running.includes(flow.id)}
+                                        busy={pending === flow.id}
+                                        expanded={expanded === flow.id}
+                                        history={history[flow.id]}
+                                        result={result?.flowId === flow.id ? result : null}
+                                        onToggle={() => void toggle(flow)}
+                                        onRun={() => void runNow(flow)}
+                                        onExpand={() => void showHistory(flow)}
+                                    />
+                                ))}
+                            </div>
+                        ))
+                    )}
+                </div>
+            </aside>
+        </div>
+    );
+}
+
+/**
+ * The honest empty state.
+ *
+ * Genie ships with no Flows and, until genie#394 phase 2, no way to author one —
+ * so this says that, rather than a decorative "nothing here yet" that leaves the
+ * user hunting for an Add button which does not exist.
+ */
+function EmptyState({ events }: { events: number }) {
+    return (
+        <div className="flowmgr-empty">
+            <IconFlow size={22} />
+            <Text size="sm" style={{ fontWeight: 600 }}>
+                No Flows yet
+            </Text>
+            <Text size="xs" className="text-zinc-500">
+                A Flow is a recipe, the triggers that start it, and the scope it may
+                touch. Genie&rsquo;s automation runs them; nothing has been set up on
+                this machine.
+            </Text>
+            <Text size="xs" className="text-zinc-500">
+                {events === 0
+                    ? 'No triggers are registered, so there is nothing for a Flow to react to yet.'
+                    : `${events} trigger${events === 1 ? '' : 's'} ${
+                          events === 1 ? 'is' : 'are'
+                      } registered and ready for one.`}
+            </Text>
+        </div>
+    );
+}
+
+function FlowRow({
+    flow,
+    running,
+    busy,
+    expanded,
+    history,
+    result,
+    onToggle,
+    onRun,
+    onExpand,
+}: {
+    flow: FlowSummary;
+    running: boolean;
+    busy: boolean;
+    expanded: boolean;
+    history?: FlowRunRecord[];
+    result: FlowRunLog | null;
+    onToggle: () => void;
+    onRun: () => void;
+    onExpand: () => void;
+}) {
+    const last = flow.lastRun;
+    const lastDesc = last ? describeOutcome(last.outcome) : null;
+
+    return (
+        <div className={`flowmgr-row${running ? ' is-running' : ''}`}>
+            <div className="flowmgr-main">
+                <button
+                    type="button"
+                    className={`flowmgr-disclose${expanded ? ' open' : ''}`}
+                    onClick={onExpand}
+                    aria-expanded={expanded}
+                    aria-label={expanded ? 'Hide run history' : 'Show run history'}
+                    title="Run history"
+                >
+                    <IconChevronDown size={13} />
+                </button>
+
+                <div className="flowmgr-identity">
+                    <div className="flowmgr-title">
+                        {flow.title}
+                        {running && <span className="flowmgr-live" aria-label="Running now" />}
+                    </div>
+                    {flow.description && (
+                        <div className="flowmgr-desc">{flow.description}</div>
+                    )}
+                    <div className="flowmgr-chips">
+                        <Badge size="sm" variant="soft">
+                            {flow.scopeLabel}
+                        </Badge>
+                        {flow.triggers.map((t, i) => (
+                            <Badge
+                                key={i}
+                                size="sm"
+                                variant="soft"
+                                color={t.kind === 'event' && !t.known ? 'orange' : undefined}
+                            >
+                                {describeTrigger(t)}
+                            </Badge>
+                        ))}
+                    </div>
+                </div>
+
+                <div className="flowmgr-state">
+                    {last && lastDesc ? (
+                        <span className="flowmgr-last" title={last.reason ?? undefined}>
+                            <Badge size="sm" color={lastDesc.color}>
+                                {lastDesc.label}
+                            </Badge>
+                            <span className="flowmgr-when">
+                                {relativeTime(last.finishedAt)}
+                            </span>
+                        </span>
+                    ) : (
+                        <span className="flowmgr-when">Never run</span>
+                    )}
+                </div>
+
+                <div className="flowmgr-actions">
+                    {flow.manuallyRunnable && (
+                        <Action
+                            variant="ghost"
+                            size="xs"
+                            icon="play"
+                            disabled={busy || running}
+                            onClick={onRun}
+                            title="Run now"
+                            aria-label={`Run ${flow.title} now`}
+                        />
+                    )}
+                    <Switch
+                        checked={flow.enabled}
+                        disabled={busy}
+                        onCheckedChange={onToggle}
+                        aria-label={`${flow.enabled ? 'Disable' : 'Enable'} ${flow.title}`}
+                    />
+                </div>
+            </div>
+
+            {/* A Flow that looks armed and cannot fire. The one thing a list
+                would never tell you, so it is stated on the row rather than
+                left to be deduced from a badge colour. */}
+            {flow.enabled && !flow.canEverFire && (
+                <div className="flowmgr-warn">
+                    <IconAlert size={13} />
+                    <span>
+                        This Flow is on but nothing can start it —{' '}
+                        {whyItCannotFire(flow)}.
+                    </span>
+                </div>
+            )}
+
+            {result && (
+                <div className="flowmgr-result">
+                    <Badge size="sm" color={describeOutcome(result.outcome).color}>
+                        {describeOutcome(result.outcome).label}
+                    </Badge>
+                    <span>{result.reason ?? 'The Flow ran to completion.'}</span>
+                </div>
+            )}
+
+            {expanded && (
+                <div className="flowmgr-history">
+                    {flow.triggers.some((t) => t.kind === 'event' && t.clauses.length > 0) && (
+                        <>
+                            <div className="iw-subhead">Conditions</div>
+                            <ul className="flowmgr-clauses">
+                                {flow.triggers.flatMap((t) =>
+                                    t.kind === 'event'
+                                        ? t.clauses.map((c, i) => (
+                                              <li key={`${t.event}-${i}`}>{describeClause(c)}</li>
+                                          ))
+                                        : [],
+                                )}
+                            </ul>
+                        </>
+                    )}
+                    <div className="iw-subhead">Recent runs</div>
+                    {history === undefined ? (
+                        <div className="iw-muted">Reading…</div>
+                    ) : history.length === 0 ? (
+                        <div className="iw-muted">This Flow has never run.</div>
+                    ) : (
+                        <ul className="flowmgr-runs">
+                            {history.map((run) => {
+                                const d = describeOutcome(run.outcome);
+                                return (
+                                    <li key={run.runId} className="flowmgr-run">
+                                        <Badge size="sm" color={d.color}>
+                                            {d.label}
+                                        </Badge>
+                                        <span className="flowmgr-when">
+                                            {relativeTime(run.finishedAt)}
+                                        </span>
+                                        {run.event && (
+                                            <span className="flowmgr-run-event">{run.event}</span>
+                                        )}
+                                        {run.reason && (
+                                            <span className="flowmgr-run-reason">
+                                                {run.reason}
+                                            </span>
+                                        )}
+                                    </li>
+                                );
+                            })}
+                        </ul>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+}
+
+/** The specific reason, never a generic "misconfigured". */
+function whyItCannotFire(flow: FlowSummary): string {
+    if (flow.scope.kind === 'workspace' && flow.scopeLabel.startsWith('A workspace that')) {
+        return 'the workspace it is scoped to no longer exists';
+    }
+    if (flow.scope.kind === 'gapp' && flow.scopeLabel.startsWith('An app that')) {
+        return 'the app that owns it is no longer installed';
+    }
+    const dead = flow.triggers.filter((t) => t.kind === 'event' && !t.known);
+    if (dead.length > 0) {
+        return `nothing emits ${dead
+            .map((t) => (t.kind === 'event' ? t.event : ''))
+            .join(', ')} any more`;
+    }
+    return 'it has no trigger anything can reach';
+}
+
+/** Grouped by purpose, in the order main already sorted them. */
+function groupByPurpose(flows: readonly FlowSummary[]): [string, FlowSummary[]][] {
+    const out = new Map<string, FlowSummary[]>();
+    for (const flow of flows) {
+        const bucket = out.get(flow.purpose);
+        if (bucket) bucket.push(flow);
+        else out.set(flow.purpose, [flow]);
+    }
+    return [...out.entries()];
+}

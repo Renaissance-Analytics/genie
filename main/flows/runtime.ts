@@ -53,6 +53,22 @@ export type FlowRunOutcome =
     /** Something about the Flow itself is wrong (an unevaluatable filter). */
     | 'error';
 
+/**
+ * A body is about to be EXECUTED. Announced by the dispatcher, never inferred.
+ *
+ * Paired with the {@link FlowRunLog} carrying the same `runId`, which is what
+ * lets a live view tell "started and still going" from "never started" — from
+ * logs alone the two are indistinguishable.
+ */
+export interface FlowRunStart {
+    flowId: string;
+    runId: string;
+    /** The event that selected it; absent on a manual run. */
+    event?: string;
+    /** Epoch ms. */
+    at: number;
+}
+
 export interface FlowRunLog {
     flowId: string;
     runId: string;
@@ -71,6 +87,21 @@ export interface FlowRuntimeDeps {
     resolveRecipe: (ref: FlowRecipeRef) => FlowRecipe | null;
     /** Called for every log entry, run or not. Production wires it to the debug log. */
     onLog?: (log: FlowRunLog) => void;
+    /**
+     * Called when a body is about to be EXECUTED — and only then.
+     *
+     * `onLog` fires once per candidate at the end, for runs and refusals alike,
+     * so from logs alone "started and still going" and "never started" look
+     * identical: both are silence. Anything showing live state needs the other
+     * half of the pair, and it has to come from the dispatcher, which is the one
+     * thing that knows a body was entered.
+     *
+     * A Flow stopped at a gate — held by the loop guard, refused by admission,
+     * pointing at a missing recipe, handed off to the wizard — announces
+     * NOTHING. That is the difference between a running indicator and one that
+     * lies.
+     */
+    onRunStart?: (start: FlowRunStart) => void;
     now?: () => number;
     newRunId?: () => string;
 }
@@ -220,6 +251,15 @@ export class FlowRuntime {
         // runs into it would let somebody re-running a Flow by hand quietly
         // suppress the system triggers of the same Flow for the next minute.
         if (event) this.deps.guard.noteRun(flow.id);
+
+        // BEFORE the body, never after: an indicator that lights up once the
+        // work is done is reporting the past as the present.
+        this.deps.onRunStart?.({
+            flowId: flow.id,
+            runId,
+            ...(event ? { event: event.event } : {}),
+            at: this.now(),
+        });
 
         const data = new Map<string, unknown>();
         // Recipe args first, event props second: a prop describes THIS

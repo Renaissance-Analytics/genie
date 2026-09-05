@@ -130,6 +130,16 @@ import { groupPendingByWorkspace, pendingCount } from './ask/inbox';
 import type { ForceAnswer } from './mcp/protocol';
 import { getKnowledgeStore } from './knowledge/store';
 import type { MemoryClass, KnowledgeScopeFilter } from './knowledge/types';
+import {
+    flowActivitySnapshot,
+    flowEventRegistry,
+    flowSummaries,
+    listFlowRuns,
+    pushFlowsChanged,
+    reconcileFlowWatches,
+    runFlowManually,
+    setFlowEnabled,
+} from './flows';
 import type { GenieScope } from './genie-scope';
 import { writeWorkspaceAgentMcp } from './mcp/agent-config';
 import {
@@ -2004,6 +2014,39 @@ export function registerIpcHandlers(): void {
         showKnowledgeWindow();
         return { ok: true };
     });
+
+    // --- Flows (Genie's automation system) -------------------------------
+    // The Flow Manager's whole surface. `main/flows/` shipped with a complete
+    // model, store and runtime and NO ipc — nothing in the app could see a Flow,
+    // let alone arm one — so these are the first callers it has ever had.
+    //
+    // Live run state does NOT come through here. It is pushed on `flows:activity`
+    // from the runtime's own start/finish callbacks (`main/flows/index.ts`), and
+    // `flows:list` returns the current snapshot alongside the Flows so a window
+    // that opened after the last push is not left blank waiting for the next one
+    // — broadcasts have no persistence and nothing replays them.
+    ipcMain.handle('flows:list', () => ({
+        flows: flowSummaries(),
+        events: flowEventRegistry().list(),
+        ...flowActivitySnapshot(),
+    }));
+    ipcMain.handle('flows:runs', (_e, flowId: string, limit?: number) =>
+        listFlowRuns(String(flowId), typeof limit === 'number' ? limit : undefined),
+    );
+    // Arming and disarming reconciles the file watchers, which is the difference
+    // between a disabled Flow that has stopped and one that has merely stopped
+    // ACTING while its watcher still runs — see `reconcileFlowWatches`.
+    ipcMain.handle('flows:set-enabled', (_e, flowId: string, enabled: boolean) => {
+        setFlowEnabled(String(flowId), !!enabled);
+        reconcileFlowWatches();
+        pushFlowsChanged();
+        return { ok: true };
+    });
+    // Returns the run LOG rather than `{ ok }`: a refusal is a real answer here
+    // ("this Flow has no manual trigger", "its body needs the wizard"), and a
+    // surface that showed a generic failure for all of them would be hiding the
+    // one useful sentence.
+    ipcMain.handle('flows:run', async (_e, flowId: string) => runFlowManually(String(flowId)));
 
     // --- Backend projects (fans out across signed-in backends) ----------
     /**
