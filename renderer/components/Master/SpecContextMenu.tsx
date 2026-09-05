@@ -13,6 +13,7 @@ import {
 } from './icons';
 import type { TerminalSpec, WorkspaceRow } from '../../lib/genie';
 import { canResumeTui } from '../../../main/agents/registry';
+import { clampPopoverToViewport } from '../../lib/anchored-popover';
 
 interface Position {
     x: number;
@@ -102,17 +103,16 @@ export default function SpecContextMenu({
         const el = menuRef.current;
         if (!el) return;
         const rect = el.getBoundingClientRect();
-        const margin = 8;
-        let nx = position.x;
-        let ny = position.y;
-        if (nx + rect.width + margin > window.innerWidth) {
-            nx = window.innerWidth - rect.width - margin;
-        }
-        if (ny + rect.height + margin > window.innerHeight) {
-            ny = window.innerHeight - rect.height - margin;
-        }
-        el.style.left = `${Math.max(margin, nx)}px`;
-        el.style.top = `${Math.max(margin, ny)}px`;
+        const { left, top } = clampPopoverToViewport({
+            left: position.x,
+            top: position.y,
+            width: rect.width,
+            height: rect.height,
+            viewportWidth: window.innerWidth,
+            viewportHeight: window.innerHeight,
+        });
+        el.style.left = `${left}px`;
+        el.style.top = `${top}px`;
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 

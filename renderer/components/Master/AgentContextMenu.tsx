@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { IconPlay, IconPin, IconAlert, IconTrash } from './icons';
 import { agentCardMenuItems, type AgentCardMenuItem } from '../../lib/agent-card-menu';
 import type { AgentGridRow } from '../../lib/ams-grid';
+import { clampPopoverToViewport } from '../../lib/anchored-popover';
 
 /**
  * The right-click menu for an agent square — including one that is NOT running.
@@ -11,9 +12,11 @@ import type { AgentGridRow } from '../../lib/ams-grid';
  * nothing. This menu is built from the agent record instead, which is what a
  * stopped agent still has.
  *
- * Dismissal and edge-clamping mirror SpecContextMenu deliberately: two menus on
- * the same surface that close differently is the kind of small inconsistency
- * that reads as breakage.
+ * Dismissal mirrors SpecContextMenu deliberately: two menus on the same surface
+ * that close differently is the kind of small inconsistency that reads as
+ * breakage. Edge-clamping is no longer mirrored but SHARED -- four copies of
+ * it had drifted into three different amounts of the job (genie#416), so it
+ * lives in `lib/anchored-popover` and this file is one of its callers.
  */
 export default function AgentContextMenu({
     position,
@@ -50,17 +53,16 @@ export default function AgentContextMenu({
         const el = menuRef.current;
         if (!el) return;
         const rect = el.getBoundingClientRect();
-        const margin = 8;
-        let nx = position.x;
-        let ny = position.y;
-        if (nx + rect.width + margin > window.innerWidth) {
-            nx = window.innerWidth - rect.width - margin;
-        }
-        if (ny + rect.height + margin > window.innerHeight) {
-            ny = window.innerHeight - rect.height - margin;
-        }
-        el.style.left = `${Math.max(margin, nx)}px`;
-        el.style.top = `${Math.max(margin, ny)}px`;
+        const { left, top } = clampPopoverToViewport({
+            left: position.x,
+            top: position.y,
+            width: rect.width,
+            height: rect.height,
+            viewportWidth: window.innerWidth,
+            viewportHeight: window.innerHeight,
+        });
+        el.style.left = `${left}px`;
+        el.style.top = `${top}px`;
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
