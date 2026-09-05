@@ -29,6 +29,7 @@ import {
     isWorkstationOperator,
     createTerminalSpec,
     updateTerminalSpec,
+    workspaceMcpEnabled,
     workspaceProcessApproval,
     workspaceTerminalApproval,
     workspaceScheduleApproval,
@@ -81,6 +82,7 @@ import {
     renderAgentFile,
 } from '../agents/agent-file';
 import { agentBootPrompt } from '../agents/boot-prompt';
+import { agentRelaunchPrompt } from '../agents/relaunch-prompt';
 import { handoffPath } from '../agents/handoff';
 import {
     diagnoseAgent,
@@ -1913,11 +1915,37 @@ export function restartAgentTerminal(id: string): RestartAgentResult {
         if (!command) return { ok: false, error: `No command configured for agent "${provider}".` };
         const identity = spec.meta.agent_id;
         const preserved = { ...spec.meta };
+        // The operator's ROLE BRIEF and this boot's script, plus the line that
+        // says it was restarted (genie#434). This branch used to pass no
+        // instructions at all AND delete the spec that held them, so the one
+        // agent responsible for repairing the machine came back knowing neither
+        // what it is nor that anything had happened to it — on the surface that
+        // exists precisely for recovery. A teardown is not a resume, so it is
+        // told so: nothing was carried over.
+        const instructions = agentRelaunchPrompt({
+            genieAvailable: !!spec.workspace_id && workspaceMcpEnabled(spec.workspace_id),
+            resumed: false,
+            saved: typeof preserved.agent_instructions === 'string'
+                ? preserved.agent_instructions
+                : null,
+        });
         killTerminalById(id);
         deleteTerminalSpec(id);
         const restarted = createAgentTerminal({
+            // THE SAME SPEC ID, which this branch alone was not doing. Deleting
+            // the spec and creating one with no `id` minted a fresh uuid, and
+            // the operator is recognised BY that id: `onThumbsUp`
+            // (host-core/server-deps.ts) keys on `GENIE_OS_TERMINAL_ID`, and
+            // `~/.gosa`'s MCP config names the endpoint registered for it. So a
+            // restarted operator could not answer the very thumbsUp this
+            // relaunch now asks it for, and its old spec sat orphaned until the
+            // next boot's `obsoleteOsAgentSpecIds` sweep collected it. Deleting
+            // first is what keeps this a FRESH launch rather than a revive —
+            // `createAgentTerminal` decides that on whether a spec already
+            // exists for the id, not on the id itself.
+            id,
             workspaceId: spec.workspace_id ?? '', cwd: spec.cwd, label: spec.label,
-            agentMeta: { agent: provider, command },
+            agentMeta: { agent: provider, command, instructions },
             agentInbox: {
                 purpose: spec.meta.whisper_purpose,
                 scope: spec.meta.whisper_scope,
@@ -1925,7 +1953,17 @@ export function restartAgentTerminal(id: string): RestartAgentResult {
             },
         });
         const fresh = getTerminalSpec(restarted.id);
-        if (fresh) updateTerminalSpec(restarted.id, { meta: { ...preserved, ...fresh.meta, ...(identity ? { agent_id: identity } : {}) } });
+        if (fresh) updateTerminalSpec(restarted.id, { meta: {
+            ...preserved, ...fresh.meta,
+            // The relaunch line is true of THIS launch, not of the agent. It
+            // rides the command line and stops there; the durable field stays
+            // the boot script, or it would compound on every restart and outlive
+            // the restart it describes.
+            ...(typeof preserved.agent_instructions === 'string'
+                ? { agent_instructions: preserved.agent_instructions }
+                : {}),
+            ...(identity ? { agent_id: identity } : {}),
+        } });
         broadcastTerminalSpecsChanged();
         return relaunchInFlight(id, restarted.id, provider, restarted.command ?? command);
     }

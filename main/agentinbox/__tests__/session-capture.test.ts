@@ -256,6 +256,52 @@ describe('agentRelaunchDecision — fresh vs continue on agent-terminal reattach
     });
 });
 
+/**
+ * genie#434 — the relaunch PROMPT is chosen from the relaunch COMMAND.
+ *
+ * `maybeRelaunchAgent` has to say a different thing to an agent whose
+ * conversation survived than to one starting empty ("pick up where you left
+ * off" names a place the second one cannot see), and the only evidence it holds
+ * at that moment is the command the decision produced. It asks
+ * `isResumingCommand` — the function `renderAgentLaunch` already consults — so
+ * the two cannot end up disagreeing about what a resume looks like. These pin
+ * that coupling: every shape `agentRelaunchDecision` can emit, classified.
+ */
+describe('agentRelaunchDecision output, as isResumingCommand reads it (genie#434)', () => {
+    const claude = (extra: Record<string, string> = {}) => ({
+        meta: { agent: 'claude', agent_command: 'claude', ...extra },
+    });
+
+    it('classifies an exact --resume as resuming', () => {
+        const d = agentRelaunchDecision(claude({ chat_session_id: 'sess-1' }), false);
+        expect(isResumingCommand('claude', d!.command)).toBe(true);
+    });
+
+    it('classifies the --continue fallback as resuming — the conversation survives it', () => {
+        const d = agentRelaunchDecision(claude({ chat_session_id: 'drifted' }), false, () => false);
+        expect(d!.command).toBe('claude --continue');
+        expect(isResumingCommand('claude', d!.command)).toBe(true);
+    });
+
+    it('classifies a freshly-minted --session-id launch as NOT resuming', () => {
+        // The one that matters: `--session-id` is CREATE, and reading it as a
+        // resume would tell an agent with no context to carry on where it left
+        // off.
+        const d = agentRelaunchDecision(claude(), false);
+        expect(d!.command).toMatch(/--session-id/);
+        expect(isResumingCommand('claude', d!.command)).toBe(false);
+    });
+
+    it('classifies the codex resume subcommand as resuming, and a bare launch as not', () => {
+        const resumed = agentRelaunchDecision(
+            { meta: { agent: 'codex', agent_command: 'codex --yolo', chat_session_id: 'x' } },
+            false,
+        );
+        expect(isResumingCommand('codex', resumed!.command)).toBe(true);
+        expect(isResumingCommand('codex', 'codex --yolo')).toBe(false);
+    });
+});
+
 describe('resolveRestartCommand — graceful restart, never a phantom --resume', () => {
     const claude = (extra: Record<string, string> = {}) => ({
         meta: { agent: 'claude', agent_command: 'claude', ...extra },
