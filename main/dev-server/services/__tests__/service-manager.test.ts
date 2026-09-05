@@ -256,7 +256,7 @@ describe('one engine, two workspaces', () => {
                 {
                     a: {
                         'ws-a': {
-                            engine: 'reverb',
+                            engine: 'websockets',
                             version: '1',
                             dedicated: false,
                             password: 'workspace_websocket_password_0123456789',
@@ -311,24 +311,24 @@ describe('one engine, two workspaces', () => {
         });
         expect(await manager.logs('ws-a')).toBe('Sockudo ready');
         expect(manager.hostBrowserRoutes()).toEqual([
-            { genName: 'reverb.ws-a.gen', port: 49_123 },
+            { genName: 'websockets.ws-a.gen', port: 49_123 },
         ]);
         expect(manager.genSites()).toEqual([
             {
                 workspaceId: 'a',
-                siteId: 'service-reverb-ws-a',
-                genName: 'reverb.ws-a.gen',
-                hostname: 'reverb.ws-a.gen',
+                siteId: 'service-websockets-ws-a',
+                genName: 'websockets.ws-a.gen',
+                hostname: 'websockets.ws-a.gen',
                 scheme: 'http',
                 port: 49_123,
                 loopback: '127.0.0.1',
             },
         ]);
-        expect(await manager.engineAction({ recordKey: 'reverb-1', action: 'logs' })).toEqual({
+        expect(await manager.engineAction({ recordKey: 'websockets-1', action: 'logs' })).toEqual({
             ok: true,
             logs: 'Sockudo ready',
         });
-        expect(await manager.engineAction({ recordKey: 'reverb-1', action: 'stop' })).toEqual({
+        expect(await manager.engineAction({ recordKey: 'websockets-1', action: 'stop' })).toEqual({
             ok: true,
         });
         expect(hostStops).toBe(1);
@@ -851,10 +851,10 @@ describe('the machine-level view', () => {
         expect(rows.length).toBeGreaterThan(0);
         expect(
             rows
-                .filter((row) => row.engine !== 'reverb')
+                .filter((row) => row.engine !== 'websockets')
                 .every((row) => row.state === 'absent' && !row.installed),
         ).toBe(true);
-        expect(rows.find((row) => row.engine === 'reverb')).toMatchObject({
+        expect(rows.find((row) => row.engine === 'websockets')).toMatchObject({
             state: 'stopped',
             installed: true,
         });

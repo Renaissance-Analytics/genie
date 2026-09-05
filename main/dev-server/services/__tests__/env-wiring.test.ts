@@ -160,10 +160,10 @@ describe('namespace engines', () => {
     });
 });
 
-describe('reverb (websockets)', () => {
-    const reverb = (over: Partial<ProvisionedService> = {}): ProvisionedService => ({
-        engine: 'reverb',
-        host: 'genie-svc-reverb-1',
+describe('websockets (Sockudo)', () => {
+    const sockudo = (over: Partial<ProvisionedService> = {}): ProvisionedService => ({
+        engine: 'websockets',
+        host: 'genie-svc-websockets-1',
         port: 8080,
         slice: { identifier: 'ws_acme', dnsName: 'ws-acme', password: 'unused' },
         adminPassword: 'master-secret',
@@ -171,7 +171,7 @@ describe('reverb (websockets)', () => {
     });
 
     it('gives the backend the CONTAINER connection + a per-workspace app whose secret is derived from the master', () => {
-        const env = serviceEnv([reverb()]);
+        const env = serviceEnv([sockudo()]);
         // The app secret is HMAC(master, app_id) — the SAME formula the shared
         // genie-reverb server uses, so the two agree without any registration.
         const derived = createHmac('sha256', 'master-secret').update('ws_acme').digest('hex');
@@ -182,16 +182,36 @@ describe('reverb (websockets)', () => {
             REVERB_APP_SECRET: derived,
             // BACKEND path: container name + container port over http — never the
             // published loopback (the same rule every other engine follows).
-            REVERB_HOST: 'genie-svc-reverb-1',
+            REVERB_HOST: 'genie-svc-websockets-1',
             REVERB_PORT: '8080',
             REVERB_SCHEME: 'http',
         });
     });
 
+    it('keeps REVERB_* as DEPRECATED ALIASES beside the canonical GENIE_WS_* names', () => {
+        // Renaming the engine must not break a single hosted app. A Laravel app
+        // reads REVERB_* because that is Laravel's reverb-driver contract, not
+        // because Genie chose the word — so those names keep being emitted, with
+        // the same values, and BROADCAST_CONNECTION keeps selecting that driver.
+        // GENIE_WS_* is the vendor-neutral name a non-Laravel app can read.
+        const env = serviceEnv([sockudo()]);
+        expect(env.GENIE_WS_HOST).toBe('genie-svc-websockets-1');
+        expect(env.GENIE_WS_PORT).toBe('8080');
+        expect(env.GENIE_WS_SCHEME).toBe('http');
+        expect(env.GENIE_WS_APP_ID).toBe('ws_acme');
+        expect(env.GENIE_WS_APP_KEY).toBe('ws_acme');
+        expect(env.GENIE_WS_APP_SECRET).toBe(env.REVERB_APP_SECRET);
+        // Alias and canonical never disagree — one connection, two spellings.
+        expect(env.REVERB_HOST).toBe(env.GENIE_WS_HOST);
+        expect(env.REVERB_PORT).toBe(env.GENIE_WS_PORT);
+        expect(env.REVERB_SCHEME).toBe(env.GENIE_WS_SCHEME);
+        expect(env.BROADCAST_CONNECTION).toBe('reverb');
+    });
+
     it('derives DIFFERENT secrets per workspace from the same master, so one cannot forge another', () => {
         const secretFor = (id: string) =>
             serviceEnv([
-                reverb({ slice: { identifier: id, dnsName: id.replace(/_/g, '-'), password: 'x' } }),
+                sockudo({ slice: { identifier: id, dnsName: id.replace(/_/g, '-'), password: 'x' } }),
             ]).REVERB_APP_SECRET;
         expect(secretFor('ws_a')).not.toBe(secretFor('ws_b'));
     });

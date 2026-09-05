@@ -15,7 +15,7 @@ import {
     workspaceDnsName,
     workspaceSqlIdentifier,
 } from './catalog';
-import { reverbAppSecret, serviceEnv } from './env-wiring';
+import { websocketAppSecret, serviceEnv } from './env-wiring';
 import { buildEngineInventory, inventoryImages } from './inventory';
 import { provisionSteps, runProvisionSteps } from './provision';
 import { planServicePorts, preferredServicePort } from './service-ports';
@@ -150,7 +150,7 @@ export interface DevServiceManagerDeps {
     /** Which runtime, and is it usable. Called per action, so installing Docker
      *  mid-session works without a restart. */
     resolveRuntime: () => Promise<ResolvedRuntimeLike>;
-    /** Bundled Host-native Pusher service. Required for the `reverb` engine. */
+    /** Bundled Host-native Pusher service. Required for the `websockets` engine. */
     hostWebSockets?: {
         acquire: (app: { id: string; key: string; secret: string }) => Promise<{
             processId: string;
@@ -613,7 +613,7 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
                 const process = await host.acquire({
                     id: slice.identifier,
                     key: slice.identifier,
-                    secret: reverbAppSecret(admin.password, slice.identifier),
+                    secret: websocketAppSecret(admin.password, slice.identifier),
                 });
                 if (!process.ready) {
                     return failed(workspaceId, serviceId, config, `${spec.label} did not become ready.`);
@@ -1381,10 +1381,10 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
         hostBrowserRoutes() {
             const routes = new Map<string, HostSiteRoute>();
             for (const entry of live.values()) {
-                if (!entry.hostNative || entry.config.engine !== 'reverb' || !entry.ready) continue;
+                if (!entry.hostNative || entry.config.engine !== 'websockets' || !entry.ready) continue;
                 const endpoint = entry.endpoints.find((candidate) => candidate.name === 'websocket');
                 if (!endpoint?.hostPort) continue;
-                const genName = `reverb.${entry.slice.dnsName}.gen`;
+                const genName = `websockets.${entry.slice.dnsName}.gen`;
                 routes.set(genName, { genName, port: endpoint.hostPort });
             }
             return [...routes.values()].sort((a, b) => a.genName.localeCompare(b.genName));
@@ -1393,13 +1393,13 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
         genSites() {
             const sites: DevGenSite[] = [];
             for (const entry of live.values()) {
-                if (!entry.hostNative || entry.config.engine !== 'reverb' || !entry.ready) continue;
+                if (!entry.hostNative || entry.config.engine !== 'websockets' || !entry.ready) continue;
                 const endpoint = entry.endpoints.find((candidate) => candidate.name === 'websocket');
                 if (!endpoint?.hostPort) continue;
-                const genName = `reverb.${entry.slice.dnsName}.gen`;
+                const genName = `websockets.${entry.slice.dnsName}.gen`;
                 sites.push({
                     workspaceId: entry.workspaceId,
-                    siteId: `service-reverb-${entry.slice.dnsName}`,
+                    siteId: `service-websockets-${entry.slice.dnsName}`,
                     genName,
                     hostname: genName,
                     scheme: 'http',
