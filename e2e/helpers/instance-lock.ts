@@ -185,10 +185,11 @@ export async function awaitInstanceExit(file: string, opts: WaitOptions = {}): P
     while (Date.now() < deadline) {
         await delay(pollMs);
         // The cheap probe inside the loop: once the pid is established as OURS,
-        // its disappearance is all we are waiting for.
-        try {
-            process.kill(rec.pid, 0);
-        } catch {
+        // its disappearance is all we are waiting for. Via `pidAlive` rather than
+        // a bare `kill(pid, 0)` in a try/catch — that reads EPERM ("alive, and
+        // not yours") as gone, which is the one wrong answer here, since it would
+        // wave through a launch on top of a process that is still running.
+        if (!pidAlive(rec.pid)) {
             clearInstanceRecord(file, rec.pid);
             return;
         }
