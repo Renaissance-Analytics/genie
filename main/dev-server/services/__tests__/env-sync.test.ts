@@ -302,6 +302,29 @@ describe('withoutManagedServiceKeys', () => {
         expect(kept).toEqual({ TYNN_AGENT_TOKEN: 'rpk_x' });
     });
 
+    it('drops the VITE_ MIRROR of a managed key — a stale export outranks the file it shadows', () => {
+        // Genie now writes the BROWSER endpoint into the same `.env` (the wss fix:
+        // `VITE_*` is a build-time substitution, so the file is the only thing a
+        // `vite build` reads). The workspace `.env` is ALSO loaded wholesale into
+        // every terminal, and Vite prioritises an inline `process.env.VITE_*` over
+        // the file — so a terminal opened before the endpoint moved would re-export
+        // the OLD host and a build in it would bake the old address in, silently.
+        //
+        // That is precisely the bug this filter exists to prevent, reappearing
+        // under a prefixed name. `VITE_X` is managed exactly when `X` is.
+        const kept = withoutManagedServiceKeys(
+            {
+                TYNN_AGENT_TOKEN: 'rpk_x',
+                VITE_REVERB_HOST: 'stale.gen',
+                VITE_REVERB_PORT: '443',
+                VITE_APP_NAME: 'mine',
+            },
+            { REVERB_HOST: 'reverb.ws-a.gen', REVERB_PORT: '443' },
+        );
+        // The user's own VITE_ variable is NOT Genie's to withhold.
+        expect(kept).toEqual({ TYNN_AGENT_TOKEN: 'rpk_x', VITE_APP_NAME: 'mine' });
+    });
+
     it('drops a managed key even when the FILE has gone stale', () => {
         // The stale value is the whole danger — dropping only exact matches would
         // export precisely the wrong ports.

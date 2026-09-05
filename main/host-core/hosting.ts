@@ -218,7 +218,31 @@ export function buildHostingDeps(ports: HostingPorts): HostingDeps {
         onServiceEnvChanged: createServiceEnvSync({
             workspaceFor: ports.workspaceFor,
             devSitesFor: ports.devSitesFor,
-            hostEnvFor: ports.devServiceHostEnvFor,
+            // The BROWSER endpoint belongs in the FILE, not only in a site's
+            // process env. `VITE_*` is a BUILD-TIME substitution: the bundle that
+            // reaches a browser is produced by `vite build`, a SEPARATE process
+            // (an agent, a person in a terminal, a deploy step) that never
+            // inherits a site's environment — and which `env-wiring.ts`'s terminal
+            // allowlist deliberately strips of these names. So injecting
+            // them at the site layer alone reached the dev server and nothing
+            // else, and an app served from `public/build` shipped whatever its
+            // `.env` said at build time.
+            //
+            // Which was wrong in both directions. Laravel's stock
+            // `VITE_REVERB_HOST="${REVERB_HOST}"` expands from the very block
+            // written here, baking `wss://127.0.0.1:<published port>` into the
+            // bundle — where nothing terminates TLS, and which an https `.gen`
+            // page cannot opt out of (the Pusher client reads the scheme from the
+            // PAGE protocol before it ever looks at `forceTLS`). Delete those
+            // lines instead and the bundle bakes `wsHost: undefined`.
+            //
+            // Writing the browser endpoint here settles it: `upsertEnvBlock`
+            // rewrites the key WHERE IT ALREADY IS, so the stock expansion is
+            // replaced in place and no second copy can shadow it. The
+            // server-to-server `REVERB_*` values are untouched and stay on
+            // loopback http, which is correct for them.
+            hostEnvFor: (workspaceId) =>
+                browserWebSocketEnv(workspaceId, ports.devServiceHostEnvFor(workspaceId)),
             write: applyEnvBlock,
             ...(ports.onServiceEnvProblem ? { onProblem: ports.onServiceEnvProblem } : {}),
         }),

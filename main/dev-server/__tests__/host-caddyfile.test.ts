@@ -37,11 +37,47 @@ describe('buildHostCaddyfile', () => {
 
     it('carries the beta.236 https-forcing — body replace + Location rewrite — per site', () => {
         const cf = buildHostCaddyfile([{ host: 'app.gen', port: 4000 }], TLS);
-        expect(cf).toContain('replace {');
+        expect(cf).toMatch(/replace @[A-Za-z0-9_]+ \{/);
         expect(cf).toContain('stream');
         expect(cf).toContain('"http://app.gen" "https://app.gen"');
         expect(cf).toContain('header_up -Accept-Encoding');
         expect(cf).toContain('header_down Location "^http:" "https:"');
+    });
+
+    /**
+     * A `.gen` page opened a WebSocket, the socket OPENED, and then no frame ever
+     * arrived — Echo sat at "unavailable" forever, which reads exactly like a
+     * broken upgrade and is not one.
+     *
+     * Measured on this machine against a real browser, four ways. The body
+     * `replace` and HTTP/2 are BOTH necessary; neither alone does it:
+     *
+     *   h1 + replace      -> OPEN + frame
+     *   h1 + no replace   -> OPEN + frame
+     *   h2 + replace      -> OPEN, then SILENT   <- the bug
+     *   h2 + no replace   -> OPEN + frame
+     *
+     * h2 is not an edge case here. Every `.gen` name shares ONE leaf certificate
+     * on ONE address, so Chromium COALESCES a WebSocket to `reverb.<ws>.gen` onto
+     * the h2 connection it already holds for the page and sends it as an Extended
+     * CONNECT stream. The same applies to a site's OWN same-origin `wss://` —
+     * Vite HMR, or Echo pointed at the app's own host.
+     *
+     * So the rewriter must never see an upgraded connection. It has nothing to do
+     * on one: there is no HTML body with self-links inside a WebSocket.
+     */
+    it('keeps the body rewriter off WebSocket upgrades — over h2 it swallows every frame', () => {
+        const cf = buildHostCaddyfile([{ host: 'app.gen', port: 4000 }], TLS);
+        // An h1 upgrade carries `Connection: Upgrade`. An h2 WebSocket carries no
+        // such header — it is a CONNECT — so BOTH have to be excluded or the h2
+        // case (the broken one) sails straight through the matcher.
+        expect(cf).toContain('not header Connection *Upgrade*');
+        expect(cf).toContain('not method CONNECT');
+        // `replace` runs BEHIND that matcher, never unconditionally.
+        expect(cf).toMatch(/replace @[A-Za-z0-9_]+ \{/);
+        expect(cf).not.toMatch(/replace \{/);
+        // The rewrite itself is unchanged for ordinary responses.
+        expect(cf).toContain('"http://app.gen" "https://app.gen"');
     });
 
     it('rewrites the upstream Host when a site pins one', () => {
