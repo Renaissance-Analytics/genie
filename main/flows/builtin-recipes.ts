@@ -24,7 +24,7 @@ import fsp from 'node:fs/promises';
 import fs from 'node:fs';
 import path from 'node:path';
 import { FILE_ADDED_EVENT } from './file-source';
-import type { FlowRecipe, FlowRunContext } from './types';
+import type { FlowRecipe, FlowRecipeRef, FlowRunContext } from './types';
 
 export const RELOCATE_FILE_RECIPE_ID = 'genie.relocate-file';
 
@@ -184,6 +184,39 @@ export const relocateFileRecipe: FlowRecipe = {
     // files they are. Anything arming this shows this sentence first.
     consequence:
         'Moves files out of your workspace into an untracked folder, without asking again.',
+    purpose: 'Files',
+    // What `relocateFile` above reads off `ctx`, said out loud. The two
+    // `fromEvent` inputs are the props a file event carries; declaring them is
+    // what stops somebody authoring a manual-only Flow on this body, whose Run
+    // button could only ever throw at `requireString`.
+    inputs: [
+        {
+            key: 'workspacePath',
+            type: 'string',
+            label: 'Workspace root',
+            description: 'The workspace the file is in. A file event supplies this.',
+            required: true,
+            fromEvent: true,
+        },
+        {
+            key: 'relPath',
+            type: 'string',
+            label: 'File',
+            description:
+                'The file to move, relative to the workspace root. A file event supplies this.',
+            required: true,
+            fromEvent: true,
+        },
+        {
+            key: RELOCATION_DIR_ARG,
+            type: 'string',
+            label: 'Move files into',
+            description:
+                'A folder inside the workspace. It is created if it does not exist, and ' +
+                'ignores its own contents so the files stay untracked.',
+            default: DEFAULT_RELOCATION_DIR,
+        },
+    ],
     steps: [
         {
             type: 'task',
@@ -198,3 +231,15 @@ export const relocateFileRecipe: FlowRecipe = {
 export const BUILT_IN_FLOW_RECIPES: ReadonlyMap<string, FlowRecipe> = new Map([
     [relocateFileRecipe.id, relocateFileRecipe],
 ]);
+
+/**
+ * A Flow's stored reference resolved to the body it names.
+ *
+ * One function rather than the same `.get(ref.recipeId) ?? null` written at each
+ * caller: the runtime resolves a body to RUN it and the store resolves one to
+ * validate against, and those two must never disagree about which recipe an id
+ * means.
+ */
+export function resolveBuiltInRecipe(ref: FlowRecipeRef): FlowRecipe | null {
+    return BUILT_IN_FLOW_RECIPES.get(ref.recipeId) ?? null;
+}

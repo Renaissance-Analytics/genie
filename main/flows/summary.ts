@@ -82,6 +82,13 @@ export interface FlowSummary {
     /** The recipe id this Flow's body resolves to. */
     recipeId: string;
     /**
+     * The standing values stored for that body's inputs.
+     *
+     * Carried so EDITING a Flow shows what it was configured with rather than
+     * an empty box that silently clears the setting on save.
+     */
+    args?: Readonly<Record<string, FlowPropValue>>;
+    /**
      * What arming this Flow will DO, in its recipe's own words. Absent when the
      * body declares none — which renders as silence, never as a reassurance.
      */
@@ -202,6 +209,7 @@ export function summariseFlows(
                 running: running.has(flow.id),
                 ...(lastRun ? { lastRun } : {}),
                 recipeId: flow.recipe.recipeId,
+                ...(flow.recipe.args ? { args: flow.recipe.args } : {}),
                 ...(consequence ? { consequence } : {}),
             };
         });

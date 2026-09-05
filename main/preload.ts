@@ -1321,6 +1321,19 @@ const api = {
             ipcRenderer.invoke('flows:set-enabled', flowId, enabled),
         /** Start a Flow by hand. Resolves with the run log — refusals included. */
         run: (flowId: string) => ipcRenderer.invoke('flows:run', flowId),
+        /**
+         * Create or update a Flow.
+         *
+         * A draft has no `enabled`: a new Flow is always created DISARMED, and
+         * arming it is a separate act with a confirmation in front of it that
+         * states, in the recipe's own words, what it will do.
+         *
+         * Resolves with `{ ok: false, errors }` rather than rejecting — the
+         * reasons ARE the surface, and an exception string would strand them.
+         */
+        save: (draft: unknown) => ipcRenderer.invoke('flows:save', draft),
+        /** Remove a Flow and its run history. */
+        remove: (flowId: string) => ipcRenderer.invoke('flows:delete', flowId),
     },
 
     files: {

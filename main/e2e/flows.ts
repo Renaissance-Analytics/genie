@@ -32,6 +32,15 @@ import { broadcastLocal } from '../remote';
 export const E2E_MANUAL_FLOW_ID = 'e2e-flow-manual';
 /** A Flow whose trigger event NOTHING emits — the "cannot fire" warning. */
 export const E2E_DEAD_FLOW_ID = 'e2e-flow-dead';
+/**
+ * The title the authoring spec types into the editor.
+ *
+ * Shared so the seed can clear it: the E2E profile is reused across runs, and a
+ * spec that crashed between creating and deleting would otherwise leave a
+ * second row with the same title behind — which makes the NEXT run's row
+ * locator ambiguous and fails a spec that has nothing wrong with it.
+ */
+export const E2E_AUTHORED_FLOW_TITLE = 'Made in the manager';
 
 export interface FlowsFixture {
     manualFlowId: string;
@@ -51,11 +60,12 @@ function seedFlow(
     },
 ): void {
     const now = new Date().toISOString();
-    // Written straight to the table rather than through `upsertFlow`: the dead
-    // Flow below names an event nothing emits, which the store REFUSES at the
-    // write (correctly — that gate is what stops one being created). The row it
-    // cannot create is exactly the row the manager has to warn about, because a
-    // Flow goes dead when its producer disappears LATER.
+    // Written straight to the table rather than through `upsertFlow`, because
+    // the store REFUSES both of these — correctly, and that is the point. The
+    // dead one names an event nothing emits; the manual one gives
+    // `genie.relocate-file` no file to act on. Each is a row the manager has to
+    // handle and the editor must never be able to create: a Flow goes dead when
+    // its producer disappears LATER, not when it is written.
     d.prepare(
         `INSERT INTO flows (id, title, purpose, description, scope_json, triggers_json,
                             recipe_json, enabled, created_at, updated_at)
@@ -84,6 +94,8 @@ export function seedFlowsE2E(): FlowsFixture {
         E2E_MANUAL_FLOW_ID,
         E2E_DEAD_FLOW_ID,
     );
+    // Anything a previous authoring run left behind, for the reason above.
+    d.prepare('DELETE FROM flows WHERE title = ?').run(E2E_AUTHORED_FLOW_TITLE);
 
     seedFlow(d, {
         id: E2E_MANUAL_FLOW_ID,

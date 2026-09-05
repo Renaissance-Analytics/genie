@@ -133,12 +133,18 @@ import type { MemoryClass, KnowledgeScopeFilter } from './knowledge/types';
 import {
     flowActivitySnapshot,
     flowEventRegistry,
+    FLOW_FILTER_OPERATORS,
+    flowRecipeCatalogue,
+    flowScopeChoices,
     flowSummaries,
     listFlowRuns,
     pushFlowsChanged,
     reconcileFlowWatches,
+    removeFlow,
     runFlowManually,
+    saveFlowDraft,
     setFlowEnabled,
+    type FlowDraft,
 } from './flows';
 import type { GenieScope } from './genie-scope';
 import { writeWorkspaceAgentMcp } from './mcp/agent-config';
@@ -2025,9 +2031,18 @@ export function registerIpcHandlers(): void {
     // `flows:list` returns the current snapshot alongside the Flows so a window
     // that opened after the last push is not left blank waiting for the next one
     // — broadcasts have no persistence and nothing replays them.
+    //
+    // The payload carries everything the EDITOR needs alongside everything the
+    // list needs — the recipe catalogue, the event kinds, the workspaces and
+    // apps a Flow can be scoped to. One fetch rather than four, and the names
+    // in the editor are then the same names `scopeLabel` used in the list,
+    // resolved by the same code.
     ipcMain.handle('flows:list', () => ({
         flows: flowSummaries(),
         events: flowEventRegistry().list(),
+        recipes: flowRecipeCatalogue(),
+        operators: FLOW_FILTER_OPERATORS,
+        ...flowScopeChoices(),
         ...flowActivitySnapshot(),
     }));
     ipcMain.handle('flows:runs', (_e, flowId: string, limit?: number) =>
@@ -2047,6 +2062,16 @@ export function registerIpcHandlers(): void {
     // surface that showed a generic failure for all of them would be hiding the
     // one useful sentence.
     ipcMain.handle('flows:run', async (_e, flowId: string) => runFlowManually(String(flowId)));
+    // Create and edit, for the manager's editor and for an agent alike. Returns
+    // the ERRORS rather than throwing: "nothing emits files:teleported" and
+    // "this body needs a file the trigger does not carry" are the whole point of
+    // validating at the write, and an exception string would strand them in a
+    // console nobody is reading.
+    //
+    // A new Flow always comes back DISARMED, whatever the caller sent — there is
+    // no `enabled` on a draft to send. See `main/flows/authoring.ts`.
+    ipcMain.handle('flows:save', (_e, draft: FlowDraft) => saveFlowDraft(draft));
+    ipcMain.handle('flows:delete', (_e, flowId: string) => removeFlow(String(flowId)));
 
     // --- Backend projects (fans out across signed-in backends) ----------
     /**

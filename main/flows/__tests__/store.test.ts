@@ -12,11 +12,18 @@
  *
  * Exercised against a real in-memory better-sqlite3 — migrations and SQL run for
  * real, so the fixture cannot be laxer than production.
+ *
+ * `validateFlow` itself lives in `authoring.ts` — deciding what may BECOME a
+ * Flow is the authoring gate, and the store's job is to refuse anything it
+ * rejects. Both halves are exercised here, because the write is where the rule
+ * has to hold.
  */
 
 import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { runMigrations } from '../../db';
+import { validateFlow } from '../authoring';
+import { resolveBuiltInRecipe } from '../builtin-recipes';
 import { createFlowEventRegistry } from '../events';
 import {
     deleteFlowIn,
@@ -24,7 +31,6 @@ import {
     listFlowsIn,
     setFlowEnabledIn,
     upsertFlowIn,
-    validateFlow,
 } from '../store';
 import type { Flow, FlowScope } from '../types';
 
@@ -36,6 +42,8 @@ function db() {
 }
 
 const registry = createFlowEventRegistry();
+/** The real catalogue: a Flow is judged against the body it actually names. */
+const resolve = resolveBuiltInRecipe;
 
 function flow(over: Partial<Flow> = {}): Flow {
     return {
@@ -45,7 +53,6 @@ function flow(over: Partial<Flow> = {}): Flow {
         scope: { kind: 'workspace', workspaceId: 'ws-1' },
         enabled: true,
         triggers: [
-            { kind: 'manual' },
             {
                 kind: 'event',
                 event: 'files:added',
@@ -60,22 +67,22 @@ function flow(over: Partial<Flow> = {}): Flow {
 describe('the flows table', () => {
     it('round-trips a Flow with all of its parts intact', () => {
         const d = db();
-        upsertFlowIn(d, flow(), registry);
+        upsertFlowIn(d, flow(), registry, resolve);
         const back = getFlowIn(d, 'w1');
         expect(back).toEqual(flow());
     });
 
     it('updates in place rather than accumulating rows', () => {
         const d = db();
-        upsertFlowIn(d, flow(), registry);
-        upsertFlowIn(d, flow({ title: 'Renamed' }), registry);
+        upsertFlowIn(d, flow(), registry, resolve);
+        upsertFlowIn(d, flow({ title: 'Renamed' }), registry, resolve);
         expect(listFlowsIn(d)).toHaveLength(1);
         expect(getFlowIn(d, 'w1')?.title).toBe('Renamed');
     });
 
     it('disables without deleting, because that is what a pause is', () => {
         const d = db();
-        upsertFlowIn(d, flow(), registry);
+        upsertFlowIn(d, flow(), registry, resolve);
         setFlowEnabledIn(d, 'w1', false);
         expect(getFlowIn(d, 'w1')?.enabled).toBe(false);
         setFlowEnabledIn(d, 'w1', true);
@@ -84,7 +91,7 @@ describe('the flows table', () => {
 
     it('deletes', () => {
         const d = db();
-        upsertFlowIn(d, flow(), registry);
+        upsertFlowIn(d, flow(), registry, resolve);
         deleteFlowIn(d, 'w1');
         expect(getFlowIn(d, 'w1')).toBeNull();
         expect(listFlowsIn(d)).toEqual([]);
@@ -92,9 +99,9 @@ describe('the flows table', () => {
 
     it('lists grouped by purpose then title, which is how the menu will read', () => {
         const d = db();
-        upsertFlowIn(d, flow({ id: 'b', purpose: 'Files', title: 'Zebra' }), registry);
-        upsertFlowIn(d, flow({ id: 'c', purpose: 'Agents', title: 'Alpha' }), registry);
-        upsertFlowIn(d, flow({ id: 'a', purpose: 'Files', title: 'Aardvark' }), registry);
+        upsertFlowIn(d, flow({ id: 'b', purpose: 'Files', title: 'Zebra' }), registry, resolve);
+        upsertFlowIn(d, flow({ id: 'c', purpose: 'Agents', title: 'Alpha' }), registry, resolve);
+        upsertFlowIn(d, flow({ id: 'a', purpose: 'Files', title: 'Aardvark' }), registry, resolve);
         expect(listFlowsIn(d).map((w) => `${w.purpose}/${w.title}`)).toEqual([
             'Agents/Alpha',
             'Files/Aardvark',
@@ -105,11 +112,11 @@ describe('the flows table', () => {
 
 describe('validateFlow', () => {
     it('accepts the reference-case Flow', () => {
-        expect(validateFlow(flow(), registry)).toEqual([]);
+        expect(validateFlow(flow(), registry, resolve)).toEqual([]);
     });
 
     it('refuses a Flow with no trigger — nothing could ever start it', () => {
-        expect(validateFlow(flow({ triggers: [] }), registry)).toContainEqual(
+        expect(validateFlow(flow({ triggers: [] }), registry, resolve)).toContainEqual(
             expect.stringContaining('at least one trigger'),
         );
     });
@@ -118,6 +125,7 @@ describe('validateFlow', () => {
         const errors = validateFlow(
             flow({ triggers: [{ kind: 'event', event: 'files:teleported' }] }),
             registry,
+            resolve,
         );
         expect(errors.join(' ')).toContain('files:teleported');
     });
@@ -134,6 +142,7 @@ describe('validateFlow', () => {
                 ],
             }),
             registry,
+            resolve,
         );
         expect(errors.join(' ')).toContain('sizeBtyes');
     });
@@ -150,12 +159,13 @@ describe('validateFlow', () => {
                 ],
             }),
             registry,
+            resolve,
         );
         expect(errors.join(' ')).toContain('relPath');
     });
 
     it('refuses a Flow with no purpose, because the menu groups by it', () => {
-        expect(validateFlow(flow({ purpose: '' }), registry)).toContainEqual(
+        expect(validateFlow(flow({ purpose: '' }), registry, resolve)).toContainEqual(
             expect.stringContaining('purpose'),
         );
     });
@@ -167,8 +177,53 @@ describe('validateFlow', () => {
         const errors = validateFlow(
             flow({ scope: { kind: 'gapp', appId: '' } }),
             registry,
+            resolve,
         );
         expect(errors.join(' ')).toContain('appId');
+    });
+
+    it('refuses a Flow whose body does not exist', () => {
+        // The runtime already reports this as a refusal at 3am. Saying it at the
+        // WRITE is the difference between a typo somebody fixes in the second
+        // they made it and a Flow that sits in the list looking armed.
+        const errors = validateFlow(
+            flow({ recipe: { kind: 'builtin', recipeId: 'genie.relocate-fil' } }),
+            registry,
+            resolve,
+        );
+        expect(errors.join(' ')).toContain('genie.relocate-fil');
+    });
+
+    it('refuses a manual trigger on a body that reads its file off the event', () => {
+        // `genie.relocate-file` declares `relPath` as an input the event
+        // supplies. A Flow you press Run on supplies none, so the body throws at
+        // its first line — a Run button that could only ever fail.
+        const errors = validateFlow(
+            flow({ triggers: [{ kind: 'manual' }] }),
+            registry,
+            resolve,
+        );
+        expect(errors.join(' ')).toContain('relPath');
+    });
+
+    it('accepts that same manual Flow once the values are given as settings', () => {
+        // The positive control: the rule above is about a MISSING value, not
+        // about manual triggers, and a validator that simply refused every
+        // manual Flow would pass the test above too.
+        expect(
+            validateFlow(
+                flow({
+                    triggers: [{ kind: 'manual' }],
+                    recipe: {
+                        kind: 'builtin',
+                        recipeId: 'genie.relocate-file',
+                        args: { workspacePath: 'C:/repo', relPath: 'big.bin' },
+                    },
+                }),
+                registry,
+                resolve,
+            ),
+        ).toEqual([]);
     });
 
     it('refuses a scope word that is no longer a scope', () => {
@@ -179,6 +234,7 @@ describe('validateFlow', () => {
         const errors = validateFlow(
             flow({ scope: { kind: 'workstation' } as unknown as FlowScope }),
             registry,
+            resolve,
         );
         expect(errors.join(' ')).toContain('workstation');
     });
@@ -200,6 +256,7 @@ describe('saving refuses what validation refuses', () => {
                     ],
                 }),
                 registry,
+                resolve,
             ),
         ).toThrow(/sizeBtyes/);
         expect(listFlowsIn(d)).toEqual([]);
@@ -210,7 +267,7 @@ describe('saving refuses what validation refuses', () => {
         // parses. Listing Flows must not fall over because one of them is
         // corrupt — `main/apps/flows/store.ts` states the same rule for graphs.
         const d = db();
-        upsertFlowIn(d, flow(), registry);
+        upsertFlowIn(d, flow(), registry, resolve);
         d.prepare(`UPDATE flows SET triggers_json = '{not json' WHERE id = 'w1'`).run();
         expect(getFlowIn(d, 'w1')).toBeNull();
         expect(listFlowsIn(d)).toEqual([]);

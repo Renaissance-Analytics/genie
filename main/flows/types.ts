@@ -184,6 +184,38 @@ export interface FlowRecipeRef {
     args?: Readonly<Record<string, FlowPropValue>>;
 }
 
+/**
+ * One value a recipe's body READS out of the run context, declared by the
+ * recipe rather than known to whatever is offering it.
+ *
+ * This is what lets one authoring form serve every body. `genie.relocate-file`
+ * needs a workspace root, a path and somewhere to put the file; a second recipe
+ * will need three different things, and the form must not have to learn either
+ * set. It renders the declarations.
+ *
+ * It is also the only way to catch, at the WRITE, a Flow whose body can never
+ * run: a manual trigger supplies no event props, so a `fromEvent` input with no
+ * value beside it is a Run button that can only ever throw. See
+ * `authoring.ts`.
+ */
+export interface FlowRecipeInput {
+    key: string;
+    type: FlowPropType;
+    label: string;
+    description?: string;
+    /** The body cannot run without it. */
+    required?: boolean;
+    /** What the body falls back to when the Flow says nothing. */
+    default?: FlowPropValue;
+    /**
+     * A triggering event's prop of the same key supplies this.
+     *
+     * `false` (the default) means it can only ever come from the Flow's own
+     * `args` — a standing setting rather than something about the occurrence.
+     */
+    fromEvent?: boolean;
+}
+
 export interface Flow {
     id: string;
     title: string;
@@ -275,5 +307,16 @@ export interface FlowRecipe {
      * safe", which would be a promise nobody made.
      */
     consequence?: string;
+    /**
+     * What a Flow built from this body is FOR — the default `purpose`, so
+     * nobody authoring one has to guess Genie's grouping vocabulary.
+     */
+    purpose?: string;
+    /**
+     * What the body reads out of the run context. Declared here so the
+     * authoring surface renders a field per input rather than knowing any
+     * recipe by name.
+     */
+    inputs?: readonly FlowRecipeInput[];
     steps: readonly FlowRecipeStep[];
 }

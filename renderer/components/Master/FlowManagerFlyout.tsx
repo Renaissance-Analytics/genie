@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Action, Badge, Switch, Text } from '@particle-academy/react-fancy';
-import { IconAlert, IconChevronDown, IconFlow, IconX } from './icons';
+import { Action, Badge, Button, Switch, Text } from '@particle-academy/react-fancy';
+import { IconAlert, IconChevronDown, IconFlow, IconPlus, IconTrash, IconX } from './icons';
+import FlowEditorModal from './FlowEditorModal';
 import {
     api,
     hasGenieBridge,
@@ -37,6 +38,14 @@ import {
  *    or a workspace that has been removed;
  *  - the run history behind each row, so "it worked yesterday" is checkable.
  *
+ * ## Creating one, and what creation is NOT
+ *
+ * The editor (`FlowEditorModal`) is reached from the header and from the empty
+ * state. It creates a Flow switched OFF, every time — arming is the switch on
+ * the row, behind a confirmation that states what the body does. Nothing about
+ * authoring may become a way around that, so this surface never turns a Flow on
+ * as a side effect of saving it.
+ *
  * ## Live state is pushed, never polled
  *
  * The list fetches once on open and then subscribes to `flowActivity` and
@@ -67,6 +76,12 @@ export default function FlowManagerFlyout({
     const [confirming, setConfirming] = useState<FlowSummary | null>(null);
     /** The host this window drives, for the "whose Flows are these" note. */
     const [hostName, setHostName] = useState<string | undefined>(undefined);
+    /** Open on a Flow to edit it, on `null` to create one, closed otherwise. */
+    const [editing, setEditing] = useState<{ flow: FlowSummary | null } | null>(null);
+    /** The Flow awaiting an explicit "yes, delete it". */
+    const [deleting, setDeleting] = useState<FlowSummary | null>(null);
+    /** Said out loud when a save turned an armed Flow off, or one was deleted. */
+    const [notice, setNotice] = useState<string | null>(null);
     const remote = isRemoteWindow();
 
     // A remote window's Flow Manager reads THIS workstation, because `flows.*`
@@ -101,6 +116,10 @@ export default function FlowManagerFlyout({
     // Fetch on open, then subscribe. Both halves are needed — see the note above.
     useEffect(() => {
         if (!open) return;
+        // The flyout is hidden by a class rather than unmounted, so last
+        // session's "Saved …" would still be sitting there on reopening — a
+        // notice about something that happened before the user left the room.
+        setNotice(null);
         void reload();
     }, [open, reload]);
 
@@ -147,14 +166,17 @@ export default function FlowManagerFlyout({
     useEffect(() => {
         if (!open) return;
         const onKey = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') {
+            // The editor and the confirmations own Escape while they are up:
+            // closing the whole flyout out from under a half-written Flow
+            // would throw the work away without asking.
+            if (e.key === 'Escape' && !editing && !confirming && !deleting) {
                 e.preventDefault();
                 onClose();
             }
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
-    }, [open, onClose]);
+    }, [open, onClose, editing, confirming, deleting]);
 
     /**
      * Arming asks first; disarming never does.
@@ -203,6 +225,20 @@ export default function FlowManagerFlyout({
         }
     };
 
+    const remove = async (flow: FlowSummary) => {
+        setPending(flow.id);
+        try {
+            await api().flows.remove(flow.id);
+            setNotice(`Deleted “${flow.title}”.`);
+            await reload();
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+        } finally {
+            setPending(null);
+            setDeleting(null);
+        }
+    };
+
     const showHistory = async (flow: FlowSummary) => {
         if (expanded === flow.id) {
             setExpanded(null);
@@ -247,6 +283,17 @@ export default function FlowManagerFlyout({
                         </Badge>
                     )}
                     <span className="grow" />
+                    {payload && (
+                        <button
+                            type="button"
+                            className="gicon flowmgr-new"
+                            onClick={() => setEditing({ flow: null })}
+                            title="New Flow"
+                            aria-label="New Flow"
+                        >
+                            <IconPlus />
+                        </button>
+                    )}
                     <button
                         type="button"
                         className="gicon"
@@ -264,6 +311,11 @@ export default function FlowManagerFlyout({
                         Flow Manager looks identical to a local one and is about
                         a different computer. */}
                     {sourceNote && <div className="flowmgr-source">{sourceNote}</div>}
+                    {notice && (
+                        <div className="flowmgr-notice" role="status">
+                            {notice}
+                        </div>
+                    )}
                     {!hasGenieBridge() ? (
                         <div className="iw-muted">This runs inside Genie.</div>
                     ) : error ? (
@@ -271,7 +323,10 @@ export default function FlowManagerFlyout({
                     ) : payload === null ? (
                         <div className="iw-muted">Reading your Flows…</div>
                     ) : flows.length === 0 ? (
-                        <EmptyState events={payload.events.length} />
+                        <EmptyState
+                            events={payload.events.length}
+                            onCreate={() => setEditing({ flow: null })}
+                        />
                     ) : (
                         groups.map(([purpose, rows]) => (
                             <div key={purpose}>
@@ -288,6 +343,8 @@ export default function FlowManagerFlyout({
                                         onToggle={() => toggle(flow)}
                                         onRun={() => void runNow(flow)}
                                         onExpand={() => void showHistory(flow)}
+                                        onEdit={() => setEditing({ flow })}
+                                        onDelete={() => setDeleting(flow)}
                                     />
                                 ))}
                             </div>
@@ -303,6 +360,32 @@ export default function FlowManagerFlyout({
             with `z-index: 60`, so it opens a stacking context that would scope
             `.prompt-scrim`'s z-index 100 INSIDE it, quietly breaking the layer
             ladder documented at the top of master.css. */}
+        {editing && payload && (
+            <FlowEditorModal
+                payload={payload}
+                editing={editing.flow}
+                onClose={() => setEditing(null)}
+                onSaved={(result) => {
+                    // A save that turned an armed Flow OFF must say so. A
+                    // switch moving on its own is exactly the kind of silent
+                    // change this surface exists to prevent.
+                    setNotice(
+                        result.disarmed
+                            ? `“${result.flow.title}” was switched off: what it does or where it acts changed, so it needs turning on again.`
+                            : `Saved “${result.flow.title}”.`,
+                    );
+                    void reload();
+                }}
+            />
+        )}
+        {deleting && (
+            <DeleteConfirm
+                flow={deleting}
+                busy={pending === deleting.id}
+                onCancel={() => setDeleting(null)}
+                onConfirm={() => void remove(deleting)}
+            />
+        )}
         {confirming && (
             <ArmConfirm
                 flow={confirming}
@@ -390,13 +473,13 @@ function ArmConfirm({
 }
 
 /**
- * The honest empty state.
+ * The empty state, and the way out of it.
  *
- * Genie ships with no Flows and, until genie#394 phase 2, no way to author one —
- * so this says that, rather than a decorative "nothing here yet" that leaves the
- * user hunting for an Add button which does not exist.
+ * Genie ships with no Flows, so this is the first thing most people see here.
+ * It says what a Flow IS before offering to make one — an empty list with a
+ * lone Add button teaches nothing about what is about to be created.
  */
-function EmptyState({ events }: { events: number }) {
+function EmptyState({ events, onCreate }: { events: number; onCreate: () => void }) {
     return (
         <div className="flowmgr-empty">
             <IconFlow size={22} />
@@ -415,6 +498,70 @@ function EmptyState({ events }: { events: number }) {
                           events === 1 ? 'is' : 'are'
                       } registered and ready for one.`}
             </Text>
+            <Button size="sm" className="flowmgr-empty-new" onClick={onCreate}>
+                <IconPlus size={12} /> New Flow
+            </Button>
+        </div>
+    );
+}
+
+/**
+ * Deleting asks, and arming asks — for opposite reasons.
+ *
+ * Arming is dangerous because the machine starts doing something. Deleting is
+ * not dangerous at all; it is IRREVERSIBLE, and the thing lost is a
+ * configuration with conditions in it that somebody worked out once. The run
+ * history goes with it, which is the part people do not expect.
+ */
+function DeleteConfirm({
+    flow,
+    busy,
+    onCancel,
+    onConfirm,
+}: {
+    flow: FlowSummary;
+    busy: boolean;
+    onCancel: () => void;
+    onConfirm: () => void;
+}) {
+    return (
+        <div className="prompt-scrim" onMouseDown={onCancel}>
+            <div
+                className="prompt-card"
+                role="dialog"
+                aria-modal="true"
+                aria-label={`Delete ${flow.title}`}
+                onMouseDown={(e) => e.stopPropagation()}
+            >
+                <div className="prompt-title">
+                    <IconTrash size={15} />
+                    Delete “{flow.title}”?
+                </div>
+                <div className="prompt-body">
+                    <p>
+                        Its triggers, conditions and settings go with it, and so does its run
+                        history. Nothing it has already done is undone.
+                    </p>
+                </div>
+                <div className="prompt-actions">
+                    <button
+                        type="button"
+                        className="prompt-btn"
+                        onClick={onCancel}
+                        disabled={busy}
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        type="button"
+                        className="prompt-btn prompt-btn-destructive"
+                        onClick={onConfirm}
+                        disabled={busy}
+                    >
+                        {busy ? 'Deleting…' : 'Delete it'}
+                    </button>
+                </div>
+            </div>
         </div>
     );
 }
@@ -429,6 +576,8 @@ function FlowRow({
     onToggle,
     onRun,
     onExpand,
+    onEdit,
+    onDelete,
 }: {
     flow: FlowSummary;
     running: boolean;
@@ -439,6 +588,8 @@ function FlowRow({
     onToggle: () => void;
     onRun: () => void;
     onExpand: () => void;
+    onEdit: () => void;
+    onDelete: () => void;
 }) {
     const last = flow.lastRun;
     const lastDesc = last ? describeOutcome(last.outcome) : null;
@@ -498,6 +649,24 @@ function FlowRow({
                 </div>
 
                 <div className="flowmgr-actions">
+                    <Action
+                        variant="ghost"
+                        size="xs"
+                        icon="pencil"
+                        disabled={busy}
+                        onClick={onEdit}
+                        title="Edit"
+                        aria-label={`Edit ${flow.title}`}
+                    />
+                    <Action
+                        variant="ghost"
+                        size="xs"
+                        icon="trash"
+                        disabled={busy}
+                        onClick={onDelete}
+                        title="Delete"
+                        aria-label={`Delete ${flow.title}`}
+                    />
                     {flow.manuallyRunnable && (
                         <Action
                             variant="ghost"
