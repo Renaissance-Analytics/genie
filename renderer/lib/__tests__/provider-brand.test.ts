@@ -32,20 +32,29 @@ describe('provider brand marks', () => {
         expect(PROVIDER_BRAND_MARKS.genie).toBe('genie');
     });
 
-    it('gives kiwi and custom NO borrowed mark', () => {
-        // They have none of their own, and wearing another vendor's asserts a
-        // relationship that does not exist. Null means "fall back to the initial".
-        expect(PROVIDER_BRAND_MARKS.kiwi).toBeNull();
-        expect(PROVIDER_BRAND_MARKS.custom).toBeNull();
-        expect(providerBrandMark('kiwi')).toBeNull();
+    it('gives a third-party CLI and custom NO borrowed mark', () => {
+        // They have none of their own here, and wearing another vendor's asserts
+        // a relationship that does not exist. Null means "fall back to the
+        // initial", which is honest about not knowing.
+        expect(providerBrandMark('kilo')).toBeNull();
+        expect(providerBrandMark('custom')).toBeNull();
+        expect(providerBrandMark('gemini')).toBeNull();
     });
 
-    it('covers every provider the registry knows', () => {
-        // The registry is the source of truth for what a provider IS. A provider
-        // added there and missed here would render as a blank avatar in the
-        // stack, which reads as "no agent" rather than "unknown TUI".
+    /**
+     * ANSWERS for every provider — which is the property that matters, and is
+     * not the same as an ENTRY for every provider.
+     *
+     * This used to require a row per provider in the table. That was right while
+     * every provider needed a decision; with twenty of them it would have forced
+     * seventeen identical `null`s, and a table of near-identical rows is where a
+     * wrong one hides. What must never happen is `undefined` reaching the
+     * caller, so that is what is asserted.
+     */
+    it('answers for every provider the registry knows, and never with undefined', () => {
         for (const id of PROVIDER_IDS) {
-            expect(id in PROVIDER_BRAND_MARKS, id).toBe(true);
+            const mark = providerBrandMark(id);
+            expect(mark === null || typeof mark === 'string', id).toBe(true);
         }
     });
 

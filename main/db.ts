@@ -2532,6 +2532,73 @@ export function runMigrations(d: Database.Database): MigrationResult {
                 `);
             },
         },
+        {
+            // v73 -- `kiwi` BECOMES `kilo`, IN THE PLACES THE ID WAS PERSISTED.
+            //
+            // Genie shipped a provider labelled "Kiwi Code" whose own registry
+            // comment admitted no public source for a `kiwi` binary could be
+            // found. The reason is that no such product exists: the npm registry
+            // and the open web have nothing by that name, and the `kiwi-cli`
+            // package is an unrelated general-purpose tool. The real neighbours
+            // are Kilo Code (`@kilocode/cli`, bin `kilo`) and Kimi Code
+            // (`@moonshot-ai/kimi-code`, bin `kimi`). The owner confirmed Kilo.
+            //
+            // Renaming the registry entry alone would repeat v58's mistake one
+            // level up. A provider ID is PERSISTED -- in every agent terminal's
+            // `meta.agent`, in `agent_command_<id>` / `agent_flags_<id>`, and in
+            // `agent_default` -- so a build that no longer knows `kiwi` reads
+            // those rows as an unknown provider: `isTuiId` says false, and the
+            // agent drops out of the roster, the reconnect table and the
+            // Toolchain page with no error anywhere.
+            //
+            // TWO different rules, deliberately:
+            //
+            //   - the ID moves. `kiwi` was a name for a thing the owner picked,
+            //     and Kilo is that thing.
+            //   - the stored COMMAND `kiwi` does NOT move. It was never a binary
+            //     anyone could run, so carrying it to `agent_command_kilo` would
+            //     plant a broken value on a working provider and shadow the
+            //     registry default forever -- v58's exact failure, renamed. It is
+            //     dropped so resolution falls through to `kilo`.
+            //
+            // A command the owner actually typed survives and moves with them.
+            // That is the line between a repair and a second bug, and it is the
+            // same line v58 drew: exact matches only.
+            version: 73,
+            runner: (db) => {
+                // 1. Settings. `INSERT OR IGNORE` first so an existing `kilo`
+                //    value -- the owner's CURRENT choice on a machine that saw
+                //    the new provider before this migration -- always wins over
+                //    the phantom's leftover.
+                for (const suffix of ['command', 'flags'] as const) {
+                    const from = `agent_${suffix}_kiwi`;
+                    const to = `agent_${suffix}_kilo`;
+                    db.prepare(
+                        `INSERT OR IGNORE INTO settings (key, value)
+                         SELECT ?, value FROM settings WHERE key = ? AND value <> 'kiwi'`,
+                    ).run(to, from);
+                    db.prepare('DELETE FROM settings WHERE key = ?').run(from);
+                }
+                // 2. The workstation default, when it named the phantom.
+                db.prepare(
+                    `UPDATE settings SET value = 'kilo'
+                      WHERE key = 'agent_default' AND value = 'kiwi'`,
+                ).run();
+                // 3. Every stored agent terminal. The id moves...
+                db.prepare(
+                    `UPDATE terminal_specs
+                        SET meta_json = json_set(meta_json, '$.agent', 'kilo')
+                      WHERE json_extract(meta_json, '$.agent') = 'kiwi'`,
+                ).run();
+                // ...and the dead command is removed, so the registry answers.
+                db.prepare(
+                    `UPDATE terminal_specs
+                        SET meta_json = json_remove(meta_json, '$.agent_command')
+                      WHERE json_extract(meta_json, '$.agent') = 'kilo'
+                        AND json_extract(meta_json, '$.agent_command') = 'kiwi'`,
+                ).run();
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -3223,7 +3290,6 @@ export type WorkspaceAgentReachability = 'workspace' | 'workstation' | 'hidden';
 export type WorkspaceAgentTransport =
     | 'claude-channel'
     | 'codex-app-server'
-    | 'kiwi-native'
     | 'genie-mcp';
 
 /** A first-class AMS configuration. Its terminal binding is intentionally nullable. */

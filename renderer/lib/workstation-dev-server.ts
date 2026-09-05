@@ -339,6 +339,15 @@ export interface ToolUpdateRow {
     installGap?: string;
     /** Where the person goes to install it themselves. Carried with the gap. */
     docsUrl?: string;
+    /**
+     * FALSE when Genie deliberately never looked for this tool.
+     *
+     * The row then shows its name and its gap and NOTHING about installed-ness —
+     * because "Not installed" is a claim, and no claim was checked. Absent on
+     * every ordinary row, so a real answer can never be mistaken for a declined
+     * one.
+     */
+    probed?: boolean;
 }
 
 const TOOL_LABELS: Record<HostToolName, string> = {
@@ -442,6 +451,7 @@ export function toolUpdateRow(u: ToolUpdate): ToolUpdateRow {
         managed: u.origin?.managedByGenie === true,
         ...(gap ? { installGap: gap } : {}),
         ...(docsUrl ? { docsUrl } : {}),
+        ...(u.probed === false ? { probed: false } : {}),
     };
 }
 

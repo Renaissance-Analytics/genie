@@ -198,6 +198,25 @@ test('a CLI Genie cannot install shows the reason instead of a button that would
     await expect(page.getByTestId('devtool-gap-genie')).toContainText(/not published yet/i);
 });
 
+/**
+ * The fourth row state, and the one that took the most argument to get right.
+ *
+ * Amazon Q's binary is `q`. Probing for it would report any unrelated `q` on
+ * PATH as an installed coding agent, and a false "installed" is the fault family
+ * this whole change removes. Omitting the CLI was the previous answer and was
+ * wrong the other way — it disappeared a real product with a real reason. So the
+ * row exists, states its gap, and says NOTHING about whether you have it.
+ */
+test('a CLI Genie will not probe for says what it is and claims nothing about the machine', async () => {
+    await tab(/Agent CLIs/).click();
+    const q = page.getByTestId('devtool-amazon-q');
+    await expect(q).toContainText('Amazon Q');
+    await expect(q).not.toContainText('Not installed');
+    await expect(q).not.toContainText('Installed');
+    await expect(q.getByRole('button', { name: /^install$/i })).toHaveCount(0);
+    await expect(page.getByTestId('devtool-gap-amazon-q')).toContainText(/too generic/i);
+});
+
 test('the Agent CLIs tab states the mid-turn rule once, in its own place', async () => {
     await tab(/Agent CLIs/).click();
     await expect(section()).toContainText(/mid-turn/i);

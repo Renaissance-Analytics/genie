@@ -43,7 +43,7 @@ describe('the hardcoded workstation Genie agent', () => {
         expect(authorizeOsAgentBoot('claude', false).allowed).toBe(false);
         expect(authorizeOsAgentBoot('codex', false).allowed).toBe(false);
         expect(authorizeOsAgentBoot('claude', true).allowed).toBe(true);
-        expect(authorizeOsAgentBoot('kiwi', false).allowed).toBe(true);
+        expect(authorizeOsAgentBoot('kilo', false).allowed).toBe(true);
     });
 });
 

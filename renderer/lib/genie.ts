@@ -883,6 +883,10 @@ export interface ToolUpdate {
     source: ToolchainUpdateSource;
     /** Who installed it and where, when the path could be resolved. */
     origin?: ToolInstallOrigin;
+    /** FALSE when Genie deliberately never looked for this tool — its binary
+     *  name is too generic to check without risking a false "installed". The row
+     *  then makes no claim either way. Absent on every ordinary answer. */
+    probed?: boolean;
 }
 
 // --- multi-version languages (the Toolchain page) --------------------------

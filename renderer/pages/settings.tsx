@@ -4514,12 +4514,20 @@ function ToolUpdateList({
                                 <Text size="sm" style={{ fontWeight: 600 }}>
                                     {row.label}
                                 </Text>
-                                <Text size="xs" className="text-zinc-500">
-                                    {row.installed ? `Installed ${row.installed}` : 'Not installed'}
-                                    {row.tone === 'update-available' && row.latest
-                                        ? ` — ${row.latest} available`
-                                        : ''}
-                                </Text>
+                                {/* "Not installed" is a CLAIM. A tool Genie
+                                    deliberately never probed gets no version
+                                    line at all, because nothing checked — its
+                                    gap note below carries the whole story. */}
+                                {row.probed !== false && (
+                                    <Text size="xs" className="text-zinc-500">
+                                        {row.installed
+                                            ? `Installed ${row.installed}`
+                                            : 'Not installed'}
+                                        {row.tone === 'update-available' && row.latest
+                                            ? ` — ${row.latest} available`
+                                            : ''}
+                                    </Text>
+                                )}
                                 {/* WHO installed it and WHERE — the same two facts
                                     the Languages tab has always shown, which this
                                     tab could not answer (genie#213). On a machine

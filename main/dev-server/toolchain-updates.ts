@@ -29,6 +29,10 @@ export interface ToolUpdate {
     /** True only when {@link latest} is strictly newer than {@link installed}. */
     updateAvailable: boolean;
     source: UpdateSource;
+    /** FALSE when Genie deliberately never looked (see `HostToolSpec.probe`).
+     *  Carried so a row can decline to say "not installed" about a tool nothing
+     *  checked — absent on every ordinary answer. */
+    probed?: boolean;
     /** WHO installed it and WHERE, when the binary's path could be resolved
      *  (genie#213). Distinct from {@link source}, which says where the LATEST
      *  version number was learned — the two answer different questions and the
@@ -129,6 +133,7 @@ export async function detectToolUpdates(
             ...(latest ? { latest } : {}),
             updateAvailable: isUpdateAvailable(probe.version, latest),
             source,
+            ...(probe.probed === false ? { probed: false } : {}),
             ...(installOrigin ? { origin: installOrigin } : {}),
         });
     }

@@ -18,7 +18,7 @@ describe('provider instruction files', () => {
         ]);
     });
 
-    it.each(['kiwi', 'genie', 'custom'] as const)(
+    it.each(['kilo', 'genie', 'custom'] as const)(
         'gives %s explicit shared, workspace-context, and provider paths',
         (provider) => {
             expect(providerInstructionFiles(provider, 'C:\\Work\\demo.agi')).toEqual([
@@ -58,13 +58,13 @@ describe('when a harness binds its chat-id', () => {
         // answers, and survives the profile being corrected underneath it.
         for (const [provider, profile] of Object.entries(LAUNCH_PROFILES)) {
             const expected = profile.strategy === 'flag' ? 'at-launch' : 'after-launch';
-            expect(chatIdBinding(provider as 'claude' | 'codex' | 'kiwi' | 'genie' | 'custom')).toBe(expected);
+            expect(chatIdBinding(provider as 'claude' | 'codex' | 'kilo' | 'genie' | 'custom')).toBe(expected);
         }
         // Positive control: the two branches are both actually reachable from
         // the current table, so the loop is not asserting one thing three times.
         const answers = new Set(
             Object.keys(LAUNCH_PROFILES).map((p) =>
-                chatIdBinding(p as 'claude' | 'codex' | 'kiwi' | 'genie' | 'custom'),
+                chatIdBinding(p as 'claude' | 'codex' | 'kilo' | 'genie' | 'custom'),
             ),
         );
         expect([...answers].sort()).toEqual(['after-launch', 'at-launch']);

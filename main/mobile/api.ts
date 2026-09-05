@@ -103,7 +103,7 @@ import {
 } from '../tynn/provision';
 import { tynnHealthService } from '../mcp/tynn-health-service';
 import type { ProjectJsonTynn } from '../workspace/project-json';
-import type { AgentTuiId } from '../agents/registry';
+import { providerSettingKeys, type AgentTuiId } from '../agents/registry';
 
 /**
  * REST surface for the mobile remote-control server. Pure routing over the
@@ -180,7 +180,15 @@ async function loadDevHosting(): Promise<NonNullable<typeof devHosting>> {
  * `HOST_SOURCED_SETTINGS_KEYS` in renderer/lib/settings-nav.ts (the client-side
  * split); keep the two in sync.
  */
-export const HOST_SOURCED_SETTINGS_KEYS = [
+/** Both launch keys for every provider — see the renderer's twin. */
+function providerLaunchKeys(): (keyof Settings)[] {
+    return providerSettingKeys().flatMap(({ command, flags }) => [
+        command as keyof Settings,
+        flags as keyof Settings,
+    ]);
+}
+
+export const HOST_SOURCED_SETTINGS_KEYS: readonly (keyof Settings)[] = [
     'ai_system',
     'mcp_port',
     'mcp_sync_claude',
@@ -188,13 +196,12 @@ export const HOST_SOURCED_SETTINGS_KEYS = [
     'mcp_sync_codex',
     'mcp_sync_agents',
     // Specialized-terminal launch command + always-on flags (host resolves these
-    // when spawning each agent type). Mirrors renderer/lib/settings-nav.ts.
-    'agent_command_claude',
-    'agent_flags_claude',
-    'agent_command_codex',
-    'agent_flags_codex',
-    'agent_command_custom',
-    'agent_flags_custom',
+    // when spawning each agent type). Mirrors renderer/lib/settings-nav.ts, and
+    // now DERIVED from the same `providerSettingKeys()` so the two cannot say
+    // different things. They already did: this side named claude, codex and
+    // custom while the client side also had `kiwi` and `genie`, so a remote
+    // window could not read or set the Genie TUI's own launch command.
+    ...providerLaunchKeys(),
     // GApp AI Provider: which TUI a Genie App's declared agents run as (genie#245).
     // The HOST launches them, so a remote desktop reads + writes it there.
     'gapp_ai_provider',
@@ -204,7 +211,7 @@ export const HOST_SOURCED_SETTINGS_KEYS = [
     'agent_default',
     'agent_enabled',
     'genie_os_backup_repo',
-] as const satisfies readonly (keyof Settings)[];
+];
 
 /** The bucket-2 subset of the host's settings a remote may see (allow-list filter). */
 export function pickHostSettings(all: Settings): Partial<Settings> {

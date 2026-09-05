@@ -5,6 +5,7 @@ import { getAllSettings } from '../db';
 import { upsertEnvLine } from '../env-file';
 import { ensureEnvGitignored, loadWorkspaceEnvVars } from '../env-store';
 import { pluginAgentSkills, type PluginSkill } from '../plugins/registry';
+import { PROVIDER_IDS, TUI_REGISTRY } from '../agents/registry';
 
 /**
  * Write/remove the Genie MCP server entry in a workspace's agent config files
@@ -1388,13 +1389,20 @@ function syncAgentsMd(workspacePath: string, enabled: boolean): void {
             AGENTS_END,
             '',
         ].join('\n');
-        const providerDocs: Record<string, string> = {
-            codex: '# Genie for Codex\n\nCodex must call `genieGuide` and follow the Codex-specific setup it returns.\n',
-            claude: '# Genie for Claude Code\n\nClaude Code must call `genieGuide` and follow the Claude-specific setup it returns.\n',
-            kiwi: '# Genie for Kiwi Code\n\nKiwi Code must call `genieGuide` and follow the Kiwi-specific setup it returns.\n',
-            genie: '# Genie for Genie TUI\n\nGenie TUI must call `genieGuide` and follow the Genie TUI-specific setup it returns.\n',
-            custom: '# Genie for Custom agent\n\nThe custom agent must call `genieGuide` and follow the setup for its harness.\n',
-        };
+        // One brief per provider, DERIVED from the registry's label. Written out,
+        // this was a fifth hand-kept provider map typed `Record<string, string>`
+        // — so a provider missing from it got no brief at all and no compile
+        // error to say so, which is the exact silence `registry.ts` exists to
+        // end. `custom` keeps its own wording: it is not a product with a name,
+        // it is whatever command the owner chose.
+        const providerDocs: Record<string, string> = Object.fromEntries(
+            PROVIDER_IDS.map((id) => [
+                id,
+                id === 'custom'
+                    ? '# Genie for Custom agent\n\nThe custom agent must call `genieGuide` and follow the setup for its harness.\n'
+                    : `# Genie for ${TUI_REGISTRY[id].label}\n\n${TUI_REGISTRY[id].label} must call \`genieGuide\` and follow the ${TUI_REGISTRY[id].label}-specific setup it returns.\n`,
+            ]),
+        );
         try {
             // `.agents/` is TRACKED now -- an agent's AGENT.md ships with the
             // project -- so what Genie regenerates under it has to be ignored,

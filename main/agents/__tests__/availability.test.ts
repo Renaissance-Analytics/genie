@@ -15,7 +15,7 @@ import { agentTuis, type TuiDef } from '../registry';
 
 /** A synthetic OWNED provider definition WITH a working `install` spec — the
  *  real registry deliberately configures none today (see `registry.ts`'s
- *  comments on `genie`/`kiwi`), so the install-attempt branches are exercised
+ *  comments on `genie`), so the install-attempt branches are exercised
  *  through this rather than any live registry entry. */
 function ownedProviderWithInstaller(): TuiDef {
     return {
@@ -51,27 +51,33 @@ describe('providerWanted — the gate genie#313 asks for', () => {
         }
     });
 
-    it('wants an owned provider when a workspace exists, even if the OSA uses something else', () => {
+    /**
+     * `genie` is now the ONLY owned provider, and that is a correction rather
+     * than a loss. `kiwi` used to claim `ownedBinary: true` under a comment
+     * saying "Genie ships this one" — which was never true of anything, and is
+     * certainly not true of Kilo Code, the real product it turned out to mean.
+     * Genie must not run an unattended `npm i -g` over another vendor's CLI, so
+     * every third-party provider is unowned by construction.
+     */
+    it('wants the owned provider when a workspace exists, even if the OSA uses something else', () => {
         expect(providerWanted('genie', { hasWorkspace: true, osaProvider: 'claude' })).toBe(true);
-        expect(providerWanted('kiwi', { hasWorkspace: true, osaProvider: 'claude' })).toBe(true);
     });
 
-    it('wants an owned provider when the OSA is configured to use it, even with zero workspaces', () => {
+    it('wants the owned provider when the OSA is configured to use it, even with zero workspaces', () => {
         expect(providerWanted('genie', { hasWorkspace: false, osaProvider: 'genie' })).toBe(true);
-        expect(providerWanted('kiwi', { hasWorkspace: false, osaProvider: 'kiwi' })).toBe(true);
     });
 
     it('does NOT want an owned provider that nothing could ever launch', () => {
         // Zero workspaces AND the OSA is on a different provider entirely — the
         // exact host genie#313 says must not get an install attempt.
         expect(providerWanted('genie', { hasWorkspace: false, osaProvider: 'claude' })).toBe(false);
-        expect(providerWanted('kiwi', { hasWorkspace: false, osaProvider: 'claude' })).toBe(false);
     });
 
-    it('does not cross-want a DIFFERENT owned provider from the OSA setting', () => {
-        // The OSA is configured for `genie`; that must not also mark `kiwi`
-        // wanted on a workspace-less host.
-        expect(providerWanted('kiwi', { hasWorkspace: false, osaProvider: 'genie' })).toBe(false);
+    it('does not want the owned provider just because the OSA names an UNOWNED one', () => {
+        // The cross-want case, expressed with the registry as it is: an OSA set
+        // to a third-party CLI on a workspace-less host must not drag Genie's
+        // own TUI into the install pass.
+        expect(providerWanted('genie', { hasWorkspace: false, osaProvider: 'kilo' })).toBe(false);
     });
 });
 
@@ -116,7 +122,7 @@ describe('ensureProviderInstalled', () => {
     });
 
     it('surfaces a clear reason — and does not attempt an install — when the provider has no installer', async () => {
-        // This is `genie` and `kiwi`'s REAL state today (registry.ts): owned,
+        // This is `genie`'s REAL state today (registry.ts): owned,
         // wanted, missing, but with no working install source yet.
         const deps = fakeDeps();
         const result = await ensureProviderInstalled(
@@ -132,20 +138,27 @@ describe('ensureProviderInstalled', () => {
         expect(deps.runInstall).not.toHaveBeenCalled();
     });
 
-    it('never attempts an install for the REAL registry\'s genie/kiwi — neither has one configured', async () => {
+    it('never attempts an install for ANY provider in the real registry — none has one configured', async () => {
         // Documents, at the orchestrator level, exactly what `registry.ts`'s
-        // comments say: today's `genie` and `kiwi` entries carry no `install`,
-        // so a boot pass against the real registry can only detect, never
-        // install. The install-attempt branches below are proven correct
-        // against a SYNTHETIC def instead (`ownedProviderWithInstaller`).
+        // comments say: no entry carries a `TuiDef.install`, so a boot pass
+        // against the real registry can only detect, never install. That is not
+        // an oversight — the unattended pass must never `npm i -g` over another
+        // vendor's CLI, and Genie's own TUI is not published yet. How a person
+        // installs one ON PURPOSE is the agent-CLI catalog's job, which is a
+        // consented action and a different question entirely. The
+        // install-attempt branches below are proven correct against a SYNTHETIC
+        // def instead (`ownedProviderWithInstaller`).
         const runInstall = vi.fn(async () => ({ ok: false, detail: 'should never run' }));
-        for (const id of ['genie', 'kiwi'] as const) {
+        for (const id of agentTuis()) {
             const result = await ensureProviderInstalled(
                 id,
                 { hasWorkspace: true, osaProvider: 'claude' },
                 fakeDeps({ runInstall }),
             );
-            expect(result.status, id).toBe('unavailable');
+            // Either it was never wanted (every third-party CLI, and `custom`)
+            // or it is wanted, missing and uninstallable (`genie`). Never a
+            // third thing, and never an attempt.
+            expect(['not-wanted', 'unavailable'], id).toContain(result.status);
         }
         expect(runInstall).not.toHaveBeenCalled();
     });
@@ -245,6 +258,6 @@ describe('launchBlockReason — consulted synchronously at launch time', () => {
         recordProviderAvailability({ id: 'genie', status: 'unavailable', reason: 'nope' });
         expect(launchBlockReason('genie')).toBe('nope');
         // Unrelated providers are unaffected.
-        expect(launchBlockReason('kiwi')).toBeUndefined();
+        expect(launchBlockReason('kilo')).toBeUndefined();
     });
 });

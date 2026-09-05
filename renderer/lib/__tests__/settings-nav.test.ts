@@ -117,7 +117,7 @@ describe('host-sourced (bucket 2) classification', () => {
 
     it('the host-sourced key allow-list is exactly the workspace/agent-env keys', () => {
         // The provider half is DERIVED. It used to be six literals covering
-        // `claude`, `codex` and `custom`, which is how `kiwi` and `genie` came
+        // `claude`, `codex` and `custom`, which is how `kilo` and `genie` came
         // to be missing: their command and flags were read from and written to
         // the CLIENT in a remote window, while the host is what spawns them.
         // Spelling them out again here would just be a seventh copy of the
@@ -131,7 +131,7 @@ describe('host-sourced (bucket 2) classification', () => {
         // POSITIVE CONTROL: the derivation is not an empty list agreeing with
         // itself — every provider must contribute exactly two keys.
         expect(providerKeys.length).toBe(agentTuis().length * 2);
-        expect(providerKeys).toContain('agent_command_kiwi');
+        expect(providerKeys).toContain('agent_command_kilo');
 
         expect([...HOST_SOURCED_SETTINGS_KEYS].sort()).toEqual(
             [

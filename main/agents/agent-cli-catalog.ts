@@ -1,6 +1,5 @@
 /**
- * PURE, and DEPENDENCY-FREE but for `./registry`. The ONE table of coding-agent
- * CLIs Genie can detect, install and update.
+ * PURE. The ONE table of coding-agent CLIs Genie can detect, install and update.
  *
  * ## The fault this closes
  *
@@ -10,8 +9,7 @@
  *     export const AGENT_CLI_TOOLS = ['claude-code', 'codex'];
  *
  * The tab therefore read as "the agent CLIs on this machine" and meant "the two
- * names we wrote down". Genie already knew more providers than that —
- * `TUI_REGISTRY` has carried Genie TUI and Kiwi Code for two releases — and the
+ * names we wrote down". Genie already knew more providers than that, and the
  * page simply never asked. The owner found out when a terminal died with
  * `bash: genie: command not found`, which is the worst possible place to learn
  * that a settings page was answering a weaker question than it appeared to.
@@ -28,111 +26,134 @@
  * (`toolchain-updates.ts`) skipped every tool that was not already present, so a
  * missing CLI produced no row, and the Install button `toolRowAction` had grown
  * for exactly that case was unreachable. Listing a CLI Genie cannot install is
- * only honest if the row says so; listing one it CAN install and offering nothing
- * is not honest at all.
+ * only honest if the row says so; listing one it CAN install and offering
+ * nothing is not honest at all.
  *
- * ## `install: null` is an answer, not an omission
+ * ## What this table does NOT carry
  *
- * Required rather than optional, for the reason `TuiDef.resume` is: adding a CLI
- * must be a DECISION about whether Genie can put it on the machine, and an
- * absent field would read as "no" without anybody having chosen. A null install
- * carries an {@link AgentCliDef.installGap} saying WHY in the user's words,
- * because "not installed, no button" with no explanation is the state the owner
- * was already looking at.
+ * No `label`, and no `bin`, for any CLI that has a provider. Those belong to
+ * `TUI_REGISTRY` — a provider's display name and its `defaultCommand` — and
+ * restating them here would put the toolchain page and the agent picker one
+ * careless edit apart. They are resolved on the way out, so the two surfaces
+ * cannot disagree rather than merely being asserted not to.
+ *
+ * ## `install: null` and `probe: false` are answers, not omissions
+ *
+ * Both are REQUIRED fields, for the reason `TuiDef.resume` is: adding a CLI must
+ * be a DECISION about whether Genie can put it on the machine and whether it can
+ * honestly look for it, and an absent field would read as "no" without anybody
+ * having chosen. A null install carries an {@link AgentCliDef.installGap} saying
+ * WHY in the user's words, because "not installed, no button" with no
+ * explanation is the state the owner was already looking at.
  *
  * ## Where the package names come from
  *
  * Every npm package and every `bin` below was read from that package's own
- * manifest on the public registry (`registry.npmjs.org/<pkg>/latest`), not from
- * recall. This ecosystem renames itself monthly and the traps are real: `aider`
- * on npm is an unrelated package (the agent is `aider-chat` on PyPI),
- * `cursor-agent` on npm is a different product entirely, and `plandex` and
- * `openhands` are security holding packages. A wrong package name here is an
- * install that fails in front of the user.
+ * manifest on the public registry (`registry.npmjs.org/<pkg>/latest`), or from
+ * the vendor's install docs where it does not ship on npm — never from recall.
+ * This ecosystem renames itself monthly and the traps are real:
+ *
+ *   - `aider` on npm is an unrelated package; the agent is `aider-chat` on PyPI
+ *   - `cursor-agent` on npm is a different product ("task sequence creator")
+ *   - `plandex` and `openhands` on npm are `0.0.1-security` holding packages
+ *   - `kimi-cli` is a front-end generator; Moonshot's agent is
+ *     `@moonshot-ai/kimi-code`
+ *   - `mistral-code` is published at 0.0.0 and is not the product; Mistral's
+ *     terminal agent is Mistral Vibe, bin `vibe`, distributed through PyPI
+ *   - `@kilocode/cli` ships TWO bins and `codebuff` ships two, so
+ *     one-bin-per-package would have been right only by luck
+ *
+ * A wrong package name here is an install that fails in front of the user.
  */
 
-import type { AgentTuiId } from './registry';
+import { TUI_REGISTRY, type AgentTuiId, type ProviderInstallSpec } from './registry';
 
 /**
- * How Genie puts an agent CLI on the machine.
+ * Every one of these answers `--version` on stdout with exit 0 — the one uniform
+ * thing across an otherwise unrelated set, so it is stated once rather than
+ * repeated twenty-one times.
  *
- * Only `npm` today, and deliberately: `npm i -g` into Genie's OWN prefix
- * (genie#214) is the one mechanism that needs no elevation, lands somewhere
- * Genie can add to PATH, and works identically on all three platforms. A vendor
- * `curl … | bash` script would need a fourth trust decision, a Windows
- * equivalent, and a consent surface — see the `installGap` entries below, which
- * name the CLIs waiting on exactly that.
+ * A CLI that did NOT answer it would probe as absent rather than crash, which is
+ * the safe direction to be wrong; it is still not a thing to discover by
+ * accident, so give this a per-entry override the day one of them needs it
+ * rather than assuming harder.
  */
-export interface AgentCliInstall {
-    manager: 'npm';
-    /** The npm package that provides {@link AgentCliDef.bin}. */
-    package: string;
-}
+const VERSION_ARGV: readonly string[] = ['--version'];
 
-export interface AgentCliDef {
+/** The table's rows, before label/bin are resolved off the registry. */
+interface RawAgentCli {
     /**
      * The TOOLCHAIN id — this row's identity on the Toolchain page, and a
-     * `HostToolName`. Deliberately not the same thing as {@link bin}: the id
+     * `HostToolName`. Deliberately not the same thing as the binary: the id
      * names the PRODUCT (`claude-code`) and the bin is what lands on PATH
      * (`claude`). Conflating them is how `defaultCommand` came to say
      * `genie-tui`, a binary that has never existed.
      */
     id: string;
-    /** Human-facing name. Must match the provider's label where there is one. */
-    label: string;
-    /** The executable this puts on PATH — what a probe actually spawns. */
-    bin: string;
-    /** argv that prints a version and exits 0 when the tool is usable. */
-    versionArgv: readonly string[];
     /**
-     * The provider Genie can LAUNCH this as, or `null` when Genie only detects
-     * and installs it. A null provider is not a lesser entry: an installed CLI
-     * with no provider is still launchable as a Custom agent, and promoting one
-     * later is a change to this field alone.
+     * The provider Genie launches this as, or `null` when Genie lists the CLI
+     * without offering to run it. Non-null is the overwhelming default: the
+     * owner's instruction was that every agent CLI Genie knows about should be
+     * launchable, not merely installable.
      */
     provider: AgentTuiId | null;
+    /** Required iff `provider` is null — otherwise the registry owns the name. */
+    label?: string;
+    /** Required iff `provider` is null — otherwise the registry owns the bin. */
+    bin?: string;
+    /**
+     * Look for this CLI on the machine?
+     *
+     * FALSE for a CLI whose binary name is too generic to probe without risking
+     * a FALSE POSITIVE — reporting some unrelated program as an installed coding
+     * agent. A `false` row is still LISTED, and still says what is missing and
+     * why; it simply makes no claim about whether you have it, which is the
+     * honest thing to say when the check cannot be trusted.
+     */
+    probe: boolean;
     /** How Genie installs it, or `null` when Genie has no working mechanism. */
-    install: AgentCliInstall | null;
+    install: ProviderInstallSpec | null;
     /** Required iff {@link install} is null: WHY, in words a user can act on. */
     installGap?: string;
     /** Where a person goes to install it themselves. */
     docsUrl?: string;
 }
 
+/** One agent CLI, with its label, binary and version probe resolved. */
+export interface AgentCliDef extends RawAgentCli {
+    label: string;
+    bin: string;
+    versionArgv: readonly string[];
+}
+
 /**
  * Every agent CLI Genie knows about.
  *
  * Order is the order the Toolchain tab renders, and it is stable on purpose (a
- * settings list that reshuffles between reads reads as broken): the providers
- * Genie can launch first, then the CLIs it can install, then the ones it can
- * only point at.
+ * settings list that reshuffles between reads reads as broken): the two that
+ * have always shipped, Genie's own, then the rest alphabetically. Alphabetical
+ * because any other ordering past the first three is an editorial claim about
+ * which vendor matters, and nothing here is qualified to make one.
  */
 const CATALOG = [
-    // --- the providers Genie launches ---------------------------------------
     {
         id: 'claude-code',
-        label: 'Claude Code',
-        bin: 'claude',
-        versionArgv: ['--version'],
         provider: 'claude',
+        probe: true,
         install: { manager: 'npm', package: '@anthropic-ai/claude-code' },
         docsUrl: 'https://docs.claude.com/en/docs/claude-code/setup',
     },
     {
         id: 'codex',
-        label: 'Codex',
-        bin: 'codex',
-        versionArgv: ['--version'],
         provider: 'codex',
+        probe: true,
         install: { manager: 'npm', package: '@openai/codex' },
         docsUrl: 'https://developers.openai.com/codex/cli/',
     },
     {
         id: 'genie',
-        label: 'Genie TUI',
-        bin: 'genie',
-        versionArgv: ['--version'],
         provider: 'genie',
+        probe: true,
         // Genie's own TUI, and still the gap that started this. `@genie/tui` is
         // `private: true` and has never been published, and its shipped `bin` is
         // named `genie-tui` — so an `npm install -g` today would put the WRONG
@@ -144,184 +165,12 @@ const CATALOG = [
             'Genie’s own TUI is not published yet, so Genie cannot install it for you. It ships with a future release.',
         docsUrl: 'https://github.com/Renaissance-Analytics/genie-tui',
     },
-    {
-        id: 'kiwi',
-        label: 'Kiwi Code',
-        bin: 'kiwi',
-        versionArgv: ['--version'],
-        provider: 'kiwi',
-        // There is no installer because there appears to be no product. A search
-        // of the npm registry and the open web turns up no coding agent called
-        // "Kiwi Code" and no `kiwi` binary (the `kiwi-cli` package on npm is an
-        // unrelated general-purpose tool). The near neighbours are all real and
-        // all different — Kilo Code (`@kilocode/cli`, bin `kilo`) and Kimi Code
-        // (`@moonshot-ai/kimi-code`, bin `kimi`), BOTH catalogued below — which
-        // makes this look like a corruption of one of their names rather than a
-        // provider waiting on an installer. Renaming it is a product decision
-        // (which vendor?), so it stays listed with the gap stated until someone
-        // makes that call. See genie#432.
-        install: null,
-        installGap:
-            'Genie has no installer for Kiwi Code, and no public source for a `kiwi` binary could be found. If you meant Kilo Code or Kimi Code, both are listed below.',
-    },
 
-    // --- CLIs Genie can install, but does not launch as a provider ----------
-    //
-    // Installed, each of these runs as a Custom agent. Promoting one to a full
-    // provider is a change to its `provider` field and a registry entry — a
-    // decision about which vendors Genie integrates with, not a toolchain one.
-    {
-        id: 'gemini-cli',
-        label: 'Gemini CLI',
-        bin: 'gemini',
-        versionArgv: ['--version'],
-        provider: null,
-        install: { manager: 'npm', package: '@google/gemini-cli' },
-        docsUrl: 'https://github.com/google-gemini/gemini-cli',
-    },
-    {
-        id: 'opencode',
-        label: 'opencode',
-        bin: 'opencode',
-        versionArgv: ['--version'],
-        provider: null,
-        install: { manager: 'npm', package: 'opencode-ai' },
-        docsUrl: 'https://opencode.ai',
-    },
-    {
-        id: 'copilot-cli',
-        label: 'GitHub Copilot CLI',
-        bin: 'copilot',
-        versionArgv: ['--version'],
-        provider: null,
-        install: { manager: 'npm', package: '@github/copilot' },
-        docsUrl: 'https://github.com/github/copilot-cli',
-    },
-    {
-        id: 'amp',
-        label: 'Amp',
-        bin: 'amp',
-        versionArgv: ['--version'],
-        provider: null,
-        install: { manager: 'npm', package: '@sourcegraph/amp' },
-        docsUrl: 'https://ampcode.com',
-    },
-    {
-        id: 'crush',
-        label: 'Crush',
-        bin: 'crush',
-        versionArgv: ['--version'],
-        provider: null,
-        install: { manager: 'npm', package: '@charmland/crush' },
-        docsUrl: 'https://github.com/charmbracelet/crush',
-    },
-    {
-        id: 'qwen-code',
-        label: 'Qwen Code',
-        bin: 'qwen',
-        versionArgv: ['--version'],
-        provider: null,
-        install: { manager: 'npm', package: '@qwen-code/qwen-code' },
-        docsUrl: 'https://github.com/QwenLM/qwen-code',
-    },
-    {
-        id: 'kimi-code',
-        label: 'Kimi Code',
-        bin: 'kimi',
-        versionArgv: ['--version'],
-        provider: null,
-        // NOT the `kimi-cli` package on npm, which is an unrelated front-end
-        // generator that happens to own the shorter name.
-        install: { manager: 'npm', package: '@moonshot-ai/kimi-code' },
-        docsUrl: 'https://github.com/MoonshotAI/kimi-code',
-    },
-    {
-        id: 'kilo-cli',
-        label: 'Kilo CLI',
-        bin: 'kilo',
-        versionArgv: ['--version'],
-        provider: null,
-        // The package publishes TWO bins, `kilo` and `kilocode`. `kilo` is the
-        // documented one and the one probed; a machine with only the alias on
-        // PATH reads as not-installed, which is the safe direction to be wrong.
-        install: { manager: 'npm', package: '@kilocode/cli' },
-        docsUrl: 'https://kilo.ai/docs/code-with-ai/platforms/cli',
-    },
-    {
-        id: 'cline',
-        label: 'Cline',
-        bin: 'cline',
-        versionArgv: ['--version'],
-        provider: null,
-        install: { manager: 'npm', package: 'cline' },
-        docsUrl: 'https://github.com/cline/cline',
-    },
-    {
-        id: 'continue-cli',
-        label: 'Continue',
-        // `cn`, not `continue` — short, and the package's own manifest says so.
-        bin: 'cn',
-        versionArgv: ['--version'],
-        provider: null,
-        install: { manager: 'npm', package: '@continuedev/cli' },
-        docsUrl: 'https://github.com/continuedev/continue',
-    },
-    {
-        id: 'auggie',
-        label: 'Auggie',
-        bin: 'auggie',
-        versionArgv: ['--version'],
-        provider: null,
-        install: { manager: 'npm', package: '@augmentcode/auggie' },
-        docsUrl: 'https://docs.augmentcode.com/cli/overview',
-    },
-    {
-        id: 'droid',
-        label: 'Factory Droid',
-        bin: 'droid',
-        versionArgv: ['--version'],
-        provider: null,
-        // The unscoped `droid` package IS Factory's — verified against its
-        // manifest. Their docs lead with a shell installer; the npm route is the
-        // one Genie can drive without a second consent mechanism.
-        install: { manager: 'npm', package: 'droid' },
-        docsUrl: 'https://docs.factory.ai/cli/getting-started/quickstart',
-    },
-    {
-        id: 'iflow-cli',
-        label: 'iFlow CLI',
-        bin: 'iflow',
-        versionArgv: ['--version'],
-        provider: null,
-        install: { manager: 'npm', package: '@iflow-ai/iflow-cli' },
-        docsUrl: 'https://github.com/iflow-ai/iflow-cli',
-    },
-
-    // --- CLIs Genie can only point at ---------------------------------------
-    //
-    // Real, widely used, and outside every mechanism Genie has. Each says which
-    // mechanism it would need, so "no button" is a stated limit rather than an
-    // apparent oversight. Amazon Q / Kiro CLI is deliberately NOT here: its
-    // binary is `q`, which is too generic to probe without reporting some
-    // unrelated `q` as an installed coding agent, and AWS ships no native
-    // Windows install at all.
-    {
-        id: 'goose',
-        label: 'Goose',
-        bin: 'goose',
-        versionArgv: ['--version'],
-        provider: null,
-        install: null,
-        installGap:
-            'Goose ships as a GitHub release binary rather than an npm package, and Genie can only install agent CLIs through npm today.',
-        docsUrl: 'https://github.com/block/goose',
-    },
+    // --- the rest of the field, alphabetically ------------------------------
     {
         id: 'aider',
-        label: 'Aider',
-        bin: 'aider',
-        versionArgv: ['--version'],
-        provider: null,
+        provider: 'aider',
+        probe: true,
         // The npm package called `aider` is somebody else's. Aider is PyPI's
         // `aider-chat`, which needs a Python toolchain Genie does not install
         // agent CLIs through.
@@ -331,19 +180,159 @@ const CATALOG = [
         docsUrl: 'https://aider.chat/docs/install.html',
     },
     {
+        id: 'amp',
+        provider: 'amp',
+        probe: true,
+        install: { manager: 'npm', package: '@sourcegraph/amp' },
+        docsUrl: 'https://ampcode.com',
+    },
+    {
+        id: 'auggie',
+        provider: 'auggie',
+        probe: true,
+        install: { manager: 'npm', package: '@augmentcode/auggie' },
+        docsUrl: 'https://docs.augmentcode.com/cli/overview',
+    },
+    {
+        id: 'cline',
+        provider: 'cline',
+        probe: true,
+        install: { manager: 'npm', package: 'cline' },
+        docsUrl: 'https://github.com/cline/cline',
+    },
+    {
+        id: 'continue-cli',
+        provider: 'continue',
+        probe: true,
+        install: { manager: 'npm', package: '@continuedev/cli' },
+        docsUrl: 'https://github.com/continuedev/continue',
+    },
+    {
+        id: 'copilot-cli',
+        provider: 'copilot',
+        probe: true,
+        install: { manager: 'npm', package: '@github/copilot' },
+        docsUrl: 'https://github.com/github/copilot-cli',
+    },
+    {
+        id: 'crush',
+        provider: 'crush',
+        probe: true,
+        install: { manager: 'npm', package: '@charmland/crush' },
+        docsUrl: 'https://github.com/charmbracelet/crush',
+    },
+    {
         id: 'cursor-cli',
-        label: 'Cursor CLI',
-        // Cursor's own installer writes `cursor-agent`; on posix it also exposes
-        // the alias `agent`, which is far too generic a name to probe for.
-        bin: 'cursor-agent',
-        versionArgv: ['--version'],
-        provider: null,
+        provider: 'cursor',
+        probe: true,
         install: null,
         installGap:
             'Cursor installs through its own vendor script (a different one per platform), which Genie does not run on your behalf.',
         docsUrl: 'https://cursor.com/docs/cli/installation',
     },
-] as const satisfies readonly AgentCliDef[];
+    {
+        id: 'droid',
+        provider: 'droid',
+        probe: true,
+        // The unscoped `droid` package IS Factory's — verified against its
+        // manifest. Their docs lead with a shell installer; the npm route is the
+        // one Genie can drive without a second consent mechanism.
+        install: { manager: 'npm', package: 'droid' },
+        docsUrl: 'https://docs.factory.ai/cli/getting-started/quickstart',
+    },
+    {
+        id: 'gemini-cli',
+        provider: 'gemini',
+        probe: true,
+        install: { manager: 'npm', package: '@google/gemini-cli' },
+        docsUrl: 'https://github.com/google-gemini/gemini-cli',
+    },
+    {
+        id: 'goose',
+        provider: 'goose',
+        probe: true,
+        install: null,
+        installGap:
+            'Goose ships as a GitHub release binary rather than an npm package, and Genie can only install agent CLIs through npm today.',
+        docsUrl: 'https://github.com/block/goose',
+    },
+    {
+        id: 'iflow-cli',
+        provider: 'iflow',
+        probe: true,
+        install: { manager: 'npm', package: '@iflow-ai/iflow-cli' },
+        docsUrl: 'https://github.com/iflow-ai/iflow-cli',
+    },
+    {
+        id: 'kilo-cli',
+        provider: 'kilo',
+        probe: true,
+        // This entry is what the `kiwi` provider was reaching for. See the
+        // `PROVIDER_IDS` comment in `registry.ts`: no product called "Kiwi Code"
+        // exists, and the owner confirmed Kilo Code was meant.
+        install: { manager: 'npm', package: '@kilocode/cli' },
+        docsUrl: 'https://kilo.ai/docs/code-with-ai/platforms/cli',
+    },
+    {
+        id: 'kimi-code',
+        provider: 'kimi',
+        probe: true,
+        // NOT the `kimi-cli` package on npm, which is an unrelated front-end
+        // generator that happens to own the shorter name.
+        install: { manager: 'npm', package: '@moonshot-ai/kimi-code' },
+        docsUrl: 'https://github.com/MoonshotAI/kimi-code',
+    },
+    {
+        id: 'mistral-vibe',
+        provider: 'vibe',
+        probe: true,
+        // PyPI `mistral-vibe`, or a vendor install script — the same two
+        // mechanisms Genie does not have. NOT the `mistral-code` npm package,
+        // which is published at 0.0.0 and is not the product.
+        install: null,
+        installGap:
+            'Mistral Vibe installs from PyPI (`mistral-vibe`) or Mistral’s own script, neither of which Genie installs agent CLIs through.',
+        docsUrl: 'https://github.com/mistralai/mistral-vibe',
+    },
+    {
+        id: 'opencode',
+        provider: 'opencode',
+        probe: true,
+        install: { manager: 'npm', package: 'opencode-ai' },
+        docsUrl: 'https://opencode.ai',
+    },
+    {
+        id: 'qwen-code',
+        provider: 'qwen',
+        probe: true,
+        install: { manager: 'npm', package: '@qwen-code/qwen-code' },
+        docsUrl: 'https://github.com/QwenLM/qwen-code',
+    },
+
+    // --- listed, but never looked for ---------------------------------------
+    {
+        id: 'amazon-q',
+        label: 'Amazon Q Developer CLI',
+        // Carried so the row can NAME the binary, never so it can be spawned or
+        // probed — `probe: false` is what stops both.
+        bin: 'q',
+        // Not launchable, and that is the same judgement as `probe: false` taken
+        // one step further: if Genie cannot trust that `q` on PATH is AWS's
+        // agent, it certainly must not spawn whatever it finds. A false
+        // "installed" is a bad row; launching an unrelated program is worse.
+        provider: null,
+        // The binary is `q` — a name generic enough that probing for it would
+        // report some unrelated program as an installed coding agent. Omitting
+        // the CLI entirely was the previous answer and it was wrong in the other
+        // direction: it disappeared a real product with a real reason. Listed
+        // WITHOUT a detection claim is the answer that is true on both counts.
+        probe: false,
+        install: null,
+        installGap:
+            'AWS ships no native Windows install for the Amazon Q CLI (WSL only), and its binary `q` is too generic for Genie to detect safely — so this row says what it is and makes no claim about whether you have it.',
+        docsUrl: 'https://docs.aws.amazon.com/amazonq/latest/qdeveloper-ug/command-line.html',
+    },
+] as const satisfies readonly RawAgentCli[];
 
 /**
  * Every agent CLI's toolchain id, as a UNION — the agent half of
@@ -352,20 +341,37 @@ const CATALOG = [
  * This is why the table above is `as const`: adding an entry widens this type,
  * and every exhaustive `Record<HostToolName, …>` downstream (the probe specs,
  * the row labels) stops compiling until it covers the new tool. A plain
- * `AgentCliDef[]` would have given `string` here and bought nothing.
+ * `RawAgentCli[]` would have given `string` here and bought nothing.
  */
 export type AgentCliToolId = (typeof CATALOG)[number]['id'];
 
+/** Resolve one row's display name — the registry's, when it has a provider. */
+function resolveLabel(raw: RawAgentCli): string {
+    return raw.provider ? TUI_REGISTRY[raw.provider].label : raw.label!;
+}
+
+/** Resolve one row's binary — the registry's `defaultCommand`, when it has a
+ *  provider. This is the join that makes "the toolchain page and the agent
+ *  picker disagree about the binary" unrepresentable rather than merely tested. */
+function resolveBin(raw: RawAgentCli): string {
+    return raw.provider ? TUI_REGISTRY[raw.provider].defaultCommand : raw.bin!;
+}
+
 /**
- * The catalog as consumers read it.
+ * The catalog as consumers read it, label and bin resolved.
  *
  * Widened to `AgentCliDef` on purpose: the `as const` literal above is a UNION
- * of twenty distinct object types, so an entry without `docsUrl` makes
+ * of twenty-one distinct object types, so an entry without `docsUrl` makes
  * `entry.docsUrl` a type error on the union even though the field is optional.
  * The literal types are still available where they matter — {@link
  * AgentCliToolId} reads them off `CATALOG` directly.
  */
-export const AGENT_CLI_CATALOG: readonly AgentCliDef[] = CATALOG;
+export const AGENT_CLI_CATALOG: readonly AgentCliDef[] = CATALOG.map((raw) => ({
+    ...raw,
+    label: resolveLabel(raw),
+    bin: resolveBin(raw),
+    versionArgv: VERSION_ARGV,
+}));
 
 /** The ids, in catalog order. */
 export const AGENT_CLI_IDS: readonly AgentCliToolId[] = CATALOG.map((e) => e.id);
@@ -432,17 +438,25 @@ export function installableAgentClis(): AgentCliDef[] {
  * The probe recipe per tool, in the shape `toolchain-detect`'s `TOOL_SPECS`
  * wants. Structural rather than imported, so this module stays free of anything
  * node-side and the renderer can keep reading it directly.
+ *
+ * `probe: false` travels with the spec so the DETECTOR can decline to spawn,
+ * rather than every caller having to remember to ask the catalog first.
  */
 export function agentCliSpecs(): Record<
     AgentCliToolId,
-    { name: AgentCliToolId; bin: string; versionArgv: string[] }
+    { name: AgentCliToolId; bin: string; versionArgv: string[]; probe: boolean }
 > {
     const out = {} as Record<
         AgentCliToolId,
-        { name: AgentCliToolId; bin: string; versionArgv: string[] }
+        { name: AgentCliToolId; bin: string; versionArgv: string[]; probe: boolean }
     >;
-    for (const entry of CATALOG) {
-        out[entry.id] = { name: entry.id, bin: entry.bin, versionArgv: [...entry.versionArgv] };
+    for (const raw of CATALOG) {
+        out[raw.id] = {
+            name: raw.id,
+            bin: resolveBin(raw),
+            versionArgv: [...VERSION_ARGV],
+            probe: raw.probe,
+        };
     }
     return out;
 }
@@ -455,8 +469,8 @@ export function agentCliSpecs(): Record<
  */
 export function npmPackagesByTool(): Partial<Record<AgentCliToolId, string>> {
     const out: Partial<Record<AgentCliToolId, string>> = {};
-    for (const entry of CATALOG) {
-        if (entry.install?.manager === 'npm') out[entry.id] = entry.install.package;
+    for (const raw of CATALOG) {
+        if (raw.install?.manager === 'npm') out[raw.id] = raw.install.package;
     }
     return out;
 }
@@ -464,7 +478,7 @@ export function npmPackagesByTool(): Partial<Record<AgentCliToolId, string>> {
 /** Tool id → display name, for the Toolchain page's row labels. */
 export function agentCliLabels(): Record<AgentCliToolId, string> {
     const out = {} as Record<AgentCliToolId, string>;
-    for (const entry of CATALOG) out[entry.id] = entry.label;
+    for (const raw of CATALOG) out[raw.id] = resolveLabel(raw);
     return out;
 }
 
@@ -475,8 +489,8 @@ export function agentCliLabels(): Record<AgentCliToolId, string> {
  */
 export function agentCliToolByProvider(): Partial<Record<AgentTuiId, AgentCliToolId>> {
     const out: Partial<Record<AgentTuiId, AgentCliToolId>> = {};
-    for (const entry of CATALOG) {
-        if (entry.provider) out[entry.provider] = entry.id;
+    for (const raw of CATALOG) {
+        if (raw.provider) out[raw.provider] = raw.id;
     }
     return out;
 }

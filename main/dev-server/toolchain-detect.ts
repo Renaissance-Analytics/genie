@@ -164,6 +164,16 @@ export interface HostToolSpec {
      * paths that must ALL exist, given the machine's system root.
      */
     files?: (systemRoot: string) => string[];
+    /**
+     * FALSE to list the tool without ever looking for it.
+     *
+     * For a binary whose name is too generic to check safely — Amazon Q's is
+     * `q`, and probing it would report any unrelated `q` on PATH as an installed
+     * coding agent. That FALSE POSITIVE is the fault this whole surface exists to
+     * remove, so the honest answer is a row that says what the tool is and makes
+     * no claim about whether you have it. Absent (the default) means probe.
+     */
+    probe?: boolean;
 }
 
 /**
@@ -223,6 +233,15 @@ export interface HostToolProbe {
     running?: boolean;
     /** Redacted output explaining a non-answer. */
     detail?: string;
+    /**
+     * FALSE when Genie deliberately did not look (see {@link HostToolSpec.probe}).
+     *
+     * Distinct from `installed: false`, and the distinction is the point: one
+     * says "it is not here", the other says "nothing checked". Absent on an
+     * ordinary probe, so a surface reading this cannot mistake a real answer for
+     * a declined one.
+     */
+    probed?: boolean;
     /** Absolute path of the binary that ANSWERED, when it could be resolved.
      *  Present only for an installed tool: it is what lets a row say which of
      *  three gits on PATH replied, and which of them Genie may update
@@ -419,17 +438,26 @@ export async function detectToolchain(opts: DetectToolchainOptions): Promise<Too
         const spec = TOOL_SPECS[name];
         const bin = opts.binFor?.(name);
         probes.push(
-            name === 'docker'
-                ? await probeDocker(opts.runner, bin)
-                : spec.files
-                  ? await probeLibrary(spec, systemRoot, opts.fileExists)
-                  : await probeHostTool(spec, opts.runner, bin, {
-                        ...(opts.resolvePath ? { resolvePath: opts.resolvePath } : {}),
-                    }),
+            // Declined FIRST, before anything can spawn: a tool marked
+            // `probe: false` must never reach a runner, because the whole reason
+            // it is marked is that its answer could not be trusted.
+            spec.probe === false
+                ? { name, installed: false, probed: false }
+                : name === 'docker'
+                  ? await probeDocker(opts.runner, bin)
+                  : spec.files
+                    ? await probeLibrary(spec, systemRoot, opts.fileExists)
+                    : await probeHostTool(spec, opts.runner, bin, {
+                          ...(opts.resolvePath ? { resolvePath: opts.resolvePath } : {}),
+                      }),
         );
     }
 
+    // An unprobed tool is in NEITHER list. `missing` drives the install plan and
+    // the wizard's "what is absent" copy, and putting a tool nothing looked at
+    // in there would be the detection claim this is avoiding — stated by a
+    // different surface, in the same voice.
     const present = probes.filter((p) => p.installed).map((p) => p.name);
-    const missing = probes.filter((p) => !p.installed).map((p) => p.name);
+    const missing = probes.filter((p) => !p.installed && p.probed !== false).map((p) => p.name);
     return { platform, probes, present, missing };
 }

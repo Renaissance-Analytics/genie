@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { HOST_SOURCED_SETTINGS_KEYS, pickHostSettings } from '../api';
+import { PROVIDER_IDS } from '../../agents/registry';
 import type { Settings } from '../../db';
 
 /**
@@ -19,18 +20,37 @@ describe('pickHostSettings — host-sourced allow-list', () => {
                 'mcp_sync_claude',
                 'mcp_sync_codex',
                 'mcp_sync_cursor',
-                'agent_command_claude',
-                'agent_flags_claude',
-                'agent_command_codex',
-                'agent_flags_codex',
-                'agent_command_custom',
-                'agent_flags_custom',
+                // Both launch keys for EVERY provider, derived. Written out,
+                // this side named claude/codex/custom while the renderer's twin
+                // also had kiwi and genie — so a remote window could not read or
+                // set the Genie TUI's own launch command, and the mirror test
+                // passed because it mirrored the same three by hand.
+                ...PROVIDER_IDS.flatMap((id) => [
+                    `agent_command_${id}`,
+                    `agent_flags_${id}`,
+                ]),
                 'gapp_ai_provider',
                 'agent_default',
                 'agent_enabled',
                 'genie_os_backup_repo',
             ].sort(),
         );
+    });
+
+    /**
+     * The two allow-lists MUST be identical — one is the client's split, the
+     * other is the server's enforcement, and a key on only one side is either a
+     * setting a remote cannot reach or one it can reach unenforced.
+     *
+     * They were NOT identical, and nothing caught it: both were hand-written,
+     * and each side's test asserted against its own hand-written copy. Comparing
+     * them to each other is the check that was missing.
+     */
+    it('is byte-identical to the client-side split it mirrors', async () => {
+        const { HOST_SOURCED_SETTINGS_KEYS: client } = await import(
+            '../../../renderer/lib/settings-nav'
+        );
+        expect([...HOST_SOURCED_SETTINGS_KEYS].sort()).toEqual([...client].sort());
     });
 
     it('exposes the bucket-2 keys and drops everything else (incl. secrets)', () => {

@@ -125,7 +125,16 @@ describe('renderAgentLaunch — post-launch agents', () => {
     });
 
     it('the profile registry is exhaustive over the agent types', () => {
-        expect(Object.keys(LAUNCH_PROFILES).sort()).toEqual(['claude', 'codex', 'custom', 'genie', 'kiwi']);
+        // Only the providers with a WIRED capture path are named; every other
+        // one derives to `detect`, which captures nothing and claims nothing.
+        expect(Object.keys(LAUNCH_PROFILES)).toEqual([...PROVIDER_IDS]);
+        expect(LAUNCH_PROFILES.claude.strategy).toBe('flag');
+        expect(LAUNCH_PROFILES.codex.strategy).toBe('hook');
+        expect(LAUNCH_PROFILES.genie.strategy).toBe('hook');
+        for (const id of PROVIDER_IDS) {
+            if (['claude', 'codex', 'genie'].includes(id)) continue;
+            expect(LAUNCH_PROFILES[id].strategy, id).toBe('detect');
+        }
     });
 });
 

@@ -1365,7 +1365,7 @@ export interface SavedAgentInfo {
     /** Is its TUI running right now? Not-live is dormant, not gone. */
     live: boolean;
     /** Harness-native AgentInbox adapter required by this provider. */
-    transport?: 'claude-channel' | 'codex-app-server' | 'kiwi-native' | 'genie-mcp';
+    transport?: 'claude-channel' | 'codex-app-server' | 'genie-mcp';
     /** Timestamp of the current boot's successful transport handshake. */
     transportVerifiedAt?: number;
     /** Actionable failure from the current boot's transport handshake. */
@@ -2513,7 +2513,7 @@ const RUN_AGENT_TOOL = {
             tui: {
                 type: 'string',
                 description:
-                    "switchTui: the TUI to make this agent's VISIBLE driver (claude / codex / kiwi / genie / custom). An agent is not its TUI: switching keeps its identity, inbox and history, and the TUI it leaves keeps its own pty and conversation as a hidden SIDECAR you can flip back to. Nothing is ever stopped by a switch. Needs `name` (or `id`) to say which agent.",
+                    "switchTui: the TUI to make this agent's VISIBLE driver (any registered provider — claude, codex, genie, gemini, opencode, …). An agent is not its TUI: switching keeps its identity, inbox and history, and the TUI it leaves keeps its own pty and conversation as a hidden SIDECAR you can flip back to. Nothing is ever stopped by a switch. Needs `name` (or `id`) to say which agent.",
             },
             name: {
                 type: 'string',

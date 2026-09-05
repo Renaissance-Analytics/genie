@@ -90,6 +90,35 @@ const IDS = PROVIDER_IDS.join('|');
  */
 const PROVIDER_LIST = new RegExp(`'(${IDS})'[^;{}]{0,40}(?:\\|\\||,)[^;{}]{0,40}'(${IDS})'`, 'g');
 
+/**
+ * Hits that are NOT the provider set, and why.
+ *
+ * The guard matches two different PROVIDER_IDS as literals in one expression.
+ * That was unambiguous while the provider set was five names nothing else used.
+ * It is not any more: expanding the registry to every agent CLI Genie knows
+ * about pulled in `cursor` and `codex`, which is also the vocabulary of the
+ * MCP-SYNC TARGETS — the config files Genie keeps the endpoint written into
+ * (`.mcp.json`, `.cursor/mcp.json`, codex's `-c` overrides, `AGENTS.md`). That
+ * list contains `agents`, which is not and will never be a provider, and it
+ * would not change if a provider were added or removed. Two vocabularies, some
+ * shared spellings.
+ *
+ * Exempted by EXACT matched text rather than by file, so the rest of a large
+ * file stays covered, and paired with a positive control below so an exemption
+ * whose site has moved fails instead of quietly widening the blind spot.
+ */
+const NOT_THE_PROVIDER_SET: readonly { file: string; contains: string; why: string }[] = [
+    {
+        file: 'pages/settings.tsx',
+        contains: "'cursor'",
+        why: 'MCP-sync targets (claude/cursor/codex/agents) — config files, not providers.',
+    },
+];
+
+function isDifferentVocabulary(rel: string, hit: string): boolean {
+    return NOT_THE_PROVIDER_SET.some((a) => a.file === rel && hit.includes(a.contains));
+}
+
 function providerLists(src: string): string[] {
     PROVIDER_LIST.lastIndex = 0;
     const hits: string[] = [];
@@ -150,12 +179,27 @@ const after = 1;`;
     it('has no file writing the provider set out by hand', () => {
         const offenders: string[] = [];
         for (const file of sourceFiles(RENDERER)) {
-            const hits = providerLists(fs.readFileSync(file, 'utf8'));
-            for (const hit of hits) {
-                offenders.push(`${path.relative(RENDERER, file).replace(/\\/g, '/')}: ${hit}`);
+            const rel = path.relative(RENDERER, file).replace(/\\/g, '/');
+            for (const hit of providerLists(fs.readFileSync(file, 'utf8'))) {
+                if (isDifferentVocabulary(rel, hit)) continue;
+                offenders.push(`${rel}: ${hit}`);
             }
         }
         expect(offenders).toEqual([]);
+    });
+
+    it('POSITIVE CONTROL: every exemption still matches something real', () => {
+        // An exemption whose site has moved silently widens the guard's blind
+        // spot to a file nobody is checking. Each one must still hit.
+        for (const allowed of NOT_THE_PROVIDER_SET) {
+            const full = path.join(RENDERER, allowed.file);
+            expect(fs.existsSync(full), `${allowed.file} is gone — drop its exemption`).toBe(true);
+            const hits = providerLists(fs.readFileSync(full, 'utf8'));
+            expect(
+                hits.some((h) => h.includes(allowed.contains)),
+                `${allowed.file} no longer contains ${allowed.contains} — drop its exemption`,
+            ).toBe(true);
+        }
     });
 
     it.each([

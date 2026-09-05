@@ -31,13 +31,16 @@ export interface TerminalTypeDef {
  * `TUI_REGISTRY`, because the registry is dependency-free by contract and
  * these are React components.
  *
- * `Record<AgentType, …>` is what keeps it honest: add a provider to the registry
- * and this stops compiling until it has a mark. Note the current three are
- * placeholder-grade — `claude` renders the TYNN mark and `codex` a generic box —
- * and adding a fourth is the moment to fix all of them rather than add a fourth
- * placeholder.
+ * Only the providers with a mark Genie can actually render are named; the rest
+ * fall to {@link FALLBACK_PROVIDER_ICON}. This was an exhaustive `Record`, which
+ * was the right shape while there were five providers and every one of them
+ * needed a decision — but a table of twenty forced eighteen copies of the same
+ * decision, and an exhaustive table of near-identical rows is where a wrong one
+ * hides. The fallback is what the exhaustive version would have made you type.
  */
-const PROVIDER_ICONS: Record<AgentType, ComponentType<{ size?: number; className?: string }>> = {
+const PROVIDER_ICONS: Partial<
+    Record<AgentType, ComponentType<{ size?: number; className?: string }>>
+> = {
     // The REAL vendor marks. These were placeholders -- claude and genie both
     // rendered the TYNN logo and codex a generic box -- which is wrong twice: it
     // tells you the wrong vendor, and it makes two different agents look
@@ -47,12 +50,19 @@ const PROVIDER_ICONS: Record<AgentType, ComponentType<{ size?: number; className
     // Genie's own TUI gets Genie's own mark, NOT Tynn's. They are different
     // products and the logo is not shared.
     genie: IconWand,
-    // Kiwi and a custom CLI have no mark of their own here, and borrowing another
-    // vendor's would assert a relationship that does not exist. A neutral glyph
-    // is the honest answer.
-    kiwi: IconCode,
-    custom: IconCode,
 };
+
+/**
+ * The glyph for a provider with no vendor mark wired here.
+ *
+ * Every third-party CLI lands on this rather than borrowing another vendor's
+ * logo — which was already the rule for `custom`, and the reason `kiwi` carried
+ * a neutral glyph rather than a pretty one. Real marks can be added per vendor
+ * the moment the icon set is CONFIRMED to carry them; guessing an icon name that
+ * does not exist renders nothing at all, which is a worse outcome than a plain
+ * glyph and a harder one to notice.
+ */
+const FALLBACK_PROVIDER_ICON = IconCode;
 
 /**
  * Regular first, then one entry per provider, DERIVED from `TUI_REGISTRY`
@@ -73,7 +83,7 @@ export const TERMINAL_TYPES: TerminalTypeDef[] = [
         return {
             id,
             label: def.label,
-            icon: PROVIDER_ICONS[id],
+            icon: PROVIDER_ICONS[id] ?? FALLBACK_PROVIDER_ICON,
             agent: id,
             specialized: true,
             hint: def.hint,

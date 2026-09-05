@@ -432,3 +432,68 @@ describe('agent CLIs are detectable on Windows', () => {
         expect(report.probes[0]).toMatchObject({ name: 'claude-code', version: '2.1.261' });
     });
 });
+
+/**
+ * LISTED, BUT NEVER LOOKED FOR.
+ *
+ * Amazon Q's binary is `q`. Probing for it would report any unrelated `q` on
+ * PATH as an installed coding agent — a FALSE POSITIVE, which is the fault
+ * family this whole change exists to remove. Omitting the CLI was the previous
+ * answer and was wrong the other way: it disappeared a real product with a real
+ * reason.
+ *
+ * So the row exists and the probe does not. `probed: false` is what lets the
+ * page render "here is what this is, and why Genie cannot help" WITHOUT the
+ * words "not installed", which would be a detection claim nothing checked.
+ */
+describe('a tool Genie declines to probe', () => {
+    it('never spawns its binary', async () => {
+        const asked: string[] = [];
+        await detectToolchain({
+            runner: {
+                async run(command: string) {
+                    asked.push(command);
+                    return { code: 0, stdout: '1.0.0', stderr: '' };
+                },
+                stream: () => {
+                    throw new Error('not used');
+                },
+            },
+            platform: 'win32',
+            wanted: ['amazon-q', 'claude-code'],
+        });
+        // `claude` was asked. `q` was not — and would have ANSWERED if it had
+        // been, which is exactly the false positive this prevents.
+        expect(asked).toEqual(['claude']);
+    });
+
+    it('reports it as unprobed rather than as missing', async () => {
+        const report = await detectToolchain({
+            runner: {
+                async run() {
+                    return { code: 1, stdout: '', stderr: '' };
+                },
+                stream: () => {
+                    throw new Error('not used');
+                },
+            },
+            platform: 'win32',
+            wanted: ['amazon-q'],
+        });
+        const probe = report.probes[0];
+        expect(probe.name).toBe('amazon-q');
+        expect(probe.probed).toBe(false);
+        expect(probe.installed).toBe(false);
+        // Absent from BOTH lists: it is neither known-present nor known-missing,
+        // and putting it in `missing` is the detection claim being avoided.
+        expect(report.present).not.toContain('amazon-q');
+        expect(report.missing).not.toContain('amazon-q');
+    });
+
+    it('leaves every probed tool reporting normally', () => {
+        // Positive control: `probed` is absent (not false) for a real probe, so
+        // nothing downstream mistakes an ordinary answer for a declined one.
+        expect(TOOL_SPECS['amazon-q'].probe).toBe(false);
+        expect(TOOL_SPECS['claude-code'].probe).not.toBe(false);
+    });
+});

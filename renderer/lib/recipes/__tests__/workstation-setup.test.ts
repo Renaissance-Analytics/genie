@@ -328,12 +328,21 @@ describe('the setup agent catalog is a CROSS-REPO contract', () => {
         // (and the host's login steps) went with it.
         const setup = SETUP_AGENTS.map((a) => a.id);
         expect(setup.length).toBeLessThan(PROVIDER_IDS.length);
-        expect(PROVIDER_IDS.filter((id) => !setup.includes(id as never))).toEqual(['kiwi', 'genie']);
+        // Named the two it left out while the registry held five. It now holds
+        // twenty, so the assertion is stated the other way round: the setup list
+        // is exactly the agents genie-cloud's catalog can log in, and every
+        // other provider is deliberately absent. Widening it still means
+        // checking the cloud side first — that has not changed, only the count.
+        expect(setup).toEqual(['claude', 'codex', 'custom']);
+        for (const id of PROVIDER_IDS) {
+            if (setup.includes(id as never)) continue;
+            expect(setup, `${id} must not have crept in`).not.toContain(id);
+        }
     });
 
     it('no longer states a frozen AgentType union as the reason', () => {
         // The claim that made the list look self-justifying: genie's `AgentType`
-        // has not been `claude | codex | custom` since kiwi and genie were
+        // has not been `claude | codex | custom` since kilo and genie were
         // registered. The blocker is the genie-cloud catalog, and the docblock
         // has to say so or the next reader "fixes" the list on its own.
         expect(SRC).not.toMatch(/AgentType[^\n]*claude \| codex \| custom/);

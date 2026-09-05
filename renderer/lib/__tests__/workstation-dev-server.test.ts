@@ -327,6 +327,24 @@ describe('tool update rows', () => {
         expect(row.installGap).toBeUndefined();
     });
 
+    /**
+     * "Not installed" is a CLAIM. A row for a tool Genie deliberately never
+     * probed must not make it — that is the difference between "you do not have
+     * this" and "nothing checked", and only one of them is true here.
+     */
+    it('says nothing about a tool it declined to probe, and offers no button', () => {
+        const row = toolUpdateRow(upd({ name: 'amazon-q', installed: undefined, probed: false }));
+        expect(row.probed).toBe(false);
+        expect(row.action).toBe('none');
+        expect(row.tone).toBe('not-installed');
+        expect(row.installGap).toMatch(/too generic|Windows/i);
+    });
+
+    it('leaves an ordinary row unmarked, so a real answer is never read as a declined one', () => {
+        expect(toolUpdateRow(upd({ name: 'docker', installed: undefined })).probed).toBeUndefined();
+        expect(toolUpdateRow(upd({ name: 'git', installed: '2.4.0' })).probed).toBeUndefined();
+    });
+
     it('labels every agent CLI by its product name, never its internal id', () => {
         expect(toolUpdateRow(upd({ name: 'gemini-cli' })).label).toBe('Gemini CLI');
         expect(toolUpdateRow(upd({ name: 'continue-cli' })).label).toBe('Continue');

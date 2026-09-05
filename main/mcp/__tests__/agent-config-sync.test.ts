@@ -39,7 +39,7 @@ const rulesMd = path.join(WS, 'RULES.md');
 const managedShared = path.join(WS, '.agents', '_genie', 'shared.md');
 const managedCodex = path.join(WS, '.agents', '_genie', 'genie-codex.md');
 const managedClaude = path.join(WS, '.agents', '_genie', 'genie-claude.md');
-const managedKiwi = path.join(WS, '.agents', '_genie', 'genie-kiwi.md');
+const managedKilo = path.join(WS, '.agents', '_genie', 'genie-kilo.md');
 const managedGenie = path.join(WS, '.agents', '_genie', 'genie-genie.md');
 const managedCustom = path.join(WS, '.agents', '_genie', 'genie-custom.md');
 const agentsBackup = path.join(WS, '.agents', '_genie', 'backups', 'AGENTS.md.pre-router.bak');
@@ -100,7 +100,7 @@ describe('writeWorkspaceAgentMcp — per-target sync gating', () => {
         expect(files.get(managedShared)).toContain('GENIE PROTOCOL');
         expect(files.get(managedCodex)).toContain('Codex');
         expect(files.get(managedClaude)).toContain('Claude Code');
-        expect(files.get(managedKiwi)).toContain('Kiwi Code');
+        expect(files.get(managedKilo)).toContain('Kilo Code');
         expect(files.get(managedGenie)).toContain('Genie TUI');
         expect(files.get(managedCustom)).toContain('Custom agent');
     });
