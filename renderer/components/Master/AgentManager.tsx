@@ -29,12 +29,16 @@ import {
     personaDraftFrom,
     personaEditFrom,
     personaIsDirty,
+    sidecarActionLabel,
+    sidecarDoneMessage,
     sidecarMatchNote,
     sidecarSummary,
     type AgentManagerTabId,
     type PersonaDraft,
 } from '../../lib/agent-manager';
 import { agentTerminalTypes } from '../../lib/terminal-types';
+import { canResumeTui } from '../../../main/agents/registry';
+import type { RestartMode } from '../../../main/agents/restart-options';
 
 /**
  * The AGENT MANAGER — Tynn #709, story #263.
@@ -176,6 +180,13 @@ export default function AgentManager({
     const mcp = state.mcp;
     const sidecar = state.sidecar;
     const drift = mcp ? mcpDriftNotice(mcp) : null;
+    // WHICH restart this banner's button performs. Resume where the provider has
+    // a grammar for it; fresh otherwise, because a button that can only be
+    // refused is the bug genie#443 is about, and a fresh relaunch reloads the MCP
+    // config just the same. This surface does not know whether a session was
+    // captured, so a resumable provider that has none still gets the host's
+    // refusal — which now names the operation that works.
+    const restartMode: RestartMode = canResumeTui(state.agent?.tui) ? 'resume' : 'fresh';
     const drivers = agentTerminalTypes();
 
     return (
@@ -413,18 +424,34 @@ export default function AgentManager({
                                                                    bound terminal — reloading
                                                                    nothing while reporting success,
                                                                    which is the silence this tab
-                                                                   exists to end. */
+                                                                   exists to end.
+
+                                                                   A provider with NO resume grammar
+                                                                   gets the FRESH restart instead
+                                                                   (genie#443). Sending `resume` there
+                                                                   is a button that can only ever be
+                                                                   refused — and this banner's whole
+                                                                   job is to get the MCP config
+                                                                   reloaded, which a fresh relaunch
+                                                                   does too. It says which it will do
+                                                                   rather than implying the kinder
+                                                                   one. */
                                                                 const r =
                                                                     await api().terminalSpec.restartAgent(
                                                                         state.agent!.terminalSpecId!,
+                                                                        restartMode,
                                                                     );
                                                                 return r.ok
                                                                     ? { ok: true }
                                                                     : { ok: false, error: r.error };
-                                                            }, 'Relaunching the agent — it resumes where it left off.')
+                                                            }, restartMode === 'resume'
+                                                                ? 'Relaunching the agent — it resumes where it left off.'
+                                                                : 'Relaunching the agent — this provider cannot resume, so it starts a new conversation.')
                                                         }
                                                     >
-                                                        Restart {state.agent?.name}
+                                                        {restartMode === 'resume'
+                                                            ? `Restart ${state.agent?.name}`
+                                                            : `Restart ${state.agent?.name} (fresh)`}
                                                     </Button>
                                                 </div>
                                             )}
@@ -597,7 +624,11 @@ export default function AgentManager({
                                         {sidecar.actions.map((action) => (
                                             <Button
                                                 key={action}
-                                                variant={action === 'stop' ? 'ghost' : 'default'}
+                                                variant={
+                                                    action === 'stop' || action === 'restart-fresh'
+                                                        ? 'ghost'
+                                                        : 'default'
+                                                }
                                                 disabled={busy}
                                                 onClick={() =>
                                                     void run(
@@ -606,15 +637,11 @@ export default function AgentManager({
                                                                 agentId,
                                                                 action as SidecarAction,
                                                             ),
-                                                        `${action[0]!.toUpperCase()}${action.slice(1)}ed ${sidecar.name}.`,
+                                                        sidecarDoneMessage(action, sidecar.name),
                                                     )
                                                 }
                                             >
-                                                {action === 'start'
-                                                    ? 'Start sidecar'
-                                                    : action === 'stop'
-                                                      ? 'Stop sidecar'
-                                                      : 'Restart sidecar'}
+                                                {sidecarActionLabel(action)}
                                             </Button>
                                         ))}
                                     </div>

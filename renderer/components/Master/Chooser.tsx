@@ -47,6 +47,10 @@ import { agentStack } from '../../lib/agent-stack';
 import { workspaceInitials } from '../../lib/workspace-avatar';
 import AgentAvatarStack from './AgentAvatarStack';
 import AgentContextMenu from './AgentContextMenu';
+import {
+    restartOptionsFor,
+    type RestartMode,
+} from '../../../main/agents/restart-options';
 import AgentDeleteModal from './AgentDeleteModal';
 import TerminalTypeSplitButton from './TerminalTypeSplitButton';
 import { workspaceHasThumb, workspaceNeedsAttention } from '../../lib/attention';
@@ -104,9 +108,10 @@ interface Props {
     onToggleSpec: (id: string) => void;
     onAddSpec: (workspaceId: string, type: ViewType) => void;
     onDestroySpec: (id: string) => void;
-    /** Restart an agent by its terminal spec — the same resume the terminal menu
-     *  offers, so a resume is a resume wherever it is asked for. */
-    onRestartAgentSpec: (specId: string) => void;
+    /** Restart an agent by its terminal spec — the same two operations the
+     *  terminal menu offers, so a resume is a resume and a fresh restart is a
+     *  fresh restart wherever either is asked for (genie#443). */
+    onRestartAgentSpec: (specId: string, mode: RestartMode) => void;
     /** Open the agent-settings editor for an agent by its terminal spec. */
     onEditAgentSpec: (specId: string) => void;
     /** Tier 2: suspend a terminal (keep pty, hide panel). */
@@ -1513,12 +1518,14 @@ export default function Chooser({
                                         return (
                                             <div className="ams-agent-grid" aria-label="Workspace agents">
                                                 {rows.map((row) => {
-                                                    const specId =
-                                                        row.kind === 'orphan'
-                                                            ? row.specId!
-                                                            : record!.runtimes.find(
-                                                                  (r) => r.agentId === row.id && r.fronted,
-                                                              )?.terminalSpecId ?? null;
+                                                    // The row carries it now, for
+                                                    // BOTH kinds — the menu handler
+                                                    // below reads the same field, and
+                                                    // computing it in two places is
+                                                    // how "Restart agent" came to be
+                                                    // a no-op on every agent square
+                                                    // (genie#443).
+                                                    const specId = row.specId ?? null;
                                                     return (
                                                         <AgentSquare
                                                             key={row.id}
@@ -2057,6 +2064,11 @@ export default function Chooser({
                 <AgentContextMenu
                     position={agentMenu.at}
                     row={agentMenu.row}
+                    // Asked of the SPEC, so the menu offers the resume only where
+                    // one exists and always offers the fresh restart.
+                    restart={restartOptionsFor(
+                        specs.find((s) => s.id === agentMenu.row.specId) ?? null,
+                    )}
                     onClose={() => setAgentMenu(null)}
                     onAct={(id) => {
                         const { ws, row } = agentMenu;
@@ -2070,10 +2082,18 @@ export default function Chooser({
                             void api().agents.setDefault(ws, row.id).catch(() => {});
                         } else if (id === 'clear-default') {
                             void api().agents.setDefault(ws, null).catch(() => {});
-                        } else if (id === 'restart') {
-                            // Same path the terminal menu's restart takes, so a
-                            // resume is a resume wherever it is asked for.
-                            if (row.specId) onRestartAgentSpec(row.specId);
+                        } else if (id === 'restart' || id === 'restart-fresh') {
+                            // Same path the terminal menu's restarts take, so each
+                            // operation means the same thing wherever it is asked
+                            // for. `row.specId` used to be set for ORPHANS ONLY, so
+                            // this branch silently did nothing on every real agent
+                            // square there has ever been (genie#443).
+                            if (row.specId) {
+                                onRestartAgentSpec(
+                                    row.specId,
+                                    id === 'restart-fresh' ? 'fresh' : 'resume',
+                                );
+                            }
                         } else if (id === 'edit') {
                             if (row.specId) onEditAgentSpec(row.specId);
                         } else if (id === 'remove-orphan') {

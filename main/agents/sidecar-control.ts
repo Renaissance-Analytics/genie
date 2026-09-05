@@ -70,8 +70,16 @@ export type { SidecarAction } from './agent-manager-types';
  * one must not be startable (it would spawn a second copy against the same
  * work). With no sidecar there is nothing at all — a control that acts on
  * nothing is worse than an absent one, because it looks like it did something.
+ *
+ * A running sidecar gets BOTH restarts (genie#443). `restart` resumes, and
+ * `agentSidecarAction` returns its refusal rather than quietly downgrading to a
+ * hard one — a sidecar exists to keep a second conversation warm, so a "restart"
+ * that dropped it would destroy the only thing it is for. That left a sidecar
+ * under a provider with no resume grammar holding a single control that could
+ * never work, which is the same dead end one surface over. `restart-fresh` is
+ * the operation that always can, and it says what it costs.
  */
 export function sidecarActions(state: { exists: boolean; running: boolean }): SidecarAction[] {
     if (!state.exists) return [];
-    return state.running ? ['stop', 'restart'] : ['start'];
+    return state.running ? ['stop', 'restart', 'restart-fresh'] : ['start'];
 }

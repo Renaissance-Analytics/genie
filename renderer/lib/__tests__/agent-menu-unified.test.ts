@@ -19,6 +19,12 @@ import type { AgentGridRow } from '../ams-grid';
  * The owner's requirement: Start, Restart, Edit, Unmount and Delete are ALWAYS
  * available on an agent. Unmount and Delete both stop the agent AND its
  * sidecars; the difference is only whether `.agents/*` survives.
+ *
+ * RESTART became two items (genie#443) — `restart` resumes the conversation,
+ * `restart-fresh` relaunches from scratch — because one of them cannot be
+ * offered to a provider with no resume grammar and the other always can. So this
+ * asks for A RESTART rather than for the literal id: what #324 requires is that
+ * the square always gives you one, not which of the two it is.
  */
 
 const row = (over: Partial<AgentGridRow> = {}): AgentGridRow =>
@@ -34,15 +40,17 @@ const row = (over: Partial<AgentGridRow> = {}): AgentGridRow =>
     }) as AgentGridRow;
 
 const ids = (items: { id: string }[]) => items.map((i) => i.id);
+const hasRestart = (got: string[]) => got.includes('restart') || got.includes('restart-fresh');
 
 describe('one agent menu, running or not (#324)', () => {
     for (const running of [false, true]) {
         it(`offers start, restart, edit, unmount and delete when running=${running}`, () => {
             const got = ids(agentCardMenuItems(row({ running })));
 
-            for (const required of ['start', 'restart', 'edit', 'unmount', 'delete']) {
+            for (const required of ['start', 'edit', 'unmount', 'delete']) {
                 expect(got).toContain(required);
             }
+            expect(hasRestart(got), got.join(',')).toBe(true);
         });
 
         it(`never offers duplicate or move-to-project when running=${running}`, () => {

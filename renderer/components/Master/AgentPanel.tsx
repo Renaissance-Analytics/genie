@@ -6,10 +6,14 @@ import TerminalPanel from './TerminalPanel';
 import { IconRefresh, IconSettings } from './icons';
 import AgentTuiSwitcher from './AgentTuiSwitcher';
 import type { AgentRuntimeSpec } from '../../lib/ams-grid';
+import { restartOptionsFor, type RestartMode } from '../../../main/agents/restart-options';
 
 type Props = ComponentProps<typeof TerminalPanel> & {
     onAgentSettings?: () => void;
-    onRestartAgent?: () => void;
+    /** Restart this agent — `'resume'` continues the conversation, `'fresh'`
+     *  relaunches from scratch. The panel decides WHICH it can offer from the
+     *  spec (genie#443); the caller performs whichever it is handed. */
+    onRestartAgent?: (mode: RestartMode) => void;
     /** This agent's record id + the TUIs it may run under — drives the panel's
      *  driver switcher. Absent for a panel whose agent has no record yet. */
     agentId?: string;
@@ -33,6 +37,13 @@ export default function AgentPanel(props: Props) {
     const provider = String(props.spec.meta.agent ?? 'custom');
     const { style, onAgentSettings, onRestartAgent, agentId, agentAvatar, runtimes, onRuntimesChanged,
         ...terminalProps } = props;
+    // WHICH restarts this agent can be offered, from the same resolver the host
+    // reasons with. The header button takes the one that preserves the most:
+    // resume when there is a conversation to keep, fresh otherwise — so the
+    // control is never the button that only ever refuses, which is what it was
+    // for every provider with no resume grammar (genie#443).
+    const restartOptions = restartOptionsFor(props.spec);
+    const primaryRestart: RestartMode = restartOptions.canResume ? 'resume' : 'fresh';
     const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
     const menuRef = useRef<HTMLDivElement>(null);
     useEffect(() => {
@@ -92,13 +103,17 @@ export default function AgentPanel(props: Props) {
                                 onChanged={() => onRuntimesChanged?.()}
                             />
                         )}
-                        {onRestartAgent && (
+                        {onRestartAgent && restartOptions.isAgent && (
                             <button
                                 type="button"
                                 className="pctl"
-                                title="Restart agent"
+                                title={
+                                    primaryRestart === 'resume'
+                                        ? 'Restart agent (resume the conversation)'
+                                        : 'Restart agent (fresh — starts a new conversation)'
+                                }
                                 aria-label="Restart agent"
-                                onClick={onRestartAgent}
+                                onClick={() => onRestartAgent(primaryRestart)}
                             >
                                 <IconRefresh size={14} />
                             </button>
@@ -109,7 +124,8 @@ export default function AgentPanel(props: Props) {
             {menu && overlayRoot && createPortal(
                 <div ref={menuRef} className="proj-popover ctx-menu agent-panel-menu" role="menu" style={{ position: 'fixed', left: menu.x, top: menu.y }}>
                     {onAgentSettings && <button type="button" role="menuitem" onClick={() => { setMenu(null); onAgentSettings(); }}><IconSettings size={14} /> Agent settings…</button>}
-                    {onRestartAgent && <button type="button" role="menuitem" onClick={() => { setMenu(null); onRestartAgent(); }}><IconRefresh size={14} /> Restart agent</button>}
+                    {onRestartAgent && restartOptions.canResume && <button type="button" role="menuitem" onClick={() => { setMenu(null); onRestartAgent('resume'); }}><IconRefresh size={14} /> Restart agent (resume)</button>}
+                    {onRestartAgent && restartOptions.canRestartFresh && <button type="button" role="menuitem" onClick={() => { setMenu(null); onRestartAgent('fresh'); }}><IconRefresh size={14} /> Restart agent (fresh)</button>}
                 </div>,
                 overlayRoot,
             )}

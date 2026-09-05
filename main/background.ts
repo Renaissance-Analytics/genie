@@ -2355,7 +2355,7 @@ app.whenReady().then(async () => {
                 setAvatar: (agentId, avatar) => agentRecordSetAvatar(agentId, avatar),
             },
             createSpecializedAgentTerminal: (input) => createSpecializedAgentTerminal(input),
-            restartAgentTerminal: (id) => restartAgentTerminal(id),
+            restartAgentTerminal: (id, mode) => restartAgentTerminal(id, mode),
             updateAgentInboxChannel: (specId, patch) => updateAgentInboxChannel(specId, patch),
             killTerminalById: (id) => killTerminalById(id),
             writeToTerminal: (id, data) => writeToTerminal(id, data),

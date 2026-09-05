@@ -10,6 +10,7 @@ import { makeRemoteBridge } from './remote-bridge';
 import type { TynnHealth } from '../../main/mcp/tynn-health';
 import type { DrainSnapshot } from '../../main/agents/drain';
 import type { AgentTuiId, TuiDef } from '../../main/agents/registry';
+import type { RestartMode } from '../../main/agents/restart-options';
 import type { AgentCliToolId } from '../../main/agents/agent-cli-catalog';
 /* The agent MANAGER's wire types (Tynn #709 / story #263).
  *
@@ -4062,16 +4063,23 @@ export interface GenieApi {
             /** IssueWatch pings: react by glow (`notify`) or idle-wake (`wake`). */
             issuewatch_action?: 'notify' | 'wake';
         }) => Promise<{ ok: boolean; spec?: TerminalSpec; error?: string }>;
-        /** Gracefully restart an agent terminal: reconnect its TUI to the current
-         *  MCP rig (fresh tools/protocol) while resuming the conversation. Resolves
-         *  to the old→new terminal ids, or `{ ok: false, error }` when the agent
-         *  can't be resumed (no resume grammar, or no captured session).
+        /** Restart an agent terminal: reconnect its TUI to the current MCP rig
+         *  (fresh tools/protocol). TWO operations, and the caller says which
+         *  (genie#443):
+         *
+         *  - `'resume'` (default) CONTINUES the conversation, and refuses when
+         *    there is none to continue — no resume grammar, or no captured
+         *    session. That refusal is why the second mode exists.
+         *  - `'fresh'` kills the process and starts it again. Always available
+         *    for an agent terminal, including a dead one; it starts a NEW
+         *    conversation, so warn first where one would be lost.
          *
          *  `ok` means the relaunch was STARTED, not that the agent is back —
          *  `state`/`note` carry what the host actually established (genie#364).
          *  Render `note`; never harden it into "restarted". */
         restartAgent: (
             id: string,
+            mode?: RestartMode,
         ) => Promise<
             | {
                   ok: true;

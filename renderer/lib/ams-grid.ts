@@ -70,7 +70,19 @@ export interface AgentGridRow {
     /** True when ANY of its TUIs is live. */
     running: boolean;
     collisionGroup: string | null;
-    /** Orphan rows only: the spec nothing owns. */
+    /**
+     * The terminal this row's ACTIONS act on: an agent row's FRONTED runtime's
+     * spec, or — for an orphan — the spec nothing owns. Undefined when there is
+     * none (a dormant agent), so a caller can tell "no terminal" from "some
+     * terminal" instead of acting on a stale one.
+     *
+     * It used to be orphan-only, and the grid's menu handler reads
+     * `if (row.specId) …` — so "Restart agent" and "Edit agent…" on a real agent
+     * square did NOTHING, silently, for every agent there has ever been
+     * (genie#443). `Chooser` was computing the same id inches away, for the
+     * square's checked/active state; the menu just never got it. Computed here
+     * so both read one answer.
+     */
     specId?: string;
 }
 
@@ -117,6 +129,7 @@ export function agentGridRows(input: {
             fronted: runtime.fronted,
             running: !!runtime.terminalSpecId && isLive(runtime.terminalSpecId),
         }));
+        const fronted = mine.find((runtime) => runtime.fronted);
         return {
             kind: 'agent' as const,
             id: agent.id,
@@ -126,6 +139,10 @@ export function agentGridRows(input: {
             role: agent.role,
             provider: tuis.find((t) => t.fronted)?.provider ?? null,
             tuis,
+            // The FRONTED runtime's terminal — the one the square is showing, so
+            // an action taken on the square lands on the TUI the person is
+            // looking at rather than on whichever sidecar sorted first.
+            ...(fronted?.terminalSpecId ? { specId: fronted.terminalSpecId } : {}),
             // ANY live TUI. A fronted one that exited while a sidecar keeps
             // working is still a working agent, and drawing it as stopped would
             // be a lie about what is running.

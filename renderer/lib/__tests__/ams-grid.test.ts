@@ -92,6 +92,42 @@ describe('agentGridRows', () => {
         expect(rows[0]!.tuis.map((t) => t.provider).sort()).toEqual(['claude', 'codex']);
     });
 
+    it('gives an AGENT row the terminal its fronted TUI runs in', () => {
+        // genie#443, the same bug one surface over. `specId` was documented
+        // "orphan rows only", and the grid's own menu handler reads
+        // `if (row.specId) onRestartAgentSpec(row.specId)` — so "Restart agent"
+        // on a real agent square did NOTHING, silently, for every agent there
+        // has ever been. A menu item that does nothing is exactly what a
+        // menu-item test passes against, which is why this asserts the id the
+        // action needs rather than the item's presence.
+        const rows = agentGridRows({
+            agents: [agent({ id: 'a1', name: 'tynn' })],
+            runtimes: [
+                runtime({ id: 'r1', agentId: 'a1', provider: 'claude', specId: 't1', fronted: true }),
+                runtime({ id: 'r2', agentId: 'a1', provider: 'codex', specId: 't2' }),
+            ],
+            specs: [spec('t1'), spec('t2')],
+            isLive: () => true,
+        });
+        // The FRONTED one — the TUI the square is showing — not whichever
+        // runtime happens to sort first.
+        expect(rows[0]!.specId).toBe('t1');
+    });
+
+    it('leaves specId undefined for an agent that has no terminal', () => {
+        // POSITIVE CONTROL for the rule above: a row that always carried some
+        // id would satisfy it while pointing an action at nothing. A dormant
+        // agent genuinely has no terminal, and the surfaces must be able to see
+        // that rather than act on a stale one.
+        const rows = agentGridRows({
+            agents: [agent({ id: 'a1', name: 'tynn' })],
+            runtimes: [],
+            specs: [],
+            isLive: () => false,
+        });
+        expect(rows[0]!.specId).toBeUndefined();
+    });
+
     it('counts an agent as running when ANY of its TUIs is live', () => {
         // A fronted TUI that exited while a sidecar keeps working is still a
         // working agent, and showing it as stopped would be a lie.

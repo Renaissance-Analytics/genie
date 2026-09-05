@@ -4,6 +4,18 @@ import path from 'path';
 import crypto from 'crypto';
 import type { AgentInboxAgentType } from './types';
 import { PROVIDER_IDS, isTuiId, providerDef } from '../agents/registry';
+import {
+    capturedSessionId,
+    extractSessionId,
+    type AgentSpecLike,
+} from '../agents/restart-options';
+
+// The session-id READERS live in `agents/restart-options.ts`, which reaches
+// nothing but the registry — the renderer's menus have to ask the same questions
+// this module answers, and a module that imports `fs` cannot be imported there.
+// Re-exported so every existing caller keeps its import site.
+export { capturedSessionId, extractSessionId };
+export type { AgentSpecLike };
 
 /**
  * Capture an AI TUI's CHAT-SESSION identity when Genie launches it, so a
@@ -109,14 +121,6 @@ export function isResumingCommand(agent: AgentInboxAgentType, command: string): 
 /** Session ids later become one unquoted CLI argument, so keep them shell-inert. */
 export function isSafeSessionId(value: string): boolean {
     return /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(String(value ?? ''));
-}
-
-/** Extract the uuid from an existing `--session-id <uuid>`/`=uuid`, or null. */
-export function extractSessionId(command: string): string | null {
-    const m = String(command ?? '').match(
-        /--session-id(?:=|\s+)([0-9a-fA-F-]{8,})/,
-    );
-    return m ? m[1] : null;
 }
 
 export interface RenderedLaunch {
@@ -250,42 +254,6 @@ export function renderAgentContinue(
     return `${base} ${flag}`;
 }
 
-/** The agent-relevant slice of a terminal spec's meta (loose so this stays free of
- *  the heavy db types). */
-interface AgentSpecLike {
-    meta?: {
-        agent?: string;
-        agent_command?: string;
-        chat_session_id?: string;
-    } | null;
-}
-
-/**
- * The session id a RELAUNCH should resume — `meta.chat_session_id` when it is
- * there, otherwise the id sitting inside the stored launch command's
- * `--session-id` flag.
- *
- * The second half is genie#364. `--session-id <uuid>` is CREATE-a-session-with-
- * this-id: {@link renderAgentLaunch} MINTS the uuid so the conversation is
- * identified from the first keystroke, and is idempotent about a flag that is
- * already present. That means the id can end up recorded ONLY in the stored
- * command — the owner's always-on flags may pin one, and a spec written by an
- * older build has one baked in. Reading it here is what lets a relaunch change
- * the flag's VERB (`--resume`) instead of replaying a create that can only ever
- * succeed once ("Error: Session ID <uuid> is already in use").
- *
- * `chat_session_id` OUTRANKS the command: it is the live record, updated when a
- * session is detected or re-captured, while a command string can hold a stale id
- * indefinitely.
- */
-export function capturedSessionId(spec: AgentSpecLike | null): string | null {
-    const meta = spec?.meta;
-    if (!meta) return null;
-    const stored = meta.chat_session_id?.trim();
-    if (stored) return stored;
-    return extractSessionId(meta.agent_command ?? '');
-}
-
 /**
  * Fresh-vs-continue decision for an AGENT terminal on a FRESH pty spawn (a restart /
  * reopen where the previous shell + agent died). The spec's captured session id
@@ -350,6 +318,35 @@ export function agentRelaunchDecision(
 }
 
 /**
+ * The BASE command a FRESH restart (genie#443) relaunches an agent with: the
+ * stored launch line with every session/resume flag stripped off.
+ *
+ * The SECOND of the two restart operations. It needs no resume grammar and no
+ * captured session id, because it promises neither — it kills the process and
+ * starts it again, which is the only thing that reaches a wedged or dead agent.
+ * {@link resolveRestartCommand} refuses exactly that case, correctly, because it
+ * is the operation that promises the conversation survives.
+ *
+ * It returns the BASE, not a finished launch line: the relaunch renders that
+ * through the same {@link agentRelaunchDecision} every other fresh spawn uses,
+ * which is what mints a new session id where the provider supports one. Two
+ * renderers of a launch command is how they drift.
+ */
+export function resolveFreshRestartCommand(
+    spec: AgentSpecLike | null,
+): { command: string } | { error: string } {
+    const agent = spec?.meta?.agent as AgentInboxAgentType | undefined;
+    if (!spec || !agent) return { error: 'Not an agent terminal.' };
+    // Stripped, because a create flag is one-shot: carrying `--session-id <uuid>`
+    // into a relaunch is a guaranteed "Session ID … is already in use"
+    // (genie#364), and carrying a `--resume` into a FRESH restart would resume
+    // the very conversation the user asked to leave behind.
+    const base = stripSessionFlags(spec.meta?.agent_command ?? '');
+    if (!base) return { error: `No command configured for agent "${agent}".` };
+    return { command: base };
+}
+
+/**
  * The command a GRACEFUL RESTART (wish #88 / #216) should relaunch an agent with,
  * or a refusal. Resumes the captured session by exact id ONLY when its transcript
  * exists on disk; when that id has DRIFTED (verified false), falls back to
@@ -359,6 +356,12 @@ export function agentRelaunchDecision(
  * has no resumable conversation — a non-agent, an unsupported custom wrapper,
  * or a supported agent with no captured session — so a restart can never silently drop the agent into
  * a fresh, context-less session.
+ *
+ * That refusal is right, and it is not the whole answer. It used to be: this was
+ * the ONLY restart, so "cannot resume" meant "cannot restart", and a dead agent
+ * with no conversation to protect could not be recovered from the UI at all
+ * (genie#443). {@link resolveFreshRestartCommand} is the other operation, and
+ * the refusal below now says so rather than dead-ending.
  *
  * Pure: the on-disk check is injected and the caller does the pty side-effects.
  * This is the decision `restartAgentTerminal` uses; the earlier version called
@@ -378,8 +381,8 @@ export function resolveRestartCommand(
     if (!renderAgentResume(agent, base, sid)) {
         return {
             error:
-                `Cannot gracefully restart "${agent}": no captured session to resume, so a restart ` +
-                'would lose the conversation. A captured session id is required.',
+                `Cannot RESUME "${agent}": there is no captured session to continue. ` +
+                'Restart it fresh instead — that relaunches the agent and starts a new conversation.',
         };
     }
     // Verified id → --resume; drifted id → --continue. Never a fresh mint here

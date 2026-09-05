@@ -9,6 +9,7 @@ import type {
     AgentManagerSidecar,
     AgentManagerState,
     AgentMcpServer,
+    SidecarAction,
 } from './genie';
 
 /**
@@ -213,6 +214,45 @@ export function sidecarSummary(sidecar: AgentManagerSidecar): string {
     return sidecar.running
         ? `${sidecar.name} is running.`
         : `${sidecar.name} is registered and not running.`;
+}
+
+/**
+ * The BUTTON for a sidecar action, and the line shown when it lands.
+ *
+ * These were derived from the action id — `Restart sidecar`, and
+ * `` `${action[0].toUpperCase()}${action.slice(1)}ed` `` for the confirmation.
+ * That is fine for three one-word verbs and produces "Restart-fresheed" for the
+ * fourth (genie#443), so the words are written out. A restart is also the one
+ * action here that does not simply happen: the host tears the old TUI down and
+ * hands a command to a fresh terminal, and everything after that is inside the
+ * pty, so the line says "relaunching" rather than a recovery nobody watched
+ * (genie#364).
+ */
+export function sidecarActionLabel(action: SidecarAction): string {
+    switch (action) {
+        case 'start':
+            return 'Start sidecar';
+        case 'stop':
+            return 'Stop sidecar';
+        case 'restart':
+            return 'Restart sidecar (resume)';
+        case 'restart-fresh':
+            return 'Restart sidecar (fresh)';
+    }
+}
+
+export function sidecarDoneMessage(action: SidecarAction, name: string | null): string {
+    const who = name ?? 'the sidecar';
+    switch (action) {
+        case 'start':
+            return `Started ${who}.`;
+        case 'stop':
+            return `Stopped ${who}.`;
+        case 'restart':
+            return `Relaunching ${who} — it resumes the same conversation.`;
+        case 'restart-fresh':
+            return `Relaunching ${who} from scratch — it starts a new conversation.`;
+    }
 }
 
 /** How this sidecar was matched, spelled out — the FK and the name convention

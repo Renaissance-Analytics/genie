@@ -1854,11 +1854,19 @@ export function registerIpcHandlers(): void {
         ) => createSpecializedAgentTerminal(input),
     );
 
-    // Gracefully restart an agent terminal so its TUI reconnects to the current
-    // MCP rig (fresh tools/protocol) WITHOUT losing the conversation — resume the
-    // captured session, or refuse when it isn't resumable. Delegates to the same
-    // engine the `runAgent restart` MCP action uses.
-    ipcMain.handle('terminal-spec:restart-agent', (_e, id: string) => restartAgentTerminal(id));
+    // Restart an agent terminal so its TUI reconnects to the current MCP rig
+    // (fresh tools/protocol). `mode: 'resume'` (the default) keeps the
+    // conversation and refuses when it cannot; `mode: 'fresh'` kills the process
+    // and starts it again, which is the only thing that reaches a wedged or dead
+    // agent (genie#443). Delegates to the same engine the `runAgent restart` MCP
+    // action uses.
+    //
+    // The mode is NARROWED here rather than trusted: it arrives from a renderer
+    // over IPC, and a value that is neither falls back to `resume` — the mode
+    // that can only ever refuse, never the one that discards a conversation.
+    ipcMain.handle('terminal-spec:restart-agent', (_e, id: string, mode?: string) =>
+        restartAgentTerminal(id, mode === 'fresh' ? 'fresh' : 'resume'),
+    );
 
     // The human AgentInbox panel: read the agent directory and DM history; post
     // as the human; and edit an agent's accessibility. The live push

@@ -444,13 +444,17 @@ export interface MobileDataDeps {
         issuewatch_action?: 'notify' | 'wake';
     }) => { ok: boolean; spec?: TerminalSpecRow; error?: string };
     /**
-     * Gracefully restart an agent terminal on the HOST (resume the conversation,
-     * reconnect the TUI to the current MCP rig) so a REMOTE window can drive the
-     * host's "Restart agent" button. OPTIONAL — only a full desktop host wires it;
-     * absent ⇒ the endpoint 501s.
+     * Restart an agent terminal on the HOST (reconnect the TUI to the current MCP
+     * rig) so a REMOTE window can drive the host's restart controls. `'resume'`
+     * keeps the conversation and refuses when it cannot; `'fresh'` relaunches
+     * from scratch and always can (genie#443) — a remote window must be able to
+     * recover a wedged agent too, or the escape hatch only exists on the desk the
+     * host happens to be sitting on. OPTIONAL — only a full desktop host wires
+     * it; absent ⇒ the endpoint 501s.
      */
     restartAgentTerminal?: (
         id: string,
+        mode?: 'resume' | 'fresh',
     ) =>
         | {
               ok: true;
@@ -2333,6 +2337,8 @@ export async function handleApi(
             patch?: Parameters<typeof updateTerminalSpec>[1];
             /** Ordered spec ids for a grid drag-reorder. */
             ids?: unknown[];
+            /** restart-agent: which of the two restarts (genie#443). */
+            mode?: unknown;
         };
         try {
             d = await readJsonBody(req);
@@ -2444,7 +2450,16 @@ export async function handleApi(
                     });
                     return true;
                 }
-                sendJson(res, 200, deps.restartAgentTerminal(String(d.id ?? '')));
+                // Narrowed, not trusted: this arrives over the wire, and an
+                // unrecognised value falls back to the mode that can only refuse.
+                sendJson(
+                    res,
+                    200,
+                    deps.restartAgentTerminal(
+                        String(d.id ?? ''),
+                        d.mode === 'fresh' ? 'fresh' : 'resume',
+                    ),
+                );
                 return true;
             }
             if (pathname === '/api/desktop/terminal-spec/update') {

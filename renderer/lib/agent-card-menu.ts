@@ -1,4 +1,5 @@
 import type { AgentGridRow } from './ams-grid';
+import type { RestartOptions } from '../../main/agents/restart-options';
 
 /**
  * The right-click menu for an agent square in the sidebar.
@@ -22,6 +23,16 @@ import type { AgentGridRow } from './ams-grid';
  * `.agents/*` survives. Both offer to take a handoff first, because stopping an
  * agent is the moment its unfinished context is lost.
  *
+ * RESTART IS TWO ITEMS, not one (genie#443). This menu carried a single
+ * "Restart agent" hinted "Relaunches its TUI and resumes the same conversation"
+ * — for every agent, including the twelve providers whose restart the host
+ * REFUSES because they have no resume grammar. So the surface that always
+ * offered a restart described one it could not perform, while the surfaces that
+ * knew better hid the item instead and left a wedged agent unrecoverable. Both
+ * operations are named here, and each says what it actually does. Which of them
+ * applies is `restartOptionsFor` — the same function the host reasons with, so
+ * the menu cannot drift from the answer.
+ *
  * PURE — the model is testable without a window, which is where the guards
  * below are worth pinning.
  */
@@ -30,6 +41,7 @@ export interface AgentCardMenuItem {
     id:
         | 'start'
         | 'restart'
+        | 'restart-fresh'
         | 'edit'
         | 'unmount'
         | 'make-default'
@@ -51,7 +63,24 @@ export interface AgentCardMenuItem {
     confirmTwice?: boolean;
 }
 
-export function agentCardMenuItems(row: AgentGridRow): AgentCardMenuItem[] {
+export function agentCardMenuItems(
+    row: AgentGridRow,
+    /**
+     * What a restart of this row's terminal could do — from `restartOptionsFor`
+     * on that terminal's spec.
+     *
+     * The default is the FLOOR, not a guess: a fresh restart always works, so a
+     * caller that cannot say still offers the escape hatch, and never claims a
+     * resume it has not checked. Callers that hold the spec pass the real answer
+     * and get both items.
+     */
+    restart: RestartOptions = {
+        isAgent: true,
+        canResume: false,
+        canRestartFresh: true,
+        losesConversation: false,
+    },
+): AgentCardMenuItem[] {
     // An ORPHAN is a leftover no agent owns — what is left on screen after the
     // agent it belonged to is gone. It has no record to start or designate, so
     // it gets no agent actions; guessing one would act on the wrong thing.
@@ -109,9 +138,14 @@ export function agentCardMenuItems(row: AgentGridRow): AgentCardMenuItem[] {
         ];
     }
 
-    // The SAME five, running or not. Which one a person wants depends on what
+    // The same items, RUNNING OR NOT. Which one a person wants depends on what
     // they are about to do, not on whether a pty happens to be alive — and a
     // menu that changes shape underneath them is the thing this replaces.
+    //
+    // The restarts are the one exception, and on a different axis: they need a
+    // TERMINAL to act on, and which of the two is offered is a fact about the
+    // provider and its captured session, not about this moment. An agent that
+    // has never been started has neither, and Start is its verb.
     const items: AgentCardMenuItem[] = [
         {
             id: 'start',
@@ -121,17 +155,33 @@ export function agentCardMenuItems(row: AgentGridRow): AgentCardMenuItem[] {
                 : 'Opens its terminal and resumes where it left off.',
             primary: !row.running,
         },
-        {
+    ];
+    // No terminal, no restart. A dormant agent's verb is Start; offering a
+    // restart would be a click that reaches nothing, which is the dead end
+    // `specId` being undefined exists to make visible.
+    if (row.specId && restart.canResume) {
+        items.push({
             id: 'restart',
-            label: 'Restart agent',
-            hint: 'Relaunches its TUI and resumes the same conversation.',
-        },
+            label: 'Restart agent (resume)',
+            hint: 'Relaunches its TUI and continues the same conversation.',
+        });
+    }
+    if (row.specId && restart.canRestartFresh) {
+        items.push({
+            id: 'restart-fresh',
+            label: 'Restart agent (fresh)',
+            hint: restart.losesConversation
+                ? 'Relaunches its TUI from scratch. The current conversation is not carried over.'
+                : 'Relaunches its TUI from scratch, starting a new conversation. Works even when it is wedged or dead.',
+        });
+    }
+    items.push(
         {
             id: 'edit',
             label: 'Edit agent…',
             hint: 'Its name, purpose, TUI and persona.',
         },
-    ];
+    );
     items.push(
         row.role === 'workspace'
             ? {

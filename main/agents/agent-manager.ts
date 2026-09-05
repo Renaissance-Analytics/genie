@@ -401,6 +401,12 @@ export function addAgentMcpServer(agentId: string, input: McpServerInput): Write
  * grammar — the refusal is returned rather than quietly downgraded to a hard
  * restart, because a hard restart is exactly what the refusal is protecting
  * against.
+ *
+ * **Restart-fresh** is that hard restart, asked for BY NAME (genie#443). The
+ * distinction the paragraph above defends is between a downgrade nobody chose
+ * and an operation someone picked: the refusal must never silently become this,
+ * and this must be reachable, or a sidecar under a provider with no resume
+ * grammar can never be recovered at all.
  */
 export async function agentSidecarAction(
     agentId: string,
@@ -425,10 +431,13 @@ export async function agentSidecarAction(
         return { ok: true };
     }
 
-    if (action === 'restart') {
+    if (action === 'restart' || action === 'restart-fresh') {
         const live = liveTerminalOf(sidecar);
         if (!live) return { ok: false, error: `${sidecar.name} is not running.` };
-        const result = restartAgentTerminal(live);
+        const result = restartAgentTerminal(
+            live,
+            action === 'restart-fresh' ? 'fresh' : 'resume',
+        );
         broadcastAgentsChanged();
         return result.ok ? { ok: true } : { ok: false, error: result.error };
     }

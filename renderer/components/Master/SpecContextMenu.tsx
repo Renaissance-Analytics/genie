@@ -12,7 +12,7 @@ import {
     IconTrash,
 } from './icons';
 import type { TerminalSpec, WorkspaceRow } from '../../lib/genie';
-import { canResumeTui } from '../../../main/agents/registry';
+import { restartOptionsFor, type RestartMode } from '../../../main/agents/restart-options';
 import { clampPopoverToViewport } from '../../lib/anchored-popover';
 
 interface Position {
@@ -35,12 +35,17 @@ interface Props {
     /** Edit a specialized (agent) terminal's AgentInbox purpose/scope. Only
      *  offered when this spec is an agent terminal (`meta.agent` set). */
     onAgentSettings?: () => void;
-    /** Gracefully restart an agent terminal so its TUI reconnects to the current
-     *  MCP rig (fresh tools) while resuming the conversation. Offered only for a
-     *  provider the registry says can resume (`TuiDef.resume`) — the same table
-     *  `renderAgentResume` builds the command from, so the item appears exactly
-     *  where the restart would succeed. */
-    onRestartAgent?: () => void;
+    /** Restart an agent terminal so its TUI reconnects to the current MCP rig
+     *  (fresh tools). TWO operations, and the item the user picks says which:
+     *
+     *  - `'resume'` continues the conversation. Offered only where the registry
+     *    says the provider can (`TuiDef.resume` — the same table
+     *    `renderAgentResume` builds the command from) AND a session was
+     *    captured, so the item appears exactly where the restart would succeed.
+     *  - `'fresh'` relaunches from scratch. Offered for EVERY agent terminal,
+     *    because a wedged or dead one is the case that needs it most and was the
+     *    case the old single gate excluded (genie#443). */
+    onRestartAgent?: (mode: RestartMode) => void;
 }
 
 /**
@@ -67,16 +72,20 @@ export default function SpecContextMenu({
     onRestartAgent,
 }: Props) {
     const isAgent = !!spec.meta?.agent;
-    // Whether a graceful resume is possible is a PROVIDER capability, and the
-    // registry decides it — the same `TuiDef.resume` that `renderAgentResume`
-    // builds the command from, so the menu cannot disagree with the main side.
+    // WHICH restarts this terminal can be offered — asked of the same resolver
+    // the host reasons with, so the menu cannot disagree with the main side.
     //
-    // It did disagree. This line read `spec.meta?.agent === 'claude'` under a
-    // comment claiming codex had no resume; codex has rendered
+    // It did disagree, twice. This started as `spec.meta?.agent === 'claude'`
+    // under a comment claiming codex had no resume; codex has rendered
     // `codex resume <id>` all along, so a codex agent was refused a restart that
     // works. Adding `|| === 'codex'` would have been the same bug with one more
     // literal, stale again the next time a provider learns to resume (genie#261).
-    const isResumableAgent = canResumeTui(spec.meta?.agent);
+    //
+    // Then it became `canResumeTui(...)` — right about resuming, and used to gate
+    // RESTARTING. A provider with `resume: null` lost the option entirely, so a
+    // dead Genie TUI could not be recovered from this menu at all (genie#443).
+    // Two questions, two items; `restartOptionsFor` answers both.
+    const restartOptions = restartOptionsFor(spec);
     const menuRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
@@ -171,12 +180,22 @@ export default function SpecContextMenu({
                         }}
                     />
                 )}
-                {isResumableAgent && onRestartAgent && (
+                {restartOptions.canResume && onRestartAgent && (
                     <CtxItem
                         icon={<IconRefresh size={14} />}
                         label="Restart agent (resume)"
                         onClick={() => {
-                            onRestartAgent();
+                            onRestartAgent('resume');
+                            onClose();
+                        }}
+                    />
+                )}
+                {restartOptions.canRestartFresh && onRestartAgent && (
+                    <CtxItem
+                        icon={<IconRefresh size={14} />}
+                        label="Restart agent (fresh)"
+                        onClick={() => {
+                            onRestartAgent('fresh');
                             onClose();
                         }}
                     />

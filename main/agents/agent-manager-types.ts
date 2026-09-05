@@ -116,7 +116,7 @@ export interface PersonaView {
 
 /* ── Sidecar ──────────────────────────────────────────────────────────────── */
 
-export type SidecarAction = 'start' | 'stop' | 'restart';
+export type SidecarAction = 'start' | 'stop' | 'restart' | 'restart-fresh';
 
 /* ── The manager's state ──────────────────────────────────────────────────── */
 

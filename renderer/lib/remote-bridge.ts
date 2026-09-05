@@ -359,10 +359,13 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
                 json: { input },
             })) as { ok: boolean; spec?: TerminalSpec; error?: string },
         // Restart targets the HOST's agent (the terminal lives there), like create.
-        restartAgent: async (id) =>
+        // The MODE rides along: a remote window offering "restart fresh" and
+        // silently sending "resume" would refuse on exactly the wedged agents the
+        // fresh mode exists for (genie#443).
+        restartAgent: async (id, mode) =>
             (await req('/api/desktop/terminal-spec/restart-agent', {
                 method: 'POST',
-                json: { id },
+                json: { id, mode },
             })) as
                 | {
                       ok: true;

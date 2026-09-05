@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { IconPlay, IconPin, IconAlert, IconTrash } from './icons';
 import { agentCardMenuItems, type AgentCardMenuItem } from '../../lib/agent-card-menu';
 import type { AgentGridRow } from '../../lib/ams-grid';
+import type { RestartOptions } from '../../../main/agents/restart-options';
 import { clampPopoverToViewport } from '../../lib/anchored-popover';
 
 /**
@@ -21,11 +22,16 @@ import { clampPopoverToViewport } from '../../lib/anchored-popover';
 export default function AgentContextMenu({
     position,
     row,
+    restart,
     onClose,
     onAct,
 }: {
     position: { x: number; y: number };
     row: AgentGridRow;
+    /** What a restart of this row's terminal could do — `restartOptionsFor` on
+     *  that terminal's spec. Omitted ⇒ no restart is offered, which is the
+     *  honest answer for an agent that has no terminal (genie#443). */
+    restart?: RestartOptions;
     onClose: () => void;
     onAct: (id: AgentCardMenuItem['id']) => void;
 }) {
@@ -66,7 +72,7 @@ export default function AgentContextMenu({
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    const items = agentCardMenuItems(row);
+    const items = agentCardMenuItems(row, restart);
     if (items.length === 0) return null;
 
     const iconFor = (id: AgentCardMenuItem['id']) =>

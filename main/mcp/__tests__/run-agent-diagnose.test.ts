@@ -319,7 +319,9 @@ describe('a repair that would be refused', () => {
         // `resolveRestartCommand` refuses a terminal with no captured session to
         // resume, so "restart it" is advice that bounces — and the operator's next
         // move after a bounce is usually stop-and-recreate, which is the thing the
-        // refusal exists to prevent (genie#364).
+        // refusal exists to prevent (genie#364). Since genie#443 the repair also
+        // names the operation that DOES work from here, so the caveat stops being
+        // a dead end.
         const { specId, inboxId } = await bootedAgent();
         agentInboxBroker.leave(inboxId);
 
@@ -331,7 +333,8 @@ describe('a repair that would be refused', () => {
         const d = only((await diagnose()).diagnoses);
         expect(d.findings[0]?.ailment).toBe('not-joined-to-inbox');
         expect(d.findings[0]?.repair).toMatch(/would be refused/i);
-        expect(d.findings[0]?.repair).toMatch(/no captured session to resume/i);
+        expect(d.findings[0]?.repair).toMatch(/no captured session to continue/i);
+        expect(d.findings[0]?.repair).toMatch(/fresh/i);
     });
 
     it('POSITIVE CONTROL — an agent that CAN be restarted gets no such warning', async () => {

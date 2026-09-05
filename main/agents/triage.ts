@@ -123,6 +123,9 @@ export interface AgentObservation {
      * flag instead of the resume grammar). A diagnosis that recommends a restart
      * without knowing that sends the operator to a refusal, or worse, to a
      * stop-and-recreate that loses the work.
+     *
+     * It is a caveat, no longer a dead end: `restart` with `fresh: true` always
+     * works (genie#443). The repair names it, and says what it costs first.
      */
     restartRefusal: string | null;
     /** When its terminal binding was last written. Null when never bound. */
@@ -262,8 +265,9 @@ function restartRepair(obs: AgentObservation, lead: string): string {
     return (
         `${lead} FIRST, though — a graceful restart would be refused right now: ` +
         `${obs.restartRefusal} Recover what it was doing (its handoff note, or ` +
-        '`manageTerminals read` on its terminal) before stopping it: from here a ' +
-        'relaunch starts a fresh, context-less session.'
+        '`manageTerminals read` on its terminal) before restarting it fresh ' +
+        '(`runAgent restart` with `fresh: true`): from here a relaunch starts a ' +
+        'new, context-less session.'
     );
 }
 
