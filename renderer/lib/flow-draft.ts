@@ -123,3 +123,32 @@ export function coerceFilterValue(
     }
     return { ok: true, value: values };
 }
+
+/**
+ * The stored settings the form is NOT showing, so an edit does not drop them.
+ *
+ * `flowFormFields` hides an input the trigger already supplies. That is right
+ * for the box and wrong for the save: a Flow that stored a value for it once
+ * would come back without it, changed by an edit nobody made on screen.
+ *
+ * Only for an edit of the SAME body. When the recipe changes, its old settings
+ * belong to a different recipe and are dropped — the store would refuse them
+ * anyway, by name.
+ */
+export function carryHiddenArgs(
+    recipe: FlowRecipeSummary | null,
+    shown: readonly FlowFormField[],
+    stored: Readonly<Record<string, string | number | boolean>> | undefined,
+): Record<string, string | number | boolean> {
+    if (!recipe || !stored) return {};
+    const showing = new Set(shown.map((f) => f.input.key));
+    const out: Record<string, string | number | boolean> = {};
+    for (const input of recipe.inputs) {
+        // A box on screen is authoritative, empty included — that is how a
+        // setting is CLEARED.
+        if (showing.has(input.key)) continue;
+        const value = stored[input.key];
+        if (value !== undefined) out[input.key] = value;
+    }
+    return out;
+}

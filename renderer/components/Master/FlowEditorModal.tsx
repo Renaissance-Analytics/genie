@@ -14,7 +14,7 @@ import {
     type FlowSummary,
     type FlowTrigger,
 } from '../../lib/genie';
-import { coerceFilterValue, flowFormFields } from '../../lib/flow-draft';
+import { carryHiddenArgs, coerceFilterValue, flowFormFields } from '../../lib/flow-draft';
 
 /**
  * Authoring a Flow: a body, when it runs, and what it may touch.
@@ -96,6 +96,19 @@ export default function FlowEditorModal({
                 setErrors(built.errors);
                 return;
             }
+            // Settings the form is not SHOWING (because a trigger supplies
+            // them) are carried through rather than dropped -- otherwise an
+            // edit changes the Flow in a way nothing on screen said it would.
+            // Only for the same body: another recipe's settings are not this
+            // one's, and the store refuses them by name.
+            const allArgs = {
+                ...carryHiddenArgs(
+                    recipe,
+                    fields,
+                    editing && editing.recipeId === recipeId ? editing.args : undefined,
+                ),
+                ...built.args,
+            };
             const draft: FlowDraft = {
                 ...(editing ? { id: editing.id } : {}),
                 title: title.trim(),
@@ -103,7 +116,7 @@ export default function FlowEditorModal({
                 scope,
                 triggers,
                 recipeId,
-                ...(Object.keys(built.args).length > 0 ? { args: built.args } : {}),
+                ...(Object.keys(allArgs).length > 0 ? { args: allArgs } : {}),
             };
             const result = await api().flows.save(draft);
             if (!result.ok) {
@@ -529,10 +542,17 @@ function ScopeField({
     scope: FlowScope;
     onChange: (next: FlowScope) => void;
 }) {
+    // The GApp rung is offered when there is an app to pick — or when the Flow
+    // is ALREADY scoped to one whose app has since been uninstalled. Dropping
+    // the option there would leave the select showing a blank, as though the
+    // Flow had no scope at all, when what it has is a scope pointing at
+    // something gone (which the list already says out loud).
     const kinds = [
         { value: 'system', label: 'Anywhere on this machine' },
         { value: 'workspace', label: 'One workspace' },
-        ...(payload.apps.length > 0 ? [{ value: 'gapp', label: 'A Genie App' }] : []),
+        ...(payload.apps.length > 0 || scope.kind === 'gapp'
+            ? [{ value: 'gapp', label: 'A Genie App' }]
+            : []),
     ];
 
     return (

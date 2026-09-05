@@ -12,7 +12,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { coerceFilterValue, flowFormFields } from '../flow-draft';
+import { carryHiddenArgs, coerceFilterValue, flowFormFields } from '../flow-draft';
 import type { FlowEventDefinition, FlowRecipeSummary, FlowTrigger } from '../genie';
 
 const FILES_ADDED: FlowEventDefinition = {
@@ -142,5 +142,41 @@ describe('coerceFilterValue', () => {
 
     it('refuses an empty single value rather than filtering on ""', () => {
         expect(coerceFilterValue('', 'string', false).ok).toBe(false);
+    });
+});
+
+/**
+ * Editing must not quietly discard what the form chose not to SHOW.
+ *
+ * `flowFormFields` hides an input the trigger already supplies — which is right
+ * for the box, and wrong for the save if the value simply vanishes with it. A
+ * Flow configured once and edited later would come back subtly different, with
+ * nothing on screen having said so.
+ */
+describe('carryHiddenArgs', () => {
+    const shownForEvent = flowFormFields(relocate, onFileAdded, events);
+
+    it('keeps a stored value for an input the form is not showing', () => {
+        expect(
+            carryHiddenArgs(relocate, shownForEvent, {
+                relPath: 'kept.bin',
+                relocateTo: '.big',
+            }),
+        ).toEqual({ relPath: 'kept.bin' });
+    });
+
+    it('does not carry one the form IS showing — that box is authoritative', () => {
+        // The control: without it, "carries relPath" would also pass against a
+        // function that carried everything, including the field the user just
+        // cleared on purpose.
+        expect(carryHiddenArgs(relocate, shownForEvent, { relocateTo: '.big' })).toEqual({});
+    });
+
+    it('carries nothing for a key the recipe does not declare', () => {
+        expect(carryHiddenArgs(relocate, shownForEvent, { leftover: 'x' })).toEqual({});
+    });
+
+    it('carries nothing when there is nothing stored', () => {
+        expect(carryHiddenArgs(relocate, shownForEvent, undefined)).toEqual({});
     });
 });

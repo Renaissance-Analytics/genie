@@ -263,15 +263,6 @@ export function flowActivitySnapshot(): { running: string[]; busy: boolean } {
     return { running: activity.runningFlowIds(), busy: activity.isBusy() };
 }
 
-/**
- * Every Flow, joined with its scope's real name, its triggers' registry
- * entries, its last run and whether it is running.
- *
- * Workspace and app names are resolved HERE rather than renderer-side: a
- * workspace that has been removed is the difference between a Flow that is quiet
- * and one that can never fire again, and that judgement belongs beside the
- * matcher that makes it, not in a component.
- */
 /** App id → name, for the apps a Flow may be scoped to. Revoked ones are gone. */
 function installedAppNames(): Map<string, string> {
     return new Map(
@@ -281,6 +272,15 @@ function installedAppNames(): Map<string, string> {
     );
 }
 
+/**
+ * Every Flow, joined with its scope's real name, its triggers' registry
+ * entries, its last run and whether it is running.
+ *
+ * Workspace and app names are resolved HERE rather than renderer-side: a
+ * workspace that has been removed is the difference between a Flow that is quiet
+ * and one that can never fire again, and that judgement belongs beside the
+ * matcher that makes it, not in a component.
+ */
 export function flowSummaries(): FlowSummary[] {
     const workspaceNames = new Map(listWorkspaces().map((w) => [w.id, w.project_name]));
     const appNames = installedAppNames();
