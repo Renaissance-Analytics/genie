@@ -4,14 +4,28 @@
  * Portaling to the overlay root is what stops an ancestor clipping a popover —
  * and it hands the component a bill it did not have before: the element is now
  * positioned against the VIEWPORT, so keeping it on screen is the caller's job.
- * Every popover in the renderer used to pay that bill itself, and each one paid
- * a different part of it: the envelope-attention popover clamped horizontally
- * and forgot the vertical, four context menus carried byte-identical copies of
- * both clamps, and two more clamped neither (genie#416).
+ * Every popover in the renderer used to pay that bill itself, and each paid a
+ * different part of it. The inventory at the time of genie#416 — TEN hand-written
+ * placements across eleven render sites, because the split button positions two:
  *
- * A rule kept as a per-component habit is a rule that a new component can miss
- * one half of without anything failing to compile. So it lives here once, and
+ *   BOTH axes, the same eleven lines copied four times:
+ *     AgentContextMenu, SpecContextMenu, ProjectContextMenu, FileTreeContextMenu
+ *   HORIZONTAL only (ran off the BOTTOM):
+ *     Chooser AgiHealth — the reported bug, under a comment claiming it clamped
+ *     Chooser WorkspaceRuntimePill — inside the right edge by construction (`right`)
+ *   VERTICAL only (ran off the SIDE):
+ *     Chooser proc-log — and against a hard-coded 340px, not a measurement
+ *     TerminalTypeSplitButton `row` variant — the one existing helper, half used
+ *   NEITHER — opened at the cursor and left there:
+ *     Chooser proc context menu, AgentPanel menu
+ *
+ * That spread is the argument for one helper rather than ten fixes: nobody was
+ * careless. A rule kept as a per-component habit is a rule a new component can
+ * miss one half of with nothing failing to compile. So it lives here once, and
  * `__tests__/popover-clamp-guard.test.ts` fails the next file that re-derives it.
+ *
+ * `Code/EditorWand` is the one deliberate non-caller: a pill centred on and
+ * translated ABOVE a text selection, where "flip below" is the wrong question.
  */
 
 /** A DOM rect, narrowed to what placement actually reads. */

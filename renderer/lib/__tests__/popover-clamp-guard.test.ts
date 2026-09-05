@@ -6,13 +6,13 @@ import { describe, expect, it } from 'vitest';
  * No renderer file may re-derive the viewport clamp for a portaled popover
  * (genie#416).
  *
- * The clamp is not hard, which is exactly why it kept being rewritten: nine
- * popovers, nine hand-written placements, and no two agreeing on how much of the
- * job to do. `Chooser`'s envelope-attention popover clamped `left` against
- * `window.innerWidth` under a comment that said "clamped to the viewport" and
- * left `top` as `anchorBottom + 6`. `AgentContextMenu` two files away had both
- * halves. Four context menus carried byte-identical copies. Two more clamped
- * neither axis.
+ * The clamp is not hard, which is exactly why it kept being rewritten: TEN
+ * hand-written placements across eleven render sites, no two agreeing on how
+ * much of the job to do. `Chooser`'s envelope-attention popover clamped `left`
+ * against `window.innerWidth` under a comment that said "clamped to the
+ * viewport" and left `top` as `anchorBottom + 6`. `AgentContextMenu` two files
+ * away had both halves. Four context menus carried byte-identical copies. Two
+ * clamped neither axis at all. The full inventory is in `lib/anchored-popover`.
  *
  * SOURCE-LEVEL, because that is the only level this is visible at. This lane has
  * no DOM harness; and even with one, the failure needs a SHORT viewport with a
