@@ -149,9 +149,9 @@ This applies to code and to prose equally. A tool DESCRIPTION in `protocol.ts` i
 read by an agent as a promise about behaviour; if the code does not do what the
 description says, the description is a bug of exactly this kind.
 
-### Two ways a check quietly answers a weaker question
+### Three ways a check quietly answers a weaker question
 
-Both of these have shipped here. Both looked like guards and neither was one.
+All three have shipped here. All three looked like guards and none was one.
 
 **A SQLite `CHECK` whose expression can evaluate to NULL passes.** NULL is not
 FALSE. So this constraint, written to make a denormalisation impossible to get
@@ -177,10 +177,32 @@ and `all` passed before any of that feature existed — the words occur in an
 unrelated IssueWatch section, inside *"unambiguous"*, and somewhere in 43KB. A
 green test standing where the check should be is worse than no test.
 
-Both are the same fault as the bugs this codebase keeps finding in its product: a
-lookup that always finds *something* and never reports that it was the wrong
-something. When you write a guard, make it fail first — and make it fail for the
-reason you think it will.
+**A test whose FIXTURE cannot reach the branch is indistinguishable from one that
+proves the fix.** The first two weaken the ASSERTION. This one never runs the
+code at all, and it is harder to see, because the test is correct — about a
+configuration that cannot exhibit the bug.
+
+`manageSite stop` reported `external: false` for a site that set BOTH
+`runMode: host` and `hostPort`, so it dropped the note saying the user's own dev
+server is still running (#226). The test written to cover exactly that case used
+`runMode: 'explicit'`, which never reaches the disputed branch. The residual
+outlived two passes aimed straight at it — and one of those passes checked its
+own fix and found it working, because the sibling code path READ THE CONFIG
+rather than the report and was right about a site `stop` was wrong about.
+
+Same shape in a source-scanning guard: `provider-literal-guard` stripped comments
+with a `/*…*/` SPAN regex, so a `/*` inside a string literal opened a span nobody
+wrote and deleted every line up to the next `*/` from the scan. It read
+`main/ipc.ts`, reported it CLEAN, and line 1785 held the very union it was
+hunting (#404). Strip comments line-based; a span cannot tell a comment from a
+string.
+
+All three are the same fault as the bugs this codebase keeps finding in its
+product: a lookup that always finds *something* and never reports that it was the
+wrong something. When you write a guard, make it fail first — and make it fail
+for the reason you think it will. Then check the other half: that your FIXTURE
+reaches the code you are guarding. A green that measured less than it appeared to
+is the failure this repository keeps meeting in new clothes.
 
 ---
 
