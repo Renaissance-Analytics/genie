@@ -147,7 +147,7 @@ import { createHarnessTransportSink } from './agentinbox/transport-sink';
 import { agentShutdownReadiness } from './agents/shutdown-readiness';
 import { setPluginPanelOpenSink } from './plugins/registry';
 import { announceAgentUpgrade, withWorkstationOperator } from './agents/upgrade-announcement';
-import { agentModeById, agentModeByTerminal } from './agents/agent-mode-source';
+import { agentModeByTerminal, agentModeFor } from './agents/agent-mode-source';
 import { MANUAL_RECOVERY, reconnectStrategy, type McpRecovery } from './agents/mcp-reconnect';
 import { terminalIsBlocked } from './agents/injection-guard';
 import { getChangelog } from './updater/changelog';
@@ -1186,7 +1186,16 @@ function announceUpgradeToAgents(): void {
                 // is what a Manual agent then does, and #407 is what that looks
                 // like from the outside. An agent that has not been declared
                 // Automated is told the same facts, informationally.
-                mode: agentModeById,
+                // BY TERMINAL first (see `agent-mode-source.ts`): the
+                // AgentInbox id is minted per launch, so it stops matching
+                // `workspace_agents.id` the moment an agent is relaunched, and
+                // a lookup on it alone would quietly report every Automated
+                // agent as Manual.
+                mode: (agentId) =>
+                    agentModeFor({
+                        agentId,
+                        terminalId: agentInboxBroker.getInfo(agentId)?.terminalId ?? null,
+                    }),
                 // Reconnect the agent's `genie` server BEFORE telling it
                 // anything: the upgrade replaced the process behind the
                 // endpoint, so the notice would otherwise arrive telling it
@@ -1705,7 +1714,7 @@ app.whenReady().then(async () => {
         // inbox notice or an attention nudge is worded for the agent it reaches.
         // GUIDANCE only -- it changes one sentence, never whether a message is
         // delivered or a nudge fires.
-        agentInboxBroker.setAgentModeSource(agentModeById);
+        agentInboxBroker.setAgentModeSource(agentModeFor);
         // The broker decides WHAT to say and HOW it may land (see agentinbox/
         // draft.ts); this sink performs it. Returns false when it cannot start,
         // so the broker can fall back to the idle-only wake.

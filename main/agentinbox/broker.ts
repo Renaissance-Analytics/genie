@@ -201,17 +201,32 @@ export class AgentInboxBroker {
      * GUIDANCE ONLY: nothing here consults the mode to decide WHETHER a message
      * is delivered or a nudge fires. It decides one sentence of wording.
      */
-    private modeSource: (agentId: string) => AgentMode = () => DEFAULT_AGENT_MODE;
+    private modeSource: (subject: { agentId: string; terminalId: string | null }) => AgentMode =
+        () => DEFAULT_AGENT_MODE;
 
-    setAgentModeSource(fn: (agentId: string) => AgentMode): void {
+    setAgentModeSource(
+        fn: (subject: { agentId: string; terminalId: string | null }) => AgentMode,
+    ): void {
         this.modeSource = fn;
     }
 
-    /** The mode to word a notice for. Never throws: a database or file error
-     *  must not be able to cost an agent the notice itself. */
-    private modeOf(agentId: string): AgentMode {
+    /**
+     * The mode to word a notice for.
+     *
+     * Passes the TERMINAL as well as the id, and that is load-bearing: an
+     * AgentInbox id is minted per LAUNCH (`spawnTerminal`), so it stops matching
+     * `workspace_agents.id` the first time an agent is relaunched. The terminal
+     * binding survives that. See `agents/agent-mode-source.ts`.
+     *
+     * Never throws: a database or file error must not be able to cost an agent
+     * the notice itself.
+     */
+    private modeOf(target: AgentInboxAgent): AgentMode {
         try {
-            return this.modeSource(agentId);
+            return this.modeSource({
+                agentId: target.agentId,
+                terminalId: target.terminalId ?? null,
+            });
         } catch {
             return DEFAULT_AGENT_MODE;
         }
@@ -435,7 +450,7 @@ export class AgentInboxBroker {
             from: msg.fromLabel,
             priority: msg.interrupt ? 'high' : 'normal',
             kind: isAnswer ? 'ftq-answer' : 'dm',
-            mode: this.modeOf(target.agentId),
+            mode: this.modeOf(target),
         });
         const plan = planNudge(target.draft);
         if (plan.mode === 'defer') {
@@ -563,7 +578,7 @@ export class AgentInboxBroker {
         try {
             this.wakeSink({
                 terminalId: target.terminalId,
-                text: wakeNudgeText(unread, this.modeOf(target.agentId)),
+                text: wakeNudgeText(unread, this.modeOf(target)),
                 plan: planNudge(target.draft),
             });
         } catch {
@@ -600,7 +615,7 @@ export class AgentInboxBroker {
             // Provably idle, so the box is empty: submit it and start the turn.
             this.wakeSink({
                 terminalId: target.terminalId,
-                text: wakeNudgeText(unread, this.modeOf(target.agentId)),
+                text: wakeNudgeText(unread, this.modeOf(target)),
                 plan: planNudge(target.draft),
             });
         } catch {
