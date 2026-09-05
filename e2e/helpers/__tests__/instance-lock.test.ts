@@ -60,7 +60,7 @@ afterEach(() => {
 });
 
 describe('processImageName', () => {
-    it('names a running process and returns null for one that is gone', () => {
+    it('names a running process and returns null for one that is gone', async () => {
         expect(processImageName(process.pid)).toMatch(/node/i);
 
         // The same pid, before and after: naming a live process proves the lookup
@@ -70,9 +70,19 @@ describe('processImageName', () => {
         expect(processImageName(live.pid)).toMatch(/node/i);
         process.kill(live.pid, 'SIGKILL');
 
+        // Yielding between probes is REQUIRED, not politeness. On Linux a killed
+        // child is a zombie until its parent reaps it, and the reap happens on
+        // this process's event loop — so a tight synchronous poll would block the
+        // very thing that has to run for the pid to disappear, and would sit there
+        // reading the zombie's name until the deadline. (Windows has no zombies,
+        // which is exactly why a busy loop passed locally and would have failed
+        // on the ubuntu CI runner.)
         const deadline = Date.now() + 10_000;
         let name = processImageName(live.pid);
-        while (name && Date.now() < deadline) name = processImageName(live.pid);
+        while (name && Date.now() < deadline) {
+            await new Promise((r) => setTimeout(r, 50));
+            name = processImageName(live.pid);
+        }
         expect(name).toBeNull();
     });
 });
