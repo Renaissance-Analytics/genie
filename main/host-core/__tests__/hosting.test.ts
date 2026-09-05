@@ -54,6 +54,63 @@ describe('buildHostingDeps — the host-core hosting seam', () => {
             VITE_REVERB_SCHEME: 'https',
         });
     });
+    /**
+     * genie#: a hosted `.gen` site could not open a WebSocket from the browser.
+     *
+     * The browser endpoint was injected into the SITE PROCESS env only. But
+     * `VITE_*` is a BUILD-TIME substitution — `import.meta.env.VITE_REVERB_HOST`
+     * becomes a literal string when `vite build` runs, and that build is a
+     * SEPARATE process (an agent or a person in a terminal), which never sees a
+     * site's env. A Laravel app served by `php artisan serve` therefore shipped
+     * a bundle built from the `.env` FILE — where Genie wrote the loopback
+     * backend address and nothing browser-facing at all.
+     *
+     * So the app had two reachable states and both were broken: keep the stock
+     * `VITE_REVERB_HOST="${REVERB_HOST}"` and it expands from the very block
+     * Genie writes, baking in `wss://127.0.0.1:<port>` where nothing terminates
+     * TLS; delete it and the bundle bakes `wsHost: undefined`.
+     *
+     * The `.env` is the one source both a build and the server read, so it is
+     * where the browser endpoint has to land.
+     */
+    it('writes the BROWSER wss endpoint into the repo .env — a vite build reads the FILE, never a site process env', () => {
+        const root = makeTmpDir('envsync');
+        fs.mkdirSync(path.join(root, 'repos', 'app'), { recursive: true });
+        const envPath = path.join(root, 'repos', 'app', '.env');
+        // The stock Laravel lines, which expand from the block Genie writes.
+        fs.writeFileSync(
+            envPath,
+            'VITE_REVERB_HOST="${REVERB_HOST}"\nVITE_REVERB_PORT="${REVERB_PORT}"\nVITE_REVERB_SCHEME="${REVERB_SCHEME}"\n',
+        );
+
+        const d = buildHostingDeps(
+            fakePorts({
+                workspaceFor: () => ({ path: root }) as never,
+                devSitesFor: () => ({ web: { repo: 'app' } }) as never,
+                devServiceHostEnvFor: () => ({
+                    REVERB_APP_KEY: 'workspace_a',
+                    REVERB_HOST: '127.0.0.1',
+                    REVERB_PORT: '49123',
+                    REVERB_SCHEME: 'http',
+                }),
+            }),
+        );
+
+        d.services.onServiceEnvChanged?.('Workspace A');
+        const written = fs.readFileSync(envPath, 'utf8');
+
+        // The server-to-server path is unchanged: loopback, http. It is correct.
+        expect(written).toContain('REVERB_HOST=127.0.0.1');
+        expect(written).toContain('REVERB_SCHEME=http');
+        // The BROWSER gets the TLS front door — rewritten IN PLACE over the stock
+        // expansion, so no second copy can shadow it.
+        expect(written).toContain('VITE_REVERB_HOST=reverb.ws-workspace-a-3bbd1699.gen');
+        expect(written).toContain('VITE_REVERB_PORT=443');
+        expect(written).toContain('VITE_REVERB_SCHEME=https');
+        expect(written).toContain('VITE_REVERB_APP_KEY=workspace_a');
+        expect(written).not.toContain('${REVERB_HOST}');
+    });
+
     it('maps ports into the three managers so the SHELL supplies the DB reads, not the boot', () => {
         const ports = fakePorts();
         const d = buildHostingDeps(ports);

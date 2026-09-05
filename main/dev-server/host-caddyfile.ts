@@ -123,7 +123,27 @@ export function buildHostCaddyfile(sites: HostCaddySite[], tls: HostCaddyTls): s
         // it sees the full response before the proxy) rewrites `http://<host>` back
         // to `https://<host>` in the RESPONSE BODY, so no app needs proxy-trust
         // config. `stream` rewrites incrementally so SSE keeps flowing.
-        '\treplace {',
+        //
+        // ...but NEVER on an upgraded connection. A WebSocket through here opened
+        // and then went permanently silent — no frame ever arrived, so Echo sat at
+        // "unavailable", which reads like a broken upgrade and is not one. Measured
+        // against a real browser, `replace` and HTTP/2 are BOTH needed to break it:
+        // over h1 the rewriter is harmless, and with h2 available it swallows every
+        // frame. h2 is the norm here rather than the exception — every `.gen` name
+        // shares ONE leaf on ONE address, so Chromium coalesces a socket to
+        // `reverb.<ws>.gen` onto the connection it already holds for the page and
+        // sends it as an Extended CONNECT stream. A site's own same-origin `wss://`
+        // (Vite HMR, Echo on the app's host) rides the same coalesced connection.
+        //
+        // Gating costs nothing: a WebSocket has no HTML body of self-links to fix.
+        // Both forms must be excluded — an h1 upgrade carries `Connection: Upgrade`,
+        // while the h2 one carries no such header at all and is a CONNECT, so
+        // matching only the header would let the broken case straight through.
+        '\t@rewritable {',
+        '\t\tnot header Connection *Upgrade*',
+        '\t\tnot method CONNECT',
+        '\t}',
+        '\treplace @rewritable {',
         '\t\tstream',
         `\t\t"http://${s.host}" "https://${s.host}"`,
         '\t}',
