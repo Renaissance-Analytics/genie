@@ -8,11 +8,7 @@ import {
     workspaceFolderName,
     workspacePathPreview,
     workspaceSlug,
-    workspaceWizardEntry,
-    tynnWorkspaceSource,
-    tynnProjectImportSource,
     scannedWorkspaceAction,
-    gdwChoicesForSource,
 } from '../workspace-onboarding';
 
 it('registers a folder that is already a workspace instead of wrapping it again', () => {
@@ -47,21 +43,10 @@ describe('managed workspace entry points', () => {
         expect(byGroup('adopt')).toEqual(['local', 'git', 'tynn']);
     });
 
-    it('offers GDW as a destination for scratch, local, Git, and Tynn sources', () => {
-        expect(gdwChoicesForSource('new')).toEqual(['workspace', 'gdw']);
-        expect(gdwChoicesForSource('git')).toEqual(['workspace', 'gdw']);
-        expect(gdwChoicesForSource('tynn')).toEqual(['workspace', 'gdw']);
-    });
-
-    it('sends a new workspace straight to creation, never through the scanner', () => {
-        expect(workspaceWizardEntry('new')).toEqual({ mode: 'create' });
-        expect(workspaceWizardEntry('gapp')).toEqual({ mode: 'gapp' });
-    });
-
-    it('keeps the scanner for the two sources that HAVE something to inspect', () => {
-        expect(workspaceWizardEntry('local')).toEqual({ mode: 'local' });
-        expect(workspaceWizardEntry('git')).toEqual({ mode: 'remote' });
-    });
+    // WHERE each source goes now lives in `./add-workspace` — a source no
+    // longer picks a ROUTE, it supplies whichever of Identity / Content / Links
+    // it happens to know, and the flow asks for the rest. See
+    // add-workspace.test.ts.
 
     it('never offers a plain-folder or Aionima-owned workspace', () => {
         expect(JSON.stringify(ADD_WORKSPACE_SOURCES)).not.toMatch(/simple|plain folder|Aionima/i);
@@ -173,34 +158,9 @@ describe('the container repository', () => {
     });
 });
 
-describe('Tynn workspace import', () => {
-    // Which projects the picker LISTS, and what an already-linked one does, moved
-    // to ./tynn-import with genie#355 — see tynn-import.test.ts.
-
-    it('uses the declared envelope repository, independent of its suffix', () => {
-        expect(tynnWorkspaceSource({
-            isWorkspace: true,
-            repositories: [
-                { url: 'git@github.com:acme/product.git', kind: 'code' },
-                { url: 'git@github.com:acme/workspace.git', kind: 'envelope', defaultBranch: 'trunk' },
-            ],
-        })).toEqual({ url: 'git@github.com:acme/workspace.git', branch: 'trunk' });
-    });
-
-    it('can start the scanner from an ordinary Tynn project repository', () => {
-        expect(tynnProjectImportSource({
-            isWorkspace: false,
-            repositories: [{ url: 'https://github.com/acme/product.git', kind: 'code' }],
-        })).toEqual({ kind: 'project', url: 'https://github.com/acme/product.git', branch: 'main' });
-    });
-
-    it('treats every Tynn project as a workspace regardless of legacy isWorkspace metadata', () => {
-        expect(tynnWorkspaceSource({
-            isWorkspace: false,
-            repositories: [{ url: 'https://github.com/acme/envelope.git', kind: 'envelope' }],
-        })).toEqual({ url: 'https://github.com/acme/envelope.git', branch: 'main' });
-    });
-});
+// WHAT a Tynn project resolves to — its container, its repositories, or an
+// empty workspace — moved to `./tynn-import` (`tynnImportContent`), where the
+// import route reads it. See tynn-import.test.ts.
 
 describe('first-run onboarding contract', () => {
     it('puts model drivers before accounts without forcing existing users to add a workspace', () => {

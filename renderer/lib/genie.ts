@@ -8,6 +8,7 @@ import type { BoardRead, ReviewOutcome } from './artboard-model';
 
 import { makeRemoteBridge } from './remote-bridge';
 import type { TynnHealth } from '../../main/mcp/tynn-health';
+import type { AddWorkspacePlan } from '../../main/workspace/add-workspace-types';
 import type { DrainSnapshot } from '../../main/agents/drain';
 import type { AgentTuiId, TuiDef } from '../../main/agents/registry';
 import type { RestartMode } from '../../main/agents/restart-options';
@@ -3586,6 +3587,13 @@ export interface GenieApi {
     workspaces: {
         list: () => Promise<WorkspaceRow[]>;
         add: (row: WorkspaceRow) => Promise<WorkspaceRow>;
+        /**
+         * Make (or bring down) a workspace from a plan, and register it — the
+         * ONE path every Add-workspace entry point ends in (`main/workspace/
+         * add-workspace.ts`). `add` above only REGISTERS a folder that already
+         * exists; this one produces the folder too.
+         */
+        create: (plan: AddWorkspacePlan) => Promise<WorkspaceRow>;
         update: (
             id: string,
             patch: Partial<WorkspaceRow>,
@@ -3692,7 +3700,6 @@ export interface GenieApi {
     };
     agi: {
         detect: (folder: string) => Promise<DetectResult>;
-        create: (opts: CreateAgiOpts) => Promise<CreateAgiResult>;
         importExisting: (folder: string) => Promise<DetectResult>;
         convert: (opts: ConvertToAgiOpts) => Promise<ConvertToAgiResult>;
         analyse: (folder: string) => Promise<AnalyseResult>;
@@ -3833,14 +3840,17 @@ export interface GenieApi {
                 workspacePath?: string;
             }>;
         }>;
-        /** Clone + register the approved child workspaces (mutates disk + db). */
+        /** Stand up + register the approved child workspaces (mutates disk + db).
+         *  A `cloneUrl` of null means there is no container to bring down, so an
+         *  empty workspace is MADE — a governed child with no repository is an
+         *  ordinary workspace, not an unprovisionable one. */
         opsProvisionApply: (
             workspacePath: string,
             targets: Array<{
                 projectId: string;
                 name: string;
                 slug: string;
-                cloneUrl: string;
+                cloneUrl: string | null;
             }>,
         ) => Promise<{
             provisioned: Array<{ name: string; workspaceId: string; path: string }>;

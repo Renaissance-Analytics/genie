@@ -61,16 +61,6 @@ export const ADD_WORKSPACE_SOURCES: readonly AddWorkspaceSource[] = [
     },
 ] as const;
 
-export function workspaceWizardEntry(source: AddWorkspaceSourceId): {
-    mode: 'create' | 'local' | 'remote' | 'tynn' | 'gapp';
-} {
-    if (source === 'gapp') return { mode: 'gapp' };
-    if (source === 'local') return { mode: 'local' };
-    if (source === 'git') return { mode: 'remote' };
-    if (source === 'tynn') return { mode: 'tynn' };
-    return { mode: 'create' };
-}
-
 /**
  * The folder a workspace named `name` gets. Lower-case, dashes for spaces, and
  * only characters that survive a filesystem, a git remote and a URL.
@@ -146,15 +136,6 @@ export function containerRepoPlan(input: {
     return { kind: 'github', owner: input.owner, repo: folder };
 }
 
-export type WorkspaceDestinationKind = 'workspace' | 'gdw';
-
-/** GDW is a destination contract, independent of where the source came from. */
-export function gdwChoicesForSource(
-    source: 'new' | 'git' | 'tynn',
-): WorkspaceDestinationKind[] {
-    return ['workspace', 'gdw'];
-}
-
 export function canFinishFirstRun(input: {
     existingWorkspaceCount: number;
     setupComplete: boolean;
@@ -195,36 +176,6 @@ export function nextIncompleteFirstRunStep(
     completed: Partial<Record<FirstRunStepId, boolean>>,
 ): FirstRunStepId | null {
     return FIRST_RUN_STEPS.find((step) => !step.optional && !completed[step.id])?.id ?? null;
-}
-
-export function tynnWorkspaceSource(project: {
-    isWorkspace?: boolean;
-    repositories?: Array<{ url: string; defaultBranch?: string; kind?: string }>;
-}): { url: string; branch: string } | null {
-    const envelope = project.repositories?.find(
-        (repository) => repository.kind === 'envelope' && repository.url.trim(),
-    );
-    return envelope
-        ? { url: envelope.url, branch: envelope.defaultBranch?.trim() || 'main' }
-        : null;
-}
-
-export function tynnProjectImportSource(project: {
-    isWorkspace?: boolean;
-    repositories?: Array<{ url: string; defaultBranch?: string; kind?: string }>;
-}): { kind: 'envelope' | 'project'; url: string; branch: string } | null {
-    const envelope = tynnWorkspaceSource(project);
-    if (envelope) return { kind: 'envelope', ...envelope };
-    const repository = project.repositories?.find(
-        (candidate) => candidate.kind === 'code' && candidate.url.trim(),
-    );
-    return repository
-        ? {
-            kind: 'project',
-            url: repository.url,
-            branch: repository.defaultBranch?.trim() || 'main',
-        }
-        : null;
 }
 
 /**

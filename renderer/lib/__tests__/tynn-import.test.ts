@@ -1,25 +1,25 @@
 import { describe, expect, it } from 'vitest';
-import {
-    importTynnEnvelopeWorkspace,
-    tynnImportChoices,
-    tynnImportRoute,
-} from '../tynn-import';
-import type { WorkspaceRow } from '../genie';
+import { tynnImportChoices, tynnImportContent, tynnImportRoute } from '../tynn-import';
 
 /**
- * genie#355 — importing a Tynn project that is ALREADY an `.agi` envelope was
- * routed, unconditionally, into the scan-and-convert wizard. That wizard's job
- * is turning a NON-envelope folder into one, so for these projects it had
- * nothing to do: the owner was made to pick a repo, clone it, and then walk a
- * conversion of a workspace that already existed.
+ * WHAT A TYNN PROJECT IS, to Genie.
  *
- * The decision lives here as a pure function so it is assertable without a
- * window, and it is asserted BOTH ways on purpose: "the wizard did not open"
- * passes just as happily against an import that does nothing at all, so the
- * non-envelope case below is the positive control that proves the wizard is
- * still reachable.
+ * It is a WORKSPACE. Not a repository to clone, not a folder to convert — every
+ * project in Tynn is a workspace, and it may legitimately contain nothing yet.
+ *
+ * The route used to answer a different question: "what is there to clone or
+ * convert here?" A project with an `.agi` repo was cloned; everything else fell
+ * into the scan-and-convert wizard, in `mode: 'local'` when there were no repos
+ * at all — which means *"go and find a folder to convert."* So the one entry
+ * point that knows exactly which workspace you mean was the one that asked you
+ * to locate it on disk (genie#431 → this rebuild).
+ *
+ * The decision lives here as a pure function, so both halves of it can be
+ * asserted without a window — and both halves ARE asserted, deliberately: "the
+ * wizard did not open" passes just as well against an import that does nothing
+ * at all, so every negative below is paired with a positive control.
  */
-describe('Tynn import routing (genie#355)', () => {
+describe('Tynn import routing', () => {
     const envelopeProject = {
         id: 'proj-envelope',
         name: 'Tynn.ai',
@@ -34,60 +34,79 @@ describe('Tynn import routing (genie#355)', () => {
         ],
     };
 
-    it('sends an envelope-backed project straight to the clone step, never the wizard', () => {
+    it('sends an envelope-backed project straight to its clone, never to an inspection', () => {
         const route = tynnImportRoute(envelopeProject, []);
 
-        expect(route.stage).not.toBe('agi-interactive');
         expect(route).toEqual({
-            stage: 'tynn-envelope',
-            reason: 'envelope-repo',
-            source: { url: 'git@github.com:acme/product.agi.git', branch: 'trunk' },
+            stage: 'tynn-workspace',
+            content: {
+                kind: 'envelope',
+                url: 'git@github.com:acme/product.agi.git',
+                branch: 'trunk',
+            },
         });
     });
 
-    // POSITIVE CONTROL. Without this, the assertion above is satisfied by a
-    // router that sends every project nowhere at all.
-    it('still sends a project with no envelope repo into the upgrade wizard', () => {
+    /**
+     * THE DEFECT, stated as a rule: a Tynn project with no repositories is a
+     * workspace with no repositories. There is nothing to clone, nothing to
+     * convert and nothing to ask.
+     */
+    it('makes a workspace for a project that has no repositories at all', () => {
+        expect(tynnImportRoute({ id: 'proj-bare', name: 'Bare' }, [])).toEqual({
+            stage: 'tynn-workspace',
+            content: { kind: 'empty', reason: 'no-repositories' },
+        });
+    });
+
+    /**
+     * POSITIVE CONTROL for the two above. A project whose repositories are
+     * ordinary code repos still brings them: without this, "it asked nothing"
+     * would be satisfied by a route that carries nothing either.
+     */
+    it('brings a project’s own repositories into the workspace it makes', () => {
         expect(
             tynnImportRoute(
                 {
                     id: 'proj-plain',
                     name: 'Plain',
                     isWorkspace: false,
-                    repositories: [{ url: 'https://github.com/acme/plain.git', kind: 'code' }],
+                    repositories: [
+                        { url: 'https://github.com/acme/plain.git', kind: 'code' },
+                        {
+                            url: 'https://github.com/acme/brain.git',
+                            kind: 'code',
+                            defaultBranch: 'develop',
+                        },
+                    ],
                 },
                 [],
             ),
         ).toEqual({
-            stage: 'agi-interactive',
-            reason: 'no-envelope-repo',
-            mode: 'remote',
-            sourceUrl: 'https://github.com/acme/plain.git',
-        });
-
-        expect(tynnImportRoute({ id: 'proj-bare', name: 'Bare' }, [])).toEqual({
-            stage: 'agi-interactive',
-            reason: 'no-envelope-repo',
-            mode: 'local',
-            sourceUrl: '',
+            stage: 'tynn-workspace',
+            content: {
+                kind: 'repos',
+                repos: [
+                    { url: 'https://github.com/acme/plain.git', branch: 'main', name: 'plain' },
+                    { url: 'https://github.com/acme/brain.git', branch: 'develop', name: 'brain' },
+                ],
+            },
         });
     });
 
     /**
-     * Tynn's `is_workspace` (its `is_envelope`) says a project HAS an envelope;
-     * only the `envelope`-kind repository says WHERE it is. A project marked one
-     * that declares no repo for it leaves Genie nothing to clone, so it keeps
-     * the wizard — under its own reason, because that is a Tynn-side gap and not
-     * an ordinary non-envelope project.
+     * Tynn's `is_workspace` (its `is_envelope`) says a project HAS a container;
+     * only the `envelope`-kind repository says WHERE. A project that claims one
+     * and declares no repo for it leaves Genie nothing to clone — a Tynn-side
+     * gap the UI should NAME rather than silently absorb, which is why the
+     * reason travels with the content instead of being flattened away.
      */
-    it('keeps the wizard when the project claims an envelope but declares no repo for it', () => {
+    it('names the Tynn-side gap when a project claims a container it does not declare', () => {
         expect(
             tynnImportRoute({ id: 'proj-claimed', name: 'Claimed', isWorkspace: true }, []),
         ).toEqual({
-            stage: 'agi-interactive',
-            reason: 'envelope-repo-undeclared',
-            mode: 'local',
-            sourceUrl: '',
+            stage: 'tynn-workspace',
+            content: { kind: 'empty', reason: 'container-undeclared' },
         });
     });
 
@@ -128,69 +147,29 @@ describe('Tynn import routing (genie#355)', () => {
     });
 });
 
-/**
- * The envelope route must REGISTER a workspace, not merely decline the wizard.
- * The effects are injected so the contract is assertable without Electron: the
- * declared envelope URL is cloned into the folder the user chose, and what lands
- * is an `.agi` workspace at the cloned path, linked to the Tynn project.
- */
-describe('Tynn envelope import (genie#355)', () => {
-    const project = { id: 'proj-envelope', name: 'Tynn.ai' };
-    const source = { url: 'git@github.com:acme/product.agi.git', branch: 'trunk' };
-
-    const spyDeps = () => {
-        const clones: Array<{ url: string; parentPath: string }> = [];
-        const added: WorkspaceRow[] = [];
-        return {
-            clones,
-            added,
-            deps: {
-                clone: async (url: string, parentPath: string) => {
-                    clones.push({ url, parentPath });
-                    return { path: 'D:/code/product.agi' };
-                },
-                defaultEnvFile: async () => '.env.local',
-                addWorkspace: async (row: WorkspaceRow) => {
-                    added.push(row);
-                    return { ...row, sort_order: 3 };
-                },
-            },
-        };
-    };
-
-    it('clones the declared envelope into the chosen folder and registers it', async () => {
-        const { clones, added, deps } = spyDeps();
-
-        const saved = await importTynnEnvelopeWorkspace(
-            { project, source, parentPath: '  D:/code  ' },
-            deps,
-        );
-
-        expect(clones).toEqual([{ url: source.url, parentPath: 'D:/code' }]);
-        expect(added).toHaveLength(1);
-        expect(added[0]).toMatchObject({
-            id: 'proj-envelope',
-            backend: 'tynn',
-            project_id: 'proj-envelope',
-            project_name: 'Tynn.ai',
-            tynn_project_id: 'proj-envelope',
-            tynn_project_name: 'Tynn.ai',
-            shape: 'agi',
-            path: 'D:/code/product.agi',
-            env_file: '.env.local',
-            created_by_genie: 0,
+describe('the content a Tynn project resolves to', () => {
+    it('prefers the declared container over the code repos beside it', () => {
+        expect(
+            tynnImportContent({
+                id: 'p',
+                repositories: [
+                    { url: 'https://github.com/acme/code.git', kind: 'code' },
+                    { url: 'https://github.com/acme/code.agi.git', kind: 'envelope' },
+                ],
+            }),
+        ).toEqual({
+            kind: 'envelope',
+            url: 'https://github.com/acme/code.agi.git',
+            branch: 'main',
         });
-        expect(saved.sort_order).toBe(3);
     });
 
-    it('refuses to clone anywhere until the user says where', async () => {
-        const { clones, added, deps } = spyDeps();
-
-        await expect(
-            importTynnEnvelopeWorkspace({ project, source, parentPath: '   ' }, deps),
-        ).rejects.toThrow(/where/i);
-
-        expect(clones).toEqual([]);
-        expect(added).toEqual([]);
+    it('ignores a repository with no URL rather than planning to clone nothing', () => {
+        expect(
+            tynnImportContent({
+                id: 'p',
+                repositories: [{ url: '   ', kind: 'code' }],
+            }),
+        ).toEqual({ kind: 'empty', reason: 'no-repositories' });
     });
 });

@@ -4,38 +4,41 @@ import { test, expect, type ElectronApplication, type Page } from '@playwright/t
 import { launchGenieE2E, readTynnImportSeed, type TynnImportSeed } from './helpers/launch';
 
 /**
- * IMPORTING A TYNN PROJECT THAT IS ALREADY AN ENVELOPE (genie#355).
+ * IMPORTING FROM TYNN — the entry point that already knows which workspace you
+ * mean.
  *
- * The owner set a new machine up, chose their Tynn project, and was made to pick
- * a repo, clone it, and then walk the whole scan-and-upgrade-to-`.agi` wizard —
- * for a project that was already a workspace, backed by a repo that was already
- * an envelope. The wizard had nothing to do. One unconditional
- * `setStage('agi-interactive')` in AddWorkspaceModal sent every Tynn import
- * there.
+ * The owner set up a new machine, chose their Tynn project, and was made to go
+ * and find a folder on disk. A project with no `.agi` repository fell through
+ * `tynnImportRoute` to the scan-and-convert wizard in `mode: 'local'` — which
+ * means *"pick a folder to convert"* — so the one route with nothing left to ask
+ * asked the hardest question there is.
  *
- * WHY E2E, when the routing is unit-tested. The decision itself is a pure
- * function, asserted directly in renderer/lib/__tests__/tynn-import.test.ts. What
- * no unit test can answer is whether the modal READS that decision — the defect
- * was never in a rule, it was in a component going somewhere else. This drives
- * the real modal over the real IPC and looks at which screen appears.
+ * The rule the rebuild follows: **all projects in Tynn are workspaces**, and a
+ * workspace needs a name and a folder. Repositories are optional, so their
+ * absence cannot be a precondition.
  *
- * THE POSITIVE CONTROL IS THE FIRST TEST, deliberately: "the upgrade wizard did
- * not open" is satisfied just as well by an import that does nothing at all, so
- * the wizard is proven REACHABLE from this very picker before the envelope case
- * is allowed to claim it stayed away.
+ * WHY E2E, when the routing is unit-tested. The decision is a pure function,
+ * asserted directly in `renderer/lib/__tests__/add-workspace.test.ts`. What no
+ * unit test can answer is whether the modal READS it — the defect was never in a
+ * rule, it was in a component going somewhere else. This drives the real modal
+ * over the real IPC and looks at what lands on disk.
  *
- * Only the network is stood in for (see main/e2e/tynn-import.ts): the Tynn
- * project list, and the git clone — which materialises a real envelope on disk
- * instead of fetching one. The workspace that lands is registered by the REAL
- * `workspaces:add` into the real database, which is what the assertions read.
+ * THE POSITIVE CONTROLS ARE NOT OPTIONAL. "It asked nothing" is satisfied
+ * perfectly by a flow that DOES nothing, so the same picker is watched carrying
+ * a container through to a real clone, and a code repository through into
+ * `repos/`, before the empty case is allowed to claim anything.
+ *
+ * Only the network is stood in for (see `main/e2e/tynn-import.ts`): the Tynn
+ * project list. The repositories those projects declare are real git repos on
+ * this disk, so the clone, the submodule and the registration are all the
+ * shipped ones.
  */
 
 let app: ElectronApplication;
 let page: Page;
 let seed: TynnImportSeed;
 
-// One modal, walked in order: the control leaves the wizard open, and the
-// envelope test cancels back out of it to prove the SAME picker routes elsewhere.
+// One modal, walked three times — the harness reopens it after each import.
 test.describe.configure({ mode: 'serial' });
 
 test.beforeAll(async () => {
@@ -52,12 +55,10 @@ test.afterAll(async () => {
     await app?.close();
 });
 
-// The inspect wizard's own heading (genie#432 renamed it off the storage
-// format). Deliberately NOT any source card's title: the second test asserts the
-// wizard is ABSENT while the picker — with its cards — is back on screen.
-const WIZARD = /Set up this (folder|repository)/;
+/** The inspection's own heading. No Tynn import may ever reach it. */
+const INSPECTION = /Set up this (folder|repository)/;
 
-/** Add workspace → Import from Tynn → choose one of the fixture projects. */
+/** Add workspace → Import from Tynn → choose a project → Continue. */
 async function chooseProject(projectId: string): Promise<void> {
     // The source card. At this stage nothing else carries that heading; the
     // step it opens has one of its own, which is why this runs first.
@@ -67,57 +68,85 @@ async function chooseProject(projectId: string): Promise<void> {
     const select = page.locator('[data-react-fancy-select]');
     await expect(select).toBeVisible();
     await select.selectOption(projectId);
+    await page.getByRole('button', { name: 'Continue' }).click();
 }
 
-test('a project that is not a workspace yet still reaches the inspect wizard', async () => {
+/** Import the project the modal is currently showing, and read what landed. */
+async function create(label: string, expectedPath: string, projectId: string): Promise<void> {
+    await page.getByRole('button', { name: label }).click();
+    const added = page.locator('[data-testid="workspace-added"]');
+    await expect(added).toBeVisible({ timeout: 60_000 });
+    await expect(added).toHaveAttribute('data-project', projectId);
+    await expect(added).toHaveAttribute('data-path', expectedPath);
+}
+
+/** Back to a fresh modal for the next project. */
+async function addAnother(): Promise<void> {
+    await page.getByTestId('add-another').click();
+}
+
+test('a project that declares a container still has it CLONED', async () => {
+    // POSITIVE CONTROL, first and deliberately: the import must be seen doing
+    // real work before its restraint on the next test means anything.
+    await chooseProject(seed.envelopeProjectId);
+
+    await expect(page.getByRole('heading', { name: INSPECTION })).toHaveCount(0);
+    await create('Clone & add workspace', seed.envelopePath, seed.envelopeProjectId);
+
+    expect(
+        {
+            container: fs.existsSync(path.join(seed.envelopePath, 'project.json')),
+            // A file that exists ONLY in the source container — proof this was
+            // cloned rather than scaffolded fresh at the same path.
+            broughtDown: fs.existsSync(path.join(seed.envelopePath, 'CONTAINER.md')),
+        },
+        'the declared container should be on disk, brought down whole',
+    ).toEqual({ container: true, broughtDown: true });
+});
+
+test('a project that declares a code repository gets that repository', async () => {
+    // SECOND POSITIVE CONTROL. Without it, "a project with no repos is fine"
+    // and "repos are ignored" look identical from the outside.
+    await addAnother();
     await chooseProject(seed.plainProjectId);
 
-    await page.getByRole('button', { name: 'Inspect workspace' }).click();
+    await create('Create workspace', seed.plainPath, seed.plainProjectId);
 
-    await expect(
-        page.getByRole('heading', { name: WIZARD }),
-        'the scan-and-convert wizard must still be reachable — without this, the ' +
-            'assertion below would pass against an import that goes nowhere',
-    ).toBeVisible();
+    expect(
+        fs.existsSync(path.join(seed.plainPath, 'repos', 'plain', 'README.md')),
+        'the repository the project declares should be in the workspace',
+    ).toBe(true);
 });
 
-test('an envelope-backed project never opens the wizard — it only asks where to put it', async () => {
-    // Back to the picker from the wizard the control just opened.
-    await page.getByRole('button', { name: 'Cancel' }).click();
-    await expect(page.getByRole('heading', { name: WIZARD })).toHaveCount(0);
+test('a project with NO repositories asks for nothing — no folder, no conversion', async () => {
+    await addAnother();
+    await chooseProject(seed.bareProjectId);
 
-    await chooseProject(seed.envelopeProjectId);
-    // Its button says what happens next, and it is not "inspect".
-    await page.getByRole('button', { name: 'Choose location' }).click();
-
-    // ONE question, and it is where.
+    // THE ASSERTION THE BUG DESERVES. Tynn named the project and the machine has
+    // a default location, so all three questions are answered: there is nothing
+    // on screen to fill in and nowhere to browse to.
     await expect(
-        page.getByRole('heading', { name: /Where should Enveloped Product live/ }),
-    ).toBeVisible();
+        page.getByRole('button', { name: 'Browse' }),
+        'the import knows where the workspace goes — it must not ask for a folder',
+    ).toHaveCount(0);
     await expect(
-        page.getByRole('heading', { name: WIZARD }),
-        'genie#355: an already-enveloped project was sent through the conversion wizard',
+        page.getByRole('heading', { name: INSPECTION }),
+        'there is nothing to inspect: the project has no repositories',
     ).toHaveCount(0);
 
-    // The destination is pre-filled from the primary workspace folder, so the
-    // single question is already answered and the import can proceed.
-    await page.getByRole('button', { name: 'Clone & add workspace' }).click();
+    const createButton = page.getByRole('button', { name: 'Create workspace' });
+    await expect(createButton, 'the only thing left to do is confirm').toBeEnabled();
 
-    // A workspace REALLY landed — through the real `workspaces:add` — at the
-    // path the envelope was cloned to, linked to the Tynn project.
-    const added = page.locator('[data-testid="workspace-added"]');
-    await expect(added).toBeVisible({ timeout: 30_000 });
-    await expect(added).toHaveAttribute('data-project', seed.envelopeProjectId);
-    await expect(added).toHaveAttribute('data-path', seed.expectedPath);
+    await create('Create workspace', seed.barePath, seed.bareProjectId);
 });
 
-test('the envelope it cloned is on disk, with its repos folder', async () => {
-    // The clone is what makes the workspace usable; a registered row pointing at
-    // nothing would satisfy every DOM assertion above. Read from the spec
-    // process — Playwright drives Electron on THIS machine, so the folder the
-    // import created is right here.
+test('the workspace it made for the empty project is a real one on disk', async () => {
+    // A registered row pointing at nothing would satisfy every DOM assertion
+    // above. Read from the spec process — Playwright drives Electron on THIS
+    // machine, so the folder the import created is right here.
     expect({
-        envelope: fs.existsSync(path.join(seed.expectedPath, 'project.json')),
-        repos: fs.existsSync(path.join(seed.expectedPath, 'repos')),
-    }).toEqual({ envelope: true, repos: true });
+        container: fs.existsSync(path.join(seed.barePath, 'project.json')),
+        repos: fs.existsSync(path.join(seed.barePath, 'repos')),
+        git: fs.existsSync(path.join(seed.barePath, '.git')),
+    }).toEqual({ container: true, repos: true, git: true });
 });

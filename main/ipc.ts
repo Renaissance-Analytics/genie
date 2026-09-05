@@ -60,8 +60,6 @@ import { broadcastIssueWatchUpdate } from './issue-watch';
 import { readSoundDataUrl } from './notify-sound';
 import { detectFolder } from './workspace/detect';
 import {
-    createAgiEnvelope,
-    CreateAgiOpts,
     convertToAgi,
     ConvertToAgiOpts,
     convertToAgiPlan,
@@ -69,6 +67,7 @@ import {
     workspaceDocHealth,
     repairWorkspaceDocs,
 } from './workspace/create-agi';
+import { createWorkspace, type AddWorkspacePlan } from './workspace/add-workspace';
 import { analyseFolder } from './workspace/analyse';
 import { syncGappDevWorkspaces } from './workspace/gapp-dev-sync';
 import { syncSacredWorkspaces } from './workspace/sacred-sync';
@@ -844,6 +843,23 @@ export function registerIpcHandlers(): void {
     ipcMain.handle('agents:sidecar-action', async (_e, agentId: string, action: SidecarAction) =>
         agentSidecarAction(String(agentId ?? ''), action),
     );
+    /**
+     * ADD A WORKSPACE — the one path every entry point takes (see
+     * `workspace/add-workspace.ts`). The renderer hands in a PLAN (a name, a
+     * folder, and whatever content it happens to have) rather than a procedure,
+     * so "new", "from a folder", "from a repo", "from Tynn" and "GApp" cannot
+     * drift into five different ideas of what a workspace requires — which is
+     * exactly what they had done.
+     */
+    ipcMain.handle('workspaces:create', async (_e, plan: AddWorkspacePlan) => {
+        const saved = await createWorkspace(plan);
+        if (saved.mcp_enabled) {
+            writeWorkspaceAgentMcp(saved.path, true, workspaceEndpointUrl(saved.id));
+        }
+        rebuildMenu();
+        broadcastWorkspacesChanged();
+        return saved;
+    });
     ipcMain.handle('workspaces:add', (_e, row: WorkspaceRow) => {
         if (row.shape === 'simple') {
             validateSimpleWorkspace({ path: row.path });
@@ -1704,9 +1720,6 @@ export function registerIpcHandlers(): void {
 
     // --- AGI envelope ---------------------------------------------------
     ipcMain.handle('agi:detect', (_e, folder: string) => detectFolder(folder));
-    ipcMain.handle('agi:create', async (_e, opts: CreateAgiOpts) => {
-        return createAgiEnvelope(opts);
-    });
     ipcMain.handle('agi:import', async (_e, folder: string) => {
         return detectFolder(folder);
     });

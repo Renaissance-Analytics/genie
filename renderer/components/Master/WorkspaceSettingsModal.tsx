@@ -1592,9 +1592,13 @@ function OpsWorkspacesPanel({ workspacePath }: { workspacePath: string }) {
 
     if (!plan || !plan.isOps) return null; // only meaningful for Ops projects
 
+    // Every missing child can have a workspace: one with a container is cloned,
+    // one without has an empty workspace MADE for it. A governed child with no
+    // repository is a normal workspace, so "no clone URL" is not a dead end —
+    // it used to be reported as one and left there.
     const missing = plan.children.filter((c) => c.status === 'missing');
-    const provisionable = missing.filter((c) => c.cloneUrl);
-    const unresolved = missing.filter((c) => !c.cloneUrl);
+    const clonable = missing.filter((c) => c.cloneUrl);
+    const creatable = missing.filter((c) => !c.cloneUrl);
 
     const toggleAuto = async (on: boolean) => {
         setAutoProvision(on); // optimistic
@@ -1611,11 +1615,11 @@ function OpsWorkspacesPanel({ workspacePath }: { workspacePath: string }) {
         try {
             const r = await api().tynn.opsProvisionApply(
                 workspacePath,
-                provisionable.map((c) => ({
+                missing.map((c) => ({
                     projectId: c.projectId,
                     name: c.name,
                     slug: c.slug,
-                    cloneUrl: c.cloneUrl as string,
+                    cloneUrl: c.cloneUrl,
                 })),
             );
             const parts = [];
@@ -1635,7 +1639,7 @@ function OpsWorkspacesPanel({ workspacePath }: { workspacePath: string }) {
         >
             <Row
                 label="Auto-provision child workspaces"
-                sub="Skip my approval (the provisionWorkspaces MCP tool acts directly)"
+                sub="Skip my approval (the provisionWorkspaces MCP tool acts directly). It governs whether you are asked — never whether a child can have a workspace."
             >
                 <input
                     type="checkbox"
@@ -1646,45 +1650,40 @@ function OpsWorkspacesPanel({ workspacePath }: { workspacePath: string }) {
                 />
             </Row>
 
-            {provisionable.length === 0 && unresolved.length === 0 ? (
+            {missing.length === 0 ? (
                 <Text size="xs" style={{ color: 'var(--emerald-600)' }}>
                     <Icon name="check" size="xs" /> Every governed child has a workspace.
                 </Text>
             ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    {provisionable.map((c) => (
+                    {clonable.map((c) => (
                         <Text key={c.projectId} size="xs">
-                            <span style={{ color: 'var(--emerald-600)' }}>+ provision</span>{' '}
-                            {c.name}
+                            <span style={{ color: 'var(--emerald-600)' }}>+ clone</span> {c.name}
                             <span className="text-zinc-500"> · {c.cloneUrl}</span>
                         </Text>
                     ))}
-                    {provisionable.length > 0 && (
-                        <div style={{ marginTop: 4 }}>
-                            <Action
-                                size="sm"
-                                color="blue"
-                                icon="download"
-                                disabled={busy}
-                                onClick={provision}
-                            >
-                                {busy
-                                    ? 'Provisioning…'
-                                    : `Provision ${provisionable.length} workspace${
-                                          provisionable.length === 1 ? '' : 's'
-                                      }`}
-                            </Action>
-                        </div>
-                    )}
+                    {creatable.map((c) => (
+                        <Text key={c.projectId} size="xs">
+                            <span style={{ color: 'var(--emerald-600)' }}>+ create</span> {c.name}
+                            <span className="text-zinc-500"> · no repository yet</span>
+                        </Text>
+                    ))}
+                    <div style={{ marginTop: 4 }}>
+                        <Action
+                            size="sm"
+                            color="blue"
+                            icon="download"
+                            disabled={busy}
+                            onClick={provision}
+                        >
+                            {busy
+                                ? 'Provisioning…'
+                                : `Provision ${missing.length} workspace${
+                                      missing.length === 1 ? '' : 's'
+                                  }`}
+                        </Action>
+                    </div>
                 </div>
-            )}
-
-            {unresolved.length > 0 && (
-                <Text size="xs" style={{ color: 'var(--amber-600)' }}>
-                    {unresolved.length} governed project(s) have no resolvable
-                    workspace repository URL
-                    ({unresolved.map((m) => m.name).join(', ')}) — can&apos;t auto-clone these.
-                </Text>
             )}
 
             {msg && (
