@@ -49,9 +49,12 @@ import {
     renderAgentLaunch,
     captureSessionByDetect,
     agentRelaunchDecision,
+    isResumingCommand,
     transcriptDirFor,
 } from '../agentinbox/session-capture';
+import type { AgentInboxAgentType } from '../agentinbox/types';
 import { withProviderStartupInstructions } from '../agents/startup';
+import { agentRelaunchPrompt } from '../agents/relaunch-prompt';
 import { launchBlockReason } from '../agents/availability';
 import { buildSubmitBytes } from './keystrokes';
 import {
@@ -704,6 +707,28 @@ export function createAgentTerminal(opts: {
     }
     if (preparedCodex && launchCommand && agentId && !result.existing) {
         const command = launchCommand;
+        // genie#434 — codex's relaunch prompt cannot ride argv, so it rides the
+        // channel codex already uses for mail. This branch short-circuits BOTH
+        // command-line routes (`maybeRelaunchAgent` is skipped for a prepared
+        // codex, and the TUI line is rebuilt from the STORED base command), and
+        // the thread is resumed over the App Server rather than by a flag. A
+        // `session.deliver` starts a turn on that resumed thread, which is a
+        // shape this code already relies on for the backlog below — unlike a
+        // positional prompt after `--remote`, which nothing here has confirmed
+        // codex accepts. Only on a REVIVE: a fresh launch took its instructions
+        // on the command line and a turn here would contradict them.
+        const relaunchPrompt = reviving
+            ? agentRelaunchPrompt({
+                  genieAvailable: workspaceMcpEnabled(opts.workspaceId),
+                  // The App Server resumes by `resumeThreadId`, so the captured
+                  // id is what says whether the conversation survived — the
+                  // launch line carries no resume grammar to read it off.
+                  resumed: !!chatSessionId,
+                  saved: typeof priorSpec?.meta?.agent_instructions === 'string'
+                      ? priorSpec.meta.agent_instructions
+                      : null,
+              })
+            : '';
         const configuredAgent = () => {
             try {
                 return listWorkspaceAgents(opts.workspaceId).find(
@@ -735,6 +760,17 @@ export function createAgentTerminal(opts: {
                 );
             }
             deliverAgentLaunch(id, codexRemoteTuiLaunch(command, running.address));
+            // BEFORE the backlog: reconnecting is what makes everything after it
+            // reachable, and a queued DM answered by an agent with no channel
+            // back to the user is the silence this whole ticket is about. A
+            // delivery that throws must not swallow the mail behind it.
+            if (relaunchPrompt) {
+                try {
+                    await running.session.deliver({ text: relaunchPrompt });
+                } catch {
+                    /* the turn could not be started — the backlog still can */
+                }
+            }
             const backlog = await agentInboxBroker.receive(agentId!, { acknowledge: false });
             for (const message of backlog.messages) {
                 await running.session.deliver({
@@ -850,14 +886,47 @@ function maybeRelaunchAgent(id: string, existing: boolean): void {
         spec?.meta?.agent,
         decision.command,
     );
-    if (typeof spec?.meta?.agent_instructions === 'string') {
+    const agent = spec?.meta?.agent;
+    const instructions = agent ? relaunchInstructionsFor(spec, decision.command) : '';
+    if (agent && instructions) {
         command = withProviderStartupInstructions(
-            spec.meta.agent as Parameters<typeof withProviderStartupInstructions>[0],
+            agent as Parameters<typeof withProviderStartupInstructions>[0],
             command,
-            spec.meta.agent_instructions,
+            instructions,
         );
     }
     deliverAgentLaunch(id, command);
+}
+
+/**
+ * What a relaunched agent is told (genie#434).
+ *
+ * This used to replay `meta.agent_instructions` and nothing else, which is a
+ * snapshot of the agent's FIRST launch: it says nothing about the restart, it
+ * is absent on every spec written before #302 or by a surface that never set it
+ * (`createSpecializedAgentTerminal`), and an agent that came back with it still
+ * had no reason to believe its Genie connection had died with its old pty. The
+ * standing instructions are still carried — they are true of the agent — but
+ * the relaunch now speaks for itself.
+ *
+ * `resumed` is read off the command the decision produced rather than tracked
+ * alongside it, through the one function that owns that question
+ * ({@link isResumingCommand}) — the same one `renderAgentLaunch` consults, so
+ * the two cannot disagree about what a resume looks like.
+ */
+function relaunchInstructionsFor(spec: TerminalSpecRow | null, command: string): string {
+    const agent = spec?.meta?.agent;
+    if (!spec || !agent) return '';
+    return agentRelaunchPrompt({
+        // The SAME gate that decides whether this terminal gets a GENIE_MCP_URL
+        // at all, so the prompt can never name a tool this agent has no endpoint
+        // to reach.
+        genieAvailable: !!spec.workspace_id && workspaceMcpEnabled(spec.workspace_id),
+        resumed: isResumingCommand(agent as AgentInboxAgentType, command),
+        saved: typeof spec.meta?.agent_instructions === 'string'
+            ? spec.meta.agent_instructions
+            : null,
+    });
 }
 
 /**
