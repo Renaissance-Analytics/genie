@@ -1,4 +1,4 @@
-import { isSafeSessionId } from './session-capture';
+import { bindsSessionAfterLaunch, isSafeSessionId } from './session-capture';
 
 /**
  * Late-bind a harness-generated chat session to an EXISTING AgentInbox agent.
@@ -43,8 +43,16 @@ export function registerAgentInboxSession(
     if (typeof agentId !== 'string' || !agentId) {
         return { ok: false, error: 'That terminal is not an AgentInbox agent.' };
     }
-    if (spec.meta?.agent !== 'codex') {
-        return { ok: false, error: 'Late session registration is only supported for Codex agents.' };
+    // The CAPABILITY, not the name (genie#261 category C). This read
+    // `!== 'codex'`, and `genie` carries the same `strategy: 'hook'` — it mints
+    // its id after launch and reports it back exactly as codex does — so a
+    // Genie TUI agent's chat id could never bind. Nothing failed to compile and
+    // nothing was logged: the agent simply had no conversation attached.
+    if (!bindsSessionAfterLaunch(spec.meta?.agent)) {
+        return {
+            ok: false,
+            error: `Late session registration is only for an agent whose harness reports its session id after launch; ${String(spec.meta?.agent ?? 'this agent')} does not.`,
+        };
     }
 
     if (spec.meta?.chat_session_id === normalized) return { ok: true, agentId, changed: false };

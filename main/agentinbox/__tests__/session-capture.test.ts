@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { PROVIDER_IDS, TUI_REGISTRY } from '../../agents/registry';
 import {
+    isResumingCommand,
+    bindsSessionAfterLaunch,
     renderAgentLaunch,
     renderAgentResume,
     renderAgentContinue,
@@ -350,5 +353,80 @@ describe('agentRelaunchDecision — verify the captured id before --resume', () 
         expect(agentRelaunchDecision(claude({ chat_session_id: 'sess-1' }), false)).toEqual({
             command: 'claude --resume sess-1',
         });
+    });
+});
+
+/**
+ * "Is this command already a resume?" is derived from `TuiDef.resume`, not from
+ * the provider's name (genie#261 category C). It used to be a two-way ternary --
+ * claude's flags, codex's subcommand, `false` for everyone else -- so the check
+ * GUARDING `renderAgentResume` knew about fewer providers than
+ * `renderAgentResume` itself, which has been registry-driven since #363.
+ */
+describe('isResumingCommand reads the provider registry', () => {
+    it.each(PROVIDER_IDS.filter((id) => TUI_REGISTRY[id].resume !== null))(
+        'recognises %s resuming in its own grammar',
+        (id) => {
+            const grammar = TUI_REGISTRY[id].resume!;
+            const binary = TUI_REGISTRY[id].defaultCommand || id;
+            const cmd =
+                grammar.kind === 'subcommand'
+                    ? `${binary} ${grammar.token} abc-123`
+                    : `${binary} ${grammar.token} abc-123`;
+            expect(isResumingCommand(id, cmd)).toBe(true);
+        },
+    );
+
+    it.each(PROVIDER_IDS.filter((id) => TUI_REGISTRY[id].resume === null))(
+        'POSITIVE CONTROL: %s has no grammar, so nothing reads as a resume',
+        (id) => {
+            // Without this the table above would pass against an
+            // `isResumingCommand` that simply returned true.
+            expect(isResumingCommand(id, `${id} --resume abc-123`)).toBe(false);
+        },
+    );
+
+    it('reads claude short forms, and a plain launch as not resuming', () => {
+        expect(isResumingCommand('claude', 'claude --continue')).toBe(true);
+        expect(isResumingCommand('claude', 'claude -r abc')).toBe(true);
+        expect(isResumingCommand('claude', 'claude -c')).toBe(true);
+        expect(isResumingCommand('claude', 'claude')).toBe(false);
+        expect(isResumingCommand('claude', 'claude --resumed-yesterday')).toBe(false);
+    });
+
+    it("does NOT read codex's -c TOML override as a resume", () => {
+        // The reason aliases are per-provider rather than one shared list: `-c`
+        // is claude's `--continue` and codex's CONFIG override. Sharing them
+        // would make Genie skip the session handling a codex launch needed.
+        expect(isResumingCommand('codex', 'codex -c "mcp_servers.genie.url=http://x"')).toBe(false);
+        expect(isResumingCommand('codex', 'codex resume abc-123')).toBe(true);
+        expect(isResumingCommand('codex', 'codex')).toBe(false);
+    });
+
+    it('only counts the subcommand immediately after the binary', () => {
+        expect(isResumingCommand('codex', 'codex --flag resume abc')).toBe(false);
+    });
+});
+
+/**
+ * Late binding is a capability -- `strategy: 'hook'` -- not the name `codex`
+ * (genie#261 category C).
+ */
+describe('bindsSessionAfterLaunch', () => {
+    it.each(PROVIDER_IDS)('answers %s from its launch profile', (id) => {
+        expect(bindsSessionAfterLaunch(id)).toBe(LAUNCH_PROFILES[id].strategy === 'hook');
+    });
+
+    it('POSITIVE CONTROL: at least one provider each side of the answer', () => {
+        // A table that agreed with the profile for every provider would pass just
+        // as well if every provider answered the same way.
+        const answers = PROVIDER_IDS.map((id) => bindsSessionAfterLaunch(id));
+        expect(answers).toContain(true);
+        expect(answers).toContain(false);
+    });
+
+    it('refuses a provider this build does not know', () => {
+        expect(bindsSessionAfterLaunch('some-future-tui')).toBe(false);
+        expect(bindsSessionAfterLaunch(undefined)).toBe(false);
     });
 });

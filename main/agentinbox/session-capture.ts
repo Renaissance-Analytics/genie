@@ -43,8 +43,51 @@ export const LAUNCH_PROFILES: Record<AgentInboxAgentType, LaunchProfile> = {
 
 /** A launch already carries a session id / is resuming — don't inject a flag. */
 const SESSION_FLAG_RE = /(^|\s)--session-id(=|\s)/;
-const CLAUDE_RESUME_FLAG_RE = /(^|\s)(--resume|--continue|-r|-c)(=|\s|$)/;
-const CODEX_RESUME_SUBCOMMAND_RE = /^\s*codex(?:\.exe)?\s+resume(?:\s|$)/i;
+
+/**
+ * True when this provider MINTS its session id AFTER launch and reports it
+ * back through a startup hook — the providers late binding exists for.
+ *
+ * `session-registration.ts` asked `agent !== 'codex'`. `genie` carries the same
+ * `strategy: 'hook'` and was refused by that literal, so a Genie TUI agent's
+ * chat id could never bind — no error, no log, just an agent with no
+ * conversation attached (genie#261 category C).
+ */
+export function bindsSessionAfterLaunch(agent: unknown): boolean {
+    if (typeof agent !== 'string') return false;
+    return LAUNCH_PROFILES[agent as AgentInboxAgentType]?.strategy === 'hook';
+}
+
+/**
+ * True when `command` is ALREADY a resume, so Genie must not inject a second
+ * session flag on top of it.
+ *
+ * DERIVED from `TuiDef.resume`, not from the provider's name. This was a
+ * two-way ternary — claude's flags, codex's subcommand, `false` for everyone
+ * else — so a provider that later gains a resume grammar would have had its
+ * resume commands treated as fresh launches, and `renderAgentResume` (which is
+ * already registry-driven) would have disagreed with the check guarding it.
+ */
+export function isResumingCommand(agent: AgentInboxAgentType, command: string): boolean {
+    if (!isTuiId(agent)) return false;
+    const def = providerDef(agent);
+    const grammar = def.resume;
+    if (!grammar) return false;
+    if (grammar.kind === 'subcommand') {
+        // The subcommand only counts immediately after the binary, which is
+        // where `renderAgentResume` puts it.
+        return new RegExp(
+            `^\\s*${escapeForRegExp(def.defaultCommand || agent)}(?:\\.exe)?\\s+${escapeForRegExp(grammar.token)}(?:\\s|$)`,
+            'i',
+        ).test(command);
+    }
+    const tokens = [
+        grammar.token,
+        ...(grammar.continueFlag ? [grammar.continueFlag] : []),
+        ...(grammar.aliases ?? []),
+    ];
+    return new RegExp(`(^|\\s)(${tokens.map(escapeForRegExp).join('|')})(=|\\s|$)`).test(command);
+}
 
 /** Session ids later become one unquoted CLI argument, so keep them shell-inert. */
 export function isSafeSessionId(value: string): boolean {
@@ -82,13 +125,7 @@ export function renderAgentLaunch(
     const cmd = String(command ?? '');
 
     // Already resuming or already pinned — never double-inject.
-    const resuming =
-        agent === 'claude'
-            ? CLAUDE_RESUME_FLAG_RE.test(cmd)
-            : agent === 'codex'
-              ? CODEX_RESUME_SUBCOMMAND_RE.test(cmd)
-              : false;
-    if (resuming) {
+    if (isResumingCommand(agent, cmd)) {
         return { command: cmd, chatSessionId: extractSessionId(cmd), strategy: profile.strategy };
     }
     const existing = extractSessionId(cmd);
@@ -264,9 +301,14 @@ export function agentRelaunchDecision(
     // robust to that drift. `sessionExists` is injected (the fs check lives in the
     // caller); omitted → trust the id (preserves the pre-verification behaviour).
     if (sid) {
-        // Only Claude's ids map to the transcript directory checked by the
-        // caller. Codex's id comes from SessionStart and is resumed directly.
-        const verified = agent === 'claude' && sessionExists ? sessionExists(sid) : true;
+        // Only an id GENIE MINTED maps to the transcript directory the caller
+        // checks — that is what `strategy: 'flag'` means. An id the harness
+        // reported (`hook`) or Genie read off disk (`detect`) is resumed
+        // directly. This asked `agent === 'claude'`, which is the same answer
+        // only for as long as claude is the only minting provider
+        // (genie#261 category C).
+        const minted = LAUNCH_PROFILES[agent]?.strategy === 'flag';
+        const verified = minted && sessionExists ? sessionExists(sid) : true;
         if (verified) {
             const resume = renderAgentResume(agent, baseCmd, sid);
             if (resume) return { command: resume };
