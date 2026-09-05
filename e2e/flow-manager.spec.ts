@@ -1,5 +1,5 @@
 import { test, expect, type ElectronApplication, type Page } from '@playwright/test';
-import { launchGenieE2E } from './helpers/launch';
+import { killMasterTerminals, launchGenieE2E } from './helpers/launch';
 
 /**
  * THE FLOW MANAGER, in the real master window (genie#394).
@@ -81,6 +81,11 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
+    // Kill the ptys BEFORE quitting. This spec loads the REAL master page, so a
+    // quit with a live terminal raises the keep-or-shut-down confirmation for
+    // real — and `app.close()` would then sit out its 30s decision timeout with
+    // nobody there to answer. Same reason `master-window.spec.ts` does it.
+    if (app) await killMasterTerminals(app).catch(() => {});
     await app?.close();
 });
 
