@@ -67,6 +67,7 @@ export type E2EHarnessPage =
     | 'terminal-recovery'
     | 'tynn-health'
     | 'tynn-import'
+    | 'workspace-create'
     | 'agent-pulse'
     | 'master';
 
@@ -81,6 +82,7 @@ const HARNESS_ROUTE: Record<E2EHarnessPage, string> = {
     'terminal-recovery': 'e2e-terminal-recovery',
     'tynn-health': 'e2e-tynn-health',
     'tynn-import': 'e2e-tynn-import',
+    'workspace-create': 'e2e-workspace-create',
     'agent-pulse': 'e2e-agent-pulse',
     master: 'master',
 };
@@ -617,6 +619,26 @@ export async function readTynnImportSeed(
     return app.evaluate(() => {
         const seed = (globalThis as Record<string, any>).__GENIE_E2E_TYNN_IMPORT__;
         return (seed as TynnImportSeed) ?? null;
+    });
+}
+
+/** Mirrors `WorkspaceCreateSeed` in main/e2e/workspace-create.ts (genie#431). */
+export interface WorkspaceCreateSeed {
+    parentPath: string;
+    workspaceName: string;
+    expectedPath: string;
+}
+
+/**
+ * Read the workspace-create fixture's destination folder + the name to type.
+ * Null when seeding never ran, so the spec fails naming the cause.
+ */
+export async function readWorkspaceCreateSeed(
+    app: ElectronApplication,
+): Promise<WorkspaceCreateSeed | null> {
+    return app.evaluate(() => {
+        const seed = (globalThis as Record<string, any>).__GENIE_E2E_WORKSPACE_CREATE__;
+        return (seed as WorkspaceCreateSeed) ?? null;
     });
 }
 

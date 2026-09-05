@@ -52,7 +52,10 @@ test.afterAll(async () => {
     await app?.close();
 });
 
-const WIZARD = /Upgrade to \.agi envelope/;
+// The inspect wizard's own heading (genie#432 renamed it off the storage
+// format). Deliberately NOT any source card's title: the second test asserts the
+// wizard is ABSENT while the picker — with its cards — is back on screen.
+const WIZARD = /Set up this (folder|repository)/;
 
 /** Add workspace → Import from Tynn → choose one of the fixture projects. */
 async function chooseProject(projectId: string): Promise<void> {
@@ -66,7 +69,7 @@ async function chooseProject(projectId: string): Promise<void> {
     await select.selectOption(projectId);
 }
 
-test('a project with no envelope still reaches the upgrade wizard', async () => {
+test('a project that is not a workspace yet still reaches the inspect wizard', async () => {
     await chooseProject(seed.plainProjectId);
 
     await page.getByRole('button', { name: 'Inspect workspace' }).click();
@@ -74,7 +77,7 @@ test('a project with no envelope still reaches the upgrade wizard', async () => 
     await expect(
         page.getByRole('heading', { name: WIZARD }),
         'the scan-and-convert wizard must still be reachable — without this, the ' +
-            'envelope assertion below would pass against an import that goes nowhere',
+            'assertion below would pass against an import that goes nowhere',
     ).toBeVisible();
 });
 

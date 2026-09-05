@@ -51,6 +51,10 @@ import type { MobileDataDeps } from '../mobile/api';
 import { listWorkspaces } from '../db';
 import { isE2EHosting, registerHostingE2EMocks } from './hosting';
 import { isE2ETynnImport, registerTynnImportE2EMocks } from './tynn-import';
+import {
+    isE2EWorkspaceCreate,
+    registerWorkspaceCreateE2EMocks,
+} from './workspace-create';
 
 /** True only in E2E test mode. Everything in this module no-ops otherwise. */
 export function isE2E(): boolean {
@@ -436,6 +440,12 @@ export function registerE2EMocks(): void {
     // list and the git clone, and no other spec should ever run against
     // either. See ./tynn-import.ts.
     if (isE2ETynnImport()) registerTynnImportE2EMocks();
+
+    // --- Making a workspace (the e2e-workspace-create page only) ----------
+    // Reports GitHub DISCONNECTED, against the shared mock's signed-in default:
+    // a connected account means the new workspace also gets its container repo,
+    // and that is a real network call. See ./workspace-create.ts.
+    if (isE2EWorkspaceCreate()) registerWorkspaceCreateE2EMocks();
 }
 
 // ===========================================================================

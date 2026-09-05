@@ -34,8 +34,8 @@ export default function WorkspaceList({ rows, onOpen, onRemove, onAdd }: Props) 
                         style={{ display: 'inline-block', marginBottom: 8 }}
                     />
                     <Text size="sm" className="text-zinc-500" style={{ display: 'block' }}>
-                        No workspaces yet. Add an existing project folder, or
-                        scaffold a new `.agi` envelope.
+                        No workspaces yet. Make a new one, or open a folder you
+                        already have.
                     </Text>
                 </Card>
             ) : (
@@ -83,11 +83,6 @@ export default function WorkspaceList({ rows, onOpen, onRemove, onAdd }: Props) 
                                     >
                                         {workspaceDisplayName(w)}
                                     </Text>
-                                    {w.shape === 'agi' && (
-                                        <Badge color="amber" size="sm" variant="soft">
-                                            .agi
-                                        </Badge>
-                                    )}
                                     {/* Backend badge only when a project is actually
                                         associated — a project-less workspace shows none. */}
                                     {hasProjectAssociation(w) &&

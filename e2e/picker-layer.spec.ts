@@ -51,13 +51,11 @@ let page: Page;
 test.beforeAll(async () => {
     ({ app, page } = await launchGenieE2E('picker-layer'));
     // Walk the modal to the step that owns a folder picker — the reported repro
-    // is now Add workspace → New → Local folder → Browse. Done once: every test
-    // below drives Browse from here. The old Simple route no longer exists in
-    // the managed-workspace UX.
+    // is now Add workspace → New workspace → Browse. Done once: every test below
+    // drives Browse from here. Since genie#431 "New workspace" is a form, not a
+    // wizard: it asks where the workspace should live, and that field's Browse
+    // is the picker under test.
     await page.getByRole('heading', { name: 'New workspace', exact: true }).click();
-    // `local` is the New wizard's default source mode; clicking it keeps the
-    // spec on the documented path if that default ever changes.
-    await page.getByRole('button', { name: 'Local folder' }).click();
 });
 
 test.afterAll(async () => {

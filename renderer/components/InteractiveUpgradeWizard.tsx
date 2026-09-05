@@ -103,32 +103,38 @@ const KIND_COPY: Record<
 > = {
     'single-repo': {
         title: 'Single repository',
-        body: 'This folder is one git repo with no submodules. It becomes ONE submodule inside the envelope, and any docs/plans folders can copy into .ai/.',
+        body: 'This folder is one git repo with no submodules. It becomes the workspace\'s ONE repository, and any docs/plans folders can copy into its shared knowledge.',
         icon: 'git-branch',
     },
     'monorepo': {
         title: 'Monorepo (git submodules)',
-        body: 'This folder is one git repo that itself bundles git submodules. You can EXPLODE it — add each submodule to the new envelope as its own submodule — or WRAP it whole as a single submodule. Choose on the next step.',
+        body: 'This folder is one git repo that itself bundles git submodules. You can EXPLODE it — each submodule joins the workspace as its own repository — or WRAP it whole as a single one. Choose on the next step.',
         icon: 'boxes',
     },
     'repo-collection': {
         title: 'Collection of repositories',
-        body: 'This folder is not a repo itself, but it contains git repos. Each one becomes its own submodule under repos/ — pick which to include on the next step.',
+        body: 'This folder is not a repo itself, but it contains git repos. Each one joins the workspace as its own repository — pick which to include on the next step.',
         icon: 'folder-git-2',
     },
     'plain-folder': {
         title: 'Plain folder',
-        body: 'No git repos found at the top level. You can still build an envelope and move knowledge into .ai/ — repos can be added later.',
+        body: 'No git repos found at the top level. Genie can still make a workspace here and move your notes into its shared knowledge — repositories can be added later.',
         icon: 'folder',
     },
 };
 
 /**
- * Upgrade-to-.agi wizard, structured as a four-step Carousel (wizard
- * variant): Source → Repos → Knowledge → Envelope. The Source step
- * classifies the folder (single repo / repo collection / plain folder)
- * and the later steps adapt to that shape. The source folder is never
- * modified — submodules clone FROM it, knowledge copies out of it.
+ * The INSPECT route (genie#431): adopting a folder or a repository that already
+ * exists, as a four-step Carousel — Source → Repos → Knowledge → Workspace. The
+ * Source step classifies what it found (single repo / repo collection / plain
+ * folder) and the later steps adapt to that shape. The source is never modified
+ * — submodules clone FROM it, knowledge copies out of it.
+ *
+ * It is called an upgrade wizard IN THE CODE because that is what it does to a
+ * folder: it wraps it in the `.agi` envelope format. What the user is told is
+ * that Genie is opening their folder, because they are not upgrading anything —
+ * they are getting a workspace (genie#432). Creating a workspace does NOT come
+ * through here; there would be nothing to inspect.
  */
 export default function InteractiveUpgradeWizard({
     initialFolder,
@@ -184,10 +190,11 @@ export default function InteractiveUpgradeWizard({
     const [parentFolder, setParentFolder] = useState('');
     const [primaryWorkspace, setPrimaryWorkspace] = useState<string | undefined>();
     const [remoteMode, setRemoteMode] = useState<'none' | 'paste' | 'github'>('none');
+    const [remoteModeTouched, setRemoteModeTouched] = useState(false);
     const [remoteUrl, setRemoteUrl] = useState('');
 
     // Shared GitHub account — drives inline connect + owner selection for
-    // BOTH the envelope remote and any repo forks. One account choice.
+    // BOTH the workspace's own repository and any repo forks. One account choice.
     const account = useGitHubAccount();
     const [ghOwner, setGhOwner] = useState<string>(''); // empty = personal user account
     // True once the user has manually picked an owner — after that we stop
@@ -200,6 +207,25 @@ export default function InteractiveUpgradeWizard({
     const chooseGhOwner = (login: string) => {
         setGhOwnerTouched(true);
         setGhOwner(login);
+    };
+
+    /**
+     * A connected account means the workspace gets its own repository — the same
+     * rule the create route derives outright (genie#431). Here it is a DEFAULT
+     * rather than a derivation: this route is adopting something that already
+     * exists and may already have a home, so pasting a URL stays available. The
+     * account resolves asynchronously, hence the effect rather than an initial
+     * value, and a user who has touched the control keeps their choice.
+     */
+    useEffect(() => {
+        if (!remoteModeTouched && account.connected && remoteMode === 'none') {
+            setRemoteMode('github');
+        }
+    }, [account.connected, remoteMode, remoteModeTouched]);
+
+    const chooseRemoteMode = (mode: 'none' | 'paste' | 'github') => {
+        setRemoteModeTouched(true);
+        setRemoteMode(mode);
     };
 
     useEffect(() => {
@@ -434,7 +460,7 @@ export default function InteractiveUpgradeWizard({
     const pickParentFolder = async () => {
         const p = await pickPath({
             mode: 'directory',
-            title: 'Choose destination parent folder for the new envelope',
+            title: 'Choose the folder the new workspace should live in',
         });
         if (p) setParentFolder(p);
     };
@@ -622,7 +648,7 @@ export default function InteractiveUpgradeWizard({
                 remote = { kind: 'paste', url: remoteUrl.trim() };
             } else if (remoteMode === 'github') {
                 if (!account.connected) {
-                    throw new Error('Connect GitHub to auto-create the envelope repo.');
+                    throw new Error('Connect GitHub to create the repository automatically.');
                 }
                 setBusyStep('Creating GitHub repo…');
                 const created = await api().github.createRepo({
@@ -631,7 +657,7 @@ export default function InteractiveUpgradeWizard({
                     ownerId: ghOwner
                         ? account.installations.find((i) => i.login === ghOwner)?.id ?? null
                         : null,
-                    description: `Aionima envelope for ${envelopeName}`,
+                    description: `Genie workspace for ${envelopeName}`,
                     private: ghPrivate,
                 });
                 remote = { kind: 'paste', url: created.clone_url };
@@ -694,7 +720,7 @@ export default function InteractiveUpgradeWizard({
                 primary: isExplodeMono ? primaryName : undefined,
                 remote,
             };
-            setBusyStep('Building envelope + adding submodules…');
+            setBusyStep('Building the workspace + adding repositories…');
             const result = await api().agi.convertPlan(plan);
 
             if (pushAfter) {
@@ -745,7 +771,11 @@ export default function InteractiveUpgradeWizard({
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <Heading as="h2" size="sm">
-                <Icon name="layers" size="sm" /> Upgrade to .agi envelope
+                {/* Named for the ACT, not the format (genie#432), and distinct
+                    from the source card that opened it so a user can see which
+                    screen they are on. */}
+                <Icon name="layers" size="sm" />{' '}
+                {sourceMode === 'remote' ? 'Set up this repository' : 'Set up this folder'}
             </Heading>
 
             <Carousel
@@ -813,7 +843,7 @@ export default function InteractiveUpgradeWizard({
                         )}
                     </Carousel.Slide>
 
-                    <Carousel.Slide name="Envelope">
+                    <Carousel.Slide name="Workspace">
                         <EnvelopeStep
                             projects={projects}
                             loadingProjects={loadingProjects}
@@ -827,7 +857,7 @@ export default function InteractiveUpgradeWizard({
                             onPickParent={pickParentFolder}
                             primaryWorkspace={primaryWorkspace}
                             remoteMode={remoteMode}
-                            setRemoteMode={setRemoteMode}
+                            setRemoteMode={chooseRemoteMode}
                             remoteUrl={remoteUrl}
                             setRemoteUrl={setRemoteUrl}
                             account={account}
@@ -856,8 +886,8 @@ export default function InteractiveUpgradeWizard({
                     canNext={canLeave(step)}
                     finishLabel={
                         remoteMode === 'github'
-                            ? 'Create on GitHub + build envelope'
-                            : 'Build envelope'
+                            ? 'Create on GitHub + add workspace'
+                            : 'Add workspace'
                     }
                     finishEnabled={(!!existingEnvelope || planValid) && !busy}
                     onFinish={() => void execute()}
@@ -914,7 +944,7 @@ function WizardFooter({
             )}
             {isLast ? (
                 <Action color="blue" icon="check" onClick={onFinish} disabled={!finishEnabled}>
-                    {busy ? busyStep ?? 'Building envelope…' : finishLabel}
+                    {busy ? busyStep ?? 'Building the workspace…' : finishLabel}
                 </Action>
             ) : (
                 <Action
@@ -987,9 +1017,9 @@ function SourceStep({
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
-                Pick the source to upgrade — a local folder or a remote git repo
+                Pick what to open — a folder on this machine, or a git repository
                 Genie clones first. Genie reads its layout (never modifies it) and
-                figures out whether it's a single repo, a collection of repos, or a
+                works out whether it's a single repo, a collection of repos, or a
                 plain folder.
             </Text>
             <div style={{ display: 'flex', gap: 8 }}>
@@ -1168,7 +1198,7 @@ function ReposStep({
             <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
                 This monorepo declares <strong>{submoduleCount}</strong> submodule
                 {submoduleCount === 1 ? '' : 's'}. Choose how to bring it into the
-                envelope:
+                workspace:
             </Text>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 {([
@@ -1188,7 +1218,7 @@ function ReposStep({
             </div>
             <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
                 {monorepoMode === 'explode'
-                    ? 'Each member submodule is added to the new envelope as its own submodule — a flat multi-repo envelope of the monorepo’s members.'
+                    ? 'Each member submodule joins the workspace as its own repository — a flat, multi-repo workspace of the monorepo’s members.'
                     : 'The whole monorepo becomes ONE submodule under repos/, with its own submodules nested inside it as-is.'}
             </Text>
         </div>
@@ -1199,7 +1229,7 @@ function ReposStep({
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 {monorepoToggle}
                 <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
-                    No git repos detected — the envelope starts without submodules.
+                    No git repos detected — the workspace starts without repositories.
                     You can add repos later with <code>git submodule add</code> or
                     from the workspace context menu.
                 </Text>
@@ -1232,7 +1262,7 @@ function ReposStep({
                     Pick the <strong>host</strong> — the one repo Aionima builds and
                     hosts. The rest become <strong>packages</strong> the host consumes
                     from the npm/composer registry (nothing in any build config is
-                    rewritten). The envelope slug defaults to the host’s name.
+                    rewritten). The workspace name defaults to the host’s name.
                 </Text>
             )}
 
@@ -1384,7 +1414,7 @@ function DispositionStep({
                 behind on a fresh clone: send those to{' '}
                 <strong>Knowledge</strong> (<code>.ai/…</code>) or{' '}
                 <strong>Root</strong> (beside <code>project.json</code>). Pick{' '}
-                <strong>Ignore</strong> to leave an item out of the envelope
+                <strong>Ignore</strong> to leave an item out of the workspace
                 entirely (nothing is moved or copied).
             </Text>
             <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -1445,7 +1475,7 @@ function DispositionStep({
                                     list={[
                                         { value: 'codebase', label: 'Codebase (stays in repo)' },
                                         { value: 'knowledge', label: 'Knowledge / WIP → .ai/' },
-                                        { value: 'root', label: 'Envelope root' },
+                                        { value: 'root', label: 'Workspace root' },
                                         { value: 'ignore', label: 'Ignore (leave out)' },
                                     ]}
                                 />
@@ -1664,13 +1694,13 @@ function EnvelopeStep({
                         GApp Development Workspace
                     </Text>
                     <Text size="xs" className="text-zinc-500">
-                        Mark this inspected envelope as a GDW so Genie exposes GApp build,
+                        Mark this workspace as a GDW so Genie exposes GApp build,
                         schema-check, and preview workflows.
                     </Text>
                 </span>
             </label>
             <Input
-                label="Envelope slug"
+                label="Workspace name"
                 description={`Becomes the folder name: ${slug || '{slug}'}.agi`}
                 value={slug}
                 onValueChange={setSlug}
@@ -1697,7 +1727,7 @@ function EnvelopeStep({
 
             <div>
                 <Text size="xs" style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>
-                    Envelope remote (optional)
+                    Where it lives on GitHub
                 </Text>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                     {(['none', 'github', 'paste'] as const).map((m) => (
