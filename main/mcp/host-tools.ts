@@ -1033,10 +1033,13 @@ export async function manageProcessForMcp(
  */
 async function approveOpsProvision(
     ws: { project_name: string },
-    targets: Array<{ name: string; cloneUrl: string }>,
+    targets: Array<{ name: string; cloneUrl: string | null }>,
 ): Promise<boolean> {
+    // A child with no container to clone gets an empty workspace MADE for it,
+    // so the approval says which is which rather than implying every line is a
+    // clone — the user is approving two different acts.
     const list = targets
-        .map((t) => `• ${t.name}\n  ${t.cloneUrl}`)
+        .map((t) => `• ${t.name}\n  ${t.cloneUrl ?? 'new workspace (no repository yet)'}`)
         .join('\n');
     const result = await forceQuestion(
         [
@@ -1044,12 +1047,12 @@ async function approveOpsProvision(
                 header: 'Provision?',
                 question:
                     `An Ops agent wants to provision Genie workspaces for ${targets.length} governed ` +
-                    `child project${targets.length === 1 ? '' : 's'} (clone each one's *.agi repo):\n\n` +
+                    `child project${targets.length === 1 ? '' : 's'}:\n\n` +
                     `${list}\n\n` +
-                    `Approve to clone + open them, or deny to skip.`,
+                    `Approve to set them up and open them, or deny to skip.`,
                 options: [
-                    { label: 'Approve', description: 'Clone + register these child workspaces.' },
-                    { label: 'Deny', description: 'Skip — nothing is cloned.' },
+                    { label: 'Approve', description: 'Set up + register these child workspaces.' },
+                    { label: 'Deny', description: 'Skip — nothing is created.' },
                 ],
             },
         ],
@@ -1125,9 +1128,11 @@ async function createEnvelopeRepo(opts: {
 /**
  * Back the provisionWorkspaces MCP tool. Resolves the Ops workspace from the
  * (already terminal-resolved) caller, computes the governed-children plan, and
- * for `provision` clones + registers the missing child workspaces — honouring
- * the ops_auto_provision_workspaces toggle: OFF blocks on the approval modal
- * (like manageProcess), ON provisions directly. `scaffold` CREATES the
+ * for `provision` stands up the missing child workspaces — cloning the container
+ * of a child that has one and MAKING one for a child that has no repository at
+ * all — honouring the ops_auto_provision_workspaces toggle: OFF blocks on the
+ * approval modal (like manageProcess), ON provisions directly. That toggle
+ * governs whether the user is ASKED and never what can be provisioned. `scaffold` CREATES the
  * envelopes that don't exist remotely (genie#6) and is ALWAYS approval-gated.
  * Gated to Ops workspaces.
  */
@@ -1233,9 +1238,11 @@ export async function provisionWorkspacesForMcp(
     // action === 'provision'
     const targets = provisionTargets(plan);
     if (targets.length === 0) {
-        // Nothing to do — every governed child already has a workspace (or the
-        // missing ones can't be resolved to a clone URL / don't exist remotely,
-        // surfaced per-child in `children` (remote: 'not-found' → scaffold).
+        // Nothing to do — every governed child already has a workspace, or the
+        // remaining ones belong to `scaffold` (remote: 'not-found' with a source
+        // repo) or need credentials ('auth-required'). Both are surfaced
+        // per-child in `children`. A child with no repository at all is NOT in
+        // this branch: it is provisionable, and gets a workspace made for it.
         return { ok: true, isOps: true, children, provisioned: [], errors: [] };
     }
 

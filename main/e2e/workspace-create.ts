@@ -4,9 +4,9 @@
  *
  * WHAT IS STOOD IN FOR, AND WHAT IS NOT
  * -------------------------------------
- * Almost nothing, which is the point. `agi:create` really scaffolds the folder,
- * really runs `git init`, and really writes the first commit; `workspaces:add`
- * really registers the row. The spec then reads the folder off disk, which no
+ * Almost nothing, which is the point. `workspaces:create` really scaffolds the
+ * folder, really runs `git init`, really writes the first commit and really
+ * registers the row. The spec then reads the folder off disk, which no
  * amount of DOM assertion could stand in for — a route that "creates a
  * workspace" and leaves nothing behind is exactly the failure #431 was.
  *
@@ -52,7 +52,7 @@ const EXPECTED_FOLDER = 'e2e-fresh-start.agi';
 /**
  * Seeded BEFORE the window loads. The E2E profile is reused across runs, so the
  * parent folder is emptied and any workspace a previous run registered under it
- * is dropped — otherwise `agi:create` would (correctly) refuse a folder that is
+ * is dropped — otherwise creation would (correctly) refuse a folder that is
  * not empty, and the spec would fail on last run's success.
  */
 export function seedWorkspaceCreateE2E(): WorkspaceCreateSeed {

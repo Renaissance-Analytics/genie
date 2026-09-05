@@ -1,18 +1,22 @@
-import { tynnProjectImportSource, tynnWorkspaceSource } from './workspace-onboarding';
-import type { BackendKind, WorkspaceRow } from './genie';
+import type { BackendKind } from './genie';
 
 /**
- * WHERE A TYNN IMPORT GOES, and why (genie#355).
+ * WHAT A TYNN PROJECT RESOLVES TO, and why it is never a question.
  *
- * Importing from Tynn used to end, unconditionally, in the scan-and-convert
- * upgrade wizard. That wizard exists to turn a folder that is NOT an `.agi`
- * envelope into one — so pointing an already-enveloped project at it made the
- * owner pick a repo, clone it, and then walk a conversion with nothing to
- * convert. An envelope carries its repos as submodules: the envelope IS the
- * unit, which is also why a repo picker is the wrong question for it.
+ * **All projects in Tynn are workspaces.** So importing one is not a search for
+ * something to clone or something to convert — it is bringing a workspace that
+ * already has a name and an identity onto this machine. What it CONTAINS varies:
+ * a published `.agi` container, some ordinary repositories, or nothing at all.
+ * None of those three is a failure to be one of the others.
  *
- * The decision lives here, as a pure function, so the renderer READS a route
- * rather than containing one — and so both halves of it can be tested without a
+ * It used to ask a different question — "what is there here to clone or
+ * convert?" — and answer `agi-interactive` whenever the answer was "nothing",
+ * which is the scan-and-convert wizard in `mode: 'local'`: *go and find a folder
+ * to convert.* The one entry point that knows exactly which workspace you mean
+ * was the one that sent you looking for it on disk.
+ *
+ * The decision lives here as a pure function so the renderer READS a route
+ * rather than containing one, and so both halves of it can be tested without a
  * window (the way `provider-settings.ts` and `setting-tiers.ts` are).
  */
 
@@ -33,6 +37,33 @@ export interface TynnImportWorkspaceLink {
     tynn_project_id?: string | null;
 }
 
+/** A repository the workspace will contain, as Tynn declares it. */
+export interface TynnImportRepo {
+    url: string;
+    branch: string;
+    /** The folder it takes under `repos/`. */
+    name: string;
+}
+
+/**
+ * What the imported workspace starts with. `empty` is an ANSWER, not a
+ * fallback: a Tynn project with no repositories is a workspace with no
+ * repositories, and it is complete.
+ */
+export type TynnImportContent =
+    | { kind: 'envelope'; url: string; branch: string }
+    | { kind: 'repos'; repos: TynnImportRepo[] }
+    | {
+          kind: 'empty';
+          /**
+           * `container-undeclared` is the Tynn-side gap worth NAMING on screen:
+           * the project is marked an envelope while declaring no repository for
+           * it, so Genie has nothing to bring down. It still gets a workspace —
+           * it just gets a new one, and the UI says so.
+           */
+          reason: 'no-repositories' | 'container-undeclared';
+      };
+
 export type TynnImportRoute =
     | {
           /** Already here. Offer to open it rather than import a second copy. */
@@ -41,17 +72,9 @@ export type TynnImportRoute =
           workspaceId: string;
       }
     | {
-          /** Ask where to put it, clone the envelope, register. Nothing else. */
-          stage: 'tynn-envelope';
-          reason: 'envelope-repo';
-          source: { url: string; branch: string };
-      }
-    | {
-          /** Not an envelope (or Tynn never said where it is) — scan and convert. */
-          stage: 'agi-interactive';
-          reason: 'no-envelope-repo' | 'envelope-repo-undeclared';
-          mode: 'local' | 'remote';
-          sourceUrl: string;
+          /** A workspace, whatever it happens to contain. */
+          stage: 'tynn-workspace';
+          content: TynnImportContent;
       };
 
 function linkedWorkspace(
@@ -67,6 +90,50 @@ function linkedWorkspace(
     );
 }
 
+/**
+ * The repo folder name a URL yields — its basename, minus `.git`. Mirrors
+ * `deriveRepoName` in `main/workspace/create-agi.ts`, which is what actually
+ * names the folder; this is the preview, and the name the plan carries so the
+ * confirm screen can show where each repository will land.
+ */
+export function repoFolderName(url: string): string {
+    const leaf = url.trim().replace(/[/\\]+$/, '').split(/[/\\:]/).pop() ?? '';
+    return leaf.replace(/\.git$/i, '') || 'repo';
+}
+
+/**
+ * WHAT the project contains. The `envelope`-kind repository wins when there is
+ * one: it is what Tynn's `is_envelope` is derived FROM, and unlike the flag it
+ * also says which repo to clone. Genie has been given it on `/api/v1/projects`
+ * all along.
+ */
+export function tynnImportContent(project: TynnImportProject): TynnImportContent {
+    const declared = (project.repositories ?? []).filter((repo) => repo.url.trim());
+
+    const envelope = declared.find((repo) => repo.kind === 'envelope');
+    if (envelope) {
+        return {
+            kind: 'envelope',
+            url: envelope.url.trim(),
+            branch: envelope.defaultBranch?.trim() || 'main',
+        };
+    }
+
+    const repos = declared
+        .filter((repo) => repo.kind !== 'envelope')
+        .map((repo) => ({
+            url: repo.url.trim(),
+            branch: repo.defaultBranch?.trim() || 'main',
+            name: repoFolderName(repo.url),
+        }));
+    if (repos.length > 0) return { kind: 'repos', repos };
+
+    return {
+        kind: 'empty',
+        reason: project.isWorkspace ? 'container-undeclared' : 'no-repositories',
+    };
+}
+
 export function tynnImportRoute(
     project: TynnImportProject,
     workspaces: readonly TynnImportWorkspaceLink[],
@@ -80,25 +147,7 @@ export function tynnImportRoute(
         };
     }
 
-    // The `envelope`-kind repository is the whole branch: it is what Tynn's
-    // `is_envelope` is derived FROM, and unlike the flag it also says which repo
-    // to clone. Genie has been given it on `/api/v1/projects` all along.
-    const envelope = tynnWorkspaceSource(project);
-    if (envelope) {
-        return { stage: 'tynn-envelope', reason: 'envelope-repo', source: envelope };
-    }
-
-    // No envelope to clone, so the wizard is still the right answer. `isWorkspace`
-    // separates the two ways to get here: an ordinary non-envelope project, versus
-    // a project Tynn marks as an envelope while declaring no repository for it —
-    // a gap on Tynn's side that the UI should name rather than silently absorb.
-    const fallback = tynnProjectImportSource(project);
-    return {
-        stage: 'agi-interactive',
-        reason: project.isWorkspace ? 'envelope-repo-undeclared' : 'no-envelope-repo',
-        mode: fallback ? 'remote' : 'local',
-        sourceUrl: fallback?.url ?? '',
-    };
+    return { stage: 'tynn-workspace', content: tynnImportContent(project) };
 }
 
 /**
@@ -116,53 +165,4 @@ export function tynnImportChoices<T extends { id: string }>(
         project,
         linkedWorkspaceId: linkedWorkspace(project.id, workspaces)?.id ?? null,
     }));
-}
-
-/** The effects the envelope import needs, injected so the contract is testable. */
-export interface TynnEnvelopeImportDeps {
-    /** Clones recursively — the envelope's submodules come down with it. */
-    clone: (url: string, parentPath: string) => Promise<{ path: string }>;
-    defaultEnvFile: () => Promise<string>;
-    addWorkspace: (row: WorkspaceRow) => Promise<WorkspaceRow>;
-}
-
-/**
- * The whole envelope import: clone the declared envelope into the folder the
- * user chose and register THAT as the workspace. No scan, no repo picker, no
- * conversion — the envelope already is one.
- */
-export async function importTynnEnvelopeWorkspace(
-    input: {
-        project: TynnImportProject;
-        source: { url: string; branch: string };
-        parentPath: string;
-    },
-    deps: TynnEnvelopeImportDeps,
-): Promise<WorkspaceRow> {
-    const parentPath = input.parentPath.trim();
-    if (!parentPath) throw new Error('Choose where to put the workspace.');
-
-    const url = input.source.url.trim();
-    if (!url) throw new Error('This Tynn project declares no envelope repository.');
-
-    const cloned = await deps.clone(url, parentPath);
-    const envFile = await deps.defaultEnvFile();
-
-    return deps.addWorkspace({
-        id: input.project.id,
-        backend: input.project.backend ?? 'tynn',
-        project_id: input.project.id,
-        project_name: input.project.name ?? '',
-        tynn_project_id: input.project.id,
-        tynn_project_name: input.project.name ?? '',
-        shape: 'agi',
-        path: cloned.path,
-        editor: null,
-        editor_cmd: null,
-        start_cmd: null,
-        env_file: envFile,
-        last_opened_at: null,
-        // Genie did not CREATE this envelope — it brought an existing one down.
-        created_by_genie: 0,
-    });
 }

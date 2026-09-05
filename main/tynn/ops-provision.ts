@@ -4,10 +4,10 @@ import { promisify } from 'util';
 import { addWorkspace, getAllSettings, listWorkspaces } from '../db';
 import { TynnBackend } from '../backend/tynn';
 import {
-    cloneAgiEnvelope,
     convertToAgiPlan,
     pushEnvelopeToOrigin,
 } from '../workspace/create-agi';
+import { createWorkspace } from '../workspace/add-workspace';
 import { readTynnLink } from './provision';
 
 const execFileAsync = promisify(execFile);
@@ -88,12 +88,17 @@ export interface OpsProvisionPlan {
     autoProvision: boolean;
 }
 
-/** A child the apply step will actually clone (resolved subset of the plan). */
+/**
+ * A child the apply step will stand a workspace up for (resolved subset of the
+ * plan). `cloneUrl` null means there is no container to bring down, so one is
+ * MADE — a governed child with no repository is an ordinary workspace, not an
+ * unprovisionable one.
+ */
 export interface OpsProvisionTarget {
     projectId: string;
     name: string;
     slug: string;
-    cloneUrl: string;
+    cloneUrl: string | null;
 }
 
 /** Whether the ops auto-provision-workspaces toggle is ON (default off). */
@@ -305,24 +310,46 @@ export async function computeOpsProvisionPlan(
 }
 
 /**
- * Provisionable targets from a plan: missing children whose envelope repo
- * actually EXISTS on the remote ('unknown' — e.g. a probe timeout — is still
- * attempted so a flaky network can't block provisioning; a probed 'not-found'
- * or 'auth-required' is NOT, and is reported instead of dying mid-clone).
+ * Every missing child a workspace can be stood up for, and HOW.
+ *
+ * CLONED when the child's container exists on its remote ('unknown' — a probe
+ * timeout — is still attempted, so a flaky network can't block provisioning).
+ *
+ * MADE when there is no container to clone: no resolvable URL at all, or a
+ * probed 'not-found' with no source repo for `scaffold` to build around. This
+ * is the Ops half of the rule the whole Add-workspace flow follows — a
+ * repository is optional, so its absence cannot be what makes a child
+ * unprovisionable. Those children used to be reported as "can't auto-clone
+ * these" and left there, which is a dead end for any project that simply had no
+ * repo yet.
+ *
+ * NEITHER for the two that would do the wrong thing: an 'auth-required'
+ * container EXISTS and Genie merely cannot reach it (making a second, empty
+ * workspace beside it would be worse than reporting the credential problem),
+ * and a 'not-found' WITH a source repo belongs to `scaffold`, which builds the
+ * envelope around that repo and publishes it.
+ *
+ * Note what this does NOT read: `plan.autoProvision`. That setting governs
+ * whether the user is ASKED, never what is possible.
  */
 export function provisionTargets(plan: OpsProvisionPlan): OpsProvisionTarget[] {
     return plan.children
+        .filter((c) => c.status === 'missing')
         .filter(
-            (c): c is OpsChildStatus & { cloneUrl: string } =>
-                c.status === 'missing' &&
-                !!c.cloneUrl &&
-                (c.remote === 'exists' || c.remote === 'unknown' || c.remote === null),
+            (c) =>
+                (!!c.cloneUrl &&
+                    (c.remote === 'exists' || c.remote === 'unknown' || c.remote === null)) ||
+                !c.cloneUrl ||
+                (c.remote === 'not-found' && !c.sourceRepoUrl),
         )
         .map((c) => ({
             projectId: c.projectId,
             name: c.name,
             slug: c.slug,
-            cloneUrl: c.cloneUrl,
+            cloneUrl:
+                c.cloneUrl && c.remote !== 'not-found' && c.remote !== 'auth-required'
+                    ? c.cloneUrl
+                    : null,
         }));
 }
 
@@ -421,11 +448,16 @@ function registerProvisionedWorkspace(
 }
 
 /**
- * Clone + register a workspace for each APPROVED target. Each op is best-effort;
- * failures are collected, not thrown. A child whose workspace already exists
- * (someone provisioned it between plan + apply) is skipped, not re-cloned. Must
- * only be called with the user's approval OR when the auto-provision toggle is
- * on — the gating itself lives in the MCP handler, like manageProcess.
+ * Stand a workspace up for each APPROVED target — cloned when there is a
+ * container, made when there is not. Each op is best-effort; failures are
+ * collected, not thrown. A child whose workspace already exists (someone
+ * provisioned it between plan + apply) is skipped, not re-provisioned. Must only
+ * be called with the user's approval OR when the auto-provision toggle is on —
+ * the gating itself lives in the MCP handler, like manageProcess.
+ *
+ * The work itself goes through `createWorkspace`, the same path the desktop
+ * Add-workspace flow takes. Ops used to carry its own copy of it, which is how
+ * it came to have its own idea of what a workspace required.
  */
 export async function applyOpsProvision(
     opsWorkspacePath: string,
@@ -438,40 +470,40 @@ export async function applyOpsProvision(
     const settings = getAllSettings();
 
     // A child already registered (by its Tynn project id == workspace id) is a
-    // no-op — never re-clone over an existing workspace.
+    // no-op — never re-provision over an existing workspace.
     const existingIds = new Set(listWorkspaces().map((w) => w.id));
 
     for (const t of targets) {
         if (existingIds.has(t.projectId)) continue;
         try {
-            const { path: wsPath } = await cloneAgiEnvelope({
-                url: t.cloneUrl,
-                parent_path: parentPath,
-                folder: t.slug,
-            });
-            const saved = registerProvisionedWorkspace(
+            const saved = await createWorkspace(
                 {
                     id: t.projectId,
-                    backend: 'tynn',
-                    project_id: t.projectId,
-                    project_name: t.name,
-                    tynn_project_id: t.projectId,
-                    tynn_project_name: t.name,
-                    shape: 'agi',
-                    path: wsPath,
-                    editor: null,
-                    editor_cmd: null,
-                    start_cmd: null,
-                    env_file: settings.default_env_file ?? '.env',
-                    last_opened_at: null,
-                    created_by_genie: 1,
+                    name: t.name,
+                    slug: t.slug,
+                    parentPath,
+                    content: t.cloneUrl
+                        ? { kind: 'envelope', url: t.cloneUrl }
+                        : { kind: 'empty' },
+                    link: { projectId: t.projectId, projectName: t.name, backend: 'tynn' },
                 },
-                deps,
+                {
+                    register: (row) => registerProvisionedWorkspace(row, deps),
+                    defaultEnvFile: () => settings.default_env_file ?? '.env',
+                },
             );
-            provisioned.push({ name: t.name, workspaceId: saved.id, path: wsPath });
+            provisioned.push({ name: t.name, workspaceId: saved.id, path: saved.path });
             existingIds.add(saved.id);
         } catch (e) {
-            errors.push(`${t.name}: ${describeCloneFailure(e, t.cloneUrl)}`);
+            errors.push(
+                `${t.name}: ${
+                    t.cloneUrl
+                        ? describeCloneFailure(e, t.cloneUrl)
+                        : e instanceof Error
+                            ? e.message
+                            : String(e)
+                }`,
+            );
         }
     }
 

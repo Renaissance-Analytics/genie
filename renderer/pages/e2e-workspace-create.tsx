@@ -8,7 +8,7 @@ import type { WorkspaceRow } from '../lib/genie';
  * NOT product UI — it mounts the REAL `AddWorkspaceModal` so a Playwright
  * Electron test can walk "Add workspace → New workspace" without standing up the
  * master window. Nothing about the flow is re-implemented here: the route, the
- * form, `agi:create` and `workspaces:add` are all the shipped ones, which is the
+ * form and `workspaces:create` are all the shipped ones, which is the
  * only way this can catch the bug it exists for — "New workspace" going
  * somewhere else.
  *

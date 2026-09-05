@@ -793,6 +793,10 @@ const api = {
         list: () => ipcRenderer.invoke('workspaces:list'),
         add: (row: Record<string, unknown>) =>
             ipcRenderer.invoke('workspaces:add', row),
+        /** Make (or bring down) a workspace from a plan, and register it. The
+         *  single path every Add-workspace entry point ends in. */
+        create: (plan: Record<string, unknown>) =>
+            ipcRenderer.invoke('workspaces:create', plan),
         update: (id: string, patch: Record<string, unknown>) =>
             ipcRenderer.invoke('workspaces:update', id, patch),
         remove: (id: string) => ipcRenderer.invoke('workspaces:remove', id),
@@ -945,8 +949,6 @@ const api = {
 
     agi: {
         detect: (path: string) => ipcRenderer.invoke('agi:detect', path),
-        create: (opts: Record<string, unknown>) =>
-            ipcRenderer.invoke('agi:create', opts),
         importExisting: (path: string) =>
             ipcRenderer.invoke('agi:import', path),
         convert: (opts: Record<string, unknown>) =>

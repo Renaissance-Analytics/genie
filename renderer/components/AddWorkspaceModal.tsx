@@ -29,36 +29,55 @@ import {
     containerRepoPlan,
     workspaceFolderName,
     workspacePathPreview,
-    workspaceSlug,
-    workspaceWizardEntry,
     type AddWorkspaceSource,
     type AddWorkspaceSourceId,
     type ContainerRepoPlan,
 } from '../lib/workspace-onboarding';
 import {
-    importTynnEnvelopeWorkspace,
-    tynnImportChoices,
-    tynnImportRoute,
-    type TynnImportRoute,
-} from '../lib/tynn-import';
+    addWorkspaceDraft,
+    addWorkspacePlan,
+    describeContent,
+    type AddWorkspaceDraft,
+} from '../lib/add-workspace';
+import { tynnImportChoices, tynnImportRoute } from '../lib/tynn-import';
+
+/**
+ * ADD WORKSPACE — one flow, entered five ways.
+ *
+ * THE RULE. **All projects in Tynn are workspaces. A Genie workspace does not
+ * require Tynn.** Nobody — user or agent — should have to make a Tynn project
+ * or a repository in order to add a workspace. A workspace is a name and a
+ * folder; repositories, a Tynn link, an `.agi` container and GitHub are all
+ * optional, and none of them may gate creation.
+ *
+ * WHAT WAS WRONG, and why this is a rebuild rather than another fix. Each entry
+ * point had its own route with its own idea of what a workspace needed, and the
+ * scan-and-convert wizard was the fallback DESTINATION for four of them. So
+ * importing a Tynn project with no `.agi` repo landed in "pick a folder to
+ * convert" — the one entry point that knows exactly which workspace you mean,
+ * asking you to go and find it on disk. Converting a folder into a container is
+ * something you might want AFTER deciding what the workspace is. It was the
+ * price of admission.
+ *
+ * WHAT IT IS NOW. Three questions — Identity (name + location), Content (which
+ * repositories, if any) and Links (Tynn, container) — and the flow asks only
+ * what the entry point has not already answered (`lib/add-workspace.ts`). An
+ * entry point that has answered all three is a single confirm. Conversion is an
+ * offer inside Content, reached only when there is a folder or repository to
+ * READ, and it is not a stage anybody can be routed into.
+ */
 
 type Stage =
+    /** Which of the five ways in. */
     | 'source'
-    // genie#431: MAKING a workspace. Name + location, straight to `agi.create`.
-    // There is nothing to inspect, so nothing inspects.
-    | 'create'
-    | 'tynn-import'
-    // genie#355: a Tynn project that already IS a Genie workspace. Ask where to
-    // put it, clone, register — the scan-and-convert wizard has nothing to do.
-    | 'tynn-envelope'
-    // …and one already registered on this machine: offer to open it rather than
-    // import a second copy of the same thing.
-    | 'tynn-open-existing'
-    | 'gapp-create'
-    // ADOPTING something that exists: a folder, or a repository. This is the one
-    // route that scans, because it is the only one with something to read.
+    /** Choosing WHICH Tynn project — that is the Identity answer, not a route. */
+    | 'tynn-pick'
+    /** The one form: whatever is unanswered, plus the optional links. */
+    | 'form'
+    /** Content, for the two entry points with something on disk to read. */
     | 'inspect'
-    | 'done';
+    /** This Tynn project already has a workspace here. */
+    | 'open-existing';
 
 interface Props {
     onClose: () => void;
@@ -71,16 +90,8 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
     const [workspaces, setWorkspaces] = useState<WorkspaceRow[]>([]);
     const [loadingProjects, setLoadingProjects] = useState(true);
     const [projectsError, setProjectsError] = useState<string | null>(null);
-    const [interactiveMode, setInteractiveMode] = useState<'local' | 'remote'>('local');
-    const [interactiveSourceUrl, setInteractiveSourceUrl] = useState('');
-    const [interactiveProjectId, setInteractiveProjectId] = useState('');
-    const [createProjectId, setCreateProjectId] = useState('');
-    const [createGappDev, setCreateGappDev] = useState(false);
-    // The Tynn project the import is acting on, plus the route `tynnImportRoute`
-    // chose for it — the source to clone, or the workspace already here.
-    const [tynnProject, setTynnProject] = useState<TynnProject | null>(null);
-    const [tynnEnvelopeSource, setTynnEnvelopeSource] = useState<{ url: string; branch: string } | null>(null);
-    const [tynnExistingWorkspaceId, setTynnExistingWorkspaceId] = useState('');
+    const [primaryWorkspace, setPrimaryWorkspace] = useState('');
+    const [draft, setDraft] = useState<AddWorkspaceDraft | null>(null);
 
     useEffect(() => {
         Promise.all([api().tynn.projects(), api().workspaces.list()])
@@ -90,6 +101,12 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
             })
             .catch((cause) => setProjectsError(cause instanceof Error ? cause.message : String(cause)))
             .finally(() => setLoadingProjects(false));
+        api()
+            .settings.get()
+            .then((s) => setPrimaryWorkspace(s.primary_workspace ?? ''))
+            .catch(() => {
+                /* no default destination; the flow asks for one */
+            });
     }, []);
 
     // A project created inline from the "Create new project" affordance gets
@@ -98,9 +115,35 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
     const onProjectCreated = (p: TynnProject) =>
         setProjects((prev) => [p, ...prev.filter((x) => x.id !== p.id)]);
 
+    const start = (source: AddWorkspaceSourceId) => {
+        if (source === 'tynn') {
+            setStage('tynn-pick');
+            return;
+        }
+        const next = addWorkspaceDraft(
+            source === 'local'
+                ? { source: 'local' }
+                : source === 'git'
+                    ? { source: 'git' }
+                    : source === 'gapp'
+                        ? { source: 'gapp' }
+                        : { source: 'new' },
+            { primaryWorkspace, workspaces },
+        );
+        setDraft(next);
+        // Content is the only unanswered question for a folder or a repository,
+        // and answering it means READING one — which is what the inspection is.
+        setStage(next.content.kind === 'inspect' ? 'inspect' : 'form');
+    };
+
+    const finish = (row: WorkspaceRow) => {
+        onAdded(row);
+        onClose();
+    };
+
     return (
-        // The inspect wizard carries step tables — give it the widest modal so
-        // nothing clips; the simpler flows stay at lg.
+        // The inspection carries step tables — give it the widest modal so
+        // nothing clips; the rest of the flow stays at lg.
         <Modal open onClose={onClose} size={stage === 'inspect' ? 'xl' : 'lg'}>
             <Modal.Header>
                 <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -108,110 +151,57 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
                 </span>
             </Modal.Header>
             <Modal.Body>
-                {stage === 'source' && <ManagedSourcePicker onPick={(source) => {
-                    // One route per KIND of act. `create` makes something and so
-                    // has nothing to read; `local`/`remote` adopt something and so
-                    // read it first (genie#431).
-                    const entry = workspaceWizardEntry(source);
-                    if (entry.mode === 'tynn') setStage('tynn-import');
-                    else if (entry.mode === 'gapp') setStage('gapp-create');
-                    else if (entry.mode === 'create') {
-                        setCreateProjectId('');
-                        setCreateGappDev(false);
-                        setStage('create');
-                    } else {
-                        setInteractiveMode(entry.mode);
-                        setStage('inspect');
-                    }
-                }} />}
-                {stage === 'gapp-create' && (
-                    <CreateProjectForm
-                        isGapp
-                        onCancel={() => setStage('source')}
-                        onCreated={(project) => {
-                            onProjectCreated(project);
-                            setCreateProjectId(project.id);
-                            setCreateGappDev(true);
-                            setStage('create');
-                        }}
-                    />
-                )}
-                {stage === 'inspect' && (
-                    <InteractiveUpgradeWizard
-                        initialSourceMode={interactiveMode}
-                        initialSourceUrl={interactiveSourceUrl}
-                        initialProjectId={interactiveProjectId}
-                        projects={projects}
-                        loadingProjects={loadingProjects}
-                        onCancel={() => setStage('source')}
-                        onCreated={(row) => {
-                            onAdded(row);
-                            setStage('done');
-                            onClose();
-                        }}
-                    />
-                )}
-                {stage === 'create' && (
-                    <CreateWorkspaceForm
-                        initialProjectId={createProjectId}
-                        gappDev={createGappDev}
-                        projects={projects}
-                        loadingProjects={loadingProjects}
-                        onProjectCreated={onProjectCreated}
-                        onCancel={() => setStage('source')}
-                        onCreated={(row) => {
-                            onAdded(row);
-                            setStage('done');
-                            onClose();
-                        }}
-                    />
-                )}
-                {stage === 'tynn-import' && (
-                    <TynnImportWizard
+                {stage === 'source' && <ManagedSourcePicker onPick={start} />}
+
+                {stage === 'tynn-pick' && (
+                    <TynnProjectStep
                         projects={projects}
                         workspaces={workspaces}
                         loading={loadingProjects}
                         loadError={projectsError}
                         onCancel={() => setStage('source')}
-                        // The routing decision is `tynnImportRoute`'s, not this
-                        // component's — genie#355 was one unconditional
-                        // `setStage('inspect')` sitting exactly here.
-                        onRoute={(project, route) => {
-                            setTynnProject(project);
-                            if (route.stage === 'tynn-envelope') {
-                                setTynnEnvelopeSource(route.source);
-                                setStage('tynn-envelope');
-                                return;
-                            }
-                            if (route.stage === 'tynn-open-existing') {
-                                setTynnExistingWorkspaceId(route.workspaceId);
-                                setStage('tynn-open-existing');
-                                return;
-                            }
-                            setInteractiveMode(route.mode);
-                            setInteractiveSourceUrl(route.sourceUrl);
-                            setInteractiveProjectId(project.id);
-                            setStage('inspect');
+                        onChosen={(project) => {
+                            const next = addWorkspaceDraft(
+                                { source: 'tynn', project },
+                                { primaryWorkspace, workspaces },
+                            );
+                            setDraft(next);
+                            setStage(next.existingWorkspaceId ? 'open-existing' : 'form');
                         }}
                     />
                 )}
-                {stage === 'tynn-envelope' && tynnProject && tynnEnvelopeSource && (
-                    <TynnEnvelopeImport
-                        project={tynnProject}
-                        source={tynnEnvelopeSource}
-                        onBack={() => setStage('tynn-import')}
-                        onCreated={(row) => {
-                            onAdded(row);
-                            setStage('done');
-                            onClose();
-                        }}
+
+                {stage === 'inspect' && draft?.content.kind === 'inspect' && (
+                    <InteractiveUpgradeWizard
+                        initialSourceMode={draft.content.mode}
+                        initialSourceUrl={draft.content.sourceUrl}
+                        initialProjectId={draft.links.tynnProjectId}
+                        projects={projects}
+                        loadingProjects={loadingProjects}
+                        onCancel={() => setStage('source')}
+                        onCreated={finish}
                     />
                 )}
-                {stage === 'tynn-open-existing' && tynnProject && (
+
+                {stage === 'form' && draft && (
+                    <WorkspaceForm
+                        draft={draft}
+                        onDraftChange={setDraft}
+                        projects={projects}
+                        loadingProjects={loadingProjects}
+                        onProjectCreated={onProjectCreated}
+                        onCancel={() => setStage(draft.source === 'tynn' ? 'tynn-pick' : 'source')}
+                        onCreated={finish}
+                    />
+                )}
+
+                {stage === 'open-existing' && draft && (
                     <TynnAlreadyImported
-                        project={tynnProject}
-                        workspace={workspaces.find((w) => w.id === tynnExistingWorkspaceId) ?? null}
-                        onBack={() => setStage('tynn-import')}
+                        name={draft.name}
+                        workspace={
+                            workspaces.find((w) => w.id === draft.existingWorkspaceId) ?? null
+                        }
+                        onBack={() => setStage('tynn-pick')}
                         onOpened={onClose}
                     />
                 )}
@@ -220,20 +210,25 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
     );
 }
 
-function TynnImportWizard({
+/**
+ * WHICH Tynn project. That is all this step is: the Identity answer, taken from
+ * a list. It used to also decide the ROUTE — envelope here, wizard there — and
+ * that decision is what sent repo-less projects looking for a folder.
+ */
+function TynnProjectStep({
     projects,
     workspaces,
     loading,
     loadError,
     onCancel,
-    onRoute,
+    onChosen,
 }: {
     projects: TynnProject[];
     workspaces: WorkspaceRow[];
     loading: boolean;
     loadError: string | null;
     onCancel: () => void;
-    onRoute: (project: TynnProject, route: TynnImportRoute) => void;
+    onChosen: (project: TynnProject) => void;
 }) {
     // Every accessible project, the already-linked ones INCLUDED and labelled:
     // dropping them silently is what made "Genie can't see my project" and "this
@@ -249,7 +244,9 @@ function TynnImportWizard({
             <div>
                 <Heading as="h3" size="sm">Import from Tynn</Heading>
                 <Text size="xs" className="text-zinc-500" style={{ display: 'block', marginTop: 4 }}>
-                    Choose one of your Tynn projects. A project that is already a Genie workspace is cloned straight onto this machine, repositories and all — Genie only asks where to put it. Anything else is inspected first, and you approve the plan before anything is written.
+                    Every project in Tynn is a workspace. Choose one and Genie brings it here —
+                    with its container, with its repositories, or with neither, depending on what
+                    the project has.
                 </Text>
             </div>
             <Select
@@ -262,19 +259,14 @@ function TynnImportWizard({
                 placeholder={loading ? 'Loading Tynn projects…' : choices.length ? 'Choose a project…' : 'No Tynn projects available'}
                 aria-label="Tynn workspace"
             />
-            {route?.stage === 'tynn-envelope' && (
-                <Text size="xs" className="text-emerald-500">
-                    Already a Genie workspace — Genie will clone {route.source.url} and register it. Nothing to set up.
-                </Text>
-            )}
             {route?.stage === 'tynn-open-existing' && (
                 <Text size="xs" className="text-amber-500">
                     This project is already a workspace on this machine.
                 </Text>
             )}
-            {route?.reason === 'envelope-repo-undeclared' && (
-                <Text size="xs" className="text-amber-500">
-                    Tynn marks this project as a workspace but does not say which repository holds it, so Genie has nothing to clone. Genie will inspect the project instead.
+            {route?.stage === 'tynn-workspace' && (
+                <Text size="xs" className="text-zinc-500">
+                    {describeContent(route.content)}
                 </Text>
             )}
             {loadError && (
@@ -285,119 +277,296 @@ function TynnImportWizard({
             <Footer
                 onCancel={onCancel}
                 onSubmit={() => {
-                    if (chosen && route) onRoute(chosen.project, route);
+                    if (chosen) onChosen(chosen.project);
                 }}
                 submitting={false}
-                label={
-                    route?.stage === 'tynn-envelope'
-                        ? 'Choose location'
-                        : route?.stage === 'tynn-open-existing'
-                            ? 'Open workspace'
-                            : 'Inspect workspace'
-                }
-                disabled={!route}
+                label={route?.stage === 'tynn-open-existing' ? 'Open workspace' : 'Continue'}
+                disabled={!chosen}
             />
         </div>
     );
 }
 
 /**
- * genie#355 — the whole import for a project that is ALREADY a Genie workspace:
- * ONE question, "where do you want it?", then clone + register. No repo picker
- * (the workspace carries its repos as submodules, so asking which one to clone
- * inverts the model) and no scan-and-convert wizard (there is nothing to
- * convert).
+ * THE form — the only one. It shows what the entry point has not answered, says
+ * what will happen, and creates the workspace.
+ *
+ * When `draft.asks` is empty there is nothing left to fill in, so it opens as a
+ * confirmation rather than a form: that is what "the Tynn import asks nothing"
+ * looks like on screen. The fields are one click away, because a pre-answer is
+ * a default and not a lock.
+ *
+ * The container repository is DERIVED, never asked (`containerRepoPlan`): GitHub
+ * connected means the workspace gets one, GitHub absent or unhappy means it does
+ * not, and either way the workspace is created — a repository the user did not
+ * ask for must never stop them making a folder. A container that already exists
+ * (an imported one) is not offered a second.
  */
-function TynnEnvelopeImport({
-    project,
-    source,
-    onBack,
+function WorkspaceForm({
+    draft,
+    onDraftChange,
+    projects,
+    loadingProjects,
+    onProjectCreated,
+    onCancel,
     onCreated,
 }: {
-    project: TynnProject;
-    source: { url: string; branch: string };
-    onBack: () => void;
+    draft: AddWorkspaceDraft;
+    onDraftChange: (draft: AddWorkspaceDraft) => void;
+    projects: TynnProject[];
+    loadingProjects: boolean;
+    onProjectCreated: (p: TynnProject) => void;
+    onCancel: () => void;
     onCreated: (row: WorkspaceRow) => void;
 }) {
-    const [parent, setParent] = useState('');
-    const [busy, setBusy] = useState(false);
+    const [owner, setOwner] = useState('');
+    const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [primaryWorkspace, setPrimaryWorkspace] = useState<string | undefined>();
+    // Created, but GitHub did not go to plan. The workspace EXISTS, so this is
+    // not an error state — it is a finished one with something to say.
+    const [partial, setPartial] = useState<{ row: WorkspaceRow; problem: string } | null>(null);
+    const [expanded, setExpanded] = useState(draft.asks.length > 0);
+    const account = useGitHubAccount();
+    // Creating a repo needs the App's `contents` write permission. Without it
+    // the workspace is local-only rather than a 403 halfway through the flow.
+    const { caps: githubCaps } = useGithubCapabilities();
 
-    useEffect(() => {
-        let live = true;
-        api()
-            .settings.get()
-            .then((s) => {
-                if (!live) return;
-                setPrimaryWorkspace(s.primary_workspace);
-                if (s.primary_workspace) setParent((p) => p || s.primary_workspace!);
-            })
-            .catch(() => {
-                /* no default parent; the user picks one below */
-            });
-        return () => {
-            live = false;
-        };
-    }, []);
+    // The container already exists for an imported one — Genie brings it down,
+    // it does not make a second.
+    const wantsContainerRepo = draft.content.kind !== 'envelope';
+    const plan = containerRepoPlan({
+        githubConnected: account.connected && wantsContainerRepo,
+        githubCanProvision: !(
+            githubCaps.connected && githubCaps.missing.includes('github.provision')
+        ),
+        owner: owner || account.username || '',
+        slug: draft.name,
+    });
+
+    const folder = workspaceFolderName(draft.name);
+    const ready = !!folder && !!draft.parentPath.trim();
 
     const submit = async () => {
-        setBusy(true);
+        setSubmitting(true);
         setError(null);
         try {
-            const saved = await importTynnEnvelopeWorkspace(
-                { project, source, parentPath: parent },
-                {
-                    // `workspaces.clone` clones with `--recurse-submodules`, so the
-                    // envelope's repos are present when this returns.
-                    clone: (url, parentPath) => api().workspaces.clone(url, parentPath),
-                    defaultEnvFile: async () => (await api().settings.get()).default_env_file ?? '.env',
-                    addWorkspace: (row) => api().workspaces.add(row),
-                },
+            // The repository has to exist before the first push, so it is made
+            // first — but a failure here is a NOTE, not a stop. Genie carries on
+            // and creates the workspace on this machine.
+            let remote: { kind: 'none' } | { kind: 'paste'; url: string } = { kind: 'none' };
+            let problem: string | null = null;
+            if (plan.kind === 'github') {
+                try {
+                    const created = await api().github.createRepo({
+                        name: plan.repo,
+                        owner: owner || null,
+                        // Pre-target the install chooser at the chosen org if Genie
+                        // isn't installed there, so the prompt lands on the right
+                        // account instead of failing.
+                        ownerId: owner
+                            ? account.installations.find((i) => i.login === owner)?.id ?? null
+                            : null,
+                        description: `Genie workspace for ${draft.name.trim()}`,
+                        private: true,
+                    });
+                    remote = { kind: 'paste', url: created.clone_url };
+                } catch (cause) {
+                    problem = `Genie could not create ${plan.owner ? `${plan.owner}/` : ''}${
+                        plan.repo
+                    } on GitHub: ${cause instanceof Error ? cause.message : String(cause)}`;
+                }
+            }
+
+            const saved = await api().workspaces.create(
+                addWorkspacePlan(draft, { id: ulid(), remote }),
             );
-            onCreated(saved);
-        } catch (e) {
+
+            if (remote.kind === 'paste') {
+                try {
+                    await api().agi.push(saved.path, 'main');
+                } catch (cause) {
+                    problem = `The workspace is on this machine, but Genie could not push it to ${
+                        remote.url
+                    }: ${cause instanceof Error ? cause.message : String(cause)}`;
+                }
+            }
+
+            if (problem) setPartial({ row: saved, problem });
+            else onCreated(saved);
+        } catch (e: unknown) {
             setError(e instanceof Error ? e.message : String(e));
         } finally {
-            setBusy(false);
+            setSubmitting(false);
         }
     };
+
+    if (partial) {
+        return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <div>
+                    <Heading as="h3" size="sm">
+                        {partial.row.project_name || draft.name.trim()} is ready
+                    </Heading>
+                    <Text size="xs" className="text-zinc-500" style={{ display: 'block', marginTop: 4 }}>
+                        The workspace is at <code>{partial.row.path}</code>. GitHub did not go to
+                        plan, which does not affect the workspace — you can connect it to a
+                        repository later.
+                    </Text>
+                </div>
+                <Text size="xs" className="text-amber-500">
+                    {partial.problem}
+                </Text>
+                <Footer
+                    onCancel={onCancel}
+                    onSubmit={() => onCreated(partial.row)}
+                    submitting={false}
+                    label="Open workspace"
+                    disabled={false}
+                />
+            </div>
+        );
+    }
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div>
-                <Heading as="h3" size="sm">Where should {project.name} live?</Heading>
+                <Heading as="h3" size="sm">
+                    {draft.links.gappDev
+                        ? 'New GApp workspace'
+                        : draft.name.trim()
+                            ? `Add ${draft.name.trim()}`
+                            : 'New workspace'}
+                </Heading>
                 <Text size="xs" className="text-zinc-500" style={{ display: 'block', marginTop: 4 }}>
-                    {project.name} is already a Genie workspace. Genie clones{' '}
-                    <code>{source.url}</code> ({source.branch}) with all its repositories and
-                    registers it — there is nothing to inspect.
+                    {describeContent(draft.content)}
+                    {draft.links.gappDev
+                        ? ' Set up to build and preview a Genie App.'
+                        : ''}
                 </Text>
             </div>
-            <FolderRow
-                folder={parent}
-                onChoose={async () => {
-                    const p = await pickPath({ mode: 'directory', title: 'Choose where to clone the workspace' });
-                    if (p) setParent(p);
-                }}
-                description={
-                    primaryWorkspace
-                        ? `Parent folder (default: ${primaryWorkspace}). The workspace lands at <parent>/<repo>/.`
-                        : 'Parent folder. The workspace lands at <parent>/<repo>/.'
-                }
+
+            {/* Everything already known, said once. The fields below fill in
+                what is missing — and open on demand when nothing is. */}
+            <Summary
+                name={draft.name}
+                folder={folder}
+                parentPath={draft.parentPath}
+                expanded={expanded}
+                onExpand={() => setExpanded(true)}
             />
-            {error && (
-                <Text size="xs" className="text-rose-500">
-                    {error}
-                </Text>
+
+            {expanded && (
+                <>
+                    <Input
+                        label="Workspace name"
+                        // The Fancy `label` prop draws the caption; the accessible
+                        // name is set explicitly so it matches what is on screen.
+                        aria-label="Workspace name"
+                        value={draft.name}
+                        onValueChange={(v: string) => onDraftChange({ ...draft, name: v })}
+                        placeholder="Acme Storefront"
+                    />
+
+                    <FolderRow
+                        folder={draft.parentPath}
+                        onChoose={async () => {
+                            const p = await pickPath({
+                                mode: 'directory',
+                                title: 'Choose where the workspace should live',
+                            });
+                            if (p) onDraftChange({ ...draft, parentPath: p });
+                        }}
+                        description={
+                            folder && draft.parentPath
+                                ? `Lands at ${workspacePathPreview(draft.parentPath, folder)}`
+                                : 'Pick the folder your workspaces live in.'
+                        }
+                    />
+
+                    <ContainerRepoNote
+                        plan={plan}
+                        account={account}
+                        owner={owner}
+                        onOwnerChange={setOwner}
+                        imported={!wantsContainerRepo}
+                    />
+
+                    {/* The Tynn link, OFFERED — during creation, optional, and
+                        skipping it costs the workspace nothing. */}
+                    <ProjectPicker
+                        value={draft.links.tynnProjectId}
+                        onChange={(id: string) => {
+                            const project = projects.find((p) => p.id === id);
+                            onDraftChange({
+                                ...draft,
+                                name: draft.name.trim() || project?.name || '',
+                                links: {
+                                    ...draft.links,
+                                    tynnProjectId: id,
+                                    tynnProjectName: project?.name ?? '',
+                                    backend: project?.backend ?? null,
+                                },
+                            });
+                        }}
+                        projects={projects}
+                        loading={loadingProjects}
+                        isGapp={draft.links.gappDev}
+                        onProjectCreated={(p: TynnProject) => {
+                            onProjectCreated(p);
+                            onDraftChange({
+                                ...draft,
+                                name: draft.name.trim() || p.name,
+                                links: {
+                                    ...draft.links,
+                                    tynnProjectId: p.id,
+                                    tynnProjectName: p.name,
+                                    backend: p.backend ?? null,
+                                },
+                            });
+                        }}
+                    />
+                </>
             )}
+
+            {error && <GitHubErrorNotice message={error} />}
             <Footer
-                onCancel={onBack}
-                onSubmit={() => void submit()}
-                submitting={busy}
-                label="Clone & add workspace"
-                disabled={!parent.trim()}
+                onCancel={onCancel}
+                onSubmit={submit}
+                submitting={submitting}
+                label={draft.content.kind === 'envelope' ? 'Clone & add workspace' : 'Create workspace'}
+                disabled={!ready}
             />
         </div>
+    );
+}
+
+/** What is about to happen, in one block — name, folder, and the path it lands at. */
+function Summary({
+    name,
+    folder,
+    parentPath,
+    expanded,
+    onExpand,
+}: {
+    name: string;
+    folder: string;
+    parentPath: string;
+    expanded: boolean;
+    onExpand: () => void;
+}) {
+    if (expanded) return null;
+    return (
+        <Card style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <Text size="sm" style={{ fontWeight: 600 }}>{name}</Text>
+            <Text size="xs" className="text-zinc-500">
+                <code>{folder && parentPath ? workspacePathPreview(parentPath, folder) : parentPath}</code>
+            </Text>
+            <div>
+                <Action variant="ghost" size="sm" icon="pencil" onClick={onExpand}>
+                    Change details
+                </Action>
+            </div>
+        </Card>
     );
 }
 
@@ -407,12 +576,12 @@ function TynnEnvelopeImport({
  * offer is to open the one that exists.
  */
 function TynnAlreadyImported({
-    project,
+    name,
     workspace,
     onBack,
     onOpened,
 }: {
-    project: TynnProject;
+    name: string;
     workspace: WorkspaceRow | null;
     onBack: () => void;
     onOpened: () => void;
@@ -436,7 +605,7 @@ function TynnAlreadyImported({
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div>
-                <Heading as="h3" size="sm">{project.name} is already here</Heading>
+                <Heading as="h3" size="sm">{name} is already here</Heading>
                 <Text size="xs" className="text-zinc-500" style={{ display: 'block', marginTop: 4 }}>
                     A workspace on this machine is already linked to this Tynn project
                     {workspace ? <> at <code>{workspace.path}</code></> : null}. Open it instead of
@@ -469,8 +638,8 @@ function ManagedSourcePicker({ onPick }: { onPick: (source: AddWorkspaceSourceId
                     repository before it writes anything, and shows you the plan first.
                 </Text>
             </div>
-            {/* Two groups, because there are two acts (genie#431) — and a flat
-                row of five cards would say they were all the same one. */}
+            {/* Two groups, because there are two acts — and a flat row of five
+                cards would say they were all the same one. */}
             <SourceGroup
                 label="Start something new"
                 sources={ADD_WORKSPACE_SOURCES.filter((s) => s.group === 'create')}
@@ -533,281 +702,34 @@ function SourceGroup({
 }
 
 /**
- * Making a workspace — the whole of it (genie#431).
- *
- * Name it, say where it lives, done. No scan, no plan to approve, no wizard:
- * the folder does not exist yet, so there is nothing to read and nothing to
- * decide. "New workspace" used to open the inspect-and-convert wizard and ask
- * which existing folder to convert, which is a question with no answer when you
- * are starting from nothing — so there was no way to create an empty workspace
- * at all.
- *
- * The container repository is DERIVED, never asked (`containerRepoPlan`): GitHub
- * connected means the workspace gets one, and GitHub absent or unhappy means it
- * does not. Either way the workspace is created — a repository the user did not
- * ask for must never be able to stop them making a folder. When GitHub does let
- * them down, the workspace is already on disk and the form says so instead of
- * closing as though everything went to plan.
- */
-function CreateWorkspaceForm({
-    initialProjectId = '',
-    gappDev = false,
-    projects,
-    loadingProjects,
-    onProjectCreated,
-    onCancel,
-    onCreated,
-}: {
-    initialProjectId?: string;
-    /** Set by the "New GApp workspace" route; the plain route never asks. */
-    gappDev?: boolean;
-    projects: TynnProject[];
-    loadingProjects: boolean;
-    onProjectCreated: (p: TynnProject) => void;
-    onCancel: () => void;
-    onCreated: (row: WorkspaceRow) => void;
-}) {
-    const [projectId, setProjectId] = useState(initialProjectId);
-    const [name, setName] = useState('');
-    const [nameTouched, setNameTouched] = useState(false);
-    const [parentFolder, setParentFolder] = useState('');
-    const [primaryWorkspace, setPrimaryWorkspace] = useState<string | undefined>();
-    const [owner, setOwner] = useState('');
-    const [submitting, setSubmitting] = useState(false);
-    const [error, setError] = useState<string | null>(null);
-    // Created, but GitHub did not go to plan. The workspace EXISTS, so this is
-    // not an error state — it is a finished one with something to say.
-    const [partial, setPartial] = useState<{ row: WorkspaceRow; problem: string } | null>(null);
-    const account = useGitHubAccount();
-    // Creating a repo needs the App's `contents` write permission. Without it
-    // the workspace is local-only rather than a 403 halfway through the flow.
-    const { caps: githubCaps } = useGithubCapabilities();
-
-    useEffect(() => {
-        api()
-            .settings.get()
-            .then((s) => {
-                setPrimaryWorkspace(s.primary_workspace);
-                if (s.primary_workspace) setParentFolder((p) => p || s.primary_workspace!);
-            })
-            .catch(() => {
-                /* no default parent; the user picks one below */
-            });
-    }, []);
-
-    // A chosen Tynn project names the workspace until the user names it themselves.
-    useEffect(() => {
-        const project = projects.find((p) => p.id === projectId);
-        if (project && !nameTouched) setName(project.name);
-    }, [projectId, projects, nameTouched]);
-
-    const folder = workspaceFolderName(name);
-    const plan = containerRepoPlan({
-        githubConnected: account.connected,
-        githubCanProvision: !(
-            githubCaps.connected && githubCaps.missing.includes('github.provision')
-        ),
-        owner: owner || account.username || '',
-        slug: name,
-    });
-
-    const submit = async () => {
-        setSubmitting(true);
-        setError(null);
-        try {
-            const project = projects.find((p) => p.id === projectId);
-            const slug = workspaceSlug(name);
-            if (!slug) throw new Error('Give the workspace a name.');
-            if (!parentFolder) throw new Error('Choose where the workspace should live.');
-
-            // The repository has to exist before the first push, so it is made
-            // first — but a failure here is a NOTE, not a stop. Genie carries on
-            // and creates the workspace on this machine.
-            let remote: { kind: 'none' } | { kind: 'paste'; url: string } = { kind: 'none' };
-            let problem: string | null = null;
-            if (plan.kind === 'github') {
-                try {
-                    const created = await api().github.createRepo({
-                        name: plan.repo,
-                        owner: owner || null,
-                        // Pre-target the install chooser at the chosen org if Genie
-                        // isn't installed there, so the prompt lands on the right
-                        // account instead of failing.
-                        ownerId: owner
-                            ? account.installations.find((i) => i.login === owner)?.id ?? null
-                            : null,
-                        description: `Genie workspace for ${project?.name || name.trim()}`,
-                        private: true,
-                    });
-                    remote = { kind: 'paste', url: created.clone_url };
-                } catch (cause) {
-                    problem = `Genie could not create ${plan.owner ? `${plan.owner}/` : ''}${
-                        plan.repo
-                    } on GitHub: ${cause instanceof Error ? cause.message : String(cause)}`;
-                }
-            }
-
-            const res = await api().agi.create({
-                slug,
-                name: project?.name || name.trim(),
-                parent_path: parentFolder,
-                remote,
-            });
-
-            if (remote.kind === 'paste') {
-                try {
-                    await api().agi.push(res.path, 'main');
-                } catch (cause) {
-                    problem = `The workspace is on this machine, but Genie could not push it to ${
-                        remote.url
-                    }: ${cause instanceof Error ? cause.message : String(cause)}`;
-                }
-            }
-
-            const settings = await api().settings.get();
-            const row: WorkspaceRow = {
-                id: project?.id ?? ulid(),
-                backend: project?.backend ?? 'tynn',
-                project_id: project?.id ?? '',
-                project_name: project?.name ?? name.trim(),
-                tynn_project_id: project?.id ?? '',
-                tynn_project_name: project?.name ?? '',
-                shape: 'agi',
-                path: res.path,
-                editor: null,
-                editor_cmd: null,
-                start_cmd: null,
-                env_file: settings.default_env_file ?? '.env',
-                last_opened_at: null,
-                created_by_genie: 1,
-                gapp_dev: gappDev ? 1 : 0,
-            };
-            const saved = await api().workspaces.add(row);
-            if (problem) setPartial({ row: saved, problem });
-            else onCreated(saved);
-        } catch (e: unknown) {
-            setError(e instanceof Error ? e.message : String(e));
-        } finally {
-            setSubmitting(false);
-        }
-    };
-
-    if (partial) {
-        return (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                <div>
-                    <Heading as="h3" size="sm">
-                        {partial.row.project_name || name.trim()} is ready
-                    </Heading>
-                    <Text size="xs" className="text-zinc-500" style={{ display: 'block', marginTop: 4 }}>
-                        The workspace is at <code>{partial.row.path}</code>. GitHub did not go to
-                        plan, which does not affect the workspace — you can connect it to a
-                        repository later.
-                    </Text>
-                </div>
-                <Text size="xs" className="text-amber-500">
-                    {partial.problem}
-                </Text>
-                <Footer
-                    onCancel={onCancel}
-                    onSubmit={() => onCreated(partial.row)}
-                    submitting={false}
-                    label="Open workspace"
-                    disabled={false}
-                />
-            </div>
-        );
-    }
-
-    return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <div>
-                <Heading as="h3" size="sm">
-                    {gappDev ? 'New GApp workspace' : 'New workspace'}
-                </Heading>
-                <Text size="xs" className="text-zinc-500" style={{ display: 'block', marginTop: 4 }}>
-                    {gappDev
-                        ? 'Genie creates the folder, its first commit, and the GApp build and preview workflows.'
-                        : 'Genie creates the folder and its first commit. Nothing is scanned and nothing existing is touched.'}
-                </Text>
-            </div>
-
-            <Input
-                label="Workspace name"
-                // The Fancy `label` prop draws the caption; the accessible name
-                // is set explicitly so it matches what is on screen.
-                aria-label="Workspace name"
-                value={name}
-                onValueChange={(v: string) => {
-                    setName(v);
-                    setNameTouched(true);
-                }}
-                placeholder="Acme Storefront"
-            />
-
-            <FolderRow
-                folder={parentFolder}
-                onChoose={async () => {
-                    const p = await pickPath({
-                        mode: 'directory',
-                        title: 'Choose where the workspace should live',
-                    });
-                    if (p) setParentFolder(p);
-                }}
-                description={
-                    folder && parentFolder
-                        ? `Lands at ${workspacePathPreview(parentFolder, folder)}`
-                        : primaryWorkspace
-                            ? `Default: ${primaryWorkspace}`
-                            : 'Pick the folder your workspaces live in.'
-                }
-            />
-
-            <ContainerRepoNote plan={plan} account={account} owner={owner} onOwnerChange={setOwner} />
-
-            <ProjectPicker
-                value={projectId}
-                onChange={(id: string) => {
-                    setProjectId(id);
-                    if (!id) setNameTouched(true);
-                }}
-                projects={projects}
-                loading={loadingProjects}
-                onProjectCreated={(p: TynnProject) => {
-                    onProjectCreated(p);
-                    setProjectId(p.id);
-                }}
-            />
-
-            {error && <GitHubErrorNotice message={error} />}
-            <Footer
-                onCancel={onCancel}
-                onSubmit={submit}
-                submitting={submitting}
-                label="Create workspace"
-                disabled={!folder || !parentFolder}
-            />
-        </div>
-    );
-}
-
-/**
- * What happens on GitHub, stated rather than asked (genie#431). There is no
- * "No remote / Auto-create / Paste URL" choice any more: the answer follows from
- * whether an account is connected, so the form reports the consequence and, when
- * there is more than one account to land in, asks the only question left — which.
+ * What happens on GitHub, stated rather than asked. There is no "No remote /
+ * Auto-create / Paste URL" choice: the answer follows from whether an account is
+ * connected, so the form reports the consequence and, when there is more than
+ * one account to land in, asks the only question left — which.
  */
 function ContainerRepoNote({
     plan,
     account,
     owner,
     onOwnerChange,
+    imported,
 }: {
     plan: ContainerRepoPlan;
     account: ReturnType<typeof useGitHubAccount>;
     owner: string;
     onOwnerChange: (v: string) => void;
+    /** The container already exists on a remote — nothing to create. */
+    imported?: boolean;
 }) {
+    if (imported) {
+        return (
+            <Text size="xs" className="text-zinc-500">
+                <Icon name="github" size="xs" /> This workspace already has its container
+                repository — Genie clones it rather than making a new one.
+            </Text>
+        );
+    }
+
     if (plan.kind === 'github') {
         return (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -834,7 +756,7 @@ function ContainerRepoNote({
     if (plan.reason === 'missing-permission') {
         return (
             <Text size="xs" style={{ color: 'var(--amber-600)', lineHeight: 1.4 }}>
-                Genie's GitHub App is missing <strong>repository contents</strong> write access, so
+                Genie&apos;s GitHub App is missing <strong>repository contents</strong> write access, so
                 this workspace stays on this machine. Approve the permission on GitHub and reconnect
                 (see the warning in the title bar) to back it up.
             </Text>
@@ -890,12 +812,15 @@ function ProjectPicker({
     onChange,
     projects,
     loading,
+    isGapp,
     onProjectCreated,
 }: {
     value: string;
     onChange: (v: string) => void;
     projects: TynnProject[];
     loading: boolean;
+    /** A GApp workspace creates a GApp project, when one is created at all. */
+    isGapp?: boolean;
     /** When provided, the picker offers a "+ New project" mode that creates a
      *  Tynn project inline and hands it back so the caller can select it. */
     onProjectCreated?: (p: TynnProject) => void;
@@ -915,6 +840,7 @@ function ProjectPicker({
     if (onProjectCreated && mode === 'create') {
         return (
             <CreateProjectForm
+                isGapp={isGapp}
                 onCancel={() => setMode('select')}
                 onCreated={(p) => {
                     onProjectCreated(p);
@@ -945,7 +871,7 @@ function ProjectPicker({
                 description={
                     loading
                         ? 'Loading projects…'
-                        : 'Optionally associate this workspace with a Tynn/Aionima project. Not required — leave as “No project” to add a plain folder.'
+                        : 'Optionally link this workspace to a Tynn project. Not required, and not required later either — the workspace works the same without one.'
                 }
                 value={value}
                 onValueChange={onChange}
@@ -957,13 +883,15 @@ function ProjectPicker({
 }
 
 /**
- * Inline "Create new project" form for the Add-workspace picker. Creates a
- * Tynn project (POST /api/v1/projects) and hands the result back so the picker
- * selects it. Owner defaults to the personal account; orgs/teams the user can
- * create under are offered when available (from /api/v1/projects/owner-options).
- * The slug is auto-derived from the name and stays editable. The created
- * project doesn't fork workspace creation — it just becomes the selected
- * project the existing flow already consumes.
+ * Inline "Create new project" form. Creates a Tynn project (POST
+ * /api/v1/projects) and hands the result back so the picker selects it. Owner
+ * defaults to the personal account; orgs/teams the user can create under are
+ * offered when available (from /api/v1/projects/owner-options). The slug is
+ * auto-derived from the name and stays editable.
+ *
+ * It is reached from the OPTIONAL project picker, and only from there: making a
+ * Tynn project is one thing you can do while adding a workspace, never a step
+ * on the way to one.
  */
 function CreateProjectForm({
     onCancel,
@@ -1032,7 +960,7 @@ function CreateProjectForm({
         <Card style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
             <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
                 <Text size="sm" style={{ fontWeight: 600 }}>
-                    {isGapp ? 'Create GApp Development Workspace' : 'Create new project'}
+                    {isGapp ? 'Create GApp project' : 'Create new project'}
                 </Text>
                 <Action variant="ghost" size="sm" icon="arrow-left" onClick={onCancel}>
                     Select existing
@@ -1045,11 +973,6 @@ function CreateProjectForm({
                 placeholder={isGapp ? 'My New GApp' : 'My New Project'}
                 required
             />
-            {isGapp && (
-                <Text size="xs" className="text-zinc-500">
-                    Genie creates this as a GApp project in Tynn, then opens the normal inspection wizard so you can choose and review the starting folder before anything is written.
-                </Text>
-            )}
             {owners.length > 1 && (
                 <Select
                     label="Owner"

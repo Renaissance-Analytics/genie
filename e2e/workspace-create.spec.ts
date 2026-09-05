@@ -17,23 +17,24 @@ import {
  * is no such folder when you are starting from nothing, so the empty case had
  * nowhere to go: every route demanded something that already existed.
  *
- * WHY E2E, when the routing is unit-tested. `workspaceWizardEntry('new')` is a
- * pure function asserted directly in renderer/lib/__tests__/workspace-onboarding
- * .test.ts, and it was WRONG there in a way a unit test caught the moment one
- * was written. What no unit test in this repo can answer is whether the create
- * route creates: there is no DOM harness (see vitest.config.ts), so "the form
- * appeared and a workspace landed on disk" is only observable here.
+ * WHY E2E, when the routing is unit-tested. What each entry point asks for is a
+ * pure function asserted directly in renderer/lib/__tests__/add-workspace.test.ts,
+ * and it was WRONG there in a way a unit test caught the moment one was written.
+ * What no unit test in this repo can answer is whether the create route creates:
+ * there is no DOM harness (see vitest.config.ts), so "the form appeared and a
+ * workspace landed on disk" is only observable here.
  *
- * NOT MOCKED: `agi:create` really scaffolds the folder and commits it, and
- * `workspaces:add` really registers the row. The fixture only sets the default
+ * NOT MOCKED: `workspaces:create` really scaffolds the folder and commits it,
+ * and really registers the row. The fixture only sets the default
  * location and reports GitHub disconnected — which is also the state that proves
  * the second half of #431: the container repository is a consequence of being
  * connected, never a precondition for making a workspace.
  *
- * The negative assertion (the inspect wizard did not open) has its positive
- * control in tynn-import.spec.ts, which asserts the SAME heading is visible when
- * a route that should inspect does inspect. Without that pairing, "the wizard is
- * absent" would also pass on a screen that renders nothing at all.
+ * The negative assertion (the inspection did not open) carries its own positive
+ * control, first in the file: the SAME heading must be visible when a route that
+ * should inspect does inspect. Without that pairing, "the inspection is absent"
+ * would also pass on a screen that renders nothing at all — or against a build
+ * where inspecting a folder had stopped working altogether.
  */
 
 let app: ElectronApplication;
@@ -50,17 +51,30 @@ test.beforeAll(async () => {
         'the workspace-create fixture should have seeded before the window loaded',
     ).not.toBeNull();
     seed = found!;
-
-    // The source card. Its own screen carries the same title, which is why this
-    // click happens once, first, while only the picker is on screen.
-    await page.getByRole('heading', { name: 'New workspace', exact: true }).click();
 });
 
 test.afterAll(async () => {
     await app?.close();
 });
 
+test('POSITIVE CONTROL: pointing Genie at an existing folder DOES open the inspection', async () => {
+    // Reading a folder before writing to it is the one thing the inspection is
+    // for, and it must still happen. Every "the inspection did not open" below
+    // means nothing without this: a build where inspecting was broken outright
+    // would satisfy all of them.
+    await page.getByRole('heading', { name: 'Open existing folder', exact: true }).click();
+    await expect(page.getByRole('heading', { name: /Set up this folder/ })).toBeVisible();
+
+    // Back to the picker, so the next test starts where the owner does.
+    await page.getByRole('button', { name: 'Cancel' }).click();
+    await expect(page.getByRole('heading', { name: /Set up this folder/ })).toHaveCount(0);
+});
+
 test('New workspace asks for a name, not for a folder to convert', async () => {
+    // The source card. Its own screen carries the same title, which is why this
+    // click happens while only the picker is on screen.
+    await page.getByRole('heading', { name: 'New workspace', exact: true }).click();
+
     // The form, not the wizard: one name field and a location, no Source →
     // Repos → Knowledge carousel over a folder that does not exist yet.
     await expect(page.getByLabel('Workspace name')).toBeVisible();

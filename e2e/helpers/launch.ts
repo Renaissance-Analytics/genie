@@ -604,9 +604,12 @@ export async function readMasterSeed(app: ElectronApplication): Promise<MasterSe
 /** Mirrors `TynnImportSeed` in main/e2e/tynn-import.ts (genie#355). */
 export interface TynnImportSeed {
     parentPath: string;
-    expectedPath: string;
     envelopeProjectId: string;
     plainProjectId: string;
+    bareProjectId: string;
+    envelopePath: string;
+    plainPath: string;
+    barePath: string;
 }
 
 /**

@@ -42,8 +42,15 @@ vi.mock('../../workspace/create-agi', () => ({
     cloneAgiEnvelope: vi.fn(async ({ folder }: { folder: string }) => ({
         path: `/parent/${folder}`,
     })),
+    // A child with NO repository gets a workspace MADE for it — there is
+    // nothing to clone and nothing to convert, and that is not a failure.
+    createAgiEnvelope: vi.fn(async ({ slug }: { slug: string }) => ({
+        path: `/parent/${slug}.agi`,
+        git_log_count: 1,
+    })),
     convertToAgiPlan: vi.fn(async ({ slug }: { slug: string }) => ({ path: `/parent/${slug}` })),
     pushEnvelopeToOrigin: vi.fn(async () => {}),
+    deriveRepoName: (url: string) => url.split('/').pop()?.replace(/\.git$/, '') ?? 'repo',
 }));
 vi.mock('../provision', () => ({
     // ops-provision links the OPS workspace itself + reads each ws's link.
@@ -174,7 +181,17 @@ describe('provisionTargets', () => {
         autoProvision: false,
     });
 
-    it('returns only missing children that have a resolvable clone URL', () => {
+    /**
+     * A GOVERNED CHILD IS A WORKSPACE, whether or not it has a repository.
+     *
+     * This used to return only the children with a resolvable `*.agi` URL, and
+     * the panel told the user the rest "can't auto-clone" — a dead end for any
+     * child project that simply had no repo yet. Cloning is one way to get a
+     * workspace; it is not what a workspace IS. A child with no container to
+     * clone gets one made (`cloneUrl: null`), which is the same rule that lets
+     * anyone else add an empty workspace.
+     */
+    it('provisions every missing child — cloning one that has a container, making one that has none', () => {
         const targets = provisionTargets(
             plan([
                 {
@@ -214,10 +231,18 @@ describe('provisionTargets', () => {
                 slug: 'missing-two',
                 cloneUrl: 'https://github.com/o/missing-two.agi.git',
             },
+            // POSITIVE CONTROL for the rule above, and the case that used to be
+            // dropped on the floor: no URL is not "unprovisionable".
+            {
+                projectId: 'p3',
+                name: 'Missing No URL',
+                slug: 'missing-no-url',
+                cloneUrl: null,
+            },
         ]);
     });
 
-    it("EXCLUDES a probed 'not-found' envelope (genie#6: a URL that 404s must not be treated as clonable)", () => {
+    it("EXCLUDES a probed 'not-found' envelope with a source repo — that is scaffold's job (genie#6)", () => {
         const targets = provisionTargets(
             plan([
                 {
@@ -241,6 +266,54 @@ describe('provisionTargets', () => {
             ]),
         );
         expect(targets).toEqual([]);
+    });
+
+    /**
+     * The one 'not-found' that is NOT scaffold's: a child with no source repo
+     * either. Nothing exists to clone and nothing exists to build an envelope
+     * around, so what it needs is a workspace — the ordinary kind.
+     */
+    it("MAKES a workspace for a 'not-found' child that has no source repo to scaffold from", () => {
+        const targets = provisionTargets(
+            plan([
+                {
+                    projectId: 'p1',
+                    name: 'Nothing Yet',
+                    slug: 'nothing-yet',
+                    status: 'missing',
+                    cloneUrl: 'https://github.com/o/nothing-yet.agi.git',
+                    remote: 'not-found',
+                    sourceRepoUrl: null,
+                },
+            ]),
+        );
+        expect(targets).toEqual([
+            { projectId: 'p1', name: 'Nothing Yet', slug: 'nothing-yet', cloneUrl: null },
+        ]);
+    });
+
+    /**
+     * `ops_auto_provision_workspaces` governs whether the user is ASKED, and
+     * nothing else. It must never decide what can be provisioned — a setting
+     * about prompting that also gates capability is how "turn it on to make it
+     * work" gets into a product.
+     */
+    it('decides the same thing whether or not auto-provision is on', () => {
+        const children: OpsProvisionPlan['children'] = [
+            {
+                projectId: 'p1',
+                name: 'No Repo',
+                slug: 'no-repo',
+                status: 'missing',
+                cloneUrl: null,
+                remote: null,
+                sourceRepoUrl: null,
+            },
+        ];
+        expect(provisionTargets({ ...plan(children), autoProvision: true })).toEqual(
+            provisionTargets({ ...plan(children), autoProvision: false }),
+        );
+        expect(provisionTargets({ ...plan(children), autoProvision: false })).toHaveLength(1);
     });
 
     it("still ATTEMPTS an 'unknown' probe result (a flaky network must not block provisioning)", () => {
@@ -571,6 +644,21 @@ describe('provisioned workspaces get their genie MCP entry (genie#201)', () => {
                 url: 'http://127.0.0.1:5199/mcp/tok-child-1',
             },
         ]);
+    });
+
+    it('makes — and registers — a workspace for a child with no container to clone', async () => {
+        const wrote: string[] = [];
+        const result = await applyOpsProvision(
+            OPS_WS,
+            [{ projectId: 'child-3', name: 'No Repo Child', slug: 'no-repo', cloneUrl: null }],
+            { registerGenieMcp: (_id, workspacePath) => wrote.push(workspacePath) },
+        );
+
+        expect(result.errors).toEqual([]);
+        expect(result.provisioned).toEqual([
+            { name: 'No Repo Child', workspaceId: 'child-3', path: '/parent/no-repo.agi' },
+        ]);
+        expect(wrote).toEqual(['/parent/no-repo.agi']);
     });
 
     it('applyOpsScaffold does too — the other path that registers a workspace', async () => {
