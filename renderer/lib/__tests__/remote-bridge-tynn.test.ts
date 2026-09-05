@@ -123,7 +123,7 @@ describe('makeRemoteBridge — host-sourced Tynn provisioning', () => {
         const local = fakeLocal(request);
         (local.tynn as unknown as { inbox: () => void }).inbox = vi.fn();
         const api = makeRemoteBridge(local);
-        // inbox/capture-wish/ops-* were not overridden — they stay the local impl.
+        // inbox/capture-issue/ops-* were not overridden — they stay the local impl.
         expect(api.tynn.inbox).toBe((local.tynn as unknown as { inbox: unknown }).inbox);
     });
 });

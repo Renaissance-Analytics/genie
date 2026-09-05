@@ -2049,10 +2049,11 @@ export function registerIpcHandlers(): void {
             },
         ) => getTynnBackend().createProject(input),
     );
-    // FEEDBACK about Genie itself (Tynn #249). Separate channel from capture-wish
-    // because they land in different places: a wish is work the user WANTS and
-    // goes to the backlog; feedback is a report about the tool and goes to Tynn's
-    // feedback pipeline to be triaged, quick-accepted or converted.
+    // FEEDBACK about Genie itself (Tynn #249). A separate channel from
+    // capture-issue because they post to separate PATHS — `/api/v1/feedback` vs
+    // `/api/v1/issues` — and those paths are a wire contract with desktops
+    // already installed, which we do not control the release of. Both make an
+    // Issue Tynn-side; that is not a reason to merge them.
     ipcMain.handle(
         'tynn:submit-feedback',
         async (
@@ -2075,7 +2076,7 @@ export function registerIpcHandlers(): void {
         },
     );
     ipcMain.handle(
-        'tynn:capture-wish',
+        'tynn:capture-issue',
         async (
             _e,
             projectId: string,
@@ -2083,7 +2084,7 @@ export function registerIpcHandlers(): void {
             backendKind: BackendKind = 'tynn',
         ) => {
             const backend = backendOfKind(backendKind);
-            return backend.captureWish(projectId, content);
+            return backend.captureIssue(projectId, content);
         },
     );
     ipcMain.handle('tynn:inbox', async () => fetchMergedInbox());

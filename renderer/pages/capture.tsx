@@ -5,7 +5,7 @@ import { api, type TynnProject } from '../lib/genie';
 
 /**
  * Frameless 480x200 always-on-top window the global hotkey toggles.
- * Type → Enter → wish posts → window hides.
+ * Type → Enter → the issue posts → window hides.
  */
 export default function CapturePage() {
     const [projects, setProjects] = useState<TynnProject[]>([]);
@@ -34,7 +34,7 @@ export default function CapturePage() {
         try {
             const selected = projects.find((p) => p.id === projectId);
             const backend = selected?.backend ?? 'tynn';
-            await api().tynn.captureWish(projectId, text, backend);
+            await api().tynn.captureIssue(projectId, text, backend);
             setContent('');
             await api().app.hideCapture();
         } catch (e: unknown) {
@@ -60,7 +60,7 @@ export default function CapturePage() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                 <Icon name="sparkles" size="sm" className="text-violet-500" />
                 <Text size="sm" style={{ fontWeight: 600 }}>
-                    Capture a wish
+                    Capture an issue
                 </Text>
                 <div style={{ flex: 1 }} />
                 <Action

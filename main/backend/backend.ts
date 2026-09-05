@@ -5,7 +5,7 @@
  *   - Holds its own credentials (session cookies, bearer token).
  *   - Resolves "who am I" against its own identity model.
  *   - Lists projects the user can write to.
- *   - Captures wishes / ideas.
+ *   - Captures ideas as issues.
  *   - Surfaces an inbox the tray badge polls.
  *   - Opens entity URLs in the user's browser.
  *
@@ -102,15 +102,23 @@ export interface Backend {
 
     listProjects(): Promise<BackendProject[]>;
 
-    captureWish(projectId: string, content: string): Promise<BackendCaptureResult>;
+    /**
+     * File what the global quick-capture hotkey caught.
+     *
+     * It makes an ISSUE. Tynn used to keep Wishes and Issues apart and this
+     * posted to the Wish intake; that intake is retired, and the one thing a
+     * captured idea can become now is an Issue.
+     */
+    captureIssue(projectId: string, content: string): Promise<BackendCaptureResult>;
 
     /**
      * File FEEDBACK about the product against a project (Tynn #249).
      *
-     * Distinct from {@link captureWish}: a wish is work the user WANTS, and lands
-     * in the backlog; feedback is a report about the tool, and lands in Tynn's
-     * feedback pipeline where it can be triaged, quick-accepted or converted. Two
-     * different destinations, so two calls rather than one with a flag.
+     * Distinct from {@link captureIssue} at the WIRE, which is the only place
+     * they still differ: quick capture posts to `/api/v1/issues`, feedback to
+     * `/api/v1/feedback`. Both make an Issue Tynn-side, but the paths are a
+     * contract with desktops already installed, so neither may be folded into
+     * the other.
      *
      * `meta` carries the context that makes a report actionable later — Genie
      * version, workspace, and for an agent its terminal. The SOURCE is stamped by
