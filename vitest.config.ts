@@ -32,6 +32,16 @@ export default defineConfig({
             // whether Windows can open a terminal at all — so the decisions in
             // them are tested like anything else.
             'scripts/**/__tests__/**/*.test.ts',
+            // E2E *helpers* — not the E2E suite. `e2e/*.spec.ts` stays on
+            // Playwright (testMatch there is `**/*.spec.ts`, so the two globs
+            // cannot overlap). What runs here is the plain-node machinery the
+            // suite is built on, most of which exists for conditions the suite
+            // itself cannot stage: the launch wait-for-exit (genie#369) guards
+            // against a previous app still exiting, which never happens on an
+            // idle machine, so an E2E that watched a launch succeed would pass
+            // whether the wait worked or not. Tested here against real processes
+            // instead.
+            'e2e/helpers/__tests__/**/*.test.ts',
         ],
         // `*.real.test.ts` are REAL hosting tests — they spawn the bundled Caddy /
         // php-cgi / Docker and bind real ports, and need `npm run build:runtime`
