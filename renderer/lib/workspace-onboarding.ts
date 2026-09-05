@@ -128,6 +128,10 @@ export type ContainerRepoPlan =
  * `missing-permission` is the same fallback rather than an error: Genie's App
  * can be connected but without `contents` write, and a workspace must never be
  * blocked on GitHub — creating one is a local act that GitHub can only add to.
+ *
+ * The ACCOUNT is read before the name, so the form can say "this stays on your
+ * machine" the moment it opens. The name only decides whether there is a
+ * repository name to show, which is all `unnamed` means.
  */
 export function containerRepoPlan(input: {
     githubConnected: boolean;
@@ -135,10 +139,10 @@ export function containerRepoPlan(input: {
     owner: string;
     slug: string;
 }): ContainerRepoPlan {
-    const folder = workspaceFolderName(input.slug);
-    if (!folder) return { kind: 'local-only', reason: 'unnamed' };
     if (!input.githubConnected) return { kind: 'local-only', reason: 'not-connected' };
     if (!input.githubCanProvision) return { kind: 'local-only', reason: 'missing-permission' };
+    const folder = workspaceFolderName(input.slug);
+    if (!folder) return { kind: 'local-only', reason: 'unnamed' };
     return { kind: 'github', owner: input.owner, repo: folder };
 }
 

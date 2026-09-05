@@ -141,13 +141,35 @@ describe('the container repository', () => {
         })).toEqual({ kind: 'local-only', reason: 'missing-permission' });
     });
 
-    it('has nothing to create before the workspace is named', () => {
+    it('has no repository to name before the workspace is named', () => {
         expect(containerRepoPlan({
             githubConnected: true,
             githubCanProvision: true,
             owner: 'acme',
             slug: '',
         })).toEqual({ kind: 'local-only', reason: 'unnamed' });
+    });
+
+    /**
+     * The ACCOUNT decides first, and the name only decides whether there is a
+     * repository name to show. Answering `unnamed` for a disconnected account
+     * made the form say nothing at all until something was typed — so the one
+     * fact a user needs before they start ("this stays on your machine") only
+     * appeared once they had finished.
+     */
+    it('knows GitHub is absent before a single character is typed', () => {
+        expect(containerRepoPlan({
+            githubConnected: false,
+            githubCanProvision: false,
+            owner: '',
+            slug: '',
+        })).toEqual({ kind: 'local-only', reason: 'not-connected' });
+        expect(containerRepoPlan({
+            githubConnected: true,
+            githubCanProvision: false,
+            owner: 'acme',
+            slug: '',
+        })).toEqual({ kind: 'local-only', reason: 'missing-permission' });
     });
 });
 
