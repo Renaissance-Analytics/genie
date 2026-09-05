@@ -53,7 +53,7 @@ const rowFor = (rows: ReturnType<typeof buildEngineInventory>, recordKey: string
 
 describe('buildEngineInventory', () => {
     it('reports the bundled WebSocket runtime as installed without a container image', () => {
-        expect(rowFor(buildEngineInventory(bare), 'reverb-1')).toMatchObject({
+        expect(rowFor(buildEngineInventory(bare), 'websockets-1')).toMatchObject({
             image: 'sockudo/sockudo@4.7.0',
             installed: true,
             state: 'stopped',
@@ -62,9 +62,9 @@ describe('buildEngineInventory', () => {
             rowFor(
                 buildEngineInventory({
                     ...bare,
-                    holders: new Map([['reverb-1', new Set(['workspace-a'])]]),
+                    holders: new Map([['websockets-1', new Set(['workspace-a'])]]),
                 }),
-                'reverb-1',
+                'websockets-1',
             ),
         ).toMatchObject({ installed: true, state: 'running', holders: 1 });
     });

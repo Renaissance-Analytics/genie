@@ -59,7 +59,7 @@ export const SERVICE_ENGINES = [
     'meilisearch',
     'minio',
     'mailpit',
-    'reverb',
+    'websockets',
     /** The generic `{image, port, env}` escape hatch. Always dedicated. */
     'custom',
 ] as const;
@@ -263,8 +263,8 @@ const MAILPIT: EngineSpec = {
     adminEnv: () => ({ MP_DATABASE: '/data/mailpit.db' }),
 };
 
-const REVERB: EngineSpec = {
-    engine: 'reverb',
+const WEBSOCKETS: EngineSpec = {
+    engine: 'websockets',
     runtime: 'host',
     distribution: { project: 'sockudo/sockudo', version: '4.7.0' },
     label: 'WebSockets (Sockudo)',
@@ -272,7 +272,7 @@ const REVERB: EngineSpec = {
         'Bundled Sockudo Pusher-protocol WebSocket server. Runs natively on the Genie Host without Docker; each workspace gets its own app credentials.',
     versions: ['1'],
     image: () => '',
-    // Reverb speaks HTTP and upgrades to WebSocket on the SAME port. `http` so
+    // Sockudo speaks HTTP and upgrades to WebSocket on the SAME port. `http` so
     // readiness probes the published port (any HTTP answer = the server is up).
     // The image also serves a monitoring/debugging DASHBOARD on 8081 (live apps,
     // channels, connections) — published + listed like MinIO's console so a
@@ -310,7 +310,7 @@ const CATALOG: Record<ServiceEngine, EngineSpec> = {
     meilisearch: MEILISEARCH,
     minio: MINIO,
     mailpit: MAILPIT,
-    reverb: REVERB,
+    websockets: WEBSOCKETS,
     custom: CUSTOM,
 };
 

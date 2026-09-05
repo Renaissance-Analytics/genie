@@ -252,6 +252,14 @@ describe('service status', () => {
         expect(serviceTitle({ ...PG, engine: 'custom', version: '' })).toBe('Custom image');
     });
 
+    it('gives the WebSockets engine a real label instead of falling through to the raw key', () => {
+        // ENGINE_LABELS had no entry for this engine, so `serviceTitle` fell back
+        // to `service.engine` and the services list literally displayed the
+        // catalog key. That is how the word "reverb" — the name of a product
+        // Genie does not ship — reached a user's screen in the first place.
+        expect(serviceTitle({ ...PG, engine: 'websockets', version: '1' })).toBe('WebSockets 1');
+    });
+
     it('says how many OTHER workspaces a release would leave holding the engine', () => {
         // The point of the shared model, and the thing that surprises people:
         // "stop" here does not stop the container unless you were the last one.

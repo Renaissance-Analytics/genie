@@ -42,14 +42,22 @@ describe('buildHostingDeps — the host-core hosting seam', () => {
     it('injects the trusted WSS endpoint used by browser Echo clients', () => {
         expect(
             browserWebSocketEnv('Workspace A', {
+                GENIE_WS_APP_KEY: 'workspace_a',
                 REVERB_APP_KEY: 'workspace_a',
                 REVERB_HOST: '127.0.0.1',
                 REVERB_PORT: '49123',
                 REVERB_SCHEME: 'http',
             }),
         ).toMatchObject({
+            // Canonical, vendor-neutral.
+            VITE_GENIE_WS_APP_KEY: 'workspace_a',
+            VITE_GENIE_WS_HOST: 'websockets.ws-workspace-a-3bbd1699.gen',
+            VITE_GENIE_WS_PORT: '443',
+            VITE_GENIE_WS_SCHEME: 'https',
+            // DEPRECATED ALIASES — what Laravel's reverb driver actually reads,
+            // kept so no hosted app breaks on the rename.
             VITE_REVERB_APP_KEY: 'workspace_a',
-            VITE_REVERB_HOST: 'reverb.ws-workspace-a-3bbd1699.gen',
+            VITE_REVERB_HOST: 'websockets.ws-workspace-a-3bbd1699.gen',
             VITE_REVERB_PORT: '443',
             VITE_REVERB_SCHEME: 'https',
         });
@@ -104,7 +112,7 @@ describe('buildHostingDeps — the host-core hosting seam', () => {
         expect(written).toContain('REVERB_SCHEME=http');
         // The BROWSER gets the TLS front door — rewritten IN PLACE over the stock
         // expansion, so no second copy can shadow it.
-        expect(written).toContain('VITE_REVERB_HOST=reverb.ws-workspace-a-3bbd1699.gen');
+        expect(written).toContain('VITE_REVERB_HOST=websockets.ws-workspace-a-3bbd1699.gen');
         expect(written).toContain('VITE_REVERB_PORT=443');
         expect(written).toContain('VITE_REVERB_SCHEME=https');
         expect(written).toContain('VITE_REVERB_APP_KEY=workspace_a');

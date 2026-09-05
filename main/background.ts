@@ -1509,7 +1509,7 @@ app.whenReady().then(async () => {
         hostWebSockets: createBundledHostWebSocketService({
             resourcesPath: process.resourcesPath,
             userDataDir: app.getPath('userData'),
-            port: preferredServicePort('reverb-1', 'websocket'),
+            port: preferredServicePort('websockets-1', 'websocket'),
             probe: (port) => waitForHttp(port, 60_000),
         }),
         // Machine-scoped for the same reason the credential is: the publication
