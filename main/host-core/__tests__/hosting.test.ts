@@ -111,6 +111,56 @@ describe('buildHostingDeps — the host-core hosting seam', () => {
         expect(written).not.toContain('${REVERB_HOST}');
     });
 
+    it('puts the browser endpoint in the env a runMode:host SITE receives, not just in the file', async () => {
+        // `serviceHostEnvReportFor` is the HOST-NATIVE path — the env a site's own
+        // dev server is spawned with. Asserted directly rather than inferred from
+        // the call site, because "it is wired at line N" is not the same claim as
+        // "the value comes out".
+        //
+        // NOTE, so nobody mistakes this for a guard on the wss fix: this path was
+        // ALREADY correct before that fix, and this test passes on the old code
+        // too. That IS the finding — the dev-server env was never the problem, so
+        // a site running `npm run dev` always had the right endpoint. What was
+        // broken is the BUILT bundle, which reads the `.env` FILE and never sees a
+        // site's process env at all. The `.env` write is tested separately, and
+        // that test is the one that goes red without the fix. Both paths, or only
+        // one kind of site works.
+        const ports = fakePorts({
+            devServiceHostEnvFor: () => ({
+                REVERB_APP_KEY: 'workspace_a',
+                REVERB_HOST: '127.0.0.1',
+                REVERB_PORT: '49123',
+                REVERB_SCHEME: 'http',
+            }),
+        });
+        // The closure reads the process-wide service manager, so stand one up —
+        // this is the boot path a real host takes, not a shortcut around it.
+        initHosting(ports);
+        const report = await buildHostingDeps(ports).sites.serviceHostEnvReportFor!('Workspace A');
+
+        expect(report.env).toMatchObject({
+            VITE_REVERB_HOST: 'reverb.ws-workspace-a-3bbd1699.gen',
+            VITE_REVERB_PORT: '443',
+            VITE_REVERB_SCHEME: 'https',
+            VITE_REVERB_APP_KEY: 'workspace_a',
+        });
+        // The server-to-server values ride along untouched: the site's PHP still
+        // publishes to the engine on loopback over http, which is correct.
+        expect(report.env.REVERB_HOST).toBe('127.0.0.1');
+        expect(report.env.REVERB_SCHEME).toBe('http');
+    });
+
+    it('adds no browser endpoint when the workspace has no websocket service', async () => {
+        // The positive control for the test above: if `browserWebSocketEnv` bolted
+        // its keys on unconditionally, that test would pass on a workspace that has
+        // no socket server at all, and every site would be told to dial a `.gen`
+        // name nothing serves.
+        const ports = fakePorts({ devServiceHostEnvFor: () => ({ DB_PORT: '5432' }) });
+        initHosting(ports);
+        const report = await buildHostingDeps(ports).sites.serviceHostEnvReportFor!('Workspace A');
+        expect(report.env).toEqual({ DB_PORT: '5432' });
+    });
+
     it('maps ports into the three managers so the SHELL supplies the DB reads, not the boot', () => {
         const ports = fakePorts();
         const d = buildHostingDeps(ports);
