@@ -217,7 +217,15 @@ test('a CLI Genie will not probe for says what it is and claims nothing about th
     // absence, or the next regression can satisfy this by rendering nothing.
     await expect(q).toContainText('Not checked');
     await expect(q).not.toContainText('Not installed');
+    // Deliberately case-SENSITIVE, and it survives the gap text on purpose:
+    // "no native Windows install" and "Install it yourself" both appear in this
+    // row, and neither forms the word "Installed". Do not soften this to /i to
+    // make it look safer — that would match the gap copy and the assertion would
+    // fail for a reason that has nothing to do with a detection claim.
     await expect(q).not.toContainText('Installed');
+    // "Install it yourself" is an ANCHOR, not a button, so the count is 0 here
+    // for a structural reason rather than a copy one — a row that grew a real
+    // Install button would still fail this even if the link text changed.
     await expect(q.getByRole('button', { name: /^install$/i })).toHaveCount(0);
     await expect(page.getByTestId('devtool-gap-amazon-q')).toContainText(/too generic/i);
 });

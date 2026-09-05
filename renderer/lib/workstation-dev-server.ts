@@ -313,6 +313,28 @@ export type ToolUpdateTone =
      * the BADGE renders straight off this — so folding the two together makes
      * the row print "Not installed" about a machine nothing checked, which is
      * the exact claim `HostToolSpec.probe` exists to avoid making.
+     *
+     * ## Why the badge says "Not checked" and not nothing
+     *
+     * It reads like a hedge and it is not one. The distinction is WHAT the label
+     * is about:
+     *
+     *   - "Not installed" and "Not detected" are claims about THE MACHINE — one
+     *     says the tool is absent, the other says a lookup ran and came back
+     *     empty. Both are false here, because nothing ran.
+     *   - "Unknown" is also about the machine: it says presence is uncertain.
+     *     Still a claim, just hedged.
+     *   - "Not checked" is about GENIE'S OWN BEHAVIOUR. It says we did not look,
+     *     which is exactly and only what happened, and asserts nothing about
+     *     what the user has.
+     *
+     * Rendering no badge at all was the other candidate and is worse twice over.
+     * A blank where every sibling row has a status reads as a rendering bug
+     * rather than a deliberate silence — which defeats the point of listing
+     * Amazon Q instead of omitting it. And it leaves the E2E able to assert only
+     * ABSENCE, which a row that fails to render entirely also satisfies: that is
+     * how this test would rot into a no-op. A negative assertion needs a
+     * positive control.
      */
     | 'not-checked';
 export type ToolRowAction = 'install' | 'update' | 'none';
