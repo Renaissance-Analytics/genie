@@ -332,12 +332,31 @@ describe('tool update rows', () => {
      * probed must not make it — that is the difference between "you do not have
      * this" and "nothing checked", and only one of them is true here.
      */
+    /**
+     * The tone must be its OWN state, not `not-installed`.
+     *
+     * This assertion said `not-installed` and PASSED, because it was written to
+     * match what the code already returned rather than what the row has to say.
+     * The badge renders straight off the tone, so the row went on printing
+     * "Not installed" — the exact claim `probe: false` exists to avoid — while a
+     * green unit test watched it happen. The E2E caught it, because it reads the
+     * whole rendered row instead of one field.
+     */
     it('says nothing about a tool it declined to probe, and offers no button', () => {
         const row = toolUpdateRow(upd({ name: 'amazon-q', installed: undefined, probed: false }));
         expect(row.probed).toBe(false);
         expect(row.action).toBe('none');
-        expect(row.tone).toBe('not-installed');
+        expect(row.tone).toBe('not-checked');
         expect(row.installGap).toMatch(/too generic|Windows/i);
+    });
+
+    it('never reports an unprobed tool as not-installed, whatever else is true of it', () => {
+        // The one-line version of the bug above: `installed` is undefined for
+        // BOTH states, so the only thing telling them apart is `probed`.
+        expect(toolUpdateTone(upd({ name: 'amazon-q', installed: undefined, probed: false }))).toBe(
+            'not-checked',
+        );
+        expect(toolUpdateTone(upd({ name: 'docker', installed: undefined }))).toBe('not-installed');
     });
 
     it('leaves an ordinary row unmarked, so a real answer is never read as a declined one', () => {

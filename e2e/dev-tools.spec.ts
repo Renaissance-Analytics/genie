@@ -211,6 +211,11 @@ test('a CLI Genie will not probe for says what it is and claims nothing about th
     await tab(/Agent CLIs/).click();
     const q = page.getByTestId('devtool-amazon-q');
     await expect(q).toContainText('Amazon Q');
+    // The BADGE is a claim too, and it renders straight off the tone — this
+    // caught the row still printing "Not installed" while a unit test asserting
+    // only the version line was green. Pin the positive state, not just the
+    // absence, or the next regression can satisfy this by rendering nothing.
+    await expect(q).toContainText('Not checked');
     await expect(q).not.toContainText('Not installed');
     await expect(q).not.toContainText('Installed');
     await expect(q.getByRole('button', { name: /^install$/i })).toHaveCount(0);

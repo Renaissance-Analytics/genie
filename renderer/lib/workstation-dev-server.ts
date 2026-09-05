@@ -303,7 +303,18 @@ function listNames(names: string[]): string {
 // first-run wizard (#240) owns getting a missing tool onto the machine; this
 // section manages what is already here.
 
-export type ToolUpdateTone = 'update-available' | 'up-to-date' | 'not-installed' | 'unknown';
+export type ToolUpdateTone =
+    | 'update-available'
+    | 'up-to-date'
+    | 'not-installed'
+    | 'unknown'
+    /**
+     * Genie never looked. Its own tone, not a shade of `not-installed`, because
+     * the BADGE renders straight off this — so folding the two together makes
+     * the row print "Not installed" about a machine nothing checked, which is
+     * the exact claim `HostToolSpec.probe` exists to avoid making.
+     */
+    | 'not-checked';
 export type ToolRowAction = 'install' | 'update' | 'none';
 
 export interface ToolUpdateRow {
@@ -379,6 +390,10 @@ export function toolLabel(name: HostToolName): string {
  * installed at all.
  */
 export function toolUpdateTone(u: ToolUpdate): ToolUpdateTone {
+    // FIRST, and before the `installed` check: `installed` is undefined for both
+    // "we looked and it is absent" and "we never looked", so `probed` is the
+    // only thing that tells them apart.
+    if (u.probed === false) return 'not-checked';
     if (!u.installed) return 'not-installed';
     if (u.updateAvailable) return 'update-available';
     if (u.latest) return 'up-to-date';

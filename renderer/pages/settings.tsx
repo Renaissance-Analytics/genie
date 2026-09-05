@@ -4478,6 +4478,12 @@ function toolToneBadge(tone: ToolUpdateTone): { color: 'amber' | 'emerald' | 'zi
             return { color: 'zinc', label: 'Not installed' };
         case 'unknown':
             return { color: 'zinc', label: 'Installed' };
+        // Genie never looked, so the badge must not say either. "Not installed"
+        // here would be the claim `probe: false` exists to avoid — and it was
+        // exactly what this row printed until an E2E read the whole row rather
+        // than the one field a unit test was checking.
+        case 'not-checked':
+            return { color: 'zinc', label: 'Not checked' };
     }
 }
 
