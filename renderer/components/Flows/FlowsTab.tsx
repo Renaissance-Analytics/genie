@@ -65,7 +65,7 @@ export default function FlowsTab({ appId }: Props) {
 
     const refresh = useCallback(async () => {
         try {
-            setFlows(await api().flows.list(appId));
+            setFlows(await api().gappFlows.list(appId));
         } catch (e) {
             setError(e instanceof Error ? e.message : 'Could not list flows.');
         }
@@ -79,14 +79,14 @@ export default function FlowsTab({ appId }: Props) {
         // Ids are minted here rather than by the database so the editor can open
         // immediately on the row it just made.
         const id = `flow-${Date.now().toString(36)}`;
-        await api().flows.save({ id, appId, name: 'New flow', graph: starterGraph() });
+        await api().gappFlows.save({ id, appId, name: 'New flow', graph: starterGraph() });
         await refresh();
         setEditing(id);
     }, [appId, refresh]);
 
     const remove = useCallback(
         async (flowId: string) => {
-            await api().flows.remove(flowId);
+            await api().gappFlows.remove(flowId);
             if (editing === flowId) setEditing(null);
             await refresh();
         },
@@ -95,7 +95,7 @@ export default function FlowsTab({ appId }: Props) {
 
     const toggle = useCallback(
         async (flow: FlowSummaryView) => {
-            await api().flows.setEnabled(flow.id, !flow.enabled);
+            await api().gappFlows.setEnabled(flow.id, !flow.enabled);
             await refresh();
         },
         [refresh],

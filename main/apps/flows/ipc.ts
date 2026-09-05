@@ -1,9 +1,24 @@
 /**
- * The Electron half of flows.
+ * The Electron half of a GApp's flow canvas.
  *
  * Everything decidable lives in the pure modules beside this one and is tested
  * there; this file hands them real I/O — the database, the GApp bridge, the host
  * scheduler — and exposes the editor's operations to Genie's renderer.
+ *
+ * ## `gapp-flows:`, not `flows:`
+ *
+ * There are two things called Flows and they are unrelated. `main/flows/` is
+ * Genie's AUTOMATION system — a Recipe, its Triggers and its Scope, workstation
+ * wide. This is a GApp's node-graph canvas: one fancy-flow workflow owned by one
+ * app.
+ *
+ * v67 already drew that line in the database, renaming this module's table to
+ * `gapp_flows` and leaving the bare name to the automation system. The IPC was
+ * left behind on the old name and owned `flows:list`, `flows:run` and
+ * `flows:set-enabled` — the exact three the Flow Manager needs. `ipcMain.handle`
+ * throws on a second registration, so that was not a naming preference: it was
+ * Genie failing to boot the moment the manager shipped. Held down by
+ * `main/__tests__/flow-ipc-channels.test.ts`.
  *
  * ## Two things happen at boot, in this order
  *
@@ -69,7 +84,7 @@ export function registerFlowsIpc(deps: ServerDeps): void {
     setFlowFireHandler(async (flowId) => (await runStoredFlow(flowId, runnerDeps(deps))).ok);
     reconcileFlowSchedules();
 
-    ipcMain.handle('flows:list', (_e, appId: string) =>
+    ipcMain.handle('gapp-flows:list', (_e, appId: string) =>
         listFlowsForApp(appId).map((flow) => ({
             id: flow.id,
             appId: flow.appId,
@@ -83,10 +98,10 @@ export function registerFlowsIpc(deps: ServerDeps): void {
         })),
     );
 
-    ipcMain.handle('flows:get', (_e, flowId: string) => getFlow(flowId));
+    ipcMain.handle('gapp-flows:get', (_e, flowId: string) => getFlow(flowId));
 
     ipcMain.handle(
-        'flows:save',
+        'gapp-flows:save',
         (_e, input: { id: string; appId: string; name: string; graph: unknown; enabled?: boolean }) => {
             upsertFlow(input);
             // Every save reconciles: adding a schedule trigger arms it, removing
@@ -97,13 +112,13 @@ export function registerFlowsIpc(deps: ServerDeps): void {
         },
     );
 
-    ipcMain.handle('flows:delete', (_e, flowId: string) => {
+    ipcMain.handle('gapp-flows:delete', (_e, flowId: string) => {
         deleteFlow(flowId);
         reconcileFlowSchedules();
         return true;
     });
 
-    ipcMain.handle('flows:set-enabled', (_e, flowId: string, enabled: boolean) => {
+    ipcMain.handle('gapp-flows:set-enabled', (_e, flowId: string, enabled: boolean) => {
         const flow = getFlow(flowId);
         if (!flow) return null;
         upsertFlow({
@@ -123,7 +138,7 @@ export function registerFlowsIpc(deps: ServerDeps): void {
      * The editor calls this as the author works, so a refusal shows up on the
      * canvas rather than at 3am on the first scheduled fire.
      */
-    ipcMain.handle('flows:check', (_e, appId: string, graph: unknown) =>
+    ipcMain.handle('gapp-flows:check', (_e, appId: string, graph: unknown) =>
         decideFlowAdmission(graph as never, grantFor(appId)),
     );
 
@@ -132,7 +147,7 @@ export function registerFlowsIpc(deps: ServerDeps): void {
      * offer a step that is certain to be refused; the full list is there for a UI
      * that wants to show what is possible but not yet permitted.
      */
-    ipcMain.handle('flows:palette', (_e, appId: string) => {
+    ipcMain.handle('gapp-flows:palette', (_e, appId: string) => {
         const grant = grantFor(appId);
         return {
             available: grant && !grant.revoked ? paletteForCapabilities(grant.capabilities) : [],
@@ -140,7 +155,7 @@ export function registerFlowsIpc(deps: ServerDeps): void {
         };
     });
 
-    ipcMain.handle('flows:run', async (_e, flowId: string) =>
+    ipcMain.handle('gapp-flows:run', async (_e, flowId: string) =>
         runStoredFlow(flowId, runnerDeps(deps)),
     );
 }

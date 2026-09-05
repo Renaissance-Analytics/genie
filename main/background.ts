@@ -336,6 +336,7 @@ import { seedRepoE2E } from './e2e/repo';
 import { seedAgentPulseE2E } from './e2e/agent-pulse';
 import { seedTynnImportE2E } from './e2e/tynn-import';
 import { seedMasterE2E } from './e2e/master';
+import { seedFlowsE2E } from './e2e/flows';
 
 /**
  * Genie — Tynn desktop companion.
@@ -2769,6 +2770,15 @@ function showE2EWindow(): void {
             seedMasterE2E();
         } catch (e) {
             console.error('[e2e] master seed failed', e);
+        }
+        // Flows for the manager flyout the master header opens, plus the emitter
+        // the spec drives the header animation with. Separate from the master
+        // seed because it touches a different table and a failure in one must
+        // not take the other's rows with it.
+        try {
+            seedFlowsE2E();
+        } catch (e) {
+            console.error('[e2e] flows seed failed', e);
         }
     }
     if (page === 'e2e-terminal-recovery') {

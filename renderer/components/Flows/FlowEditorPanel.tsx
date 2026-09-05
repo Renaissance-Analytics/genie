@@ -49,7 +49,7 @@ export default function FlowEditorPanel({ appId, flowId }: Props) {
 
     useEffect(() => {
         let live = true;
-        void window.genie.flows.get(flowId).then((flow) => {
+        void window.genie.gappFlows.get(flowId).then((flow) => {
             if (!live) return;
             if (!flow) {
                 setError('That flow no longer exists.');
@@ -79,7 +79,7 @@ export default function FlowEditorPanel({ appId, flowId }: Props) {
         (next: unknown) => {
             if (checkTimer.current) clearTimeout(checkTimer.current);
             checkTimer.current = setTimeout(() => {
-                void window.genie.flows.check(appId, next).then(setAdmission);
+                void window.genie.gappFlows.check(appId, next).then(setAdmission);
             }, CHECK_DELAY_MS);
         },
         [appId],
@@ -103,7 +103,7 @@ export default function FlowEditorPanel({ appId, flowId }: Props) {
         if (!graph) return;
         setBusy(true);
         try {
-            await window.genie.flows.save({ id: flowId, appId, name, graph, enabled });
+            await window.genie.gappFlows.save({ id: flowId, appId, name, graph, enabled });
             setError(null);
         } catch (e) {
             setError(e instanceof Error ? e.message : 'Could not save this flow.');
@@ -117,9 +117,9 @@ export default function FlowEditorPanel({ appId, flowId }: Props) {
         setBusy(true);
         try {
             if (graph) {
-                await window.genie.flows.save({ id: flowId, appId, name, graph, enabled });
+                await window.genie.gappFlows.save({ id: flowId, appId, name, graph, enabled });
             }
-            setRun(await window.genie.flows.run(flowId));
+            setRun(await window.genie.gappFlows.run(flowId));
         } catch (e) {
             setRun({ ok: false, error: e instanceof Error ? e.message : 'The run failed.' });
         } finally {

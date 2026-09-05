@@ -2386,6 +2386,55 @@ export function runMigrations(d: Database.Database): MigrationResult {
                 `);
             },
         },
+        {
+            // v70 -- FLOW RUN HISTORY (genie#394; the Flow Manager).
+            //
+            // `FlowRunLog` existed from the start and went nowhere: the runtime
+            // handed it to a callback that console.logs the non-`ran` cases and
+            // drops the rest. So "did my Flow run last night, and what happened"
+            // had no answer that survived the process, and a manager could show
+            // a list of Flows and nothing about whether any had ever acted.
+            //
+            // ## Refusals are history too
+            //
+            // Every outcome is stored, not just `ran` -- `blocked`, `refused`
+            // and `error` alongside it. That is `runtime.ts`'s own stated
+            // principle applied to storage: a Flow silently not firing is the
+            // hardest failure here to debug, and "last outcome: the loop guard
+            // held it" is the answer that makes opening the manager worth doing.
+            // A table of successes would show a Flow refused nightly for a week
+            // as one that had simply never run.
+            //
+            // ## No foreign key to `flows`
+            //
+            // Recording happens inside the runtime's finish callback, and a
+            // Flow deleted while its body was mid-run would turn an FK
+            // violation into a throw on a path whose whole job is to report what
+            // happened. `deleteFlow` drops the history explicitly instead
+            // (`deleteFlowRunsIn`), which is the same outcome without a way to
+            // fail at the worst moment.
+            //
+            // Epoch-ms INTEGERs rather than ISO text: these are compared and
+            // ordered on every read, never displayed raw, and the manager's list
+            // column is "the newest run per Flow" -- an index scan over
+            // (flow_id, finished_at DESC).
+            version: 70,
+            runner: (db) => {
+                db.exec(`
+                    CREATE TABLE IF NOT EXISTS flow_runs (
+                        run_id      TEXT PRIMARY KEY,
+                        flow_id     TEXT NOT NULL,
+                        event       TEXT,
+                        outcome     TEXT NOT NULL,
+                        reason      TEXT,
+                        started_at  INTEGER NOT NULL,
+                        finished_at INTEGER NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_flow_runs_flow
+                        ON flow_runs(flow_id, finished_at DESC);
+                `);
+            },
+        },
     ];
 
     const apply = d.transaction(

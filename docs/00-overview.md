@@ -35,10 +35,11 @@ Tray icon  ──►  Genie window
                  ├── Sidebar                    workspaces, status + Add Panel
                  ├── Floor                      terminals, AgentPanels, files + plugins
                  ├── Toolbar                    layout, add views, active workspace
-                 └── Title bar                  Knowledge Graph · AgentInbox ·
-                                                Task Manager · Issue Watch ·
-                                                .gen sites · Hosts · update pill ·
-                                                Genie OSA · Docs · Settings
+                 └── Title bar                  Knowledge Graph · Flows ·
+                                                AgentInbox · Task Manager ·
+                                                Issue Watch · .gen sites · Hosts ·
+                                                update pill · Genie OSA · Docs ·
+                                                Settings
 ```
 
 Genie lives in your system tray. Closing the window **hides** it rather than

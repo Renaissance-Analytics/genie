@@ -259,5 +259,21 @@ export type FlowRecipeStep = PluginRecipeStep | FlowTaskStep;
 export interface FlowRecipe {
     id: string;
     title: string;
+    /**
+     * What arming this body will DO to the machine, in one sentence, in the
+     * recipe's own words.
+     *
+     * A title says what a Flow is CALLED. "Keep the repo light" is a pleasant
+     * name for something that relocates a user's files without asking again, and
+     * a switch beside it is one unlabelled click away from that happening at
+     * 3am. Declared HERE rather than written into a surface, because no
+     * component can know what a recipe does, and a sentence invented in one
+     * would drift from the code the moment either changed.
+     *
+     * Optional. A body with no side effects worth warning about declares none —
+     * and the absence must render as silence, never as an invented "this is
+     * safe", which would be a promise nobody made.
+     */
+    consequence?: string;
     steps: readonly FlowRecipeStep[];
 }

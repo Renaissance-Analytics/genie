@@ -539,3 +539,252 @@ test('a blocked nudge stays on its terminal and replaces that workspace AgentPul
     await switchToWorkspace(seed.workspaceName);
     await expect(plainRow).toHaveClass(/\bis-active\b/);
 });
+
+/* ===== The Flow Manager (genie#394) ==================================== */
+
+/**
+ * Genie's automation surface, in the window it actually lives in.
+ *
+ * ## Why these tests are HERE rather than in their own spec
+ *
+ * They started in `e2e/flow-manager.spec.ts`, which called
+ * `launchGenieE2E('master')` a second time. Every spec shares one
+ * `--user-data-dir`, and a dozen of them launch and close apps against it
+ * happily — but `master` is the heavy one, the real product window with ptys and
+ * a terminal host behind it, and a SECOND master app in the same run left this
+ * file's `beforeAll` timing out at 60s. Not a slow runner: identical on macOS,
+ * Linux and Windows.
+ *
+ * The launch is the scarce resource, so the tests come to the window rather than
+ * the window being booted twice. They are appended LAST and each leaves the
+ * flyout closed, so nothing above them sees a changed floor.
+ *
+ * ## What only an E2E can answer here
+ *
+ * Two things; the rest is covered in main, where it belongs.
+ *
+ *  1. **The header button animates.** `main/flows/__tests__/activity.test.ts`
+ *     proves the running SET is right and `run-announcement.test.ts` proves the
+ *     runtime announces a start for exactly the bodies it executes. Neither can
+ *     see a pixel.
+ *  2. **The state clears.** A badge that sticks is worse than no badge, and
+ *     "stuck" is invisible to a test that only ever looks once.
+ *
+ * The animation is measured with `getAnimations()` — asking the COMPOSITOR what
+ * is actually running, so a rule the stylesheet never applied or a selector that
+ * stopped matching comes back as zero. Reading the class back would be a test of
+ * the test.
+ *
+ * Activity is pushed on the REAL `flows:activity` channel by `main/e2e/flows.ts`,
+ * which explains there why a genuine run is not used: every built-in body
+ * finishes in milliseconds, so racing one would be timing a flicker. Drift
+ * between the broadcast and the listener is caught structurally by
+ * `main/__tests__/flow-ipc-channels.test.ts`.
+ */
+
+const flowsButton = () => page.locator('.gicon.flows-button');
+
+/**
+ * The flyout ROOT, not the dialog.
+ *
+ * `aria-hidden` and the `open` class live on `.docs-flyout-root`; the `<aside>`
+ * inside it carries `role="dialog"`. Asserting open/closed on the aside is how
+ * the first version of this failed — it has no such attribute, so the very first
+ * assertion missed before anything was even clicked.
+ */
+const flowsRoot = () =>
+    page.locator('.docs-flyout-root').filter({ has: page.locator('[aria-label="Flows"]') });
+const flowsPanel = () => page.locator('[role="dialog"][aria-label="Flows"]');
+const flowRow = (title: string) => flowsPanel().locator('.flowmgr-row', { hasText: title });
+
+/**
+ * What is animating on the Flows icon, split by KIND.
+ *
+ * `getAnimations()` returns CSS **transitions** as well as CSS animations, and
+ * `.gicon` transitions two properties — `background` and `color`, 150ms each —
+ * on hover. The first version of this counted everything and went red with
+ * `Received: 2`, seven milliseconds after the previous test had clicked the
+ * button and left the pointer on it. Two transitioned properties, two effects,
+ * 7ms into a 150ms transition: the icon was not animating, it was finishing a
+ * hover.
+ *
+ * Asking the compositor is still the right instrument — it is the only thing
+ * that knows whether a rule actually applied, which a class check cannot see —
+ * but the question has to name the KIND, or the answer includes everything the
+ * element happens to be doing for unrelated reasons.
+ *
+ * Both lists are returned so a failure says WHAT was running rather than only
+ * that something was. That is what turned the last failure from a guess into a
+ * measurement, and the next person should not have to re-derive it.
+ */
+async function flowIconEffects(): Promise<{ animations: string[]; transitions: string[] }> {
+    return page.evaluate(() => {
+        const el = document.querySelector('.gicon.flows-button');
+        if (!el) return { animations: ['NO ELEMENT MATCHED'], transitions: [] };
+        const live = el.getAnimations().filter((a) => a.playState === 'running');
+        return {
+            animations: live
+                .filter((a): a is Animation & { animationName: string } => 'animationName' in a)
+                .map((a) => a.animationName)
+                .sort(),
+            transitions: live
+                .filter((a): a is Animation & { transitionProperty: string } =>
+                    'transitionProperty' in a,
+                )
+                .map((a) => a.transitionProperty)
+                .sort(),
+        };
+    });
+}
+
+/** Push run state from main, exactly as the runtime's callbacks do. */
+async function setFlowsRunning(running: string[]): Promise<void> {
+    await app.evaluate(({}, ids) => {
+        const fixture = (globalThis as Record<string, unknown>).__GENIE_E2E_FLOWS__ as
+            | { emit: (running: string[]) => void }
+            | undefined;
+        if (!fixture) throw new Error('__GENIE_E2E_FLOWS__ missing — seed did not run');
+        fixture.emit(ids);
+    }, running);
+}
+
+async function openFlows(): Promise<void> {
+    const cls = (await flowsRoot().getAttribute('class')) ?? '';
+    if (!cls.includes('open')) await flowsButton().click();
+    await expect(flowsRoot()).toHaveClass(/\bopen\b/);
+}
+
+test('the Flows button sits in the icon cluster and opens the manager', async () => {
+    await setFlowsRunning([]);
+    await expect(flowsButton()).toHaveAttribute('aria-label', 'Flow Manager');
+    // Same treatment as its neighbours: it IS a `.gicon`, not a lookalike.
+    await expect(flowsButton()).toHaveClass(/\bgicon\b/);
+
+    await expect(flowsRoot()).not.toHaveClass(/\bopen\b/);
+    await expect(flowsRoot()).toHaveAttribute('aria-hidden', 'true');
+    await flowsButton().click();
+    await expect(flowsRoot()).toHaveClass(/\bopen\b/);
+    await expect(flowsRoot()).toHaveAttribute('aria-hidden', 'false');
+
+    await page.keyboard.press('Escape');
+    await expect(flowsRoot()).not.toHaveClass(/\bopen\b/);
+});
+
+test('the Flows icon is still while nothing runs, and animates while one does', async () => {
+    await setFlowsRunning([]);
+    await expect(flowsButton()).not.toHaveClass(/is-running/);
+    // EMPTY, not "does not contain flows-running": an unexpected animation on
+    // this icon should fail here too. The transitions are reported in the
+    // message so a failure names what was running instead of implying it.
+    const still = await flowIconEffects();
+    expect(still.animations, `transitions also live: ${still.transitions.join(', ')}`).toEqual([]);
+
+    await setFlowsRunning(['e2e-flow-manual']);
+    await expect(flowsButton()).toHaveClass(/is-running/);
+    // The control, and it NAMES the animation — "something is animating" is
+    // satisfied by the hover transition this test previously mistook for one.
+    //
+    // Polled rather than sampled: the class lands one style recalc before the
+    // animation object exists, and a single read can arrive in the gap.
+    await expect
+        .poll(async () => (await flowIconEffects()).animations, {
+            message: 'the flows-running animation should start when a Flow runs',
+        })
+        .toEqual(['flows-running']);
+
+    await setFlowsRunning([]);
+    await expect(flowsButton()).not.toHaveClass(/is-running/);
+    // A stuck badge is worse than no badge. This is what catches one — and it
+    // asserts EMPTY rather than "no flows-running", so anything unexpected that
+    // starts animating this icon fails here too.
+    await expect
+        .poll(async () => (await flowIconEffects()).animations, {
+            message: 'the flows-running animation must STOP when the run ends',
+        })
+        .toEqual([]);
+});
+
+test('the Flow Manager lists the seeded Flows, and warns about the one that cannot fire', async () => {
+    await setFlowsRunning([]);
+    await openFlows();
+
+    const tidy = flowRow('Tidy the workspace');
+    await expect(tidy).toBeVisible();
+    await expect(tidy).toContainText('Whole machine');
+    await expect(tidy).toContainText('When you run it');
+    await expect(tidy).toContainText('Never run');
+
+    // Titled, enabled, and incapable of ever running again — the one thing a
+    // plain list would never tell you.
+    const dead = flowRow('Watch a thing that left');
+    await expect(dead.locator('.flowmgr-warn')).toContainText('nothing can start it');
+    await expect(dead.locator('.flowmgr-warn')).toContainText('ghost:vanished');
+
+    await page.keyboard.press('Escape');
+});
+
+test('the Flow Manager marks the running Flow, and only that one', async () => {
+    await openFlows();
+    await setFlowsRunning(['e2e-flow-manual']);
+
+    // Both asserted: a row that lit up for every Flow passes the first alone.
+    await expect(flowRow('Tidy the workspace')).toHaveClass(/is-running/);
+    await expect(flowRow('Watch a thing that left')).not.toHaveClass(/is-running/);
+
+    await setFlowsRunning([]);
+    await expect(flowRow('Tidy the workspace')).not.toHaveClass(/is-running/);
+    await page.keyboard.press('Escape');
+});
+
+test('turning a Flow off is one click; turning it back on states what it will do', async () => {
+    await setFlowsRunning([]);
+    await openFlows();
+
+    const row = flowRow('Tidy the workspace');
+    const toggle = row.getByRole('switch');
+    const armDialog = page.locator('[role="dialog"][aria-label*="Turn on"]');
+    const runButton = row.getByRole('button', { name: /Run .* now/ });
+    await expect(toggle).toBeVisible();
+
+    // OFF asks nothing. A machine doing LESS cannot surprise anybody, and a
+    // confirm on both directions trains people to click through both.
+    await toggle.click();
+    await expect(armDialog).toHaveCount(0);
+    // The Run button going away is evidence the STORE changed and came back on
+    // `flows:changed` — not that the renderer flipped a local boolean.
+    await expect(runButton).toHaveCount(0);
+    await expect(row.locator('.flowmgr-off')).toContainText('Moves files out of your workspace');
+
+    // ON asks, in the recipe's own words.
+    await toggle.click();
+    await expect(armDialog).toBeVisible();
+    await expect(armDialog).toContainText('Moves files out of your workspace');
+    await expect(armDialog).toContainText('without asking again');
+
+    // Cancel leaves it OFF. A confirmation that arms anyway is worse than none:
+    // it teaches the user the dialog is decoration.
+    await armDialog.getByRole('button', { name: 'Cancel' }).click();
+    await expect(armDialog).toHaveCount(0);
+    await expect(runButton).toHaveCount(0);
+
+    await toggle.click();
+    await armDialog.getByRole('button', { name: 'Turn it on' }).click();
+    await expect(armDialog).toHaveCount(0);
+    await expect(runButton).toHaveCount(1);
+
+    await page.keyboard.press('Escape');
+});
+
+test('a Flow row opens its run history, and says so when there is none', async () => {
+    await setFlowsRunning([]);
+    await openFlows();
+
+    const row = flowRow('Tidy the workspace');
+    await row.locator('.flowmgr-disclose').click();
+    await expect(row.locator('.flowmgr-history')).toContainText('Recent runs');
+    await expect(row.locator('.flowmgr-history')).toContainText('never run');
+
+    // Leave the window as this file's other tests expect to find it.
+    await page.keyboard.press('Escape');
+    await expect(flowsRoot()).not.toHaveClass(/\bopen\b/);
+});

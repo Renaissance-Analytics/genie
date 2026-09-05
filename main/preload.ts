@@ -275,19 +275,25 @@ const api = {
     // surface: an installed app never sees it, and it grants nothing — a graph
     // reaching past the app's permissions saves fine (an author is mid-edit) and
     // is refused at RUN by `decideFlowAdmission`.
-    flows: {
-        list: (appId: string) => ipcRenderer.invoke('flows:list', appId),
-        get: (flowId: string) => ipcRenderer.invoke('flows:get', flowId),
+    //
+    // `gappFlows`, not `flows`: the bare name belongs to Genie's AUTOMATION
+    // system (`main/flows/`, below), the way the `flows` TABLE has since v67
+    // renamed this module's to `gapp_flows`. Two unrelated things called Flows
+    // sharing one namespace is how `flows:list` came to mean both.
+    gappFlows: {
+        list: (appId: string) => ipcRenderer.invoke('gapp-flows:list', appId),
+        get: (flowId: string) => ipcRenderer.invoke('gapp-flows:get', flowId),
         save: (input: { id: string; appId: string; name: string; graph: unknown; enabled?: boolean }) =>
-            ipcRenderer.invoke('flows:save', input),
-        remove: (flowId: string) => ipcRenderer.invoke('flows:delete', flowId),
+            ipcRenderer.invoke('gapp-flows:save', input),
+        remove: (flowId: string) => ipcRenderer.invoke('gapp-flows:delete', flowId),
         setEnabled: (flowId: string, enabled: boolean) =>
-            ipcRenderer.invoke('flows:set-enabled', flowId, enabled),
+            ipcRenderer.invoke('gapp-flows:set-enabled', flowId, enabled),
         // What this graph WOULD be allowed to do, without running it — so a
         // refusal lands on the canvas rather than at 3am on the first fire.
-        check: (appId: string, graph: unknown) => ipcRenderer.invoke('flows:check', appId, graph),
-        palette: (appId: string) => ipcRenderer.invoke('flows:palette', appId),
-        run: (flowId: string) => ipcRenderer.invoke('flows:run', flowId),
+        check: (appId: string, graph: unknown) =>
+            ipcRenderer.invoke('gapp-flows:check', appId, graph),
+        palette: (appId: string) => ipcRenderer.invoke('gapp-flows:palette', appId),
+        run: (flowId: string) => ipcRenderer.invoke('gapp-flows:run', flowId),
     },
 
     // The GApp window's own bridge. NOT the app's — this is Genie's renderer
@@ -1298,6 +1304,25 @@ const api = {
         openWindow: () => ipcRenderer.invoke('knowledge:open-window'),
     },
 
+    /**
+     * Flows — Genie's automation system, and the Flow Manager that runs it.
+     *
+     * `list()` returns the live run snapshot alongside the Flows on purpose:
+     * `flows:activity` is a broadcast, and a broadcast that fires before a window
+     * exists reaches nobody and is never replayed. Fetch, then subscribe.
+     */
+    flows: {
+        list: () => ipcRenderer.invoke('flows:list'),
+        /** One Flow's run history, newest first. */
+        runs: (flowId: string, limit?: number) =>
+            ipcRenderer.invoke('flows:runs', flowId, limit),
+        /** Arm or disarm. Reconciles the file watchers as well as the row. */
+        setEnabled: (flowId: string, enabled: boolean) =>
+            ipcRenderer.invoke('flows:set-enabled', flowId, enabled),
+        /** Start a Flow by hand. Resolves with the run log — refusals included. */
+        run: (flowId: string) => ipcRenderer.invoke('flows:run', flowId),
+    },
+
     files: {
         listTree: (
             workspacePath: string,
@@ -1902,6 +1927,37 @@ const api = {
             ) => cb(payload);
             ipcRenderer.on('knowledge:changed', handler);
             return () => ipcRenderer.off('knowledge:changed', handler);
+        },
+        /** A Flow started or finished. `busy` is what the header button
+         *  animates on; `running` is the per-row live state; `finished` carries
+         *  the closing run so an open manager can update that row's outcome
+         *  without a round trip. Pushed from the runtime's own start/finish
+         *  callbacks — there is no poller anywhere in this path. */
+        flowActivity: (
+            cb: (payload: {
+                running: string[];
+                busy: boolean;
+                finished?: {
+                    runId: string;
+                    flowId: string;
+                    event?: string;
+                    outcome: string;
+                    reason?: string;
+                    startedAt: number;
+                    finishedAt: number;
+                };
+            }) => void,
+        ) => {
+            const handler = (_e: unknown, payload: Parameters<typeof cb>[0]) => cb(payload);
+            ipcRenderer.on('flows:activity', handler);
+            return () => ipcRenderer.off('flows:activity', handler);
+        },
+        /** The stored Flows changed (armed, disarmed, added, removed) — a live
+         *  manager re-reads. Distinct from `flowActivity`, which is about runs. */
+        flowsChanged: (cb: () => void) => {
+            const handler = () => cb();
+            ipcRenderer.on('flows:changed', handler);
+            return () => ipcRenderer.off('flows:changed', handler);
         },
         /** A file was created/renamed/deleted on disk in a watched workspace
          *  (outside the renderer's own edits — an agent, a git op, a tool). The
