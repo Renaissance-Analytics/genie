@@ -53,6 +53,18 @@ export const IconAlert = ({ size = 14, ...p }: Props) =>
         p.className,
         p.style,
     );
+/** The drain roster's thumb (genie#389). Outline while an agent is still
+ *  working; the roster fills it with `currentColor` when the row goes green. */
+export const IconThumbUp = ({ size = 14, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <path d="M7 22V11" />
+            <path d="M11 22h6.6a2 2 0 0 0 2-1.7l1.1-7A2 2 0 0 0 18.7 11H15l.6-3.4A2.6 2.6 0 0 0 13 4.4L11 9.6a3 3 0 0 1-.8 1.2L9 12v10z" />
+        </>,
+        p.className,
+        p.style,
+    );
 export const IconPanelLeftOpen = ({ size = 18, ...p }: Props) =>
     wrap(
         size,

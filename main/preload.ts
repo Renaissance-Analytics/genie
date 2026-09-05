@@ -704,12 +704,30 @@ const api = {
             ipcRenderer.invoke('updater:restart') as Promise<{
                 ok: boolean;
                 error?: string;
+                /** genie#389 — the restart started a DRAIN instead of applying:
+                 *  live agents are being asked to hand off first. Watch the
+                 *  roster; the apply follows on its own when it clears. */
+                draining?: boolean;
             }>,
         getConfig: () => ipcRenderer.invoke('updater:config:get'),
         setConfig: (patch: { repo?: string; pollHours?: number }) =>
             ipcRenderer.invoke('updater:config:set', patch),
         changelog: (latest: string, fromVersion?: string) =>
             ipcRenderer.invoke('updater:changelog', latest, fromVersion),
+    },
+
+    /**
+     * The upgrade DRAIN (genie#389) — every live agent is asked to stop, write
+     * its handoff and call `thumbsUp` before the upgrade tears its terminal
+     * down. `satisfy` is the manual override for a wedged one: the user shuts
+     * it down by hand and presses its thumb, and the drain proceeds.
+     */
+    drain: {
+        snapshot: () => ipcRenderer.invoke('drain:snapshot') as Promise<unknown>,
+        begin: () => ipcRenderer.invoke('drain:begin') as Promise<unknown>,
+        satisfy: (agentId: string) =>
+            ipcRenderer.invoke('drain:satisfy', agentId) as Promise<unknown>,
+        cancel: () => ipcRenderer.invoke('drain:cancel') as Promise<unknown>,
     },
 
     // System clipboard via Electron MAIN (reliable; renderer navigator.clipboard
@@ -2114,6 +2132,13 @@ const api = {
             const handler = (_e: unknown, payload: unknown) => cb(payload);
             ipcRenderer.on('updater:status', handler);
             return () => ipcRenderer.off('updater:status', handler);
+        },
+        // The upgrade DRAIN's roster (genie#389). Pushed on every row change, so
+        // a thumb fills the moment it lands rather than at the next poll.
+        drainChanged: (cb: (snapshot: unknown) => void) => {
+            const handler = (_e: unknown, payload: unknown) => cb(payload);
+            ipcRenderer.on('drain:changed', handler);
+            return () => ipcRenderer.off('drain:changed', handler);
         },
         // GitHub capability status changed (boot check, connect/reconnect,
         // disconnect, explicit recheck). The renderer re-renders the resolve

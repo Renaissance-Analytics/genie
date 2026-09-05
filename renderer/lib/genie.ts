@@ -8,6 +8,7 @@ import type { BoardRead, ReviewOutcome } from './artboard-model';
 
 import { makeRemoteBridge } from './remote-bridge';
 import type { TynnHealth } from '../../main/mcp/tynn-health';
+import type { DrainSnapshot } from '../../main/agents/drain';
 import type { AgentTuiId, TuiDef } from '../../main/agents/registry';
 /* The agent MANAGER's wire types (Tynn #709 / story #263).
  *
@@ -3982,12 +3983,19 @@ export interface GenieApi {
         status: () => Promise<UpdaterStatus>;
         check: () => Promise<UpdaterStatus>;
         apply: () => Promise<{ ok: boolean; error?: string }>;
-        restart: () => Promise<{ ok: boolean; error?: string }>;
+        restart: () => Promise<{ ok: boolean; error?: string; draining?: boolean }>;
         getConfig: () => Promise<UpdaterConfig>;
         setConfig: (
             patch: Partial<UpdaterConfig>,
         ) => Promise<UpdaterConfig>;
         changelog: (latest: string, fromVersion?: string) => Promise<Changelog>;
+    };
+    /** The upgrade DRAIN's roster (genie#389). */
+    drain: {
+        snapshot: () => Promise<DrainSnapshot>;
+        begin: () => Promise<DrainSnapshot>;
+        satisfy: (agentId: string) => Promise<DrainSnapshot>;
+        cancel: () => Promise<DrainSnapshot>;
     };
     terminalSpec: {
         list: () => Promise<TerminalSpec[]>;
@@ -4689,6 +4697,8 @@ export interface GenieApi {
             }) => void,
         ) => () => void;
         updaterStatus: (cb: (status: UpdaterStatus) => void) => () => void;
+        /** The drain roster, pushed on every row change (genie#389). */
+        drainChanged: (cb: (snapshot: DrainSnapshot) => void) => () => void;
         updaterLog: (cb: (payload: { line: string }) => void) => () => void;
         /** GitHub capability status changed (boot check, connect, reconnect,
          *  disconnect, or an explicit recheck). The renderer raises/clears the

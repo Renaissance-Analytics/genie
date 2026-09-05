@@ -60,6 +60,42 @@ restart and **replays the history** afterwards (Tier 1). The processes restart,
 but your scrollback and working directories come back. See
 **[Terminal session persistence](05-session-persistence.md)**.
 
+## Draining agents before an upgrade
+
+If agents are running when you apply an update, Genie does not just close their
+terminals. It **drains** them first.
+
+1. Every live agent is sent one message: stop work, write a handoff, then call
+   `thumbsUp`.
+2. A **"waiting on" roster** appears under the title bar — one row per agent,
+   with an empty thumb while it is still working and a **green** one the moment
+   its answer lands.
+3. When every row is green, Genie installs the update and restarts.
+
+### An agent that stops answering
+
+A row that has gone quiet for a few minutes says **"not responding"** and turns
+amber, so a wedged agent is never mistaken for a slow one. When that happens,
+close that agent yourself and then **press the thumb on its row**. That counts
+as satisfied, and the upgrade goes ahead. Nothing waits indefinitely on one
+stuck agent, and **Cancel the upgrade** always abandons the whole thing rather
+than installing anyway.
+
+### Everything comes back, a few seconds apart
+
+Genie records what was running when the drain started — agents, hosted sites and
+background processes — and brings **that** back after the restart. Each agent
+picks up the handoff its previous run wrote.
+
+Two things about the restore are deliberate:
+
+- **Starts are spaced at least three seconds apart.** A dozen cold starts at
+  once, on a machine that has just finished an upgrade, is how ports collide and
+  startups crawl.
+- **Anything *you* stopped stays stopped.** A site you stopped or a process you
+  paused is not resurrected by an upgrade you did not choose. Genie restores what
+  *it* stopped; it never restarts what *you* stopped.
+
 ## Buttons in the Updater section
 
 - **Check for updates** — check now.

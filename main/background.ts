@@ -149,6 +149,12 @@ import { createHarnessTransportSink } from './agentinbox/transport-sink';
 import { agentShutdownReadiness } from './agents/shutdown-readiness';
 import { setPluginPanelOpenSink } from './plugins/registry';
 import { announceAgentUpgrade, withWorkstationOperator } from './agents/upgrade-announcement';
+import {
+    pendingDrainRestore,
+    runPendingDrainRestore,
+    upgradeDrainCleared,
+} from './agents/drain-service';
+import { shutdownReadinessPlan } from './agents/drain';
 import { agentModeByTerminal, agentModeFor } from './agents/agent-mode-source';
 import { MANUAL_RECOVERY, reconnectStrategy, type McpRecovery } from './agents/mcp-reconnect';
 import { terminalIsBlocked } from './agents/injection-guard';
@@ -1951,10 +1957,24 @@ app.whenReady().then(async () => {
     // + best-effort so it never blocks startup (the token may settle first).
     // Skipped under E2E — the mock owns the capability channels + state.
     if (!isE2E()) setTimeout(() => void runBootCapabilityCheck(), 4000).unref?.();
+    // Did a drained upgrade leave a restore list (genie#389)?
+    //
+    // Read ONCE and remembered. The restore CONSUMES the roster, and the two
+    // places that need the answer sit on opposite sides of it — asking again
+    // after it has run would answer "no drain was pending" and skip the
+    // catch-all the first answer deferred.
+    const drainRestorePending = pendingDrainRestore();
     // Start background Process service runners flagged autostart. Headless —
     // they run in the pty backend with no panel; the supervisor broadcasts
     // status to the workspace-row indicator + inline manager.
-    startAutostartProcesses();
+    //
+    // HELD when a drained upgrade left a restore list (genie#389). This pass
+    // starts everything at once, and the whole point of the drain's restore is
+    // that it does not: it brings back what was actually running, three seconds
+    // apart. So the restore goes first (from the dev-server boot block below,
+    // which is where the ordering seam is) and calls this afterwards as the
+    // catch-all for anything configured that the roster did not carry.
+    if (!drainRestorePending) startAutostartProcesses();
     // Re-arm every approved SCHEDULED task (a process spec with meta.schedule).
     // This is what makes a schedule survive quit/crash/auto-update: the timers
     // died with the process, the specs did not, so each is armed forward from
@@ -2433,7 +2453,31 @@ app.whenReady().then(async () => {
         // prompt carrying every site.
         const resumeHostBrowser = hostBrowserReconciler?.suspend();
         try {
-            await devLifecycle()?.onBoot();
+            await devLifecycle()?.onBoot({
+                // THE DRAIN'S RESTORE (genie#389), between adoption and the
+                // ordinary resume. Everything the drain recorded as running
+                // comes back here, >=3s apart, filtered again through the
+                // durable desired state genie#412 landed — so a site the user
+                // stopped, or a process they paused, is NOT resurrected by an
+                // upgrade they did not choose.
+                beforeResume: async () => {
+                    if (!drainRestorePending) return;
+                    await runPendingDrainRestore({
+                        onOutcome: (outcome) => {
+                            if (outcome.status === 'started') return;
+                            console.log(
+                                `[drain] restore ${outcome.status}: ${outcome.entry.kind} ` +
+                                    `${outcome.entry.label} — ${outcome.reason ?? ''}`,
+                            );
+                        },
+                    });
+                    // The catch-all the guard above deferred: anything
+                    // configured to autostart that the roster did not carry.
+                    // The restored ones are live by now, and the pass leaves a
+                    // live process alone.
+                    startAutostartProcesses();
+                },
+            });
         } catch (e) {
             console.error('[dev-server] boot adoption failed', e);
         } finally {
@@ -2490,7 +2534,15 @@ app.whenReady().then(async () => {
         const kind = hostBackendKind();
         const fullShutdown = forReset || !isHostBacked() ||
             (shouldKillHostForUpdate(forUpdate, kind) && detachedHostPinsBinary());
-        if (fullShutdown) {
+        // A drained upgrade already asked every agent this exact question and
+        // waited for the answer (genie#389). Asking again would put a second
+        // nudge in each one's box on the way out and make the user watch a
+        // 30-second timeout at the end of an upgrade they just spent time
+        // draining. Every other quit — a reset, an ordinary shutdown, an apply
+        // that skipped the drain — keeps the barrier it has always had.
+        const askReadiness =
+            shutdownReadinessPlan({ forUpdate, drainCleared: upgradeDrainCleared() }) === 'ask';
+        if (fullShutdown && askReadiness) {
             const targets = listWorkspaces().flatMap((workspace) =>
                 listWorkspaceAgents(workspace.id).flatMap((agent) => {
                     if (!agent.terminal_spec_id || !isTerminalLive(agent.terminal_spec_id)) return [];

@@ -256,6 +256,29 @@ function persistIntent(id: string, key: 'was_running' | 'user_stopped', value: b
     }
 }
 
+/**
+ * Is a pty actually running for this process RIGHT NOW?
+ *
+ * The PTY BACKEND is asked, not the supervisor's own status map, and the
+ * difference matters at exactly the moment this is used. On a launch that
+ * reattached to a surviving detached host the map is empty — it belongs to a
+ * process image that no longer exists — while the ptys are very much alive, so
+ * a map-based answer would spawn a duplicate over every one of them. A restart
+ * in flight has no pty either way, and is covered by `startProcess`'s own
+ * `restarting` guard.
+ *
+ * Defensive: a backend that cannot be asked reports NOT live, so boot still
+ * starts things. The cost of being wrong here is a redundant restart; the cost
+ * of the opposite default is a service that never comes back.
+ */
+function isProcessLive(specId: string): boolean {
+    try {
+        return terminalManager().isLive(specId) === true;
+    } catch {
+        return false;
+    }
+}
+
 /** Current status of every managed process (id → status). */
 export function getProcessStatuses(): Record<string, ProcessStatus> {
     const out: Record<string, ProcessStatus> = {};
@@ -529,6 +552,15 @@ export function startAutostartProcesses(): void {
         if (
             spec.type === 'process' &&
             spec.enabled !== false &&
+            // Already up — leave it EXACTLY as it is. `startProcess` treats a
+            // redundant start as a RESTART, so this pass used to kill and
+            // respawn everything a surviving pty-host had kept alive, despite
+            // the paragraph above saying it no-ops. Latent until genie#389's
+            // drain restore began starting processes before this ran: the
+            // restore brings them back three seconds apart and this then
+            // restarted every one of them in a single tick, which is the
+            // thundering herd the stagger exists to prevent.
+            !isProcessLive(spec.id) &&
             // Genie may restore what IT stopped; it may never restart what the
             // USER stopped. Only an explicit start lifts this.
             spec.meta?.user_stopped !== true &&
