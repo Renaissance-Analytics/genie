@@ -1,51 +1,64 @@
 import { describe, expect, it, vi } from 'vitest';
 import { runFlow } from '@particle-academy/fancy-flow/engine';
 import { buildFlowExecutors, type FlowDispatch } from '../executors';
+import { newFlowNode } from '../graph';
 
 /**
- * The ONE door. Every way a flow reaches Genie goes through this file.
- *
- * fancy-flow dispatches executors on the six coarse node types, never on
- * `data.kind` (verified — see the research note). That is usually described as a
- * footgun, and it is, but taken deliberately it is the better security shape:
- * Genie registers a SINGLE `action` executor, and that function is the only place
- * a node's kind is turned into a Genie call. There is no per-kind executor that
- * could be added later with its own path to the bridge.
+ * The ONE door. Every way a flow reaches Genie goes through `executors.ts`.
  *
  * What these tests defend, in order of how badly it would hurt:
  *
  *   1. A Fancy builtin like `api_request` — arbitrary outbound HTTP — must never
  *      reach Genie or the network. fancy-flow ships no executor for it, so it is
- *      inert *unless a host implements it*. Genie does not, and this asserts that
- *      staying true rather than trusting it to.
+ *      inert *unless a host implements it*. Genie refuses it, and this asserts
+ *      that rather than trusting it.
  *   2. A node cannot name the app it acts as. Identity comes from the run, the
  *      way it comes from the window in `bridge.ts`.
  *   3. A refusal STOPS the flow. A refused step that let the graph carry on would
  *      turn "permission denied" into "silently did half the automation".
+ *
+ * ## Every node here goes through the real `runFlow`
+ *
+ * This file used to call `executors[node.type]` itself. That assumed away the
+ * thing most worth checking — whether the engine can FIND the executor — and it
+ * is how the coarse-type bug survived: the suite hand-wrote graphs in a shape
+ * `<FlowEditor>` stopped producing at v0.48, so every node a user could actually
+ * drag onto the canvas aborted while the tests stayed green.
+ *
+ * So `runNode` drives `runFlow` on a one-node graph, and the nodes come from
+ * {@link newFlowNode} — the same function that builds a node everywhere else in
+ * Genie, and a mirror of the editor's `addNode`. A test that builds its input in
+ * a shape the product cannot produce is not testing the product.
  */
 
 const dispatchOk = (): FlowDispatch =>
     vi.fn(async () => ({ ok: true as const, result: { done: true } }));
 
-const node = (id: string, type: string, kind: string, config?: Record<string, unknown>) => ({
-    id,
-    type,
-    position: { x: 0, y: 0 },
-    data: { kind, label: id, ...(config ? { config } : {}) },
-});
+/** A node of `kind`, built the way the canvas builds one, with `config` applied. */
+function node(id: string, kind: string, config?: Record<string, unknown>) {
+    const built = newFlowNode(kind, { x: 0, y: 0 }, id);
+    if (!built) throw new Error(`no registered kind called ${kind}`);
+    if (config) built.data.config = { ...built.data.config, ...config };
+    return built;
+}
 
-/** Call one executor directly, with the ctx `runFlow` would have built. */
+/**
+ * Run ONE node through the engine and hand back what it produced.
+ *
+ * Throws on a failed run, so the `.rejects.toThrow()` assertions below are about
+ * the flow stopping — which is the property, not an implementation detail of how
+ * an executor signals refusal.
+ */
 async function runNode(
     executors: ReturnType<typeof buildFlowExecutors>,
-    n: ReturnType<typeof node>,
+    n: { id: string },
     inputs: Record<string, unknown> = {},
 ) {
-    const executor = executors[n.type as keyof typeof executors];
-    if (!executor) throw new Error(`no executor for type ${n.type}`);
-    const abort = (reason?: string) => {
-        throw new Error(reason ?? 'aborted');
-    };
-    return executor({ node: n as never, inputs, abort: abort as never, emit: () => {} });
+    const result = await runFlow({ nodes: [n], edges: [] } as never, executors as never, () => {}, {
+        initialInputs: { [n.id]: inputs },
+    });
+    if (!result.ok) throw new Error(result.error);
+    return (result.outputs as Record<string, unknown>)[n.id];
 }
 
 describe('a granted Genie step', () => {
@@ -53,7 +66,7 @@ describe('a granted Genie step', () => {
         const dispatch = dispatchOk();
         const out = await runNode(
             buildFlowExecutors('com.example.trader', dispatch),
-            node('a', 'action', 'genie.manageSite', { action: 'list' }),
+            genieNode('a', 'genie.manageSite', { action: 'list' }),
         );
 
         expect(dispatch).toHaveBeenCalledWith('com.example.trader', {
@@ -68,7 +81,7 @@ describe('a granted Genie step', () => {
         const dispatch = dispatchOk();
         await runNode(
             buildFlowExecutors('app', dispatch),
-            node('a', 'action', 'genie.manageSite', { workspaceId: 'ws-two', action: 'list' }),
+            genieNode('a', 'genie.manageSite', { workspaceId: 'ws-two', action: 'list' }),
         );
 
         expect(dispatch).toHaveBeenCalledWith('app', {
@@ -84,10 +97,34 @@ describe('a granted Genie step', () => {
         const dispatch = dispatchOk();
         await runNode(
             buildFlowExecutors('the-real-app', dispatch),
-            node('a', 'action', 'genie.manageSite', { appId: 'some-other-app' }),
+            genieNode('a', 'genie.manageSite', { appId: 'some-other-app' }),
         );
 
         expect(dispatch).toHaveBeenCalledWith('the-real-app', expect.anything());
+    });
+});
+
+/**
+ * A Genie node, hand-built.
+ *
+ * Genie's kinds are not in fancy's registry yet at this layer, so `newFlowNode`
+ * cannot make one — but the SHAPE must be identical to what it produces, or this
+ * file reintroduces the very drift it exists to prevent. Asserted below.
+ */
+function genieNode(id: string, kind: string, config: Record<string, unknown> = {}) {
+    return { id, type: kind, position: { x: 0, y: 0 }, data: { kind, label: id, config } };
+}
+
+describe('a hand-built Genie node', () => {
+    it('has the same shape a canvas-built node has', () => {
+        const canvas = node('c', '@particle-academy/log');
+        const genie = genieNode('g', 'genie.manageSite');
+
+        // `type === data.kind` is the invariant that broke. Pinning it here stops
+        // the helper above drifting from `newFlowNode` unnoticed.
+        expect(canvas.type).toBe(canvas.data.kind);
+        expect(genie.type).toBe(genie.data.kind);
+        expect(Object.keys(genie.data).sort()).toEqual(Object.keys(canvas.data).sort());
     });
 });
 
@@ -100,12 +137,12 @@ describe('a step that must never reach Genie', () => {
         const dispatch = dispatchOk();
         const executors = buildFlowExecutors('app', dispatch);
 
-        await expect(
-            runNode(executors, node('x', 'action', '@particle-academy/api_request')),
-        ).rejects.toThrow();
-        await expect(
-            runNode(executors, node('x', 'action', '@particle-academy/webhook_out')),
-        ).rejects.toThrow();
+        await expect(runNode(executors, node('x', '@particle-academy/api_request'))).rejects.toThrow(
+            /arbitrary web requests/,
+        );
+        await expect(runNode(executors, node('y', '@particle-academy/webhook_out'))).rejects.toThrow(
+            /arbitrary URLs/,
+        );
         expect(dispatch).not.toHaveBeenCalled();
     });
 
@@ -113,22 +150,42 @@ describe('a step that must never reach Genie', () => {
         const dispatch = dispatchOk();
 
         await expect(
-            runNode(
-                buildFlowExecutors('app', dispatch),
-                node('x', 'action', 'genie.submitFeedback'),
-            ),
+            runNode(buildFlowExecutors('app', dispatch), genieNode('x', 'genie.submitFeedback')),
         ).rejects.toThrow();
         expect(dispatch).not.toHaveBeenCalled();
     });
 
     it('aborts on a node with no kind at all', async () => {
         const dispatch = dispatchOk();
-        const bare = { id: 'x', type: 'action', position: { x: 0, y: 0 }, data: { label: 'x' } };
+        const bare = { id: 'x', position: { x: 0, y: 0 }, data: { label: 'x' } };
 
         await expect(
             runNode(buildFlowExecutors('app', dispatch), bare as never),
         ).rejects.toThrow();
         expect(dispatch).not.toHaveBeenCalled();
+    });
+
+    it('aborts on a marketplace node Genie never took, rather than skipping it', async () => {
+        // A kind from a package Genie does not vendor, or from a newer fancy-flow
+        // than this build knows. Unconsidered must mean refused, not ignored.
+        const dispatch = dispatchOk();
+
+        await expect(
+            runNode(
+                buildFlowExecutors('app', dispatch),
+                { id: 'x', type: '@acme/salesforce_upsert', position: { x: 0, y: 0 },
+                  data: { kind: '@acme/salesforce_upsert', label: 'x', config: {} } } as never,
+            ),
+        ).rejects.toThrow(/does not know how to run/);
+        expect(dispatch).not.toHaveBeenCalled();
+    });
+
+    it('refuses a subflow, because whose permissions it would run under is undecided', async () => {
+        // Was asserted by the ABSENCE of a `subgraph` registry key, which a
+        // wildcard registry makes vacuously true. Assert the behaviour instead.
+        await expect(
+            runNode(buildFlowExecutors('app', dispatchOk()), node('s', '@particle-academy/subflow')),
+        ).rejects.toThrow(/whose permissions/);
     });
 });
 
@@ -143,19 +200,16 @@ describe('a refusal from the bridge', () => {
         }));
 
         await expect(
-            runNode(
-                buildFlowExecutors('app', dispatch),
-                node('x', 'action', 'genie.manageTerminals'),
-            ),
+            runNode(buildFlowExecutors('app', dispatch), genieNode('x', 'genie.manageTerminals')),
         ).rejects.toThrow(/Run commands/);
     });
 });
 
-describe('the rest of the six node types', () => {
+describe('the built-in logic steps Genie implements', () => {
     it('starts a run from a trigger', async () => {
         const out = await runNode(
             buildFlowExecutors('app', dispatchOk()),
-            node('t', 'trigger', '@particle-academy/manual_trigger'),
+            node('t', '@particle-academy/manual_trigger'),
         );
 
         expect(out).toBeDefined();
@@ -164,26 +218,36 @@ describe('the rest of the six node types', () => {
     it('passes a value through an output node', async () => {
         const out = await runNode(
             buildFlowExecutors('app', dispatchOk()),
-            node('o', 'output', '@particle-academy/output'),
+            node('o', '@particle-academy/output'),
             { value: 42 },
         );
 
         expect(out).toBe(42);
     });
 
-    it('branches on the truthiness of its input', async () => {
+    it('routes true and false on a real condition', async () => {
         const executors = buildFlowExecutors('app', dispatchOk());
-        const d = node('d', 'decision', '@particle-academy/branch');
+        const branchOn = (right: string) =>
+            node('d', '@particle-academy/branch', {
+                match: 'all',
+                conditions: [{ left: '{{ value }}', operator: 'eq', right }],
+            });
 
-        expect(await runNode(executors, d, { value: true })).toMatchObject({ branch: 'true' });
-        expect(await runNode(executors, d, { value: 0 })).toMatchObject({ branch: 'false' });
+        expect(await runNode(executors, branchOn('hit'), { value: 'hit' })).toMatchObject({
+            branch: 'true',
+        });
+        expect(await runNode(executors, branchOn('hit'), { value: 'miss' })).toMatchObject({
+            branch: 'false',
+        });
     });
 
-    it('leaves subgraph deliberately unregistered, so it fails closed', () => {
-        // Flow-to-flow references need a resolver and an answer about whose grant
-        // the child runs under. Until that is decided, a subflow node must not
-        // half-work: `runFlow` aborts on an unregistered type.
-        expect(buildFlowExecutors('app', dispatchOk())).not.toHaveProperty('subgraph');
+    it('refuses a branch with no conditions instead of guessing a direction', async () => {
+        await expect(
+            runNode(
+                buildFlowExecutors('app', dispatchOk()),
+                node('d', '@particle-academy/branch', { conditions: [] }),
+            ),
+        ).rejects.toThrow(/no conditions/);
     });
 });
 
@@ -192,8 +256,8 @@ describe('end to end, through the real engine', () => {
         const dispatch = dispatchOk();
         const graph = {
             nodes: [
-                node('t', 'trigger', '@particle-academy/manual_trigger'),
-                node('a', 'action', 'genie.manageSite', { action: 'list' }),
+                node('t', '@particle-academy/manual_trigger'),
+                genieNode('a', 'genie.manageSite', { action: 'list' }),
             ],
             edges: [{ id: 'e', source: 't', target: 'a' }],
         };
@@ -208,9 +272,9 @@ describe('end to end, through the real engine', () => {
         const dispatch: FlowDispatch = vi.fn(async () => ({ ok: false as const, error: 'no' }));
         const graph = {
             nodes: [
-                node('t', 'trigger', '@particle-academy/manual_trigger'),
-                node('a', 'action', 'genie.manageTerminals'),
-                node('b', 'action', 'genie.manageSite'),
+                node('t', '@particle-academy/manual_trigger'),
+                genieNode('a', 'genie.manageTerminals'),
+                genieNode('b', 'genie.manageSite'),
             ],
             edges: [
                 { id: 'e1', source: 't', target: 'a' },
@@ -221,7 +285,7 @@ describe('end to end, through the real engine', () => {
         const res = await runFlow(graph as never, buildFlowExecutors('app', dispatch) as never);
 
         expect(res.ok).toBe(false);
-        // The step AFTER the refusal must never have run.
+        // The step AFTER the refused one never ran — the whole point.
         expect(dispatch).toHaveBeenCalledTimes(1);
     });
 });

@@ -46,6 +46,8 @@ import { runStoredFlow, type FlowRunnerDeps } from './runner';
 import { reconcileFlowSchedules } from './scheduler';
 import { deleteFlow, getFlow, listFlowsForApp, upsertFlow } from './store';
 import { listGenieNodeKinds, paletteForCapabilities } from './nodes';
+import { genieNodeDefinitions } from './kinds';
+import { starterFlowGraph } from './graph';
 import { declaredTriggers } from './triggers';
 import { decideFlowAdmission } from './admission';
 
@@ -100,6 +102,32 @@ export function registerFlowsIpc(deps: ServerDeps): void {
 
     ipcMain.handle('gapp-flows:get', (_e, flowId: string) => getFlow(flowId));
 
+    /**
+     * A new flow, born here rather than in the renderer.
+     *
+     * The starter graph is built by `newFlowNode` against the live node
+     * registry, and the renderer must not import that: a `main/` module the
+     * renderer reaches has to be a LEAF (see
+     * `renderer/lib/__tests__/renderer-main-boundary.test.ts`), and the graph
+     * builder pulls fancy-flow's engine. Values cross by IPC — which is also the
+     * better answer, because minting a flow is main's job anyway: it owns the
+     * ids, the table, and what a new flow starts as.
+     */
+    ipcMain.handle('gapp-flows:create', (_e, appId: string, name?: string) => {
+        const id = `flow-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+        upsertFlow({
+            id,
+            appId,
+            name: typeof name === 'string' && name.trim() !== '' ? name.trim() : 'New flow',
+            graph: starterFlowGraph(),
+            // Born disarmed. Arming a flow is a separate decision, made once the
+            // author can see what the flow actually does.
+            enabled: false,
+        });
+        reconcileFlowSchedules();
+        return getFlow(id);
+    });
+
     ipcMain.handle(
         'gapp-flows:save',
         (_e, input: { id: string; appId: string; name: string; graph: unknown; enabled?: boolean }) => {
@@ -149,8 +177,28 @@ export function registerFlowsIpc(deps: ServerDeps): void {
      */
     ipcMain.handle('gapp-flows:palette', (_e, appId: string) => {
         const grant = grantFor(appId);
+        const granted = grant && !grant.revoked ? paletteForCapabilities(grant.capabilities) : [];
+        const byKind = new Map(genieNodeDefinitions().map((d) => [d.name, d] as const));
+
         return {
-            available: grant && !grant.revoked ? paletteForCapabilities(grant.capabilities) : [],
+            // The DEFINITIONS, not just the names. The renderer registers these
+            // with its own copy of fancy-flow's registry — registries are
+            // per-process, and `<FlowEditor>` reads the renderer's — so the two
+            // processes have to be handed the same objects rather than each
+            // building its own from a list of tool names.
+            //
+            // Filtered to what the app HOLDS, and that filtering is the palette
+            // restriction: fancy-flow's palette can be narrowed by category but
+            // not by kind, and a GApp window is its own renderer process, so the
+            // set this window registers IS the set it can offer. A step certain
+            // to be refused at run time never appears.
+            available: granted.flatMap((k) => {
+                const def = byKind.get(k.kind);
+                return def ? [def] : [];
+            }),
+            // Names only. For a surface that wants to show what is possible but
+            // not yet permitted — which must never be registerable, or it would
+            // become authorable.
             all: listGenieNodeKinds(),
         };
     });

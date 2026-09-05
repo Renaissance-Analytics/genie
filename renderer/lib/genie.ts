@@ -60,10 +60,46 @@ export type BackendKind = 'tynn' | 'aionima';
 /** A Genie tool presented as a droppable step. Derived from the capability model. */
 export interface FlowNodeKindView {
     kind: string;
+    /** The pre-namespace spelling an older stored graph may carry. */
+    legacyKind: string;
     tool: string;
     capability: string;
     label: string;
     risk: 'standard' | 'high';
+}
+
+/**
+ * A Genie step as something the CANVAS can register and draw.
+ *
+ * `FlowNodeKindView` says which steps exist; this says what one IS — ports,
+ * config fields, how it behaves on a retry. The renderer needs the second
+ * because fancy-flow's node registry is per-process: main knowing a kind does
+ * nothing for the palette, so the definition itself crosses IPC and both
+ * processes register the same object.
+ *
+ * Structurally identical to `FlowNodeDefinitionView` in `flow-kinds.ts`, which
+ * is where the registering happens.
+ */
+export interface FlowNodeDefinitionView {
+    name: string;
+    aliases: string[];
+    tool: string;
+    capability: string;
+    category: 'io' | 'human' | 'data' | 'output';
+    label: string;
+    description: string;
+    configSchema: {
+        key: string;
+        label: string;
+        type: 'text' | 'textarea' | 'number' | 'select' | 'switch' | 'json';
+        description?: string;
+        required?: boolean;
+        default?: unknown;
+        options?: { value: string; label: string }[];
+    }[];
+    inputs: { id: string }[];
+    outputs: { id: string }[];
+    sideEffects: 'none' | 'idempotent' | 'unsafe-to-replay';
 }
 
 /** What starts a flow, read off its graph. */
@@ -3249,6 +3285,8 @@ export interface GenieApi {
     gappFlows: {
         list: (appId: string) => Promise<FlowSummaryView[]>;
         get: (flowId: string) => Promise<FlowView | null>;
+        /** Mint a new flow, starter graph and all. Born disarmed. */
+        create: (appId: string, name?: string) => Promise<FlowView | null>;
         save: (input: {
             id: string;
             appId: string;
@@ -3259,8 +3297,16 @@ export interface GenieApi {
         remove: (flowId: string) => Promise<boolean>;
         setEnabled: (flowId: string, enabled: boolean) => Promise<FlowView | null>;
         check: (appId: string, graph: unknown) => Promise<FlowAdmissionView>;
+        /**
+         * What this app may author with.
+         *
+         * `available` carries full DEFINITIONS because the renderer registers
+         * them — registries are per-process and `<FlowEditor>` reads the
+         * renderer's. `all` is names only, for a surface that shows what is
+         * possible but not yet permitted: shown, and deliberately unauthorable.
+         */
         palette: (appId: string) => Promise<{
-            available: FlowNodeKindView[];
+            available: FlowNodeDefinitionView[];
             all: FlowNodeKindView[];
         }>;
         run: (flowId: string) => Promise<FlowRunOutcomeView>;

@@ -283,6 +283,8 @@ const api = {
     gappFlows: {
         list: (appId: string) => ipcRenderer.invoke('gapp-flows:list', appId),
         get: (flowId: string) => ipcRenderer.invoke('gapp-flows:get', flowId),
+        create: (appId: string, name?: string) =>
+            ipcRenderer.invoke('gapp-flows:create', appId, name),
         save: (input: { id: string; appId: string; name: string; graph: unknown; enabled?: boolean }) =>
             ipcRenderer.invoke('gapp-flows:save', input),
         remove: (flowId: string) => ipcRenderer.invoke('gapp-flows:delete', flowId),

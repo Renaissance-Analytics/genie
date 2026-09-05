@@ -30,16 +30,32 @@ import { APP_CAPABILITIES, isAppCapability, type CapabilityRisk } from '../capab
  * Namespace for every Genie node kind.
  *
  * Fancy's builtins live in the same id space (`@particle-academy/api_request`),
- * and marketplace nodes are namespaced by vendor. Genie takes its own prefix so a
- * Genie node and a Fancy node can never be confused for one another — in the
- * editor palette, in a stored graph, or in the executor's lookup.
+ * and marketplace nodes are namespaced by vendor. Genie takes its own namespace
+ * so a Genie node and a Fancy node can never be confused for one another — in
+ * the editor palette, in a stored graph, or in the executor's lookup.
+ *
+ * `@scope/name` rather than the `genie.` prefix this used to write, because that
+ * is the shape every other kind in the registry has and the one
+ * `validateNodeManifest` requires: *"a bare id makes stored graphs ambiguous,
+ * and that is unfixable once documents carry it."*
  */
-export const GENIE_NODE_PREFIX = 'genie.';
+export const GENIE_NODE_NAMESPACE = '@genie/';
+
+/**
+ * The spelling Genie kinds were written with before the namespace changed.
+ *
+ * Still READ, never written. A stored graph outlives the spelling it was made
+ * with, and a flow that quietly stopped resolving would present as a permissions
+ * problem — the hardest kind of bug to trace back to a rename.
+ */
+export const GENIE_NODE_LEGACY_PREFIX = 'genie.';
 
 /** A Genie tool, presented as something an author can drop on a canvas. */
 export interface GenieFlowNodeKind {
-    /** The `data.kind` written into the graph, e.g. `genie.manageTerminals`. */
+    /** The `data.kind` written into the graph, e.g. `@genie/manageTerminals`. */
     kind: string;
+    /** The spelling older graphs carry. Read, never written. */
+    legacyKind: string;
     /** The Genie tool this node calls. */
     tool: string;
     /** The capability that governs it — what a consent prompt would name. */
@@ -52,7 +68,12 @@ export interface GenieFlowNodeKind {
 
 /** The node kind that runs `tool`. Says nothing about whether it EXISTS. */
 export function nodeKindForTool(tool: string): string {
-    return `${GENIE_NODE_PREFIX}${tool}`;
+    return `${GENIE_NODE_NAMESPACE}${tool}`;
+}
+
+/** The pre-namespace spelling of the same kind. Read-only compatibility. */
+export function legacyNodeKindForTool(tool: string): string {
+    return `${GENIE_NODE_LEGACY_PREFIX}${tool}`;
 }
 
 /**
@@ -64,6 +85,7 @@ export function nodeKindForTool(tool: string): string {
 const NODE_KINDS: readonly GenieFlowNodeKind[] = APP_CAPABILITIES.flatMap((capability) =>
     capability.tools.map((tool) => ({
         kind: nodeKindForTool(tool),
+        legacyKind: legacyNodeKindForTool(tool),
         tool,
         capability: capability.key,
         label: capability.label,
@@ -71,8 +93,19 @@ const NODE_KINDS: readonly GenieFlowNodeKind[] = APP_CAPABILITIES.flatMap((capab
     })),
 );
 
+/**
+ * Both spellings resolve, and the map is the ONLY place that is true.
+ *
+ * Not a `startsWith` on either prefix, and not the registry either. A LOOKUP is
+ * what makes `@genie/submitFeedback` — an ungrantable tool, hand-written by an
+ * app hoping the executor trusts the string — resolve to nothing: the name was
+ * never in the map to begin with. And keying it here rather than relying on the
+ * kind being registered means the answer does not depend on whether
+ * `registerGenieKinds()` has run yet, which in a test or an early boot it may
+ * not have.
+ */
 const BY_KIND: ReadonlyMap<string, GenieFlowNodeKind> = new Map(
-    NODE_KINDS.map((n) => [n.kind, n] as const),
+    NODE_KINDS.flatMap((n) => [[n.kind, n] as const, [n.legacyKind, n] as const]),
 );
 
 export function listGenieNodeKinds(): readonly GenieFlowNodeKind[] {
@@ -94,6 +127,20 @@ export function genieNodeKind(kind: string): GenieFlowNodeKind | null {
  */
 export function toolForNodeKind(kind: string): string | null {
     return BY_KIND.get(kind)?.tool ?? null;
+}
+
+/**
+ * Is this kind CLAIMING to be a Genie step, whether or not it is a real one?
+ *
+ * The distinction admission needs. A kind outside Genie's namespace is somebody
+ * else's node and none of Genie's business; a kind INSIDE it that resolves to no
+ * tool is a broken graph — a typo, a removed tool, or a forgery — and is refused
+ * rather than ignored.
+ */
+export function isGenieNodeKind(kind: string): boolean {
+    return (
+        kind.startsWith(GENIE_NODE_NAMESPACE) || kind.startsWith(GENIE_NODE_LEGACY_PREFIX)
+    );
 }
 
 /**

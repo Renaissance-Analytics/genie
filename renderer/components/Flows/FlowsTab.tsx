@@ -21,31 +21,6 @@ interface Props {
     appId: string;
 }
 
-/**
- * What a new flow starts as.
- *
- * A manual trigger, and nothing else. Not an empty graph: admission refuses one
- * (an empty graph is nearly always a failed load or a bad edit, and reporting
- * success for it hides both), so a new flow would open already complaining.
- */
-function starterGraph() {
-    return {
-        nodes: [
-            {
-                id: 'start',
-                type: 'trigger',
-                position: { x: 80, y: 80 },
-                data: {
-                    kind: '@particle-academy/manual_trigger',
-                    label: 'Start',
-                    config: {},
-                },
-            },
-        ],
-        edges: [],
-    };
-}
-
 /** "Runs daily at 03:00", roughly — enough for a list row. */
 function describeTriggers(triggers: FlowTriggerView[]): string {
     if (triggers.length === 0) return 'No trigger';
@@ -76,12 +51,13 @@ export default function FlowsTab({ appId }: Props) {
     }, [refresh]);
 
     const create = useCallback(async () => {
-        // Ids are minted here rather than by the database so the editor can open
-        // immediately on the row it just made.
-        const id = `flow-${Date.now().toString(36)}`;
-        await api().gappFlows.save({ id, appId, name: 'New flow', graph: starterGraph() });
+        // Main mints it — the id, and the graph a new flow starts as. The
+        // renderer cannot build that graph itself: it needs the live node
+        // registry, and a `main/` module the renderer imports has to be a leaf
+        // (`renderer-main-boundary.test.ts`). Values cross by IPC.
+        const flow = await api().gappFlows.create(appId);
         await refresh();
-        setEditing(id);
+        if (flow) setEditing(flow.id);
     }, [appId, refresh]);
 
     const remove = useCallback(

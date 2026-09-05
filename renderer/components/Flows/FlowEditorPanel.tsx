@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { FlowEditor } from '@particle-academy/fancy-flow';
 import '@particle-academy/fancy-flow/styles.css';
+import { registerFlowKinds } from '../../lib/flow-kinds';
 import type { FlowAdmissionView, FlowRunOutcomeView } from '../../lib/genie';
 
 /**
@@ -27,6 +28,18 @@ import type { FlowAdmissionView, FlowRunOutcomeView } from '../../lib/genie';
  * unfinished flow would be unusable. What the panel does instead is CHECK
  * continuously and show the refusals inline, so the problem is visible while it
  * is being made rather than at 3am on the first scheduled fire.
+ *
+ * ## The palette is fetched, and the canvas WAITS for it
+ *
+ * fancy-flow's node registry is per-process, so Genie's steps have to be
+ * registered here or the palette shows only Fancy's builtins — every one of
+ * which the executor refuses. That is exactly what shipped: the kinds existed in
+ * main, on an IPC channel nothing called.
+ *
+ * The editor is not rendered until they are registered. `<FlowEditor>` builds
+ * its node-type map on mount, so a canvas that mounted first would draw every
+ * Genie node as a bare default box and keep doing so until something forced it
+ * to rebuild — which looks like a rendering bug and is really a race.
  */
 
 interface Props {
@@ -45,7 +58,43 @@ export default function FlowEditorPanel({ appId, flowId }: Props) {
     const [run, setRun] = useState<FlowRunOutcomeView | null>(null);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [kindsReady, setKindsReady] = useState(false);
     const checkTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    /**
+     * Register the steps this app may author with, then let the canvas mount.
+     *
+     * The set registered IS the palette: fancy-flow narrows a palette by
+     * category, not by kind, and a GApp window is its own renderer process
+     * acting for one app — so registering only what the grant covers means the
+     * canvas cannot offer a step certain to be refused at run time.
+     */
+    useEffect(() => {
+        let undo: (() => void) | null = null;
+        let live = true;
+
+        void window.genie.gappFlows
+            .palette(appId)
+            .then((palette) => {
+                if (!live) return;
+                undo = registerFlowKinds(palette.available);
+            })
+            .catch(() => {
+                // A palette that failed to load must not leave a blank panel.
+                // Fancy's own steps still work, and the message says what is
+                // missing rather than letting the author wonder why the Genie
+                // steps are absent.
+                if (live) setError('Genie’s own steps could not be loaded, so the palette is incomplete.');
+            })
+            .finally(() => {
+                if (live) setKindsReady(true);
+            });
+
+        return () => {
+            live = false;
+            undo?.();
+        };
+    }, [appId]);
 
     useEffect(() => {
         let live = true;
@@ -127,7 +176,7 @@ export default function FlowEditorPanel({ appId, flowId }: Props) {
         }
     }, [appId, enabled, flowId, graph, name]);
 
-    if (!graph) {
+    if (!graph || !kindsReady) {
         return <div className="p-4 text-sm opacity-70">{error ?? 'Loading…'}</div>;
     }
 

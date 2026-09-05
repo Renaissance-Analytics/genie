@@ -32,7 +32,7 @@
  */
 
 import { decideAppCall, type AppGrant } from '../bridge-decision';
-import { GENIE_NODE_PREFIX, toolForNodeKind } from './nodes';
+import { isGenieNodeKind, toolForNodeKind } from './nodes';
 
 /**
  * The minimum Genie needs to read off a node.
@@ -145,7 +145,7 @@ export function decideFlowAdmission(
             // Either way it would fail closed at run time, but only AFTER
             // everything upstream had already run. That is the exact outcome
             // admission exists to prevent, so it is refused here instead.
-            if (!kind.startsWith(GENIE_NODE_PREFIX)) continue;
+            if (!isGenieNodeKind(kind)) continue;
             refusals.push({
                 nodeId,
                 ...(label ? { label } : {}),

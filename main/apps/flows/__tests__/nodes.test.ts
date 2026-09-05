@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-    GENIE_NODE_PREFIX,
+    GENIE_NODE_NAMESPACE,
     listGenieNodeKinds,
     nodeKindForTool,
     paletteForCapabilities,
@@ -36,7 +36,11 @@ describe('the palette is derived from APP_CAPABILITIES', () => {
         const terminals = listGenieNodeKinds().find((k) => k.tool === 'manageTerminals');
 
         expect(terminals).toMatchObject({
-            kind: 'genie.manageTerminals',
+            kind: '@genie/manageTerminals',
+            // The pre-namespace spelling is still carried, and still READ, so a
+            // graph stored before the rename resolves rather than looking like a
+            // permissions failure.
+            legacyKind: 'genie.manageTerminals',
             tool: 'manageTerminals',
             capability: 'terminals',
             risk: 'high',
@@ -46,7 +50,7 @@ describe('the palette is derived from APP_CAPABILITIES', () => {
     it('namespaces every kind, so a Genie node can never collide with a Fancy builtin', () => {
         // `@particle-academy/api_request` and friends live in the same id space.
         for (const k of listGenieNodeKinds()) {
-            expect(k.kind.startsWith(GENIE_NODE_PREFIX)).toBe(true);
+            expect(k.kind.startsWith(GENIE_NODE_NAMESPACE)).toBe(true);
         }
     });
 });

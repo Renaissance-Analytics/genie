@@ -3571,7 +3571,7 @@ function readStateNote(state: TerminalReadState | undefined): string {
  * exist outside its permission model, and that check is only as good as the list
  * it reads. Tools are filtered only when their Host capability is not wired.
  */
-const CORE_TOOLS = [
+export const CORE_TOOLS = [
     IMDONE_TOOL,
     THUMBS_UP_TOOL,
     CHECK_ISSUES_TOOL,
