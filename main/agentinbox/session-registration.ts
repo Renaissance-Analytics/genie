@@ -7,6 +7,14 @@ import { isSafeSessionId } from './session-capture';
  * terminal's persisted `agent_id` is therefore the durable identity: update its
  * metadata and the live broker record in place so inbox cursors, queued mail,
  * channel membership, and DM history remain attached to the same agent.
+ *
+ * IDEMPOTENT, and that is load-bearing. The managed hook's matcher is
+ * `startup|resume|clear` (`main/mcp/agent-config.ts`), so it RE-FIRES inside a
+ * live TUI and a resume hands back the id already stored. Claude binds its chat
+ * id once at launch (`--session-id`) and never re-registers, which is why only
+ * Codex agents showed genie#229. `changed` tells the caller whether anything
+ * actually moved, so a re-bind of a KNOWN session broadcasts nothing: that
+ * broadcast makes the master window re-fetch and replace its entire spec list.
  */
 export function registerAgentInboxSession(
     terminalId: string,
@@ -22,7 +30,7 @@ export function registerAgentInboxSession(
         ) => unknown;
         setChatSession: (agentId: string, sessionId: string) => void;
     },
-): { ok: true; agentId: string } | { ok: false; error: string } {
+): { ok: true; agentId: string; changed: boolean } | { ok: false; error: string } {
     const normalized = sessionId.trim();
     if (!normalized) return { ok: false, error: 'A non-empty session id is required.' };
     if (!isSafeSessionId(normalized)) {
@@ -39,9 +47,11 @@ export function registerAgentInboxSession(
         return { ok: false, error: 'Late session registration is only supported for Codex agents.' };
     }
 
+    if (spec.meta?.chat_session_id === normalized) return { ok: true, agentId, changed: false };
+
     deps.updateTerminalSpec(spec.id, {
         meta: { ...(spec.meta ?? {}), chat_session_id: normalized },
     });
     deps.setChatSession(agentId, normalized);
-    return { ok: true, agentId };
+    return { ok: true, agentId, changed: true };
 }

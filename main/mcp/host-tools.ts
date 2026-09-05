@@ -2895,7 +2895,12 @@ export async function agentInboxForMcp(
                         agentInboxBroker.setChatSession(id, sessionId),
                 });
                 if (!registered.ok) return registered;
-                broadcastTerminalSpecsChanged();
+                // Only when the binding actually moved. This event makes every
+                // master window re-fetch and REPLACE its whole spec list, and
+                // Codex's hook re-fires on resume with the id already stored --
+                // so an unconditional broadcast here churned the renderer for a
+                // write that never happened (genie#229).
+                if (registered.changed) broadcastTerminalSpecsChanged();
                 return {
                     ok: true,
                     self: agentInboxBroker.getInfo(registered.agentId) ?? undefined,
