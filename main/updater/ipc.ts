@@ -217,7 +217,20 @@ export function registerUpdaterIpc(): void {
             // to `restartAndApply` passes through `restartPlanForUpgrade`, so
             // adding a door cannot skip the drain by accident.
             if (restartPlanForUpgrade(currentRestartPlanInput()) === 'drain') {
-                startUpgradeDrain();
+                try {
+                    startUpgradeDrain();
+                } catch (e) {
+                    // A drain that cannot even START must not apply the update
+                    // behind the user's back, and must not reject this call
+                    // either — the renderer has no handler for that and would
+                    // leave the pill mid-click. Say what happened instead.
+                    return {
+                        ok: false,
+                        error: `The agent drain could not start: ${
+                            e instanceof Error ? e.message : String(e)
+                        }`,
+                    };
+                }
                 return { ok: true, draining: true };
             }
             try {
@@ -245,7 +258,15 @@ export function registerUpdaterIpc(): void {
     };
 
     ipcMain.handle('drain:snapshot', (): DrainSnapshot => drainSnapshot());
-    ipcMain.handle('drain:begin', (): DrainSnapshot => startUpgradeDrain());
+    ipcMain.handle('drain:begin', (): DrainSnapshot => {
+        try {
+            return startUpgradeDrain();
+        } catch {
+            // Same reason as above: the roster surface reads a snapshot, and a
+            // rejected invoke would leave it blank with no explanation.
+            return drainSnapshot();
+        }
+    });
     ipcMain.handle('drain:satisfy', (_e, agentId: string): DrainSnapshot =>
         satisfyDrainRow(String(agentId ?? '')),
     );

@@ -3047,7 +3047,14 @@ function UpdatePill() {
             : `${heldTerminals} terminal${heldTerminals === 1 ? '' : 's'}`;
     const confirmHeldRestart = (): void => {
         void (async () => {
-            const r = await api().updater.restart();
+            // A REJECTED call and a REFUSED one are different, and only the
+            // second is a reason to quit. `!ok` is phase-1 saying it has no
+            // installer, where quitting so the user relaunches is the honest
+            // fallback; a rejection is the IPC failing, and quitting Genie over
+            // that would turn a transient error into lost work. Leave the
+            // button clickable instead.
+            const r = await api().updater.restart().catch(() => null);
+            if (!r) return;
             // genie#389 — `draining` means nothing restarted: the agents are
             // being asked to finish and hand off first, and the roster flyout is
             // now on screen. The apply follows on its own when it clears, so the
