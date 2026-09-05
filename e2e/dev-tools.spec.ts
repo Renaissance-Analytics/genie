@@ -185,17 +185,38 @@ test('the Agent CLIs tab lists more than the two names that used to be hardcoded
  * ...and the CLIs Genie genuinely cannot install say so.
  *
  * The owner's instruction was that Genie should be able to install these. Where
- * it cannot — its own TUI is unpublished — the honest surface is the row WITH
- * the reason, not a hidden row and not an Install button that throws. A button
- * that always fails is worse than none; the same conclusion the git-on-Windows
- * refusal reached.
+ * it cannot, the honest surface is the row WITH the reason, not a hidden row and
+ * not an Install button that throws. A button that always fails is worse than
+ * none; the same conclusion the git-on-Windows refusal reached.
+ *
+ * The example is `aider`, not Genie's own TUI. The TUI USED to be the case in
+ * point -- unpublished, with a bin named `genie-tui` -- and is now installable
+ * from its public repo, so it demonstrates the opposite. Aider is PyPI-only and
+ * Genie has no Python installer, which is a gap that is real rather than one
+ * chosen to keep a test green.
  */
 test('a CLI Genie cannot install shows the reason instead of a button that would fail', async () => {
     await tab(/Agent CLIs/).click();
+    const aider = page.getByTestId('devtool-aider');
+    await expect(aider).toContainText('Not installed');
+    await expect(aider.getByRole('button', { name: /^install$/i })).toHaveCount(0);
+    await expect(page.getByTestId('devtool-gap-aider')).toContainText(/PyPI/i);
+});
+
+/**
+ * ...and the one that used to be the example now offers the button.
+ *
+ * Without this, moving the case above to `aider` would silently drop all
+ * coverage of the Genie TUI row -- the change would look tested and would not
+ * be. The positive assertion is the point: a gap row and a broken row are
+ * indistinguishable from an absence check alone.
+ */
+test('the Genie TUI now offers a real Install, because its package finally works', async () => {
+    await tab(/Agent CLIs/).click();
     const genie = page.getByTestId('devtool-genie');
-    await expect(genie).toContainText('Not installed');
-    await expect(genie.getByRole('button', { name: /^install$/i })).toHaveCount(0);
-    await expect(page.getByTestId('devtool-gap-genie')).toContainText(/not published yet/i);
+    await expect(genie).toContainText('Genie TUI');
+    await expect(genie.getByRole('button', { name: /^install$/i })).toHaveCount(1);
+    await expect(page.getByTestId('devtool-gap-genie')).toHaveCount(0);
 });
 
 /**
