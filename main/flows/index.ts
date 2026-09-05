@@ -22,24 +22,33 @@
  * (`run-store.ts`) rather than logged and lost, which is what makes "last
  * outcome" answerable at all.
  *
- * Still deferred (genie#394 phase 2): CREATING a Flow. Nothing in the app can
- * author one — no trigger editor, no filter builder, no GApp-authored Flows —
- * so the manager manages what exists and says so plainly when nothing does. A
- * half-built creation surface would still be worse than an absent one; a
- * half-built VIEW of an armed automation system was the worse thing, because it
- * meant nobody could see whether their machine was doing anything.
+ * Authoring goes through {@link saveFlowDraft} — one entry point for the Flow
+ * Manager's editor and for an agent over IPC, so the rule that a new Flow is
+ * born disarmed is enforced once rather than trusted to each caller
+ * (`authoring.ts`).
+ *
+ * Still deferred (genie#394 phase 2): GApp-AUTHORED Flows. A GApp cannot ship
+ * or install one of its own; a person can scope a Flow to an installed GApp,
+ * which is a different thing.
  */
 
 import fs from 'node:fs';
-import { listWorkspaces } from '../db';
+import { listAppGrants, listWorkspaces } from '../db';
 import { onFileWatchEvent, unwatchWorkspace, watchWorkspace } from '../files/watch';
 import { broadcastLocal } from '../remote';
 import { FlowActivity } from './activity';
-import { BUILT_IN_FLOW_RECIPES } from './builtin-recipes';
+import {
+    planFlowSave,
+    summariseFlowRecipes,
+    type FlowDraft,
+    type FlowRecipeSummary,
+} from './authoring';
+import { BUILT_IN_FLOW_RECIPES, resolveBuiltInRecipe } from './builtin-recipes';
 import { createFlowEventRegistry, type FlowEventRegistry } from './events';
 import { startFlowFileSource } from './file-source';
 import { FlowLoopGuard } from './loop';
 import {
+    deleteFlowRuns,
     lastFlowRuns,
     pruneFlowRuns,
     reconcileInterruptedFlowRuns,
@@ -48,7 +57,7 @@ import {
     type FlowRunRecord,
 } from './run-store';
 import { FlowRuntime, type FlowRunLog } from './runtime';
-import { listFlows } from './store';
+import { deleteFlow, getFlow, listFlows, upsertFlow } from './store';
 import { summariseFlows, type FlowSummary } from './summary';
 import { planFlowFileWatches, type WatchableWorkspace } from './watch-plan';
 
@@ -151,7 +160,7 @@ export function startFlows(): () => void {
         registry: flowEventRegistry(),
         guard: new FlowLoopGuard(),
         listFlows,
-        resolveRecipe: (ref) => BUILT_IN_FLOW_RECIPES.get(ref.recipeId) ?? null,
+        resolveRecipe: resolveBuiltInRecipe,
         onRunStart: (start) => {
             activity.started(start);
             // Persisted at the START as well as the finish. Not for the header —
@@ -263,8 +272,18 @@ export function flowActivitySnapshot(): { running: string[]; busy: boolean } {
  * and one that can never fire again, and that judgement belongs beside the
  * matcher that makes it, not in a component.
  */
+/** App id → name, for the apps a Flow may be scoped to. Revoked ones are gone. */
+function installedAppNames(): Map<string, string> {
+    return new Map(
+        listAppGrants()
+            .filter((a) => !a.revoked)
+            .map((a) => [a.appId, a.name]),
+    );
+}
+
 export function flowSummaries(): FlowSummary[] {
     const workspaceNames = new Map(listWorkspaces().map((w) => [w.id, w.project_name]));
+    const appNames = installedAppNames();
     // Read off the recipes themselves, so what the manager warns about and what
     // the body actually does cannot drift apart.
     const recipeConsequences = new Map(
@@ -275,10 +294,94 @@ export function flowSummaries(): FlowSummary[] {
     return summariseFlows(listFlows(), {
         registry: flowEventRegistry(),
         workspaceNames,
+        appNames,
         lastRuns: lastFlowRuns(),
         runningFlowIds: activity.runningFlowIds(),
         recipeConsequences,
     });
+}
+
+/* ===== authoring ======================================================= */
+
+/**
+ * The bodies a Flow may be given, serializable.
+ *
+ * A `FlowRecipe` carries `run` functions and cannot cross IPC, so the authoring
+ * surface is handed the declared subset: title, consequence, inputs, and
+ * whether a system trigger could ever execute it. Adding a second recipe adds a
+ * card to the picker and nothing else.
+ */
+export function flowRecipeCatalogue(): FlowRecipeSummary[] {
+    return summariseFlowRecipes(BUILT_IN_FLOW_RECIPES.values());
+}
+
+/** The things a Flow can be scoped TO, named as the user knows them. */
+export function flowScopeChoices(): {
+    workspaces: { id: string; name: string }[];
+    apps: { id: string; name: string }[];
+} {
+    return {
+        workspaces: listWorkspaces()
+            .filter((w) => typeof w.path === 'string' && w.path !== '')
+            .map((w) => ({ id: w.id, name: w.project_name })),
+        apps: [...installedAppNames()].map(([id, name]) => ({ id, name })),
+    };
+}
+
+export type FlowSaveResult =
+    | { ok: true; flow: FlowSummary; disarmed: boolean }
+    | { ok: false; errors: string[] };
+
+/**
+ * Create or update a Flow — the ONE way anything in Genie authors one.
+ *
+ * The renderer's editor and an agent reaching IPC both land here, so the two
+ * rules that make an authored Flow safe hold for both: a new Flow is created
+ * DISARMED, and an edit that changes what an armed Flow does — or where it may
+ * act — turns it off (`authoring.ts`). Neither is something a caller can opt
+ * out of; there is no `enabled` on a draft to set.
+ *
+ * Watches are reconciled after the write for the same reason `flows:set-enabled`
+ * does it: a Flow saved with a file trigger must actually start watching, not
+ * wait for the next restart.
+ */
+export function saveFlowDraft(draft: FlowDraft): FlowSaveResult {
+    const plan = planFlowSave(draft, {
+        registry: flowEventRegistry(),
+        resolveRecipe: resolveBuiltInRecipe,
+        existing: draft.id ? getFlow(draft.id) : null,
+        taken: new Set(listFlows().map((f) => f.id)),
+    });
+    if (!plan.ok) return plan;
+
+    upsertFlow(plan.flow, flowEventRegistry(), resolveBuiltInRecipe);
+    reconcileFlowWatches();
+    pushFlowsChanged();
+
+    const summary = flowSummaries().find((f) => f.id === plan.flow.id);
+    if (!summary) {
+        // Unreachable: it was just written, and `summariseFlows` skips only a
+        // row it cannot parse. Reported rather than asserted, because a save
+        // that SUCCEEDED must not come back as a failure.
+        return { ok: false, errors: ['the Flow was saved but could not be read back.'] };
+    }
+    return { ok: true, flow: summary, disarmed: plan.disarmed };
+}
+
+/**
+ * Remove a Flow and the history that belonged to it.
+ *
+ * The runs go with it explicitly: `flow_runs` has no foreign key on purpose
+ * (migration v70 — a cascade would turn a delete mid-run into a throw on the
+ * path whose whole job is to report what happened), so nothing else would ever
+ * collect them.
+ */
+export function removeFlow(flowId: string): { ok: boolean } {
+    deleteFlow(flowId);
+    deleteFlowRuns(flowId);
+    reconcileFlowWatches();
+    pushFlowsChanged();
+    return { ok: true };
 }
 
 /**
@@ -303,7 +406,13 @@ export async function runFlowManually(flowId: string): Promise<FlowRunLog> {
 
 export * from './types';
 export { createFlowEventRegistry, BUILT_IN_FLOW_EVENTS } from './events';
-export { matchesFlowFilter, validateFlowFilter, FlowFilterError } from './filter';
+export {
+    matchesFlowFilter,
+    validateFlowFilter,
+    FlowFilterError,
+    FLOW_FILTER_OPERATORS,
+    type FlowOperatorSpec,
+} from './filter';
 export { isFlowVisibleTo, isManuallyRunnable, selectFlowsForEvent } from './match';
 export { decideFlowAdmission, UNATTENDED_SAFE_STEP_TYPES } from './admission';
 export { FlowLoopGuard } from './loop';
@@ -321,18 +430,26 @@ export {
     FLOW_RUNS_KEPT_PER_FLOW,
     type FlowRunStatus,
 } from './run-store';
+export { listFlows, getFlow, upsertFlow, deleteFlow, setFlowEnabled } from './store';
 export {
-    listFlows,
-    getFlow,
-    upsertFlow,
-    deleteFlow,
-    setFlowEnabled,
+    buildFlow,
+    newFlowId,
+    planFlowSave,
+    recipeErrors,
+    suggestFlowPurpose,
+    summariseFlowRecipe,
+    summariseFlowRecipes,
     validateFlow,
-} from './store';
+    type FlowDraft,
+    type FlowRecipeResolver,
+    type FlowRecipeSummary,
+    type FlowSavePlan,
+} from './authoring';
 export {
     RELOCATE_FILE_RECIPE_ID,
     RELOCATION_DIR_ARG,
     DEFAULT_RELOCATION_DIR,
     BUILT_IN_FLOW_RECIPES,
+    resolveBuiltInRecipe,
 } from './builtin-recipes';
 export { FILE_ADDED_EVENT } from './file-source';

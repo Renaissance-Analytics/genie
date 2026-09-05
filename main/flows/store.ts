@@ -30,8 +30,9 @@
 
 import type Database from 'better-sqlite3';
 import { getDb } from '../db';
+import { validateFlow, type FlowRecipeResolver } from './authoring';
+import { resolveBuiltInRecipe } from './builtin-recipes';
 import type { FlowEventRegistry } from './events';
-import { validateFlowFilter } from './filter';
 import type { Flow, FlowRecipeRef, FlowScope, FlowTrigger } from './types';
 
 interface RawFlow {
@@ -49,77 +50,6 @@ interface RawFlow {
 
 const COLUMNS =
     'id, title, purpose, description, scope_json, triggers_json, recipe_json, enabled, created_at, updated_at';
-
-/**
- * Everything wrong with this Flow, in one list.
- *
- * All the problems rather than the first: an author fixing a Flow wants the
- * whole list, and reporting one at a time turns a single edit into four rounds.
- */
-export function validateFlow(flow: Flow, registry: FlowEventRegistry): string[] {
-    const errors: string[] = [];
-
-    if (!nonEmpty(flow.id)) errors.push('a Flow needs an id.');
-    if (!nonEmpty(flow.title)) errors.push('a Flow needs a title.');
-    if (!nonEmpty(flow.purpose)) {
-        errors.push('a Flow needs a purpose — the menu groups by it, so it cannot be inferred.');
-    }
-    if (!flow.recipe || flow.recipe.kind !== 'builtin' || !nonEmpty(flow.recipe.recipeId)) {
-        errors.push('a Flow needs a body: a recipe id.');
-    }
-
-    errors.push(...scopeErrors(flow.scope));
-
-    if (!Array.isArray(flow.triggers) || flow.triggers.length === 0) {
-        errors.push('a Flow needs at least one trigger, or nothing could ever start it.');
-    } else {
-        flow.triggers.forEach((trigger, i) => {
-            errors.push(...triggerErrors(trigger, i, registry));
-        });
-    }
-
-    return errors;
-}
-
-function nonEmpty(v: unknown): boolean {
-    return typeof v === 'string' && v.trim() !== '';
-}
-
-function scopeErrors(scope: FlowScope | undefined): string[] {
-    if (!scope || typeof scope !== 'object') return ['a Flow needs a scope.'];
-    switch (scope.kind) {
-        case 'system':
-            return [];
-        case 'workspace':
-            return nonEmpty(scope.workspaceId)
-                ? []
-                : ['a workspace-scoped Flow needs a workspaceId.'];
-        case 'gapp':
-            // The appId is the whole of a `gapp` scope: it says who owns the
-            // Flow AND who may see it. Without one the Flow belongs to nobody
-            // and appears to nobody.
-            return nonEmpty(scope.appId) ? [] : ['a gapp-scoped Flow needs an appId.'];
-        default:
-            return [`unknown scope "${String((scope as { kind?: unknown }).kind)}".`];
-    }
-}
-
-function triggerErrors(trigger: FlowTrigger, i: number, registry: FlowEventRegistry): string[] {
-    const where = `triggers[${i}]`;
-    if (!trigger || typeof trigger !== 'object') return [`${where} is not a trigger.`];
-    if (trigger.kind === 'manual') return [];
-    if (trigger.kind !== 'event') {
-        return [`${where}: unknown trigger kind "${String((trigger as { kind?: unknown }).kind)}".`];
-    }
-    const def = registry.get(trigger.event);
-    if (!def) {
-        return [
-            `${where}: nothing emits "${trigger.event}". ` +
-                `Known events: ${registry.list().map((d) => d.id).join(', ') || '(none)'}.`,
-        ];
-    }
-    return validateFlowFilter(trigger.filter, def).map((e) => `${where}: ${e}`);
-}
 
 /* ===== reading ========================================================= */
 
@@ -177,8 +107,9 @@ export function upsertFlowIn(
     d: Database.Database,
     flow: Flow,
     registry: FlowEventRegistry,
+    resolveRecipe: FlowRecipeResolver,
 ): void {
-    const errors = validateFlow(flow, registry);
+    const errors = validateFlow(flow, registry, resolveRecipe);
     if (errors.length > 0) {
         throw new Error(`Cannot save Flow "${flow.id}": ${errors.join(' ')}`);
     }
@@ -228,8 +159,11 @@ export function deleteFlowIn(d: Database.Database, id: string): void {
 
 export const getFlow = (id: string): Flow | null => getFlowIn(getDb(), id);
 export const listFlows = (): Flow[] => listFlowsIn(getDb());
-export const upsertFlow = (flow: Flow, registry: FlowEventRegistry): void =>
-    upsertFlowIn(getDb(), flow, registry);
+export const upsertFlow = (
+    flow: Flow,
+    registry: FlowEventRegistry,
+    resolveRecipe: FlowRecipeResolver = resolveBuiltInRecipe,
+): void => upsertFlowIn(getDb(), flow, registry, resolveRecipe);
 export const setFlowEnabled = (id: string, enabled: boolean): void =>
     setFlowEnabledIn(getDb(), id, enabled);
 export const deleteFlow = (id: string): void => deleteFlowIn(getDb(), id);

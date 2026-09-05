@@ -2796,6 +2796,8 @@ export interface FlowSummary {
     running: boolean;
     lastRun?: FlowRunRecord;
     recipeId: string;
+    /** The standing values stored for the body's inputs, for editing. */
+    args?: Record<string, string | number | boolean>;
     /**
      * What ARMING this Flow will do, in its recipe's own words — shown on the
      * disabled row and confirmed at the moment of enabling. Absent when the body
@@ -2813,10 +2815,96 @@ export interface FlowEventDefinition {
     props: { key: string; type: 'string' | 'number' | 'boolean'; label: string; description?: string }[];
 }
 
+/** One value a recipe's body reads, declared by the recipe itself. */
+export interface FlowRecipeInput {
+    key: string;
+    type: 'string' | 'number' | 'boolean';
+    label: string;
+    description?: string;
+    /** The body cannot run without it. */
+    required?: boolean;
+    /** What the body falls back to when the Flow says nothing. */
+    default?: string | number | boolean;
+    /** A triggering event's prop of the same key supplies this. */
+    fromEvent?: boolean;
+}
+
+/**
+ * A Flow body as the editor sees it: the serializable half.
+ *
+ * The recipe declares its own inputs and its own consequence, so a second
+ * recipe appears in the picker with working fields and a real warning without
+ * anything in the renderer being taught about it.
+ */
+export interface FlowRecipeSummary {
+    id: string;
+    title: string;
+    consequence?: string;
+    purpose?: string;
+    inputs: FlowRecipeInput[];
+    /** False when an event trigger could never run this body. */
+    runsUnattended: boolean;
+    unattendedRefusals: { stepId: string; stepType: string; reason: string }[];
+    /** True when running it by hand hands off to the recipe wizard. */
+    needsWizard: boolean;
+}
+
+/** What a caller hands in to create or edit a Flow. NO `enabled` — see `save`. */
+export interface FlowDraft {
+    /** Absent to create; the id of the Flow being edited otherwise. */
+    id?: string;
+    title: string;
+    /** Left out, Genie groups the Flow by its trigger's own purpose. */
+    purpose?: string;
+    description?: string;
+    scope: FlowScope;
+    triggers: FlowTrigger[];
+    recipeId: string;
+    args?: Record<string, string | number | boolean>;
+}
+
+/** One predicate in a trigger's filter, as authored. */
+export interface FlowFilterClause {
+    prop: string;
+    op: string;
+    value: string | number | boolean | (string | number | boolean)[];
+}
+
+export interface FlowFilter {
+    all?: FlowFilterClause[];
+    any?: FlowFilterClause[];
+    none?: FlowFilterClause[];
+}
+
+export type FlowTrigger =
+    | { kind: 'manual' }
+    | { kind: 'event'; event: string; filter?: FlowFilter };
+
+export type FlowSaveResult =
+    | { ok: true; flow: FlowSummary; disarmed: boolean }
+    | { ok: false; errors: string[] };
+
 export interface FlowListPayload {
     flows: FlowSummary[];
     /** Every event kind that currently has a producer. */
     events: FlowEventDefinition[];
+    /** Every body a Flow can be given. */
+    recipes: FlowRecipeSummary[];
+    /** The workspaces a Flow can be scoped to, named. */
+    workspaces: { id: string; name: string }[];
+    /** The installed Genie Apps a Flow can be scoped to, named. */
+    apps: { id: string; name: string }[];
+    /**
+     * Which operators apply to which prop type, from `main/flows/filter.ts`.
+     *
+     * Sent rather than listed renderer-side: a second copy would eventually
+     * offer one the store refuses, with the menu having just said it was fine.
+     */
+    operators: {
+        op: string;
+        accepts: ('string' | 'number' | 'boolean')[];
+        listValue: boolean;
+    }[];
     /** Flow ids with a run in flight, right now. */
     running: string[];
     busy: boolean;
@@ -3852,6 +3940,16 @@ export interface GenieApi {
         /** Start a Flow by hand. Resolves with the run log — a refusal carries
          *  the reason, which is the only useful thing to show when one happens. */
         run: (flowId: string) => Promise<FlowRunLog>;
+        /**
+         * Create or update a Flow.
+         *
+         * A draft carries no `enabled`: a new Flow is created DISARMED and
+         * arming it is a separate, confirmed act. Resolves with the reasons
+         * rather than rejecting — they are what the editor shows.
+         */
+        save: (draft: FlowDraft) => Promise<FlowSaveResult>;
+        /** Remove a Flow and its run history. */
+        remove: (flowId: string) => Promise<{ ok: boolean }>;
     };
     process: {
         /** Start a background Process service runner. */

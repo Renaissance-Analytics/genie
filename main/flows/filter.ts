@@ -35,6 +35,7 @@ import type {
     FlowFilter,
     FlowFilterClause,
     FlowFilterOp,
+    FlowPropType,
     FlowPropValue,
 } from './types';
 
@@ -68,6 +69,29 @@ const OPS: Readonly<Record<FlowFilterOp, OpSpec>> = {
     in: { accepts: new Set(['string', 'number', 'boolean']), listValue: true },
     notIn: { accepts: new Set(['string', 'number', 'boolean']), listValue: true },
 };
+
+/**
+ * The operator table as DATA, for a surface that has to offer them.
+ *
+ * The condition builder cannot keep its own copy: a second list would decide
+ * for itself that `gt` applies to strings, offer it, and produce a filter the
+ * store then refuses — with the user staring at a select box that had just told
+ * them it was allowed. One table, sent to whoever is drawing the menu.
+ */
+export interface FlowOperatorSpec {
+    op: FlowFilterOp;
+    accepts: FlowPropType[];
+    /** The clause's value must be a list. */
+    listValue: boolean;
+}
+
+export const FLOW_FILTER_OPERATORS: readonly FlowOperatorSpec[] = (
+    Object.keys(OPS) as FlowFilterOp[]
+).map((op) => ({
+    op,
+    accepts: [...OPS[op].accepts] as FlowPropType[],
+    listValue: OPS[op].listValue,
+}));
 
 export function isFlowFilterOp(op: unknown): op is FlowFilterOp {
     return typeof op === 'string' && Object.prototype.hasOwnProperty.call(OPS, op);

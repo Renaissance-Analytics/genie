@@ -788,3 +788,111 @@ test('a Flow row opens its run history, and says so when there is none', async (
     await page.keyboard.press('Escape');
     await expect(flowsRoot()).not.toHaveClass(/\bopen\b/);
 });
+
+
+/* ===== Authoring a Flow (genie#394 phase 2) ============================ */
+
+/**
+ * The title the editor is driven to type. Shared with `main/e2e/flows.ts`,
+ * which clears any row a crashed run left behind — two rows with one title make
+ * `flowRow()` ambiguous and fail a spec that has nothing wrong with it.
+ */
+const AUTHORED = 'Made in the manager';
+
+const editor = () => page.locator('[role="dialog"][aria-label="New Flow"]');
+
+/**
+ * What only an E2E can answer about authoring.
+ *
+ * The rules themselves are decided in main and pinned there:
+ * `main/flows/__tests__/authoring.test.ts` proves a new Flow is built disarmed
+ * whatever the caller asks for, and that a body whose inputs nothing supplies is
+ * refused. Neither can see whether a person can actually reach any of it.
+ *
+ * These two can:
+ *
+ *  1. **A Flow made in the editor arrives OFF, and arming it still asks** — the
+ *     safety property of the whole feature, end to end through the real store.
+ *     A unit test proving `enabled: false` says nothing about a form that
+ *     helpfully flips the switch afterwards.
+ *  2. **A refusal reaches the user.** The store's reasons are the reason it
+ *     validates at the write at all; a save that swallowed them would leave the
+ *     Create button doing nothing at all, silently.
+ */
+test('a Flow made in the manager arrives switched off, and arming it still asks', async () => {
+    await setFlowsRunning([]);
+    await openFlows();
+
+    await flowsPanel().locator('.flowmgr-new').click();
+    await expect(editor()).toBeVisible();
+
+    await editor().getByLabel('Flow name').fill(AUTHORED);
+    // The whole machine, so this does not depend on the seeded workspaces.
+    await editor().getByLabel('Where it applies').selectOption('system');
+
+    // A condition on the event's own declared prop — the reference case, built
+    // from what main sent rather than from anything the renderer knows.
+    await editor().getByRole('button', { name: 'Add a condition' }).click();
+    await editor().getByLabel('Condition prop').selectOption('sizeBytes');
+    await editor().getByLabel('Condition operator').selectOption('gt');
+    await editor().getByLabel('Condition value').fill('5242880');
+
+    await editor().getByRole('button', { name: 'Create Flow' }).click();
+    await expect(editor()).toHaveCount(0);
+
+    const row = flowRow(AUTHORED);
+    await expect(row).toBeVisible();
+    await expect(row).toContainText('Whole machine');
+    // Both halves: it is OFF, and the row says what turning it on would do.
+    await expect(row.getByRole('switch')).not.toBeChecked();
+    await expect(row.locator('.flowmgr-off')).toContainText(
+        'Moves files out of your workspace',
+    );
+
+    // Creating is not arming. The confirmation is still in front of the switch,
+    // and it names the scope this Flow was just given.
+    await row.getByRole('switch').click();
+    const armDialog = page.locator('[role="dialog"][aria-label*="Turn on"]');
+    await expect(armDialog).toBeVisible();
+    await expect(armDialog).toContainText('anywhere on this machine');
+    await armDialog.getByRole('button', { name: 'Cancel' }).click();
+    await expect(row.getByRole('switch')).not.toBeChecked();
+
+    // Delete it, which is both the other half of authoring and what keeps this
+    // spec from leaving a row behind for the next run.
+    await row.getByRole('button', { name: `Delete ${AUTHORED}` }).click();
+    const deleteDialog = page.locator('[role="dialog"][aria-label*="Delete"]');
+    await deleteDialog.getByRole('button', { name: 'Delete it' }).click();
+    await expect(flowRow(AUTHORED)).toHaveCount(0);
+
+    await page.keyboard.press('Escape');
+    await expect(flowsRoot()).not.toHaveClass(/\bopen\b/);
+});
+
+test('the editor shows the store’s refusal rather than failing silently', async () => {
+    await setFlowsRunning([]);
+    await openFlows();
+    await flowsPanel().locator('.flowmgr-new').click();
+    await expect(editor()).toBeVisible();
+
+    await editor().getByLabel('Flow name').fill(AUTHORED);
+    // A Flow you can only run by hand, on a body that reads its file off the
+    // event. Nothing would supply that file, so pressing Run could only ever
+    // throw — and the store says so at the write instead.
+    await editor().getByRole('button', { name: 'Remove this trigger' }).click();
+    await editor().getByRole('button', { name: 'Let me run it by hand' }).click();
+    await editor().getByRole('button', { name: 'Create Flow' }).click();
+
+    await expect(editor().locator('.floweditor-errors')).toContainText('relPath');
+    // The dialog STAYS, holding what was typed. A refusal that closed the form
+    // would be indistinguishable from a save.
+    await expect(editor()).toBeVisible();
+
+    await editor().getByRole('button', { name: 'Cancel' }).click();
+    await expect(editor()).toHaveCount(0);
+    // Nothing was written: the refusal has to be a refusal, not a warning.
+    await expect(flowRow(AUTHORED)).toHaveCount(0);
+
+    await page.keyboard.press('Escape');
+    await expect(flowsRoot()).not.toHaveClass(/\bopen\b/);
+});
