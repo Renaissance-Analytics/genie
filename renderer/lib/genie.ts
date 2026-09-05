@@ -2714,6 +2714,18 @@ export interface LinkAuditEntry {
 /** How a run ended. `ran` and `failed` are the only two that executed a body. */
 export type FlowRunOutcome = 'ran' | 'failed' | 'refused' | 'blocked' | 'handoff' | 'error';
 
+/**
+ * A run's state as the STORE knows it — the outcomes above plus two the runtime
+ * can never report about itself.
+ *
+ * `running` is written when a body starts, so a run cut short leaves a trace
+ * rather than vanishing from the history. `interrupted` is what BOOT turns those
+ * into: the runtime cannot log "Genie died on top of me", so boot does it —
+ * sound because at boot nothing is running, making a `running` row orphaned by
+ * definition rather than by a guess about its age.
+ */
+export type FlowRunStatus = FlowRunOutcome | 'running' | 'interrupted';
+
 /** Who a Flow belongs to and who may see it. */
 export type FlowScope =
     | { kind: 'system' }
@@ -2746,9 +2758,10 @@ export interface FlowRunRecord {
     runId: string;
     flowId: string;
     event?: string;
-    outcome: FlowRunOutcome;
+    outcome: FlowRunStatus;
     reason?: string;
     startedAt: number;
+    /** Equal to `startedAt` while the run is still going. */
     finishedAt: number;
 }
 

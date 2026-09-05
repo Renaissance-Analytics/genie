@@ -41,6 +41,8 @@ Only two of these mean a Flow's body actually ran:
 | **Refused** | It could not run: its recipe is not installed, or its body is not one an unattended run is allowed to execute. |
 | **Needs you** | It has steps only the recipe wizard can run, so it is waiting for a person. |
 | **Misconfigured** | Something about the Flow itself is wrong — a condition that cannot be evaluated. |
+| **Running** | The body is executing right now. |
+| **Interrupted** | Genie stopped while the run was in progress. The Flow did not fail — it never got to finish. |
 
 A refusal is kept in the history exactly like a success. A Flow that quietly
 does nothing is the hardest thing about any automation system to debug, so
@@ -64,6 +66,12 @@ would tell you.
 
 Expand a row for its recent runs — the outcome, when, the event that triggered
 it, and the reason where there is one. Genie keeps the last 50 runs per Flow.
+
+A run is recorded when it **starts**, not only when it ends, so a run that was
+still going when Genie quit or crashed is still in the history. Genie marks
+those **Interrupted** the next time it starts. Nothing is ever left showing as
+running: the animated header icon is rebuilt from scratch on every launch, so it
+can only ever reflect work happening now.
 
 ## Creating a Flow
 

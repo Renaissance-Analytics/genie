@@ -33,14 +33,25 @@
 
 import type { FlowRunLog, FlowRunStart } from './runtime';
 
-/** One finished run, as the manager shows it and the store keeps it. */
+/**
+ * A run's state as the STORE knows it — the runtime's outcomes plus two the
+ * runtime can never report about itself.
+ *
+ * `running` is written when a body starts, so a run that is cut short leaves a
+ * trace instead of vanishing. `interrupted` is what boot turns those into: the
+ * runtime cannot log "Genie died on top of me", so somebody else has to.
+ */
+export type FlowRunStatus = FlowRunLog['outcome'] | 'running' | 'interrupted';
+
+/** One run, as the manager shows it and the store keeps it. */
 export interface FlowRunRecord {
     runId: string;
     flowId: string;
     event?: string;
-    outcome: FlowRunLog['outcome'];
+    outcome: FlowRunStatus;
     reason?: string;
     startedAt: number;
+    /** Equal to `startedAt` while the run is still going. */
     finishedAt: number;
 }
 

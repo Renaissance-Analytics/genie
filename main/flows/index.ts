@@ -39,7 +39,14 @@ import { BUILT_IN_FLOW_RECIPES } from './builtin-recipes';
 import { createFlowEventRegistry, type FlowEventRegistry } from './events';
 import { startFlowFileSource } from './file-source';
 import { FlowLoopGuard } from './loop';
-import { pruneFlowRuns, recordFlowRun, lastFlowRuns, type FlowRunRecord } from './run-store';
+import {
+    lastFlowRuns,
+    pruneFlowRuns,
+    reconcileInterruptedFlowRuns,
+    recordFlowRun,
+    recordFlowRunStart,
+    type FlowRunRecord,
+} from './run-store';
 import { FlowRuntime, type FlowRunLog } from './runtime';
 import { listFlows } from './store';
 import { summariseFlows, type FlowSummary } from './summary';
@@ -124,6 +131,22 @@ export function reconcileFlowWatches(): void {
 export function startFlows(): () => void {
     if (stopSource) return stopFlows;
 
+    // BEFORE the runtime exists, so nothing this process starts can be caught by
+    // it. At this instant nothing is running, which is what makes a `running`
+    // row orphaned by definition rather than by a guess about its age — no
+    // heuristic, no grace period, no window where a live run looks dead.
+    try {
+        const orphaned = reconcileInterruptedFlowRuns();
+        if (orphaned > 0) {
+            console.log(
+                `[flows] ${orphaned} run${orphaned === 1 ? '' : 's'} were in progress when ` +
+                    `Genie last stopped; marked interrupted.`,
+            );
+        }
+    } catch (e) {
+        console.log(`[flows] could not reconcile interrupted runs: ${String(e)}`);
+    }
+
     const rt = new FlowRuntime({
         registry: flowEventRegistry(),
         guard: new FlowLoopGuard(),
@@ -131,6 +154,16 @@ export function startFlows(): () => void {
         resolveRecipe: (ref) => BUILT_IN_FLOW_RECIPES.get(ref.recipeId) ?? null,
         onRunStart: (start) => {
             activity.started(start);
+            // Persisted at the START as well as the finish. Not for the header —
+            // that reads the in-memory map, which a crash takes with it — but so
+            // a run cut short by one leaves a trace instead of vanishing from
+            // the history entirely. Boot turns whatever is left into
+            // `interrupted`.
+            try {
+                recordFlowRunStart(start);
+            } catch (e) {
+                console.log(`[flows] could not record start ${start.runId}: ${String(e)}`);
+            }
             pushFlowActivity();
         },
         onLog: (log) => {
@@ -273,9 +306,12 @@ export {
     listFlowRuns,
     lastFlowRuns,
     recordFlowRun,
+    recordFlowRunStart,
+    reconcileInterruptedFlowRuns,
     pruneFlowRuns,
     deleteFlowRuns,
     FLOW_RUNS_KEPT_PER_FLOW,
+    type FlowRunStatus,
 } from './run-store';
 export {
     listFlows,

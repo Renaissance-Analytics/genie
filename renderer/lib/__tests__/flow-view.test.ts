@@ -16,7 +16,6 @@ import {
     describeOutcome,
     describeTrigger,
     relativeTime,
-    runIsInteresting,
 } from '../flow-view';
 import type { FlowSummaryTrigger } from '../genie';
 
@@ -181,14 +180,30 @@ describe('when it happened', () => {
     });
 });
 
-describe('which runs are worth surfacing', () => {
-    it('treats anything that is not a clean run as interesting', () => {
-        expect(runIsInteresting('ran')).toBe(false);
-        // Positive control for the line above: the predicate is not simply false.
-        expect(runIsInteresting('failed')).toBe(true);
-        expect(runIsInteresting('refused')).toBe(true);
-        expect(runIsInteresting('blocked')).toBe(true);
-        expect(runIsInteresting('error')).toBe(true);
-        expect(runIsInteresting('handoff')).toBe(true);
+describe('the two states the runtime cannot report about itself', () => {
+    it('shows a run still in flight as running, not as an absent outcome', () => {
+        expect(describeOutcome('running').label).toBe('Running');
+    });
+
+    it('does NOT call an interrupted run a failure', () => {
+        // Genie stopped on top of it; the Flow did not fail. A user reading
+        // "Failed" would go hunting for a bug in an automation that never had
+        // one.
+        expect(describeOutcome('interrupted').label).toBe('Interrupted');
+        expect(describeOutcome('interrupted').label).not.toBe(
+            describeOutcome('failed').label,
+        );
+        expect(describeOutcome('interrupted').color).not.toBe(
+            describeOutcome('failed').color,
+        );
+    });
+
+    it('greens neither of them', () => {
+        // The green column has to keep meaning "this Flow did its job".
+        expect(describeOutcome('running').color).not.toBe('emerald');
+        expect(describeOutcome('interrupted').color).not.toBe('emerald');
+        // Positive control: something IS green, so the two assertions above are
+        // about these states rather than about nothing ever being green.
+        expect(describeOutcome('ran').color).toBe('emerald');
     });
 });

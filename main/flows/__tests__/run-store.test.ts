@@ -27,7 +27,9 @@ import {
     lastFlowRunsIn,
     listFlowRunsIn,
     pruneFlowRunsIn,
+    reconcileInterruptedFlowRunsIn,
     recordFlowRunIn,
+    recordFlowRunStartIn,
 } from '../run-store';
 import type { FlowRunRecord } from '../run-store';
 
@@ -184,5 +186,101 @@ describe('history does not grow forever', () => {
         // assertion above is about `f1` and not about the delete taking
         // everything.
         expect(listFlowRunsIn(d, 'f2').map((r) => r.runId)).toEqual(['b']);
+    });
+});
+
+/**
+ * A run that was in flight when the process died.
+ *
+ * Two different failures hide here, and only one of them is the obvious one.
+ *
+ * The obvious one is a permanently spinning header. Genie is safe from that by
+ * construction — live state is `FlowActivity`'s in-memory map, which a crash
+ * takes with it, so nothing can survive a restart claiming to be running. The
+ * badge is rebuilt from nothing on every boot.
+ *
+ * The one that needed fixing is the opposite: with rows written only at the
+ * FINISH, a run that started and never finished left NO TRACE AT ALL. The
+ * manager would say "last run: yesterday" when in fact a run started last night
+ * and Genie died on top of it — the history quietly omitting the single most
+ * interesting thing that ever happened to that Flow.
+ *
+ * So a run is written when it STARTS, and boot converts anything still marked
+ * running into `interrupted`. That is sound because of the same property that
+ * makes the header safe: at boot nothing is running, so a `running` row is
+ * orphaned by definition rather than by a guess about how old it is.
+ */
+describe('a run that never finished', () => {
+    it('is recorded the moment it STARTS, not only when it ends', () => {
+        const d = db();
+        recordFlowRunStartIn(d, {
+            runId: 'r1',
+            flowId: 'f1',
+            event: 'files:added',
+            at: 500,
+        });
+
+        const runs = listFlowRunsIn(d, 'f1');
+        expect(runs).toHaveLength(1);
+        expect(runs[0]?.outcome).toBe('running');
+        expect(runs[0]?.startedAt).toBe(500);
+    });
+
+    it('is REPLACED by its outcome when it finishes, not duplicated', () => {
+        const d = db();
+        recordFlowRunStartIn(d, { runId: 'r1', flowId: 'f1', at: 500 });
+        recordFlowRunIn(d, record({ runId: 'r1', outcome: 'ran', startedAt: 500, finishedAt: 900 }));
+
+        const runs = listFlowRunsIn(d, 'f1');
+        expect(runs).toHaveLength(1);
+        expect(runs[0]?.outcome).toBe('ran');
+        expect(runs[0]?.finishedAt).toBe(900);
+    });
+
+    it('becomes `interrupted` at boot, because nothing is running at boot', () => {
+        const d = db();
+        recordFlowRunStartIn(d, { runId: 'orphan', flowId: 'f1', at: 100 });
+
+        expect(reconcileInterruptedFlowRunsIn(d)).toBe(1);
+        expect(listFlowRunsIn(d, 'f1')[0]?.outcome).toBe('interrupted');
+        // It says WHY, so the row is an explanation rather than a mystery state.
+        expect(listFlowRunsIn(d, 'f1')[0]?.reason).toContain('Genie stopped');
+    });
+
+    it('leaves finished runs completely alone', () => {
+        const d = db();
+        recordFlowRunIn(d, record({ runId: 'done', outcome: 'ran' }));
+        recordFlowRunIn(d, record({ runId: 'bad', outcome: 'failed', reason: 'EACCES' }));
+        recordFlowRunStartIn(d, { runId: 'orphan', flowId: 'f1', at: 100 });
+
+        expect(reconcileInterruptedFlowRunsIn(d)).toBe(1);
+
+        const byId = new Map(listFlowRunsIn(d, 'f1').map((r) => [r.runId, r]));
+        // POSITIVE CONTROL for the count above: a reconcile that rewrote every
+        // row would also return a number, and would destroy the history it
+        // exists to complete.
+        expect(byId.get('done')?.outcome).toBe('ran');
+        expect(byId.get('bad')?.outcome).toBe('failed');
+        expect(byId.get('bad')?.reason).toBe('EACCES');
+        expect(byId.get('orphan')?.outcome).toBe('interrupted');
+    });
+
+    it('is a no-op on a clean shutdown, and says so with a zero', () => {
+        const d = db();
+        recordFlowRunIn(d, record({ runId: 'done', outcome: 'ran' }));
+
+        expect(reconcileInterruptedFlowRunsIn(d)).toBe(0);
+        expect(listFlowRunsIn(d, 'f1')[0]?.outcome).toBe('ran');
+    });
+
+    it('shows as the last run while it is still going', () => {
+        const d = db();
+        recordFlowRunIn(d, record({ runId: 'old', outcome: 'ran', finishedAt: 100 }));
+        recordFlowRunStartIn(d, { runId: 'live', flowId: 'f1', at: 900 });
+
+        // The list column reports the run in flight rather than the last
+        // COMPLETED one — "running" is the honest answer to "what happened
+        // last", and hiding it would show a stale success as current.
+        expect(lastFlowRunsIn(d).get('f1')?.outcome).toBe('running');
     });
 });

@@ -31,8 +31,9 @@
 import type Database from 'better-sqlite3';
 import { getDb } from '../db';
 import type { FlowRunRecord } from './activity';
+import type { FlowRunStart } from './runtime';
 
-export type { FlowRunRecord } from './activity';
+export type { FlowRunRecord, FlowRunStatus } from './activity';
 
 /**
  * Runs kept per Flow.
@@ -93,6 +94,53 @@ export function recordFlowRunIn(d: Database.Database, run: FlowRunRecord): void 
         started_at: run.startedAt,
         finished_at: run.finishedAt,
     });
+}
+
+/**
+ * Record a run the moment its body STARTS.
+ *
+ * Written as `running`, with `finished_at` equal to `started_at` so the list's
+ * "newest run" ordering still works while it is in flight.
+ *
+ * The reason to write at the start at all is not the header — live state is
+ * `FlowActivity`'s in-memory map, which a crash takes with it, so nothing can
+ * come back claiming to be running. It is the HISTORY. With rows written only
+ * at the finish, a run that started and never finished left no trace whatever:
+ * the manager would report "last run: yesterday" while in fact a run began last
+ * night and Genie died on top of it, quietly omitting the most interesting
+ * thing that ever happened to that Flow.
+ */
+export function recordFlowRunStartIn(d: Database.Database, start: FlowRunStart): void {
+    recordFlowRunIn(d, {
+        runId: start.runId,
+        flowId: start.flowId,
+        ...(start.event !== undefined ? { event: start.event } : {}),
+        outcome: 'running',
+        startedAt: start.at,
+        finishedAt: start.at,
+    });
+}
+
+/**
+ * Close out every run still marked `running`. Returns how many there were.
+ *
+ * Call at BOOT, before the runtime can start anything new. It is sound for one
+ * reason and it is worth being explicit about it: at boot nothing is running, so
+ * a `running` row is orphaned BY DEFINITION rather than by a guess about how old
+ * it looks. No heuristic, no grace period, no window in which a live run could
+ * be mistaken for a dead one.
+ *
+ * `interrupted` rather than `failed`: the Flow did not fail, Genie stopped. A
+ * user reading a row that says "Failed" would go looking for a bug in their
+ * automation that was never there.
+ */
+export function reconcileInterruptedFlowRunsIn(d: Database.Database): number {
+    return d
+        .prepare(
+            `UPDATE flow_runs SET outcome = 'interrupted', reason = ?
+             WHERE outcome = 'running'`,
+        )
+        .run('Genie stopped while this run was in progress.').changes;
 }
 
 /** One Flow's history, newest first. */
@@ -168,6 +216,10 @@ export function deleteFlowRunsIn(d: Database.Database, flowId: string): void {
 /* ===== bound to Genie's database ======================================= */
 
 export const recordFlowRun = (run: FlowRunRecord): void => recordFlowRunIn(getDb(), run);
+export const recordFlowRunStart = (start: FlowRunStart): void =>
+    recordFlowRunStartIn(getDb(), start);
+export const reconcileInterruptedFlowRuns = (): number =>
+    reconcileInterruptedFlowRunsIn(getDb());
 export const listFlowRuns = (flowId: string, limit?: number): FlowRunRecord[] =>
     listFlowRunsIn(getDb(), flowId, limit);
 export const lastFlowRuns = (): Map<string, FlowRunRecord> => lastFlowRunsIn(getDb());

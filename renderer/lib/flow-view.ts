@@ -19,7 +19,7 @@
  */
 
 import type { Color } from '@particle-academy/react-fancy';
-import type { FlowRunOutcome, FlowSummaryClause, FlowSummaryTrigger } from './genie';
+import type { FlowRunStatus, FlowSummaryClause, FlowSummaryTrigger } from './genie';
 
 export interface OutcomeDescription {
     label: string;
@@ -36,24 +36,24 @@ export interface OutcomeDescription {
  * job, and colouring them like one turns the column into decoration. The wording
  * keeps the same distinction: nothing here implies a body ran when it did not.
  */
-const OUTCOMES: Record<FlowRunOutcome, OutcomeDescription> = {
+const OUTCOMES: Record<FlowRunStatus, OutcomeDescription> = {
     ran: { label: 'Ran', color: 'emerald' },
     failed: { label: 'Failed', color: 'rose' },
     blocked: { label: 'Held back', color: 'amber' },
     refused: { label: 'Refused', color: 'zinc' },
     handoff: { label: 'Needs you', color: 'blue' },
     error: { label: 'Misconfigured', color: 'orange' },
+    running: { label: 'Running', color: 'blue' },
+    // Genie stopped on top of it. Deliberately NOT "Failed": the Flow did not
+    // fail, and a user reading that would go hunting for a bug in an automation
+    // that never had one.
+    interrupted: { label: 'Interrupted', color: 'amber' },
 };
 
-export function describeOutcome(outcome: FlowRunOutcome): OutcomeDescription {
+export function describeOutcome(outcome: FlowRunStatus): OutcomeDescription {
     // An outcome added to the runtime and not yet to this table shows its own
     // name rather than blanking the row — an unfamiliar word beats an empty cell.
     return OUTCOMES[outcome] ?? { label: String(outcome), color: 'zinc' };
-}
-
-/** Everything except a clean run is worth the user's eye. */
-export function runIsInteresting(outcome: FlowRunOutcome): boolean {
-    return outcome !== 'ran';
 }
 
 const OPS: Record<string, string> = {
