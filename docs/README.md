@@ -50,6 +50,9 @@ renders these same pages with a navigable sidebar.
 20. **[Genie Apps (GApps)](19-genie-apps.md)** — whole agentic applications that
     install into Genie with their own workspace, hosting, window and consented
     permissions; GApp Development Workspaces, and the check/preview tools.
+21. **[Flows](20-flows.md)** — Genie's automation: a recipe, the triggers that
+    start it and the scope it may touch; the Flow Manager, run outcomes, and why
+    a Flow that looks armed sometimes cannot fire.
 
 ## Developer & reference docs
 
