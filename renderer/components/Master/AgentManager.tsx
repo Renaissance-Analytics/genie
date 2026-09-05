@@ -236,10 +236,7 @@ export default function AgentManager({
                                     />
                                 </Field>
 
-                                <Field
-                                    label="Mode"
-                                    hint={agentModeSummary(draft.mode)}
-                                >
+                                <Field label="Mode" hint={agentModeSummary(draft.mode)}>
                                     <Select
                                         data-testid="agent-manager-mode"
                                         value={draft.mode}
@@ -260,8 +257,8 @@ export default function AgentManager({
                                 <Callout color="slate">
                                     <Text size="xs">
                                         Genie’s notices to this agent — the upgrade
-                                        announcement, AgentInbox notices, attention nudges and
-                                        the boot prompt — will carry:{' '}
+                                        announcement, AgentInbox notices, attention nudges,
+                                        IssueWatch pings and the boot prompt — will carry:{' '}
                                         <em>{attentionNudgeMode(draft.mode)}</em> This changes
                                         how Genie <strong>words</strong> what it tells the
                                         agent. It is not a permission boundary: what an agent

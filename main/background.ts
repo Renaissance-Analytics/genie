@@ -1181,12 +1181,13 @@ function announceUpgradeToAgents(): void {
                         .map((agent) => ({ agentId: agent.agentId, name: agent.purpose })),
                 ),
                 changes: changelog.groups.flatMap((group) => group.changes).slice(0, 8),
-                // PER AGENT (genie#408). The upgrade notice is the one the
-                // issue was filed about: "restore your connection and migrate"
-                // is what a Manual agent then does, and #407 is what that looks
-                // like from the outside. An agent that has not been declared
-                // Automated is told the same facts, informationally.
-                // BY TERMINAL first (see `agent-mode-source.ts`): the
+                // PER AGENT (genie#408). This is the notice the issue was
+                // filed about: "restore your connection and migrate" is what a
+                // Manual agent then does, and #407 is what that looks like from
+                // the outside. An agent that has not been declared Automated is
+                // told the same facts, informationally.
+                //
+                // Resolved BY TERMINAL first (see `agent-mode-source.ts`): the
                 // AgentInbox id is minted per launch, so it stops matching
                 // `workspace_agents.id` the moment an agent is relaunched, and
                 // a lookup on it alone would quietly report every Automated
