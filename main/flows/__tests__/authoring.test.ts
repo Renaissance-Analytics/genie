@@ -340,3 +340,43 @@ describe('planFlowSave', () => {
         expect(plan.ok && plan.flow.enabled).toBe(false);
     });
 });
+
+/**
+ * `flows:save` is reachable by an AGENT, not only by a form that always sends
+ * well-shaped objects. A draft with a string where a list belongs must come
+ * back as a reason, the way every other refusal does — a thrown TypeError
+ * crosses IPC as an opaque rejection with nothing in it to act on.
+ */
+describe('planFlowSave refuses a malformed draft instead of throwing', () => {
+    const deps = { registry, resolveRecipe: resolveBuiltInRecipe };
+    const bad = (over: Record<string, unknown>): FlowDraft =>
+        ({ ...draft(), ...over }) as unknown as FlowDraft;
+
+    it('when the triggers are not a list', () => {
+        const plan = planFlowSave(bad({ triggers: 'whenever' }), deps);
+        expect(plan.ok).toBe(false);
+        if (!plan.ok) expect(plan.errors.join(' ')).toContain('trigger');
+    });
+
+    it('when the title is not text', () => {
+        const plan = planFlowSave(bad({ title: 42 }), deps);
+        expect(plan.ok).toBe(false);
+        if (!plan.ok) expect(plan.errors.join(' ')).toContain('title');
+    });
+
+    it('when there is no scope at all', () => {
+        const plan = planFlowSave(bad({ scope: undefined }), deps);
+        expect(plan.ok).toBe(false);
+        if (!plan.ok) expect(plan.errors.join(' ')).toContain('scope');
+    });
+
+    it('when the settings are not an object', () => {
+        const plan = planFlowSave(bad({ args: 'relocateTo=.big' }), deps);
+        expect(plan.ok).toBe(false);
+        if (!plan.ok) expect(plan.errors.join(' ')).toContain('settings');
+    });
+
+    it('still accepts a well-formed one (control)', () => {
+        expect(planFlowSave(draft(), deps).ok).toBe(true);
+    });
+});

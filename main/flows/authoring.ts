@@ -349,6 +349,36 @@ export type FlowSavePlan =
     | { ok: true; flow: Flow; disarmed: boolean }
     | { ok: false; errors: string[] };
 
+/** Reasons this is not a draft at all, before anything reads a field of it. */
+function draftShapeErrors(draft: FlowDraft): string[] {
+    const errors: string[] = [];
+    if (!draft || typeof draft !== 'object') return ['that is not a Flow.'];
+    if (typeof draft.title !== 'string') errors.push('a Flow needs a title, as text.');
+    if (typeof draft.recipeId !== 'string' || draft.recipeId === '') {
+        errors.push('a Flow needs a body: a recipe id.');
+    }
+    if (!draft.scope || typeof draft.scope !== 'object') errors.push('a Flow needs a scope.');
+    if (!Array.isArray(draft.triggers)) {
+        errors.push('a Flow needs a list of triggers, or nothing could ever start it.');
+    }
+    if (draft.args !== undefined) {
+        if (typeof draft.args !== 'object' || draft.args === null || Array.isArray(draft.args)) {
+            errors.push('a Flow’s settings are an object of name/value pairs.');
+        } else {
+            for (const [key, value] of Object.entries(draft.args)) {
+                const t = typeof value;
+                if (t !== 'string' && t !== 'number' && t !== 'boolean') {
+                    errors.push(
+                        `the setting "${key}" must be text, a number or true/false; ` +
+                            `this one is ${Array.isArray(value) ? 'a list' : t}.`,
+                    );
+                }
+            }
+        }
+    }
+    return errors;
+}
+
 /**
  * Everything a save decides, with no database in sight.
  *
@@ -359,6 +389,14 @@ export type FlowSavePlan =
  * the write; every judgement is here.
  */
 export function planFlowSave(draft: FlowDraft, deps: FlowSavePlanDeps): FlowSavePlan {
+    // SHAPE first, because `flows:save` is reachable by an agent and not only by
+    // a form that always sends well-formed objects. A `title` that is a number
+    // throws inside the id builder, and a thrown TypeError crosses IPC as an
+    // opaque rejection with nothing in it anybody could act on. Every other
+    // refusal in this module is a sentence; so is this one.
+    const shape = draftShapeErrors(draft);
+    if (shape.length > 0) return { ok: false, errors: shape };
+
     // An edit whose Flow has been deleted underneath it — two managers open, one
     // of them deleted. Saving would resurrect it as a NEW row, disarmed and
     // subtly not the thing the other window thought it was editing.
@@ -396,6 +434,10 @@ export function planFlowSave(draft: FlowDraft, deps: FlowSavePlanDeps): FlowSave
 /**
  * Everything wrong with this Flow, in one list.
  *
+ * The gate `store.ts` calls before every write, from every caller. It lives
+ * beside the draft rather than beside the SQL because deciding what may BECOME
+ * a Flow is authoring: the store's job is to refuse whatever this rejects.
+ *
  * All the problems rather than the first: an author fixing a Flow wants the
  * whole list, and reporting one at a time turns a single edit into four rounds.
  */
@@ -416,8 +458,8 @@ export function validateFlow(
     } else {
         // The body is judged HERE, not only when it runs. A Flow pointing at a
         // recipe that does not exist, or one whose inputs nothing supplies, is
-        // refused every time it fires — and looks completely healthy in a list
-        // while doing it. See `authoring.ts`.
+        // refused every time it fires -- and looks completely healthy in a list
+        // while doing it. `recipeErrors` above is the whole of that judgement.
         const recipe = resolveRecipe(flow.recipe);
         if (!recipe) {
             errors.push(
