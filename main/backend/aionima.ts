@@ -21,7 +21,7 @@ import type {
  *   POST /api/projects        — used by .agi-envelope register flow
  *   GET  /api/notifications   — fetchInbox
  *
- * Quick capture has no native endpoint yet. captureWish() routes through
+ * Quick capture has no native endpoint yet. captureIssue() routes through
  * a chat-session placeholder (also documented at `/api/chat/sessions`) so
  * the global hotkey works in Aionima-only mode today; will swap to a
  * native `POST /api/capture` (or whatever they ship) once Q5.4 is
@@ -114,12 +114,6 @@ export class AionimaBackend implements Backend {
     }
 
     /**
-     * Captures the content as a chat message addressed to Aion. The body
-     * shape is a best guess based on `/api/chat/sessions` — we'll switch
-     * to `POST /api/capture` (or whatever native endpoint Aionima ships)
-     * once Q5.4 on Civicognita/agi#178 is answered.
-     */
-    /**
      * Aionima has no feedback pipeline (Tynn #249 is a Tynn feature), so this is
      * REFUSED rather than quietly routed into chat capture. Feedback that silently
      * became something else would be worse than feedback that could not be sent:
@@ -131,7 +125,13 @@ export class AionimaBackend implements Backend {
         );
     }
 
-    async captureWish(
+    /**
+     * Captures the content as a chat message addressed to Aion. The body
+     * shape is a best guess based on `/api/chat/sessions` — we'll switch
+     * to `POST /api/capture` (or whatever native endpoint Aionima ships)
+     * once Q5.4 on Civicognita/agi#178 is answered.
+     */
+    async captureIssue(
         projectId: string,
         content: string,
     ): Promise<BackendCaptureResult> {

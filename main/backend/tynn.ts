@@ -523,11 +523,23 @@ export class TynnBackend implements Backend {
         }
     }
 
-    async captureWish(
+    /**
+     * File what quick capture caught as an Issue (`POST /api/v1/issues` →
+     * `MeApiController::storeIssue`).
+     *
+     * Tynn retired Wishes into a single Issue intake and `/api/v1/wishes` went
+     * with them, so this used to 404 on every keystroke of the global hotkey.
+     * The session-cookie surface in `routes/web.php` is the right one: the
+     * desktop holds a `laravel_session`, not a bearer token.
+     *
+     * `title` is capped at 255 server-side and the whole text has to survive
+     * somewhere, so a long capture rides in `description` as well.
+     */
+    async captureIssue(
         projectId: string,
         content: string,
     ): Promise<BackendCaptureResult> {
-        const data = await this.fetch<{ id: string }>('/api/v1/wishes', {
+        const data = await this.fetch<{ id: string }>('/api/v1/issues', {
             method: 'POST',
             body: {
                 project_id: projectId,

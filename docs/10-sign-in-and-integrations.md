@@ -74,10 +74,10 @@ Notes you may encounter:
   (register a GitHub App at `github.com/settings/apps/new` with *Enable Device
   Flow* ticked).
 
-## Quick capture (wishes)
+## Quick capture (issues)
 
-Genie can pop a small always-on-top **Capture a wish** window to jot a task into
-a project without switching context.
+Genie can pop a small always-on-top **Capture an issue** window to file an issue
+against a project without switching context.
 
 - Open it with the **Quick capture hotkey** you set in
   **[Settings](08-settings.md)** (an Electron accelerator like
@@ -87,8 +87,8 @@ a project without switching context.
 - Type into **"What needs to happen?"** and press **Enter** to send
   (**Shift+Enter** for a newline). **Esc** cancels.
 
-The wish is captured to the selected project's backend, and the window hides on
-success.
+The issue is filed against the selected project's backend, and the window hides
+on success.
 
 ## Inbox
 

@@ -3518,16 +3518,19 @@ export interface GenieApi {
             slug?: string;
             is_gapp?: boolean;
         }) => Promise<TynnProject>;
-        captureWish: (
+        /** File what the global quick-capture hotkey caught, as an ISSUE
+         *  (`POST /api/v1/issues`). Tynn's separate Wish intake is retired. */
+        captureIssue: (
             projectId: string,
             content: string,
             backendKind?: BackendKind,
         ) => Promise<{ id: string; backend: BackendKind }>;
         /** File feedback about GENIE ITSELF into a Tynn project (Tynn #249).
-         *  Distinct from captureWish: a wish is work the user wants and lands in
-         *  the backlog; feedback is a report about the tool and lands in Tynn's
-         *  feedback pipeline. Never throws — it resolves with `ok:false` and a
-         *  reason, so a form can show what went wrong instead of dying. */
+         *  Distinct from captureIssue at the wire — feedback posts to
+         *  `/api/v1/feedback`, quick capture to `/api/v1/issues` — and those
+         *  paths are a contract with already-installed desktops. Never throws:
+         *  it resolves with `ok:false` and a reason, so a form can show what
+         *  went wrong instead of dying. */
         submitFeedback: (
             projectId: string,
             message: string,

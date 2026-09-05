@@ -973,13 +973,13 @@ const api = {
             backendKind: 'tynn' | 'aionima' = 'tynn',
         ) =>
             ipcRenderer.invoke('tynn:submit-feedback', projectId, message, meta, backendKind),
-        captureWish: (
+        captureIssue: (
             projectId: string,
             content: string,
             backendKind: 'tynn' | 'aionima' = 'tynn',
         ) =>
             ipcRenderer.invoke(
-                'tynn:capture-wish',
+                'tynn:capture-issue',
                 projectId,
                 content,
                 backendKind,

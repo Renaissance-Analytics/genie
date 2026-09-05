@@ -785,7 +785,7 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
     // / unlink AGAINST THE HOST over the bridge; running them locally would mint against
     // the wrong session and write to a client path that doesn't exist (which is why
     // remote "Link & provision" did nothing). Every OTHER tynn.* method (inbox,
-    // capture-wish, create-project, ops-*) stays spread-from-local. Token stays in main.
+    // capture-issue, create-project, ops-*) stays spread-from-local. Token stays in main.
     const tynn: GenieApi['tynn'] = {
         ...local.tynn,
         projects: async () =>

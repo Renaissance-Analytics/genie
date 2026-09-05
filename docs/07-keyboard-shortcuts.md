@@ -12,16 +12,16 @@ On macOS use **⌘ (Command)**; on Windows and Linux use **Ctrl**.
 |----------|----------------|--------|
 | **⌘/Ctrl + ,** | Anywhere in the window | Open **Settings**. Works even while a terminal is focused. |
 | **⌘/Ctrl + S** | A focused **Files** panel | Save the active file (or plugin tab). |
-| **Quick-capture hotkey** | System-wide (global) | Pop the **Capture a wish** window. Default **Ctrl + Shift + W** (⌘ + Shift + W on macOS); change it in Settings. |
+| **Quick-capture hotkey** | System-wide (global) | Pop the **Capture an issue** window. Default **Ctrl + Shift + W** (⌘ + Shift + W on macOS); change it in Settings. |
 | **Esc** | An open flyout / dialog | Close the flyout (Docs, AgentInbox, Task Manager, Issue Watch…) or dismiss the current dialog. |
 
 ## The quick-capture hotkey
 
 The one **global** shortcut — it works even when Genie is hidden in the tray. It
-opens a small always-on-top window to jot a wish into a project without switching
-context. Inside that window:
+opens a small always-on-top window to file an issue against a project without
+switching context. Inside that window:
 
-- **Enter** sends the wish (**Shift + Enter** for a newline).
+- **Enter** files the issue (**Shift + Enter** for a newline).
 - **Esc** cancels and hides the window.
 
 Set the accelerator in **Settings → Quick capture hotkey** (an Electron
