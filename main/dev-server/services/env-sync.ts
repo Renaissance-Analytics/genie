@@ -113,6 +113,18 @@ export function withoutManagedServiceKeys(
     const out: Record<string, string> = {};
     for (const [key, value] of Object.entries(workspaceEnv)) {
         if (key in managed) continue;
+        // ...and the `VITE_` MIRROR of a managed key, which is managed for the
+        // same reason under a different spelling. Genie writes the BROWSER
+        // endpoint into this file because `VITE_*` is a BUILD-TIME substitution
+        // and the file is the only thing a `vite build` reads. Vite then
+        // prioritises an inline `process.env.VITE_*` over the file — so a
+        // re-exported one from a terminal opened before the endpoint moved would
+        // outrank the corrected file and bake the old address into the bundle.
+        // That is this filter's whole purpose, arriving under a prefix.
+        //
+        // Keyed on the managed name, so a VITE_ variable the USER owns
+        // (`VITE_APP_NAME`) is theirs and passes straight through.
+        if (key.startsWith('VITE_') && key.slice('VITE_'.length) in managed) continue;
         out[key] = value;
     }
     return out;
