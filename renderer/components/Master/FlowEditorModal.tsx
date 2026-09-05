@@ -304,6 +304,15 @@ const GROUPS: { value: 'all' | 'any' | 'none'; label: string }[] = [
 
 type ClauseRow = { group: 'all' | 'any' | 'none'; clause: FlowFilterClause };
 
+/**
+ * The conditions of one trigger, flattened for editing.
+ *
+ * Read back in GROUP order rather than the order they were added, so changing a
+ * clause's group moves it beside the others in that group. That is deliberate:
+ * the filter MEANS "all of these, any of these, none of these", and a list that
+ * kept insertion order would show three interleaved rows whose reading depends
+ * on a word in a select box.
+ */
 function clauseRows(trigger: FlowTrigger): ClauseRow[] {
     if (trigger.kind !== 'event' || !trigger.filter) return [];
     return GROUPS.flatMap(({ value }) =>
@@ -438,7 +447,13 @@ function ClauseEditor({
         : String(row.clause.value ?? '');
 
     const commit = (text: string): void => {
-        if (!prop) return;
+        // A prop the event does not declare cannot be coerced -- but the box
+        // must still accept typing. Storing the raw text lets the store say
+        // what is wrong; refusing the keystroke would look like a frozen field.
+        if (!prop) {
+            onChange({ ...row, clause: { ...row.clause, value: text } });
+            return;
+        }
         const parsed = coerceFilterValue(text, prop.type, spec?.listValue ?? false);
         // An unparseable value stays as TEXT in the clause. The store refuses it
         // and says why, which beats a box that silently refuses to accept what

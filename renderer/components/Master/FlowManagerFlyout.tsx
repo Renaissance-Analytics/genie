@@ -116,6 +116,10 @@ export default function FlowManagerFlyout({
     // Fetch on open, then subscribe. Both halves are needed — see the note above.
     useEffect(() => {
         if (!open) return;
+        // The flyout is hidden by a class rather than unmounted, so last
+        // session's "Saved …" would still be sitting there on reopening — a
+        // notice about something that happened before the user left the room.
+        setNotice(null);
         void reload();
     }, [open, reload]);
 
