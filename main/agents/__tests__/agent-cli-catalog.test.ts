@@ -115,9 +115,14 @@ describe('a gap is stated, never hidden', () => {
         const installable = installableAgentClis().map((e) => e.id);
         expect(installable).toContain('claude-code');
         expect(installable).toContain('codex');
-        // Genie's own TUI is not published yet — the honest state is a listed
-        // gap, never a silent absence and never an installer that would fail.
-        expect(installable).not.toContain('genie');
+        // Genie's own TUI IS installable now: the package is public and its bin
+        // is `genie`, the two conditions the catalog comment set. Verified by
+        // running the install, not by reading the repo.
+        expect(installable).toContain('genie');
+        // The negative case still needs a real one, or this only proves that
+        // everything is installable. Aider is PyPI-only and Genie has no Python
+        // installer, so it is a listed gap rather than a silent absence.
+        expect(installable).not.toContain('aider');
     });
 });
 

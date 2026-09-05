@@ -154,15 +154,30 @@ const CATALOG = [
         id: 'genie',
         provider: 'genie',
         probe: true,
-        // Genie's own TUI, and still the gap that started this. `@genie/tui` is
-        // `private: true` and has never been published, and its shipped `bin` is
-        // named `genie-tui` — so an `npm install -g` today would put the WRONG
-        // name on PATH and reproduce, one layer later, the naming bug the
-        // registry's `defaultCommand` comment already documents. Wire an
-        // installer here once the package is public AND its bin is `genie`.
-        install: null,
-        installGap:
-            'Genie’s own TUI is not published yet, so Genie cannot install it for you. It ships with a future release.',
+        // Genie's own TUI — the gap that started this, now closed. The previous
+        // comment here set two conditions for wiring an installer: the package
+        // public, and its bin named `genie` rather than `genie-tui`. Both are
+        // now true, and both were checked by RUNNING the install rather than by
+        // reading the repo:
+        //
+        //   npm install github:Renaissance-Analytics/genie-tui
+        //   ls node_modules/.bin/genie*        -> genie, genie.cmd, genie.ps1
+        //   ./node_modules/.bin/genie --version -> 0.0.0
+        //
+        // A GIT SPEC, NOT A REGISTRY NAME, and deliberately. Genie's own posture
+        // is a public GitHub repo that is `private: true` and never published:
+        // `npm view genie` is an unrelated package owned by somebody else, and
+        // the `@genie` scope is not ours. The registry is the wrong place to
+        // reach for here, not merely the road not taken.
+        //
+        // KNOWN LIMIT, stated rather than discovered: update detection reads
+        // `npm outdated -g --json`, which keys by PACKAGE NAME (`@genie/tui`),
+        // while we install by git spec — so the lookup finds nothing and the row
+        // never offers an update. Harmless today (the package is 0.0.0 with no
+        // releases to update to) and real the day it ships one. Installing and
+        // detecting-an-update are two jobs `package` is doing at once; that is
+        // the field to split when this starts to matter.
+        install: { manager: 'npm', package: 'github:Renaissance-Analytics/genie-tui' },
         docsUrl: 'https://github.com/Renaissance-Analytics/genie-tui',
     },
 

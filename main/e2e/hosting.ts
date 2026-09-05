@@ -542,10 +542,19 @@ export function defaultHostingE2EState(): HostingE2EState {
             // is no longer capped at the pair that used to be written out in the
             // renderer.
             { name: 'gemini-cli', updateAvailable: false, source: 'unknown' },
-            // NOT INSTALLED and NOT INSTALLABLE — Genie's own TUI is unpublished.
-            // The third state, and the one the owner was actually looking at: it
-            // must say WHY rather than showing a button that would fail.
+            // NOT INSTALLED but INSTALLABLE — Genie's own TUI. It used to be the
+            // third state below; its package is public now with the bin named
+            // `genie`, so the row offers a real Install and states no gap.
             { name: 'genie', updateAvailable: false, source: 'unknown' },
+            // NOT INSTALLED and NOT INSTALLABLE — the third state. Aider is
+            // PyPI-only (`aider-chat`) and Genie installs agent CLIs through npm,
+            // so the row must say WHY rather than show a button that would fail.
+            //
+            // This row exists FOR that test. When the TUI became installable it
+            // stopped demonstrating the case, and a fixture with no
+            // uninstallable CLI left the assertion looking for an element that
+            // could not exist — green only in the sense that nothing ran.
+            { name: 'aider', updateAvailable: false, source: 'unknown' },
             // NOT PROBED — the fourth state. Amazon Q's binary is `q`, too
             // generic to look for without reporting some unrelated program as an
             // installed coding agent. The row must say what it is and make NO
