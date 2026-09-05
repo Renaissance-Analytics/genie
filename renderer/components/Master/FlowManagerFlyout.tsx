@@ -201,6 +201,7 @@ export default function FlowManagerFlyout({
     const liveCount = running.length;
 
     return (
+        <>
         <div className={`docs-flyout-root${open ? ' open' : ''}`} aria-hidden={!open}>
             <div className="docs-scrim" onClick={onClose} />
             <aside
@@ -266,15 +267,23 @@ export default function FlowManagerFlyout({
                     )}
                 </div>
             </aside>
-            {confirming && (
-                <ArmConfirm
-                    flow={confirming}
-                    busy={pending === confirming.id}
-                    onCancel={() => setConfirming(null)}
-                    onConfirm={() => void setEnabled(confirming, true)}
-                />
-            )}
         </div>
+        {/* OUTSIDE the flyout root, deliberately, for two reasons that both bite.
+            `.docs-flyout-root` sets `pointer-events: none` and hands it back only
+            to the aside and its scrim — a modal nested inside it renders
+            perfectly and cannot be clicked. And the root is `position: fixed`
+            with `z-index: 60`, so it opens a stacking context that would scope
+            `.prompt-scrim`'s z-index 100 INSIDE it, quietly breaking the layer
+            ladder documented at the top of master.css. */}
+        {confirming && (
+            <ArmConfirm
+                flow={confirming}
+                busy={pending === confirming.id}
+                onCancel={() => setConfirming(null)}
+                onConfirm={() => void setEnabled(confirming, true)}
+            />
+        )}
+        </>
     );
 }
 
