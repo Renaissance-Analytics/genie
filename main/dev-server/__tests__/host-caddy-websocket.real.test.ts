@@ -27,8 +27,9 @@ import { buildHostCaddyfile } from '../host-caddyfile';
  * proving nothing.
  *
  * h2 is not exotic on this front door, it is the norm. Every `.gen` name shares
- * ONE leaf certificate on ONE address, so a browser COALESCES a socket to
- * `websockets.<ws>.gen` onto the h2 connection it already holds for the page and
+ * ONE leaf certificate on ONE address, so a browser COALESCES a socket to the
+ * WebSocket service's own `.gen` name onto the h2 connection it already holds for
+ * the page and
  * sends it as an RFC 8441 Extended CONNECT stream (`:method: CONNECT` +
  * `:protocol: websocket`). That is what this test does, with `node:http2` — the
  * same wire protocol the browser used, and no browser anywhere near it.
