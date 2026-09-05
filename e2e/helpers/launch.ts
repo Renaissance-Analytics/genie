@@ -1,6 +1,13 @@
 import { _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import path from 'node:path';
 import os from 'node:os';
+import {
+    awaitInstanceExit,
+    awaitPidExit,
+    clearInstanceRecord,
+    instanceRecordPath,
+    writeInstanceRecord,
+} from './instance-lock';
 
 /**
  * Boot the compiled Genie Electron app in E2E mode and return the app handle +
@@ -78,13 +85,108 @@ const HARNESS_ROUTE: Record<E2EHarnessPage, string> = {
     master: 'master',
 };
 
+/**
+ * The Electron MAIN process behind an app handle.
+ *
+ * NOT `app.process()`. On Windows Playwright spawns Electron through a `cmd.exe`
+ * wrapper, so `app.process()` is the wrapper and `spawnfile` is `cmd.exe` — a
+ * pid belonging to the most heavily recycled image on the machine, and one whose
+ * exit says nothing about Electron's. Measured here: wrapper 14680, Electron main
+ * 78952. Ask the app instead; it knows who it is, on every platform.
+ */
+const identities = new WeakMap<ElectronApplication, { pid: number; image: string }>();
+
+async function identify(
+    app: ElectronApplication,
+): Promise<{ pid: number; image: string } | null> {
+    const known = identities.get(app);
+    if (known) return known;
+    try {
+        // BOUNDED. `evaluate` has no timeout of its own, and this now sits in
+        // front of every launch — an app wedged badly enough not to answer must
+        // degrade to "untracked", which is exactly today's behaviour, rather than
+        // hang the hook and turn a legible `firstWindow` timeout into a mystery.
+        const info = await Promise.race([
+            app.evaluate(() => ({ pid: process.pid, exec: process.execPath })),
+            new Promise<null>((r) => setTimeout(() => r(null), 10_000)),
+        ]);
+        if (!info) return null;
+        const id = { pid: info.pid, image: path.basename(info.exec) };
+        identities.set(app, id);
+        return id;
+    } catch {
+        // An app too broken to answer is an app we cannot track. Recording a pid
+        // we are unsure of is worse than recording none: the next launch would
+        // wait out its whole budget on it and then fail a run that was fine.
+        return null;
+    }
+}
+
+/**
+ * Every Electron launch in this suite goes through here, so that none of them can
+ * begin while a previous app is still on its way out (genie#369).
+ *
+ * WHY THE WAIT IS HERE AND NOT ONLY IN TEARDOWN. `app.close()` turns out to be
+ * well behaved — measured on Windows, it returns only once the Electron main and
+ * its wrapper are both actually gone (511ms, both dead the instant it returned).
+ * So a spec that closes its app in `afterAll` leaks nothing, and a teardown-side
+ * fix alone would have protected the one path that was never broken.
+ *
+ * The path that has no teardown is the one that matters: Playwright stops the
+ * worker after a failed test and starts a fresh one, which re-runs the next
+ * spec's `beforeAll` and launches again. No `afterAll` runs in between, and the
+ * new worker is a NEW PROCESS with none of the old one's memory. That is why the
+ * record is a FILE — it is the only thing that can carry "an app was started and
+ * never proven dead" across that boundary.
+ *
+ * The cost when nothing is wrong is one `kill(pid, 0)`, which is why this can sit
+ * in front of every launch.
+ */
+async function launchElectron(
+    harness: string,
+    options: Parameters<typeof electron.launch>[0],
+): Promise<ElectronApplication> {
+    const record = instanceRecordPath();
+    await awaitInstanceExit(record);
+
+    const app = await electron.launch(options);
+
+    const id = await identify(app);
+    if (id) writeInstanceRecord(record, { ...id, harness, startedAt: Date.now() });
+    return app;
+}
+
+/**
+ * Close an app and PROVE it is gone, rather than take `close()` on trust.
+ *
+ * `close()` does currently reap the process before it returns (see above), so on
+ * today's Playwright this confirms rather than corrects. It is still worth
+ * asserting: it costs one liveness check, it is the difference between a teardown
+ * that knows and one that assumes, and if that behaviour ever changes this fails
+ * in the spec that leaked instead of as a launch timeout in the next one.
+ */
+export async function closeGenieE2E(app: ElectronApplication | undefined): Promise<void> {
+    if (!app) return;
+    // Identify BEFORE closing — a closed app cannot answer.
+    const id = await identify(app);
+    try {
+        await app.close();
+    } catch {
+        // An app that already died is closed, which is all this needs.
+    }
+    if (id) {
+        await awaitPidExit(id.pid, id.image);
+        clearInstanceRecord(instanceRecordPath(), id.pid);
+    }
+}
+
 export async function launchGenieE2E(
     harness: E2EHarnessPage = 'issuewatch',
 ): Promise<{
     app: ElectronApplication;
     page: Page;
 }> {
-    const app = await electron.launch({
+    const app = await launchElectron(harness, {
         args: [MAIN_ENTRY, `--user-data-dir=${E2E_USERDATA}`],
         env: {
             ...process.env,
@@ -97,8 +199,22 @@ export async function launchGenieE2E(
         },
     });
     // The harness window is opened on app.whenReady(); wait for it.
-    const page = await app.firstWindow();
-    await page.waitForLoadState('domcontentloaded');
+    //
+    // A launch that fails here CLEANS UP AFTER ITSELF. Without this, a
+    // `firstWindow` timeout leaves a running app behind with nobody holding a
+    // handle to close it — the spec's `afterAll` never got one — so the app is
+    // left for Playwright's process-exit handler to kill on its own schedule,
+    // while the replacement worker is already launching the next spec. That is
+    // the genie#369 amplifier at its source: one failed launch manufacturing the
+    // overlap that fails the next one.
+    let page: Page;
+    try {
+        page = await app.firstWindow();
+        await page.waitForLoadState('domcontentloaded');
+    } catch (e) {
+        await closeGenieE2E(app).catch(() => {});
+        throw e;
+    }
     return { app, page };
 }
 
@@ -243,7 +359,7 @@ export async function launchGenieMobileE2E(): Promise<{
     scrollback: string;
     terminalId: string;
 }> {
-    const app = await electron.launch({
+    const app = await launchElectron('mobile', {
         args: [MAIN_ENTRY, `--user-data-dir=${E2E_USERDATA}`],
         env: {
             ...process.env,
@@ -292,7 +408,11 @@ export async function launchGenieTunnelE2E(): Promise<{
         os.tmpdir(),
         `genie-e2e-tunnel-${process.pid}-${Date.now()}`,
     );
-    const app = await electron.launch({
+    // A private `--user-data-dir` isolates this one's PROFILE, not the machine:
+    // it is still a full Electron boot competing for the same CPU, disk and
+    // loopback ports as an app that has not finished exiting. It waits its turn
+    // like the rest.
+    const app = await launchElectron('tunnel', {
         args: [MAIN_ENTRY, `--user-data-dir=${tunnelUserData}`],
         env: {
             ...process.env,
