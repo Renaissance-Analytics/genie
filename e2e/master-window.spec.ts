@@ -832,12 +832,12 @@ test('a Flow made in the manager arrives switched off, and arming it still asks'
 
     // A condition on the event's own declared prop — the reference case, built
     // from what main sent rather than from anything the renderer knows.
-    await editor().getByRole('button', { name: 'Add a condition' }).click();
+    await editor().getByRole('button', { name: /Add a condition/ }).click();
     await editor().getByLabel('Condition prop').selectOption('sizeBytes');
     await editor().getByLabel('Condition operator').selectOption('gt');
     await editor().getByLabel('Condition value').fill('5242880');
 
-    await editor().getByRole('button', { name: 'Create Flow' }).click();
+    await editor().getByRole('button', { name: /Create Flow/ }).click();
     await expect(editor()).toHaveCount(0);
 
     const row = flowRow(AUTHORED);
@@ -862,7 +862,7 @@ test('a Flow made in the manager arrives switched off, and arming it still asks'
     // spec from leaving a row behind for the next run.
     await row.getByRole('button', { name: `Delete ${AUTHORED}` }).click();
     const deleteDialog = page.locator('[role="dialog"][aria-label*="Delete"]');
-    await deleteDialog.getByRole('button', { name: 'Delete it' }).click();
+    await deleteDialog.getByRole('button', { name: /Delete it/ }).click();
     await expect(flowRow(AUTHORED)).toHaveCount(0);
 
     await page.keyboard.press('Escape');
@@ -879,9 +879,9 @@ test('the editor shows the store’s refusal rather than failing silently', asyn
     // A Flow you can only run by hand, on a body that reads its file off the
     // event. Nothing would supply that file, so pressing Run could only ever
     // throw — and the store says so at the write instead.
-    await editor().getByRole('button', { name: 'Remove this trigger' }).click();
-    await editor().getByRole('button', { name: 'Let me run it by hand' }).click();
-    await editor().getByRole('button', { name: 'Create Flow' }).click();
+    await editor().getByRole('button', { name: /Remove this trigger/ }).click();
+    await editor().getByRole('button', { name: /Let me run it by hand/ }).click();
+    await editor().getByRole('button', { name: /Create Flow/ }).click();
 
     await expect(editor().locator('.floweditor-errors')).toContainText('relPath');
     // The dialog STAYS, holding what was typed. A refusal that closed the form
