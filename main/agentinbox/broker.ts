@@ -24,6 +24,7 @@ import {
     NUDGE_UNCHECKED_MS,
 } from './wake';
 import { containsHumanInput, inboxNoticeText } from './notify';
+import { DEFAULT_AGENT_MODE, type AgentMode } from '../agents/agent-mode';
 import { EMPTY_DRAFT, noteDraft, planNudge, type Draft, type NudgePlan } from './draft';
 
 /**
@@ -186,6 +187,50 @@ export class AgentInboxBroker {
     private pendingNudgeSink: ((d: PendingNudgeChange) => void) | null = null;
     /** Clock — injectable so wake-on-DM idle timing is deterministically testable. */
     private now: () => number = () => Date.now();
+
+    /**
+     * THIS agent's mode (genie#408) — Automated or Manual — so a notice is
+     * worded for the agent it is going to.
+     *
+     * A SEAM for the same reason `store` and `wakeSink` are: resolving a mode
+     * means reading `workspace_agents` and an `AGENT.md` on disk, and the broker
+     * stays free of both. Unwired (every test, and any host that has not
+     * installed one) answers {@link DEFAULT_AGENT_MODE}, which is Manual — the
+     * direction that tells an agent to do less on its own.
+     *
+     * GUIDANCE ONLY: nothing here consults the mode to decide WHETHER a message
+     * is delivered or a nudge fires. It decides one sentence of wording.
+     */
+    private modeSource: (subject: { agentId: string; terminalId: string | null }) => AgentMode =
+        () => DEFAULT_AGENT_MODE;
+
+    setAgentModeSource(
+        fn: (subject: { agentId: string; terminalId: string | null }) => AgentMode,
+    ): void {
+        this.modeSource = fn;
+    }
+
+    /**
+     * The mode to word a notice for.
+     *
+     * Passes the TERMINAL as well as the id, and that is load-bearing: an
+     * AgentInbox id is minted per LAUNCH (`spawnTerminal`), so it stops matching
+     * `workspace_agents.id` the first time an agent is relaunched. The terminal
+     * binding survives that. See `agents/agent-mode-source.ts`.
+     *
+     * Never throws: a database or file error must not be able to cost an agent
+     * the notice itself.
+     */
+    private modeOf(target: AgentInboxAgent): AgentMode {
+        try {
+            return this.modeSource({
+                agentId: target.agentId,
+                terminalId: target.terminalId ?? null,
+            });
+        } catch {
+            return DEFAULT_AGENT_MODE;
+        }
+    }
 
     setWakeSink(fn: (d: NudgeDelivery) => boolean | void): void {
         this.wakeSink = fn;
@@ -405,6 +450,7 @@ export class AgentInboxBroker {
             from: msg.fromLabel,
             priority: msg.interrupt ? 'high' : 'normal',
             kind: isAnswer ? 'ftq-answer' : 'dm',
+            mode: this.modeOf(target),
         });
         const plan = planNudge(target.draft);
         if (plan.mode === 'defer') {
@@ -532,7 +578,7 @@ export class AgentInboxBroker {
         try {
             this.wakeSink({
                 terminalId: target.terminalId,
-                text: wakeNudgeText(unread),
+                text: wakeNudgeText(unread, this.modeOf(target)),
                 plan: planNudge(target.draft),
             });
         } catch {
@@ -569,7 +615,7 @@ export class AgentInboxBroker {
             // Provably idle, so the box is empty: submit it and start the turn.
             this.wakeSink({
                 terminalId: target.terminalId,
-                text: wakeNudgeText(unread),
+                text: wakeNudgeText(unread, this.modeOf(target)),
                 plan: planNudge(target.draft),
             });
         } catch {

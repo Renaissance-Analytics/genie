@@ -7,6 +7,7 @@ import {
     withWorkstationOperator,
 } from '../upgrade-announcement';
 import { MANUAL_RECONNECT_NOTICE, type McpRecovery } from '../mcp-reconnect';
+import { upgradeNoticeMode } from '../agent-mode';
 import { GENIE_OS_AGENT } from '../os-agent';
 
 /** The recovery a Claude terminal gets when the reconnect command actually ran. */
@@ -23,18 +24,25 @@ const RECONNECTED: McpRecovery = {
 const runNow = (run: () => void): void => run();
 
 describe('agent upgrade announcement', () => {
-    it('formats a concise no-reply system message', () => {
+    it('formats a concise no-reply system message, ending in the mode clause', () => {
+        // The mode clause is LAST and is the ONLY part that differs between an
+        // Automated and a Manual agent (genie#408): the facts, the recovery and
+        // the migration step are identical for both, because the mode is
+        // guidance on how to read the notice and not a boundary on what may
+        // be told.
         expect(
             formatAgentUpgradeMessage(
                 '0.8.0',
                 ['Native AgentInbox transport', 'What’s New menu'],
                 RECONNECTED,
+                'manual',
             ),
         ).toBe(
             'Genie upgraded to v0.8.0. What changed:\n- Native AgentInbox transport\n- What’s New menu\n\n' +
             'Your `genie` MCP connection was replaced by the upgrade, so its tools do not answer until it is restored. ' +
             'Genie ran `/mcp reconnect genie` in this terminal to restore it. If `genie` still does not answer, run it again yourself.\n\n' +
             'Once `genie` answers again: if this terminal predates AMS, call agentUpgrade and follow its ordered migration guide.\n\n' +
+            upgradeNoticeMode('manual') + '\n\n' +
             'This is a system notice; no reply is needed.',
         );
     });
@@ -48,7 +56,7 @@ describe('agent upgrade announcement', () => {
      */
     describe('the notice is honest about the dead connection', () => {
         it('never asks for agentUpgrade as though the tools were live', () => {
-            const msg = formatAgentUpgradeMessage('0.8.0', [], RECONNECTED);
+            const msg = formatAgentUpgradeMessage('0.8.0', [], RECONNECTED, 'manual');
             // What is TRUE comes first: the connection was replaced.
             expect(msg).toContain('replaced by the upgrade');
             // The restore step is stated BEFORE the migration is asked for…
@@ -63,19 +71,23 @@ describe('agent upgrade announcement', () => {
             // A kiwi/custom/Genie-TUI agent gets no reconnect at all. Handing it
             // Claude's sentence would tell it a command had been run in a
             // terminal that never saw one.
-            const msg = formatAgentUpgradeMessage('0.8.0', [], {
-                strategy: { kind: 'notice', text: MANUAL_RECONNECT_NOTICE },
-                applied: false,
-            });
+            const msg = formatAgentUpgradeMessage(
+                '0.8.0',
+                [],
+                { strategy: { kind: 'notice', text: MANUAL_RECONNECT_NOTICE }, applied: false },
+                'manual',
+            );
             expect(msg).toContain(MANUAL_RECONNECT_NOTICE);
             expect(msg).not.toContain('/mcp reconnect genie');
         });
 
         it('says a reconnect was HELD BACK when the terminal refused it', () => {
-            const msg = formatAgentUpgradeMessage('0.8.0', [], {
-                strategy: { kind: 'command', text: '/mcp reconnect genie' },
-                applied: false,
-            });
+            const msg = formatAgentUpgradeMessage(
+                '0.8.0',
+                [],
+                { strategy: { kind: 'command', text: '/mcp reconnect genie' }, applied: false },
+                'manual',
+            );
             expect(msg).toContain('held the command back');
             expect(msg).not.toContain('Genie ran `/mcp reconnect genie`');
         });

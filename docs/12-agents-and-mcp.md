@@ -54,6 +54,37 @@ The MCP server is enabled per workspace and runs on a fixed loopback port (see
 | **setEnv / checkEnv** | Reads or upserts a key in a workspace `.env` (preserving comments). |
 | **genieGuide** | Returns the full usage guide, so the agent knows when and how to use all of the above. |
 
+## Automated or Manual — how Genie talks to an agent
+
+Every agent is either **Automated** or **Manual**, set on its `AGENT.md` and
+edited in **Agent settings → Prompt & rules**. New and existing agents are
+**Manual** until someone says otherwise.
+
+It changes how Genie **words** its own notices to that agent — the upgrade
+announcement, AgentInbox notices, attention nudges, IssueWatch pings and the
+prompt an agent boots with:
+
+- **Automated** — expected to act unattended, so the notices are imperative:
+  *"the machine upgraded; restore what you own."*
+- **Manual** — acts when a person asks, so the notices say so: *"this is for
+  your awareness — do not act on it unless a person asks you to."*
+
+The difference matters because an agent does what it is told. A supervising
+agent handed *"restore your connection and migrate"* after an upgrade may go on
+to restart every site and process it looks after — nobody asked for that, and
+the agent was not wrong to do it.
+
+> **This is guidance, not a permission boundary.** It changes the wording of
+> what Genie says to an agent and nothing else. It does not restrict what an
+> agent can do, it is not a security control, and nothing should be built on it
+> as though it were. What an agent is allowed to do is decided by the approval
+> gates below — in either mode.
+
+The mode belongs to the **agent**, not to the terminal or the workspace: one
+workspace can hold a supervising Automated agent and a Manual one you drive
+yourself. An agent's `AGENT.md` is committed with the project, so the mode
+travels with it.
+
 ## Approvals — you stay in control
 
 The **high-power** tools (`manageTerminals`, `runAgent`, and creating a process)

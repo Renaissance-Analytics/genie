@@ -45,6 +45,9 @@ const tab = (p: Page, id: string) => p.locator(`[data-testid="agent-manager-tab-
 const body = (p: Page) => p.locator('[data-testid="agent-manager-body"]');
 const purpose = (p: Page) => p.locator('[data-testid="agent-manager-purpose"]');
 const save = (p: Page) => p.locator('[data-testid="agent-manager-save"]');
+/** Automated or Manual (genie#408). Fancy's `Select` defaults to the NATIVE
+ *  `<select>`, so this is `selectOption`-able rather than a custom listbox. */
+const mode = (p: Page) => p.locator('[data-testid="agent-manager-mode"]');
 const mcpRows = (p: Page) => p.locator('[data-testid="agent-manager-mcp-row"]');
 /**
  * ONE row, by exact server name.
@@ -73,8 +76,14 @@ test('the prompt tab opens the agent’s real AGENT.md', async () => {
     await tab(page, 'prompt').click();
     await expect(body(page)).toHaveValue(/You are moic\. Original prompt\./);
     await expect(purpose(page)).toHaveValue('agent management');
+    // The seeded file declares no `mode:` at all, and an undeclared agent is
+    // MANUAL (genie#408) — the default that means no existing agent's behaviour
+    // changes under this.
+    await expect(mode(page)).toHaveValue('manual');
     // Save is DISABLED until something is typed: opening a file must not offer
-    // to rewrite it.
+    // to rewrite it. Including after the mode was merely READ — resolving an
+    // absent key to a shown value must not count as an edit, or every agent
+    // would open dirty.
     await expect(save(page)).toBeDisabled();
 });
 
@@ -83,6 +92,7 @@ test('★ an edit round-trips to disk WITHOUT mangling what it did not touch', a
 
     await body(page).fill('You are moic. Edited by the manager.\n');
     await purpose(page).fill('the agent management surface');
+    await mode(page).selectOption('automated');
     await expect(save(page)).toBeEnabled();
     await save(page).click();
     await expect(page.locator('[data-testid="agent-manager-saved"]')).toBeVisible();
@@ -93,6 +103,8 @@ test('★ an edit round-trips to disk WITHOUT mangling what it did not touch', a
     const onDisk = await readAgentManagerPersonaFile(app);
     expect(onDisk).toContain('You are moic. Edited by the manager.');
     expect(onDisk).toContain('purpose: the agent management surface');
+    // Declaring the agent Automated writes the line every nudge surface reads.
+    expect(onDisk).toContain('mode: automated');
     // The edit did not eat what it was not asked to change: the header key the
     // UI does not render, and the fields it does but nobody touched.
     expect(onDisk).toContain(seed.unrenderedLine);
@@ -106,6 +118,7 @@ test('★ an edit round-trips to disk WITHOUT mangling what it did not touch', a
     await tab(page, 'prompt').click();
     await expect(body(page)).toHaveValue(/Edited by the manager/);
     await expect(purpose(page)).toHaveValue('the agent management surface');
+    await expect(mode(page)).toHaveValue('automated');
     await expect(save(page)).toBeDisabled();
 });
 

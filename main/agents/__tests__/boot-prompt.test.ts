@@ -14,9 +14,12 @@ import { agentBootPrompt } from '../boot-prompt';
 
 const full = {
     genieAvailable: true,
+    // Manual is the default every undeclared agent gets (genie#408). The mode's
+    // own effect on this prompt is pinned in `agent-mode-nudges.test.ts`.
+    mode: 'manual',
     handoffPath: '/ws/.ai/handoff/tynn.md',
     tynnLinked: true,
-};
+} as const;
 
 describe('the agent boot prompt', () => {
     it('does NOT tell the agent to go and read its own system prompt', () => {
@@ -59,7 +62,7 @@ describe('the agent boot prompt', () => {
         // conditional: pointing at a note that exists (must not appear here),
         // and asking for one on the way out (must, or the protocol never
         // starts — see the `LEAVE one` block below).
-        const out = agentBootPrompt({ genieAvailable: true });
+        const out = agentBootPrompt({ genieAvailable: true, mode: 'manual' });
 
         expect(out).toContain('connectToGenie');
         expect(out).not.toMatch(/left a handoff|read it before/i);
@@ -70,12 +73,13 @@ describe('the agent boot prompt', () => {
         // Including the ask for a handoff: `imDone` is a genie MCP tool, so
         // with no Genie there is nothing to call and asking would send the
         // agent after a tool it does not have.
-        expect(agentBootPrompt({ genieAvailable: false })).toBe('');
+        expect(agentBootPrompt({ genieAvailable: false, mode: 'manual' })).toBe('');
     });
 
     it('keeps the persona and the caller’s own instructions', () => {
         const out = agentBootPrompt({
             genieAvailable: true,
+            mode: 'manual',
             personaPath: '/ws/.agents/tynn/AGENT.md',
             extra: 'Fix the migration.',
         });
@@ -91,7 +95,7 @@ describe('telling an agent to LEAVE one', () => {
         // agent that already RECEIVED one was told to leave one — so the very
         // first run of every agent learned nothing, and left nothing, and the
         // next run again found nothing. A chicken-and-egg that never hatches.
-        const prompt = agentBootPrompt({ genieAvailable: true, handoffPath: null });
+        const prompt = agentBootPrompt({ genieAvailable: true, mode: 'manual', handoffPath: null });
 
         expect(prompt).toMatch(/imDone/);
         expect(prompt).toMatch(/handoff/i);
@@ -100,7 +104,7 @@ describe('telling an agent to LEAVE one', () => {
     it('does not claim a note is waiting when none is', () => {
         // POSITIVE CONTROL for the test above: asking it to LEAVE one must not
         // become telling it to READ one that does not exist.
-        const prompt = agentBootPrompt({ genieAvailable: true, handoffPath: null });
+        const prompt = agentBootPrompt({ genieAvailable: true, mode: 'manual', handoffPath: null });
 
         expect(prompt).not.toMatch(/left a handoff|read it before/i);
     });
@@ -108,6 +112,7 @@ describe('telling an agent to LEAVE one', () => {
     it('still says where to read one when there is one', () => {
         const prompt = agentBootPrompt({
             genieAvailable: true,
+            mode: 'manual',
             handoffPath: '/ws/.ai/handoff/tynn.md',
         });
 

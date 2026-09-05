@@ -56,6 +56,16 @@ export type McpServerInput =
     | { kind: 'http'; name: string; url: string }
     | { kind: 'stdio'; name: string; command: string; args: string[] };
 
+/* ── Mode ──────────────────────────────────────────────────────────────── */
+
+/**
+ * Whether an agent is expected to act unattended (genie#408).
+ *
+ * `manual` is the default and the safe direction — see `agents/agent-mode.ts`,
+ * which owns what each one is TOLD. GUIDANCE, never a permission boundary.
+ */
+export type AgentMode = 'automated' | 'manual';
+
 /* ── AGENT.md ─────────────────────────────────────────────────────────────── */
 
 /**
@@ -71,6 +81,10 @@ export type McpServerInput =
  */
 export interface PersonaEdit {
     purpose?: string;
+    /** Automated or Manual. Written to the file as a `mode:` line — stated in
+     *  both directions, because choosing Manual is a declaration a human made,
+     *  not a reversion to a blank. */
+    mode?: AgentMode;
     /** null clears it back to the whole workspace. */
     scope?: string | null;
     tuis?: string[];
@@ -90,6 +104,9 @@ export interface PersonaExtraView {
 export interface PersonaView {
     name: string;
     purpose: string;
+    /** RESOLVED, never null: a file that declares nothing is Manual, and the
+     *  surface must show the mode the agent will actually be spoken to in. */
+    mode: AgentMode;
     scope: string | null;
     tuis: string[];
     avatar: string | null;

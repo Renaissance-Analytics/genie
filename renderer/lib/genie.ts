@@ -27,6 +27,7 @@ import type { AgentTuiId, TuiDef } from '../../main/agents/registry';
  * `AgentRuntimeSpec.provider` stopped matching main's `tui` and the agent panel
  * started throwing on undefined. */
 import type {
+    AgentMode,
     AgentManagerState,
     AgentManagerMcp,
     AgentManagerPersona,
@@ -39,6 +40,7 @@ import type {
 
 export type {
     TynnHealth,
+    AgentMode,
     AgentManagerState,
     AgentManagerMcp,
     AgentManagerPersona,

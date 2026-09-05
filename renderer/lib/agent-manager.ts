@@ -1,5 +1,10 @@
+/* A ZERO-RUNTIME-IMPORT leaf — see `__tests__/renderer-main-boundary.test.ts`.
+   The mode's LABEL comes from the module that words what the agent is told, so
+   what a human sees on the tab and what the agent is handed cannot drift. */
+import { agentModeBadge, DEFAULT_AGENT_MODE } from '../../main/agents/agent-mode';
 import type {
     AgentManagerMcp,
+    AgentMode,
     AgentManagerPersona,
     AgentManagerSidecar,
     AgentManagerState,
@@ -37,7 +42,15 @@ export function agentManagerTabs(state: AgentManagerState): AgentManagerTab[] {
     if (!state.ok || !state.agent) return [];
     const tabs: AgentManagerTab[] = [
         { id: 'identity', label: 'Identity' },
-        { id: 'prompt', label: 'Prompt & rules' },
+        {
+            id: 'prompt',
+            label: 'Prompt & rules',
+            // WHICH agents act unprompted is the one thing about this tab
+            // worth seeing without opening it (genie#408). The label comes from
+            // `agent-mode.ts`, which also decides that only the EXCEPTION is
+            // badged — Manual is the default and nearly every agent.
+            badge: agentModeBadge(state.persona?.mode ?? DEFAULT_AGENT_MODE) ?? undefined,
+        },
         {
             id: 'mcp',
             label: 'MCP',
@@ -128,6 +141,10 @@ export interface PersonaDraft {
     /** '' means the whole workspace — the file omits the key entirely. */
     scope: string;
     tuis: string[];
+    /** Automated or Manual (genie#408). Never blank: an undeclared file reads
+     *  as Manual, and a control showing "unset" would ask the human to reason
+     *  about a default instead of telling them how their agent is spoken to. */
+    mode: AgentMode;
     body: string;
 }
 
@@ -137,6 +154,7 @@ export function personaDraftFrom(persona: AgentManagerPersona): PersonaDraft {
         purpose: persona.purpose,
         scope: persona.scope ?? '',
         tuis: persona.tuis,
+        mode: persona.mode,
         body: persona.body,
     };
 }
@@ -153,6 +171,7 @@ export function personaDraftFrom(persona: AgentManagerPersona): PersonaDraft {
 export function personaIsDirty(loaded: AgentManagerPersona, draft: PersonaDraft): boolean {
     if (draft.purpose !== loaded.purpose) return true;
     if (draft.scope !== (loaded.scope ?? '')) return true;
+    if (draft.mode !== loaded.mode) return true;
     if (draft.body !== loaded.body) return true;
     const a = [...draft.tuis].sort();
     const b = [...loaded.tuis].sort();
@@ -164,10 +183,21 @@ export function personaIsDirty(loaded: AgentManagerPersona, draft: PersonaDraft)
 export function personaEditFrom(
     loaded: AgentManagerPersona,
     draft: PersonaDraft,
-): { purpose?: string; scope?: string | null; tuis?: string[]; body?: string } {
-    const edit: { purpose?: string; scope?: string | null; tuis?: string[]; body?: string } = {};
+): { purpose?: string; scope?: string | null; tuis?: string[]; mode?: AgentMode; body?: string } {
+    const edit: {
+        purpose?: string;
+        scope?: string | null;
+        tuis?: string[];
+        mode?: AgentMode;
+        body?: string;
+    } = {};
     if (draft.purpose !== loaded.purpose) edit.purpose = draft.purpose;
     if (draft.scope !== (loaded.scope ?? '')) edit.scope = draft.scope.trim() || null;
+    // Sent only when it CHANGED, so an agent whose file has never carried the
+    // key keeps it that way and an empty save stays a genuine no-op.
+    if (draft.mode !== loaded.mode) edit.mode = draft.mode;
+    // Sent only when it CHANGED, so an agent whose file has never carried the
+    // key keeps it that way and an empty save stays a genuine no-op.
     if (draft.body !== loaded.body) edit.body = draft.body;
     const a = [...draft.tuis].sort();
     const b = [...loaded.tuis].sort();
