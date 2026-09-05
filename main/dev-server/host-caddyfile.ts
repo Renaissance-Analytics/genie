@@ -131,9 +131,16 @@ export function buildHostCaddyfile(sites: HostCaddySite[], tls: HostCaddyTls): s
         // over h1 the rewriter is harmless, and with h2 available it swallows every
         // frame. h2 is the norm here rather than the exception — every `.gen` name
         // shares ONE leaf on ONE address, so Chromium coalesces a socket to
-        // `websockets.<ws>.gen` onto the connection it already holds for the page and
-        // sends it as an Extended CONNECT stream. A site's own same-origin `wss://`
-        // (Vite HMR, Echo on the app's host) rides the same coalesced connection.
+        // `websockets.<ws>.gen` onto the connection it already holds for the page
+        // and sends it as an Extended CONNECT stream.
+        //
+        // The blast radius was every hosted site, not the one workspace that
+        // reported it. Nothing here is specific to a WebSocket service, or to Echo,
+        // or to Laravel — this rewriter sits in front of EVERY `.gen` vhost, so it
+        // ate the frames of any socket a hosted site opened, its OWN same-origin
+        // one included. Vite HMR was broken on every host-native `.gen` site, which
+        // presents as "hot reload just stopped" and gets blamed on the dev server
+        // rather than on the front door.
         //
         // Gating costs nothing: a WebSocket has no HTML body of self-links to fix.
         // Both forms must be excluded — an h1 upgrade carries `Connection: Upgrade`,
