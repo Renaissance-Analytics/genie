@@ -307,12 +307,14 @@ describe('tool update rows', () => {
      * the same conclusion the git-on-Windows refusal reached.
      */
     it('withholds Install from a tool Genie has no installer for, and says why instead', () => {
-        expect(toolRowAction(upd({ name: 'genie', installed: undefined }))).toBe('none');
-        const row = toolUpdateRow(upd({ name: 'genie', installed: undefined }));
+        // `aider` rather than `genie`: the Genie TUI now HAS an installer, so it
+        // stopped being an example of a tool without one. Aider is PyPI-only.
+        expect(toolRowAction(upd({ name: 'aider', installed: undefined }))).toBe('none');
+        const row = toolUpdateRow(upd({ name: 'aider', installed: undefined }));
         expect(row.action).toBe('none');
         expect(row.tone).toBe('not-installed');
-        expect(row.installGap).toMatch(/not published yet/i);
-        expect(row.docsUrl).toBe('https://github.com/Renaissance-Analytics/genie-tui');
+        expect(row.installGap).toMatch(/PyPI/i);
+        expect(row.docsUrl).toBe('https://aider.chat/docs/install.html');
     });
 
     it('states no gap for a tool it CAN install — a reason with no problem is noise', () => {

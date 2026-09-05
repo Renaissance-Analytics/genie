@@ -180,7 +180,11 @@ describe('buildInstallCommand — npm-global (agent TUIs)', () => {
      */
     it('refuses to invent an npm package for a tool that has none', () => {
         expect(() =>
-            buildInstallCommand(step({ tool: 'genie' as never, method: 'npm-global' }), {
+            // `aider`, not `genie`: the Genie TUI gained a real installer once
+            // its package went public with the right bin name, so it no longer
+            // demonstrates this. Aider is PyPI-only and still has no npm
+            // package, which is what this test needs.
+            buildInstallCommand(step({ tool: 'aider' as never, method: 'npm-global' }), {
                 os: 'win32',
             }),
         ).toThrow(/no npm package/i);
