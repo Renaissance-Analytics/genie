@@ -149,9 +149,9 @@ This applies to code and to prose equally. A tool DESCRIPTION in `protocol.ts` i
 read by an agent as a promise about behaviour; if the code does not do what the
 description says, the description is a bug of exactly this kind.
 
-### Three ways a check quietly answers a weaker question
+### Four ways a check quietly answers a weaker question
 
-All three have shipped here. All three looked like guards and none was one.
+All four have shipped here. All four looked like guards and none was one.
 
 **A SQLite `CHECK` whose expression can evaluate to NULL passes.** NULL is not
 FALSE. So this constraint, written to make a denormalisation impossible to get
@@ -197,16 +197,67 @@ wrote and deleted every line up to the next `*/` from the scan. It read
 hunting (#404). Strip comments line-based; a span cannot tell a comment from a
 string.
 
-All three are the same fault as the bugs this codebase keeps finding in its
+**A test that asserts what the code RETURNS rather than what the requirement
+SAYS.** The first three weaken the assertion or never reach the branch. This one
+is precise, calls the right function, and is simply about the wrong thing: it
+records the implementation's current answer as though that answer were the
+specification. Nothing about it looks wrong, and it will keep passing forever
+while the requirement is violated.
+
+`HostToolSpec.probe: false` exists so a row can decline to claim anything about
+the machine — Amazon Q's binary is `q`, too generic to look for without reporting
+some unrelated program as an installed coding agent. The unit test asserted
+`tone === 'not-installed'` and passed, because that is what `toolUpdateTone`
+returned — not because it is what the row must say. The badge renders straight
+off the tone, so the row went on printing:
+
+```
+Amazon Q Developer CLI  [Not installed]  …its binary `q` is too generic for
+Genie to detect safely — so this row says what it is and makes no claim about
+whether you have it.
+```
+
+A row stating the claim its own copy denies making, under a green test.
+
+Two things generalise past this row:
+
+**`installed` is undefined for BOTH "we looked and it is absent" and "we never
+looked".** A field that conflates two states will be read as the more common one
+by every consumer written before the second state existed — `toolUpdateTone`
+reached `if (!u.installed) return 'not-installed'` and never got as far as asking.
+Adding a state to a system usually means adding a FIELD, not a new reading of an
+existing one.
+
+**A unit test only checks the fields you thought of, and the bug was in a field
+nobody thought of.** The E2E caught this because it reads the whole rendered row
+rather than one field. Not "E2E is better" — a whole-output assertion catches the
+field you did not think to name.
+
+Note the sibling found in the same PR, which looks nothing like it:
+`HOST_SOURCED_SETTINGS_KEYS` exists twice, and the two copies disagreed for
+months while both sides' tests passed — each asserting against its own
+hand-written copy of the list. That compares a list to itself; this compares a
+function to its own output. **Both are the implementation grading its own
+homework.** Two instances that share no surface features is what makes the
+pattern worth naming rather than the instance.
+
+The replacement test is better in one further way: it asserts the POSITIVE state
+("Not checked") as well as the absence, so a regression cannot satisfy it by
+rendering nothing at all. **A negative assertion needs a positive control, or a
+corpse passes it.**
+
+All four are the same fault as the bugs this codebase keeps finding in its
 product: a lookup that always finds *something* and never reports that it was the
 wrong something. When you write a guard, make it fail first — and make it fail
 for the reason you think it will. Then check the other half: that your FIXTURE
-reaches the code you are guarding. A green that measured less than it appeared to
-is the failure this repository keeps meeting in new clothes.
+reaches the code you are guarding, and that the value you assert is the one the
+REQUIREMENT names rather than the one the function happens to return today. A
+green that measured less than it appeared to is the failure this repository keeps
+meeting in new clothes.
 
 ### And one no per-PR check can see at all
 
-The three above are checks that measured less than they appeared to. This one is
+The four above are checks that measured less than they appeared to. This one is
 different in kind: **there is no check to weaken, because the thing that breaks
 exists in neither branch.**
 
