@@ -325,14 +325,16 @@ describe('the handoff note', () => {
  * refusal, or worse, to a stop-and-recreate that loses the work.
  */
 describe('when a graceful restart would be refused', () => {
+    // VERBATIM what `resolveRestartCommand` returns, so this fixture cannot
+    // outlive the message it stands in for.
     const refusal =
-        'Cannot gracefully restart "claude": no captured session to resume, so a restart would ' +
-        'lose the conversation.';
+        'Cannot RESUME "claude": there is no captured session to continue. ' +
+        'Restart it fresh instead — that relaunches the agent and starts a new conversation.';
 
     it('says so on the repair it was about to recommend', () => {
         const d = diagnoseAgent(running({ joinedInbox: false, restartRefusal: refusal }));
 
-        expect(d.findings[0]?.repair).toContain('no captured session to resume');
+        expect(d.findings[0]?.repair).toContain('no captured session to continue');
         expect(d.findings[0]?.repair).toMatch(/handoff|manageTerminals read/i);
     });
 

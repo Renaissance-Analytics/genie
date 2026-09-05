@@ -9,6 +9,10 @@ import ProjectContextMenu from '../components/Master/ProjectContextMenu';
 import NewAgentModal from '../components/Master/NewAgentModal';
 import AgentTuiSwitcher from '../components/Master/AgentTuiSwitcher';
 import type { AgentRecordSpec, AgentRuntimeSpec } from '../lib/ams-grid';
+import {
+    restartOptionsFor,
+    type RestartMode,
+} from '../../main/agents/restart-options';
 import WorkspaceSettingsModal from '../components/Master/WorkspaceSettingsModal';
 import WorkspaceSiteManager from '../components/Master/WorkspaceSiteManager';
 import SpecContextMenu from '../components/Master/SpecContextMenu';
@@ -1967,6 +1971,47 @@ function MasterInner() {
         }
     }, []);
 
+    /**
+     * The ONE place a restart is asked for, whichever surface asked (genie#443).
+     *
+     * TWO operations, and this confirms the right thing for each. `'resume'`
+     * continues the conversation, so the only warning it needs is about unsent
+     * input. `'fresh'` starts a NEW one — and it is offered on agents that have
+     * no conversation at all (the wedged and the dead), so it warns about losing
+     * one only when there IS one. Telling someone their work is at risk when it
+     * is not is the same class of wrongness as not telling them when it is; the
+     * reported terminal was refused a restart in order to protect a conversation
+     * that had never started.
+     *
+     * The toast is the HOST's own `note`, never a stronger claim. `ok` means the
+     * old agent was torn down and the command was handed to a fresh terminal —
+     * not that the TUI came back up, which nothing here has observed (genie#364).
+     * This surface used to say "Agent restarted — conversation resumed." on
+     * evidence that only supported "restarting".
+     */
+    const restartAgentSpec = useCallback(
+        async (spec: TerminalSpec, mode: RestartMode) => {
+            const { losesConversation } = restartOptionsFor(spec);
+            const ok = await showPrompt({
+                title: mode === 'fresh' ? 'Restart agent (fresh)' : 'Restart agent (resume)',
+                body:
+                    mode === 'fresh'
+                        ? `Restart "${spec.label}" from scratch? Its process is relaunched against the current settings and MCP tools. ` +
+                          (losesConversation
+                              ? 'It starts a NEW conversation — the current one is not carried over.'
+                              : 'Genie has no saved conversation for it, so there is nothing to carry over.')
+                        : `Restart "${spec.label}"? Its process is relaunched and reconnects to the ` +
+                          'current MCP tools; the conversation is resumed, but any unsent input in the terminal is lost.',
+                confirmLabel: 'Restart',
+                destructive: mode === 'fresh' && losesConversation,
+            });
+            if (ok === null) return;
+            const result = await api().terminalSpec.restartAgent(spec.id, mode);
+            setToast(result.ok ? result.note : result.error || 'Could not restart the agent.');
+        },
+        [],
+    );
+
     const duplicateSpec = useCallback(
         async (id: string) => {
             const src = specs.find((s) => s.id === id);
@@ -2217,18 +2262,10 @@ function MasterInner() {
                         onToggleSpec={toggleSpec}
                         onAddSpec={(wsId, type) => void addSpec(wsId, type)}
                         onDestroySpec={(id) => void destroySpec(id)}
-                        onRestartAgentSpec={(id) => {
+                        onRestartAgentSpec={(id, mode) => {
                             const sp = specs.find((x) => x.id === id);
                             if (!sp) return;
-                            void api()
-                                .terminalSpec.restartAgent(sp.id)
-                                .then((r) =>
-                                    // The host's own words for what it did — see
-                                    // the agent-panel restart below (genie#364).
-                                    setToast(
-                                        r.ok ? r.note : r.error || 'Could not restart the agent.',
-                                    ),
-                                );
+                            void restartAgentSpec(sp, mode);
                         }}
                         onEditAgentSpec={(id) => {
                             const sp = specs.find((x) => x.id === id);
@@ -2359,26 +2396,7 @@ function MasterInner() {
                         onToggleMaximize={toggleMaximize}
                         onDisable={(id) => void disableSpec(id)}
                         onAgentSettings={(spec) => setAgentEditSpec(spec)}
-                        onRestartAgent={async (spec) => {
-                            const ok = await showPrompt({
-                                title: 'Restart agent',
-                                body: `Restart "${spec.label}"? Any unsent terminal input will be lost. Genie will resume the saved conversation when the provider supports it.`,
-                                confirmLabel: 'Restart',
-                            });
-                            if (ok === null) return;
-                            const result = await api().terminalSpec.restartAgent(spec.id);
-                            // NOT "Agent restarted." — the host has torn the old
-                            // agent down and handed the resume command to a fresh
-                            // terminal, and that is all it knows (genie#364). It
-                            // says so in `note`; repeating a stronger claim here
-                            // is how the owner was told an agent was back while
-                            // the relaunch was dying in the pty.
-                            setToast(
-                                result.ok
-                                    ? result.note
-                                    : result.error || 'Could not restart the agent.',
-                            );
-                        }}
+                        onRestartAgent={(spec, mode) => void restartAgentSpec(spec, mode)}
                         onAddTerminal={() =>
                             activeWorkspaceId && void addSpec(activeWorkspaceId, 'terminal')
                         }
@@ -2407,17 +2425,7 @@ function MasterInner() {
                             onAttentionClear={() => clearAttention(genieOsSpec.id)}
                             onClose={() => setGenieOsOpen(false)}
                             onAgentSettings={() => setAgentEditSpec(genieOsSpec)}
-                            onRestartAgent={async () => {
-                                const result = await api().terminalSpec.restartAgent(genieOsSpec.id);
-                                // Same honesty as the agent panel above: report
-                                // the relaunch the host actually performed, not a
-                                // recovery it has not observed (genie#364).
-                                setToast(
-                                    result.ok
-                                        ? result.note
-                                        : result.error || 'Could not restart Genie OS.',
-                                );
-                            }}
+                            onRestartAgent={(mode) => void restartAgentSpec(genieOsSpec, mode)}
                             onMarkActive={() => markActive(genieOsSpec.id)}
                             onMarkInactive={() => markInactive(genieOsSpec.id)}
                         />
@@ -2644,22 +2652,7 @@ function MasterInner() {
                             void moveSpecToWorkspace(target.id, wsId)
                         }
                         onAgentSettings={() => setAgentEditSpec(target)}
-                        onRestartAgent={async () => {
-                            const ok = await showPrompt({
-                                title: 'Restart agent',
-                                body:
-                                    `Restart "${target.label}"? Its process is relaunched and reconnects to the ` +
-                                    'current MCP tools; the conversation resumes, but any unsent input in the terminal is lost.',
-                                confirmLabel: 'Restart',
-                            });
-                            if (ok === null) return;
-                            const res = await api().terminalSpec.restartAgent(target.id);
-                            setToast(
-                                res.ok
-                                    ? 'Agent restarted — conversation resumed.'
-                                    : res.error || 'Could not restart the agent.',
-                            );
-                        }}
+                        onRestartAgent={(mode) => void restartAgentSpec(target, mode)}
                         onDelete={async () => {
                             const ok = await showPrompt({
                                 title: 'Delete terminal',

@@ -113,8 +113,18 @@ describe('sidecarActions', () => {
         expect(sidecarActions({ exists: true, running: false })).toEqual(['start']);
     });
 
-    it('offers Stop and Restart when it is running', () => {
-        expect(sidecarActions({ exists: true, running: true })).toEqual(['stop', 'restart']);
+    it('offers Stop and BOTH restarts when it is running', () => {
+        // genie#443 — `restart` resumes, and `agentSidecarAction` returns the
+        // refusal rather than downgrading to a hard restart, which is right: a
+        // sidecar exists to keep a second conversation warm. But that made the
+        // ONLY control for a sidecar under a provider with no resume grammar a
+        // button that could not work. The fresh restart is the other operation,
+        // and it is always available on something that is running.
+        expect(sidecarActions({ exists: true, running: true })).toEqual([
+            'stop',
+            'restart',
+            'restart-fresh',
+        ]);
     });
 
     it('offers nothing when there is no sidecar', () => {

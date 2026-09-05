@@ -1439,6 +1439,12 @@ export interface RunAgentRequest {
     /** read (optional): strip ANSI/escape sequences and return readable plain
      *  text instead of raw redraw frames. */
     strip?: boolean;
+    /** restart (optional, default false): restart FRESH — kill the TUI and start
+     *  a new conversation — instead of resuming the captured one. The only
+     *  restart that reaches a wedged or dead agent, or a provider with no resume
+     *  grammar (genie#443). It DISCARDS the conversation, so ask before using it
+     *  on an agent that has one. */
+    fresh?: boolean;
 }
 
 export interface RegisterAgentRequest {
@@ -2499,7 +2505,7 @@ const THUMBS_UP_TOOL = {
 const RUN_AGENT_TOOL = {
     name: 'runAgent',
     description:
-        "Start and control a REGISTERED coding agent (claude / codex / a custom CLI) in this workspace — or one you govern. Registration is a separate `registerAgent` call; `runAgent` never creates configuration. Actions: `list` (registered agents, including dormant ones); `diagnose` (read-only — WHY an agent is wedged and which repair fits); `start` (launch or resume the registered `name`; defaults to the Workspace Agent); `send`; `read`; `stop`; `restart`. A running agent uses a distinct AgentPanel on the Floor while its durable AMS identity survives TUI and panel restarts. TRIAGE: `diagnose` joins the agent record, its runtime, its pty, its harness transport and its AgentInbox membership and reports a CAUSE — never joined the inbox, transport never verified, a binding lost to a Genie restart, boot never completed, a dead pty, a name collision — each with the existing verb that addresses it. Run it BEFORE a repair: a restart aimed at a healthy agent costs its conversation. With no `id`/`name` it examines every agent in the workspace; with no `workspaceId` a workstation operator sweeps the whole machine. SAFETY: first launch, `send`, and `restart` are approval-gated when the workspace requires it; listing, diagnosing, reading, and reattaching are read-only/already-approved.",
+        "Start and control a REGISTERED coding agent (claude / codex / a custom CLI) in this workspace — or one you govern. Registration is a separate `registerAgent` call; `runAgent` never creates configuration. Actions: `list` (registered agents, including dormant ones); `diagnose` (read-only — WHY an agent is wedged and which repair fits); `start` (launch or resume the registered `name`; defaults to the Workspace Agent); `send`; `read`; `stop`; `restart` (resumes the conversation — add `fresh: true` to kill it and start a NEW one, the only restart that reaches a wedged or dead agent). A running agent uses a distinct AgentPanel on the Floor while its durable AMS identity survives TUI and panel restarts. TRIAGE: `diagnose` joins the agent record, its runtime, its pty, its harness transport and its AgentInbox membership and reports a CAUSE — never joined the inbox, transport never verified, a binding lost to a Genie restart, boot never completed, a dead pty, a name collision — each with the existing verb that addresses it. Run it BEFORE a repair: a restart aimed at a healthy agent costs its conversation. With no `id`/`name` it examines every agent in the workspace; with no `workspaceId` a workstation operator sweeps the whole machine. SAFETY: first launch, `send`, and `restart` are approval-gated when the workspace requires it; listing, diagnosing, reading, and reattaching are read-only/already-approved.",
     inputSchema: {
         type: 'object',
         properties: {
@@ -2578,6 +2584,11 @@ const RUN_AGENT_TOOL = {
                 type: 'boolean',
                 description:
                     'read (optional): strip ANSI/escape sequences and return readable plain text instead of raw redraw frames.',
+            },
+            fresh: {
+                type: 'boolean',
+                description:
+                    'restart (optional, default false): restart FRESH — kill the TUI and start a NEW conversation — instead of resuming the captured one. This is the only restart that works on a wedged or dead agent, or on a provider with no resume grammar (a plain restart refuses those rather than silently losing the chat). It DISCARDS the conversation: use it to recover an agent that is stuck, not to reload a working one.',
             },
         },
         required: ['action'],

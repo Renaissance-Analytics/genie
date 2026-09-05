@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { agentCardMenuItems } from '../agent-card-menu';
+import { restartOptionsFor } from '../../../main/agents/restart-options';
 import type { AgentGridRow } from '../ams-grid';
 
 /**
@@ -68,6 +69,49 @@ describe('agentCardMenuItems', () => {
         expect(items.find((i) => i.id === 'start')?.label).toBe('Focus agent');
         // …and it is still an agent, so the agent-level items remain.
         expect(ids(items)).toContain('make-default');
+    });
+
+    it('offers a FRESH restart even to a provider that cannot resume', () => {
+        // genie#443. The hint here read "Relaunches its TUI and resumes the same
+        // conversation" for EVERY agent, including the twelve providers with
+        // `resume: null` — for which the host refuses outright. So the one
+        // surface that always showed a restart described an operation it could
+        // not perform, and the surfaces that COULD tell hid the item instead.
+        const items = agentCardMenuItems(
+            row({ running: true, provider: 'genie', specId: 't1' }),
+            restartOptionsFor({ meta: { agent: 'genie', agent_command: 'genie' } }),
+        );
+
+        expect(ids(items)).toContain('restart-fresh');
+        // …and it does NOT claim a resume it cannot do.
+        expect(ids(items)).not.toContain('restart');
+        expect(items.find((i) => i.id === 'restart-fresh')?.hint).not.toMatch(/resumes/i);
+    });
+
+    it('offers BOTH restarts when the conversation can genuinely be resumed', () => {
+        // POSITIVE CONTROL: without it, "restart-fresh is offered" passes
+        // against a menu that has stopped offering the resume at all.
+        const items = agentCardMenuItems(
+            row({ running: true, provider: 'claude', specId: 't1' }),
+            restartOptionsFor({ meta: { agent: 'claude', chat_session_id: 'sess-1' } }),
+        );
+
+        expect(ids(items)).toContain('restart');
+        expect(ids(items)).toContain('restart-fresh');
+        expect(items.find((i) => i.id === 'restart')?.hint).toMatch(/same conversation/i);
+        // A fresh restart HERE really would drop a chat, so it says so.
+        expect(items.find((i) => i.id === 'restart-fresh')?.hint).toMatch(/not carried over/i);
+    });
+
+    it('offers no restart at all to an agent with no terminal', () => {
+        // A dormant agent has nothing to restart — `start` is its verb. Offering
+        // one would be a click that reaches nothing, which is what `specId`
+        // being undefined is there to prevent.
+        const items = agentCardMenuItems(row());
+
+        expect(ids(items)).not.toContain('restart');
+        expect(ids(items)).not.toContain('restart-fresh');
+        expect(ids(items)).toContain('start');
     });
 
     it('offers to DELETE the agent — the whole reason genie#311 exists', () => {

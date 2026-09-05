@@ -388,10 +388,17 @@ Actions (\`action\`):
   \`strip: true\` for plain text with escape codes removed).
 - \`stop\` — terminate the agent \`id\`. The SAVED agent survives; \`start\` brings
   it back, resuming its conversation.
-- \`restart\` — GRACEFULLY relaunch the agent \`id\`: it resumes the SAME
-  conversation (via \`--resume\`) in a fresh terminal, so its TUI reconnects to the
-  current MCP rig / \`.mcp.json\` after a genie update WITHOUT losing context.
-  claude-only, needs a captured session. Returns the NEW terminal \`id\`.
+- \`restart\` — relaunch the agent \`id\`. TWO operations, and you pick:
+  - default: GRACEFUL. It resumes the SAME conversation (via the provider's
+    resume grammar) in a fresh terminal, so its TUI reconnects to the current MCP
+    rig / \`.mcp.json\` after a genie update WITHOUT losing context. Needs a
+    provider that can resume AND a captured session; it REFUSES otherwise rather
+    than silently starting a new chat.
+  - \`fresh: true\`: kill it and start over. Needs neither, so it is the only
+    restart that reaches a WEDGED or DEAD agent, or a provider with no resume
+    grammar. It DISCARDS the conversation — use it to recover, not to reload.
+
+  Either way it returns the NEW terminal \`id\`.
 **Approval:** creating an agent, \`send\`, and \`restart\` are GATED the same way
 (OFF runs immediately). \`list\`, \`read\`, and reattaching to an already-approved
 saved agent never prompt.

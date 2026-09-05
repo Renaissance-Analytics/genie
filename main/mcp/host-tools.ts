@@ -29,7 +29,6 @@ import {
     isWorkstationOperator,
     createTerminalSpec,
     updateTerminalSpec,
-    workspaceMcpEnabled,
     workspaceProcessApproval,
     workspaceTerminalApproval,
     workspaceScheduleApproval,
@@ -82,7 +81,6 @@ import {
     renderAgentFile,
 } from '../agents/agent-file';
 import { agentBootPrompt } from '../agents/boot-prompt';
-import { agentRelaunchPrompt } from '../agents/relaunch-prompt';
 import { handoffPath } from '../agents/handoff';
 import {
     diagnoseAgent,
@@ -124,7 +122,12 @@ import {
     runScheduleNow,
 } from '../terminal/process-scheduler';
 import { describeCron, isValidCron } from '../terminal/cron';
-import { capturedSessionId, resolveRestartCommand } from '../agentinbox/session-capture';
+import {
+    capturedSessionId,
+    resolveFreshRestartCommand,
+    resolveRestartCommand,
+} from '../agentinbox/session-capture';
+import type { RestartMode } from '../agents/restart-options';
 import { launchBlockReason } from '../agents/availability';
 import type { AgentTuiId } from '../agents/registry';
 import { detectFolder } from '../workspace/detect';
@@ -1862,23 +1865,40 @@ export type RestartAgentResult =
     | { ok: false; error: string };
 
 /**
- * GRACEFULLY restart an agent terminal so its TUI reconnects to the (possibly
- * updated) MCP rig WITHOUT losing the conversation (wish #88): tear the current
- * agent down, then relaunch it in a fresh terminal with the provider's RESUME
- * grammar (`TuiDef.resume` — never the one-shot `--session-id` create flag; see
- * genie#364). Claude persists its session to disk continuously, so the resumed
- * CLI continues where it left off while re-reading the current `.mcp.json` +
- * getting a fresh agent MCP endpoint. REFUSES (no teardown) when the terminal
- * isn't a resumable agent — no captured session id, or an unsupported custom
- * agent — so a restart can never silently drop the conversation into a fresh,
- * context-less session.
+ * Restart an agent terminal — either of the TWO operations (genie#443).
+ *
+ * **Resume** (`mode: 'resume'`, the default) is the graceful restart of wish #88:
+ * tear the current agent down, then relaunch it into the same spec with the
+ * provider's RESUME grammar (`TuiDef.resume` — never the one-shot `--session-id`
+ * create flag; see genie#364), so its TUI re-reads the current `.mcp.json` and
+ * gets a fresh agent MCP endpoint WITHOUT losing the conversation. It REFUSES,
+ * before any teardown, when the terminal has no resumable conversation — no
+ * captured session id, or a provider with no resume grammar — so a restart can
+ * never silently drop a conversation into a fresh, context-less session.
+ *
+ * **Fresh** (`mode: 'fresh'`) kills the process and starts it again. It needs no
+ * resume grammar and no captured id, because it promises neither. This is the
+ * operation that was missing: sharing one path meant "cannot resume" was read as
+ * "cannot restart", so the twelve providers with `resume: null` — the Genie TUI
+ * among them — could not be restarted AT ALL, and the reported terminal (dead at
+ * `bash: genie: command not found`, with no conversation to protect) was refused
+ * in order to protect a conversation that did not exist.
+ *
+ * Fresh does NOT get a launch path of its own. It clears the captured session
+ * FROM THE SPEC and then takes the ordinary revive route, which already renders
+ * a clean launch — and mints a new session id where the provider supports one —
+ * the moment nothing is captured. Two renderers of a launch command is how they
+ * drift; the surfaces above have already paid for that once.
  *
  * On success it reports `state: 'relaunching'`, NOT "restarted": everything it
  * can decide, it decides here and refuses on (the provider is launchable, the
  * command resolves, the fresh pty is live); the one thing it cannot see is
  * inside the pty, and it says so instead of implying otherwise.
  */
-export function restartAgentTerminal(id: string): RestartAgentResult {
+export function restartAgentTerminal(
+    id: string,
+    mode: RestartMode = 'resume',
+): RestartAgentResult {
     const spec = getTerminalSpec(id);
     const agent = spec?.meta?.agent;
     if (!spec || !agent) {
@@ -1900,75 +1920,20 @@ export function restartAgentTerminal(id: string): RestartAgentResult {
 
     // Genie OSA is a recovery surface: restart means a complete teardown and a
     // fresh launch using CURRENT provider settings. It must work even when the
-    // old TUI never captured a resumable session or its input path is wedged.
-    if (spec.meta?.agent_id === 'genie:workstation') {
-        // This used to key on `meta.system` and then rebuild a fake workspace
-        // (`{ id: '__system__', path: spec.cwd }`) because the operator
-        // had no row — an earlier version asserted `getWorkspace(spec.workspace_id!)`
-        // on a value that was ALWAYS null, so every restart failed with "Genie OS
-        // workspace is unavailable". The row exists now, so the workspace is
-        // looked up, not invented; what remains is the teardown-and-relaunch
-        // behaviour, which is about the operator's ROLE, not about its identity
-        // model.
-        const ws = getWorkspace(spec.workspace_id ?? '') ?? { id: '', path: spec.cwd };
-        const command = resolveAgentLaunch(provider, undefined, ws);
-        if (!command) return { ok: false, error: `No command configured for agent "${provider}".` };
-        const identity = spec.meta.agent_id;
-        const preserved = { ...spec.meta };
-        // The operator's ROLE BRIEF and this boot's script, plus the line that
-        // says it was restarted (genie#434). This branch used to pass no
-        // instructions at all AND delete the spec that held them, so the one
-        // agent responsible for repairing the machine came back knowing neither
-        // what it is nor that anything had happened to it — on the surface that
-        // exists precisely for recovery. A teardown is not a resume, so it is
-        // told so: nothing was carried over.
-        const instructions = agentRelaunchPrompt({
-            genieAvailable: !!spec.workspace_id && workspaceMcpEnabled(spec.workspace_id),
-            resumed: false,
-            saved: typeof preserved.agent_instructions === 'string'
-                ? preserved.agent_instructions
-                : null,
-        });
-        killTerminalById(id);
-        deleteTerminalSpec(id);
-        const restarted = createAgentTerminal({
-            // THE SAME SPEC ID, which this branch alone was not doing. Deleting
-            // the spec and creating one with no `id` minted a fresh uuid, and
-            // the operator is recognised BY that id: `onThumbsUp`
-            // (host-core/server-deps.ts) keys on `GENIE_OS_TERMINAL_ID`, and
-            // `~/.gosa`'s MCP config names the endpoint registered for it. So a
-            // restarted operator could not answer the very thumbsUp this
-            // relaunch now asks it for, and its old spec sat orphaned until the
-            // next boot's `obsoleteOsAgentSpecIds` sweep collected it. Deleting
-            // first is what keeps this a FRESH launch rather than a revive —
-            // `createAgentTerminal` decides that on whether a spec already
-            // exists for the id, not on the id itself.
-            id,
-            workspaceId: spec.workspace_id ?? '', cwd: spec.cwd, label: spec.label,
-            agentMeta: { agent: provider, command, instructions },
-            agentInbox: {
-                purpose: spec.meta.whisper_purpose,
-                scope: spec.meta.whisper_scope,
-                scopeWorkspaces: spec.meta.whisper_workspaces,
-            },
-        });
-        const fresh = getTerminalSpec(restarted.id);
-        if (fresh) updateTerminalSpec(restarted.id, { meta: {
-            ...preserved, ...fresh.meta,
-            // The relaunch line is true of THIS launch, not of the agent. It
-            // rides the command line and stops there; the durable field stays
-            // the boot script, or it would compound on every restart and outlive
-            // the restart it describes.
-            ...(typeof preserved.agent_instructions === 'string'
-                ? { agent_instructions: preserved.agent_instructions }
-                : {}),
-            ...(identity ? { agent_id: identity } : {}),
-        } });
-        broadcastTerminalSpecsChanged();
-        return relaunchInFlight(id, restarted.id, provider, restarted.command ?? command);
-    }
+    // old TUI never captured a resumable session or its input path is wedged, so
+    // it does not take a caller's `mode` — it IS the fresh one, always.
+    //
+    // It used to be a whole separate branch, which is how genie#438 happened: it
+    // DELETED the spec so `createAgentTerminal` would treat the relaunch as
+    // fresh, and deleting the spec mints a new `meta.agent_id` — joined to the
+    // AgentInbox broker before the code could re-stamp `genie:workstation` back
+    // onto the spec, leaving the two disagreeing about who the operator is. Now
+    // that a fresh restart exists for every agent, the operator just asks for one
+    // and the spec is never deleted, so there is no second identity to reconcile.
+    const isWorkstation = spec.meta?.agent_id === 'genie:workstation';
+    const effectiveMode: RestartMode = isWorkstation ? 'fresh' : mode;
 
-    // The BASE the resume is built on. `meta.agent_command` is a cache of what
+    // The BASE the relaunch is built on. `meta.agent_command` is a cache of what
     // the builder produced, and migrations DELETE it when the flags it froze go
     // bad (v59's interactive channel prompt, v65's no-op `--channels`) precisely
     // so resolution falls back to the builder. Nothing here used to do that
@@ -1979,8 +1944,19 @@ export function restartAgentTerminal(id: string): RestartAgentResult {
     // agent came back visibly crippled and the sweep looked like the culprit.
     // Re-resolve, and PERSIST it so the reopen path (maybeRelaunchAgent, which
     // has no access to settings) gets the same command.
+    //
+    // The operator re-resolves EVERY time, because its provider follows the
+    // WORKSTATION's configured TUI (`restartProviderForSpec`) rather than
+    // whatever it was last launched with — so switching that default has to
+    // actually move it, command and `meta.agent` together.
     const ws = getWorkspace(spec.workspace_id ?? '');
-    if (!spec.meta?.agent_command?.trim() && ws) {
+    if (isWorkstation) {
+        const rebuilt = resolveAgentLaunch(provider, undefined, ws ?? { id: '', path: spec.cwd });
+        if (!rebuilt) return { ok: false, error: `No command configured for agent "${provider}".` };
+        updateTerminalSpec(spec.id, {
+            meta: { ...spec.meta, agent: provider, agent_command: rebuilt },
+        });
+    } else if (!spec.meta?.agent_command?.trim() && ws) {
         const rebuilt = resolveAgentLaunch(provider, undefined, ws);
         if (rebuilt) {
             updateTerminalSpec(spec.id, { meta: { ...spec.meta, agent_command: rebuilt } });
@@ -1988,25 +1964,44 @@ export function restartAgentTerminal(id: string): RestartAgentResult {
     }
     const current = getTerminalSpec(spec.id) ?? spec;
 
-    // Resolve the relaunch command with the ON-DISK transcript check, so a
-    // drifted session id falls back to `--continue` instead of dead-ending at
-    // `--resume <phantom>` ("No conversation found" — reads as lost work). Refuses
-    // when the terminal has no resumable conversation.
-    const decision = resolveRestartCommand(current, (sid) =>
-        agentSessionTranscriptExists(current, sid),
-    );
+    // RESUME resolves with the ON-DISK transcript check, so a drifted session id
+    // falls back to `--continue` instead of dead-ending at `--resume <phantom>`
+    // ("No conversation found" — reads as lost work), and refuses when there is
+    // no resumable conversation at all. FRESH has nothing to verify: it asks only
+    // for the base command, stripped of the flags that would resume anything.
+    const decision =
+        effectiveMode === 'fresh'
+            ? resolveFreshRestartCommand(current)
+            : resolveRestartCommand(current, (sid) =>
+                  agentSessionTranscriptExists(current, sid),
+              );
     if ('error' in decision) {
         return { ok: false, error: decision.error };
     }
-    const resume = decision.command;
+    const command = decision.command;
 
-    // A session id that lived only in the stored `--session-id` flag has just
-    // been recovered (genie#364). Move it into the field that owns it, so the
-    // AgentInbox, the agent ref and the next relaunch all read one record rather
-    // than re-parsing a command string that the next migration may sweep away.
-    const recovered = capturedSessionId(current);
-    if (recovered && current.meta?.chat_session_id !== recovered) {
-        updateTerminalSpec(spec.id, { meta: { ...current.meta, chat_session_id: recovered } });
+    if (effectiveMode === 'fresh') {
+        // The conversation is deliberately left behind, so the SPEC has to stop
+        // pointing at it before the relaunch — `agentRelaunchDecision` resumes
+        // whatever `capturedSessionId` finds, and that reads the stored
+        // `--session-id` flag as well as the field (genie#364), so clearing one
+        // without the other would silently resume the chat the user asked to
+        // leave. Cleared here, the ordinary revive path renders a fresh launch
+        // by itself, mints a new id where the provider supports one, and tells
+        // the relaunched agent `resumed: false` — because the command it reads
+        // carries no resume grammar, not because a flag said so.
+        updateTerminalSpec(spec.id, {
+            meta: { ...current.meta, agent_command: command, chat_session_id: undefined },
+        });
+    } else {
+        // A session id that lived only in the stored `--session-id` flag has just
+        // been recovered (genie#364). Move it into the field that owns it, so the
+        // AgentInbox, the agent ref and the next relaunch all read one record rather
+        // than re-parsing a command string that the next migration may sweep away.
+        const recovered = capturedSessionId(current);
+        if (recovered && current.meta?.chat_session_id !== recovered) {
+            updateTerminalSpec(spec.id, { meta: { ...current.meta, chat_session_id: recovered } });
+        }
     }
 
     // Tear the old agent down FIRST (releases its pty + MCP endpoint + AgentInbox
@@ -2026,15 +2021,15 @@ export function restartAgentTerminal(id: string): RestartAgentResult {
     // The same spec means all three are impossible rather than repaired: the
     // identity is inherited, there is no second spec to orphan, and the registry
     // binding never went stale. It is exactly what `reattachSavedAgent`'s revive
-    // already does; the Genie OSA branch above needs its own path only because a
-    // recovery restart deliberately re-resolves the provider.
+    // already does — and a FRESH conversation is not a fresh AGENT, so it takes
+    // the same route rather than deleting its way to one.
     killTerminalById(id);
     const restarted = createAgentTerminal({
         id: spec.id,
-        workspaceId: spec.workspace_id!,
+        workspaceId: spec.workspace_id ?? '',
         cwd: spec.cwd,
         label: spec.label,
-        agentMeta: { agent, command: resume },
+        agentMeta: { agent: provider, command },
         agentInbox: {
             purpose: spec.meta?.whisper_purpose,
             scope: spec.meta?.whisper_scope,
@@ -2042,8 +2037,8 @@ export function restartAgentTerminal(id: string): RestartAgentResult {
         },
     });
     // createAgentTerminal launches it host-side from the spec's own relaunch
-    // decision, which is the same `resume` resolved above.
-    return relaunchInFlight(id, restarted.id, agent, restarted.command ?? resume);
+    // decision, which is the same one resolved above.
+    return relaunchInFlight(id, restarted.id, provider, restarted.command ?? command);
 }
 
 /**
@@ -2610,15 +2605,21 @@ export async function runAgentForMcp(
                     return { ok: false, error: `No agent terminal "${req.id ?? ''}" in this workspace.` };
                 }
                 // Restarting relaunches an agent CLI (it can read/write/run code) —
-                // gate it like start.
+                // gate it like start. The gate NAMES which of the two restarts is
+                // being asked for (genie#443): a fresh one discards the
+                // conversation, and approving that must not read as approving a
+                // resume.
+                const fresh = req.fresh === true;
                 const approved = await approveTerminalAction(ws, {
-                    title: 'An agent wants to RESTART a running coding agent — relaunch its TUI (resuming the same conversation) so it picks up genie rig / protocol updates:',
+                    title: fresh
+                        ? 'An agent wants to RESTART a running coding agent FROM SCRATCH — its TUI is killed and relaunched, and its CONVERSATION IS DISCARDED:'
+                        : 'An agent wants to RESTART a running coding agent — relaunch its TUI (resuming the same conversation) so it picks up genie rig / protocol updates:',
                     lines: [`terminal: ${req.id}`],
                 });
                 if (!approved) {
                     return { ok: false, error: 'Denied by user — the agent was not restarted.' };
                 }
-                const r = restartAgentTerminal(req.id!);
+                const r = restartAgentTerminal(req.id!, fresh ? 'fresh' : 'resume');
                 if (!r.ok) return { ok: false, error: r.error };
                 // `note` travels with the result: the caller is another agent,
                 // and "restarted" would have it report a recovery Genie has not

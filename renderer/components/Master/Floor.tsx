@@ -1,6 +1,7 @@
 import { IconBox, IconLayoutGrid } from './icons';
 import TerminalGrid from './TerminalGrid';
 import type { AgentRecordSpec, AgentRuntimeSpec } from '../../lib/ams-grid';
+import type { RestartMode } from '../../../main/agents/restart-options';
 import type { LayoutMode } from './TerminalGrid';
 import type { AgentInboxIncomingNotice, TerminalSpec, WorkspaceRow } from '../../lib/genie';
 
@@ -45,7 +46,7 @@ export interface FloorState {
     onToggleMaximize: (id: string) => void;
     onDisable?: (id: string) => void;
     onAgentSettings?: (spec: TerminalSpec) => void;
-    onRestartAgent?: (spec: TerminalSpec) => void;
+    onRestartAgent?: (spec: TerminalSpec, mode: RestartMode) => void;
     onAddTerminal: () => void;
     onAddCode?: () => void;
     onMarkActive: (id: string) => void;

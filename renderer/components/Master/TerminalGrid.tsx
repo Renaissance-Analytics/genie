@@ -10,6 +10,7 @@ import TerminalPanel from './TerminalPanel';
 import AgentPanel from './AgentPanel';
 import { agentForSpec } from '../../lib/agent-for-spec';
 import type { AgentRecordSpec, AgentRuntimeSpec } from '../../lib/ams-grid';
+import type { RestartMode } from '../../../main/agents/restart-options';
 import CodePanel from '../Code/CodePanel';
 import PluginEditorHost from '../Plugins/PluginEditorHost';
 import PluginPanelHost from '../Plugins/PluginPanelHost';
@@ -78,7 +79,7 @@ interface Props {
     /** Tier 2: suspend a terminal (keep its pty alive, hide the panel). */
     onDisable?: (id: string) => void;
     onAgentSettings?: (spec: TerminalSpec) => void;
-    onRestartAgent?: (spec: TerminalSpec) => void;
+    onRestartAgent?: (spec: TerminalSpec, mode: RestartMode) => void;
     onAddTerminal: () => void;
     onAddCode?: () => void;
     onMarkActive: (id: string) => void;
@@ -286,7 +287,7 @@ interface ResizableGridProps {
     onToggleMaximize: (id: string) => void;
     onDisable?: (id: string) => void;
     onAgentSettings?: (spec: TerminalSpec) => void;
-    onRestartAgent?: (spec: TerminalSpec) => void;
+    onRestartAgent?: (spec: TerminalSpec, mode: RestartMode) => void;
     onAddTerminal: () => void;
     onAddCode?: () => void;
     onMarkActive: (id: string) => void;
@@ -740,7 +741,7 @@ interface PanelForProps {
     onMinimize?: () => void;
     onDisable?: () => void;
     onAgentSettings?: (spec: TerminalSpec) => void;
-    onRestartAgent?: (spec: TerminalSpec) => void;
+    onRestartAgent?: (spec: TerminalSpec, mode: RestartMode) => void;
     onMarkActive: () => void;
     onMarkInactive: () => void;
     /** Drag-reorder wiring for this tile (undefined = not reorderable). */
@@ -866,7 +867,7 @@ function PanelFor({
                 onMinimize={onMinimize}
                 onDisable={onDisable}
                 onAgentSettings={onAgentSettings ? () => onAgentSettings(spec) : undefined}
-                onRestartAgent={onRestartAgent ? () => onRestartAgent(spec) : undefined}
+                onRestartAgent={onRestartAgent ? (mode) => onRestartAgent(spec, mode) : undefined}
                 onMarkActive={onMarkActive}
                 onMarkInactive={onMarkInactive}
                 drag={drag}

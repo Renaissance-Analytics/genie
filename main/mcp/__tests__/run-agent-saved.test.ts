@@ -435,6 +435,33 @@ describe('listing the workspace roster', () => {
 describe('runAgent restart', () => {
     const restart = (id: string) =>
         runAgentForMcp(CALLER_ID, { action: 'restart', id } as RunAgentRequest);
+    const restartFresh = (id: string) =>
+        runAgentForMcp(CALLER_ID, { action: 'restart', id, fresh: true } as RunAgentRequest);
+
+    it('REFUSES a resume it cannot do, and performs the FRESH restart it can', async () => {
+        // genie#443 over MCP. A `genie` agent has no resume grammar, so a plain
+        // restart refuses — correctly, since inventing one would silently open a
+        // NEW conversation while claiming to resume (genie#440). Before `fresh`
+        // existed that refusal was the end of the road, and an agent asked to
+        // repair a wedged peer had no verb that worked.
+        const created = await registerAndStart({ name: 'genie-builder', agent: 'genie' });
+        expect(created.ok).toBe(true);
+
+        const refused = await restart(created.id!);
+        expect(refused.ok).toBe(false);
+        expect(refused.error).toMatch(/fresh/i);
+        // The refusal tore NOTHING down — the agent it declined to restart is
+        // still running, which is the half of the old behaviour that was right.
+        expect(terminalManager().isLive(created.id!)).toBe(true);
+
+        const fresh = await restartFresh(created.id!);
+
+        expect(fresh.ok).toBe(true);
+        // POSITIVE CONTROL: one agent, and it is actually running — "no second
+        // agent" passes trivially against a restart that simply failed.
+        expect(agentSpecs()).toHaveLength(1);
+        expect(terminalManager().isLive(agentSpecs()[0]!.id)).toBe(true);
+    });
 
     it('leaves ONE agent, not two', async () => {
         const created = await registerAndStart({ name: 'tynn-builder', agent: 'claude' });

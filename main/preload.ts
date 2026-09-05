@@ -1190,10 +1190,12 @@ const api = {
             issuewatch_handle?: boolean;
             issuewatch_action?: 'notify' | 'wake';
         }) => ipcRenderer.invoke('terminal-spec:create-agent', input),
-        /** Gracefully restart an agent terminal (reconnect its TUI to the current
-         *  MCP rig, resuming the conversation). Returns the old→new terminal ids,
-         *  or `{ ok: false, error }` when the agent isn't resumable. */
-        restartAgent: (id: string) => ipcRenderer.invoke('terminal-spec:restart-agent', id),
+        /** Restart an agent terminal (reconnect its TUI to the current MCP rig).
+         *  `'resume'` (default) keeps the conversation and refuses when it cannot;
+         *  `'fresh'` relaunches from scratch and always can (genie#443). Returns
+         *  the old→new terminal ids, or `{ ok: false, error }`. */
+        restartAgent: (id: string, mode?: 'resume' | 'fresh') =>
+            ipcRenderer.invoke('terminal-spec:restart-agent', id, mode),
     },
 
     /** AgentInbox — the local inter-agent messaging network's human panel. */
