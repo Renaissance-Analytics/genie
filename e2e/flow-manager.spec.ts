@@ -166,18 +166,38 @@ test.describe('the manager', () => {
         await expect(running).not.toHaveClass(/is-running/);
     });
 
-    test('turns a Flow off and the change survives a re-read', async () => {
+    test('turns a Flow off with one click, and asks before turning it back on', async () => {
         const row = flyout().locator('.flowmgr-row', { hasText: 'Tidy the workspace' });
         const toggle = row.getByRole('switch');
+        const armDialog = page.locator('[role="dialog"][aria-label*="Turn on"]');
         await expect(toggle).toBeVisible();
 
+        // OFF is one click. Turning a Flow off cannot surprise anybody — the
+        // machine does less — so there is deliberately no ceremony here.
         await toggle.click();
+        await expect(armDialog).toHaveCount(0);
         // Disarming goes through main and comes back on `flows:changed`, so the
         // Run button disappearing is evidence the STORE changed — not that the
-        // renderer toggled a local boolean.
+        // renderer flipped a local boolean.
+        await expect(row.getByRole('button', { name: /Run .* now/ })).toHaveCount(0);
+        // And the row now says what turning it back on would mean.
+        await expect(row.locator('.flowmgr-off')).toContainText('Moves files out of your workspace');
+
+        // ON asks first, and states the consequence in the recipe's own words.
+        await toggle.click();
+        await expect(armDialog).toBeVisible();
+        await expect(armDialog).toContainText('Moves files out of your workspace');
+        await expect(armDialog).toContainText('without asking again');
+
+        // Cancelling leaves it OFF. A confirmation that arms anyway is worse
+        // than none, because it teaches the user the dialog is decoration.
+        await armDialog.getByRole('button', { name: 'Cancel' }).click();
+        await expect(armDialog).toHaveCount(0);
         await expect(row.getByRole('button', { name: /Run .* now/ })).toHaveCount(0);
 
         await toggle.click();
+        await armDialog.getByRole('button', { name: 'Turn it on' }).click();
+        await expect(armDialog).toHaveCount(0);
         await expect(row.getByRole('button', { name: /Run .* now/ })).toHaveCount(1);
     });
 

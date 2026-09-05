@@ -61,6 +61,8 @@ export default function FlowManagerFlyout({
     const [pending, setPending] = useState<string | null>(null);
     const [result, setResult] = useState<FlowRunLog | null>(null);
     const [error, setError] = useState<string | null>(null);
+    /** The Flow awaiting an explicit "yes, arm it" — see {@link ArmConfirm}. */
+    const [confirming, setConfirming] = useState<FlowSummary | null>(null);
 
     const reload = useCallback(async () => {
         if (!hasGenieBridge()) return;
@@ -132,15 +134,35 @@ export default function FlowManagerFlyout({
         return () => window.removeEventListener('keydown', onKey);
     }, [open, onClose]);
 
-    const toggle = async (flow: FlowSummary) => {
+    /**
+     * Arming asks first; disarming never does.
+     *
+     * The asymmetry is the point. Turning a Flow OFF cannot surprise anybody —
+     * the machine does less. Turning one ON hands it standing permission to act
+     * unattended, and `genie.relocate-file` acting unattended means the user's
+     * files move. A switch with a title beside it says what the Flow is CALLED;
+     * it does not say that. So a body that declares a consequence gets a
+     * confirmation that states it, and one that declares none arms straight
+     * away rather than manufacturing ceremony out of nothing.
+     */
+    const toggle = (flow: FlowSummary) => {
+        if (!flow.enabled && flow.consequence) {
+            setConfirming(flow);
+            return;
+        }
+        void setEnabled(flow, !flow.enabled);
+    };
+
+    const setEnabled = async (flow: FlowSummary, enabled: boolean) => {
         setPending(flow.id);
         try {
-            await api().flows.setEnabled(flow.id, !flow.enabled);
+            await api().flows.setEnabled(flow.id, enabled);
             await reload();
         } catch (e) {
             setError(e instanceof Error ? e.message : String(e));
         } finally {
             setPending(null);
+            setConfirming(null);
         }
     };
 
@@ -234,7 +256,7 @@ export default function FlowManagerFlyout({
                                         expanded={expanded === flow.id}
                                         history={history[flow.id]}
                                         result={result?.flowId === flow.id ? result : null}
-                                        onToggle={() => void toggle(flow)}
+                                        onToggle={() => toggle(flow)}
                                         onRun={() => void runNow(flow)}
                                         onExpand={() => void showHistory(flow)}
                                     />
@@ -244,6 +266,88 @@ export default function FlowManagerFlyout({
                     )}
                 </div>
             </aside>
+            {confirming && (
+                <ArmConfirm
+                    flow={confirming}
+                    busy={pending === confirming.id}
+                    onCancel={() => setConfirming(null)}
+                    onConfirm={() => void setEnabled(confirming, true)}
+                />
+            )}
+        </div>
+    );
+}
+
+/**
+ * The one place in this surface with deliberate friction.
+ *
+ * It states what the Flow will DO, in the recipe's own words, at the moment the
+ * user is arming it — not in a doc, not in a tooltip they may never open. A
+ * switch flipped without reading is how "Genie moved my files" becomes a support
+ * ticket, and the sentence that prevents it has to be in front of the click.
+ *
+ * The confirm button says what will happen rather than "OK", so the last thing
+ * read before committing is still the action and not an acknowledgement.
+ */
+function ArmConfirm({
+    flow,
+    busy,
+    onCancel,
+    onConfirm,
+}: {
+    flow: FlowSummary;
+    busy: boolean;
+    onCancel: () => void;
+    onConfirm: () => void;
+}) {
+    return (
+        <div className="prompt-scrim" onMouseDown={onCancel}>
+            <div
+                className="prompt-card"
+                role="dialog"
+                aria-modal="true"
+                aria-label={`Turn on ${flow.title}`}
+                onMouseDown={(e) => e.stopPropagation()}
+            >
+                <div className="prompt-title">
+                    <IconAlert size={15} />
+                    Turn on “{flow.title}”?
+                </div>
+                <div className="prompt-body">
+                    <p className="flowmgr-consequence">{flow.consequence}</p>
+                    <p>
+                        It will run on its own whenever its trigger fires
+                        {flow.scope.kind === 'workspace'
+                            ? ` in ${flow.scopeLabel}`
+                            : flow.scope.kind === 'system'
+                              ? ' anywhere on this machine'
+                              : ''}
+                        , without asking again. You can turn it off at any time.
+                    </p>
+                </div>
+                <div className="prompt-actions">
+                    <button
+                        type="button"
+                        className="prompt-btn"
+                        onClick={onCancel}
+                        disabled={busy}
+                    >
+                        Cancel
+                    </button>
+                    {/* Primary, not destructive-red. Arming destroys nothing at
+                        the moment of the click, and a red button that cries wolf
+                        is a red button the user stops reading. The friction here
+                        is the SENTENCE above it. */}
+                    <button
+                        type="button"
+                        className="prompt-btn prompt-btn-primary"
+                        onClick={onConfirm}
+                        disabled={busy}
+                    >
+                        {busy ? 'Turning on…' : 'Turn it on'}
+                    </button>
+                </div>
+            </div>
         </div>
     );
 }
@@ -376,6 +480,15 @@ function FlowRow({
                     />
                 </div>
             </div>
+
+            {/* Off, and what turning it on would mean. A row that says only
+                "disabled" is a switch; a row that says what the switch DOES is
+                a decision the user can actually make. */}
+            {!flow.enabled && flow.consequence && (
+                <div className="flowmgr-off">
+                    Off — {flow.consequence}
+                </div>
+            )}
 
             {/* A Flow that looks armed and cannot fire. The one thing a list
                 would never tell you, so it is stated on the row rather than

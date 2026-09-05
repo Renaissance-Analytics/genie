@@ -180,6 +180,10 @@ async function relocateFile(ctx: FlowRunContext): Promise<void> {
 export const relocateFileRecipe: FlowRecipe = {
     id: RELOCATE_FILE_RECIPE_ID,
     title: 'Move the file into an untracked folder',
+    // Said in the first person about the USER's files, because that is whose
+    // files they are. Anything arming this shows this sentence first.
+    consequence:
+        'Moves files out of your workspace into an untracked folder, without asking again.',
     steps: [
         {
             type: 'task',

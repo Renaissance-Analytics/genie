@@ -2796,6 +2796,13 @@ export interface FlowSummary {
     running: boolean;
     lastRun?: FlowRunRecord;
     recipeId: string;
+    /**
+     * What ARMING this Flow will do, in its recipe's own words — shown on the
+     * disabled row and confirmed at the moment of enabling. Absent when the body
+     * declares none, which renders as silence rather than as a reassurance
+     * nobody made.
+     */
+    consequence?: string;
 }
 
 /** One event kind a Flow can trigger on, as the registry declares it. */

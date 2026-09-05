@@ -81,6 +81,11 @@ export interface FlowSummary {
     lastRun?: FlowRunRecord;
     /** The recipe id this Flow's body resolves to. */
     recipeId: string;
+    /**
+     * What arming this Flow will DO, in its recipe's own words. Absent when the
+     * body declares none — which renders as silence, never as a reassurance.
+     */
+    consequence?: string;
 }
 
 export interface SummariseFlowsOptions {
@@ -91,6 +96,8 @@ export interface SummariseFlowsOptions {
     appNames?: ReadonlyMap<string, string>;
     lastRuns?: ReadonlyMap<string, FlowRunRecord>;
     runningFlowIds?: readonly string[];
+    /** Recipe id → what running it does, from the recipe's own declaration. */
+    recipeConsequences?: ReadonlyMap<string, string>;
 }
 
 const GROUPS: readonly FlowClauseGroup[] = ['all', 'any', 'none'];
@@ -178,6 +185,7 @@ export function summariseFlows(
                 (t) => t.kind === 'manual' || t.known,
             );
             const lastRun = opts.lastRuns?.get(flow.id);
+            const consequence = opts.recipeConsequences?.get(flow.recipe.recipeId);
 
             return {
                 id: flow.id,
@@ -194,6 +202,7 @@ export function summariseFlows(
                 running: running.has(flow.id),
                 ...(lastRun ? { lastRun } : {}),
                 recipeId: flow.recipe.recipeId,
+                ...(consequence ? { consequence } : {}),
             };
         });
 }

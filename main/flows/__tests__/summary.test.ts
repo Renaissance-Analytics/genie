@@ -217,3 +217,40 @@ describe('ordering', () => {
         expect(summaries.map((s) => s.id)).toEqual(['a', 'b', 'c']);
     });
 });
+
+/**
+ * What a Flow will DO, said before it is armed.
+ *
+ * `genie.relocate-file` moves the user's files. Arming it is one click on a
+ * switch, and a switch with a title beside it tells you what the Flow is CALLED,
+ * not what it will do to your workspace at 3am. "Keep the repo light" is a
+ * pleasant name for something that relocates your files without asking again.
+ *
+ * So a recipe declares its consequence in its own words, and the summary carries
+ * it to whatever is about to arm it. Declared BESIDE the body rather than
+ * written in the UI: the component cannot know what a recipe does, and a
+ * sentence invented there would drift from the code the moment either changed.
+ */
+describe('the consequence of arming a Flow', () => {
+    const recipes = new Map([
+        ['genie.relocate-file', 'Moves files out of your workspace into an untracked folder.'],
+    ]);
+
+    it('carries the recipe\'s own description of what it will do', () => {
+        const [s] = summarise([flow({ recipe: { kind: 'builtin', recipeId: 'genie.relocate-file' } })], {
+            recipeConsequences: recipes,
+        });
+        expect(s?.consequence).toBe(
+            'Moves files out of your workspace into an untracked folder.',
+        );
+    });
+
+    it('leaves it absent for a body that declares none', () => {
+        const [s] = summarise([flow({ recipe: { kind: 'builtin', recipeId: 'genie.harmless' } })], {
+            recipeConsequences: recipes,
+        });
+        // Absent, not an invented reassurance. A UI that printed "this Flow is
+        // safe" for anything undeclared would be making a promise nobody made.
+        expect(s?.consequence).toBeUndefined();
+    });
+});

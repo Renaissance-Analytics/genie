@@ -265,11 +265,19 @@ export function flowActivitySnapshot(): { running: string[]; busy: boolean } {
  */
 export function flowSummaries(): FlowSummary[] {
     const workspaceNames = new Map(listWorkspaces().map((w) => [w.id, w.project_name]));
+    // Read off the recipes themselves, so what the manager warns about and what
+    // the body actually does cannot drift apart.
+    const recipeConsequences = new Map(
+        [...BUILT_IN_FLOW_RECIPES.values()]
+            .filter((r) => typeof r.consequence === 'string' && r.consequence !== '')
+            .map((r) => [r.id, r.consequence as string]),
+    );
     return summariseFlows(listFlows(), {
         registry: flowEventRegistry(),
         workspaceNames,
         lastRuns: lastFlowRuns(),
         runningFlowIds: activity.runningFlowIds(),
+        recipeConsequences,
     });
 }
 

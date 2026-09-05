@@ -29,6 +29,21 @@ refused, or is simply waiting for its trigger does not move it.
 | **Enabled** | The switch arms and disarms it. Disarming also releases any filesystem watchers the Flow was holding, so a disabled Flow really stops rather than quietly still watching. |
 | **Last run** | The outcome, and when. |
 
+## Turning a Flow on
+
+Turning one **off** is one click — the machine does less, which cannot surprise
+you.
+
+Turning one **on** asks first, when the Flow's body has consequences worth
+stating. Genie shows you what it will do in the recipe's own words — *"Moves
+files out of your workspace into an untracked folder, without asking again"* —
+before it is armed, because that is what arming means: standing permission to
+act unattended, without checking with you each time. A Flow that is off says the
+same sentence on its row, so the switch beside it is a decision rather than a
+guess.
+
+You can turn it off again at any time.
+
 ## Outcomes
 
 Only two of these mean a Flow's body actually ran:
