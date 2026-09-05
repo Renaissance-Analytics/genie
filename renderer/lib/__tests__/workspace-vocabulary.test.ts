@@ -98,8 +98,13 @@ export function userVisibleText(src: string): string[] {
     const out: string[] = [];
 
     // JSX text: a span between tags with no braces or angle brackets in it, so
-    // `>{expr}<` and `a > b && c < d` cannot masquerade as prose.
-    for (const m of code.matchAll(/>([^<>{}]*[A-Za-z]{2,}[^<>{}]*)</g)) out.push(m[1]!);
+    // `>{expr}<` and `a > b && c < d` cannot masquerade as prose. The "has
+    // words in it" test is done in code rather than in the pattern — two
+    // `[^<>{}]*` around a `[A-Za-z]{2,}` they both also match is an ambiguity
+    // the engine has to backtrack through, and it buys nothing.
+    for (const m of code.matchAll(/>([^<>{}]*)</g)) {
+        if (/[A-Za-z]{2,}/.test(m[1]!)) out.push(m[1]!);
+    }
 
     // Display props, quoted: label="…"
     for (const m of code.matchAll(new RegExp(`\\b(?:${DISPLAY_PROPS})=(['"\`])((?:\\\\.|(?!\\1)[^\\\\])*)\\1`, 'g'))) {
@@ -115,8 +120,12 @@ export function userVisibleText(src: string): string[] {
     for (const m of code.matchAll(/new Error\(([^)]*)\)/g)) out.push(...literals(m[1]!));
 
     // `const finishLabel = cond ? 'A' : 'B'` — copy that reaches a prop later.
+    // The initializer runs to the first `;`, newlines included, as ONE negated
+    // class: the line-by-line version of this (`[^;\n]*(?:\n\s+[^;\n]*)*`) let
+    // `\s+` and `[^;\n]*` both match the same whitespace, which is exponential
+    // backtracking on a run of blank continuation lines (CodeQL js/redos).
     for (const m of code.matchAll(
-        /\b(?:const|let|var)\s+\w*(?:label|title|text|msg|message|heading|copy|body)\w*\s*=\s*([^;\n]*(?:\n\s+[^;\n]*)*);/gi,
+        /\b(?:const|let|var)\s+\w*(?:label|title|text|msg|message|heading|copy|body)\w*\s*=\s*([^;]*);/gi,
     )) {
         out.push(...literals(m[1]!));
     }
