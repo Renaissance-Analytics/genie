@@ -9,6 +9,7 @@ import {
     type ToolchainStepStatus,
 } from '../../lib/genie';
 import { installOutcomeNotice } from '../../lib/toolchain-page';
+import { agentCliLabels } from '../../../main/agents/agent-cli-catalog';
 
 /**
  * First-run toolchain setup (Tynn #240) — the guided step that turns a fresh
@@ -31,11 +32,14 @@ const TOOL_LABEL: Record<HostToolName, string> = {
     php: 'PHP',
     composer: 'Composer',
     docker: 'Docker',
-    'claude-code': 'Claude Code',
-    codex: 'Codex',
     // Named for what it IS to the user, not by its package id: the row appears
     // only on Windows, and only because PHP cannot start without it.
     vcredist: 'Visual C++ runtime (for PHP)',
+    // The agent CLIs, derived from the one catalog. Written out, this was the
+    // fifth hand-kept copy of the same fact, and the wizard only ever renders
+    // the tools it was asked to install — so a missing label here would have
+    // printed an internal id at whoever picked that driver.
+    ...agentCliLabels(),
 };
 
 const PM_LABEL: Record<ToolchainPackageManager | 'direct', string> = {

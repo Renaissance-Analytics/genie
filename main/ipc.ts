@@ -302,7 +302,8 @@ import { hostToolCommandRunner } from './dev-server/seams';
 import { runInstallPlan } from './dev-server/toolchain-install';
 import { planToolUpdate } from './dev-server/toolchain-plan';
 import { installIntentFor } from './dev-server/toolchain-adapters';
-import { DEFAULT_TOOLCHAIN, validateHostToolSelection } from './dev-server/toolchain-detect';
+import { DEFAULT_TOOLCHAIN, MANAGED_TOOLCHAIN, validateHostToolSelection } from './dev-server/toolchain-detect';
+import { agentCliDef } from './agents/agent-cli-catalog';
 import type { HostToolName } from './dev-server/toolchain-detect';
 import {
     addToolchainVersion,
@@ -1105,6 +1106,12 @@ export function registerIpcHandlers(): void {
         const rows = await detectToolchainUpdates({
             runner: hostToolCommandRunner,
             os: process.platform,
+            // The PAGE's set, not the wizard's: every agent CLI Genie knows
+            // about, so the Agent CLIs tab can list one that is missing and
+            // offer to install it. `DEFAULT_TOOLCHAIN` (the default here) is
+            // what a fresh machine gets installed unattended and deliberately
+            // stays small — see MANAGED_TOOLCHAIN.
+            wanted: MANAGED_TOOLCHAIN,
             // Resolve each present tool's binary so its row can say WHO installed
             // it and WHERE — the question the Languages tab already answers and
             // this one could not (genie#213).
@@ -1154,8 +1161,27 @@ export function registerIpcHandlers(): void {
     // `update` intent makes a package-manager step an upgrade, not an install.
     // Per-tool progress streams on `toolchain:progress`, same as install.
     ipcMain.handle('toolchain:update', async (e, tool: string, confirmed?: boolean) => {
-        if (!(DEFAULT_TOOLCHAIN as readonly string[]).includes(tool)) {
+        // The allow-list is MANAGED_TOOLCHAIN, not DEFAULT_TOOLCHAIN: the page
+        // now lists (and offers to install) every agent CLI in the catalog, and
+        // gating on the wizard's smaller set would have silently refused all of
+        // them — `ok: false` with no error, which renders as a button that does
+        // nothing at all. Still an allow-list against main's OWN table, so the
+        // renderer's only lever remains WHICH known tool.
+        if (!(MANAGED_TOOLCHAIN as readonly string[]).includes(tool)) {
             return { ok: false, results: [], restartRequired: false, skipped: [] };
+        }
+        // A tool Genie has no installer for must not reach the executor: the
+        // adapter would throw building a command that does not exist, and the
+        // user would see a crash where the row already told them the reason.
+        const gap = agentCliDef(tool);
+        if (gap && !gap.install) {
+            return {
+                ok: false,
+                results: [],
+                restartRequired: false,
+                skipped: [],
+                error: gap.installGap ?? `Genie has no installer for ${gap.label}.`,
+            };
         }
         // What this would walk into, read at the MOMENT of the click. An update
         // replaces a binary other live things are running on: replacing an agent
@@ -1175,7 +1201,19 @@ export function registerIpcHandlers(): void {
             };
         }
         const ctx = { os: process.platform, arch: process.arch, genieRoot: toolchainRoot() };
-        const insp = await inspectToolchain({ runner: hostToolCommandRunner, ...ctx });
+        // Probe the default set PLUS the tool being acted on. `present` is what
+        // decides install-vs-update below, and an agent CLI outside
+        // DEFAULT_TOOLCHAIN would otherwise always read as absent — harmless for
+        // `npm i -g`, which fetches latest either way, but only by luck, and the
+        // luck runs out the first time a non-npm mechanism lands here.
+        const wanted = (DEFAULT_TOOLCHAIN as readonly HostToolName[]).includes(tool as HostToolName)
+            ? undefined
+            : [...DEFAULT_TOOLCHAIN, tool as HostToolName];
+        const insp = await inspectToolchain({
+            runner: hostToolCommandRunner,
+            ...ctx,
+            ...(wanted ? { wanted } : {}),
+        });
         const perform = createToolchainInstallEffect(ctx, toolchainManagerDeps());
         const result = await runInstallPlan({
             steps: [planToolUpdate(tool as HostToolName, ctx.os, insp.pmChoice)],

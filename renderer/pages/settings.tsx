@@ -4573,6 +4573,26 @@ function ToolUpdateList({
                                 )}
                             </div>
                         </div>
+                        {/* A tool Genie cannot install SAYS SO, right where the
+                            Install button would have been. Listing an agent CLI
+                            with no button and no reason is the state the owner
+                            was already looking at; an Install that throws "no
+                            npm package" would be worse. Both are avoided by
+                            naming the limit and pointing somewhere useful. */}
+                        {row.installGap && (
+                            <div className="set-note" data-testid={`devtool-gap-${row.name}`}>
+                                {row.installGap}
+                                {row.docsUrl && (
+                                    <>
+                                        {' '}
+                                        <a href={row.docsUrl} target="_blank" rel="noreferrer">
+                                            Install it yourself
+                                        </a>
+                                        .
+                                    </>
+                                )}
+                            </div>
+                        )}
                     </div>
                 );
             })}

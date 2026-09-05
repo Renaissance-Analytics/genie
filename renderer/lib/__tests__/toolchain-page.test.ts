@@ -15,6 +15,7 @@ import {
     installOutcomeNotice,
 } from '../toolchain-page';
 import type { EngineInstall, ToolUpdate, ToolchainStepResult } from '../genie';
+import { AGENT_CLI_IDS } from '../../../main/agents/agent-cli-catalog';
 
 /**
  * The Toolchain page's VIEW model. The renderer test env has no DOM, so every
@@ -61,7 +62,24 @@ describe('the three tabs split the toolchain by how it is MANAGED', () => {
     });
 
     it('separates the agent CLIs, because updating them is the one thing refused mid-turn', () => {
-        expect([...AGENT_CLI_TOOLS]).toEqual(['claude-code', 'codex']);
+        expect(AGENT_CLI_TOOLS).toContain('claude-code');
+        expect(AGENT_CLI_TOOLS).toContain('codex');
+    });
+
+    /**
+     * The tab used to be `['claude-code', 'codex']`, written out here. That is
+     * the whole reason it read "Agent CLIs (2)" on a machine Genie already knew
+     * more providers for: the count was capped by a literal, not measured off
+     * the machine. Deriving it from the catalog is what makes an added provider
+     * unable to fail to appear — the property the literal could never have.
+     */
+    it('derives the agent CLI tab from the catalog rather than a literal pair', () => {
+        expect([...AGENT_CLI_TOOLS]).toEqual([...AGENT_CLI_IDS]);
+        expect(AGENT_CLI_TOOLS.length).toBeGreaterThan(2);
+    });
+
+    it('includes the Genie TUI — the provider whose absence here was the bug', () => {
+        expect(AGENT_CLI_TOOLS).toContain('genie');
     });
 
     it('routes each tool to exactly one tab, and drops the ones neither owns', () => {

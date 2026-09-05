@@ -8,6 +8,9 @@ import {
     TOOL_SPECS,
     validateHostToolSelection,
 } from '../toolchain-detect';
+import type { HostToolName } from '../toolchain-detect';
+import { hostToolInvocation } from '../seams';
+import { AGENT_CLI_CATALOG } from '../../agents/agent-cli-catalog';
 
 describe('renderer toolchain selection boundary', () => {
     it('rejects unknown tool names before they reach the tool specification map', () => {
@@ -363,5 +366,69 @@ describe('defaultToolchainFor — the runtime is a WINDOWS prerequisite', () => 
                 expect(defaultToolchainFor(platform)).toContain(tool);
             }
         }
+    });
+});
+
+/**
+ * THE AGENT CLIs, ON WINDOWS.
+ *
+ * Two things have to be true or an agent CLI is undetectable on the platform
+ * Genie ships on first, and both have bitten this repo already:
+ *
+ *   1. **A probe spawns the BIN, never the tool id.** `claude-code` is the
+ *      product; `claude` is the executable. Getting this backwards is exactly
+ *      the `genie-tui` bug — a `defaultCommand` naming a binary that has never
+ *      existed, which produced `command not found` and no explanation anywhere.
+ *   2. **It goes through a shell.** Every one of these installs via `npm i -g`,
+ *      which on Windows writes a `.cmd` SHIM, and `spawn` with `shell:false`
+ *      answers ENOENT for a shim. That is genie#205, and it is why detection
+ *      once reported installed tools as missing and offered to install them
+ *      again.
+ */
+describe('agent CLIs are detectable on Windows', () => {
+    it('probes each CLI by its BIN, not by its tool id', () => {
+        for (const entry of AGENT_CLI_CATALOG) {
+            const spec = TOOL_SPECS[entry.id as HostToolName];
+            expect(spec, entry.id).toBeDefined();
+            expect(spec.bin, entry.id).toBe(entry.bin);
+        }
+        // The two that already ship, spelled out — a rename of either is a
+        // silent breakage for every existing install.
+        expect(TOOL_SPECS['claude-code'].bin).toBe('claude');
+        expect(TOOL_SPECS['codex'].bin).toBe('codex');
+    });
+
+    it('asks every CLI for a version through a shell on win32, so a .cmd shim answers', () => {
+        for (const entry of AGENT_CLI_CATALOG) {
+            const spec = TOOL_SPECS[entry.id as HostToolName];
+            const inv = hostToolInvocation(spec.bin, spec.versionArgv, 'win32');
+            expect(inv.shell, entry.id).toBe(true);
+            expect(inv.file, entry.id).toBe(`${entry.bin} --version`);
+        }
+    });
+
+    it('spawns the bin the catalog names — verified against a runner, not just a table', async () => {
+        const asked: string[] = [];
+        const report = await detectToolchain({
+            runner: {
+                async run(command: string) {
+                    asked.push(command);
+                    // Only `claude` answers. Everything else is absent, which is
+                    // the ordinary state on a machine with one agent CLI.
+                    return command === 'claude'
+                        ? { code: 0, stdout: '2.1.261 (Claude Code)', stderr: '' }
+                        : { code: 1, stdout: '', stderr: 'not found' };
+                },
+                stream: () => {
+                    throw new Error('not used');
+                },
+            },
+            platform: 'win32',
+            wanted: ['claude-code', 'gemini-cli', 'genie'],
+        });
+        expect(asked).toEqual(['claude', 'gemini', 'genie']);
+        expect(report.present).toEqual(['claude-code']);
+        expect(report.missing).toEqual(['gemini-cli', 'genie']);
+        expect(report.probes[0]).toMatchObject({ name: 'claude-code', version: '2.1.261' });
     });
 });

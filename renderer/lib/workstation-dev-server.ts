@@ -8,6 +8,7 @@ import type {
     ToolchainUpdateSource,
 } from './genie';
 import type { DevTone } from './dev-server';
+import { agentCliDef, agentCliLabels } from '../../main/agents/agent-cli-catalog';
 
 /**
  * PURE. Everything the WORKSTATION Hosting Manager page decides (workstation
@@ -327,6 +328,17 @@ export interface ToolUpdateRow {
      *  unknown — claiming ownership of a tool another installer put there is the
      *  one answer that causes harm. */
     managed: boolean;
+    /**
+     * Why Genie cannot install this one, when it cannot.
+     *
+     * Present ONLY on a row whose {@link action} is therefore `none` — a reason
+     * beside a working Install button is noise, and noise spends the same
+     * attention a real warning needs. Absent for every tool Genie can install
+     * and for every tool already on the machine.
+     */
+    installGap?: string;
+    /** Where the person goes to install it themselves. Carried with the gap. */
+    docsUrl?: string;
 }
 
 const TOOL_LABELS: Record<HostToolName, string> = {
@@ -340,8 +352,10 @@ const TOOL_LABELS: Record<HostToolName, string> = {
     // prerequisite, not a tool this page manages or updates — it is absent from
     // DEFAULT_TOOLCHAIN, so no update row is ever built for it.
     vcredist: 'Visual C++ runtime (for PHP)',
-    'claude-code': 'Claude Code',
-    codex: 'Codex',
+    // The agent CLIs, derived. `Record<HostToolName, …>` means a catalogued CLI
+    // with no label would not compile — better than the old fallback to the
+    // internal id, which would have printed `gemini-cli` at a user.
+    ...agentCliLabels(),
 };
 
 /** The display name for a tool — never its internal id in the UI. */
@@ -375,10 +389,23 @@ export function toolUpdateTone(u: ToolUpdate): ToolUpdateTone {
  * on it, and the owner reported precisely that about docker, git and the agent
  * CLIs. Both surfaces now install through the same path (genie#212), so there is
  * no longer a reason for one of them to withhold the button.
+ *
+ * The ONE case that still withholds it is an agent CLI Genie has no installer
+ * for — Genie's own unpublished TUI, Aider's Python packaging, Cursor's vendor
+ * script. Offering Install there would produce a button that always fails, which
+ * is strictly worse than none; the row carries {@link ToolUpdateRow.installGap}
+ * instead, so the answer is "here is why", never silence.
  */
 export function toolRowAction(u: ToolUpdate): ToolRowAction {
-    if (!u.installed) return 'install';
+    if (!u.installed) return installGapFor(u.name) ? 'none' : 'install';
     return u.updateAvailable ? 'update' : 'none';
+}
+
+/** Why this tool cannot be installed, or undefined when it can (or is not an
+ *  agent CLI at all — a dev tool's install route never went through here). */
+function installGapFor(name: HostToolName): string | undefined {
+    const cli = agentCliDef(name);
+    return cli && !cli.install ? cli.installGap : undefined;
 }
 
 /** How each installer is written on screen. `unknown` is deliberately absent:
@@ -396,6 +423,11 @@ const INSTALL_SOURCE_LABELS: Partial<Record<ToolInstallSource, string>> = {
 /** One tool's row: the version pair, badge tone and action folded together. */
 export function toolUpdateRow(u: ToolUpdate): ToolUpdateRow {
     const originLabel = u.origin ? INSTALL_SOURCE_LABELS[u.origin.source] : undefined;
+    // Only on a row that is actually blocked by it: a tool already on the
+    // machine needs no explanation of how to get it, and one Genie can install
+    // has none to give.
+    const gap = u.installed ? undefined : installGapFor(u.name);
+    const docsUrl = gap ? agentCliDef(u.name)?.docsUrl : undefined;
     return {
         name: u.name,
         label: toolLabel(u.name),
@@ -408,6 +440,8 @@ export function toolUpdateRow(u: ToolUpdate): ToolUpdateRow {
         ...(originLabel ? { originLabel } : {}),
         ...(u.origin?.directory ? { directory: u.origin.directory } : {}),
         managed: u.origin?.managedByGenie === true,
+        ...(gap ? { installGap: gap } : {}),
+        ...(docsUrl ? { docsUrl } : {}),
     };
 }
 

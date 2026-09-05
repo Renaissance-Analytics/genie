@@ -3,6 +3,7 @@ import type { InstallStep } from './toolchain-plan';
 import { pmPackageFor } from './toolchain-packages';
 import type { PackageManager } from './toolchain-packages';
 import { LANGUAGE_LABELS, recipesFor } from './toolchain-versions';
+import { npmPackagesByTool } from '../agents/agent-cli-catalog';
 import type { LanguageTool } from './toolchain-versions';
 
 /**
@@ -196,14 +197,21 @@ export function installIntentFor(
 type BuiltRun = Omit<RunInstallCommand, 'tool' | 'requiresElevation' | 'requiresRestart'>;
 type BuiltDownload = Omit<DownloadInstallCommand, 'tool' | 'requiresElevation' | 'requiresRestart'>;
 
-/** The agent-TUI npm packages. Keyed by tool, since the bin name (`claude`)
- *  differs from both the tool name and the package. Exported as the single
- *  source of truth for both installing (`npm i -g`) and update-checking
- *  (`npm outdated -g`, #242). */
-export const NPM_PACKAGES: Partial<Record<HostToolName, string>> = {
-    'claude-code': '@anthropic-ai/claude-code',
-    codex: '@openai/codex',
-};
+/**
+ * The agent-CLI npm packages. Keyed by tool, since the bin name (`claude`)
+ * differs from both the tool name and the package. The single source of truth
+ * for both installing (`npm i -g`) and update-checking (`npm outdated -g`,
+ * #242), which is why it is one map and not two.
+ *
+ * DERIVED from the catalog rather than written out. It used to name
+ * `claude-code` and `codex` here, which was the complete set only while the
+ * toolchain knew of exactly those two; the moment the Toolchain page began
+ * LISTING more agent CLIs, a hand-written map would have meant a row with an
+ * Install button that threw "no npm package for gemini-cli" at the user.
+ * A tool with no installer is absent from this map on purpose — see
+ * `AgentCliDef.install`, where `null` is a stated answer.
+ */
+export const NPM_PACKAGES: Partial<Record<HostToolName, string>> = npmPackagesByTool();
 
 /**
  * Materialise one step into its command. Pure; never touches the network.

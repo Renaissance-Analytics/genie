@@ -8,6 +8,7 @@ import type {
     ToolchainSiteUsage,
     ToolchainStepResult,
 } from './genie';
+import { AGENT_CLI_IDS } from '../../main/agents/agent-cli-catalog';
 
 /**
  * The Toolchain page's VIEW model — every judgement the page makes, kept out of
@@ -21,8 +22,11 @@ import type {
  *    installs side by side, one is the machine default, and Genie owns the ones
  *    it installed (binaries and config) under `<userData>/toolchain`.
  *  - **Dev tools** — git / docker / composer. Single-version, update-to-latest.
- *  - **Agent CLIs** — claude-code / codex. Separated because updating them is
- *    the one thing REFUSED mid-turn, so the rule is stated once in one place.
+ *  - **Agent CLIs** — every entry in the agent-CLI catalog, which is also where
+ *    the launchable providers' CLIs come from. Separated because updating one is
+ *    the single action REFUSED mid-turn, so that rule is stated once in one
+ *    place. Membership is DERIVED, not listed here: the two names that used to
+ *    be written out are what capped this tab at two rows.
  *
  * `node`, `npm` and `php` deliberately do NOT appear under Dev tools any more:
  * they are languages, they are managed per version, and showing a single
@@ -41,8 +45,22 @@ import type {
 /** Single-version host tools: one install, update-to-latest. */
 export const DEV_TOOL_TOOLS: readonly HostToolName[] = ['git', 'docker', 'composer'];
 
-/** The agent TUIs. Their own group because their update rule is different. */
-export const AGENT_CLI_TOOLS: readonly HostToolName[] = ['claude-code', 'codex'];
+/**
+ * The agent CLIs. Their own group because their update rule is different.
+ *
+ * DERIVED from `main/agents/agent-cli-catalog`, which is also where the provider
+ * registry's CLIs come from. It used to be the literal `['claude-code', 'codex']`
+ * — which is why the tab read **Agent CLIs (2)** on a machine Genie already knew
+ * more providers for. The count was capped by this line, not measured off the
+ * machine, and a provider added to the registry could never appear here at all;
+ * the owner discovered that when a terminal died with `bash: genie: command not
+ * found` and the one page that would have explained it did not list the tool.
+ *
+ * The renderer reads a `main/` module directly here, exactly as
+ * `provider-brand.ts` reads `main/agents/registry` — both are pure and
+ * import-free by design, so nothing node-side follows them into the bundle.
+ */
+export const AGENT_CLI_TOOLS: readonly HostToolName[] = AGENT_CLI_IDS;
 
 /** Keep a tab's rows in the declared order whatever order main answers in — a
  *  settings list that reshuffles between reads reads as broken. */

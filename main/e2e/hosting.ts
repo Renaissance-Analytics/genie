@@ -538,6 +538,14 @@ export function defaultHostingE2EState(): HostingE2EState {
             // the Install button has to exist on both.
             { name: 'composer', updateAvailable: false, source: 'unknown' },
             { name: 'claude-code', updateAvailable: false, source: 'unknown' },
+            // An agent CLI beyond the original two, so a spec can prove the tab
+            // is no longer capped at the pair that used to be written out in the
+            // renderer.
+            { name: 'gemini-cli', updateAvailable: false, source: 'unknown' },
+            // NOT INSTALLED and NOT INSTALLABLE — Genie's own TUI is unpublished.
+            // The third state, and the one the owner was actually looking at: it
+            // must say WHY rather than showing a button that would fail.
+            { name: 'genie', updateAvailable: false, source: 'unknown' },
         ],
     };
 }

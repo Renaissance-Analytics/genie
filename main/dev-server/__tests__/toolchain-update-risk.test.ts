@@ -3,6 +3,7 @@ import {
     toolchainUpdateRisk,
     type ToolchainActivity,
 } from '../toolchain-update-risk';
+import { AGENT_CLI_IDS } from '../../agents/agent-cli-catalog';
 
 /**
  * WHAT AN UPDATE WOULD WALK INTO (owner report, pre-beta.249).
@@ -53,6 +54,24 @@ describe('toolchainUpdateRisk', () => {
 
     it('BLOCKS updating codex mid-turn too — same mechanism', () => {
         expect(toolchainUpdateRisk('codex', { ...idle, busyAgents: ['a'] }).risk).toBe('blocked');
+    });
+
+    /**
+     * EVERY agent CLI, not the two that were written down.
+     *
+     * The refusal listed `claude-code` and `codex` by hand, which was complete
+     * only while the toolchain knew of exactly those two. The moment Genie could
+     * install more of them, a hand-written set becomes a hole with the worst
+     * possible shape: the new CLIs would be the ONLY ones you could overwrite
+     * while their agent was mid-turn. Derived from the catalog, adding a CLI
+     * cannot open that hole.
+     */
+    it('BLOCKS updating ANY catalogued agent CLI mid-turn, not just the two hardcoded ones', () => {
+        for (const tool of AGENT_CLI_IDS) {
+            const r = toolchainUpdateRisk(tool, { ...idle, busyAgents: ['Guardian'] });
+            expect(r.risk, tool).toBe('blocked');
+            expect(r.reason, tool).toContain('Guardian');
+        }
     });
 
     it('BLOCKS updating node while agents are working, since the TUIs run on it', () => {

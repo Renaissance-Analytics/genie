@@ -87,7 +87,18 @@ describe('detectToolUpdates', () => {
         expect(byName.node).toMatchObject({ updateAvailable: false, source: 'version-index' });
     });
 
-    it('only reports tools that are actually installed', async () => {
+    /**
+     * A MISSING tool gets a row too, and that is the whole install story.
+     *
+     * This used to `continue` past anything not installed, under "a missing tool
+     * is the install wizard's job". The page stopped agreeing with that the
+     * moment `toolRowAction` grew an `install` action for an absent tool — and
+     * because nothing missing ever reached it, that button was unreachable code.
+     * The Toolchain page could REPORT nothing about a tool it did not have and
+     * OFFER nothing to fix it; the owner hit exactly that trying to install the
+     * Genie TUI. The row is what makes Install reachable.
+     */
+    it('reports a MISSING tool too, with no installed version — that is the Install row', async () => {
         const report: ToolchainReport = {
             platform: 'linux',
             probes: [
@@ -98,7 +109,22 @@ describe('detectToolUpdates', () => {
             missing: ['docker'],
         };
         const updates = await detectToolUpdates(report, async () => null);
-        expect(updates.map((u) => u.name)).toEqual(['git']);
+        expect(updates.map((u) => u.name)).toEqual(['git', 'docker']);
+        const docker = updates.find((u) => u.name === 'docker')!;
+        expect(docker.installed).toBeUndefined();
+        expect(docker.updateAvailable).toBe(false);
+    });
+
+    it('never asks a version source about a tool that is not there', async () => {
+        const report: ToolchainReport = {
+            platform: 'linux',
+            probes: [{ name: 'docker', installed: false }],
+            present: [],
+            missing: ['docker'],
+        };
+        const latestFor = vi.fn(async () => null);
+        await detectToolUpdates(report, latestFor);
+        expect(latestFor).not.toHaveBeenCalled();
     });
 
     it('records no update (source unknown) when the source has no answer', async () => {

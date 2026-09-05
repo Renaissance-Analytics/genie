@@ -293,6 +293,44 @@ describe('tool update rows', () => {
         expect(toolRowAction(upd({ name: 'docker', installed: undefined }))).toBe('install');
         expect(toolRowAction(upd({ name: 'git', installed: undefined }))).toBe('install');
         expect(toolRowAction(upd({ name: 'claude-code', installed: undefined }))).toBe('install');
+        expect(toolRowAction(upd({ name: 'gemini-cli', installed: undefined }))).toBe('install');
+    });
+
+    /**
+     * ...but NEVER a button that cannot work.
+     *
+     * The owner's instruction was that Genie should be able to install these,
+     * and where it genuinely cannot — Genie's own TUI is unpublished, Aider is a
+     * Python package, Cursor ships a vendor script — the honest surface is the
+     * row WITH the reason, not a hidden row and not an Install that throws "no
+     * npm package". A button that always fails is worse than no button; that is
+     * the same conclusion the git-on-Windows refusal reached.
+     */
+    it('withholds Install from a tool Genie has no installer for, and says why instead', () => {
+        expect(toolRowAction(upd({ name: 'genie', installed: undefined }))).toBe('none');
+        const row = toolUpdateRow(upd({ name: 'genie', installed: undefined }));
+        expect(row.action).toBe('none');
+        expect(row.tone).toBe('not-installed');
+        expect(row.installGap).toMatch(/not published yet/i);
+        expect(row.docsUrl).toBe('https://github.com/Renaissance-Analytics/genie-tui');
+    });
+
+    it('states no gap for a tool it CAN install — a reason with no problem is noise', () => {
+        const row = toolUpdateRow(upd({ name: 'claude-code', installed: undefined }));
+        expect(row.action).toBe('install');
+        expect(row.installGap).toBeUndefined();
+    });
+
+    it('leaves a dev tool alone — the gap only ever describes an agent CLI', () => {
+        const row = toolUpdateRow(upd({ name: 'docker', installed: undefined }));
+        expect(row.action).toBe('install');
+        expect(row.installGap).toBeUndefined();
+    });
+
+    it('labels every agent CLI by its product name, never its internal id', () => {
+        expect(toolUpdateRow(upd({ name: 'gemini-cli' })).label).toBe('Gemini CLI');
+        expect(toolUpdateRow(upd({ name: 'continue-cli' })).label).toBe('Continue');
+        expect(toolUpdateRow(upd({ name: 'genie' })).label).toBe('Genie TUI');
     });
 
     it('builds a row that carries the version pair, tone and action together', () => {

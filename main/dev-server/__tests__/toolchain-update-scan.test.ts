@@ -53,12 +53,21 @@ describe('detectToolchainUpdates', () => {
         });
         // node is installed but not in brew's outdated list → up to date.
         expect(byName.node).toMatchObject({ updateAvailable: false });
-        // A missing tool never appears — that's the install wizard's job, not this.
-        expect(byName.docker).toBeUndefined();
+        // A MISSING tool appears too, with no installed version. It used to be
+        // dropped ("that's the install wizard's job"), which is what made the
+        // Toolchain page's Install button unreachable for everything absent —
+        // the row it acts on was never built.
+        expect(byName.docker).toMatchObject({ name: 'docker', updateAvailable: false });
+        expect(byName.docker!.installed).toBeUndefined();
     });
 
-    it('never throws — a machine with nothing installed scans to an empty report', async () => {
+    it('never throws — a machine with nothing installed scans to all-missing, not an error', async () => {
         const updates = await detectToolchainUpdates({ runner: runner(() => MISSING), os: 'linux' });
-        expect(updates).toEqual([]);
+        // Every wanted tool, each reported absent. An empty array would be the
+        // WRONG answer here: it reads as "nothing to say" when the truth is
+        // "nothing is installed, and here is what you could install".
+        expect(updates.length).toBeGreaterThan(0);
+        expect(updates.every((u) => u.installed === undefined)).toBe(true);
+        expect(updates.every((u) => u.updateAvailable === false)).toBe(true);
     });
 });

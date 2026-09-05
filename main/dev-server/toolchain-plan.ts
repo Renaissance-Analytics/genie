@@ -1,6 +1,7 @@
 import { DEFAULT_TOOLCHAIN } from './toolchain-detect';
 import type { HostToolName, ToolchainReport } from './toolchain-detect';
 import { pmCanInstall, pmPackageFor } from './toolchain-packages';
+import { AGENT_CLI_IDS } from '../agents/agent-cli-catalog';
 import type { PackageManager } from './toolchain-packages';
 
 // The package-manager identity lives in one place (`toolchain-packages.ts`) so
@@ -95,20 +96,26 @@ export const INSTALL_ORDER: readonly HostToolName[] = [
     'vcredist',
     'php',
     'composer',
-    'claude-code',
-    'codex',
+    // Every agent CLI, DERIVED — after npm (they are all `npm i -g`) and before
+    // docker (the elevation/reboot step, which nothing cheap should wait behind).
+    // Written out, this said `claude-code, codex`, and a catalogued CLI missing
+    // from it would have been filtered straight out of every plan: the planner
+    // walks this list, so absence here is not a wrong order, it is a tool that
+    // silently cannot be installed at all.
+    ...AGENT_CLI_IDS,
     'docker',
 ];
 
-/** The agent TUIs — installed with `npm i -g`, never by a system PM. */
-const NPM_GLOBAL_TOOLS: ReadonlySet<HostToolName> = new Set(['claude-code', 'codex']);
+/** The agent CLIs — installed with `npm i -g`, never by a system PM. Derived, so
+ *  a new CLI cannot fall through to a `direct` download with no recipe. */
+const NPM_GLOBAL_TOOLS: ReadonlySet<HostToolName> = new Set<HostToolName>(AGENT_CLI_IDS);
 
-/** Each tool's prerequisite tools. Absent → no prerequisite. */
+/** Each tool's prerequisite tools. Absent → no prerequisite. Every agent CLI
+ *  needs npm, for the same reason and by the same derivation. */
 const DEPENDS_ON: Partial<Record<HostToolName, HostToolName[]>> = {
     npm: ['node'],
     composer: ['php'],
-    'claude-code': ['npm'],
-    codex: ['npm'],
+    ...Object.fromEntries(AGENT_CLI_IDS.map((id) => [id, ['npm']])),
 };
 
 /**

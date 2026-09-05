@@ -1,4 +1,5 @@
 import type { HostToolName } from './toolchain-detect';
+import { AGENT_CLI_IDS } from '../agents/agent-cli-catalog';
 
 /**
  * PURE. "What would updating this tool walk into RIGHT NOW?"
@@ -53,8 +54,21 @@ export interface ToolchainUpdateRisk {
 
 const SAFE: ToolchainUpdateRisk = { risk: 'safe', reason: '', affected: [] };
 
-/** Tools whose update overwrites something an agent is actively executing. */
-const AGENT_CRITICAL: ReadonlySet<HostToolName> = new Set(['claude-code', 'codex', 'node']);
+/**
+ * Tools whose update overwrites something an agent is actively executing.
+ *
+ * DERIVED from the agent-CLI catalog, plus node (every agent CLI runs ON it).
+ * This used to name `claude-code` and `codex` by hand, which was complete only
+ * while the toolchain knew of exactly those two. Once Genie could install more
+ * agent CLIs, a hand-written set would have become a hole with the worst
+ * possible shape — the NEW CLIs would have been the only ones you could
+ * overwrite mid-turn, i.e. the refusal would protect everything except what it
+ * had not been told about.
+ */
+const AGENT_CRITICAL: ReadonlySet<HostToolName> = new Set<HostToolName>([
+    ...AGENT_CLI_IDS,
+    'node',
+]);
 
 const list = (names: string[]): string =>
     names.length === 1
