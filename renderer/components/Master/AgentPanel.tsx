@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ComponentProps, type MouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useOverlayRoot } from '../../lib/use-overlay-root';
+import { clampPopoverToViewport } from '../../lib/anchored-popover';
 import TerminalPanel from './TerminalPanel';
 import { IconRefresh, IconSettings } from './icons';
 import AgentTuiSwitcher from './AgentTuiSwitcher';
@@ -41,6 +42,26 @@ export default function AgentPanel(props: Props) {
         };
         document.addEventListener('mousedown', close);
         return () => document.removeEventListener('mousedown', close);
+    }, [menu]);
+    // Keep the menu on screen. Right-clicking a panel near the bottom or right
+    // of the window opened it at the cursor with no clamp at all, so its items
+    // ran off the edge -- the same defect the sibling context menus had fixed
+    // by hand and this one had never had (genie#416). Measured after mount, so
+    // the height reflects which items actually rendered.
+    useEffect(() => {
+        const el = menuRef.current;
+        if (!menu || !el) return;
+        const rect = el.getBoundingClientRect();
+        const { left, top } = clampPopoverToViewport({
+            left: menu.x,
+            top: menu.y,
+            width: rect.width,
+            height: rect.height,
+            viewportWidth: window.innerWidth,
+            viewportHeight: window.innerHeight,
+        });
+        el.style.left = `${left}px`;
+        el.style.top = `${top}px`;
     }, [menu]);
     const openMenu = (event: MouseEvent) => {
         event.preventDefault();

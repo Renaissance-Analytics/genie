@@ -18,7 +18,7 @@ import {
     panelLauncherTypes,
     type TerminalTypeId,
 } from '../../lib/terminal-types';
-import { anchoredPopoverTop } from '../../lib/anchored-popover';
+import { anchoredPopoverTop, clampPopoverAxis } from '../../lib/anchored-popover';
 import { addPanelMainButton } from '../../lib/add-panel-button';
 
 /**
@@ -116,15 +116,27 @@ export default function TerminalTypeSplitButton({
     const place = () => {
         const r = ref.current?.getBoundingClientRect();
         if (!r) return;
+        const box = popRef.current?.getBoundingClientRect();
         const top = anchoredPopoverTop({
             anchorTop: r.top,
             anchorBottom: r.bottom,
-            popoverHeight: popRef.current?.getBoundingClientRect().height ?? 0,
+            popoverHeight: box?.height ?? 0,
             viewportHeight: window.innerHeight,
         });
+        // The `right` form is inside the right edge by construction. The `row`
+        // form anchors its LEFT to the button, so a narrow window can push it
+        // out -- the other half of the clamp this popover already did
+        // vertically (genie#416).
         const next =
             variant === 'row'
-                ? { top, left: r.left }
+                ? {
+                      top,
+                      left: clampPopoverAxis({
+                          start: r.left,
+                          size: box?.width ?? 0,
+                          viewport: window.innerWidth,
+                      }),
+                  }
                 : { top, right: window.innerWidth - r.right };
         setCoords(
             (current) =>

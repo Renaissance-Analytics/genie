@@ -2291,6 +2291,12 @@ button.iw-feedback-note.as-link:hover {
     position: fixed;
     z-index: 1000;
     width: 268px;
+    /* Positioning cannot save content taller than the window: with a long
+       missing-docs list and both sections showing, this popover can exceed a
+       short viewport whatever `top` says. Scroll the overflow rather than
+       putting the buttons out of reach (genie#416). */
+    max-height: calc(100vh - 16px);
+    overflow-y: auto;
     padding: 10px 12px;
     border-radius: var(--radius-lg);
     border: 1px solid var(--border-1);

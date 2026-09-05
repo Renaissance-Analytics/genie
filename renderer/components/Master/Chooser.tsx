@@ -1,6 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { useOverlayRoot } from '../../lib/use-overlay-root';
+import {
+    anchoredPopoverPosition,
+    anchoredPopoverTop,
+    clampPopoverToViewport,
+} from '../../lib/anchored-popover';
 import { pickPath } from '../FilePickerModal';
 import { Input, Select } from '@particle-academy/react-fancy';
 import {
@@ -313,6 +318,25 @@ export default function Chooser({
         x: number;
         y: number;
     } | null>(null);
+    const procMenuRef = useRef<HTMLDivElement>(null);
+    // Opened at the cursor with no clamp at all, so right-clicking a process
+    // near the bottom of the list ran its items off the screen (genie#416).
+    // Measured after mount: which items render depends on the process.
+    useLayoutEffect(() => {
+        const el = procMenuRef.current;
+        if (!procMenu || !el) return;
+        const rect = el.getBoundingClientRect();
+        const { top, left } = clampPopoverToViewport({
+            left: procMenu.x,
+            top: procMenu.y,
+            width: rect.width,
+            height: rect.height,
+            viewportWidth: window.innerWidth,
+            viewportHeight: window.innerHeight,
+        });
+        el.style.top = `${top}px`;
+        el.style.left = `${left}px`;
+    }, [procMenu]);
     const [procLabel, setProcLabel] = useState('');
     const [procCommand, setProcCommand] = useState('');
     const [procCwd, setProcCwd] = useState(''); // '' = envelope root
@@ -908,19 +932,27 @@ export default function Chooser({
     const showProcLog = (e: React.MouseEvent, s: TerminalSpec) => {
         cancelProcLogHide();
         const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-        // Clamp the popover's top so a row near the bottom of the panel doesn't get
-        // its log cut off by the viewport edge — shift it UP to fit. The popover is
-        // ~340px tall (head + a 240px-max scrolling body + foot); keep a small margin.
-        const POP_MAX_H = 340;
-        const MARGIN = 12;
-        const top = Math.max(MARGIN, Math.min(r.top, window.innerHeight - POP_MAX_H - MARGIN));
+        // The popover opens BESIDE the row, so either axis can run off: a row
+        // near the bottom loses the log, and a wide sidebar pushes the popover
+        // past the right edge. Sized from `.proc-log-pop` (420px wide; head + a
+        // 240px-max scrolling body + foot is ~340px tall) rather than measured,
+        // because it has not been rendered yet.
+        const { top, left } = clampPopoverToViewport({
+            left: r.right + 8,
+            top: r.top,
+            width: 420,
+            height: 340,
+            viewportWidth: window.innerWidth,
+            viewportHeight: window.innerHeight,
+            margin: 12,
+        });
         setProcLog({
             id: s.id,
             label: s.label,
             command: s.meta?.command ?? '',
             text: '',
             top,
-            left: r.right + 8,
+            left,
         });
         void api()
             .process.log(s.id)
@@ -2143,6 +2175,7 @@ export default function Chooser({
                         }}
                     />
                     <div
+                        ref={procMenuRef}
                         className="proj-popover ctx-menu proc-ctx-menu"
                         style={{ top: procMenu.y, left: procMenu.x }}
                     >
@@ -2240,18 +2273,47 @@ function AgiHealth({ ws }: { ws: WorkspaceRow }) {
     useEffect(refresh, [ws.path]);
 
     // Position the portaled popover under the alert dot, clamped to the
-    // viewport. Recomputed on open; closed on scroll/resize so it never
-    // drifts away from its anchor.
-    const place = () => {
+    // viewport on BOTH axes. Recomputed on open; closed on scroll/resize so
+    // it never drifts away from its anchor.
+    //
+    // Only `left` used to be clamped, under a comment that claimed the
+    // viewport was handled — so an alert dot low in the sidebar put the
+    // popover's buttons below the bottom edge, out of reach (genie#416).
+    // Portaling escapes the sidebar's clipping and hands the element to the
+    // VIEWPORT to clip instead; it does not remove the need to fit.
+    const POP_WIDTH = 268;
+    const placement = (el: HTMLDivElement | null) => {
         const r = anchorRef.current?.getBoundingClientRect();
-        if (!r) return;
-        const width = 268;
-        const left = Math.min(
-            Math.max(8, r.right - width),
-            window.innerWidth - width - 8,
-        );
-        setCoords({ top: r.bottom + 6, left });
+        if (!r) return null;
+        const box = el?.getBoundingClientRect();
+        return anchoredPopoverPosition({
+            anchor: r,
+            popoverWidth: box?.width ?? POP_WIDTH,
+            // The popover renders only once `coords` exists, so the first pass
+            // has nothing to measure and places optimistically; the layout
+            // effect below corrects it with the real height before paint.
+            popoverHeight: box?.height ?? 0,
+            viewportWidth: window.innerWidth,
+            viewportHeight: window.innerHeight,
+            align: 'end',
+        });
     };
+    const place = () => {
+        const next = placement(popRef.current);
+        if (next) setCoords(next);
+    };
+
+    // The first pass places the popover before it exists to measure. This
+    // corrects it with the rendered height, before the browser paints.
+    useLayoutEffect(() => {
+        const el = popRef.current;
+        if (!open || !el) return;
+        const next = placement(el);
+        if (!next) return;
+        el.style.top = `${next.top}px`;
+        el.style.left = `${next.left}px`;
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [open, coords]);
 
     useEffect(() => {
         if (!open) return;
@@ -2761,6 +2823,23 @@ function WorkspaceRuntimePill({
         if (rect) setPosition({ top: rect.bottom + 5, right: window.innerWidth - rect.right });
         setOpen((current) => !current);
     };
+
+    // `right` keeps the menu inside the right edge by construction; `top` was
+    // the anchor's bottom with no check, so the pill sitting low in a short
+    // window put the menu's items below it (genie#416). Corrected after mount
+    // because the item count -- and so the height -- depends on the workspace.
+    useLayoutEffect(() => {
+        const el = menu.current;
+        const rect = anchor.current?.getBoundingClientRect();
+        if (!open || !el || !rect) return;
+        el.style.top = `${anchoredPopoverTop({
+            anchorTop: rect.top,
+            anchorBottom: rect.bottom,
+            popoverHeight: el.getBoundingClientRect().height,
+            viewportHeight: window.innerHeight,
+            gap: 5,
+        })}px`;
+    }, [open]);
 
     useEffect(() => {
         if (!open) return;
