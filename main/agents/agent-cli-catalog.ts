@@ -154,49 +154,64 @@ const CATALOG = [
         id: 'genie',
         provider: 'genie',
         probe: true,
-        // Genie's own TUI. It shipped an installer briefly — a GIT SPEC,
-        // `github:Renaissance-Analytics/genie-tui` — and that installer could
-        // never work, because npm cannot install a git spec GLOBALLY when the
-        // package has a `prepare` that needs its own dependencies:
+        // Genie's own TUI, installable at last — from a PACKED TARBALL attached
+        // to a GitHub release.
         //
-        //   npm install -g --prefix <genie>/npm-global github:Renaissance-Analytics/genie-tui
-        //   -> npm error command failed
-        //      > @genie/tui@0.0.0 build
-        //      > tsc -p tsconfig.build.json
-        //      'tsc' is not recognized as an internal or external command
+        // It shipped a git-spec installer briefly and that installer could never
+        // have worked. `npm install -g <git spec>` prepares the dependency by
+        // cloning it and shelling out to a nested `npm install` inside the
+        // clone, and that nested process inherits `npm_config_global=true` and
+        // `npm_config_prefix` from the outer `-g` — so it installs globally too,
+        // the clone never receives its own dependencies, and the package's
+        // `prepare` runs a `tsc` that is not there:
         //
-        // npm prepares a git dependency by cloning it and shelling out to a
-        // nested `npm install --force --include=dev …` inside the clone. That
-        // nested process inherits `npm_config_global=true` and
-        // `npm_config_prefix` from the outer `-g`, so it installs GLOBALLY too:
-        // the clone's dependencies land under `<prefix>/node_modules/@genie/tui/
-        // node_modules/` and the clone itself gets no `node_modules/.bin`.
-        // `prepare` then runs `tsc` that is not there. Observed on disk for
-        // `@mastra/core` as well as the dev dependencies, so moving `typescript`
-        // into `dependencies` fixes nothing.
+        //     > @genie/tui@0.0.0 build
+        //     > tsc -p tsconfig.build.json
+        //     'tsc' is not recognized as an internal or external command
         //
-        // The comment this replaces claimed the installer had been checked by
-        // RUNNING it. It had — as `npm install github:Renaissance-Analytics/
-        // genie-tui`, LOCAL, no `-g` and no `--prefix`. That command succeeds
-        // and is not the command the product runs. Verifying with a weaker
-        // command than the product's is the fault this file exists to stop
-        // repeating; it is enforced now, in the catalog test, rather than
-        // remembered.
+        // A TARBALL is already built, so npm never prepares one. Verified with
+        // the command the PRODUCT runs, not a weaker one — which is the whole
+        // lesson of the git-spec failure (genie#469):
         //
-        // WHAT WOULD MAKE IT INSTALLABLE, in `genie-tui`, either one:
-        //   - commit a built `dist/` and drop `prepare`, so a consumer's install
-        //     runs no build at all; or
-        //   - publish a packed tarball as a GitHub release asset and point
-        //     `install` at that URL — npm treats a tarball as a plain artifact
-        //     and never prepares it.
-        // Publishing to the registry would work too, but `@genie` is not our
-        // scope and `genie` on npm is somebody else's package.
-        install: null,
-        installGap:
-            'Genie’s own TUI installs from its GitHub repository, and npm cannot build a repository into a global install — the build it runs there has no compiler to run. It needs a prebuilt release first; until then, clone it and run it from a checkout.',
+        //     npm install -g --prefix <tmp> <the URL below>   -> added 255 packages
+        //     <tmp>/genie --version                           -> 0.1.0
+        //
+        // THE URL IS THE VERSION-LESS ALIAS, so this line never needs editing
+        // again. GitHub's `/releases/latest/download/<name>` resolves only if the
+        // LATEST release carries an asset with that exact name — so a URL naming
+        // the versioned asset answers 200 today and 404s the moment the next
+        // release ships, which is a button that fails in the FIELD rather than at
+        // edit time. genie-tui therefore publishes the same bytes twice on every
+        // release, under the versioned name and under `genie-tui.tgz`, and
+        // backfilled the alias onto v0.1.0 so the stable URL resolves now.
+        //
+        // Measured against the real release rather than assumed, and re-measured
+        // after the alias landed rather than taken on report:
+        //
+        //     latest/download/genie-tui.tgz         -> 200
+        //     download/v0.1.0/genie-tui-0.1.0.tgz   -> 200
+        //     cmp of the two downloads              -> byte-identical
+        //       (sha256 73bd2269…d097692, 33741 bytes each)
+        //
+        // A pin to the tag was the honest answer while no alias existed — stale
+        // beats broken — and it is the wrong answer now that one does, because it
+        // would have to be edited on every release and the edit is the step
+        // somebody forgets.
+        //
+        // KNOWN LIMIT, stated rather than discovered: update detection reads
+        // `npm outdated -g --json`, which keys by PACKAGE NAME, and this field
+        // now holds a URL — so the lookup finds nothing and the row reports
+        // "Installed 0.1.0" with no update claim either way. That is the honest
+        // state (`toolUpdateTone` returns `unknown`, which the badge renders as
+        // "Installed", NOT as "Up to date"), but it is honest by accident: one
+        // field is doing both jobs. Splitting it is genie#470.
+        install: {
+            manager: 'npm',
+            package:
+                'https://github.com/Renaissance-Analytics/genie-tui/releases/latest/download/genie-tui.tgz',
+        },
         docsUrl: 'https://github.com/Renaissance-Analytics/genie-tui',
     },
-
     // --- the rest of the field, alphabetically ------------------------------
     {
         id: 'aider',

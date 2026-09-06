@@ -50,22 +50,50 @@ import { AGENT_CLI_CATALOG } from '../agent-cli-catalog';
  * than the product's proves the product nothing. That is now enforced, not
  * remembered — see "an npm install spec names a REGISTRY package".
  */
-describe('the Genie TUI states its install gap', () => {
+describe('the Genie TUI installs, from a packed tarball', () => {
     const genie = AGENT_CLI_CATALOG.find((entry) => entry.id === 'genie');
 
     it('is in the catalog at all — listed, never hidden', () => {
         expect(genie).toBeDefined();
     });
 
-    it('offers no installer, because the only one available cannot work', () => {
-        expect(genie?.install).toBeNull();
+    it('installs from a release TARBALL, which npm never prepares', () => {
+        expect(genie?.install?.manager).toBe('npm');
+        expect(genie?.install?.package).toMatch(/\.tgz$/);
     });
 
-    it('says WHY, in words the row can show where the button would have been', () => {
-        // `installGap` is required IFF install is null, and a row with neither a
-        // button nor a reason is the state the owner was already looking at.
-        expect(genie?.installGap).toBeTruthy();
-        expect(genie?.installGap).toMatch(/build|prebuilt/i);
+    /**
+     * The URL names the VERSION-LESS ALIAS, so this entry never needs editing
+     * on a release.
+     *
+     * GitHub's `/releases/latest/download/<name>` resolves only if the LATEST
+     * release carries an asset with that exact name, so a URL naming the
+     * versioned asset works today and 404s the moment the next release ships —
+     * a button that fails in the field rather than at edit time. That was the
+     * case when this shipped, and the entry pinned the tag instead: stale beats
+     * broken. genie-tui now publishes the same bytes twice on every release,
+     * under the versioned name and under `genie-tui.tgz`, and backfilled the
+     * alias onto v0.1.0, so the stable URL resolves today.
+     *
+     * Re-measured after that landed rather than taken on report:
+     *
+     *     latest/download/genie-tui.tgz         -> 200
+     *     download/v0.1.0/genie-tui-0.1.0.tgz   -> 200
+     *     cmp of the two downloads              -> byte-identical
+     *     npm install -g --prefix <tmp> <alias> -> added 255 packages
+     *     <tmp>/genie --version                 -> 0.1.0
+     */
+    it('names the version-less alias, so a release does not strand this line', () => {
+        expect(genie?.install?.package).toContain('/releases/latest/download/');
+        // A VERSION in the filename is the failure mode this exists to stop:
+        // `latest/download/genie-tui-0.1.0.tgz` is a 200 that becomes a 404.
+        expect(genie?.install?.package).not.toMatch(/\d+\.\d+\.\d+/);
+    });
+
+    it('states no gap, because it no longer has one', () => {
+        // `installGap` beside a working installer is a UI explaining why it
+        // cannot do the thing it is currently doing.
+        expect(genie?.installGap).toBeUndefined();
     });
 
     it('still points at somewhere a person can get it themselves', () => {
