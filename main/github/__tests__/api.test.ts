@@ -19,6 +19,7 @@ const store = {
     reauthFlagged: false,
     reauthReason: null as unknown,
     refreshTokenState: null as 'missing' | 'undecryptable' | null,
+    clientSecret: '' as string,
     saved: null as unknown,
 };
 const refreshUserTokenMock = vi.fn();
@@ -38,6 +39,7 @@ vi.mock('../storage', () => ({
     getAccessExpiryMs: () => store.accessExpiryMs,
     getRefreshExpiryMs: () => store.refreshExpiryMs,
     getClientId: () => 'Iv_test',
+    getClientSecret: () => store.clientSecret,
     getUsername: () => 'me',
     markReauthNeeded: (reason: unknown) => {
         store.reauthFlagged = true;
@@ -108,6 +110,7 @@ afterEach(() => {
     store.reauthFlagged = false;
     store.reauthReason = null;
     store.refreshTokenState = null;
+    store.clientSecret = '';
     store.saved = null;
 });
 
@@ -557,7 +560,10 @@ describe('token refresh (expiring user-to-server tokens)', () => {
 
         await listInstallations();
 
-        expect(refreshUserTokenMock).toHaveBeenCalledWith('Iv_test', 'ghr_old');
+        // Three arguments now: the refresh grant needs the client secret
+        // (genie#263). Restated rather than loosened -- `toHaveBeenCalled()`
+        // would pass against a call that dropped it again.
+        expect(refreshUserTokenMock).toHaveBeenCalledWith('Iv_test', 'ghr_old', '');
         // The refreshed grant is persisted with the new access + refresh token.
         expect(store.saved).toMatchObject({ accessToken: 'ghu_new', refreshToken: 'ghr_new' });
         // The live request went out with the refreshed token.
@@ -625,6 +631,61 @@ describe('token refresh (expiring user-to-server tokens)', () => {
         expect(store.reauthReason).toMatchObject({
             code: 'refresh_token_rejected',
         });
+    });
+
+    it('hands the configured client secret to the refresh (genie#263)', async () => {
+        store.accessExpiryMs = Date.now() - 1000;
+        store.refreshToken = 'ghr_old';
+        store.clientSecret = 'sec_configured';
+        refreshUserTokenMock.mockResolvedValueOnce({
+            access_token: 'ghu_new',
+            token_type: 'bearer',
+            expires_in: 28800,
+        });
+        fetchMock.mockResolvedValueOnce(res(200, { installations: [] }));
+
+        await listInstallations();
+
+        expect(refreshUserTokenMock).toHaveBeenCalledWith('Iv_test', 'ghr_old', 'sec_configured');
+    });
+
+    it('names the missing client secret rather than blaming the refresh token', async () => {
+        // The dead end this issue is really about. GitHub answers
+        // `incorrect_client_credentials` when the refresh grant carries no
+        // secret, and Genie recorded that as `refresh_token_rejected` -- whose
+        // copy tells the operator to reconnect. Reconnecting cannot fix it: a
+        // fresh device-flow login succeeds (that grant IS secret-less) and the
+        // next refresh fails identically. Three attempts were made on the
+        // reported install for exactly that reason.
+        store.accessExpiryMs = Date.now() - 1000;
+        store.refreshToken = 'ghr_live';
+        store.clientSecret = '';
+        refreshUserTokenMock.mockRejectedValueOnce(
+            new DeviceFlowError('incorrect_client_credentials', 'bad client', false),
+        );
+
+        await expect(listInstallations()).rejects.toBeInstanceOf(GitHubAuthError);
+
+        expect(store.reauthReason).toMatchObject({
+            code: 'refresh_client_secret_missing',
+            detailCode: 'incorrect_client_credentials',
+        });
+    });
+
+    it('still blames the refresh token when a secret WAS sent and GitHub said no', async () => {
+        // POSITIVE CONTROL for the branch above: without this, routing every
+        // `incorrect_client_credentials` to the new code would pass the test
+        // above while hiding a genuinely wrong secret behind "none configured".
+        store.accessExpiryMs = Date.now() - 1000;
+        store.refreshToken = 'ghr_live';
+        store.clientSecret = 'sec_wrong';
+        refreshUserTokenMock.mockRejectedValueOnce(
+            new DeviceFlowError('incorrect_client_credentials', 'bad client', false),
+        );
+
+        await expect(listInstallations()).rejects.toBeInstanceOf(GitHubAuthError);
+
+        expect(store.reauthReason).toMatchObject({ code: 'refresh_token_rejected' });
     });
 
     it('single-flights concurrent refreshes — ONE rotation shared by all callers', async () => {

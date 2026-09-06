@@ -26,6 +26,39 @@
 export const GENIE_GITHUB_CLIENT_ID = 'Iv23liPssWsCpaUIxtIT';
 
 /**
+ * The App's client SECRET — required to REFRESH a user token, and empty here.
+ *
+ * genie#263. GitHub waives the secret for the device_code grant, which is how
+ * Genie signs in; it does NOT waive it for the `refresh_token` grant, which
+ * shares the same endpoint and is a different grant. A secret-less refresh is
+ * answered `incorrect_client_credentials` — the exact value recorded in
+ * `github_reauth_detail` on the install that issue was filed from, against a
+ * refresh token with five months left. Until this change the refresh call could
+ * not send one at all, so no install could recover: re-authenticating succeeds
+ * (device grant) and the next refresh fails identically.
+ *
+ * DELIBERATELY EMPTY, and not the same kind of value as the Client ID above.
+ * The ID is public and commits happily. A secret in a desktop binary is not a
+ * secret — anyone can read it out of the app — so shipping one is a decision
+ * with real consequences, and this file is not the place to make it quietly.
+ *
+ * TWO WAYS to close the gap, both open:
+ *
+ *   1. Turn "Expire user authorization tokens" OFF on the App. Then GitHub
+ *      issues non-expiring tokens with no refresh token, this path is never
+ *      reached, and one Reconnect fixes each install permanently.
+ *      `storage.ts`'s {@link TokenSet} already handles that shape. No secret,
+ *      no code, and the option this codebase is best placed to take.
+ *   2. Supply a secret — per machine via the Settings → GitHub field
+ *      ({@link getClientSecret}), or baked in here for a build that accepts the
+ *      exposure. Self-hosters pointing Genie at their own App take this one.
+ *
+ * The plumbing is inert while this is empty; what changes is that the code CAN
+ * now send a secret, and says so honestly when it has none to send.
+ */
+export const GENIE_GITHUB_CLIENT_SECRET = '';
+
+/**
  * The GitHub App's public slug, used to build the "install this App on an
  * account" URL. Derived from the App name "Genie AOS". If GitHub assigned a
  * different slug, change it here — it's the only place the slug lives.
