@@ -202,17 +202,95 @@ describe('the list the owner asked to be expanded', () => {
  *
  * Moving `typescript` into `dependencies` does NOT fix it — nothing at all lands
  * in the clone, dev or not. The fix belongs in the package: ship a prebuilt
- * `dist` (no `prepare` to run), or install from a packed tarball rather than a
- * git spec. Until one of those exists the row states the gap, which is what
- * `install: null` is for.
+ * `dist` (no `prepare` to run), or install from a packed TARBALL rather than a
+ * git spec — npm never prepares a tarball, because a tarball is already built.
+ * Until one of those exists the row states the gap, which is what `install: null`
+ * is for.
+ *
+ * The rule below is therefore about GIT SPECS and nothing wider. Its first
+ * version also rejected `https?:`, which forbade the tarball remedy this very
+ * paragraph recommends — see {@link isGitSpec}.
  */
+
+/**
+ * Is this npm spec a GIT spec — the one form `npm install -g` cannot prepare?
+ *
+ * Every form npm resolves through its git fetcher, and nothing else:
+ *
+ *   - the hosted shorthands (`github:`, `gitlab:`, `bitbucket:`, `gist:`),
+ *   - the explicit schemes (`git:`, `git+https:`, `git+ssh:`, `git+file:`),
+ *   - any URL whose path ends `.git`, with or without a `#committish` — a git
+ *     spec wearing a URL,
+ *   - and BARE `owner/repo`, which npm treats as GitHub. It is the form most
+ *     likely to be typed by someone reaching for a repository, and the one a
+ *     scheme check misses entirely. A scoped registry name (`@scope/name`) also
+ *     contains a slash and is NOT this.
+ *
+ * A TARBALL URL is deliberately NOT a git spec, and that exemption is the point
+ * of this function existing at all. npm prepares a git CLONE; it never prepares
+ * a packed tarball, because a tarball is already built — so
+ * `https://…/releases/latest/download/genie-tui.tgz` is exactly the remedy the
+ * comment above recommends, and it installs globally without complaint.
+ *
+ * The first version of this rule read `/^(github:|…|https?:)/` and therefore
+ * forbade the fix it names three paragraphs up. The evidence established "no GIT
+ * spec"; it was widened to "no URL" with no evidence for the second half, and an
+ * invariant that contradicts its own stated remedy is worse than none — the next
+ * person reads the comment, does what it says, and gets a red test that appears
+ * to tell them they are wrong.
+ */
+function isGitSpec(pkg: string): boolean {
+    if (/^(github:|gitlab:|bitbucket:|gist:|git:|git\+)/.test(pkg)) return true;
+    if (/\.git(#[^#]*)?$/.test(pkg)) return true;
+    // Bare `owner/repo` — GitHub shorthand. `@scope/name` is a registry name.
+    return !pkg.startsWith('@') && !pkg.includes(':') && pkg.includes('/');
+}
+
 describe('an npm install spec names a REGISTRY package, never a git spec', () => {
-    it('has no git or URL spec anywhere — npm cannot prepare one under `install -g`', () => {
+    it('has no git spec anywhere — npm cannot prepare one under `install -g`', () => {
         for (const entry of AGENT_CLI_CATALOG) {
             if (entry.install?.manager !== 'npm') continue;
-            expect(entry.install.package, `${entry.id} installs by git spec`).not.toMatch(
-                /^(github:|gitlab:|bitbucket:|gist:|git\+|git:|https?:)/,
+            expect(isGitSpec(entry.install.package), `${entry.id} installs by git spec`).toBe(
+                false,
             );
+        }
+    });
+
+    it('recognises every git form npm does', () => {
+        for (const spec of [
+            'github:Renaissance-Analytics/genie-tui',
+            'gitlab:owner/repo',
+            'bitbucket:owner/repo',
+            'gist:0a1b2c3d',
+            'git://github.com/owner/repo',
+            'git+https://github.com/owner/repo.git',
+            'git+ssh://git@github.com/owner/repo.git',
+            'https://github.com/owner/repo.git',
+            'https://github.com/owner/repo.git#v1.2.3',
+            'Renaissance-Analytics/genie-tui',
+        ]) {
+            expect(isGitSpec(spec), spec).toBe(true);
+        }
+    });
+
+    /**
+     * The exemption, PINNED. An exemption that exists only as the absence of a
+     * rule is one somebody re-adds — which is how the `https?:` in the first
+     * version of this got there.
+     */
+    it('does NOT flag a packed tarball URL — the remedy this rule exists to allow', () => {
+        for (const spec of [
+            'https://github.com/Renaissance-Analytics/genie-tui/releases/latest/download/genie-tui.tgz',
+            'https://github.com/Renaissance-Analytics/genie-tui/releases/download/v0.1.0/genie-tui-0.1.0.tgz',
+            'https://registry.npmjs.org/example/-/example-1.0.0.tgz',
+        ]) {
+            expect(isGitSpec(spec), spec).toBe(false);
+        }
+    });
+
+    it('does NOT flag the registry names the catalog actually uses', () => {
+        for (const spec of ['@anthropic-ai/claude-code', '@openai/codex', 'cline', 'opencode-ai']) {
+            expect(isGitSpec(spec), spec).toBe(false);
         }
     });
 
