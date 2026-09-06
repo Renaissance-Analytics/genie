@@ -958,16 +958,16 @@ test('the canvas offers Genie’s OWN steps, not just fancy-flow’s builtins', 
     await expect(flowsRoot()).not.toHaveClass(/open/);
 });
 
-test('the palette does not offer a step that would hang the run — not even via search', async () => {
-    // The other half of the palette story, and the half only an E2E can answer.
+test('the palette offers no step Genie would refuse — not even via search', async () => {
+    // The half only an E2E can answer: whether `kindFilter` is actually wired to
+    // the editor. `main/` can prove the predicate is right about every kind in
+    // the registry; it cannot prove the prop reached `<FlowEditor>`.
     //
-    // Three of fancy-flow's kinds park a run by aborting with a resume token
-    // Genie cannot yet act on, so a flow containing one can be drawn, armed, and
-    // then hang for good with nothing saying why. Genie refuses them at
-    // admission, at save and at run — all three covered by unit tests — but
-    // until fancy-flow 0.66.0 there was no way to stop somebody DRAWING one.
-    // `kindFilter` is that way, and whether the prop is actually wired to the
-    // editor is not a question `main/` can answer about itself.
+    // Genie refuses eighteen of fancy-flow's kinds — three that would HANG a run
+    // it cannot resume, and fifteen that would FAIL one. An earlier pass filtered
+    // only the three, so SubFlow, For Each, Memory Store and Webhook stayed on
+    // the canvas. Those four are named below because they are what the owner
+    // actually saw.
     await setFlowsRunning([]);
     await openFlows();
     await flowRow('Tidy the workspace').getByRole('button', { name: /Edit/ }).click();
@@ -975,37 +975,53 @@ test('the palette does not offer a step that would hang the run — not even via
     const canvas = page.locator('[role="dialog"] .flowmgr-canvas-body');
     await expect(canvas.locator('.react-flow')).toBeVisible();
     const palette = canvas.locator('.ff-palette');
-    const rows = palette.locator('.ff-palette__row');
+    // The LABEL element, not the row. A row renders `label` and `description`
+    // together, and Playwright's `hasText` is a case-insensitive substring over
+    // the whole thing -- so `hasText: 'Memory Store'` matched Genie's own
+    // Knowledge step, whose description calls the knowledge graph a
+    // "local knowledge/memory store". That is a real row that SHOULD be there,
+    // and the looser locator called it a regression. Exact label match instead.
+    const labels = palette.locator('.ff-palette__row-label');
 
-    // POSITIVE CONTROL, first: an empty or unrendered palette would satisfy
-    // every absence assertion below without the filter existing at all.
-    await expect(rows.filter({ hasText: 'Branch' }).first()).toBeVisible();
+    await expect(labels.filter({ hasText: 'Branch' }).first()).toBeVisible();
+    const offered = (await labels.allTextContents()).map((t) => t.trim());
 
-    // The three that would HANG a run…
-    for (const label of ['Human Approval', 'Rich User Input', 'User Input']) {
-        await expect(rows.filter({ hasText: label })).toHaveCount(0);
+    // POSITIVE CONTROLS, first: an empty or unrendered palette satisfies every
+    // absence assertion below without the filter existing at all, and an empty
+    // palette is exactly what a filter bug produces.
+    expect(offered).toContain('Branch');
+    expect(offered).toContain('Merge');
+    expect(offered).toContain('Transform');
+    expect(offered.length, `palette offered ${JSON.stringify(offered)}`).toBeGreaterThan(5);
+
+    for (const hidden of [
+        // would HANG the run
+        'Human Approval',
+        'User Input',
+        'Rich User Input',
+        // would FAIL it -- the first four are the owner's screenshot
+        'SubFlow',
+        'For Each',
+        'Memory Store',
+        'Webhook',
+        'API Request',
+        'LLM Call',
+    ]) {
+        expect(offered, `palette still offers "${hidden}"`).not.toContain(hidden);
     }
 
-    // …and the ones that would FAIL it. These four are the labels visible in
-    // the owner's screenshot of the broken palette, which is why they are named
-    // here rather than left to the unit sweep: the palette hid only the three
-    // pause kinds while the door refused eighteen.
-    for (const label of ['SubFlow', 'For Each', 'Memory Store', 'Webhook']) {
-        await expect(rows.filter({ hasText: label })).toHaveCount(0);
-    }
-
-    // `kindFilter` runs BEFORE the palette's search box — it filters the full
+    // `kindFilter` runs BEFORE the palette's search box -- it filters the full
     // list, and the query narrows what is left. A filter applied the other way
     // round would look identical until somebody typed the name, so this is the
     // assertion that tells the two apart.
     const search = palette.getByPlaceholder(/Search nodes/i);
-    await search.fill('human approval');
-    await expect(rows.filter({ hasText: /Human Approval/i })).toHaveCount(0);
+    await search.fill('memory store');
+    expect((await labels.allTextContents()).map((t) => t.trim())).not.toContain('Memory Store');
 
-    // ...and the search box itself still works, so the count above is a hidden
-    // kind rather than a query that matches nothing.
+    // ...and the search box still works, so the absence above is a hidden kind
+    // rather than a query that matches nothing.
     await search.fill('branch');
-    await expect(rows.filter({ hasText: 'Branch' }).first()).toBeVisible();
+    await expect(labels.filter({ hasText: 'Branch' }).first()).toBeVisible();
 
     await page.locator('.flowmgr-canvas-close').click();
     await page.keyboard.press('Escape');
