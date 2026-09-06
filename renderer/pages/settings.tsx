@@ -5086,9 +5086,11 @@ export function ToolchainSection() {
 
                     <Tabs.Panel value="agents">
                         <div className="set-note">
-                            Genie refuses to update an agent CLI while that agent is mid-turn:
-                            replacing the binary under a running turn fails outright on Windows
-                            and corrupts the turn elsewhere. Finish the turn, then update.
+                            Genie refuses to update an agent CLI while an agent RUNNING THAT CLI
+                            is mid-turn: replacing the binary under a running turn fails outright
+                            on Windows and corrupts the turn elsewhere. Finish that turn, then
+                            update. Installing a CLI you do not have yet replaces nothing, so it
+                            is never held back.
                         </div>
                         {updates === null ? (
                             <div className="set-note">Checking for updates…</div>
