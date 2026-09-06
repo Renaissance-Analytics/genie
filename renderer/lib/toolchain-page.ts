@@ -9,6 +9,7 @@ import type {
     ToolchainStepResult,
 } from './genie';
 import { AGENT_CLI_IDS } from '../../main/agents/agent-cli-catalog';
+import { toolLabel } from './workstation-dev-server';
 
 /**
  * The Toolchain page's VIEW model — every judgement the page makes, kept out of
@@ -390,4 +391,53 @@ export function installOutcomeNotice(result: {
         `only for terminals started after them. If that answers, you are set; if it does not, the ` +
         `install did not land and “Re-check” will say so.`
     );
+}
+
+
+/**
+ * The two halves of a failed install or update: a sentence, and the output.
+ *
+ * They are separated because they answer different questions and only one of
+ * them is short. The headline is what a person reads; the detail is what a bug
+ * report needs.
+ */
+export interface InstallFailureNotice {
+    /** Genie's own sentence, naming the tool. Always present. */
+    headline: string;
+    /** The failing command's raw output, when there was one. */
+    detail?: string;
+}
+
+/**
+ * What to show when an install or update did not succeed — or `null` when it did.
+ *
+ * Two separate failures used to reach the user as the same four words.
+ *
+ * MAIN's refusals carry a written reason on `result.error` — "Genie has no
+ * installer for X, because …". The page read only `results[].error`, and a
+ * refusal has an EMPTY `results`, so the reason was computed, sent across the
+ * IPC boundary, and dropped one line before it would have been shown. The user
+ * got *"The update did not complete."*
+ *
+ * A REAL failure went the other way: the whole of npm's stderr was put into a
+ * one-line note. The owner's screen therefore ended on `A complete log of this
+ * run can be found in: C:\…` — which is npm saying where the answer is kept,
+ * presented as the answer.
+ *
+ * So the headline is always Genie's, and always names the TOOL by its product
+ * label; the command's own output is kept as DETAIL rather than deleted, because
+ * it is the only copy of what actually happened and the page is where somebody
+ * is standing when they need it.
+ */
+export function installFailureNotice(
+    tool: HostToolName,
+    result: { ok: boolean; results: ToolchainStepResult[]; error?: string },
+): InstallFailureNotice | null {
+    if (result.ok) return null;
+    const failed = result.results.find((r) => r.status === 'failed');
+    const headline = result.error ?? `${toolLabel(tool)} could not be installed.`;
+    return {
+        headline,
+        ...(failed?.error ? { detail: failed.error } : {}),
+    };
 }

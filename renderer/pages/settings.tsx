@@ -61,11 +61,13 @@ import {
 import {
     agentCliRows,
     defaultChangeNotice,
+    installFailureNotice,
     repairNotice,
     devToolRows,
     formatBytes,
     languageSections,
     removeConfirmation,
+    type InstallFailureNotice,
 } from '../lib/toolchain-page';
 import {
     appSummaryLine,
@@ -115,6 +117,7 @@ import {
     type SectionId,
 } from '../lib/settings-nav';
 import { pickPath } from '../components/FilePickerModal';
+import ErrorBoundary from '../components/ErrorBoundary';
 
 /** Hard cap on the Ai.System instruction set (mirrors main's AI_SYSTEM_MAX).
  *  Enforced here in the UI (`maxLength` + slice) and again server-side in the
@@ -937,7 +940,7 @@ const SettingsFilterCtx = createContext('');
  * mounted, so this prefixes each tab's rows with its nav label — and the
  * `.set-searching` CSS collapses any tab/section whose rows don't match.
  */
-function SearchGroup({
+export function SearchGroup({
     label,
     searching,
     children,
@@ -946,11 +949,27 @@ function SearchGroup({
     searching: boolean;
     children: ReactNode;
 }) {
-    if (!searching) return <div className="settings-tab">{children}</div>;
+    // COMPACT, and per SECTION. Genie's only other boundary is the root one in
+    // `_app.tsx`, which replaces the whole window — so in Settings a single bad
+    // section took down the fifteen working ones with it, including whichever
+    // one the person needed to work around the broken one. It also meant the
+    // error text landed on a full-screen page nobody screenshots, which is how
+    // "the settings window crashes when I go to the toolchain CLI tab" arrived
+    // with no stack attached to it.
+    //
+    // No section can opt out, because every section already goes through here.
+    // Navigating away UNMOUNTS the group (the page renders `show(id) && …`), so
+    // a caught error clears itself on the way back without a `resetKeys`.
+    const body = (
+        <ErrorBoundary compact name={label}>
+            <div className="settings-tab">{children}</div>
+        </ErrorBoundary>
+    );
+    if (!searching) return body;
     return (
         <div className="set-search-group">
             <div className="set-search-group-label">{label}</div>
-            <div className="settings-tab">{children}</div>
+            {body}
         </div>
     );
 }
@@ -4492,8 +4511,17 @@ function toolToneBadge(tone: ToolUpdateTone): { color: 'amber' | 'emerald' | 'zi
  * CLIs tabs. Presentational only: the row model and badge tone are decided in
  * `workstation-dev-server.ts`, and which tools belong on which tab in
  * `toolchain-page.ts`, both pure and unit-tested.
+ *
+ * EXPORTED so it can be rendered in a test. The pure halves were always
+ * checkable and the component never was, which left the Agent CLIs tab —
+ * twenty-one rows, four different row shapes, mounted lazily the first time
+ * somebody clicks the tab — with no render coverage outside an E2E that runs
+ * against a page built for the suite with an eight-row fixture. The renderer
+ * test env has no DOM, but the SERVER renderer runs every component function
+ * and throws where the browser would, which is the class of fault an error
+ * boundary catches. See `components/__tests__/toolchain-agent-cli-rows.test.ts`.
  */
-function ToolUpdateList({
+export function ToolUpdateList({
     rows,
     busy,
     onUpdate,
@@ -4800,8 +4828,9 @@ function LanguagesTab({
  *  - **Languages** — MULTI-version. Many installs side by side, one machine
  *    default, and a site follows that default unless it pins a version.
  *  - **Dev tools** — git / docker / composer. One install, update-to-latest.
- *  - **Agent CLIs** — claude-code / codex. Their own group because updating one
- *    is the single action Genie REFUSES mid-turn, so that rule is stated once.
+ *  - **Agent CLIs** — every CLI in the agent-CLI catalog, not the two that used
+ *    to be written out here. Their own group because updating one is the single
+ *    action Genie REFUSES mid-turn, so that rule is stated once.
  *
  * The guided first-run wizard stays a separate thing this page can OPEN: the
  * wizard is the front door, the page is where you live afterwards.
@@ -4818,7 +4847,17 @@ export function ToolchainSection() {
      *  these are installs. */
     const [busy, setBusy] = useState<string | null>(null);
     const [toolBusy, setToolBusy] = useState<HostToolName | null>(null);
-    const [error, setError] = useState<string | null>(null);
+    /**
+     * What went wrong, as a HEADLINE plus the failing command's own output.
+     *
+     * The output is kept rather than used as the message: npm's stderr ends on
+     * "A complete log of this run can be found in: …", and a note whose last
+     * words are where the answer is kept reads as the answer. See
+     * {@link installFailureNotice}.
+     */
+    const [error, setErrorNotice] = useState<InstallFailureNotice | null>(null);
+    const setError = (headline: string | null, detail?: string) =>
+        setErrorNotice(headline === null ? null : { headline, ...(detail ? { detail } : {}) });
     /** What just happened. Setting a default, adding and removing a version all
      *  change something invisible (a directory, a machine-wide pointer), so each
      *  one says what it did and what it affects. */
@@ -4971,10 +5010,12 @@ export function ToolchainSection() {
                 else setConfirmUpdate({ tool: name, reason: res.error ?? '' });
                 return;
             }
-            if (!res.ok) {
-                const failed = res.results.find((r) => r.status === 'failed');
-                setError(failed?.error ?? 'The update did not complete.');
-            }
+            // MAIN's refusal carries a written reason on `res.error`, which this
+            // used to drop on the floor because it only ever read the step list —
+            // and a refusal has no steps. The failing command's own output is
+            // kept as DETAIL rather than used as the message.
+            const failure = installFailureNotice(name, res);
+            if (failure) setError(failure.headline, failure.detail);
         } catch (e) {
             setError(e instanceof Error ? e.message : String(e));
         } finally {
@@ -5002,7 +5043,26 @@ export function ToolchainSection() {
                   }
                 : {})}
         >
-            {error && <div className="set-note bad">{error}</div>}
+            {error && (
+                <div className="set-note bad">
+                    {error.headline}
+                    {error.detail && (
+                        <pre
+                            data-testid="toolchain-error-detail"
+                            style={{
+                                marginTop: 6,
+                                whiteSpace: 'pre-wrap',
+                                wordBreak: 'break-word',
+                                maxHeight: 160,
+                                overflow: 'auto',
+                                fontSize: 11,
+                            }}
+                        >
+                            {error.detail}
+                        </pre>
+                    )}
+                </div>
+            )}
             {notice && (
                 <div className="set-note" role="status" data-testid="toolchain-notice">
                     {notice}

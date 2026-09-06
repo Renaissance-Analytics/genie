@@ -542,9 +542,11 @@ export function defaultHostingE2EState(): HostingE2EState {
             // is no longer capped at the pair that used to be written out in the
             // renderer.
             { name: 'gemini-cli', updateAvailable: false, source: 'unknown' },
-            // NOT INSTALLED but INSTALLABLE — Genie's own TUI. It used to be the
-            // third state below; its package is public now with the bin named
-            // `genie`, so the row offers a real Install and states no gap.
+            // NOT INSTALLED and NOT INSTALLABLE — Genie's OWN TUI, which is the
+            // row somebody will be tempted to make installable again. It briefly
+            // was, from a git spec, and `npm install -g` cannot prepare one: the
+            // clone never gets its dependencies, so its `prepare` runs a `tsc`
+            // that is not there. It states its gap now, like aider's.
             { name: 'genie', updateAvailable: false, source: 'unknown' },
             // NOT INSTALLED and NOT INSTALLABLE — the third state. Aider is
             // PyPI-only (`aider-chat`) and Genie installs agent CLIs through npm,

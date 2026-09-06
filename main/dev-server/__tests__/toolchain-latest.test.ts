@@ -46,6 +46,30 @@ describe('createLatestFor', () => {
         expect(await latestFor('codex')).toEqual({ version: '0.5.0', source: 'npm-global' });
     });
 
+    /**
+     * `npm outdated` EXITS 1 when it finds something outdated. That is its
+     * documented contract, not a failure — and it is the only case where the
+     * command has anything to say.
+     *
+     * The gate here read `code === 0 ? parse : {}`, so npm's answer was thrown
+     * away exactly when there was one: no agent CLI could ever show an update.
+     * Every fixture in this file used exit 0, which is a state the real command
+     * reaches only when it has nothing to report.
+     *
+     * From the owner's own machine, `%LOCALAPPDATA%/npm-cache/_logs`:
+     *
+     *     6 verbose title npm outdated
+     *     7 verbose argv "outdated" "--global" "--json"
+     *     20 verbose exit 1
+     */
+    it('reads npm’s answer even though `npm outdated` exits 1 — that IS a hit', async () => {
+        const { runner: r } = runner((cmd) =>
+            cmd === 'npm' ? { code: 1, stdout: NPM_OUTDATED, stderr: '' } : OK(''),
+        );
+        const latestFor = createLatestFor({ runner: r, pm: 'brew' });
+        expect(await latestFor('codex')).toEqual({ version: '0.5.0', source: 'npm-global' });
+    });
+
     it('returns null when the tool is not in the outdated list (already current)', async () => {
         const { runner: r } = runner((cmd) => (cmd === 'brew' ? OK(BREW_OUTDATED) : OK('')));
         const latestFor = createLatestFor({ runner: r, pm: 'brew' });
