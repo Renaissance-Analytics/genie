@@ -55,13 +55,37 @@ interface TrackedRun {
      *  a record written before ports were tracked; such a run can still be stopped
      *  and read, it just cannot be re-ROUTED without a restart. */
     port?: number;
+    /**
+     * Runs this site started EARLIER that were still alive when a new start
+     * displaced them (genie#391).
+     *
+     * The registry is keyed by siteId and `set` overwrites, so a start reaching
+     * that line while a previous run is up used to drop a live pair — shell and
+     * server both — leaving nothing anywhere holding their pids. That is the
+     * second leak on this issue, and the larger half of it: of 109 stranded
+     * `php -S` servers measured after #496, 80 still had a LIVE parent shell, so
+     * the wrong-pid mechanism cannot explain them. Thirty-one duplicates for one
+     * site is a shape problem, not a pid problem.
+     *
+     * Retained to be STOPPABLE, never to be served — see {@link
+     * HostProcessRun.running}. Pruned to the ones still alive on every start, so
+     * this cannot grow without bound and `stop` never signals a long-dead pid the
+     * OS may since have reused.
+     */
+    displaced?: DisplacedRun[];
+}
+
+/** A displaced run: only what a later stop needs to reach it. */
+interface DisplacedRun {
+    pid: number;
+    serverPid?: number;
 }
 
 /**
  * The pid whose liveness IS the run's liveness. See {@link TrackedRun.serverPid}:
  * the spawn pid is only a proxy for it, and on win32 a short-lived one.
  */
-const supervisedPid = (t: TrackedRun): number => t.serverPid ?? t.pid;
+const supervisedPid = (t: TrackedRun | DisplacedRun): number => t.serverPid ?? t.pid;
 
 /**
  * How long a start looks for the port's owner before giving up, and how often.
@@ -163,7 +187,37 @@ export function createHostProcessRun(deps: HostProcessRunDeps): HostProcessRun {
      * Guarded on liveness, so an ordinary stop still issues ONE kill: the tree kill
      * has already taken the server, `alive` says so, and nothing further is asked.
      */
-    async function stopTracked(t: TrackedRun): Promise<void> {
+    /** Is this run's server still up? Unanswerable counts as dead — the callers
+     *  either retain it (bounded by this) or stop it (best-effort anyway). */
+    function runAlive(t: TrackedRun | DisplacedRun): boolean {
+        try {
+            return hostSiteAlive(supervisedPid(t), prims);
+        } catch {
+            return false;
+        }
+    }
+
+    /**
+     * The earlier runs a new start must not forget: the one it is displacing, plus
+     * anything that displaced run was itself still carrying — each kept only while
+     * genuinely alive.
+     *
+     * The prune is what makes this safe to persist. Retaining unconditionally would
+     * grow the registry for the life of the site and have `stop` signal pids the OS
+     * has since handed to somebody else, which is a worse bug than the leak.
+     */
+    function retainedFrom(previous: TrackedRun): DisplacedRun[] {
+        const kept: DisplacedRun[] = [];
+        for (const older of previous.displaced ?? []) {
+            if (runAlive(older)) kept.push(older);
+        }
+        if (runAlive(previous)) {
+            kept.push({ pid: previous.pid, ...(previous.serverPid ? { serverPid: previous.serverPid } : {}) });
+        }
+        return kept;
+    }
+
+    async function stopTracked(t: TrackedRun | DisplacedRun): Promise<void> {
         try {
             await stopHostSite(t.pid, prims);
         } catch {
@@ -216,7 +270,17 @@ export function createHostProcessRun(deps: HostProcessRunDeps): HostProcessRun {
                 }
                 const spec: HostSiteSpawnSpec = { command, cwd, env, logPath };
                 const pid = startHostSite(spec, prims);
-                tracked.set(siteId, { pid, logPath, ...(port ? { port } : {}) });
+                // A start must not silently drop a run that is still alive
+                // (genie#391). Computed AFTER the spawn, so a failed spawn leaves
+                // the previous record exactly as it was.
+                const previous = tracked.get(siteId);
+                const displaced = previous ? retainedFrom(previous) : [];
+                tracked.set(siteId, {
+                    pid,
+                    logPath,
+                    ...(port ? { port } : {}),
+                    ...(displaced.length > 0 ? { displaced } : {}),
+                });
                 // Persisted BEFORE the port owner is resolved, so a Genie that dies
                 // during the resolve still records what the old code recorded.
                 save();
@@ -242,6 +306,10 @@ export function createHostProcessRun(deps: HostProcessRunDeps): HostProcessRun {
             const t = tracked.get(siteId);
             if (!t) return;
             await stopTracked(t);
+            // …and every run an earlier start displaced. Retaining them was only
+            // ever so this line could reach them; a survivor of THIS stop is the
+            // site manager's `orphans` map (genie#399/#421), one layer up.
+            for (const older of t.displaced ?? []) await stopTracked(older);
             tracked.delete(siteId);
             save();
         },
@@ -324,9 +392,27 @@ function loadRegistry(
         const entry = value as Partial<TrackedRun>;
         if (!Number.isInteger(entry.pid) || (entry.pid as number) <= 0) continue;
         if (typeof entry.logPath !== 'string' || !entry.logPath) continue;
+        // Displaced runs are pid-only records, so each is validated the same way
+        // the primary pid is. Anything malformed is simply dropped: a bad entry
+        // here would have `stop` signal a number nobody vouched for.
+        const displaced: DisplacedRun[] = [];
+        if (Array.isArray(entry.displaced)) {
+            for (const raw of entry.displaced) {
+                if (!raw || typeof raw !== 'object') continue;
+                const older = raw as Partial<DisplacedRun>;
+                if (!Number.isInteger(older.pid) || (older.pid as number) <= 0) continue;
+                displaced.push({
+                    pid: older.pid as number,
+                    ...(Number.isInteger(older.serverPid) && (older.serverPid as number) > 0
+                        ? { serverPid: older.serverPid as number }
+                        : {}),
+                });
+            }
+        }
         out.set(siteId, {
             pid: entry.pid as number,
             logPath: entry.logPath,
+            ...(displaced.length > 0 ? { displaced } : {}),
             // Absent in every record written before genie#391 — those keep working,
             // they simply fall back to the spawn pid the way they always did.
             ...(Number.isInteger(entry.serverPid) && (entry.serverPid as number) > 0
