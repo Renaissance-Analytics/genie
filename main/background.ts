@@ -2317,6 +2317,15 @@ app.whenReady().then(async () => {
                     project_name: w.project_name,
                     path: w.path,
                 })),
+            // The protected System Workspace, asked for BY ID — the affordance
+            // `listWorkspaces()`'s exclusion leaves open. A paired device gets full
+            // access to every workspace on this host, the workstation operator's own
+            // included, which is what makes the OSA remotely drivable (genie#455).
+            // Deliberate: see `workspacesForRemote` in main/mobile/api.ts.
+            systemWorkspace: () => {
+                const w = getWorkspace(SYSTEM_WORKSPACE_ROW_ID);
+                return w ? { id: w.id, project_name: w.project_name, path: w.path } : null;
+            },
             listTerminalSpecs: () =>
                 listTerminalSpecs().map((s) => ({
                     id: s.id,
