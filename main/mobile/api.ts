@@ -328,6 +328,21 @@ export interface MobileDataDeps {
         project_name: string;
         path: string;
     }>;
+    /**
+     * The PROTECTED System Workspace, asked for BY ID — the one affordance
+     * `listWorkspaces()`'s exclusion leaves open, and the ONLY way this surface
+     * ever learns of the row. Kept separate from `listWorkspaces` on purpose: that
+     * one is also the SERVED set (`servedWorkspaceIds`), the headless
+     * confinement boundary, and widening it would widen that too.
+     *
+     * Wired on the DESKTOP host, where it feeds {@link workspacesForRemote}.
+     * Absent on a headless genie-cloud host, which has no such row.
+     */
+    systemWorkspace?: () => {
+        id: string;
+        project_name: string;
+        path: string;
+    } | null;
     // --- Tynn provisioning on a HEADLESS HOST (genie #52) ---
     // A Genie Cloud host has no user OAuth cookie, so the "Tynn agent" picker's list,
     // status, and provision must ride the host's WORKSTATION identity instead. These
@@ -594,6 +609,49 @@ function servedWorkspaceIds(deps: MobileDataDeps): Set<string> {
     return new Set(deps.listWorkspaces().map((w) => w.id));
 }
 
+/**
+ * The workspaces a PAIRED remote may ENUMERATE: everything `listWorkspaces()`
+ * serves, plus the protected System Workspace — asked for BY ID, which is the one
+ * affordance that exclusion deliberately leaves open (see `listWorkspacesIn` in
+ * `main/db.ts`). Widening `listWorkspaces()` itself would have put the operator's
+ * row into every picker, sidebar, inventory, IssueWatch count and Dev Server
+ * reconcile at once to fix this one surface.
+ *
+ * THIS IS DELIBERATE, AND IT IS A GRANT OF POWER (genie#455). The System
+ * Workspace is where the OSA lives — `genie:workstation`, launched with
+ * `--dangerously-skip-permissions` / `--yolo` — so listing it here is what makes
+ * that agent remotely drivable. The owner asked for exactly that: for now, a
+ * paired device gets full access to every workspace on the host. Granular
+ * per-pairing permission is deferred, and when it arrives it belongs HERE, at
+ * this single seam, not as `id !==` checks sprinkled across the routes.
+ *
+ * PAIRING IS THE GATE: every caller of this is behind the Bearer check in
+ * `handleApi`, so an unpaired or unauthenticated client sees nothing new.
+ *
+ * HEADLESS IS UNCHANGED, fail-closed. On genie-cloud the mobile surface is
+ * MEMBER-facing and multi-tenant — a member is not the machine's owner — so the
+ * operator's workspace stays invisible there whatever the deps supply. (Such a
+ * host has no System Workspace row to begin with: only the Electron boot calls
+ * `ensureSystemWorkspace`. The runtime gate means that is a second line of
+ * defence rather than the only one.)
+ *
+ * The row is pinned FIRST, as the desktop sidebar pins it: it is fixed, not one
+ * of the user's orderable workspaces.
+ *
+ * Scope: the `/api/state` + `/api/workspaces` payload, which IS the phone's
+ * workspace surface. NOT `/api/desktop/workspaces` — a remote desktop window
+ * feeds that list to every picker and composes its own System Workspace row
+ * instead (`systemWorkspaceRow`), so sending it there would only re-open the
+ * exclusion this seam exists to keep.
+ */
+export function workspacesForRemote<T extends { id: string }>(
+    listed: readonly T[],
+    system: T | null | undefined,
+): T[] {
+    if (isHeadless() || !system) return [...listed];
+    return [system, ...listed];
+}
+
 /** A workspace-bound target belongs to a real served workspace. A null/absent
  *  or unknown workspace (System / unattached) is NOT served (fail-closed). */
 function boundToServedWorkspace(
@@ -777,7 +835,10 @@ function buildState(deps: MobileDataDeps, principalId: string | null = null) {
         // connected with their emoji.
         locked: control.locked,
         control,
-        workspaces: deps.listWorkspaces().map((w) => ({
+        workspaces: workspacesForRemote(
+            deps.listWorkspaces(),
+            deps.systemWorkspace?.() ?? null,
+        ).map((w) => ({
             id: w.id,
             name: w.project_name,
             path: w.path,
@@ -2320,6 +2381,12 @@ export async function handleApi(
 
     if (pathname.startsWith('/api/desktop/')) {
         if (pathname === '/api/desktop/workspaces' && method === 'GET') {
+            // The protected row is deliberately NOT here, even for a paired remote.
+            // A remote DESKTOP window's every picker, scope selector and launch
+            // target reads this list and relies on the exclusion; its sidebar
+            // composes the System Workspace itself, from the host's own OSA
+            // terminal cwd (`systemWorkspaceRow`, genie#455). The phone has no such
+            // spec to compose from, which is why `/api/workspaces` sends it there.
             sendJson(res, 200, { workspaces: dbListWorkspaces() });
             return true;
         }

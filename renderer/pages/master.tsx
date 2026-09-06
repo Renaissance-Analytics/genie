@@ -111,7 +111,7 @@ import {
     isGenieOsTerminalSpec,
     workspaceSurfaceSpecs,
     workspaceSurfaceRows,
-    makeSystemWorkspace,
+    systemWorkspaceRow,
     SYSTEM_WORKSPACE_ID,
     sidebarWorkspaceRows,
     ulid,
@@ -856,10 +856,11 @@ function MasterInner() {
         () => specs.find(isGenieOsTerminalSpec) ?? null,
         [specs],
     );
+    // Composed from the OSA terminal's cwd, which is the HOST's on a remote
+    // window — so the chip, and the Host Genie OSA under it, now appear when
+    // driving another machine (genie#455). `homeDir` stays desktop-only.
     const systemWorkspace = useMemo(
-        () => (!isRemoteWindow() && (genieOsSpec?.cwd || homeDir)
-            ? makeSystemWorkspace(genieOsSpec?.cwd || homeDir!)
-            : null),
+        () => systemWorkspaceRow(genieOsSpec?.cwd, homeDir, isRemoteWindow()),
         [genieOsSpec?.cwd, homeDir],
     );
 

@@ -76,6 +76,14 @@ test('mobile remote control: pair → dashboard → questions → terminal', asy
     await expect(page.getByText('Mobile E2E', { exact: true })).toBeVisible();
     await expect(page.getByText('E2E dev server')).toBeVisible();
 
+    // The PROTECTED System Workspace is here too (genie#455). It is absent from
+    // `listWorkspaces()` — every picker, sidebar and reconcile on the host still
+    // never sees it — and the remote payload asks for it BY ID, so a paired
+    // device gets the whole machine including the workstation operator's own
+    // workspace. Without it the Host Genie OSA below is an orphan: its terminal
+    // is in the payload, bound to a workspace this phone was never sent.
+    await expect(page.getByText('System', { exact: true })).toBeVisible();
+
     // The process starts 'stopped' → a Start control is shown. Clicking it POSTs
     // /api/process/:id/start; the server flips status + pushes process:status,
     // so the row reconciles to a running state (Stop/Restart controls appear).
@@ -103,6 +111,10 @@ test('mobile remote control: pair → dashboard → questions → terminal', asy
     await page.getByRole('button', { name: /Terminal/ }).click();
     const termRow = page.getByRole('button', { name: /E2E terminal/ });
     await expect(termRow).toBeVisible();
+
+    // …and so is the OSA, the whole point of listing its workspace above: the
+    // operator this phone can now actually drive.
+    await expect(page.getByRole('button', { name: /Genie OSA/ })).toBeVisible();
 
     // Pick it → MobileTerminalView mounts + opens /ws/term. Assert the WS upgrade
     // actually happened (the byte bridge connected). We DON'T assert xterm's

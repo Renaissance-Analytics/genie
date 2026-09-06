@@ -470,6 +470,19 @@ const E2E_MOBILE_WORKSPACE = {
     project_name: 'Mobile E2E',
     path: 'C:/e2e/mobile-workspace',
 };
+/**
+ * The PROTECTED System Workspace and the OSA terminal that lives in it — the
+ * workstation operator. A paired phone is sent this row (genie#455) even though
+ * `listWorkspaces()` excludes it, which is what makes the Host Genie OSA
+ * reachable from a remote connection; the fixture mirrors that split exactly, so
+ * the spec drives the real seam rather than a list that was never filtered.
+ */
+const E2E_MOBILE_SYSTEM_WORKSPACE = {
+    id: '__system__',
+    project_name: 'System',
+    path: 'C:/e2e/.gosa',
+};
+const E2E_MOBILE_OSA_TERMINAL_ID = 'term-e2e-osa';
 const E2E_MOBILE_TERMINAL_ID = 'term-e2e-mobile';
 const E2E_MOBILE_PROCESS_ID = 'proc-e2e-mobile';
 /** The catch-up banner getScrollback returns when the phone attaches /ws/term. */
@@ -521,7 +534,11 @@ function buildMobileE2EDeps(): MobileDataDeps {
     };
 
     return {
+        // The SERVED list, System-excluded exactly as `listWorkspaces()` is…
         listWorkspaces: () => [E2E_MOBILE_WORKSPACE],
+        // …and the protected row, asked for BY ID. Together they are the split the
+        // remote payload is built from.
+        systemWorkspace: () => E2E_MOBILE_SYSTEM_WORKSPACE,
         listTerminalSpecs: () => [
             {
                 id: E2E_MOBILE_TERMINAL_ID,
@@ -531,10 +548,20 @@ function buildMobileE2EDeps(): MobileDataDeps {
                 cwd: E2E_MOBILE_WORKSPACE.path,
                 live_cwd: null,
             },
+            {
+                id: E2E_MOBILE_OSA_TERMINAL_ID,
+                workspace_id: E2E_MOBILE_SYSTEM_WORKSPACE.id,
+                label: 'Genie OSA',
+                type: 'terminal',
+                cwd: E2E_MOBILE_SYSTEM_WORKSPACE.path,
+                live_cwd: null,
+            },
         ],
         listAllProcesses: () => [processRow()],
         liveTerminalIds: () =>
-            mobileE2E.terminalLive ? [E2E_MOBILE_TERMINAL_ID] : [],
+            mobileE2E.terminalLive
+                ? [E2E_MOBILE_TERMINAL_ID, E2E_MOBILE_OSA_TERMINAL_ID]
+                : [],
 
         startProcess: () => setProc('running'),
         stopProcess: () => setProc('stopped'),

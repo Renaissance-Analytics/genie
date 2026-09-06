@@ -4851,11 +4851,12 @@ export function workspaceSurfaceRows<T extends { path: string }>(
 /**
  * The workspace rows the sidebar lists, with the System Workspace composed in.
  *
- * The renderer never RECEIVES the System Workspace — main's `listWorkspaces()`
- * excludes the protected row on purpose — so the sidebar adds it rather than
- * filtering for it, and it is pinned to the top because it is fixed: never
- * draggable, never reorderable, so a reorder of the real workspaces can't
- * shuffle it down.
+ * This window never RECEIVES the System Workspace — main's `listWorkspaces()`
+ * excludes the protected row on purpose, and so does the `/api/desktop/workspaces`
+ * a remote window reads — so the sidebar adds it rather than filtering for it
+ * (see {@link systemWorkspaceRow}), and it is pinned to the top because it is
+ * fixed: never draggable, never reorderable, so a reorder of the real workspaces
+ * can't shuffle it down.
  *
  * `workspaceSurfaceRows` runs FIRST and keeps running while the chip is on. A
  * legacy registered row pointing at the managed OSA directory must stay hidden
@@ -4967,6 +4968,33 @@ export function makeSystemWorkspace(homePath: string): WorkspaceRow {
         terminal_approval: 1,
         schedule_approval: 1,
     };
+}
+
+/**
+ * The System Workspace row the sidebar chip reveals — composed, never fetched.
+ *
+ * `listWorkspaces()` excludes the protected row on purpose, so no window is sent
+ * it and every window has to build its own. The one field that has to be TRUE is
+ * the operator root, and `operatorPath` — the OSA terminal's cwd — already is on
+ * both kinds of window: a remote window's terminal specs are the HOST's, so the
+ * cwd it reads names the host's operator directory, not its own.
+ *
+ * That is the whole of genie#455 on this side. The chip used to be refused to a
+ * remote window outright, which left the Host Genie OSA unreachable from another
+ * machine even though its terminal was right there in the specs.
+ *
+ * `homeDir` is the legacy fallback for a desktop whose OSA spec has not resolved
+ * yet, and it is the one value that is genuinely LOCAL. A remote window must
+ * never compose from it: the chip would name a directory on the wrong machine.
+ */
+export function systemWorkspaceRow(
+    operatorPath: string | null | undefined,
+    homeDir: string | null | undefined,
+    remote: boolean,
+): WorkspaceRow | null {
+    if (operatorPath) return makeSystemWorkspace(operatorPath);
+    if (remote || !homeDir) return null;
+    return makeSystemWorkspace(homeDir);
 }
 
 export function ulid(): string {
