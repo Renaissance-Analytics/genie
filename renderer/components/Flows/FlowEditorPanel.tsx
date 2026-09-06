@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { FlowEditor } from '@particle-academy/fancy-flow';
 import '@particle-academy/fancy-flow/styles.css';
-import { registerFlowKinds } from '../../lib/flow-kinds';
+import { paletteKindFilter, registerFlowKinds } from '../../lib/flow-kinds';
 import type { FlowAdmissionView, FlowRunOutcomeView, FlowScope } from '../../lib/genie';
 
 /**
@@ -72,10 +72,14 @@ export default function FlowEditorPanel({ flowId, scope }: Props) {
     /**
      * Register the steps this app may author with, then let the canvas mount.
      *
-     * The set registered IS the palette: fancy-flow narrows a palette by
-     * category, not by kind, and a GApp window is its own renderer process
-     * acting for one app — so registering only what the grant covers means the
-     * canvas cannot offer a step certain to be refused at run time.
+     * The set registered IS the palette, for Genie's own steps: a GApp window is
+     * its own renderer process acting for one app, so registering only what the
+     * grant covers means the canvas cannot offer a Genie step certain to be
+     * refused at run time.
+     *
+     * Fancy's own builtins are not Genie's to withhold — the package registers
+     * them itself — so the one that must not be offered is hidden at render
+     * time instead, by `kindFilter` on the editor below.
      */
     useEffect(() => {
         let undo: (() => void) | null = null;
@@ -251,9 +255,28 @@ export default function FlowEditorPanel({ flowId, scope }: Props) {
                 <FlowEditor
                     value={graph as never}
                     onChange={onChange as never}
+                    // Fill the box the container gives us. `<FlowEditor>` sets
+                    // `style={{ height: props.height ?? 720, ...props.style }}`
+                    // on its root, so without this the editor is a fixed 720px
+                    // whatever the surrounding layout says — and `height` is
+                    // typed `number`, so the percentage has to arrive via
+                    // `style`, which is spread last and therefore wins.
+                    //
+                    // Both callers give it a real height: the canvas modal
+                    // through `.flowmgr-canvas-body`, and the GApp Flows tab
+                    // through its own `flex: 1; min-height: 0` column.
+                    style={{ height: '100%' }}
                     // No `executors` prop, and the built-in Run is off — see the
                     // note at the top. Running belongs to the main process.
                     builtins={{ run: false }}
+                    // Offers only steps Genie can actually run — the predicate
+                    // asks `refusalFor`, the same function the executor's door
+                    // asks. It removes the TRAP: you cannot drag on a node that
+                    // would hang or fail the run. It is NOT the enforcement —
+                    // the refusals at admission, save and run stay, because a
+                    // graph can arrive hand-authored, imported, or from an
+                    // agent, and this filter never sees one that did.
+                    kindFilter={paletteKindFilter}
                     actions={[
                         {
                             id: 'genie-run',

@@ -7268,6 +7268,52 @@ body.gutter-dragging .grid-gutter {
     font-size: 11.5px;
 }
 
+/* ===== the canvas modal ================================================= */
+
+/*
+ * A graph editor is a WORKSPACE, and `.prompt-card` is a prompt.
+ *
+ * `FlowCanvasModal` renders `prompt-card flowmgr-canvas` to borrow the card's
+ * CHROME -- surface, border, radius, shadow -- and must replace its SIZING
+ * outright. `.prompt-card` is `width: 380px`, which is narrower than the editor
+ * can be: fancy-flow lays `.ff-editor` out as
+ * `grid-template-columns: 216px 1fr 300px`, so below ~516px of content width the
+ * `1fr` canvas column collapses and the palette becomes one scrolling list with
+ * a sliver of graph beside it. The class shipped here with no rules at all, and
+ * that is exactly what it looked like.
+ *
+ * These rules must stay BELOW `.prompt-card` in this file. Both are single-class
+ * selectors, so specificity ties and source order is the only thing deciding
+ * which width wins. Pinned by `flow-canvas-modal-size.test.ts`.
+ */
+.flowmgr-canvas {
+    /* Percentages resolve against `.prompt-scrim`, which is already inset below
+       the titlebar -- so this reads "the window, less a margin", capped so the
+       editor does not sprawl on a large display. `min()` rather than a width
+       plus a `min-width`: a min-width large enough to matter would simply
+       overflow a small window, which is the failure it was meant to prevent. */
+    width: min(1600px, calc(100% - 48px));
+    height: min(920px, calc(100% - 48px));
+    /* `.prompt-card` caps at `calc(100vw - 32px)`; the width above is the cap. */
+    max-width: none;
+    padding: 14px 14px 12px;
+}
+
+/* The editor takes everything under the title row.
+
+   `min-height: 0` is the load-bearing line: a flex child will not shrink below
+   its content unless told it may, and without it the body keeps the editor's
+   natural height and the CARD scrolls -- which reads as a different bug. */
+.flowmgr-canvas-body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+}
+.flowmgr-canvas-body > * {
+    flex: 1;
+    min-width: 0;
+}
+
 /* ===== the Flow editor ================================================= */
 
 /* A form of stacked sections rather than a two-column grid: every field here

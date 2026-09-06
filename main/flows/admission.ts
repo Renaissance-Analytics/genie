@@ -34,7 +34,7 @@
 import { decideAppCall } from '../apps/bridge-decision';
 import { capabilityForTool } from '../apps/capabilities';
 import { isGenieNodeKind, toolForNodeKind } from './nodes';
-import { PAUSES_WITHOUT_RESUME, PAUSE_UNSUPPORTED } from './builtins';
+import { PAUSES_WITHOUT_RESUME, PAUSE_UNSUPPORTED } from './refusals';
 import { describeAuthority, type FlowAuthority } from './authority';
 
 /**

@@ -11,19 +11,23 @@
  * of which Genie's executor is designed to refuse, and offered none of the steps
  * Genie can actually run.
  *
- * ## The registered set IS the palette
+ * ## The registered set IS the palette, for GENIE's steps
  *
- * `<FlowEditor>` can narrow its palette by CATEGORY but not by kind, so there is
- * no prop that says "offer only these". What there is instead is a fact worth
- * more than a prop: a GApp window is its own renderer process, and it acts for
- * exactly one app. So registering only what that app was granted means the
- * palette cannot offer a step that would certainly be refused at run time —
- * enforced by the process boundary rather than by a filter somebody could pass
- * wrongly.
+ * A GApp window is its own renderer process, and it acts for exactly one app. So
+ * registering only what that app was granted means the palette cannot offer a
+ * Genie step that would certainly be refused at run time — enforced by the
+ * process boundary rather than by a filter somebody could pass wrongly.
  *
  * The full list still crosses IPC as `all`, for a surface that wants to show
  * what is possible but not yet permitted. It is deliberately NOT registered:
  * shown and unauthorable is the point.
+ *
+ * ## Not registering is no lever at all over FANCY's own steps
+ *
+ * fancy-flow registers its own builtins at import, and withholding them is not
+ * on the table — the canvas needs `branch`, `merge` and the rest. So the only
+ * way to keep one out of the palette is to say so at render time. That is
+ * `paletteKindFilter` below.
  *
  * ## Registering does not grant anything
  *
@@ -34,6 +38,43 @@
  */
 
 import { getNodeKind, registerNodeKind } from '@particle-academy/fancy-flow/engine';
+import { refusalFor } from '../../main/flows/refusals';
+
+/**
+ * Which registered kinds the palette offers — `<FlowEditor>`'s `kindFilter`.
+ *
+ * Hides every step Genie would refuse, so none of them can be dragged onto a
+ * canvas. That is eighteen of fancy-flow's kinds: three that would PARK a run
+ * Genie cannot resume, twelve that reach something Genie will not give a flow
+ * (`api_request`, `llm_call`, `subflow`, `memory_store`, `for_each`, …), and
+ * three that drive a terminal Genie has not wired. `refusals.ts` holds the
+ * tables and the reason for each.
+ *
+ *  - **It calls `refusalFor` — the same function the executor's door calls.**
+ *    Not a list beside it. A kind added to either table is hidden here and
+ *    refused there by that one edit, and the two cannot drift. An earlier pass
+ *    filtered only the three pause kinds while the door refused eighteen, which
+ *    left SubFlow, For Each, Memory Store and Webhook on the canvas for anyone
+ *    to drag on and be told no.
+ *  - **The doors still refuse.** This filter is presentation and only ever sees
+ *    the palette; a graph that arrives hand-authored, imported, or written by an
+ *    agent through `manageFlows` never passes through here.
+ *  - **It runs BEFORE the palette's search box** (verified in `NodePalette`: it
+ *    filters the full list, then the query filters what is left). So a hidden
+ *    kind cannot be typed back into view, which a post-search filter would have
+ *    allowed.
+ *
+ * Genie's own steps are unaffected: `refusalFor` strips the scope before looking
+ * in `REFUSALS`, and no `@genie/` tool's bare name collides with a refused fancy
+ * kind — Genie's are camelCase, fancy's are snake_case. Pinned by a control test.
+ *
+ * Declared at module scope rather than inline in the panel because `NodePalette`
+ * memoises its grouping on the filter's identity: a new closure every render
+ * would rebuild the palette on every keystroke in the config panel.
+ */
+export function paletteKindFilter({ kind }: { kind: { name: string } }): boolean {
+    return refusalFor(kind.name) === null;
+}
 
 /**
  * A Genie step, as main describes it over IPC.

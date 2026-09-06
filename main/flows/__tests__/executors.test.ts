@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { runFlow } from '@particle-academy/fancy-flow/engine';
+import { listNodeKinds, runFlow } from '@particle-academy/fancy-flow/engine';
 import { buildFlowExecutors, type FlowDispatch } from '../executors';
+import { implementedBuiltins } from '../builtins';
+import { refusalFor } from '../refusals';
 import { newFlowNode } from '../graph';
 
 /**
@@ -287,5 +289,196 @@ describe('end to end, through the real engine', () => {
         expect(res.ok).toBe(false);
         // The step AFTER the refused one never ran — the whole point.
         expect(dispatch).toHaveBeenCalledTimes(1);
+    });
+});
+
+/**
+ * fancy-flow 0.66.0 shipped DEFAULT executors. Genie's still win.
+ *
+ * The bump gave `branch`, `transform`, `merge` and `for_each` an `executor` on
+ * the kind definition, and `pickExecutor` gained a fallback to it:
+ *
+ *     for (const id of executorLookupIds(node)) if (executors[id]) return executors[id];
+ *     return getNodeKind(node.type ?? '')?.executor;      // ← new in 0.66.0
+ *
+ * The fallback is unreachable here, because `executorLookupIds` ends in `"*"`
+ * and Genie's registry is wildcard-only — so the door is hit on every node and
+ * the defaults are never consulted. The header of `executors.ts` used to say
+ * `runFlow` "never consults" a kind's executor; that stopped being true at this
+ * bump, and the property now rests on the wildcard rather than on the engine.
+ *
+ * Which is a property worth a test rather than a sentence. Genie's executors are
+ * not drop-in equivalents of the new defaults — they are deliberately stricter,
+ * and one of them refuses outright — so if ours quietly stopped being used, the
+ * flows would not break loudly. They would keep running and mean something else.
+ *
+ * Each of these asserts a BEHAVIOUR the two implementations disagree about, so
+ * "ours ran" is what is being measured, not what is in a registry.
+ */
+describe('after the 0.66.0 bump, Genie’s own executors still run', () => {
+    const executors = () => buildFlowExecutors({ kind: 'app', appId: 'app' }, dispatchOk());
+
+    it('still REFUSES for_each, which the package would now happily run', async () => {
+        // 0.66.0's `forEachExecutor` resolves the list and returns
+        // `{ items, count }` — it publishes the collection and its size rather
+        // than repeating the steps after it. That is not what a person drawing
+        // a loop is asking for, so Genie refuses instead of half-delivering,
+        // and the refusal says what to do instead.
+        //
+        // This is the sharpest of the three: if the default took over, the run
+        // would SUCCEED.
+        await expect(
+            runNode(
+                executors(),
+                node('l', '@particle-academy/for_each', { source: '{{ value }}' }),
+                { value: [1, 2, 3] },
+            ),
+        ).rejects.toThrow(/repeat the steps|Run Agent/i);
+    });
+
+    it('still throws on an unresolved path in a transform, where the default resolves it away', async () => {
+        // Genie resolves with `onUnresolved: 'throw'`; the default uses the
+        // engine's `'empty'`, which turns `{{ nothing.here }}` into null and
+        // carries on. A misspelled path that quietly becomes nothing gives a
+        // run that reports success and means something else — the whole reason
+        // Genie sets the stricter policy.
+        //
+        // Matched on the engine's own message, so it cannot pass on some other
+        // failure that happens to reject.
+        await expect(
+            runNode(
+                executors(),
+                node('x', '@particle-academy/transform', {
+                    mode: 'expression',
+                    expression: '{{ nothing.here }}',
+                }),
+            ),
+        ).rejects.toThrow(/did not resolve/);
+    });
+
+    it('still aborts a branch with no conditions, where the default routes false', async () => {
+        // The default sets `taken = false` for an empty condition list and
+        // returns the `false` port — a successful run down a direction nobody
+        // chose. Genie stops where the mistake is.
+        await expect(
+            runNode(executors(), node('d', '@particle-academy/branch', { conditions: [] })),
+        ).rejects.toThrow(/no conditions/);
+    });
+
+    it('CONTROL: the door is still passing real work through', async () => {
+        // Every assertion above is a rejection, and a door that refused
+        // EVERYTHING would satisfy all three. This is the positive control:
+        // Genie's `log` executor runs, and hands its input on.
+        expect(await runNode(executors(), node('g', '@particle-academy/log'), { value: 7 })).toBe(7);
+    });
+});
+
+/**
+ * The four node kinds fancy-flow 0.66.0 added, and what Genie does with them.
+ *
+ * `terminal_run` / `terminal_send` / `terminal_await` drive a pty through the
+ * package's new `TerminalHost` capability — a host registers one with
+ * `registerTerminalHost`, and nothing does here. They arrived in the palette on
+ * a version bump nobody asked for terminals in, and they sit in the `io`
+ * category, right beside Genie's own steps.
+ *
+ * Genie already owns terminals, properly: they are real, visible, attributed to
+ * an agent, and reachable from a flow through the Manage Terminals step. A
+ * second, invisible shell that only the flow engine knows about is not a feature
+ * Genie is missing — it is one it declines. So they are refused with that said
+ * out loud, rather than falling through to the generic "Genie does not know how
+ * to run this", which is true of a kind nobody has considered and misleading
+ * about one that has been.
+ *
+ * `terminal_lane` is the fourth and is NOT refused: it is a `layout` kind, and
+ * the engine skips the whole category before an executor is ever chosen. A
+ * refusal for it would be dead code that reads like live defence.
+ */
+describe('the terminal steps fancy-flow 0.66.0 added', () => {
+    const executors = () => buildFlowExecutors({ kind: 'app', appId: 'app' }, dispatchOk());
+
+    /** The abort message, or null if the run somehow succeeded. */
+    const refusalFrom = async (kind: string): Promise<string | null> => {
+        try {
+            await runNode(executors(), node('t', kind));
+            return null;
+        } catch (e) {
+            return e instanceof Error ? e.message : String(e);
+        }
+    };
+
+    it.each([
+        ['@particle-academy/terminal_run'],
+        ['@particle-academy/terminal_send'],
+        ['@particle-academy/terminal_await'],
+    ])('refuses %s with a STATED reason, not the catch-all', async (kind) => {
+        const message = await refusalFrom(kind);
+
+        expect(message).toMatch(/terminal/i);
+        // The half that matters. All three were already refused before this
+        // change — by case 4 of the door, the catch-all for a kind nobody has
+        // considered. These have been considered, and saying "Genie does not
+        // know how to run this" about them is misleading rather than merely
+        // unhelpful: it reads as a bug to report.
+        expect(message).not.toMatch(/does not know how to run/);
+    });
+
+    it('points at the step Genie does have', async () => {
+        expect(await refusalFrom('@particle-academy/terminal_run')).toMatch(/Manage Terminals/);
+    });
+
+    it('never reaches the door for terminal_lane, because the engine skips layout', async () => {
+        // Asserting the skip rather than a refusal. If the engine ever stopped
+        // skipping `layout`, this goes red and says so — which is the moment a
+        // refusal WOULD be needed.
+        await expect(
+            runNode(executors(), node('lane', '@particle-academy/terminal_lane')),
+        ).resolves.toBeUndefined();
+    });
+});
+
+/**
+ * Every fancy-flow kind has a DECIDED outcome, or this fails.
+ *
+ * The palette offers what `refusalFor` does not refuse, so a kind that is
+ * neither implemented nor refused is offered AND aborts the run — through case 4
+ * of the door, the catch-all whose message ("Genie does not know how to run…")
+ * is honest about a kind nobody has considered and misleading about one that
+ * simply got missed.
+ *
+ * That is not hypothetical. fancy-flow 0.66.0 added four kinds in a MINOR bump,
+ * three of them in the `io` category right beside Genie's own steps, and they
+ * landed in the palette with nothing here mentioning them. This is the test that
+ * makes the next one fail loudly instead: a new kind upstream now breaks the
+ * build until somebody writes down what Genie does with it.
+ */
+describe('every fancy-flow kind Genie could be offered', () => {
+    /** Categories the ENGINE skips before an executor is chosen. */
+    const VISUAL_ONLY = new Set(['annotation', 'layout']);
+
+    it('is implemented, refused with a stated reason, or purely visual', () => {
+        const fancy = (listNodeKinds() as { name: string; category: string }[]).filter((k) =>
+            k.name.startsWith('@particle-academy/'),
+        );
+
+        // POSITIVE CONTROL on the sweep itself. If the registry were empty — a
+        // moved import, a renamed export — `undecided` would be `[]` and this
+        // would pass while guarding nothing at all.
+        expect(fancy.length).toBeGreaterThan(20);
+
+        const undecided = fancy
+            .filter(
+                (k) =>
+                    !VISUAL_ONLY.has(k.category) &&
+                    !implementedBuiltins().includes(k.name) &&
+                    refusalFor(k.name) === null,
+            )
+            .map((k) => `${k.name} [${k.category}]`);
+
+        expect(
+            undecided,
+            'these would be OFFERED in the palette and then abort the run with the ' +
+                'generic catch-all — implement them, or give each a sentence in REFUSALS',
+        ).toEqual([]);
     });
 });

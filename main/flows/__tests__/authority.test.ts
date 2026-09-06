@@ -227,9 +227,16 @@ describe('a step that would park a run Genie cannot resume', () => {
      * continuously while an author draws, which is the only moment the refusal
      * is cheap to act on.
      *
-     * They stay in the palette because `<FlowEditor>` narrows by node CATEGORY
-     * and not by kind, so a host cannot remove one. Filed upstream. Genie will
-     * not fake it by re-categorising its own nodes to dodge a category filter.
+     * They are no longer OFFERED, either: fancy-flow 0.66.0 added `kindFilter`
+     * (the answer to the issue Genie filed when the only lever was node
+     * CATEGORY), and `paletteKindFilter` drives it off `refusalFor` — the same
+     * function this refusal reads. That removes the trap: you cannot drag one on.
+     *
+     * It does not remove the need for THIS test. A palette filter is
+     * presentation; it only ever sees the sidebar. A graph that was
+     * hand-authored, imported, or written by an agent through `manageFlows`
+     * reaches admission without passing a palette at all, which is why the
+     * refusal stays and why it is asserted here rather than assumed.
      */
     it.each([
         ['@particle-academy/human_approval'],

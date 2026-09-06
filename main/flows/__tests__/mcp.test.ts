@@ -6,6 +6,7 @@ import { registerGenieKinds } from '../kinds';
 import { registerEventTriggerKind } from '../event-trigger';
 import { createFlowEventRegistry } from '../events';
 import { getFlowIn, listFlowsIn, upsertFlowIn } from '../store';
+import { PAUSES_WITHOUT_RESUME } from '../refusals';
 
 /**
  * How an AGENT authors a flow.
@@ -329,5 +330,64 @@ describe('an agent with no workspace', () => {
         const out = await call({ action: 'list' }, { workspaceId: () => null });
 
         expect(out.error).toMatch(/workspace/i);
+    });
+});
+
+/**
+ * The door an AGENT writes a flow through, for a step the canvas no longer offers.
+ *
+ * fancy-flow 0.66.0 gave `<FlowEditor>` a `kindFilter`, so Genie now hides every
+ * refused kind from the palette, so a person cannot drag on a node that would
+ * hang or fail the run. An agent does not use the palette. It writes a
+ * graph and posts it HERE — hand-authored, imported, or copied from a doc — and
+ * a filter over a sidebar can never see that.
+ *
+ * So the refusal has to stand at this door whatever the canvas offers, and these
+ * assert it was not quietly dropped once the palette started hiding them. They
+ * are driven off `PAUSES_WITHOUT_RESUME` rather than three literals for the same
+ * reason the filter is: one list, or the two halves drift.
+ */
+describe('a pause step the palette no longer offers', () => {
+    const pauseGraph = (kind: string) => ({
+        nodes: [{ id: 'h', type: kind, data: { kind, config: {} } }],
+        edges: [],
+    });
+
+    it.each([...PAUSES_WITHOUT_RESUME])('is refused when an agent CHECKS %s', async (kind) => {
+        const out = await call({ action: 'check', graph: pauseGraph(kind) });
+
+        expect(out.allowed).toBe(false);
+        expect(out.refusals?.[0]?.nodeId).toBe('h');
+        expect(out.refusals?.[0]?.reason).toMatch(/cannot resume a paused flow/);
+    });
+
+    it.each([...PAUSES_WITHOUT_RESUME])('SAVES %s but refuses it, so the author is told', async (kind) => {
+        // Saving is not authorising — an author may be mid-edit — so the flow
+        // is stored and the reason comes back with it. A save that succeeded
+        // SILENTLY would be the trap wearing a different hat.
+        const out = await call({ action: 'save', title: 'Waits', graph: pauseGraph(kind) });
+
+        expect(out.flow).toBeTruthy();
+        expect(out.allowed).toBe(false);
+        expect(out.refusals?.[0]?.reason).toMatch(/cannot resume a paused flow/);
+    });
+
+    it('CONTROL: the same door admits a step Genie does run', async () => {
+        // Without this, a door that refused EVERYTHING would pass the above.
+        const out = await call({
+            action: 'check',
+            graph: {
+                nodes: [
+                    {
+                        id: 'q',
+                        type: '@genie/ForceTheQuestion',
+                        data: { kind: '@genie/ForceTheQuestion', config: {} },
+                    },
+                ],
+                edges: [],
+            },
+        });
+
+        expect(out.allowed, JSON.stringify(out.refusals)).toBe(true);
     });
 });
