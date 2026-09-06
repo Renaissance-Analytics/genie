@@ -70,7 +70,7 @@ describe('a workspace needs a name and a folder — and nothing else', () => {
 
         const saved = await createWorkspace(
             {
-                id: 'ws-bare',
+                unlinkedId: 'ws-bare',
                 name: 'Bare Workspace',
                 slug: 'bare-workspace',
                 parentPath: parent,
@@ -99,7 +99,7 @@ describe('a workspace needs a name and a folder — and nothing else', () => {
 
         await createWorkspace(
             {
-                id: 'proj-42',
+                unlinkedId: 'proj-42',
                 name: 'Linked Workspace',
                 slug: 'linked-workspace',
                 parentPath: parent,
@@ -117,13 +117,48 @@ describe('a workspace needs a name and a folder — and nothing else', () => {
         });
     });
 
+    /**
+     * ONE FACT, ONE HOME.
+     *
+     * A Tynn-linked workspace is KEYED by its project id — that is how every
+     * other surface finds the link (`tynnImportRoute`'s already-here check, the
+     * Ops presence map, the `existingIds` guard that stops a second clone). The
+     * plan used to carry that id twice: once as the workspace id and once as the
+     * link, and nothing made the two agree. A caller that set them differently
+     * would land a row whose `id` and `project_id` disagreed, and those surfaces
+     * would then disagree about whether the workspace existed at all — each of
+     * them right about the half it was reading.
+     *
+     * So the caller's id is the id for an UNLINKED workspace, and only that. A
+     * linked one takes the project's, and there is nothing to keep in sync.
+     */
+    it('keys a linked workspace by its project, never by the id the caller brought', async () => {
+        const parent = makeTmpDir('one-home-parent');
+        const { rows, deps } = spyRegistrar();
+
+        await createWorkspace(
+            {
+                unlinkedId: 'ulid-nobody-should-see',
+                name: 'One Home',
+                slug: 'one-home',
+                parentPath: parent,
+                content: { kind: 'empty' },
+                link: { projectId: 'proj-99', projectName: 'One Home' },
+            },
+            deps,
+        );
+
+        expect(rows[0].id).toBe('proj-99');
+        expect(rows[0].project_id).toBe('proj-99');
+    });
+
     it('marks a GApp development workspace as one', async () => {
         const parent = makeTmpDir('gapp-parent');
         const { rows, deps } = spyRegistrar();
 
         await createWorkspace(
             {
-                id: 'ws-gapp',
+                unlinkedId: 'ws-gapp',
                 name: 'Gapp Workspace',
                 slug: 'gapp-workspace',
                 parentPath: parent,
@@ -146,7 +181,7 @@ describe('content, when the entry point has some', () => {
 
         const saved = await createWorkspace(
             {
-                id: 'ws-repos',
+                unlinkedId: 'ws-repos',
                 name: 'With Repos',
                 slug: 'with-repos',
                 parentPath: parent,
@@ -182,7 +217,7 @@ describe('content, when the entry point has some', () => {
 
         const saved = await createWorkspace(
             {
-                id: 'proj-published',
+                unlinkedId: 'proj-published',
                 name: 'Published Product',
                 slug: 'published',
                 parentPath: parent,
@@ -204,7 +239,7 @@ describe('what it refuses to do', () => {
         await expect(
             createWorkspace(
                 {
-                    id: 'ws-x',
+                    unlinkedId: 'ws-x',
                     name: '   ',
                     slug: '',
                     parentPath: makeTmpDir('noname'),
@@ -220,7 +255,7 @@ describe('what it refuses to do', () => {
         await expect(
             createWorkspace(
                 {
-                    id: 'ws-x',
+                    unlinkedId: 'ws-x',
                     name: 'Nowhere',
                     slug: 'nowhere',
                     parentPath: '  ',
@@ -241,7 +276,7 @@ describe('what it refuses to do', () => {
         await expect(
             createWorkspace(
                 {
-                    id: 'ws-fail',
+                    unlinkedId: 'ws-fail',
                     name: 'Register Fails',
                     slug: 'register-fails',
                     parentPath: parent,

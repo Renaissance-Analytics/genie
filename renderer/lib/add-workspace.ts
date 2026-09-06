@@ -213,9 +213,10 @@ export type AddWorkspacePlanInput = AddWorkspacePlan;
 /**
  * Turn a completed draft into the plan main executes.
  *
- * THE ID. A Tynn-linked workspace is keyed by its project id — that is how
- * every other surface finds the link. With no project, the caller's generated
- * id is used, and that is the entire cost of Tynn being optional.
+ * THE ID is NOT resolved here. A Tynn-linked workspace is keyed by its project
+ * id — that is how every other surface finds the link — and `createWorkspace`
+ * is the one place that decides it. Resolving it here as well would put one
+ * fact in two homes, which is the shape of bug this whole rebuild is about.
  */
 export function addWorkspacePlan(
     draft: Omit<AddWorkspaceDraft, 'asks'> & { asks?: AddWorkspaceAsk[] },
@@ -240,7 +241,7 @@ export function addWorkspacePlan(
     if (!slug) throw new Error('Give the workspace a name it can be a folder for.');
 
     return {
-        id: draft.links.tynnProjectId || opts.id,
+        unlinkedId: opts.id,
         name,
         slug,
         parentPath,

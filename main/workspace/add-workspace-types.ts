@@ -38,8 +38,18 @@ export type AddWorkspaceContent =
     | { kind: 'repos'; repos: AddWorkspaceRepo[] };
 
 export interface AddWorkspacePlan {
-    /** The workspace id. A Tynn-linked workspace uses the project's id. */
-    id: string;
+    /**
+     * The workspace id to use when NOTHING is linked — and only then.
+     *
+     * A Tynn-linked workspace is keyed by its project id (`link.projectId`),
+     * because that is how every other surface finds the link. The two used to be
+     * separate fields with nothing keeping them equal, which is one fact with
+     * two homes: a caller that set them differently would land a row whose `id`
+     * and `project_id` disagreed, and the surfaces reading each half would then
+     * disagree about whether the workspace existed. `createWorkspace` resolves
+     * it, once, so there is no pair to keep in sync.
+     */
+    unlinkedId: string;
     name: string;
     /** Folder slug; `<slug>.agi` is the folder that lands under `parentPath`. */
     slug: string;
