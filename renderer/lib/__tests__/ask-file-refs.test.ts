@@ -83,11 +83,39 @@ describe('extractFileRefs', () => {
         ]);
     });
 
-    it('takes a bare filename only when the question set it in code', () => {
-        expect(extractFileRefs('Edit `package.json` to bump it.')).toEqual([
-            { path: 'package.json', name: 'package.json' },
-        ]);
+    it('never takes a bare filename — in code or not, it names no location', () => {
+        // genie#475. A bare name says WHICH file, never WHERE, and the modal has
+        // exactly one place to look: the workspace root. In an `.agi` envelope
+        // with eleven repos under `repos/`, every one of which has a
+        // package.json, that root is almost never the one meant.
+        expect(extractFileRefs('Edit `package.json` to bump it.')).toEqual([]);
         expect(extractFileRefs('Edit package.json to bump it.')).toEqual([]);
+    });
+
+    it('positive control: the same filename UNDER A PATH is still a chip', () => {
+        // The rule is about the separator, not about the word. Without this the
+        // test above would pass equally against a build that had stopped
+        // producing chips at all.
+        expect(extractFileRefs('Edit `repos/genie-tui/package.json` to bump it.')).toEqual([
+            { path: 'repos/genie-tui/package.json', name: 'package.json' },
+        ]);
+    });
+
+    it('does not chip filenames a question merely TALKS ABOUT (genie#475)', () => {
+        // The question the owner hit: it described shims npm had written into a
+        // throwaway temp prefix, naming them in prose. All three became chips,
+        // and `genie.cmd` opened as `C:\_Projects\tynn.ai\genie.cmd` — ENOENT.
+        const md =
+            'npm put `genie.cmd`, `genie.ps1` and a `package.json` in the temp prefix. Proceed?';
+        expect(extractFileRefs(md)).toEqual([]);
+    });
+
+    it('does not silently resolve a bare name to the envelope root (genie#475)', () => {
+        // The worse half, because it does not announce itself. `package.json`
+        // resolves to the ENVELOPE manifest, which exists — so the chip opens,
+        // renders, and looks right while showing a file the question never meant.
+        // An ENOENT is at least visible; this is not.
+        expect(extractFileRefs('Does `package.json` still pin beta.303?')).toEqual([]);
     });
 
     it('caps the chips so a question listing a whole tree stays readable', () => {

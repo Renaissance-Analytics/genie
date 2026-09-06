@@ -33,6 +33,25 @@ const OPEN = ASK_MODAL_WIDTH + ASK_DRAWER_WIDTH;
  */
 const ROOMY_X = SCREEN.width - OPEN - 40;
 
+/**
+ * The window is centred on its display — asserted as a PROPERTY (the gap on the
+ * left matches the gap on the right) rather than by recomputing the formula the
+ * implementation uses, which would only prove the test can do the same
+ * arithmetic as the code. Tolerates a pixel, because an odd leftover cannot be
+ * split evenly.
+ */
+function expectCentred(
+    b: { x: number; width: number },
+    area: { x: number; width: number },
+): void {
+    const left = b.x - area.x;
+    const right = area.x + area.width - (b.x + b.width);
+    expect(Math.abs(left - right)).toBeLessThanOrEqual(1);
+    // Centred is only meaningful if it is also ON the display.
+    expect(left).toBeGreaterThanOrEqual(0);
+    expect(right).toBeGreaterThanOrEqual(0);
+}
+
 describe('askWindowBounds', () => {
     it('is the bare modal width when the drawer is closed', () => {
         const b = askWindowBounds({
@@ -52,9 +71,9 @@ describe('askWindowBounds', () => {
         expect(b.width).toBe(OPEN);
     });
 
-    it('leaves the question where it is when the drawer has room', () => {
-        // The premise, asserted rather than assumed: if this fails the test
-        // below is vacuous, because there was never room to begin with.
+    it('RECENTRES on the display when the drawer opens (genie#475)', () => {
+        // The premise, asserted rather than assumed: there was room to grow in
+        // place, so recentring is a choice here and not the clamp in disguise.
         expect(ROOMY_X + OPEN).toBeLessThanOrEqual(SCREEN.x + SCREEN.width);
 
         const b = askWindowBounds({
@@ -62,27 +81,54 @@ describe('askWindowBounds', () => {
             workArea: SCREEN,
             drawerOpen: true,
         });
-        expect(b.x).toBe(ROOMY_X);
+        // It used to keep `x` and grow rightward from wherever it happened to
+        // be, which left a modal near an edge visibly lopsided.
+        expect(b.x).not.toBe(ROOMY_X);
+        expectCentred(b, SCREEN);
     });
 
-    it('slides left rather than opening the drawer off the screen', () => {
-        // A modal centred at the right edge: 1360 + 1080 would end at 2440.
-        const b = askWindowBounds({
-            current: { x: 1360, y: 260, width: ASK_MODAL_WIDTH, height: 560 },
+    it('recentres when the drawer CLOSES too, so it never ends up lopsided', () => {
+        // Recentring only on the way out would trade one lopsided window for
+        // another: the width shrinks by the drawer while `x` stays, leaving the
+        // question sitting half a drawer left of centre.
+        const opened = askWindowBounds({
+            current: { x: ROOMY_X, y: 260, width: ASK_MODAL_WIDTH, height: 560 },
             workArea: SCREEN,
             drawerOpen: true,
         });
-        expect(b.x + b.width).toBe(SCREEN.x + SCREEN.width);
-        expect(b.x).toBe(1920 - OPEN);
+        const closed = askWindowBounds({
+            current: opened,
+            workArea: SCREEN,
+            drawerOpen: false,
+        });
+        expect(closed.width).toBe(ASK_MODAL_WIDTH);
+        expectCentred(closed, SCREEN);
     });
 
-    it('respects a work area that does not start at zero', () => {
+    it('brings a modal at the right-hand edge fully back on screen', () => {
+        // The original defect: growing in place from here ran the drawer off the
+        // display, and a frameless always-on-top window has no title bar to drag
+        // it back by. Recentring subsumes the old slide-left clamp.
         const b = askWindowBounds({
-            current: { x: 2900, y: 300, width: ASK_MODAL_WIDTH, height: 560 },
-            workArea: { x: 1920, y: 0, width: 1920, height: 1080 },
+            current: { x: SCREEN.width - ASK_MODAL_WIDTH, y: 260, width: ASK_MODAL_WIDTH, height: 560 },
+            workArea: SCREEN,
             drawerOpen: true,
         });
-        expect(b.x).toBe(3840 - OPEN);
+        expect(b.x + b.width).toBeLessThanOrEqual(SCREEN.x + SCREEN.width);
+        expectCentred(b, SCREEN);
+    });
+
+    it('centres on the display it is on, not on the primary one', () => {
+        const workArea = { x: 1920, y: 0, width: 1920, height: 1080 };
+        const b = askWindowBounds({
+            current: { x: 2900, y: 300, width: ASK_MODAL_WIDTH, height: 560 },
+            workArea,
+            drawerOpen: true,
+        });
+        // A second monitor starts at 1920, so a window centred on the PRIMARY
+        // display would be off this one entirely.
+        expect(b.x).toBeGreaterThanOrEqual(workArea.x);
+        expectCentred(b, workArea);
     });
 
     it('never grows wider than the screen it is on', () => {
@@ -102,7 +148,8 @@ describe('askWindowBounds', () => {
             workArea: SCREEN,
             drawerOpen: false,
         });
-        expect(b.x).toBe(0);
+        expect(b.x).toBeGreaterThanOrEqual(SCREEN.x);
+        expectCentred(b, SCREEN);
     });
 
     it('changes nothing about the height or the vertical position', () => {
