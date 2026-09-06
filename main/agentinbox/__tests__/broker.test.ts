@@ -316,6 +316,111 @@ describe('AgentInboxBroker — cursor + inbox', () => {
     });
 });
 
+/**
+ * genie#393 — `receive` with NO cursor, which is the ONLY shape a real caller
+ * uses.
+ *
+ * The MCP tool passes `cursor: req.cursor` straight through, and nothing in the
+ * agent-facing contract asks for a cursor, so every `agentinbox receive` arrives
+ * here with `opts.cursor` undefined. That defaulted to 0 — the durable cursor
+ * this class writes on every read was never read back — so the same message came
+ * out as "new" for the rest of the session, and a ten-round conversation paid to
+ * be handed all ten of its own messages on the tenth call.
+ *
+ * The existing paging tests all feed the previous result back in, so the suite
+ * exercised the PARAMETER and never the DEFAULT. That is why this survived.
+ */
+describe('AgentInboxBroker — receive with no cursor (genie#393)', () => {
+    it('does not hand back a message it already delivered to this agent', async () => {
+        const b = fresh();
+        b.join(input({ agentId: 'A' }));
+        b.join(input({ agentId: 'B' }));
+        b.send({ fromAgentId: 'A', toAgentId: 'B', text: 'the only message' });
+
+        // POSITIVE CONTROL. "Returns nothing" is satisfied just as well by a
+        // broker that never delivered anything, so the first read must prove
+        // there was something to re-deliver.
+        const first = await b.receive('B');
+        expect(first.messages.map((m) => m.text)).toEqual(['the only message']);
+
+        expect((await b.receive('B')).messages).toEqual([]);
+        expect((await b.receive('B')).messages).toEqual([]);
+
+        // SECOND POSITIVE CONTROL: genuinely new mail still arrives, so the
+        // cursor advanced rather than the inbox going deaf.
+        b.send({ fromAgentId: 'A', toAgentId: 'B', text: 'genuinely new' });
+        expect((await b.receive('B')).messages.map((m) => m.text)).toEqual(['genuinely new']);
+    });
+
+    it('counts as NEW only what it has not delivered before', async () => {
+        // "N new message(s)" is rendered from what `receive` returns, so the
+        // count is only as honest as the selection.
+        const b = fresh();
+        b.join(input({ agentId: 'A' }));
+        b.join(input({ agentId: 'B' }));
+        for (const text of ['m1', 'm2', 'm3']) {
+            b.send({ fromAgentId: 'A', toAgentId: 'B', text });
+        }
+        expect((await b.receive('B')).messages).toHaveLength(3);
+        b.send({ fromAgentId: 'A', toAgentId: 'B', text: 'm4' });
+        expect((await b.receive('B')).messages.map((m) => m.text)).toEqual(['m4']);
+    });
+
+    it('`acknowledge: false` still fetches WITHOUT advancing, cursor or no cursor', async () => {
+        // The documented opt-out has to keep meaning what it says once the
+        // default start position is the durable cursor.
+        const b = fresh();
+        b.join(input({ agentId: 'A' }));
+        b.join(input({ agentId: 'B' }));
+        b.send({ fromAgentId: 'A', toAgentId: 'B', text: 'peek at me' });
+
+        expect((await b.receive('B', { acknowledge: false })).messages).toHaveLength(1);
+        expect((await b.receive('B', { acknowledge: false })).messages).toHaveLength(1);
+        expect(b.unreadForTerminal('t-B').count).toBe(1);
+        // And the ordinary read still drains it.
+        expect((await b.receive('B')).messages).toHaveLength(1);
+        expect((await b.receive('B')).messages).toEqual([]);
+    });
+
+    it('an explicit cursor still wins, so paging is unchanged', async () => {
+        const b = fresh();
+        b.join(input({ agentId: 'A' }));
+        b.join(input({ agentId: 'B' }));
+        b.send({ fromAgentId: 'A', toAgentId: 'B', text: 'm1' });
+        await b.receive('B');
+        // Re-reading from 0 is a deliberate act and must still work — a caller
+        // that asks for a position gets that position.
+        expect((await b.receive('B', { cursor: 0 })).messages.map((m) => m.text)).toEqual(['m1']);
+    });
+
+    it('a blocking receive WAITS instead of resolving with already-read mail', async () => {
+        // The documented way to await a ForceTheQuestion answer is a single
+        // blocking `receive`. Returning a stale message immediately breaks that
+        // pattern at the exact moment an agent is relying on it — and a stale
+        // "your question was answered" is byte-identical to a fresh one.
+        const b = fresh();
+        b.join(input({ agentId: 'A' }));
+        b.join(input({ agentId: 'B' }));
+        b.send({ fromAgentId: 'A', toAgentId: 'B', text: 'read already' });
+        await b.receive('B');
+
+        const waited = await b.receive('B', { wait: true, timeoutMs: 20 });
+        expect(waited.messages).toEqual([]);
+
+        // POSITIVE CONTROL: the waiter is alive, not merely timing out on a
+        // broker that can no longer deliver.
+        const pending = b.receive('B', { wait: true, timeoutMs: 5000 });
+        b.send({ fromAgentId: 'A', toAgentId: 'B', text: 'arrived while waiting' });
+        expect((await pending).messages.map((m) => m.text)).toEqual(['arrived while waiting']);
+    });
+
+    it("an unknown agent still answers with the caller's own cursor", async () => {
+        const b = fresh();
+        expect(await b.receive('nobody')).toEqual({ messages: [], cursor: 0 });
+        expect(await b.receive('nobody', { cursor: 42 })).toEqual({ messages: [], cursor: 42 });
+    });
+});
+
 describe('AgentInboxBroker — long-poll waiter', () => {
     it('resolves a waiting receive when a message arrives', async () => {
         const b = fresh();

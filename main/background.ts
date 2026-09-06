@@ -1261,6 +1261,19 @@ function announceUpgradeToAgents(): void {
                     broadcastTerminalAttention(terminalId, true);
                     return { strategy, applied: false };
                 },
+                // What Genie can actually ESTABLISH about this agent's link to
+                // the replacement process (genie#371). The notice used to state
+                // the connection was dead for everyone, and #358 made that wrong
+                // more often than not: the channel bridge supervises itself and
+                // re-registers, so the transport is frequently back before the
+                // notice is read. The owner read that sentence THROUGH the tools
+                // it declared dead, on four consecutive releases.
+                //
+                // The registry is IN-MEMORY, so it starts empty on every upgrade
+                // — a binding here can only mean this agent's channel found the
+                // new process and re-registered. Absence proves nothing, and is
+                // reported as nothing.
+                transportBound: (agentId) => harnessTransportRegistry.isVerified(agentId),
                 send: (agentId, text) =>
                     agentInboxBroker.send({ system: true, toAgentId: agentId, text }).ok,
                 persist: (version) => setSettings({ agent_upgrade_announced_version: version }),

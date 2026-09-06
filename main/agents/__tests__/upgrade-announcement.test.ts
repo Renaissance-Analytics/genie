@@ -36,10 +36,12 @@ describe('agent upgrade announcement', () => {
                 ['Native AgentInbox transport', 'What’s New menu'],
                 RECONNECTED,
                 'manual',
+                'unknown',
             ),
         ).toBe(
             'Genie upgraded to v0.8.0. What changed:\n- Native AgentInbox transport\n- What’s New menu\n\n' +
-            'Your `genie` MCP connection was replaced by the upgrade, so its tools do not answer until it is restored. ' +
+            "The upgrade replaced the process behind `genie`'s MCP endpoint, and Genie cannot tell whether " +
+            'yours survived it — call a `genie` tool and see, rather than assuming either way. ' +
             'Genie ran `/mcp reconnect genie` in this terminal to restore it. If `genie` still does not answer, run it again yourself.\n\n' +
             'Once `genie` answers again: if this terminal predates AMS, call agentUpgrade and follow its ordered migration guide.\n\n' +
             upgradeNoticeMode('manual') + '\n\n' +
@@ -56,9 +58,11 @@ describe('agent upgrade announcement', () => {
      */
     describe('the notice is honest about the dead connection', () => {
         it('never asks for agentUpgrade as though the tools were live', () => {
-            const msg = formatAgentUpgradeMessage('0.8.0', [], RECONNECTED, 'manual');
-            // What is TRUE comes first: the connection was replaced.
-            expect(msg).toContain('replaced by the upgrade');
+            const msg = formatAgentUpgradeMessage('0.8.0', [], RECONNECTED, 'manual', 'unknown');
+            // What is TRUE comes first: the SERVER process was replaced. The
+            // half that was never checked — that THIS agent's tools do not
+            // answer — is no longer asserted at all (genie#371).
+            expect(msg).toContain('replaced the process behind');
             // The restore step is stated BEFORE the migration is asked for…
             expect(msg.indexOf('/mcp reconnect genie')).toBeLessThan(msg.indexOf('agentUpgrade'));
             // …and the migration is CONDITIONED on the connection being back,
@@ -76,6 +80,7 @@ describe('agent upgrade announcement', () => {
                 [],
                 { strategy: { kind: 'notice', text: MANUAL_RECONNECT_NOTICE }, applied: false },
                 'manual',
+                'unknown',
             );
             expect(msg).toContain(MANUAL_RECONNECT_NOTICE);
             expect(msg).not.toContain('/mcp reconnect genie');
@@ -87,9 +92,110 @@ describe('agent upgrade announcement', () => {
                 [],
                 { strategy: { kind: 'command', text: '/mcp reconnect genie' }, applied: false },
                 'manual',
+                'unknown',
             );
             expect(msg).toContain('held the command back');
             expect(msg).not.toContain('Genie ran `/mcp reconnect genie`');
+        });
+    });
+
+    /**
+     * genie#371 — the notice asserted a connection state nobody had checked.
+     *
+     * *"Your `genie` MCP connection was replaced by the upgrade, so its tools do
+     * not answer until it is restored"* went out unconditionally, and the owner
+     * read it THROUGH the genie MCP on beta.298, .299, .304 and .305 — four
+     * releases of a sentence that was false while it was being delivered.
+     *
+     * #358 is what made it wrong so often: the channel bridge supervises its own
+     * connection and re-registers on reconnect, so an agent's transport can be
+     * back before the notice is read.
+     *
+     * Genie can establish ONE thing here — whether this agent's harness
+     * transport is bound in the replacement process's registry, which is
+     * in-memory and therefore starts empty on every upgrade. It never establishes
+     * the opposite, so `unknown` is a real state and not a synonym for dead.
+     */
+    describe('the notice does not assert a connection state it has not established (genie#371)', () => {
+        const HELD_BACK: McpRecovery = {
+            strategy: { kind: 'command', text: '/mcp reconnect genie' },
+            applied: false,
+        };
+
+        it('never claims the tools do not answer — in either evidence state', () => {
+            for (const evidence of ['attached', 'unknown'] as const) {
+                const msg = formatAgentUpgradeMessage('0.8.0', [], HELD_BACK, 'manual', evidence);
+                expect(msg).not.toContain('do not answer until it is restored');
+            }
+        });
+
+        it('ATTACHED: reports what it can see, and says to try a tool first', () => {
+            const msg = formatAgentUpgradeMessage('0.8.0', [], HELD_BACK, 'manual', 'attached');
+            expect(msg).toContain('harness channel has already re-attached');
+            expect(msg).toContain('call one before you reconnect');
+        });
+
+        it('UNKNOWN: says Genie cannot tell, instead of assuming the worse case', () => {
+            const msg = formatAgentUpgradeMessage('0.8.0', [], HELD_BACK, 'manual', 'unknown');
+            expect(msg).toContain('Genie cannot tell whether yours survived');
+            expect(msg).not.toContain('harness channel has already re-attached');
+        });
+
+        /**
+         * POSITIVE CONTROL. "It stopped saying reconnect" passes just as well
+         * against a notice that lost the instruction altogether, which would be
+         * a worse bug than the one being fixed.
+         */
+        it('still carries the reconnect instruction in BOTH states', () => {
+            for (const evidence of ['attached', 'unknown'] as const) {
+                expect(formatAgentUpgradeMessage('0.8.0', [], HELD_BACK, 'manual', evidence))
+                    .toContain('Run `/mcp reconnect genie` in this terminal');
+            }
+        });
+
+        it('asks per agent, so two agents in different states are told different things', () => {
+            const send = vi.fn((_agentId: string, _text: string) => true);
+            announceAgentUpgrade({
+                currentVersion: '0.8.0',
+                previousVersion: '0.7.9',
+                agents: [
+                    { agentId: 'a-bound', name: 'bound-one' },
+                    { agentId: 'a-gone', name: 'gone-one' },
+                ],
+                changes: [],
+                transportBound: (agentId) => agentId === 'a-bound',
+                send,
+                persist: vi.fn(),
+                schedule: runNow,
+            });
+            expect(send.mock.calls[0][1]).toContain('harness channel has already re-attached');
+            expect(send.mock.calls[1][1]).toContain('Genie cannot tell whether yours survived');
+        });
+
+        it('a probe that is absent or throws is UNKNOWN, never a claim', () => {
+            // Same rule the mode and recovery lookups already hold themselves to:
+            // a fact that cannot be read is not a licence to state its opposite.
+            const send = vi.fn((_agentId: string, _text: string) => true);
+            const base = {
+                currentVersion: '0.8.0',
+                previousVersion: '0.7.9',
+                agents: [{ agentId: 'a-1', name: 'one' }],
+                changes: [],
+                persist: vi.fn(),
+                schedule: runNow,
+            };
+            announceAgentUpgrade({ ...base, send });
+            announceAgentUpgrade({
+                ...base,
+                previousVersion: '0.7.8',
+                transportBound: () => {
+                    throw new Error('registry exploded');
+                },
+                send,
+            });
+            for (const call of send.mock.calls) {
+                expect(call[1]).toContain('Genie cannot tell whether yours survived');
+            }
         });
     });
 

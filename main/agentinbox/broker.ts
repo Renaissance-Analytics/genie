@@ -1367,14 +1367,35 @@ export class AgentInboxBroker {
      * empty). Always resolves; the returned `cursor` is the highest seq seen (so
      * the caller pages forward). A second concurrent wait supersedes the first
      * (resolving it empty) — one live waiter per agent.
+     *
+     * OMITTING `cursor` means "since I last read", not "from the beginning"
+     * (genie#393). This defaulted to 0, so the durable cursor that `ackCursor`
+     * writes on every read was never read back: a caller that passed no cursor —
+     * which is every real one, since the MCP tool forwards only what the agent
+     * sent and the agent-facing contract never asks for one — got the whole
+     * in-memory inbox again on every call. The same message was announced as new
+     * for the rest of the session, "N new message(s)" counted redeliveries, and
+     * a stale "your ForceTheQuestion was answered" came back byte-identical to a
+     * fresh one, on a metered account.
+     *
+     * Every other unread computation in this class already reads `agent.cursor`
+     * ({@link notifyNow}, {@link agentLagCount}, {@link hasMail},
+     * {@link unreadForTerminal}); this was the one place that did not, which is
+     * exactly why the inbox could disagree with the badge counting it.
      */
     receive(
         agentId: string,
         opts: { cursor?: number; wait?: boolean; timeoutMs?: number; acknowledge?: boolean } = {},
     ): Promise<{ messages: AgentInboxMessage[]; cursor: number }> {
         const agent = this.agents.get(agentId);
-        const cursor = opts.cursor ?? 0;
-        if (!agent) return Promise.resolve({ messages: [], cursor });
+        // An UNKNOWN agent has no cursor to fall back to, so it still echoes
+        // whatever the caller asked for. Resolved before the durable default is
+        // reached for that reason, not merely for tidiness.
+        if (!agent) return Promise.resolve({ messages: [], cursor: opts.cursor ?? 0 });
+        // An EXPLICIT cursor still wins outright: re-reading from a position is
+        // a deliberate act (paging, a harness replaying its own backlog), and
+        // the durable cursor is only what "no position given" now means.
+        const cursor = opts.cursor ?? agent.cursor;
 
         const pending = agent.inbox.filter((m) => m.seq > cursor);
         const nextCursor = (msgs: AgentInboxMessage[]): number =>
