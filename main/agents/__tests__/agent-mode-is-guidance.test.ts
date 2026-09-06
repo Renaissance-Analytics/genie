@@ -124,8 +124,8 @@ describe('the agent mode is guidance, not enforcement', () => {
         // a badly built one.
         expect(manual).toContain('Genie upgraded to v0.8.0');
         expect(manual).toContain('A change');
-        expect(manual).toContain('replaced by the upgrade');
-        for (const fact of ['Genie upgraded to v0.8.0', 'A change', 'replaced by the upgrade']) {
+        expect(manual).toContain('replaced the process behind');
+        for (const fact of ['Genie upgraded to v0.8.0', 'A change', 'replaced the process behind']) {
             expect(automated).toContain(fact);
         }
     });

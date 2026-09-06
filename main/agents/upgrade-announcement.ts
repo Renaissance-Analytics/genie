@@ -90,6 +90,52 @@ export function nudgeableAgents(agents: readonly UpgradeAnnouncementTarget[]): s
 }
 
 /**
+ * What Genie has ESTABLISHED about one agent's connection to the process that
+ * replaced the one it was talking to (genie#371).
+ *
+ *  - `attached` — positive evidence. This agent's harness transport is bound in
+ *    the NEW process's registry, and that registry is in-memory, so it starts
+ *    empty on every upgrade: a binding can only mean the channel found the
+ *    replacement and re-registered itself (the supervision #358 added).
+ *  - `unknown` — no evidence either way. Deliberately NOT a synonym for dead:
+ *    nothing here verifies death, and a notice that says otherwise is asserting
+ *    a state nobody checked, which is the whole of genie#371.
+ *
+ * A bound harness channel is not the agent's own `genie` MCP client session —
+ * they are different connections to the same process — so `attached` is worth
+ * saying and is not worth over-reading. The notice reports it as what it is and
+ * tells the agent to try a tool, which settles the question in one call and
+ * costs nothing when the answer is good.
+ */
+export type McpConnectionEvidence = 'attached' | 'unknown';
+
+/**
+ * The connection paragraph — the sentence genie#371 was filed about.
+ *
+ * It used to read *"Your `genie` MCP connection was replaced by the upgrade, so
+ * its tools do not answer until it is restored"*, stated for every recipient. The
+ * first half is true of the SERVER and stays; the second half is a claim about
+ * THIS agent that was never checked, and was read four releases running by an
+ * owner who was reading it through the very tools it declared dead.
+ *
+ * Neither branch asserts the connection is gone, because neither can.
+ */
+function connectionSentence(evidence: McpConnectionEvidence): string {
+    if (evidence === 'attached') {
+        return (
+            'The upgrade replaced the process behind `genie`\'s MCP endpoint. Your ' +
+            'harness channel has already re-attached to the replacement, so `genie`\'s ' +
+            'tools may be answering for you too — call one before you reconnect.'
+        );
+    }
+    return (
+        'The upgrade replaced the process behind `genie`\'s MCP endpoint, and Genie ' +
+        'cannot tell whether yours survived it — call a `genie` tool and see, rather ' +
+        'than assuming either way.'
+    );
+}
+
+/**
  * The notice one agent gets, built from THAT agent's recovery (genie#346).
  *
  * The old text said *"call agentUpgrade now and follow its ordered migration
@@ -110,17 +156,23 @@ export function nudgeableAgents(agents: readonly UpgradeAnnouncementTarget[]): s
  * its own. It is GUIDANCE, not a permission boundary: the facts, the recovery
  * and the migration step are identical for both modes, and only the framing
  * differs.
+ *
+ * `evidence` is required for the THIRD time the same argument has come up
+ * (genie#371), and it is the one that had actually shipped wrong: the notice
+ * used to state, unconditionally, that this agent's connection was dead. A
+ * caller that cannot say passes `unknown`, which claims nothing.
  */
 export function formatAgentUpgradeMessage(
     version: string,
     changes: string[],
     recovery: McpRecovery,
     mode: AgentMode,
+    evidence: McpConnectionEvidence,
 ): string {
     const summary = changes.length > 0
         ? ` What changed:\n${changes.map((change) => `- ${change}`).join('\n')}`
         : '';
-    return `Genie upgraded to v${version}.${summary}\n\nYour \`genie\` MCP connection was replaced by the upgrade, so its tools do not answer until it is restored. ${recoveryInstruction(recovery)}\n\nOnce \`genie\` answers again: if this terminal predates AMS, call agentUpgrade and follow its ordered migration guide.\n\n${upgradeNoticeMode(mode)}\n\nThis is a system notice; no reply is needed.`;
+    return `Genie upgraded to v${version}.${summary}\n\n${connectionSentence(evidence)} ${recoveryInstruction(recovery)}\n\nOnce \`genie\` answers again: if this terminal predates AMS, call agentUpgrade and follow its ordered migration guide.\n\n${upgradeNoticeMode(mode)}\n\nThis is a system notice; no reply is needed.`;
 }
 
 /** One agent the announcement may reach. */
@@ -165,6 +217,19 @@ export function announceAgentUpgrade(input: {
      * upgrade notice. Absent or failed degrades to {@link DEFAULT_AGENT_MODE}.
      */
     mode?: (agentId: string) => AgentMode;
+    /**
+     * Is THIS agent's harness transport bound in the replacement process
+     * (genie#371)? Asked per agent and at compose time, because that is when it
+     * is true or false — the grace above exists precisely so a healed channel
+     * has had time to report itself, and a fleet-wide answer computed once would
+     * be wrong for whichever agents healed on either side of it.
+     *
+     * Optional, and a throw is caught, on the same reasoning as `mode` and
+     * `reconnect`: a fact that cannot be read degrades to `unknown`, which
+     * claims nothing. It must never degrade to the old behaviour of asserting
+     * the worse case — that is the bug.
+     */
+    transportBound?: (agentId: string) => boolean;
     persist: (version: string) => void;
     /**
      * The stagger's clock (genie#353). Defaults to `setTimeout`; tests pass a
@@ -218,9 +283,22 @@ export function announceAgentUpgrade(input: {
             // a message that assumes the tools are live.
             recovery = MANUAL_RECOVERY;
         }
+        // Read AFTER the reconnect, which is the point of reading it here at all:
+        // a Codex agent Genie has just restarted against the new endpoint may
+        // have re-bound in the meantime, and the notice should say what is true
+        // when it is written rather than what was true before Genie acted.
+        let evidence: McpConnectionEvidence = 'unknown';
+        try {
+            if (input.transportBound?.(agentId) === true) evidence = 'attached';
+        } catch {
+            // Unreadable is UNKNOWN. Never the old assertion: an agent told its
+            // connection is dead spends a turn reconnecting a working one, and
+            // for the Claude path that means typing into its own prompt.
+            evidence = 'unknown';
+        }
         input.send(
             agentId,
-            formatAgentUpgradeMessage(input.currentVersion, input.changes, recovery, mode),
+            formatAgentUpgradeMessage(input.currentVersion, input.changes, recovery, mode, evidence),
         );
     };
 

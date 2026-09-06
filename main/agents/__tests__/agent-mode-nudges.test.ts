@@ -35,7 +35,10 @@ const SURFACES: readonly {
 }[] = [
     {
         name: 'the upgrade announcement',
-        render: (mode) => formatAgentUpgradeMessage('0.8.0', ['A change'], MANUAL_RECOVERY, mode),
+        // `unknown` evidence (genie#371) — this suite is about the MODE clause,
+        // and the connection state is orthogonal to it.
+        render: (mode) =>
+            formatAgentUpgradeMessage('0.8.0', ['A change'], MANUAL_RECOVERY, mode, 'unknown'),
         clause: upgradeNoticeMode,
     },
     {
