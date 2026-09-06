@@ -6,7 +6,7 @@ import { getNodeKind, listNodeKinds } from '@particle-academy/fancy-flow/engine'
 // than "will the canvas draw it as a Fancy node".
 import { buildNodeTypes } from '@particle-academy/fancy-flow/registry';
 import { paletteKindFilter, registerFlowKinds, type FlowNodeDefinitionView } from '../flow-kinds';
-import { PAUSES_WITHOUT_RESUME } from '../../../main/flows/pauses';
+import { PAUSES_WITHOUT_RESUME, refusalFor } from '../../../main/flows/refusals';
 
 /**
  * Putting Genie's steps on the canvas.
@@ -108,70 +108,126 @@ describe('registering the palette a window may author with', () => {
 /**
  * What the palette does NOT offer.
  *
- * fancy-flow's three human-pause kinds park a run by aborting with a structured
- * token that a host resumes from by replaying with `resumeOutputs`. Genie
- * decodes the token and does not yet resume, so a flow containing one can be
- * drawn, armed, and then hang for good with nothing saying why.
+ * Genie refuses EIGHTEEN of fancy-flow's kinds, for three different families of
+ * reason, and every one of them used to sit in the palette waiting to be dragged
+ * onto a canvas and then refused:
  *
- * Until 0.66.0 there was nothing to be done about it here: `<FlowEditor>`
- * narrowed its palette by CATEGORY and not by kind, so a host could not offer a
- * subset, and the only workaround was re-categorising Genie's own nodes until a
- * category filter happened to exclude fancy's — distorting the taxonomy to hide
- * a gap. That was filed upstream instead, and 0.66.0 answers it with
- * `kindFilter`.
+ *   - three PAUSE a run Genie cannot resume (`human_approval`, `user_input`,
+ *     `rich_user_input`) — the worst, because the flow hangs rather than fails;
+ *   - twelve reach something Genie will not give a flow (`api_request`,
+ *     `llm_call`, `subflow`, `memory_store`, `for_each`, `webhook_trigger`, …);
+ *   - three drive a terminal Genie has not wired for flows.
  *
- * So the trap is now closed at the palette. **The refusals stay**, and these
- * tests are not their replacement: a filter is presentation and cannot see a
- * graph that arrives by another door — hand-authored, imported, or written by an
- * agent through `manageFlows`. See `main/flows/__tests__/authority.test.ts` and
- * `mcp.test.ts` for the doors themselves.
+ * The first fix here hid only the three pause kinds, which was the brief and was
+ * wrong: SubFlow, For Each, Memory Store and Webhook were still on the canvas
+ * where anyone could reach them.
+ *
+ * So the predicate is `refusalFor` — **the same function the executor calls at
+ * the door**, not a list beside it. A kind added to `REFUSALS` or to
+ * `PAUSES_WITHOUT_RESUME` is hidden and refused by that one edit. Two lists with
+ * one consumer is fine; two lists with two independent consumers is how two
+ * disagreeing copies of `HOST_SOURCED_SETTINGS_KEYS` shipped in this repo.
+ *
+ * **The refusals stay.** These tests are not their replacement: a filter is
+ * presentation and only ever sees the palette. A graph that arrives
+ * hand-authored, imported, or written by an agent through `manageFlows` never
+ * passes through here. See `main/flows/__tests__/authority.test.ts`, `mcp.test.ts`
+ * and `runner.test.ts` for the doors themselves.
  */
-describe('the palette hides the steps Genie cannot resume', () => {
-    it.each([...PAUSES_WITHOUT_RESUME])('hides %s', (name) => {
+describe('the palette offers only steps Genie can actually run', () => {
+    /** Every registered kind, as the palette sees them. */
+    const registered = () => listNodeKinds() as { name: string }[];
+
+    it('hides EXACTLY what the door refuses — derived from the tables, not listed', () => {
+        // Written as a comparison of two derived sets on purpose. A hand-written
+        // list of eighteen strings would rot the moment somebody adds a
+        // nineteenth refusal, and would rot SILENTLY — still green, with a new
+        // trap on the canvas.
+        const refused = registered()
+            .filter((k) => refusalFor(k.name) !== null)
+            .map((k) => k.name)
+            .sort();
+        const hidden = registered()
+            .filter((k) => !paletteKindFilter({ kind: k }))
+            .map((k) => k.name)
+            .sort();
+
+        expect(hidden).toEqual(refused);
+        // Guards the test itself: if `refusalFor` ever returned null for
+        // everything, both sides would be `[]` and this would pass while the
+        // palette offered the lot.
+        expect(refused.length).toBeGreaterThan(PAUSES_WITHOUT_RESUME.size);
+    });
+
+    it.each([...PAUSES_WITHOUT_RESUME])('hides %s, which would HANG a run', (name) => {
         const kind = getNodeKind(name);
         // A positive control on the INPUT. "The filter hides it" passes just as
         // well against a kind that is not registered at all, so a rename
         // upstream has to fail HERE — where it means "the list is stale" —
-        // rather than silently downgrading every assertion below to a tautology.
+        // rather than silently downgrading the assertion to a tautology.
         expect(kind, `${name} is not a registered kind any more`).not.toBeNull();
         expect(paletteKindFilter({ kind: kind! })).toBe(false);
     });
 
-    it('keeps the logic steps sitting beside them', () => {
-        // Without this, a filter that hid EVERYTHING would pass the above.
-        for (const name of [
-            '@particle-academy/branch',
-            '@particle-academy/merge',
-            '@particle-academy/output',
+    it.each([
+        'subflow',
+        'for_each',
+        'memory_store',
+        'webhook_trigger',
+        'api_request',
+        'llm_call',
+        'notify',
+        'terminal_run',
+    ])('hides %s, which would FAIL a run', (bare) => {
+        // The four at the top are the ones visible in the owner's screenshot of
+        // the broken palette. Named explicitly, as a regression pin, even though
+        // the sweep above already covers them: this is the report, and a test
+        // that names the reported symptom is the one somebody trusts.
+        const kind = getNodeKind(`@particle-academy/${bare}`);
+
+        expect(kind, `${bare} is not a registered kind any more`).not.toBeNull();
+        expect(paletteKindFilter({ kind: kind! })).toBe(false);
+    });
+
+    it('CONTROL: keeps every logic step Genie implements', () => {
+        // Without this, a filter that hid EVERYTHING would pass all of the
+        // above — and an empty palette is exactly what a filter bug produces.
+        for (const bare of [
+            'branch',
+            'merge',
+            'transform',
+            'switch_case',
+            'variable',
+            'wait',
+            'log',
+            'output',
+            'manual_trigger',
+            'schedule_trigger',
         ]) {
-            expect(paletteKindFilter({ kind: getNodeKind(name)! })).toBe(true);
+            const kind = getNodeKind(`@particle-academy/${bare}`);
+            expect(kind, `${bare} is not registered`).not.toBeNull();
+            expect(paletteKindFilter({ kind: kind! }), `${bare} should be offered`).toBe(true);
         }
     });
 
-    it('keeps Genie’s own steps', () => {
+    it('CONTROL: keeps Genie’s own steps', () => {
+        // `refusalFor` strips the scope from `@genie/manageSite` before looking
+        // in `REFUSALS`, so a Genie tool whose bare name collided with a refused
+        // fancy kind would vanish from the palette. None do — Genie's are
+        // camelCase and fancy's are snake_case — and this is what says so.
         register([def('@genie/testPalette')]);
 
         expect(paletteKindFilter({ kind: getNodeKind('@genie/testPalette')! })).toBe(true);
     });
 
-    it('hides EXACTLY what the refusals refuse, over the whole real registry', () => {
-        // The point of the test, and the reason it sweeps the registry rather
-        // than naming three kinds: the palette and the refusals must be driven
-        // by ONE list. Add a fourth pause kind to `PAUSES_WITHOUT_RESUME` and
-        // the palette hides it with no second edit; write a second list here and
-        // the two drift, which is exactly how two disagreeing copies of
-        // `HOST_SOURCED_SETTINGS_KEYS` shipped in this repo.
-        //
-        // `k` is annotated because the ROOT tsconfig resolves with
-        // `moduleResolution: "node"` and cannot read this package's `exports`
-        // map, so `listNodeKinds()` degrades to `any` there and the callbacks
-        // become implicit-any errors. The renderer's own lane infers it fine;
-        // this just keeps the root lane's count honest.
-        const hidden = listNodeKinds()
-            .filter((k: { name: string }) => !paletteKindFilter({ kind: k }))
-            .map((k: { name: string }) => k.name)
-            .sort();
-
-        expect(hidden).toEqual([...PAUSES_WITHOUT_RESUME].sort());
+    it('CONTROL: keeps the visual-only kinds, which never reach an executor', () => {
+        // `note` and the lanes are `annotation`/`layout`; the engine skips those
+        // categories before choosing an executor, so they cannot fail a run and
+        // must not be hidden.
+        for (const bare of ['note', 'lane', 'terminal_lane']) {
+            const kind = getNodeKind(`@particle-academy/${bare}`);
+            expect(kind, `${bare} is not registered`).not.toBeNull();
+            expect(paletteKindFilter({ kind: kind! }), `${bare} should be offered`).toBe(true);
+        }
     });
 });

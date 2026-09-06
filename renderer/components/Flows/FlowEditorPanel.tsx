@@ -255,15 +255,27 @@ export default function FlowEditorPanel({ flowId, scope }: Props) {
                 <FlowEditor
                     value={graph as never}
                     onChange={onChange as never}
+                    // Fill the box the container gives us. `<FlowEditor>` sets
+                    // `style={{ height: props.height ?? 720, ...props.style }}`
+                    // on its root, so without this the editor is a fixed 720px
+                    // whatever the surrounding layout says — and `height` is
+                    // typed `number`, so the percentage has to arrive via
+                    // `style`, which is spread last and therefore wins.
+                    //
+                    // Both callers give it a real height: the canvas modal
+                    // through `.flowmgr-canvas-body`, and the GApp Flows tab
+                    // through its own `flex: 1; min-height: 0` column.
+                    style={{ height: '100%' }}
                     // No `executors` prop, and the built-in Run is off — see the
                     // note at the top. Running belongs to the main process.
                     builtins={{ run: false }}
-                    // Hides the steps that would park a run Genie cannot
-                    // resume. It removes the TRAP — you cannot drag on a node
-                    // that will hang. It is NOT the enforcement: the refusals at
-                    // admission, save and run stay, because a graph can arrive
-                    // hand-authored, imported, or from an agent, and this filter
-                    // never sees one that did.
+                    // Offers only steps Genie can actually run — the predicate
+                    // asks `refusalFor`, the same function the executor's door
+                    // asks. It removes the TRAP: you cannot drag on a node that
+                    // would hang or fail the run. It is NOT the enforcement —
+                    // the refusals at admission, save and run stay, because a
+                    // graph can arrive hand-authored, imported, or from an
+                    // agent, and this filter never sees one that did.
                     kindFilter={paletteKindFilter}
                     actions={[
                         {

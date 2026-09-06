@@ -62,7 +62,8 @@
  */
 
 import { getNodeKind } from '@particle-academy/fancy-flow/engine';
-import { builtinExecutor, refusalFor, type FlowRunScope } from './builtins';
+import { builtinExecutor, type FlowRunScope } from './builtins';
+import { refusalFor } from './refusals';
 import { toolForNodeKind } from './nodes';
 import type { FlowAuthority } from './authority';
 

@@ -882,6 +882,56 @@ test('a flow made in the manager arrives switched off, and opens on a canvas', a
     await expect(flowsRoot()).not.toHaveClass(/open/);
 });
 
+test('the canvas modal is a WORKSPACE, not a 380px prompt card', async () => {
+    // The bug this is the standing answer to, and the reason the spec beside it
+    // did not catch it: `FlowCanvasModal` renders `prompt-card flowmgr-canvas`,
+    // and `.flowmgr-canvas` had no rules in `master.css` at all. The editor
+    // inherited `.prompt-card { width: 380px }`, and fancy-flow's
+    // `grid-template-columns: 216px 1fr 300px` collapsed the canvas column to
+    // nothing -- a scrolling one-column node list with a sliver of graph.
+    //
+    // `expect(canvas.locator('.react-flow')).toBeVisible()` passes against
+    // exactly that. An element can be present, visible and 100px wide. So this
+    // MEASURES.
+    await setFlowsRunning([]);
+    await openFlows();
+    await flowRow('Tidy the workspace').getByRole('button', { name: /Edit/ }).click();
+
+    const dialog = page.locator('[role="dialog"].flowmgr-canvas');
+    await expect(dialog).toBeVisible();
+
+    // `page.viewportSize()` is null for an Electron window — there is no
+    // emulated viewport — so the window is measured from inside the page.
+    const win = await page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }));
+    const card = await dialog.boundingBox();
+    if (!card) throw new Error('no bounding box for the canvas modal');
+
+    // Not "wider than 380": a regression that shipped 420px would be just as
+    // broken. 600 is chosen against the thing that actually constrains it —
+    // fancy-flow gives the palette 216px and the config panel 300px from a fixed
+    // grid, so below ~516px of content the canvas column has nothing left.
+    expect(card.width, `canvas modal is ${card.width}px in a ${win.w}px window`).toBeGreaterThan(
+        600,
+    );
+    expect(card.height, `canvas modal is ${card.height}px in a ${win.h}px window`).toBeGreaterThan(
+        400,
+    );
+
+    // The part that matters to a person: the GRAPH has room. It is the `1fr`
+    // between those two fixed columns, so it is what goes to zero first — which
+    // makes it the thing worth measuring rather than the card around it.
+    const graph = dialog.locator('.react-flow');
+    await expect(graph).toBeVisible();
+    const graphBox = await graph.boundingBox();
+    if (!graphBox) throw new Error('no bounding box for the graph canvas');
+    expect(graphBox.width, `graph canvas is only ${graphBox.width}px wide`).toBeGreaterThan(400);
+    expect(graphBox.height).toBeGreaterThan(300);
+
+    await page.locator('.flowmgr-canvas-close').click();
+    await page.keyboard.press('Escape');
+    await expect(flowsRoot()).not.toHaveClass(/open/);
+});
+
 test('the canvas offers Genie’s OWN steps, not just fancy-flow’s builtins', async () => {
     // The bug this is the standing answer to: Genie's node kinds were derived in
     // main, served on an IPC channel nothing called, and never registered with
@@ -931,7 +981,16 @@ test('the palette does not offer a step that would hang the run — not even via
     // every absence assertion below without the filter existing at all.
     await expect(rows.filter({ hasText: 'Branch' }).first()).toBeVisible();
 
+    // The three that would HANG a run…
     for (const label of ['Human Approval', 'Rich User Input', 'User Input']) {
+        await expect(rows.filter({ hasText: label })).toHaveCount(0);
+    }
+
+    // …and the ones that would FAIL it. These four are the labels visible in
+    // the owner's screenshot of the broken palette, which is why they are named
+    // here rather than left to the unit sweep: the palette hid only the three
+    // pause kinds while the door refused eighteen.
+    for (const label of ['SubFlow', 'For Each', 'Memory Store', 'Webhook']) {
         await expect(rows.filter({ hasText: label })).toHaveCount(0);
     }
 

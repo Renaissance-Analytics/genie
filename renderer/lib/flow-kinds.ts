@@ -38,31 +38,42 @@
  */
 
 import { getNodeKind, registerNodeKind } from '@particle-academy/fancy-flow/engine';
-import { PAUSES_WITHOUT_RESUME } from '../../main/flows/pauses';
+import { refusalFor } from '../../main/flows/refusals';
 
 /**
  * Which registered kinds the palette offers — `<FlowEditor>`'s `kindFilter`.
  *
- * Hides the steps that would park a run Genie cannot resume, so one cannot be
- * dragged onto a canvas at all. `pauses.ts` holds the list and the whole
- * argument; the two things worth knowing here are:
+ * Hides every step Genie would refuse, so none of them can be dragged onto a
+ * canvas. That is eighteen of fancy-flow's kinds: three that would PARK a run
+ * Genie cannot resume, twelve that reach something Genie will not give a flow
+ * (`api_request`, `llm_call`, `subflow`, `memory_store`, `for_each`, …), and
+ * three that drive a terminal Genie has not wired. `refusals.ts` holds the
+ * tables and the reason for each.
  *
- *  - **It is the SAME list the refusals read.** Not a copy. Add a kind there and
- *    the palette hides it with no second edit — and the doors keep refusing it,
- *    which they must, because this filter only ever sees the palette. A graph
- *    that arrives hand-authored, imported, or written by an agent through
- *    `manageFlows` never passes through here.
- *  - **The filter runs BEFORE the palette's search box** (verified in
- *    `NodePalette`: it filters the full list, then the query filters that). So a
- *    hidden kind cannot be typed back into view, which a post-search filter
- *    would have allowed.
+ *  - **It calls `refusalFor` — the same function the executor's door calls.**
+ *    Not a list beside it. A kind added to either table is hidden here and
+ *    refused there by that one edit, and the two cannot drift. An earlier pass
+ *    filtered only the three pause kinds while the door refused eighteen, which
+ *    left SubFlow, For Each, Memory Store and Webhook on the canvas for anyone
+ *    to drag on and be told no.
+ *  - **The doors still refuse.** This filter is presentation and only ever sees
+ *    the palette; a graph that arrives hand-authored, imported, or written by an
+ *    agent through `manageFlows` never passes through here.
+ *  - **It runs BEFORE the palette's search box** (verified in `NodePalette`: it
+ *    filters the full list, then the query filters what is left). So a hidden
+ *    kind cannot be typed back into view, which a post-search filter would have
+ *    allowed.
+ *
+ * Genie's own steps are unaffected: `refusalFor` strips the scope before looking
+ * in `REFUSALS`, and no `@genie/` tool's bare name collides with a refused fancy
+ * kind — Genie's are camelCase, fancy's are snake_case. Pinned by a control test.
  *
  * Declared at module scope rather than inline in the panel because `NodePalette`
  * memoises its grouping on the filter's identity: a new closure every render
  * would rebuild the palette on every keystroke in the config panel.
  */
 export function paletteKindFilter({ kind }: { kind: { name: string } }): boolean {
-    return !PAUSES_WITHOUT_RESUME.has(kind.name);
+    return refusalFor(kind.name) === null;
 }
 
 /**

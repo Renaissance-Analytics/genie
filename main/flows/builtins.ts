@@ -46,9 +46,6 @@ import {
     evaluateExpression,
     truthy,
 } from '@particle-academy/fancy-flow/engine';
-// The steps that would park a run, and the sentence that says so. They live in
-// their own LEAF module because the palette reads them too — see `pauses.ts`.
-import { PAUSES_WITHOUT_RESUME, PAUSE_UNSUPPORTED } from './pauses';
 
 /** The ctx `runFlow` hands an executor, narrowed to what Genie reads. */
 export interface BuiltinCtx {
@@ -411,56 +408,6 @@ const trigger: BuiltinExecutor = (ctx) => {
     return { ...cfg, ...ctx.inputs };
 };
 
-/* ===== the ones Genie refuses ============================================ */
-
-/**
- * Why each refused kind is refused, in the author's own terms.
- *
- * Data rather than a switch, so adding a kind means adding a sentence — and a
- * kind with no sentence falls through to the generic refusal rather than being
- * admitted by omission.
- */
-const REFUSALS: Readonly<Record<string, string>> = {
-    api_request:
-        'it makes arbitrary web requests, and a flow that can call any URL is not bounded by what this app was allowed to do. Use a Genie step for the thing you actually want to reach.',
-    webhook_out: 'it posts to arbitrary URLs. See “API Request” — the same reason.',
-    tool_use: 'Genie does not host tool-calling models. Run an agent step instead.',
-    embed_search: 'Genie has no embedding store wired to flows. Use the Knowledge step.',
-    llm_call:
-        'Genie does not call models directly from a flow — the spend and the attribution would belong to nobody. Use an agent step, which runs under an agent that has both.',
-    llm_router: 'it routes by calling a model. See “LLM Call” — the same reason.',
-    notify:
-        'its channels are somebody else’s (Slack, email). Use the “Tell the user” step, which reaches this user where they already are.',
-    memory_store: 'Genie has not decided where a flow’s data lives or who may read it, so it will not store any yet.',
-    data_store: 'Genie has not decided where a flow’s data lives or who may read it, so it will not store any yet.',
-    subflow:
-        'running another flow needs an answer to whose permissions the inner flow acts under, and Genie does not have one yet.',
-    for_each:
-        'Genie runs a graph once through, so it cannot yet repeat the steps after this one per item. Fan out with a Run Agent step, or handle the list in one step.',
-    webhook_trigger:
-        'Genie has nowhere for an inbound request to land yet, so this flow will only run when started by hand or by another trigger.',
-    // Arrived in the palette with fancy-flow 0.66.0, in the `io` category right
-    // beside Genie's own steps. They drive a pty through the package's new
-    // `TerminalHost` capability, and nothing calls `registerTerminalHost` here —
-    // so today they would fail whatever this table said.
-    //
-    // Worth stating plainly, because the gap is small: 0.66.0 also ships
-    // `@particle-academy/fancy-flow/terminal/fancy-term-host`, an adapter whose
-    // own docs describe its intended consumer as "a desktop app that has already
-    // wired `fancy-term-host` and holds a live backend", verified against
-    // `fancy-term-host@0.5.0` — which is exactly the package and major Genie
-    // pins for its terminals. Wiring it is a decision about whose terminals a
-    // flow gets to drive and who sees them, and nobody has made it. So these say
-    // "not yet", not "never", and point at the step that works today.
-    terminal_run:
-        'Genie has not wired a terminal for flows to drive yet, so this step has nothing to run in. Use the Manage Terminals step, which works in a real Genie terminal you can watch and take over.',
-    terminal_send: 'it types into a terminal a flow cannot open yet. See “Run in terminal” — the same reason.',
-    terminal_await: 'it waits on a terminal a flow cannot open yet. See “Run in terminal” — the same reason.',
-    // `terminal_lane` is deliberately absent: it is a `layout` kind, and the
-    // engine skips that whole category before an executor is chosen, so a
-    // refusal here could never fire. Pinned by a test rather than trusted.
-};
-
 /* ===== the table ========================================================= */
 
 /**
@@ -482,19 +429,12 @@ const IMPLEMENTED: Readonly<Record<string, BuiltinExecutor>> = {
     '@particle-academy/wait': wait,
     '@particle-academy/log': log,
     '@particle-academy/output': output,
-    // The human-pause kinds are deliberately absent — see `pauses.ts`.
+    // The human-pause kinds are deliberately absent — see `refusals.ts`.
 };
 
 /** The executor for a fancy builtin, or null when it is not one Genie runs. */
 export function builtinExecutor(canonicalKind: string): BuiltinExecutor | null {
     return IMPLEMENTED[canonicalKind] ?? null;
-}
-
-/** Why Genie refuses this kind, or null when it has no stated reason. */
-export function refusalFor(canonicalKind: string): string | null {
-    if (PAUSES_WITHOUT_RESUME.has(canonicalKind)) return PAUSE_UNSUPPORTED;
-    const bare = canonicalKind.replace(/^@[^/]+\//, '');
-    return REFUSALS[bare] ?? null;
 }
 
 /** Every builtin Genie implements — for the palette, and for its own tests. */

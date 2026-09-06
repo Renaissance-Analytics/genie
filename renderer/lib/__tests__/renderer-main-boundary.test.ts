@@ -183,14 +183,15 @@ describe('the renderer → main boundary', () => {
         expect(importSpecs(file)).toEqual([]);
     });
 
-    it('keeps flows/pauses.ts a leaf — the palette reads it', () => {
-        // Same reason, second module. `PAUSES_WITHOUT_RESUME` is read by BOTH
-        // the flow doors (main) and `<FlowEditor>`'s `kindFilter` (renderer), so
-        // it cannot live in `flows/builtins.ts` — which imports the fancy-flow
-        // engine — and it must not grow an import here either. The alternative
-        // to sharing it is a copy in the renderer, and a copy is how two
-        // disagreeing versions of `HOST_SOURCED_SETTINGS_KEYS` shipped.
-        const file = sourceFileFor('main/flows/pauses')!;
+    it('keeps flows/refusals.ts a leaf — the palette reads it', () => {
+        // Same reason, second module. `refusalFor` is called by BOTH the flow
+        // door (main) and `<FlowEditor>`'s `kindFilter` (renderer) — one
+        // decision, so the palette cannot offer a step the door would turn away.
+        // That is why it cannot live in `flows/builtins.ts`, which imports the
+        // fancy-flow engine, and why it must not grow an import here either. The
+        // alternative to sharing it is a copy in the renderer, and a copy is how
+        // two disagreeing versions of `HOST_SOURCED_SETTINGS_KEYS` shipped.
+        const file = sourceFileFor('main/flows/refusals')!;
         expect(importSpecs(file)).toEqual([]);
     });
 

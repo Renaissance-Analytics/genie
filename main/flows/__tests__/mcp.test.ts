@@ -6,7 +6,7 @@ import { registerGenieKinds } from '../kinds';
 import { registerEventTriggerKind } from '../event-trigger';
 import { createFlowEventRegistry } from '../events';
 import { getFlowIn, listFlowsIn, upsertFlowIn } from '../store';
-import { PAUSES_WITHOUT_RESUME } from '../pauses';
+import { PAUSES_WITHOUT_RESUME } from '../refusals';
 
 /**
  * How an AGENT authors a flow.
@@ -336,9 +336,9 @@ describe('an agent with no workspace', () => {
 /**
  * The door an AGENT writes a flow through, for a step the canvas no longer offers.
  *
- * fancy-flow 0.66.0 gave `<FlowEditor>` a `kindFilter`, so Genie now hides the
- * three human-pause kinds from the palette: a person cannot drag on a node that
- * would hang the run for good. An agent does not use the palette. It writes a
+ * fancy-flow 0.66.0 gave `<FlowEditor>` a `kindFilter`, so Genie now hides every
+ * refused kind from the palette, so a person cannot drag on a node that would
+ * hang or fail the run. An agent does not use the palette. It writes a
  * graph and posts it HERE — hand-authored, imported, or copied from a doc — and
  * a filter over a sidebar can never see that.
  *

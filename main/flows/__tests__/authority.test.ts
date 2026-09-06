@@ -229,8 +229,8 @@ describe('a step that would park a run Genie cannot resume', () => {
      *
      * They are no longer OFFERED, either: fancy-flow 0.66.0 added `kindFilter`
      * (the answer to the issue Genie filed when the only lever was node
-     * CATEGORY), and `paletteKindFilter` drives it off this same list. That
-     * removes the trap — you cannot drag one on.
+     * CATEGORY), and `paletteKindFilter` drives it off `refusalFor` — the same
+     * function this refusal reads. That removes the trap: you cannot drag one on.
      *
      * It does not remove the need for THIS test. A palette filter is
      * presentation; it only ever sees the sidebar. A graph that was

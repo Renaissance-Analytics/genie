@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { runStoredFlow, type FlowRunnerDeps } from '../runner';
 import type { AppGrant } from '../../apps/bridge-decision';
 import type { FlowRow } from '../store';
-import { PAUSES_WITHOUT_RESUME } from '../pauses';
+import { PAUSES_WITHOUT_RESUME } from '../refusals';
 
 /**
  * Load, judge, then run — and never in a different order.

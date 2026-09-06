@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { runFlow } from '@particle-academy/fancy-flow/engine';
+import { listNodeKinds, runFlow } from '@particle-academy/fancy-flow/engine';
 import { buildFlowExecutors, type FlowDispatch } from '../executors';
+import { implementedBuiltins } from '../builtins';
+import { refusalFor } from '../refusals';
 import { newFlowNode } from '../graph';
 
 /**
@@ -432,5 +434,51 @@ describe('the terminal steps fancy-flow 0.66.0 added', () => {
         await expect(
             runNode(executors(), node('lane', '@particle-academy/terminal_lane')),
         ).resolves.toBeUndefined();
+    });
+});
+
+/**
+ * Every fancy-flow kind has a DECIDED outcome, or this fails.
+ *
+ * The palette offers what `refusalFor` does not refuse, so a kind that is
+ * neither implemented nor refused is offered AND aborts the run — through case 4
+ * of the door, the catch-all whose message ("Genie does not know how to run…")
+ * is honest about a kind nobody has considered and misleading about one that
+ * simply got missed.
+ *
+ * That is not hypothetical. fancy-flow 0.66.0 added four kinds in a MINOR bump,
+ * three of them in the `io` category right beside Genie's own steps, and they
+ * landed in the palette with nothing here mentioning them. This is the test that
+ * makes the next one fail loudly instead: a new kind upstream now breaks the
+ * build until somebody writes down what Genie does with it.
+ */
+describe('every fancy-flow kind Genie could be offered', () => {
+    /** Categories the ENGINE skips before an executor is chosen. */
+    const VISUAL_ONLY = new Set(['annotation', 'layout']);
+
+    it('is implemented, refused with a stated reason, or purely visual', () => {
+        const fancy = (listNodeKinds() as { name: string; category: string }[]).filter((k) =>
+            k.name.startsWith('@particle-academy/'),
+        );
+
+        // POSITIVE CONTROL on the sweep itself. If the registry were empty — a
+        // moved import, a renamed export — `undecided` would be `[]` and this
+        // would pass while guarding nothing at all.
+        expect(fancy.length).toBeGreaterThan(20);
+
+        const undecided = fancy
+            .filter(
+                (k) =>
+                    !VISUAL_ONLY.has(k.category) &&
+                    !implementedBuiltins().includes(k.name) &&
+                    refusalFor(k.name) === null,
+            )
+            .map((k) => `${k.name} [${k.category}]`);
+
+        expect(
+            undecided,
+            'these would be OFFERED in the palette and then abort the run with the ' +
+                'generic catch-all — implement them, or give each a sentence in REFUSALS',
+        ).toEqual([]);
     });
 });
