@@ -3,7 +3,7 @@ import type { HostToolName } from './toolchain-detect';
 import type { LatestFor, UpdateSource } from './toolchain-updates';
 import { pmPackageFor } from './toolchain-packages';
 import type { PackageManager } from './toolchain-packages';
-import { NPM_PACKAGES } from './toolchain-adapters';
+import { NPM_UPDATE_PACKAGES } from './toolchain-adapters';
 import { parseAptUpgradable, parseBrewOutdated, parseNpmOutdated, parseWingetUpgrade } from './toolchain-outdated';
 
 /**
@@ -44,11 +44,25 @@ export interface LatestForDeps {
     /** The package manager to consult for its installed tools, or undefined when
      *  the machine has none (agent TUIs still resolve via npm). */
     pm?: PackageManager;
+    /**
+     * npm global prefixes to consult IN ADDITION to npm's configured one.
+     *
+     * A real machine has two (genie#470): Genie installs agent CLIs into its own
+     * prefix (`npm install -g --prefix <userData>/toolchain/npm-global`), while a
+     * bare `npm outdated -g` reads whatever npm is configured with. Measured on
+     * the owner's machine, those hold different things — `@openai/codex` in the
+     * configured one, `@genie/tui` in Genie's — so a single-prefix check is
+     * blind to half of what is installed, and the half it was blind to is
+     * everything GENIE installed.
+     *
+     * Empty (the default) is exactly the previous behaviour: one bare run.
+     */
+    npmPrefixes?: readonly string[];
 }
 
 export function createLatestFor(deps: LatestForDeps): LatestFor {
     // One cached promise per outdated command — resolved on first use, reused
-    // after, so the command runs at most once for the whole update pass.
+    // after, so each command runs at most once for the whole update pass.
     let npmMap: Promise<Record<string, string>> | undefined;
     let pmMap: Promise<Record<string, string>> | undefined;
 
@@ -87,11 +101,54 @@ export function createLatestFor(deps: LatestForDeps): LatestFor {
         }
     };
 
+    /**
+     * Every npm prefix's outdated list, merged into one `{package -> latest}`.
+     *
+     * MERGING NEEDS NO WINNER RULE, and that is what makes consulting both
+     * prefixes a read widening rather than a policy decision:
+     *
+     *   - the update decision is `isUpdateAvailable(probe.version, latest)`;
+     *   - `probe.version` comes from running THE BINARY PATH RESOLVES, so "which
+     *     of the two installs is this?" is already answered by evidence rather
+     *     than by this map;
+     *   - `latest` is a property of the package ON THE REGISTRY and is identical
+     *     whichever prefix reported it;
+     *   - `current` from the outdated output is never read at all.
+     *
+     * So two entries for one package agree on the only field anything uses. The
+     * merge is still FIRST-WINS rather than last, so the answer cannot depend on
+     * which subprocess happened to return first — they can only disagree if a
+     * publish lands between two calls seconds apart, and either reading is then
+     * a correct "latest" for the moment it was taken.
+     */
+    const npmOutdated = async (): Promise<Record<string, string>> => {
+        const runs = [
+            runParse(NPM_OUTDATED.bin, NPM_OUTDATED.argv, NPM_OUTDATED.parse),
+            ...(deps.npmPrefixes ?? []).map((prefix) =>
+                runParse(
+                    NPM_OUTDATED.bin,
+                    ['outdated', '-g', '--prefix', prefix, '--json'],
+                    NPM_OUTDATED.parse,
+                ),
+            ),
+        ];
+        const merged: Record<string, string> = {};
+        for (const map of await Promise.all(runs)) {
+            for (const [pkg, version] of Object.entries(map)) {
+                merged[pkg] ??= version;
+            }
+        }
+        return merged;
+    };
+
     return async (tool: HostToolName): Promise<{ version?: string; source?: UpdateSource } | null> => {
         // Agent TUIs — npm-global, independent of any system package manager.
-        const npmPkg = NPM_PACKAGES[tool];
+        // Keyed by the REGISTRY NAME, which is not always the install spec: the
+        // Genie TUI installs from a release-tarball URL, and asking `npm
+        // outdated` for a URL is a category error that happens to miss.
+        const npmPkg = NPM_UPDATE_PACKAGES[tool];
         if (npmPkg) {
-            npmMap ??= runParse(NPM_OUTDATED.bin, NPM_OUTDATED.argv, NPM_OUTDATED.parse);
+            npmMap ??= npmOutdated();
             const version = (await npmMap)[npmPkg];
             return version ? { version, source: 'npm-global' } : null;
         }

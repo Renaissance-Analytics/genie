@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { CommandResult, CommandRunner, StreamHandle } from '../container-runtime';
 import { detectToolchainUpdates } from '../toolchain-setup';
+import { npmGlobalPrefix } from '../toolchain-adapters';
 
 /**
  * `detectToolchainUpdates` is the one call the manager's update scan makes: it
@@ -69,5 +70,68 @@ describe('detectToolchainUpdates', () => {
         expect(updates.length).toBeGreaterThan(0);
         expect(updates.every((u) => u.installed === undefined)).toBe(true);
         expect(updates.every((u) => u.updateAvailable === false)).toBe(true);
+    });
+});
+
+/**
+ * The scan consults GENIE'S OWN npm prefix, not only npm's configured one.
+ *
+ * This is the join genie#470 was about, asserted at the level where the two
+ * halves meet: the installer writes to `<genieRoot>/npm-global` and the update
+ * check has to read the same directory. Before this, it read npm's configured
+ * prefix and nothing else — a location the installer never writes to.
+ */
+describe('detectToolchainUpdates across npm prefixes', () => {
+    /** A machine where the CLI lives ONLY in Genie's prefix. */
+    function machine(seen: string[][]): CommandRunner {
+        return runner((cmd, args) => {
+            seen.push([cmd, ...args]);
+            if (cmd === 'npm' && args[0] === 'outdated') {
+                // The configured prefix knows nothing; Genie's has the answer.
+                return args.includes('--prefix')
+                    ? OK(JSON.stringify({ '@openai/codex': { latest: '0.153.4' } }))
+                    : OK('{}');
+            }
+            if (cmd === 'codex') return OK('0.151.0');
+            if (cmd === 'npm') return OK('10.9.8');
+            return MISSING;
+        });
+    }
+
+    it('reads Genie’s prefix, and reports the update only that prefix knows about', async () => {
+        const seen: string[][] = [];
+        const updates = await detectToolchainUpdates({
+            runner: machine(seen),
+            os: 'win32',
+            wanted: ['codex'],
+            genieRoot: 'C:\\g\\toolchain',
+        });
+
+        // The exact directory the INSTALLER writes to — same helper, so the two
+        // cannot drift into different strings again.
+        expect(seen).toContainEqual([
+            'npm',
+            'outdated',
+            '-g',
+            '--prefix',
+            npmGlobalPrefix('C:\\g\\toolchain', 'win32'),
+            '--json',
+        ]);
+        expect(updates.find((u) => u.name === 'codex')).toMatchObject({
+            installed: '0.151.0',
+            latest: '0.153.4',
+            updateAvailable: true,
+        });
+    });
+
+    it('POSITIVE CONTROL: without a genieRoot it asks only the configured prefix', async () => {
+        // Otherwise the assertion above would pass on a scan that queried every
+        // prefix it could imagine, and prove nothing about the wiring.
+        const seen: string[][] = [];
+        await detectToolchainUpdates({ runner: machine(seen), os: 'win32', wanted: ['codex'] });
+
+        const outdated = seen.filter((c) => c[0] === 'npm' && c[1] === 'outdated');
+        expect(outdated).toHaveLength(1);
+        expect(outdated[0]).not.toContain('--prefix');
     });
 });

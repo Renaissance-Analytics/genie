@@ -9,6 +9,7 @@ import type { InstallStep } from './toolchain-plan';
 import { summarizeInstallPlan } from './toolchain-choice';
 import type { PackageManager } from './toolchain-packages';
 import { createLatestFor } from './toolchain-latest';
+import { npmGlobalPrefix } from './toolchain-adapters';
 import { detectToolUpdates } from './toolchain-updates';
 import type { OriginContext } from './tool-install-origin';
 import type { ToolUpdate } from './toolchain-updates';
@@ -115,6 +116,21 @@ export interface DetectUpdatesOptions {
     /** Home + Genie's toolchain root, for classifying those paths. Without it
      *  the rows simply carry no origin. */
     origin?: OriginContext;
+    /**
+     * Genie's toolchain root, so the scan can ALSO read the npm prefix Genie
+     * installs agent CLIs into (genie#470).
+     *
+     * A bare `npm outdated -g` reads npm's CONFIGURED prefix, which is not where
+     * `npm install -g --prefix <genieRoot>/npm-global` writes — so without this
+     * the check reads a directory the installer never touches, and every CLI
+     * Genie installed itself reports no update forever. Absent means "ask only
+     * the configured prefix", which is the previous behaviour exactly.
+     *
+     * Deliberately the ROOT rather than the prefix: `npmGlobalPrefix` derives the
+     * directory, and it is the same function the installer builds its `--prefix`
+     * argument with, so the two cannot drift into different strings again.
+     */
+    genieRoot?: string;
 }
 
 /**
@@ -145,6 +161,9 @@ export async function detectToolchainUpdates(opts: DetectUpdatesOptions): Promis
     const latestFor = createLatestFor({
         runner: opts.runner,
         ...(packageManagers.recommended ? { pm: packageManagers.recommended } : {}),
+        ...(opts.genieRoot
+            ? { npmPrefixes: [npmGlobalPrefix(opts.genieRoot, os)] }
+            : {}),
     });
     return detectToolUpdates(report, latestFor, opts.origin);
 }

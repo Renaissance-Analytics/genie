@@ -1219,6 +1219,12 @@ export function registerIpcHandlers(): void {
                 home: os.homedir(),
                 genieRoot: toolchainRoot(),
             },
+            // ALSO read the npm prefix Genie installs agent CLIs into. A bare
+            // `npm outdated -g` reads npm's CONFIGURED prefix, which is a
+            // different directory — so without this the scan checked a location
+            // the installer never writes to, and every CLI Genie installed
+            // itself reported no update forever (genie#470).
+            genieRoot: toolchainRoot(),
         });
         toolchainUpdateCache = { at: Date.now(), rows };
         return rows;

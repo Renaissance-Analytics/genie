@@ -521,6 +521,53 @@ export function npmPackagesByTool(): Partial<Record<AgentCliToolId, string>> {
     return out;
 }
 
+/**
+ * Can `npm outdated` report this install spec BY NAME?
+ *
+ * Only a plain registry name can be. A tarball URL — which is how the Genie TUI
+ * installs, because npm never prepares a packed tarball — names a file, and
+ * looking a URL up in a map keyed by package name is a category error. It
+ * happens to miss today, which is why it went unnoticed; a URL that ever
+ * collided with a real package name would answer about somebody else's package.
+ *
+ * The catalog comment predicted this: *"Installing and detecting-an-update are
+ * two jobs `package` is doing at once; that is the field to split when this
+ * starts to matter."* The tarball made it matter.
+ */
+export function isRegistryPackageSpec(pkg: string): boolean {
+    if (!pkg) return false;
+    if (/^[a-z][a-z0-9+.-]*:/i.test(pkg)) return false; // any URL or scheme spec
+    if (pkg.startsWith('.') || pkg.startsWith('/')) return false; // a path
+    return true;
+}
+
+/**
+ * Tool id → the REGISTRY NAME its updates are reported under.
+ *
+ * The other half of {@link npmPackagesByTool}, which is the INSTALL spec. They
+ * are the same string for every CLI that installs from the registry, and only
+ * diverge where an install spec is not a name at all — so this map is derived
+ * rather than written out, and a tool with no registry entry is ABSENT rather
+ * than mapped to something that cannot answer.
+ *
+ * The Genie TUI is the absent one, and it is absent for a real reason rather
+ * than an oversight: `@genie/tui` is `private: true` and has never been
+ * published, so no registry can say what its latest version is. Its row reports
+ * "Installed <version>" and makes no update claim — which is the honest state,
+ * and is now a DECISION rather than a lookup that quietly misses. Learning about
+ * a new TUI release would mean reading GitHub's releases API, which is a source
+ * this module does not have.
+ */
+export function npmUpdatePackagesByTool(): Partial<Record<AgentCliToolId, string>> {
+    const out: Partial<Record<AgentCliToolId, string>> = {};
+    for (const raw of CATALOG) {
+        if (raw.install?.manager !== 'npm') continue;
+        if (!isRegistryPackageSpec(raw.install.package)) continue;
+        out[raw.id] = raw.install.package;
+    }
+    return out;
+}
+
 /** Tool id → display name, for the Toolchain page's row labels. */
 export function agentCliLabels(): Record<AgentCliToolId, string> {
     const out = {} as Record<AgentCliToolId, string>;
