@@ -536,6 +536,7 @@ const ResizableGrid = ({
                             agentRecord={agentRecord}
                             onRuntimesChanged={onRuntimesChanged}
                             focused={p.visible && focusId === p.spec.id}
+                            onScreen={p.visible}
                             attention={attentionIds.has(p.spec.id)}
                             pendingNudge={pendingNudges[p.spec.id]}
                             onSendPendingNudge={onSendPendingNudge}
@@ -728,6 +729,10 @@ interface PanelForProps {
     spec: TerminalSpec;
     workspacesById: Map<string, WorkspaceRow>;
     focused: boolean;
+    /** Is this panel on the ACTIVE workspace? Off-workspace panels stay mounted
+     *  (display:none) so their ptys survive, and must never be re-fitted — see
+     *  renderer/lib/terminal-fit.ts (genie#491). */
+    onScreen: boolean;
     /** Agent-integration MCP: pulse this panel's border (imDone). */
     attention: boolean;
     pendingNudge?: AgentInboxIncomingNotice;
@@ -763,6 +768,7 @@ function PanelFor({
     spec,
     workspacesById,
     focused,
+    onScreen,
     attention,
     pendingNudge,
     onSendPendingNudge,
@@ -884,6 +890,7 @@ function PanelFor({
             onSendPendingNudge={onSendPendingNudge}
             onAttentionClear={onAttentionClear}
             focused={focused}
+            onScreen={onScreen}
             maximized={maximized}
             style={style}
             onClose={onClose}

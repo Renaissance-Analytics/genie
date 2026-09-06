@@ -64,3 +64,46 @@ describe('measurements that are not measurements', () => {
         expect(shouldFit(undefined)).toBe(false);
     });
 });
+
+/**
+ * genie#491 — the size is a PROXY for visibility, and the proxy is wrong during
+ * a workspace switch.
+ *
+ * A hidden panel measures 0×0, and the rule above catches that. What it cannot
+ * catch is an off-workspace panel measured while the Floor is mid-reflow: the
+ * number is real, usable, and belongs to a container this terminal is not in. On
+ * CI a pty on 103 columns came back on 67, so a fit was computed and pushed for
+ * a panel that was not on screen — the exact damage genie#229 exists to prevent,
+ * arriving through the one door the guard left open.
+ *
+ * The grid already KNOWS which panels are on screen (`buildPanelList` marks every
+ * entry `visible`, and TerminalGrid already reasons with it). So visibility is
+ * passed as a fact rather than inferred from a measurement.
+ */
+describe('visibility beats the measurement (genie#491)', () => {
+    it('refuses a perfectly usable size when the panel is not on screen', () => {
+        // The observed failure: 67 columns' worth of container, measured for a
+        // panel the user had already switched away from.
+        expect(shouldFit({ width: 536, height: 400 }, false)).toBe(false);
+    });
+
+    it('still fits the same size when the panel IS on screen', () => {
+        // The positive control. Without it the rule above would be satisfied by
+        // a guard that had simply stopped fitting anything.
+        expect(shouldFit({ width: 536, height: 400 }, true)).toBe(true);
+    });
+
+    it('keeps refusing an unusable size even when the panel is on screen', () => {
+        // Visibility does not overrule the size rule; it is checked as well as,
+        // not instead of. A visible panel mid-animation still measures nonsense.
+        expect(shouldFit({ width: 0, height: 0 }, true)).toBe(false);
+        expect(shouldFit({ width: 4, height: 400 }, true)).toBe(false);
+    });
+
+    it('falls back to the measurement when visibility is not known', () => {
+        // A caller with no visibility signal behaves exactly as before, so this
+        // cannot silently disable fitting for anyone who has not been updated.
+        expect(shouldFit({ width: 800, height: 600 })).toBe(true);
+        expect(shouldFit({ width: 0, height: 0 })).toBe(false);
+    });
+});
