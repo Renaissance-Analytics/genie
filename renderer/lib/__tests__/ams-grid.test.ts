@@ -49,6 +49,7 @@ describe('agentGridRows', () => {
         avatar: null,
         role: 'specialized' as const,
         collisionGroup: null,
+        allowedTuis: [],
         ...over,
     });
     // The fixture still SAYS `provider` at its call sites; the field the type

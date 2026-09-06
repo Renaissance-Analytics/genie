@@ -444,6 +444,8 @@ export interface MobileDataDeps {
             bootFolder?: string;
         }) => Promise<unknown>;
         start: (workspaceId: string, name: string) => Promise<unknown>;
+        /** END the run, KEEP the agent — genie#474. Not `remove`. */
+        stop: (agentId: string) => unknown;
         remove: (agentId: string, mode: 'unmount' | 'delete', handoff?: boolean) => Promise<unknown>;
         setDefault: (workspaceId: string, agentId: string | null) => unknown;
         addRuntime: (agentId: string, provider: string) => unknown;
@@ -2475,6 +2477,10 @@ export async function handleApi(
                 }
                 if (op === 'start') {
                     sendJson(res, 200, { result: await a.start(wsId, String(b.name ?? '')) });
+                    return true;
+                }
+                if (op === 'stop') {
+                    sendJson(res, 200, { result: a.stop(agentId) });
                     return true;
                 }
                 if (op === 'delete') {

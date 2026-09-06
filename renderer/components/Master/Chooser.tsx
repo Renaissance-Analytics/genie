@@ -1374,6 +1374,14 @@ export default function Chooser({
                                                         void api()
                                                             .agents.setDefault(ws.id, null)
                                                             .catch(() => {});
+                                                    } else if (action === 'stop') {
+                                                        // END the run, KEEP the
+                                                        // agent (genie#474) —
+                                                        // never the delete
+                                                        // prompt below.
+                                                        void api()
+                                                            .agents.stop(entry.id)
+                                                            .catch(() => {});
                                                     } else if (action === 'delete') {
                                                         openDeletePrompt(ws.id, {
                                                             id: entry.id,
@@ -2094,6 +2102,18 @@ export default function Chooser({
                                     id === 'restart-fresh' ? 'fresh' : 'resume',
                                 );
                             }
+                        } else if (id === 'stop') {
+                            // END the run, KEEP the agent (genie#474). NOT
+                            // `agents.delete`, which is what the two items below
+                            // this one do -- and which was, until now, the only
+                            // thing this menu offered in the other direction
+                            // from Start. Deliberately no handoff prompt: the
+                            // agent's record, files, inbox and history all
+                            // survive, so there is nothing to preserve BEFORE
+                            // the act the way there is for a delete.
+                            void api()
+                                .agents.stop(row.id)
+                                .catch(() => {});
                         } else if (id === 'edit') {
                             if (row.specId) onEditAgentSpec(row.specId);
                         } else if (id === 'remove-orphan') {

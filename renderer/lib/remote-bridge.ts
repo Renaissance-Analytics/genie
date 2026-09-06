@@ -1055,6 +1055,13 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
                     json: { workspaceId, name },
                 })) as { result: Awaited<ReturnType<GenieApi['agents']['start']>> }
             ).result,
+        stop: async (agentId) =>
+            (
+                (await req('/api/desktop/agents/stop', {
+                    method: 'POST',
+                    json: { agentId },
+                })) as { result: Awaited<ReturnType<GenieApi['agents']['stop']>> }
+            ).result,
         delete: async (agentId, mode, handoff) =>
             (
                 (await req('/api/desktop/agents/delete', {

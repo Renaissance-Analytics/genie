@@ -49,6 +49,7 @@ const registered = (over: Partial<RegisteredAgentSummary> = {}): RegisteredAgent
     purpose: 'Builds the thing',
     role: 'specialized',
     tui: 'claude',
+    running: false,
     ...over,
 });
 
@@ -104,6 +105,36 @@ describe('the roster: what is registered, and what is only on disk', () => {
         expect(roster).toHaveLength(1);
         expect(roster[0]).toMatchObject({ name: 'ripple-builder', registered: true, onDisk: true });
         expect(roster[0]!.agentId).toBe('a1');
+    });
+
+    /**
+     * WHETHER IT IS UP — genie#474.
+     *
+     * The roster offered Start and nothing for the other direction, and the
+     * reason it could not offer Stop was not only that the path was missing:
+     * the list did not know which agents were running, so it could not have
+     * said which button to draw. Carried through here because the roster is
+     * where a human sees the whole workspace at once.
+     */
+    it('carries whether a registered agent is running', () => {
+        const roster = workspaceRoster({
+            registered: [
+                registered({ id: 'up', name: 'moic', running: true }),
+                registered({ id: 'down', name: 'trader', running: false }),
+            ],
+            files: [],
+        });
+        expect(roster.find((e) => e.name === 'moic')!.running).toBe(true);
+        // POSITIVE CONTROL: a hard-coded `running: true` would pass the line
+        // above on every roster ever rendered.
+        expect(roster.find((e) => e.name === 'trader')!.running).toBe(false);
+    });
+
+    it('never claims an UNREGISTERED file is running', () => {
+        // There is no process behind a file the registry has never heard of, so
+        // the row must not carry a state that would draw a Stop button.
+        const roster = workspaceRoster({ registered: [], files: [file('ripple', '# Ripple\n')] });
+        expect(roster[0]!.running).toBe(false);
     });
 
     it('lists a registered agent whose file is gone, and says the file is gone', () => {

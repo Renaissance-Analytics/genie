@@ -24,6 +24,7 @@ const agent = (id: string, over: Partial<AgentRecordSpec> = {}): AgentRecordSpec
     avatar: null,
     role: 'specialized',
     collisionGroup: null,
+    allowedTuis: [],
     ...over,
 });
 

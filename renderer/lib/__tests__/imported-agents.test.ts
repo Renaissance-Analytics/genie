@@ -22,6 +22,7 @@ const entry = (over: Partial<AgentRosterEntry> & { name: string }): AgentRosterE
     purpose: 'does a thing',
     tuis: [],
     scope: null,
+    running: false,
     ...over,
 });
 

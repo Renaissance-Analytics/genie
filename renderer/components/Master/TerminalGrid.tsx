@@ -858,6 +858,8 @@ function PanelFor({
                 spec={spec}
                 agentId={owner?.id}
                 agentAvatar={owner?.avatar ?? null}
+                agentAllowedTuis={owner?.allowedTuis ?? []}
+                agentCurrentTui={String(spec.meta.agent ?? '')}
                 runtimes={agentRecord?.runtimes ?? []}
                 onRuntimesChanged={onRuntimesChanged}
                 workspace={workspace}

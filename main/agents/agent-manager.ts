@@ -38,6 +38,9 @@ import { applyPersonaEdit, blankPersona, personaView } from './persona';
 import type { PersonaEdit } from './agent-manager-types';
 import { isSidecarName } from './sidecar';
 import { sidecarActions, sidecarsOf } from './sidecar-control';
+import { agentAllowedTuis } from './agent-file';
+import { terminalsToStopFor } from './deletion';
+import { planAgentStop } from './stop-plan';
 
 /**
  * The agent management surface's HOST side — Tynn #709, story #263.
@@ -94,7 +97,10 @@ function ownTerminals(agent: WorkspaceAgentRow): string[] {
     return [...ids];
 }
 
-function isRunning(agent: WorkspaceAgentRow): boolean {
+/** Whether any terminal this agent could be driven by is alive. Exported
+ *  because the ROSTER needs the same answer (genie#474): a list that shows
+ *  Start and cannot tell which agents are up has no way to draw Stop. */
+export function isAgentRunning(agent: WorkspaceAgentRow): boolean {
     return ownTerminals(agent).some((id) => isTerminalLive(id));
 }
 
@@ -144,7 +150,7 @@ export function agentManagerState(agentId: string): AgentManagerState {
     }
 
     const tui = effectiveTui(agent);
-    const running = isRunning(agent);
+    const running = isAgentRunning(agent);
 
     // --- AGENT.md ---------------------------------------------------------
     const personaPath = agent.persona_path;
@@ -189,7 +195,7 @@ export function agentManagerState(agentId: string): AgentManagerState {
         id: found?.id ?? null,
         name: found?.name ?? null,
         exists: !!found,
-        running: found ? isRunning(found) : false,
+        running: found ? isAgentRunning(found) : false,
         terminalSpecId: found ? liveTerminalOf(found) : null,
         actions: [],
         matchedBy: found ? (found.parent_agent_id === agent.id ? 'parent' : 'name') : null,
@@ -211,6 +217,21 @@ export function agentManagerState(agentId: string): AgentManagerState {
             // rather than offering controls that would act on nothing.
             isSidecar: isSidecarName(agent.name),
             terminalSpecId: liveTerminalOf(agent),
+            // The DRIVER tab's two inputs (genie#463).
+            //
+            // `allowedTuis` is read from the FILE, not from `persona.tuis`
+            // above: an agent with no `AGENT.md` gets a blank persona seeded
+            // with its current driver, so reading the restriction off that
+            // would lock a brand-new agent to the one TUI it happens to be on.
+            // `agentAllowedTuis` answers [] — "no opinion" — for a file that is
+            // missing or says nothing, which is what the host applies.
+            allowedTuis: agentAllowedTuis(personaPath),
+            runtimes: listAgentRuntimes(agent.id).map((r) => ({
+                id: r.id,
+                tui: r.tui,
+                terminalSpecId: r.terminal_spec_id,
+                fronted: r.fronted === 1,
+            })),
         },
         persona,
         mcp,
@@ -385,6 +406,41 @@ export function addAgentMcpServer(agentId: string, input: McpServerInput): Write
 }
 
 /**
+ * STOP an agent — end its run, keep the agent (genie#474).
+ *
+ * The renderer had no path to this at all. What it had was `agents:delete`,
+ * which tears the record down, and wiring a Stop button to that would be a
+ * control that does something other than what it says — on a surface whose whole
+ * purpose is recovering agents you did not mean to lose. The MCP side has had
+ * `runAgent stop` since v55; this is the human's half of the same verb.
+ *
+ * What it does NOT touch: the `workspace_agents` row, `.agents/<name>/AGENT.md`,
+ * the AgentInbox identity, the conversation transcript, or any runtime binding.
+ * `agentRecordStart` brings the same agent back, which is the distinction this
+ * whole issue is about. The plan it acts on can only ever name terminals — see
+ * `stop-plan.ts` — so that promise is structural rather than a comment.
+ *
+ * It stops the agent's SIDECARS too, via `terminalsToStopFor`: the one resolver
+ * `deleteRegisteredAgent` and the handoff request already share. A sidecar drives
+ * the same work under a second TUI, and leaving one running against a driver that
+ * is gone is the exact state that resolver was written to prevent. Two callers
+ * must not answer "which terminals is this agent" differently.
+ */
+export function stopRegisteredAgent(agentId: string): WriteResult {
+    const agent = getWorkspaceAgentById(String(agentId ?? ''));
+    if (!agent) return { ok: false, error: 'That agent is no longer registered.' };
+    const plan = planAgentStop({
+        name: agent.name,
+        terminals: terminalsToStopFor(agent),
+        live: isTerminalLive,
+    });
+    if (plan.kind === 'refuse') return { ok: false, error: plan.reason };
+    for (const id of plan.terminalIds) killTerminalById(id);
+    broadcastAgentsChanged();
+    return { ok: true };
+}
+
+/**
  * Start, stop or restart this agent's sidecar.
  *
  * **Stop** kills the sidecar's terminals and leaves its RECORD alone — it keeps
@@ -422,14 +478,11 @@ export async function agentSidecarAction(
         return { ok: false, error: `${agent.name} has no sidecar to ${action}.` };
     }
 
-    if (action === 'stop') {
-        if (!isRunning(sidecar)) {
-            return { ok: false, error: `${sidecar.name} is not running.` };
-        }
-        for (const id of ownTerminals(sidecar)) killTerminalById(id);
-        broadcastAgentsChanged();
-        return { ok: true };
-    }
+    // ONE stop, applied to the sidecar. A sidecar is an ordinary agent row
+    // whose name carries the `-slave` suffix, so the verb is identical — and a
+    // second copy of "kill this agent's terminals and keep its record" is a
+    // second place for the two to drift.
+    if (action === 'stop') return stopRegisteredAgent(sidecar.id);
 
     if (action === 'restart' || action === 'restart-fresh') {
         const live = liveTerminalOf(sidecar);
@@ -442,7 +495,7 @@ export async function agentSidecarAction(
         return result.ok ? { ok: true } : { ok: false, error: result.error };
     }
 
-    if (isRunning(sidecar)) {
+    if (isAgentRunning(sidecar)) {
         return { ok: false, error: `${sidecar.name} is already running.` };
     }
 

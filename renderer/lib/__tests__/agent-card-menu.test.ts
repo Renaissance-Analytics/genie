@@ -71,6 +71,40 @@ describe('agentCardMenuItems', () => {
         expect(ids(items)).toContain('make-default');
     });
 
+    /**
+     * genie#474. The agent square was the surface the issue describes exactly:
+     * you can see it is running, you can start it, and the only thing offered
+     * for the other direction destroys it. Unmount and Delete both stop the
+     * agent, and both remove it. Neither is "stop".
+     */
+    it('offers STOP to a running agent, between the restarts and Edit', () => {
+        const items = agentCardMenuItems(row({ running: true, provider: 'claude' }));
+        expect(ids(items)).toContain('stop');
+        const stop = items.find((i) => i.id === 'stop')!;
+        expect(stop.label).toBe('Stop agent');
+        // The hint is what separates it from the two items below it.
+        expect(stop.hint).toMatch(/keeps/i);
+        expect(stop.hint).toMatch(/\.agents/);
+        // It is a lifecycle verb, not a removal: no danger styling, or it reads
+        // as the third destructive item in a row of three.
+        expect(stop.danger).toBeFalsy();
+    });
+
+    it('POSITIVE CONTROL: a DORMANT agent is offered no stop, and still gets Start', () => {
+        // A Stop over nothing is the dead control this file's orphan branch and
+        // its restart guard both exist to avoid.
+        const items = agentCardMenuItems(row({ running: false }));
+        expect(ids(items)).not.toContain('stop');
+        expect(ids(items)).toContain('start');
+    });
+
+    it('keeps stop out of an ORPHAN’s menu — nothing owns it to stop', () => {
+        const items = agentCardMenuItems(row({ kind: 'orphan', running: true } as Partial<AgentGridRow>));
+        expect(ids(items)).not.toContain('stop');
+        // POSITIVE CONTROL: the orphan branch still answers with its own item.
+        expect(ids(items)).toContain('remove-orphan');
+    });
+
     it('offers a FRESH restart even to a provider that cannot resume', () => {
         // genie#443. The hint here read "Relaunches its TUI and resumes the same
         // conversation" for EVERY agent, including the twelve providers with

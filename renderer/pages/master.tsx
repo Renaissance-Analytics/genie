@@ -7,7 +7,6 @@ import FeedbackModal from '../components/Master/FeedbackModal';
 import Chooser from '../components/Master/Chooser';
 import ProjectContextMenu from '../components/Master/ProjectContextMenu';
 import NewAgentModal from '../components/Master/NewAgentModal';
-import AgentTuiSwitcher from '../components/Master/AgentTuiSwitcher';
 import type { AgentRecordSpec, AgentRuntimeSpec } from '../lib/ams-grid';
 import {
     restartOptionsFor,
@@ -2702,7 +2701,6 @@ function MasterInner() {
                                 (r) => r.agentId === a.id && r.terminalSpecId === agentEditSpec.id,
                             ),
                     )}
-                    runtimes={agentRecord?.runtimes ?? []}
                     onRecordChanged={() => {
                         const ws = agentEditSpec.workspace_id;
                         if (ws) void api().agents.list(ws).then(setAgentRecord).catch(() => {});
@@ -2725,7 +2723,6 @@ function AgentSettingsModal({
     onClose,
     onSaved,
     record,
-    runtimes,
     onRecordChanged,
 }: {
     spec: TerminalSpec;
@@ -2734,9 +2731,9 @@ function AgentSettingsModal({
     onSaved: () => void;
     /** This agent's RECORD, when Genie has one. The modal used to describe the
      *  terminal only — title `claude · moic`, no drivers, no designation — which
-     *  is the model that no longer exists. */
+     *  is the model that no longer exists. The manager reads the agent's
+     *  runtimes itself (`agents.managerState`), so they are not passed in. */
     record?: AgentRecordSpec;
-    runtimes?: AgentRuntimeSpec[];
     onRecordChanged?: () => void;
 }) {
     const [busy, setBusy] = useState(false);
@@ -2752,28 +2749,20 @@ function AgentSettingsModal({
         return () => window.removeEventListener('keydown', onKey);
     }, [onClose]);
 
-    /* The IDENTITY controls — driver, workspace default, purpose,
-       reachability, IssueWatch. Kept exactly as they were: Tynn #709
-       REPLACES this surface, it does not shrink it. They are now the
-       manager's first tab, beside the prompt, MCP and sidecar tabs the
-       owner asked for on 2026-09-02 and did not get. */
+    /* The IDENTITY controls — workspace default, purpose, reachability,
+       IssueWatch. Kept as they were: Tynn #709 REPLACES this surface, it does
+       not shrink it. They are the manager's first tab, beside the driver,
+       prompt, MCP and sidecar tabs.
+
+       The DRIVER picker used to sit here as a popover trigger and is now the
+       Driver tab (genie#463) — a real control that lists every provider, says
+       which hold a parked conversation, and refuses the ones this agent's
+       AGENT.md excludes, none of which fits in an icon. Moved, not copied: two
+       driver controls in one modal is how they drift. */
     const identityPanel = (
         <>
             {record && (
                 <div className="agent-settings-record">
-                    <div className="agent-settings-row">
-                        <span className="agent-form-label">Drivers</span>
-                        <AgentTuiSwitcher
-                            agentId={record.id}
-                            runtimes={runtimes ?? []}
-                            onChanged={() => onRecordChanged?.()}
-                        />
-                    </div>
-                    <span className="agent-form-scope-desc">
-                        An agent is not its TUI. Switching keeps this agent — its inbox,
-                        history and prompt — and the driver it leaves keeps its
-                        conversation as a sidecar. Nothing is stopped by switching.
-                    </span>
                     <label className="agent-form-wake">
                         <input
                             type="checkbox"

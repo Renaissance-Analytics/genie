@@ -32,6 +32,7 @@ const file = (name: string): AgentRosterEntry => ({
     purpose: `${name} does a thing`,
     tuis: [],
     scope: null,
+    running: false,
 });
 
 describe('the step an import ends on when it brought agents', () => {

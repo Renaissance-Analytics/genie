@@ -19,6 +19,12 @@ type Props = ComponentProps<typeof TerminalPanel> & {
     agentId?: string;
     /** This agent's own mark, so the avatar field opens showing what is set. */
     agentAvatar?: string | null;
+    /** `tuis:` from this agent's AGENT.md, so the switcher does not offer a
+     *  driver the host would refuse (genie#463). EMPTY is "no opinion". */
+    agentAllowedTuis?: string[];
+    /** The driver this PANEL is, for an agent whose runtime rows do not yet say
+     *  — the same fallback `effectiveTui` makes on the host. */
+    agentCurrentTui?: string;
     runtimes?: AgentRuntimeSpec[];
     onRuntimesChanged?: () => void;
 };
@@ -35,8 +41,8 @@ export default function AgentPanel(props: Props) {
     // them to nothing and paints transparent (genie #114).
     const overlayRoot = useOverlayRoot();
     const provider = String(props.spec.meta.agent ?? 'custom');
-    const { style, onAgentSettings, onRestartAgent, agentId, agentAvatar, runtimes, onRuntimesChanged,
-        ...terminalProps } = props;
+    const { style, onAgentSettings, onRestartAgent, agentId, agentAvatar, agentAllowedTuis,
+        agentCurrentTui, runtimes, onRuntimesChanged, ...terminalProps } = props;
     // WHICH restarts this agent can be offered, from the same resolver the host
     // reasons with. The header button takes the one that preserves the most:
     // resume when there is a conversation to keep, fresh otherwise — so the
@@ -99,6 +105,8 @@ export default function AgentPanel(props: Props) {
                             <AgentTuiSwitcher
                                 agentId={agentId}
                                 avatar={agentAvatar}
+                                allowed={agentAllowedTuis}
+                                current={agentCurrentTui}
                                 runtimes={runtimes ?? []}
                                 onChanged={() => onRuntimesChanged?.()}
                             />
