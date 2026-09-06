@@ -27,9 +27,16 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Local environment overrides
+# Local environment overrides.
+#
+# `.env*` rather than an enumerated list: a stray `.env.testing` was found at
+# this repo's root carrying DB_PASSWORD and APP_KEY — a Laravel env file, in the
+# Electron repo, matching neither name below and therefore committable. An
+# allow-list of env filenames only ignores the ones somebody thought of, and the
+# cost of missing one is a credential in the history.
 .env
-.env.local
+.env.*
+!.env.example
 
 # Test coverage
 coverage/
