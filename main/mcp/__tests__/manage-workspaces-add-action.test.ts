@@ -6,10 +6,24 @@ import { MANAGE_WORKSPACES_TOOL } from '../protocol';
  *
  * The tool description told the agent, in detail, how to register a folder as a
  * workspace. The schema's action enum was
- * `['list','status','open','activate','remove']`, so every such call was
- * rejected at validation before it reached the handler — which had `add`
- * implemented the whole time (`host-tools.ts`), as did the TypeScript union.
- * Only the JSON schema disagreed, and the JSON schema is the half that decides.
+ * `['list','status','open','activate','remove']`, so such a call was rejected at
+ * validation before it reached the handler — which had `add` implemented the
+ * whole time (`host-tools.ts`), as did the TypeScript union.
+ *
+ * CORRECTION (genie#495). This file used to end that sentence "Only the JSON
+ * schema disagreed, and the JSON schema is the half that decides." It is not
+ * the half that decides — it is one of three. Behind it sat a hand-written
+ * `action !== …` chain in the dispatcher that ALSO omitted `add`, and a `path`
+ * argument the dispatcher never forwarded. So `add` stayed unreachable for
+ * weeks with this test green, and the identical pair of gates was found
+ * blocking `runAgent switchTui` (genie#504).
+ *
+ * The tests below still earn their place — a description promising what the
+ * schema forbids is a real defect and this is where it is pinned. But they are
+ * about the DEFINITION, and a definition cannot tell you whether a call works.
+ * `declared-actions-reach-the-handler.test.ts` dispatches a real `tools/call`
+ * for every enumerated action of every tool, which is the assertion that would
+ * have caught both.
  *
  * The asymmetry is what made it worth fixing rather than deleting the docs:
  * `remove` WAS exposed. An agent could unregister a workspace and then not put

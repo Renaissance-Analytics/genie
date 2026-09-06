@@ -2627,6 +2627,18 @@ export const MANAGE_WORKSPACES_TOOL = {
                 enum: ['list', 'status', 'open', 'activate', 'remove', 'add'],
                 description: 'What to do.',
             },
+            // `add`'s only argument, and it was MISSING here while the tool
+            // description told the agent to pass it (genie#495). Under
+            // `additionalProperties: false` an undeclared property is a
+            // validation failure, so even once the dispatcher stopped refusing
+            // the action, every call carrying the path would still have been
+            // rejected -- and a call WITHOUT it reaches a handler that can only
+            // answer "a path is required".
+            path: {
+                type: 'string',
+                description:
+                    '`add`: the ABSOLUTE path of the folder to register as a workspace.',
+            },
         },
         required: ['action'],
         additionalProperties: false,
@@ -3652,6 +3664,57 @@ export const CORE_TOOLS = [
 export const GENIE_TOOL_NAMES: readonly string[] = CORE_TOOLS.map((t) => t.name);
 
 /**
+ * The `action` values a tool DECLARES, read from its own schema.
+ *
+ * The dispatchers below used to restate this as a hand-written
+ * `action !== 'a' && action !== 'b' && …` chain, and twice the restatement fell
+ * behind the schema it was copying:
+ *
+ *   - `manageWorkspaces add` (genie#495) — implemented in `host-tools.ts` all
+ *     along, refused here, after genie#322 had already fixed the enum;
+ *   - `runAgent switchTui` (genie#504) — implemented, documented, and named in
+ *     Genie's OWN guide as the way to change an agent's TUI (`guide.ts:446`),
+ *     refused here.
+ *
+ * Both refusals listed only the actions their chain knew about, so the error
+ * DENIED the missing action existed and the caller stopped rather than retried.
+ *
+ * Deriving removes the copy. There is one list, in the schema the client
+ * validates against, and the refusal is generated from it — so a message can no
+ * longer disagree with the tool that produced it. `manageService` already did
+ * exactly this with a local `ACTIONS` array; this is that idea with the array
+ * deleted too.
+ */
+function declaredActions(toolName: string): readonly string[] {
+    const tool = CORE_TOOLS.find((t) => t.name === toolName) as
+        | { inputSchema?: { properties?: { action?: { enum?: readonly string[] } } } }
+        | undefined;
+    return tool?.inputSchema?.properties?.action?.enum ?? [];
+}
+
+type ActionCheck<T extends string> = { ok: true; action: T } | { ok: false; message: string };
+
+/**
+ * Accept an action the tool declares; refuse anything else, naming them all.
+ *
+ * The caller supplies the request's own action union as `T`. That is an
+ * assertion rather than a proof — TypeScript cannot see the schema — and it is
+ * checked at runtime instead, by
+ * `main/mcp/__tests__/declared-actions-reach-the-handler.test.ts`, which
+ * dispatches a real `tools/call` for EVERY enumerated action of EVERY tool and
+ * fails if one is refused. A test about the tool DEFINITION cannot do that: the
+ * genie#322 regression test asserts on `inputSchema` and stayed green through
+ * both defects above.
+ */
+function checkAction<T extends string>(toolName: string, action: unknown): ActionCheck<T> {
+    const declared = declaredActions(toolName);
+    if (typeof action === 'string' && declared.includes(action)) {
+        return { ok: true, action: action as T };
+    }
+    return { ok: false, message: `${toolName} requires \`action\`: ${declared.join(' | ')}.` };
+}
+
+/**
  * Handle one JSON-RPC message. Returns the response, or null for notifications
  * (methods with no id / the `notifications/*` namespace) which get a bare 202.
  */
@@ -4041,26 +4104,16 @@ ${body}` }],
             }
             if (params.name === 'manageService') {
                 const a = (params.arguments ?? {}) as Partial<ManageServiceRequest>;
-                const ACTIONS: ReadonlyArray<ManageServiceRequest['action']> = [
-                    'catalog',
-                    'list',
-                    'add',
-                    'start',
-                    'stop',
-                    'status',
-                    'logs',
-                    'remove',
-                    'connection',
-                    'dedicated',
-                    'inventory',
-                ];
-                if (!a.action || !ACTIONS.includes(a.action)) {
-                    return err(
-                        msg.id,
-                        -32602,
-                        `manageService requires \`action\`: ${ACTIONS.join(' | ')}.`,
-                    );
-                }
+                // This tool had the right idea first — one array, and the error
+                // string built from it, so its message could never deny an
+                // action it accepted. It was still a SECOND copy of the enum,
+                // and a second copy is what genie#495 and genie#504 are. Now
+                // there is one list, in the schema.
+                const checked = checkAction<NonNullable<ManageServiceRequest['action']>>(
+                    'manageService',
+                    a.action,
+                );
+                if (!checked.ok) return err(msg.id, -32602, checked.message);
                 if (!ctx.manageService) {
                     return err(
                         msg.id,
@@ -4069,7 +4122,7 @@ ${body}` }],
                     );
                 }
                 const result = await ctx.manageService(ctx.terminalId, {
-                    action: a.action,
+                    action: checked.action,
                     workspaceId: a.workspaceId,
                     engine: a.engine,
                     version: a.version,
@@ -4093,14 +4146,12 @@ ${body}` }],
             }
             if (params.name === 'provisionWorkspaces') {
                 const a = params.arguments ?? {};
-                const action = (a as Partial<ProvisionWorkspacesRequest>).action;
-                if (action !== 'status' && action !== 'provision' && action !== 'scaffold') {
-                    return err(
-                        msg.id,
-                        -32602,
-                        'provisionWorkspaces requires `action`: status | provision | scaffold.',
-                    );
-                }
+                const checked = checkAction<NonNullable<ProvisionWorkspacesRequest['action']>>(
+                    'provisionWorkspaces',
+                    (a as Partial<ProvisionWorkspacesRequest>).action,
+                );
+                if (!checked.ok) return err(msg.id, -32602, checked.message);
+                const action = checked.action;
                 const result = await ctx.provisionWorkspaces(ctx.terminalId, {
                     action,
                 });
@@ -4146,20 +4197,9 @@ ${body}` }],
             }
             if (params.name === 'manageTerminals') {
                 const a = (params.arguments ?? {}) as Partial<ManageTerminalsRequest>;
-                const action = a.action;
-                if (
-                    action !== 'create' &&
-                    action !== 'write' &&
-                    action !== 'read' &&
-                    action !== 'list' &&
-                    action !== 'kill'
-                ) {
-                    return err(
-                        msg.id,
-                        -32602,
-                        'manageTerminals requires `action`: create | write | read | list | kill.',
-                    );
-                }
+                const checked = checkAction<NonNullable<ManageTerminalsRequest['action']>>('manageTerminals', a.action);
+                if (!checked.ok) return err(msg.id, -32602, checked.message);
+                const action = checked.action;
                 const result = await ctx.manageTerminals(ctx.terminalId, {
                     action,
                     workspaceId: a.workspaceId,
@@ -4239,22 +4279,9 @@ ${body}` }],
             }
             if (params.name === 'runAgent') {
                 const a = (params.arguments ?? {}) as Partial<RunAgentRequest>;
-                const action = a.action;
-                if (
-                    action !== 'start' &&
-                    action !== 'send' &&
-                    action !== 'read' &&
-                    action !== 'stop' &&
-                    action !== 'restart' &&
-                    action !== 'list' &&
-                    action !== 'diagnose'
-                ) {
-                    return err(
-                        msg.id,
-                        -32602,
-                        'runAgent requires `action`: start | send | read | stop | restart | list | diagnose.',
-                    );
-                }
+                const checked = checkAction<NonNullable<RunAgentRequest['action']>>('runAgent', a.action);
+                if (!checked.ok) return err(msg.id, -32602, checked.message);
+                const action = checked.action;
                 const result = await ctx.runAgent(ctx.terminalId, {
                     action,
                     workspaceId: a.workspaceId,
@@ -4271,6 +4298,11 @@ ${body}` }],
                     cursor: a.cursor,
                     bytes: a.bytes,
                     strip: a.strip,
+                    // `switchTui`'s only argument, dropped here until genie#504
+                    // for the same reason `path` was on manageWorkspaces: past
+                    // the guard, the handler could still only answer "switchTui
+                    // needs a `tui` to switch to" (host-tools.ts:2662).
+                    tui: a.tui,
                 });
                 let summary: string;
                 if (!result.ok) {
@@ -4309,23 +4341,17 @@ ${body}` }],
             }
             if (params.name === 'manageWorkspaces') {
                 const a = (params.arguments ?? {}) as Partial<ManageWorkspacesRequest>;
-                const action = a.action;
-                if (
-                    action !== 'list' &&
-                    action !== 'status' &&
-                    action !== 'open' &&
-                    action !== 'activate' &&
-                    action !== 'remove'
-                ) {
-                    return err(
-                        msg.id,
-                        -32602,
-                        'manageWorkspaces requires `action`: list | status | open | activate | remove.',
-                    );
-                }
+                const checked = checkAction<NonNullable<ManageWorkspacesRequest['action']>>('manageWorkspaces', a.action);
+                if (!checked.ok) return err(msg.id, -32602, checked.message);
+                const action = checked.action;
                 const result = await ctx.manageWorkspaces(ctx.terminalId, {
                     action,
                     workspaceId: a.workspaceId,
+                    // `add`'s only argument. Dropped here until genie#495: past
+                    // the guard, the handler could still only answer "a path is
+                    // required" -- a silent no-op in place of a clear refusal,
+                    // which is worse.
+                    path: a.path,
                 });
                 const summary = result.ok
                     ? `${result.workspaces.length} workspace${result.workspaces.length === 1 ? '' : 's'} you can act on${
@@ -4343,24 +4369,9 @@ ${body}` }],
             }
             if (params.name === 'agentinbox') {
                 const a = (params.arguments ?? {}) as Partial<AgentInboxRequest>;
-                const action = a.action;
-                if (
-                    action !== 'list' &&
-                    action !== 'send' &&
-                    action !== 'receive' &&
-                    action !== 'receipts' &&
-                    action !== 'saveAttachment' &&
-                    action !== 'registerSession' &&
-                    action !== 'registerTransport' &&
-                    action !== 'acknowledge' &&
-                    action !== 'setAccessibility'
-                ) {
-                    return err(
-                        msg.id,
-                        -32602,
-                        'agentinbox requires `action`: list | send | receive | receipts | saveAttachment | registerSession | registerTransport | acknowledge | setAccessibility.',
-                    );
-                }
+                const checked = checkAction<NonNullable<AgentInboxRequest['action']>>('agentinbox', a.action);
+                if (!checked.ok) return err(msg.id, -32602, checked.message);
+                const action = checked.action;
                 const result = await ctx.agentInbox(ctx.terminalId, {
                     action,
                     to: a.to,
@@ -4438,20 +4449,9 @@ ${body}` }],
             }
             if (params.name === 'knowledge') {
                 const a = (params.arguments ?? {}) as Partial<KnowledgeToolRequest>;
-                const action = a.action;
-                if (
-                    action !== 'search' &&
-                    action !== 'get' &&
-                    action !== 'add' &&
-                    action !== 'list' &&
-                    action !== 'link'
-                ) {
-                    return err(
-                        msg.id,
-                        -32602,
-                        'knowledge requires `action`: search | get | add | list | link.',
-                    );
-                }
+                const checked = checkAction<NonNullable<KnowledgeToolRequest['action']>>('knowledge', a.action);
+                if (!checked.ok) return err(msg.id, -32602, checked.message);
+                const action = checked.action;
                 const result = await ctx.knowledge(ctx.terminalId, {
                     action,
                     query: a.query,
