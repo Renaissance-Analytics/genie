@@ -76,8 +76,21 @@ function toTokenResponse(res: Record<string, string>): TokenResponse {
 /**
  * Exchange a refresh token for a fresh access (+ refresh) token. Used by the
  * API client when an 8h access token has expired but the ~6-month refresh
- * token is still good — the user never sees a reconnect prompt. No client
- * secret: GitHub waives it for device-flow grants.
+ * token is still good — the user never sees a reconnect prompt.
+ *
+ * SENDS THE CLIENT SECRET when one is configured (genie#263). This used to send
+ * none at all, under a comment saying "GitHub waives it for device-flow grants".
+ * The waiver is real and it does not reach here: it covers the `device_code`
+ * grant, and this is the `refresh_token` grant — a different grant that happens
+ * to share the same endpoint. GitHub answers a secret-less refresh with
+ * `incorrect_client_credentials`, so before this change no install with token
+ * expiration ON could ever refresh, and re-authenticating did not help (the
+ * device grant genuinely IS secret-less, so sign-in succeeded and the next
+ * refresh failed the same way).
+ *
+ * `clientSecret` is optional and omitted entirely when empty, rather than sent
+ * as `client_secret=` — an empty credential is a credential GitHub can reject on
+ * its own terms, which would swap one misleading error for another.
  *
  * Two failure shapes, distinguished for the caller via DeviceFlowError.retryable:
  *   - TRANSIENT (retryable=true): a non-2xx HTTP (429 secondary rate limit, 5xx)
@@ -89,6 +102,7 @@ function toTokenResponse(res: Record<string, string>): TokenResponse {
 export async function refreshUserToken(
     clientId: string,
     refreshToken: string,
+    clientSecret = '',
 ): Promise<TokenResponse> {
     let res: Record<string, string>;
     try {
@@ -96,6 +110,7 @@ export async function refreshUserToken(
             client_id: clientId,
             grant_type: 'refresh_token',
             refresh_token: refreshToken,
+            ...(clientSecret ? { client_secret: clientSecret } : {}),
         });
     } catch (e) {
         // postForm already tags its HTTP (429/5xx) errors retryable; a raw

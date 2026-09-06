@@ -2,6 +2,7 @@ import { net } from 'electron';
 import {
     getAccessExpiryMs,
     getClientId,
+    getClientSecret,
     getRefreshExpiryMs,
     getRefreshToken,
     getRefreshTokenState,
@@ -107,8 +108,9 @@ async function doRefresh(): Promise<string> {
         markReauthNeeded({ code: 'refresh_token_expired' });
         throw new GitHubAuthError();
     }
+    const clientSecret = getClientSecret();
     try {
-        const next = await refreshUserToken(getClientId(), refreshToken);
+        const next = await refreshUserToken(getClientId(), refreshToken, clientSecret);
         saveTokenSet(
             {
                 accessToken: next.access_token,
@@ -129,9 +131,22 @@ async function doRefresh(): Promise<string> {
                 `GitHub couldn't refresh the access token right now — transient failure (${e.code}); will retry.`,
             );
         }
-        // A real rejection (bad/expired/revoked refresh token) → reconnect.
+        // A real rejection. WHICH credential GitHub refused decides what the
+        // user can do about it, and getting that wrong is the whole of
+        // genie#263: `incorrect_client_credentials` with no secret to send is
+        // not a dead refresh token, and telling someone to reconnect sends them
+        // round a loop that cannot terminate — the device grant needs no secret,
+        // so sign-in succeeds and the next refresh fails identically.
+        //
+        // Narrow on purpose. A wrong secret produces the SAME provider code, and
+        // must keep reading as a rejected credential rather than being explained
+        // away as "none configured".
+        const noSecretToSend =
+            !clientSecret &&
+            e instanceof DeviceFlowError &&
+            e.code === 'incorrect_client_credentials';
         markReauthNeeded({
-            code: 'refresh_token_rejected',
+            code: noSecretToSend ? 'refresh_client_secret_missing' : 'refresh_token_rejected',
             ...(e instanceof DeviceFlowError ? { detailCode: e.code } : {}),
         });
         throw new GitHubAuthError();

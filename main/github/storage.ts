@@ -1,5 +1,5 @@
 import { getAllSettings, setSettings } from '../db';
-import { GENIE_GITHUB_CLIENT_ID } from '../config';
+import { GENIE_GITHUB_CLIENT_ID, GENIE_GITHUB_CLIENT_SECRET } from '../config';
 import {
     encryptSecret,
     decryptSecret,
@@ -35,6 +35,7 @@ export type GitHubReauthReasonCode =
     | 'refresh_token_undecryptable'
     | 'refresh_token_expired'
     | 'refresh_token_rejected'
+    | 'refresh_client_secret_missing'
     | 'access_token_rejected';
 
 export interface GitHubReauthFailure {
@@ -185,6 +186,7 @@ export function getReauthFailure(): GitHubReauthFailure | null {
         'refresh_token_undecryptable',
         'refresh_token_expired',
         'refresh_token_rejected',
+        'refresh_client_secret_missing',
         'access_token_rejected',
     ];
     if (!code || !valid.includes(code)) return null;
@@ -207,6 +209,17 @@ export function reauthFailureMessage(failure: GitHubReauthFailure | null): strin
             return 'The saved GitHub refresh credential expired. Reconnect GitHub to renew authorization.';
         case 'refresh_token_rejected':
             return 'GitHub rejected the saved refresh credential. Reconnect GitHub to authorize a new one.';
+        case 'refresh_client_secret_missing':
+            // NOT "reconnect" (genie#263). Reconnecting WORKS — and then fails
+            // again at the next refresh, because the device grant needs no
+            // client secret and the refresh grant does. Sending someone round
+            // that loop three times is what this issue was filed about.
+            //
+            // It also does not send them to a Settings field: there is none, and
+            // inventing a destination is the same dead end wearing better copy.
+            // Nothing on this machine can fix it, so the message says so — the
+            // fix is in the Genie build or the GitHub App's own settings.
+            return 'GitHub refused to renew the authorization: this Genie has no GitHub App client secret to send, and the refresh step requires one. Reconnecting will sign you back in, but it will expire again in a few hours. This needs fixing in Genie itself, not on your machine — please report it.';
         case 'access_token_rejected':
             return 'GitHub rejected the refreshed access token. Reconnect GitHub; the saved grant may have been revoked.';
     }
@@ -264,4 +277,26 @@ export function clearClientIdOverride(): void {
 
 export function getBuiltInClientId(): string {
     return GENIE_GITHUB_CLIENT_ID;
+}
+
+/**
+ * The App's client secret, or `''` when none is configured (genie#263).
+ *
+ * Build-time only, on purpose — there is deliberately no settings override here,
+ * unlike {@link getClientIdOverride} beside it. The Client ID is public and
+ * lives in the settings table in clear; a secret must not. This file's whole
+ * premise is that a credential never lands on disk in plain text (see the header
+ * — tokens go through `safeStorage`), and adding a plaintext `github_client_secret`
+ * row to satisfy one error message would undo that for the sake of a
+ * convenience. A per-machine override therefore belongs in the ENCRYPTED store
+ * alongside the tokens, with UI to match, and that is a change worth making
+ * deliberately rather than as a side effect of this fix.
+ *
+ * Empty is a normal, supported state, not a misconfiguration: it is what every
+ * install has today, and it is CORRECT for an App with user-token expiration
+ * turned off, where nothing ever refreshes. See {@link GENIE_GITHUB_CLIENT_SECRET}
+ * for the two ways to close the gap.
+ */
+export function getClientSecret(): string {
+    return GENIE_GITHUB_CLIENT_SECRET;
 }
