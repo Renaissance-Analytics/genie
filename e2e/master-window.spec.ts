@@ -42,36 +42,27 @@ let seed: MasterSeed;
 test.beforeAll(async () => {
     ({ app, page } = await launchGenieE2E('master'));
 
-    // The throwaway profile deliberately starts without the first-run marker.
-    // This fixture already contains registered workspaces, so the supported
-    // returning-user path is to dismiss onboarding and continue into the
-    // existing workspace. Exercise that real path instead of mutating
-    // localStorage behind the product's back.
-    const onboarding = page
-        .locator('[data-react-fancy-modal]')
-        .filter({ hasText: 'Getting the Workstation Ready' });
-    await onboarding.waitFor({ state: 'visible', timeout: 20_000 }).catch(() => {});
-    if (await onboarding.count()) {
-        await page.keyboard.press('Escape');
-        await expect(onboarding).toHaveCount(0);
-    }
-
-    // A machine missing dev tools is offered the first-run toolchain setup, raised
-    // over the whole window — and a clean CI runner is exactly the machine that
-    // offer exists for, so it opens on every leg. It is real behaviour with a story
-    // of its own; here it is a modal standing in front of the window under test,
-    // and on macOS its backdrop swallowed the click that switches workspaces.
+    // Two first-run overlays used to be dismissed here, each behind a 20s
+    // `waitFor(...).catch(() => {})`. Neither can render on this route any more,
+    // so between them they spent 40 fixed seconds of this hook's 60s budget
+    // waiting for something that was never coming (genie#356):
     //
-    // Closed the way a user closes it: that button records the dismissal, so it
-    // cannot come back later in the session. Reloading into a pre-set dismissal
-    // flag also works and is one line shorter — but it tears the freshly-created
-    // pty down mid-handshake, and the Windows leg then had no terminal at all.
-    const wizard = page.locator('.toolchain-wizard');
-    await wizard.waitFor({ state: 'visible', timeout: 20_000 }).catch(() => {});
-    if (await wizard.count()) {
-        await wizard.getByRole('button', { name: /^(Close|Done)$/ }).click();
-        await expect(wizard).toHaveCount(0);
-    }
+    //   - the "Getting the Workstation Ready" walkthrough — `FirstRunOnboarding`
+    //     has no mount site; the Genie OS layer asserted on below replaced it;
+    //   - the `.toolchain-wizard` — `78cdd904` removed its mount from
+    //     `master.tsx`, leaving `settings.tsx` as its only one, a different route.
+    //
+    // That is why a hook measured at ~42s on a GREEN run had 18s of headroom, and
+    // lost it whenever anything varied — a worker restart relaunch, a slow cold
+    // boot — surfacing as `"beforeAll" hook timeout of 60000ms` against whichever
+    // test was next (genie#490, genie#442).
+    //
+    // Deleted rather than shortened. A wait guarded by `.catch()` + `if (count)`
+    // cannot fail, so it never reported the modal's absence; a smaller timeout
+    // would have kept a check that still cannot tell the two states apart.
+    // `e2e/helpers/__tests__/master-window-waits-guard.test.ts` now holds the
+    // invariant: this hook may only wait for overlays the master route renders,
+    // so if either is mounted again its wait has to come back with it.
 
     // A fresh throwaway profile has never acknowledged this build's curated
     // release notes. They load asynchronously, so dismiss the real dialog here
