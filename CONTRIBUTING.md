@@ -197,6 +197,15 @@ wrote and deleted every line up to the next `*/` from the scan. It read
 hunting (#404). Strip comments line-based; a span cannot tell a comment from a
 string.
 
+**And the person most likely to blind a source guard is the person writing it.**
+The wiring guard in #508 was about to be written in the same commit as comments
+quoting, verbatim, the expression it hunts for — so a negative regex would have
+been green and blind on its FIRST run, before anyone could regress anything. It
+asserts positively instead (each call site resolves through the shared rule),
+which no comment can satisfy by accident. A guard's blind spot is usually created
+by the change that ships it, not by a later one, because that is the change
+writing new prose about the very thing being guarded.
+
 **A test that asserts what the code RETURNS rather than what the requirement
 SAYS.** The first three weaken the assertion or never reach the branch. This one
 is precise, calls the right function, and is simply about the wrong thing: it
@@ -291,6 +300,44 @@ What actually helps, until there is a merge queue: rebase onto `origin/main` and
 re-run CI **immediately before** merging, and report the head SHA alongside the
 conclusion. A conclusion without the SHA it belongs to is how a stale green gets
 read as a current one.
+
+### A comment about another module's data is a dependency nothing typechecks
+
+Three turned up in one evening, each written by somebody who was right at the
+time:
+
+- `main/ask/__tests__/refuse-undeliverable.test.ts` said the workstation
+  operator's terminal has `workspace_id = NULL`. True until the operator got a
+  real `__system__` row; after that it described a LIVE bug (#502) as intended
+  behaviour.
+- `main/mcp/guide.ts:526` told every agent that a peer's tag is
+  `{provider}:{name}` and that *"that is the `ref` `list` prints"*. False since
+  `ddece5f7` dropped the tui from `agentRef`. Three agents followed it into #388
+  independently, each rediscovering the workaround by trial.
+- `main/dev-server/host-site-process.ts` recorded, as the cost it was weighing,
+  that *"a non-detached child dies with Genie"*. On win32 it does not: a site's
+  server is a GRANDCHILD (Genie → cmd.exe → caddy/php-cgi), Windows kills nothing
+  on a parent's exit, and 151 orphans were counted on one workstation, the oldest
+  eleven days old (#391). Correcting it is what surfaced `portOwnerPid` — the pid
+  that spawn returns is the SHELL's, which nobody had had reason to question.
+
+**A wrong comment does not merely fail to help; it protects the defect.** The
+next person checks whether the behaviour is deliberate, finds a note saying yes,
+and stops looking. That is worse than no comment at all, which would have sent
+them to the code.
+
+That third file also shows the remedy, so copy it: the correction is written **in
+place, above the code it misdescribed**, opening `CORRECTION (genie#391)` and
+saying which half was false and what measured it. Deleting the wrong sentence
+would have left the next reader free to re-derive it; the note that was wrong is
+the note that has to say so.
+
+Nothing enforces any of it. No type checker reads a comment, and the module it
+describes does not know it exists. So when you change a field's meaning, its
+default, or where its value comes from, `git grep` the old fact by name — and
+when you write about someone else's data, prefer naming the source
+(*"`workspace_agents.terminal_spec_id` is the fronted runtime's cached mirror"*)
+over restating its current value. A pointer ages better than a snapshot.
 
 ---
 
