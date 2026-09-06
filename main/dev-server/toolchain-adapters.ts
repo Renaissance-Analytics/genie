@@ -3,7 +3,7 @@ import type { InstallStep } from './toolchain-plan';
 import { pmPackageFor } from './toolchain-packages';
 import type { PackageManager } from './toolchain-packages';
 import { LANGUAGE_LABELS, recipesFor } from './toolchain-versions';
-import { npmPackagesByTool } from '../agents/agent-cli-catalog';
+import { npmPackagesByTool, npmUpdatePackagesByTool } from '../agents/agent-cli-catalog';
 import type { LanguageTool } from './toolchain-versions';
 
 /**
@@ -214,6 +214,41 @@ type BuiltDownload = Omit<DownloadInstallCommand, 'tool' | 'requiresElevation' |
 export const NPM_PACKAGES: Partial<Record<HostToolName, string>> = npmPackagesByTool();
 
 /**
+ * Tool id -> the REGISTRY NAME `npm outdated` reports it under.
+ *
+ * Distinct from {@link NPM_PACKAGES}, which is the INSTALL spec, and identical
+ * to it for every CLI that installs from the registry. They diverge only where
+ * an install spec is not a name at all - the Genie TUI installs from a release
+ * tarball URL - and a tool with no registry entry is ABSENT here rather than
+ * mapped to a string no registry can answer for. See `agent-cli-catalog`.
+ */
+export const NPM_UPDATE_PACKAGES: Partial<Record<HostToolName, string>> =
+    npmUpdatePackagesByTool();
+
+/**
+ * Genie's own npm global prefix - `<genieRoot>/npm-global`.
+ *
+ * ONE definition, because two surfaces have to agree about this directory and
+ * for a while they did not: the installer writes here while the update check
+ * read npm's CONFIGURED prefix, so the scan read a location nothing ever
+ * installed into (genie#470). Building the path independently in both places is
+ * how that happens again.
+ *
+ * npm's own layout decides where the BINARIES land inside it, which is why
+ * {@link npmGlobalBinDir} is a second function rather than a suffix a caller
+ * appends: `<prefix>/bin` on posix, `<prefix>` itself on Windows.
+ */
+export function npmGlobalPrefix(genieRoot: string, os: string): string {
+    return `${genieRoot}${os === 'win32' ? '\\' : '/'}npm-global`;
+}
+
+/** Where npm puts the executables inside {@link npmGlobalPrefix}. */
+export function npmGlobalBinDir(genieRoot: string, os: string): string {
+    const prefix = npmGlobalPrefix(genieRoot, os);
+    return os === 'win32' ? prefix : `${prefix}/bin`;
+}
+
+/**
  * Materialise one step into its command. Pure; never touches the network.
  *
  * Throws only on an impossible input — a `pm` step for a tool the manager has no
@@ -372,14 +407,11 @@ function buildNpmGlobalCommand(tool: HostToolName, ctx: AdapterContext): BuiltRu
         // No root known — keep the previous behaviour rather than invent a path.
         return { via: 'run', command: 'npm', args: ['install', '-g', pkg], label: `npm install -g ${pkg}` };
     }
-    const isWin = ctx.os === 'win32';
-    const sep = isWin ? '\\' : '/';
-    const prefix = `${ctx.genieRoot}${sep}npm-global`;
     return {
         via: 'run',
         command: 'npm',
-        args: ['install', '-g', '--prefix', prefix, pkg],
-        pathAdd: isWin ? prefix : `${prefix}${sep}bin`,
+        args: ['install', '-g', '--prefix', npmGlobalPrefix(ctx.genieRoot, ctx.os), pkg],
+        pathAdd: npmGlobalBinDir(ctx.genieRoot, ctx.os),
         label: `npm install -g ${pkg}`,
     };
 }

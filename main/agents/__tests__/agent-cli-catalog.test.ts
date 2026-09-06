@@ -7,6 +7,8 @@ import {
     agentCliSpecs,
     installableAgentClis,
     npmPackagesByTool,
+    npmUpdatePackagesByTool,
+    isRegistryPackageSpec,
 } from '../agent-cli-catalog';
 import { PROVIDER_IDS, TUI_REGISTRY } from '../registry';
 
@@ -299,5 +301,53 @@ describe('an npm install spec names a REGISTRY package, never a git spec', () =>
     it('still has npm specs to check — the loop above passes on an empty catalog too', () => {
         const npmSpecs = AGENT_CLI_CATALOG.filter((e) => e.install?.manager === 'npm');
         expect(npmSpecs.length).toBeGreaterThan(10);
+    });
+});
+
+/**
+ * INSTALLING and DETECTING-AN-UPDATE are two jobs, and `install.package` was
+ * doing both.
+ *
+ * The comment on the Genie TUI entry predicted this — *"that is the field to
+ * split when this starts to matter"* — and the tarball made it matter. The
+ * installer wants the spec `npm install -g` takes, which may be a URL; the
+ * update check wants the REGISTRY NAME `npm outdated` reports under. They are
+ * the same string for every CLI that installs from the registry, so the second
+ * map is DERIVED rather than written out, and a tool with no registry entry is
+ * absent rather than mapped to something no registry can answer for.
+ */
+describe('the install spec and the update key are two different questions', () => {
+    it('maps every REGISTRY-installable tool for the update check', () => {
+        const update = npmUpdatePackagesByTool();
+        expect(update['claude-code']).toBe('@anthropic-ai/claude-code');
+        expect(update['codex']).toBe('@openai/codex');
+        // The positive control the negative below needs: an empty map would
+        // satisfy "genie is absent" and prove nothing.
+        expect(Object.keys(update).length).toBeGreaterThan(10);
+    });
+
+    it('leaves out the tool whose install spec is not a name at all', () => {
+        // The Genie TUI installs from a release-tarball URL. `npm outdated` keys
+        // by name, so asking it about a URL is a category error — it happens to
+        // miss today, and a URL that ever collided with a real package name
+        // would answer about somebody else's package.
+        expect(npmPackagesByTool()['genie']).toMatch(/^https:/);
+        expect(npmUpdatePackagesByTool()['genie']).toBeUndefined();
+    });
+
+    it('knows a registry name from everything that is not one', () => {
+        for (const name of ['@anthropic-ai/claude-code', 'cline', 'opencode-ai']) {
+            expect(isRegistryPackageSpec(name), name).toBe(true);
+        }
+        for (const other of [
+            'https://github.com/o/r/releases/download/v1/x.tgz',
+            'github:owner/repo',
+            'git+ssh://git@github.com/o/r.git',
+            'file:../local',
+            './relative/path.tgz',
+            '',
+        ]) {
+            expect(isRegistryPackageSpec(other), other).toBe(false);
+        }
     });
 });
