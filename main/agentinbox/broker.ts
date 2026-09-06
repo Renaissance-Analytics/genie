@@ -152,6 +152,18 @@ export type AgentInboxSendResult =
           delivered?: number;
       };
 
+/**
+ * The outcome of {@link AgentInboxBroker.deliverHumanMessageToTerminalResult}.
+ *
+ * `no-agent` — that terminal has no registered agent identity (it closed, or one
+ * never joined). `refused` — an agent IS there and the broker declined the
+ * message itself. They are different facts about different things, and a caller
+ * that reports one as the other is telling the user a story (genie#462).
+ */
+export type HumanDeliveryOutcome =
+    | { ok: true }
+    | { ok: false; reason: 'no-agent' | 'refused'; error?: string };
+
 export class AgentInboxBroker {
     private agents = new Map<string, AgentInboxAgent>();
     private byTerminal = new Map<string, string>(); // terminalId → agentId
@@ -691,11 +703,34 @@ export class AgentInboxBroker {
         text: string,
         kind: 'dm' | 'ftq-answer' = 'dm',
     ): boolean {
+        return this.deliverHumanMessageToTerminalResult(terminalId, text, kind).ok;
+    }
+
+    /**
+     * The same delivery, reporting WHY it failed — for a caller that has to
+     * explain the failure to a PERSON (genie#462).
+     *
+     * `false` above covers two unrelated situations: the terminal has no agent
+     * identity at all (closed, or never registered), and the broker looked at the
+     * message and declined it. The ArtBoard panel has to turn that into a
+     * sentence, and with one bit to work from it invented a cause — "the agent
+     * that posted it is no longer running" — which it had not checked and which
+     * was wrong for the whole life of the feature.
+     *
+     * The boolean is derived from this rather than implemented beside it: two
+     * answers to "did it land" is how the two drift apart.
+     */
+    deliverHumanMessageToTerminalResult(
+        terminalId: string,
+        text: string,
+        kind: 'dm' | 'ftq-answer' = 'dm',
+    ): HumanDeliveryOutcome {
         const target = this.agentForTerminal(terminalId);
-        if (!target) return false;
+        if (!target) return { ok: false, reason: 'no-agent' };
         if (kind === 'ftq-answer') this.ftqAnswerTerminals.add(terminalId);
         const r = this.send({ human: true, toAgentId: target.agentId, text, interrupt: true });
-        return r.ok;
+        if (r.ok) return { ok: true };
+        return { ok: false, reason: 'refused', ...(r.error ? { error: r.error } : {}) };
     }
 
     /** Terminals whose NEXT notice is an answer rather than ordinary mail.

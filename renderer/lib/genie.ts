@@ -3041,8 +3041,10 @@ export interface GenieApi {
          *  filesystem, so it receives markup / data URLs, never a path). */
         artboardRead: (workspaceId: string) => Promise<BoardRead>;
         /** Record approve/reject with an optional comment and hand it to the
-         *  posting agent. `delivered` says whether that agent was actually told —
-         *  a recorded-but-undelivered verdict is a success with a caveat. */
+         *  posting agent. `delivery` says whether that agent was actually told
+         *  and, when it was not, WHICH failure it was — a recorded-but-undelivered
+         *  verdict is a success with a caveat, and the caveat has three different
+         *  causes the panel must not confuse (genie#462). */
         artboardReview: (
             workspaceId: string,
             postId: string,
