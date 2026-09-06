@@ -410,6 +410,21 @@ textarea.input {
 .ask-file-chip-at {
     opacity: 0.65;
 }
+/* A file the question named that is not in the workspace (genie#477). Said out
+   loud, but deliberately NOT a chip: there is nothing to open, so there is
+   nothing to click. Muted, because it is a note about the question, not part
+   of it. */
+.ask-file-missing {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 6px;
+    color: var(--amber-500, #f59e0b);
+    opacity: 0.85;
+    font-size: 11.5px;
+    font-family: var(--font-mono);
+    word-break: break-all;
+}
 .ask-file-pane {
     flex: 1 1 auto;
     min-width: 0;

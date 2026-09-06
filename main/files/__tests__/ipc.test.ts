@@ -6,6 +6,7 @@ import {
     createFolder,
     deletePath,
     duplicatePath,
+    existingFiles,
     importExternalBytes,
     listTree,
     readExternalBytes,
@@ -450,5 +451,61 @@ describe('files:read-external-bytes', () => {
     it('throws on a missing source path', async () => {
         const dir = makeTmpDir('read-ext-missing');
         await expect(readExternalBytes(path.join(dir, 'nope.txt'))).rejects.toThrow();
+    });
+});
+
+/**
+ * genie#477 — which of the files a ForceTheQuestion question names actually
+ * exist, so the modal chips only the ones it can open.
+ *
+ * Resolution goes through the SAME `guardedResolve` confinement `files:read`
+ * applies, because a chip that passed this probe must be openable by that read:
+ * two different notions of "inside the workspace" would mean a chip that says
+ * yes and a read that says no.
+ */
+describe('existingFiles (question file chips)', () => {
+    it('returns the paths that exist and omits the ones that do not', async () => {
+        const ws = makeTmpDir('exists-ws');
+        fs.mkdirSync(path.join(ws, 'main'), { recursive: true });
+        fs.writeFileSync(path.join(ws, 'main', 'db.ts'), 'x');
+
+        const found = await existingFiles(ws, ['main/db.ts', 'main/dose.ts']);
+        expect(found).toEqual(['main/db.ts']);
+    });
+
+    it('refuses a path that escapes the workspace, and keeps one that does not', async () => {
+        const ws = makeTmpDir('exists-ws2');
+        const outside = makeTmpDir('exists-outside');
+        fs.writeFileSync(path.join(outside, 'secret.txt'), 'nope');
+        fs.writeFileSync(path.join(ws, 'inside.txt'), 'ok');
+
+        const found = await existingFiles(ws, [
+            ['..', path.basename(outside), 'secret.txt'].join('/'),
+            'inside.txt',
+        ]);
+        // The escape is not reported as existing even though the file is really
+        // there — confinement decides, not the disk. The positive control is in
+        // the same call: a legitimate path is still found.
+        expect(found).toEqual(['inside.txt']);
+    });
+
+    it('does not count a DIRECTORY as a file the drawer could open', async () => {
+        const ws = makeTmpDir('exists-ws3');
+        fs.mkdirSync(path.join(ws, 'main'), { recursive: true });
+        fs.writeFileSync(path.join(ws, 'main', 'db.ts'), 'x');
+        // `main/` resolves and exists, but opening it in the drawer would throw
+        // 'Not a file' — exactly the dead button this is meant to prevent.
+        expect(await existingFiles(ws, ['main', 'main/db.ts'])).toEqual(['main/db.ts']);
+    });
+
+    it('answers an empty list without touching the disk', async () => {
+        expect(await existingFiles(makeTmpDir('exists-ws4'), [])).toEqual([]);
+    });
+
+    it('is not taken down by one unreadable path', async () => {
+        const ws = makeTmpDir('exists-ws5');
+        fs.writeFileSync(path.join(ws, 'real.ts'), 'x');
+        const found = await existingFiles(ws, [String.fromCharCode(0) + 'bad', 'real.ts']);
+        expect(found).toEqual(['real.ts']);
     });
 });

@@ -1,7 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
-import { listTree, readFile, writeFile, type TreeNodeData } from '../ipc';
+import {
+    listTree,
+    readFile,
+    writeFile,
+    _setMachineRootsForTest,
+    listWindowsDrives,
+    type TreeNodeData,
+} from '../ipc';
 import {
     markDesktopRuntime,
     markHeadlessRuntime,
@@ -18,7 +25,10 @@ import { cleanupTmpRoot, makeTmpDir } from '../../../test/helpers';
  */
 
 afterAll(() => cleanupTmpRoot());
-afterEach(() => _resetRuntimeModeForTest());
+afterEach(() => {
+    _resetRuntimeModeForTest();
+    _setMachineRootsForTest(null);
+});
 
 /** Flatten a tree's ids. */
 function ids(nodes: TreeNodeData[]): string[] {
@@ -62,16 +72,59 @@ describe('system workspace full-FS (desktop only)', () => {
         expect(ids(tree)).toContain(wantId);
     });
 
-    it('desktop system top-level tree is the machine root(s) (drives / /)', async () => {
+    it('lists one node per drive when the machine reports several (genie#466)', async () => {
+        // The roots are INJECTED, so this asserts the mapping from a drive list
+        // to a tree — which is the actual behaviour — instead of asserting
+        // whatever happens to be plugged into the machine running the suite.
         markDesktopRuntime();
+        _setMachineRootsForTest(async () => ['C:', 'D:']);
         const wsRoot = makeTmpDir('sys-ws3');
-        const tree = await listTree(wsRoot, { system: true });
-        expect(Array.isArray(tree)).toBe(true);
-        // Every top-level id is absolute (a drive like `C:/` or the POSIX root).
-        for (const n of tree) {
-            expect(path.isAbsolute(n.id) || /^[A-Za-z]:\/$/.test(n.id)).toBe(true);
-        }
+
+        // maxDepth 0 stops at the roots: this test is about the TOP level, and
+        // walking two whole drives to assert their names is what made the old
+        // version take 21 seconds.
+        const tree = await listTree(wsRoot, { system: true, maxDepth: 0 });
+
+        expect(tree.map((n) => n.id)).toEqual(['C:/', 'D:/']);
+        expect(tree.map((n) => n.label)).toEqual(['C:', 'D:']);
+        expect(tree.every((n) => n.type === 'folder')).toBe(true);
     });
+
+    it('lists a single drive as a single node', async () => {
+        markDesktopRuntime();
+        _setMachineRootsForTest(async () => ['C:']);
+        const tree = await listTree(makeTmpDir('sys-ws3b'), { system: true, maxDepth: 0 });
+        expect(tree.map((n) => n.id)).toEqual(['C:/']);
+    });
+
+    it('puts the CHILDREN of / at the top level on POSIX, not a node called /', async () => {
+        // The other shape, which the old test could never reach on a Windows box
+        // and never asserted on a POSIX one: `/` has no drive letter above it, so
+        // its children ARE the top level.
+        markDesktopRuntime();
+        _setMachineRootsForTest(async () => ['/']);
+        const tree = await listTree(makeTmpDir('sys-ws3c'), { system: true, maxDepth: 0 });
+        expect(tree.some((n) => n.id === '/')).toBe(false);
+        expect(tree.every((n) => path.isAbsolute(n.id) || /^[A-Za-z]:\//.test(n.id))).toBe(true);
+    });
+
+    it(
+        'enumerates the REAL machine roots end to end',
+        async () => {
+            // The one case that genuinely touches the machine, kept separate and
+            // given room so the three deterministic assertions above are not
+            // hostage to how many drives are attached or how loaded the box is.
+            // `maxDepth: 0` still applies: enumerating the roots is the part that
+            // has to be real, walking them is not.
+            markDesktopRuntime();
+            const tree = await listTree(makeTmpDir('sys-ws3d'), { system: true, maxDepth: 0 });
+            expect(Array.isArray(tree)).toBe(true);
+            for (const n of tree) {
+                expect(path.isAbsolute(n.id) || /^[A-Za-z]:\/$/.test(n.id)).toBe(true);
+            }
+        },
+        120_000,
+    );
 });
 
 describe('non-system workspace stays confined (Part A invariant)', () => {
@@ -115,5 +168,59 @@ describe('headless can NEVER get system full-FS (HARD constraint)', () => {
         await expect(listTree(wsRoot, { system: true, root: outside })).rejects.toThrow(
             /escapes workspace/i,
         );
+    });
+});
+
+/**
+ * genie#466 — a drive letter that does not answer must not stall the tree.
+ *
+ * The reported symptom was a slow, flaky TEST. The cause turned out to be in the
+ * product: `fsp.access('A:\')` blocks for TWENTY-ONE SECONDS on a machine with
+ * no floppy drive, because Windows retries the absent removable device before
+ * giving up. Every Windows user opening the System workspace's file tree paid
+ * that, and the test was only the thing that noticed.
+ *
+ * A letter is probed with a bound, and the probes run together, so one
+ * unreachable device — a legacy A:/B:, a disconnected network mapping — costs
+ * the bound once instead of its full retry, serially.
+ */
+describe('drive probing is bounded (genie#466)', () => {
+    const never = () => new Promise<void>(() => {});
+
+    it('drops a letter that does not answer within the bound', async () => {
+        const drives = await listWindowsDrives(
+            (root) => (root.startsWith('A:') ? never() : Promise.resolve()),
+            20,
+        );
+        // A: hung, so it is not reported...
+        expect(drives).not.toContain('A:');
+        // ...and the letters that DID answer still are. Without this the
+        // assertion above would pass against a probe that returned nothing.
+        expect(drives).toContain('C:');
+        expect(drives).toContain('Z:');
+    });
+
+    it('does not wait for the hung letter serially', async () => {
+        const started = Date.now();
+        await listWindowsDrives((root) => (root.startsWith('A:') ? never() : Promise.resolve()), 40);
+        // One bound, not 26 of them: probes run together. Generous, because this
+        // asserts a shape (concurrent, not sequential) and not a stopwatch.
+        expect(Date.now() - started).toBeLessThan(40 * 5);
+    });
+
+    it('reports every letter when the machine answers for all of them', async () => {
+        const drives = await listWindowsDrives(() => Promise.resolve(), 50);
+        expect(drives).toHaveLength(26);
+        expect(drives[0]).toBe('A:');
+        expect(drives[25]).toBe('Z:');
+    });
+
+    it('keeps the letters in order when only some answer', async () => {
+        const present = new Set(['C:', 'G:', 'H:']);
+        const drives = await listWindowsDrives(
+            (root) => (present.has(root.slice(0, 2)) ? Promise.resolve() : Promise.reject(new Error('nope'))),
+            50,
+        );
+        expect(drives).toEqual(['C:', 'G:', 'H:']);
     });
 });

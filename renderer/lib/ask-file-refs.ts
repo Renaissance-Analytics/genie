@@ -135,3 +135,42 @@ export function extractFileRefs(markdown: string): AskFileRef[] {
     }
     return out;
 }
+
+/** A question's file references split by whether the file is actually there. */
+export interface AskFileRefSplit {
+    /** Files that resolve inside the question's workspace — these get chips. */
+    present: AskFileRef[];
+    /** Files the question named that are NOT there — reported, never clickable. */
+    missing: AskFileRef[];
+}
+
+/**
+ * Split the refs a question named by whether they resolve (genie#477).
+ *
+ * Requiring a separator stopped a bare filename resolving to whatever happened
+ * to sit at the workspace root. It cannot stop a separated path from simply
+ * being wrong: `repos/genie/main/dose.ts` names a location, so it chips, and
+ * then fails on click with a raw ENOENT. The header's standard applies to that
+ * too — a chip offering to open a file that isn't there is worse than no chip.
+ *
+ * A missing file is REPORTED rather than dropped in silence. A chip that
+ * vanished and a chip that never existed look identical to the reader, and "the
+ * question is pointing at a file that does not exist" is usually the more useful
+ * thing to know — often it is the answer to the question.
+ *
+ * `resolvable` is the set of paths the main process could resolve inside the
+ * ASKING question's workspace root, or `null` for "could not be established".
+ * Null FAILS OPEN: the probe is IPC and can fail, and hiding every chip over a
+ * failed round trip would lose a working feature, where showing one that might
+ * not open is merely the behaviour that shipped for months.
+ */
+export function splitByExistence(
+    refs: readonly AskFileRef[],
+    resolvable: ReadonlySet<string> | null,
+): AskFileRefSplit {
+    if (!resolvable) return { present: [...refs], missing: [] };
+    const present: AskFileRef[] = [];
+    const missing: AskFileRef[] = [];
+    for (const ref of refs) (resolvable.has(ref.path) ? present : missing).push(ref);
+    return { present, missing };
+}

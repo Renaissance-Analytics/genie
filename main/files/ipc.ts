@@ -256,19 +256,101 @@ function walkAbs(
     );
 }
 
-/** Existing drive roots on Windows (A:..Z: that respond to access). */
-async function listWindowsDrives(): Promise<string[]> {
-    const out: string[] = [];
-    for (let c = 65 /* A */; c <= 90 /* Z */; c++) {
-        const letter = String.fromCharCode(c);
-        try {
-            await fsp.access(`${letter}:\\`);
-            out.push(`${letter}:`);
-        } catch {
-            /* no such drive */
-        }
-    }
-    return out;
+/**
+ * How long a single drive letter gets to answer before it is treated as absent.
+ *
+ * A present drive answers in under a millisecond, so this is enormous for the
+ * case it serves and small for the case it prevents. See
+ * {@link listWindowsDrives} for what it prevents.
+ */
+const DRIVE_PROBE_MS = 1500;
+
+/** Resolve to `true` if `p` settles within `ms`, `false` if it rejects or hangs. */
+function answersWithin(p: Promise<unknown>, ms: number): Promise<boolean> {
+    return new Promise((resolve) => {
+        // `unref` so a probe still hanging at exit cannot hold the process open.
+        const timer = setTimeout(() => resolve(false), ms);
+        timer.unref?.();
+        void p.then(
+            () => {
+                clearTimeout(timer);
+                resolve(true);
+            },
+            () => {
+                clearTimeout(timer);
+                resolve(false);
+            },
+        );
+    });
+}
+
+/**
+ * Existing drive roots on Windows (A:..Z: that respond to access).
+ *
+ * Each letter is probed with a BOUND, and every letter is probed AT ONCE, for a
+ * reason worth stating plainly (genie#466): `fsp.access('A:\\')` takes
+ * **twenty-one seconds** to fail on a machine with no floppy drive, because
+ * Windows retries the absent removable device before giving up. Probed serially
+ * and unbounded — as this was — that is twenty-one seconds added to opening the
+ * System workspace's file tree, for every Windows user, before a single filename
+ * appears. A disconnected network mapping on any letter does the same thing.
+ *
+ * The bound is what fixes it; running them together is what keeps the worst case
+ * at one bound rather than twenty-six. A drive that cannot answer inside
+ * {@link DRIVE_PROBE_MS} is reported absent, which is also the honest answer:
+ * a device that slow is not one a file tree can usefully browse.
+ *
+ * `access` and `timeoutMs` are injectable so the hang can be exercised without
+ * depending on the machine the suite runs on.
+ */
+export async function listWindowsDrives(
+    access: (root: string) => Promise<unknown> = (root) => fsp.access(root),
+    timeoutMs: number = DRIVE_PROBE_MS,
+): Promise<string[]> {
+    const letters = Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i));
+    const answered = await Promise.all(
+        letters.map((letter) => {
+            let probe: Promise<unknown>;
+            try {
+                probe = access(`${letter}:\\`);
+            } catch {
+                return Promise.resolve(false); // a synchronous throw is an absent drive
+            }
+            return answersWithin(probe, timeoutMs);
+        }),
+    );
+    // Rebuilt from the letter order, so the result does not depend on which
+    // probe happened to settle first.
+    return letters.filter((_, i) => answered[i]).map((letter) => `${letter}:`);
+}
+
+/**
+ * The machine's filesystem roots: `['C:', 'D:']` on Windows, `['/']` on POSIX.
+ *
+ * The ONLY environment-coupled part of the system tree, and it is coupled twice
+ * over — to how many drives are attached, and (through 26 `fsp.access` probes,
+ * some of which sit on unreachable network drives) to how loaded the machine is.
+ */
+async function readMachineRoots(): Promise<string[]> {
+    return process.platform === 'win32' ? listWindowsDrives() : ['/'];
+}
+
+/**
+ * Injectable so the SHAPE of the system tree can be asserted against a fixed set
+ * of roots (genie#466).
+ *
+ * The test that covered this used to enumerate the real machine and walk every
+ * drive it found: 21 seconds on a developer box, and a timeout under load. Worse,
+ * what it could assert was whatever happened to be plugged in — so the
+ * multi-drive and single-root shapes were never actually pinned, on either
+ * platform. Injecting the roots makes those deterministic AND fast; the real
+ * enumeration keeps its own end-to-end case.
+ */
+let machineRootsReader: () => Promise<string[]> = readMachineRoots;
+
+/** Test seam for {@link machineRootsReader}. Pass null to restore the real one. */
+export function _setMachineRootsForTest(fn: (() => Promise<string[]>) | null): void {
+    machineRootsReader = fn ?? readMachineRoots;
 }
 
 /**
@@ -285,19 +367,24 @@ async function listSystemTree(
     if (sub) {
         return walkAbs(path.resolve(sub), 0, maxDepth, budget);
     }
-    if (process.platform === 'win32') {
-        const drives = await listWindowsDrives();
-        const out: TreeNodeData[] = [];
-        for (const d of drives) {
-            if (budget.remaining <= 0) break;
-            budget.remaining--;
-            const children = await walkAbs(`${d}\\`, 1, maxDepth, budget);
-            // Drive node id ends with '/' so joinRel/reads resolve under it.
-            out.push({ id: `${d}/`, label: d, type: 'folder', children });
-        }
-        return out;
+    const roots = await machineRootsReader();
+    // POSIX reports one root, `/`, and its CHILDREN are the top level — there is
+    // no drive letter to list as a node above them. Windows reports one node per
+    // drive. Deciding from the ROOTS rather than `process.platform` keeps this a
+    // single code path and lets both shapes be tested on either platform; `/` is
+    // unambiguous, since no drive prefix can ever equal it.
+    if (roots.length === 1 && roots[0] === '/') {
+        return walkAbs('/', 0, maxDepth, budget);
     }
-    return walkAbs('/', 0, maxDepth, budget);
+    const out: TreeNodeData[] = [];
+    for (const d of roots) {
+        if (budget.remaining <= 0) break;
+        budget.remaining--;
+        const children = await walkAbs(`${d}\\`, 1, maxDepth, budget);
+        // Drive node id ends with '/' so joinRel/reads resolve under it.
+        out.push({ id: `${d}/`, label: d, type: 'folder', children });
+    }
+    return out;
 }
 
 export async function listTree(
@@ -339,6 +426,44 @@ export async function listTree(
 
     const root = path.resolve(workspacePath);
     return walk(root, '', 0, maxDepth, budget);
+}
+
+/**
+ * Which of `relPaths` name a readable FILE inside `workspacePath` (genie#477).
+ *
+ * The ForceTheQuestion modal turns paths a question mentions into chips. A path
+ * that does not resolve used to chip anyway and fail on click with a raw ENOENT,
+ * which `ask-file-refs.ts` calls out in its own header as worse than showing no
+ * chip at all. This is how the modal finds out beforehand.
+ *
+ * Confinement goes through {@link guardedResolve} — the SAME primitive
+ * `files:read` uses — deliberately and not by coincidence: a chip that passed
+ * this probe must be openable by that read, and two different notions of "inside
+ * the workspace" would produce a chip that says yes and a read that says no.
+ * There is no `system` bypass, because the ask modal never asks for one.
+ *
+ * A directory is NOT a file: it resolves and exists, but opening it in the
+ * drawer throws 'Not a file' — exactly the dead button this prevents.
+ *
+ * Returns the input paths (as written, so the caller can match them back), never
+ * absolute ones. One unreadable path costs itself and nothing else.
+ */
+export async function existingFiles(
+    workspacePath: string,
+    relPaths: readonly string[],
+): Promise<string[]> {
+    const checks = await Promise.all(
+        relPaths.map(async (relPath) => {
+            try {
+                const abs = guardedResolve(workspacePath, relPath);
+                if (!abs) return false; // escapes the workspace
+                return (await fsp.stat(abs)).isFile();
+            } catch {
+                return false; // missing, unreadable, or not a usable path
+            }
+        }),
+    );
+    return relPaths.filter((_, i) => checks[i]);
 }
 
 export async function readFile(
@@ -905,6 +1030,13 @@ export function registerFilesIpc(): void {
         'files:read',
         (_e, workspacePath: string, relPath: string, system?: boolean) =>
             readFile(workspacePath, relPath, system),
+    );
+    // Which of the paths a ForceTheQuestion names actually exist (genie#477).
+    // Batched: one round trip per question, not one per chip.
+    ipcMain.handle(
+        'files:exist',
+        (_e, workspacePath: string, relPaths: string[]) =>
+            existingFiles(workspacePath, Array.isArray(relPaths) ? relPaths : []),
     );
     ipcMain.handle(
         'files:write',
