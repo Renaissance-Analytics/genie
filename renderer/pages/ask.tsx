@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Action, ContentRenderer, Heading, Icon, Text } from '@particle-academy/react-fancy';
 import { FileViewer } from '@particle-academy/fancy-code';
 import { api, hasGenieBridge, type ForceQuestionSpec } from '../lib/genie';
-import { extractFileRefs, type AskFileRef } from '../lib/ask-file-refs';
+import { extractFileRefs, splitByExistence, type AskFileRef } from '../lib/ask-file-refs';
 import { ASK_MODAL_WIDTH } from '../../main/ask/drawer-bounds';
 import {
     clearDraft,
@@ -160,6 +160,16 @@ export default function AskPage() {
         () => questions.map((q) => extractFileRefs(q.question)),
         [questions],
     );
+    /**
+     * The paths that actually resolve, or null for "not established yet".
+     *
+     * Probed against the ASKING question's workspace root (`workspacePath`
+     * below), never the active window's: a forwarded question names files on the
+     * HOST, and statting them locally would answer a different question.
+     * `canOpenFiles` already gates chips on that root being known, so this never
+     * runs without one.
+     */
+    const [resolvable, setResolvable] = useState<ReadonlySet<string> | null>(null);
     const workspacePath = active?.workspacePath;
     // Files can only be opened when we know which workspace to resolve them in —
     // a forwarded question's paths are on the HOST, and reading a same-named
@@ -171,6 +181,40 @@ export default function AskPage() {
     useEffect(() => {
         setOpenFile(null);
     }, [activeId]);
+
+    // Ask main which of the named paths are really there, so a path that does
+    // not resolve never becomes a chip that fails on click (genie#477). One
+    // batched round trip per question. A failure leaves `resolvable` null, which
+    // `splitByExistence` treats as "could not establish" and fails OPEN.
+    const namedPaths = useMemo(
+        () => [...new Set(fileRefs.flat().map((r) => r.path))],
+        [fileRefs],
+    );
+    useEffect(() => {
+        if (!workspacePath || namedPaths.length === 0) {
+            setResolvable(null);
+            return;
+        }
+        let cancelled = false;
+        setResolvable(null);
+        void api()
+            .files.exist(workspacePath, namedPaths)
+            .then((found) => {
+                if (!cancelled) setResolvable(new Set(found));
+            })
+            .catch(() => {
+                if (!cancelled) setResolvable(null);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [workspacePath, namedPaths]);
+
+    /** Per question: the chips to render, and the files it named that are gone. */
+    const fileSplits = useMemo(
+        () => fileRefs.map((refs) => splitByExistence(refs, resolvable)),
+        [fileRefs, resolvable],
+    );
 
     useEffect(() => {
         if (!openFile || !workspacePath) return;
@@ -398,9 +442,9 @@ export default function AskPage() {
                                 lineSpacing={1.55}
                                 className="ask-q-content"
                             />
-                            {canOpenFiles && (fileRefs[qi]?.length ?? 0) > 0 && (
+                            {canOpenFiles && (fileSplits[qi]?.present.length ?? 0) > 0 && (
                                 <div className="ask-file-chips">
-                                    {fileRefs[qi]!.map((ref) => (
+                                    {fileSplits[qi]!.present.map((ref) => (
                                         <button
                                             key={`${ref.path}:${ref.line ?? ''}${ref.section ?? ''}`}
                                             type="button"
@@ -424,6 +468,20 @@ export default function AskPage() {
                                             )}
                                         </button>
                                     ))}
+                                </div>
+                            )}
+                            {/* A file the question named that is NOT there. Said
+                                out loud rather than silently dropped: a chip that
+                                vanished and a chip that never existed look
+                                identical, and "the question is pointing at a file
+                                that does not exist" is often the answer to it. */}
+                            {canOpenFiles && (fileSplits[qi]?.missing.length ?? 0) > 0 && (
+                                <div className="ask-file-missing">
+                                    <Icon name="alert-triangle" size="xs" />
+                                    <span>
+                                        not found in this workspace:{' '}
+                                        {fileSplits[qi]!.missing.map((r) => r.path).join(', ')}
+                                    </span>
                                 </div>
                             )}
                             <div className="ask-options">

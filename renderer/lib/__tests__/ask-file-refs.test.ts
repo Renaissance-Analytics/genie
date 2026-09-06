@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractFileRefs } from '../ask-file-refs';
+import { extractFileRefs, splitByExistence, type AskFileRef } from '../ask-file-refs';
 
 /**
  * Finding the files a ForceTheQuestion question is ABOUT (Tynn story #272).
@@ -125,5 +125,62 @@ describe('extractFileRefs', () => {
 
     it('finds nothing in an empty question', () => {
         expect(extractFileRefs('')).toEqual([]);
+    });
+});
+
+/**
+ * genie#477 — a chip must point at a file that is actually there.
+ *
+ * Requiring a separator stopped a bare filename resolving to whatever happened
+ * to sit at the workspace root. It does not stop a separated path from simply
+ * being wrong: `repos/genie/main/dose.ts` names a location, so it chips, and
+ * then fails on click with a raw ENOENT. The module's own standard says a chip
+ * offering to open a file that isn't there is worse than no chip at all.
+ */
+describe('splitByExistence', () => {
+    const ref = (path: string): AskFileRef => ({ path, name: path.split('/').pop()! });
+
+    it('chips only the paths that resolve, and reports the ones that do not', () => {
+        const refs = [ref('repos/genie/main/db.ts'), ref('repos/genie/main/dose.ts')];
+        const split = splitByExistence(refs, new Set(['repos/genie/main/db.ts']));
+        expect(split.present.map((r) => r.path)).toEqual(['repos/genie/main/db.ts']);
+        expect(split.missing.map((r) => r.path)).toEqual(['repos/genie/main/dose.ts']);
+    });
+
+    it('a question naming only missing files produces no chips at all', () => {
+        const split = splitByExistence([ref('repos/genie/main/dose.ts')], new Set());
+        expect(split.present).toEqual([]);
+        // Not a dead button — but not silence either. A chip that vanished and a
+        // chip that never existed look identical to the reader, and a question
+        // pointing at a file that is not there is usually the more useful signal.
+        expect(split.missing.map((r) => r.name)).toEqual(['dose.ts']);
+    });
+
+    it('fails OPEN when existence could not be established', () => {
+        // The probe is IPC and can fail. Showing a chip that might not open is
+        // the behaviour that shipped for months; hiding every chip because a
+        // round trip failed would lose a working feature outright.
+        const refs = [ref('a/one.ts'), ref('b/two.ts')];
+        const split = splitByExistence(refs, null);
+        expect(split.present).toEqual(refs);
+        expect(split.missing).toEqual([]);
+    });
+
+    it('keeps the order the question named them in', () => {
+        const refs = [ref('a/one.ts'), ref('b/two.ts'), ref('c/three.ts')];
+        const split = splitByExistence(refs, new Set(['c/three.ts', 'a/one.ts']));
+        expect(split.present.map((r) => r.path)).toEqual(['a/one.ts', 'c/three.ts']);
+    });
+
+    it('carries the section and line through onto the chip', () => {
+        const refs: AskFileRef[] = [
+            { path: 'a/one.ts', name: 'one.ts', line: 42, section: '§3' },
+        ];
+        const split = splitByExistence(refs, new Set(['a/one.ts']));
+        expect(split.present[0]).toEqual(refs[0]);
+    });
+
+    it('handles a question that named no files', () => {
+        expect(splitByExistence([], new Set())).toEqual({ present: [], missing: [] });
     });
 });

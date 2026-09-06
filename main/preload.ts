@@ -1386,6 +1386,10 @@ const api = {
                 content: string;
                 truncated: boolean;
             }>,
+        /** Which of these paths name a readable file inside the workspace
+         *  (genie#477 — the ask modal chips only files it can open). */
+        exist: (workspacePath: string, relPaths: string[]) =>
+            ipcRenderer.invoke('files:exist', workspacePath, relPaths) as Promise<string[]>,
         write: (workspacePath: string, relPath: string, content: string, system?: boolean) =>
             ipcRenderer.invoke('files:write', workspacePath, relPath, content, system) as Promise<{
                 ok: boolean;

@@ -4113,6 +4113,9 @@ export interface GenieApi {
             relPath: string,
             system?: boolean,
         ) => Promise<{ content: string; truncated: boolean }>;
+        /** Which of these paths name a readable file inside the workspace
+         *  (genie#477 — the ask modal chips only files it can open). */
+        exist: (workspacePath: string, relPaths: string[]) => Promise<string[]>;
         write: (
             workspacePath: string,
             relPath: string,
