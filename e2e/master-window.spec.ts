@@ -856,7 +856,7 @@ test('a flow made in the manager arrives switched off, and opens on a canvas', a
 
     await canvas.getByLabel('Flow name').fill(AUTHORED);
     await canvas.getByRole('button', { name: 'Save' }).click();
-    await page.locator('[role="dialog"] .gicon[aria-label="Close"]').click();
+    await page.locator('.flowmgr-canvas-close').click();
 
     const row = flowRow(AUTHORED);
     await expect(row).toBeVisible();
@@ -897,7 +897,7 @@ test('the canvas offers Genie’s OWN steps, not just fancy-flow’s builtins', 
     await expect(canvas.getByText('Terminals', { exact: false }).first()).toBeVisible();
     await expect(canvas.getByText('Branch', { exact: false }).first()).toBeVisible();
 
-    await page.locator('[role="dialog"] .gicon[aria-label="Close"]').click();
+    await page.locator('.flowmgr-canvas-close').click();
     await page.keyboard.press('Escape');
     await expect(flowsRoot()).not.toHaveClass(/open/);
 });

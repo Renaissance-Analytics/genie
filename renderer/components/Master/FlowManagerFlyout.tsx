@@ -573,7 +573,16 @@ function FlowCanvasModal({
                     <IconFlow size={15} />
                     {flow.title}
                     <span className="grow" />
-                    <button type="button" className="gicon" onClick={onClose} aria-label="Close">
+                    {/* Its own class, so a spec can reach THIS close button.
+                        `[role="dialog"] .gicon[aria-label="Close"]` matches
+                        every open dialog in the master window, and there are
+                        three. */}
+                    <button
+                        type="button"
+                        className="gicon flowmgr-canvas-close"
+                        onClick={onClose}
+                        aria-label="Close the canvas"
+                    >
                         <IconX />
                     </button>
                 </div>
