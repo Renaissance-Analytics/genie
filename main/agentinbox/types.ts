@@ -89,11 +89,24 @@ export interface AgentInboxAgentInfo {
      *  (empty) for a caller that can't reach this agent — don't leak the ACL to
      *  agents it excludes. The human panel always receives the real list. */
     scopeWorkspaces: string[];
-    /** Whether the CALLER this entry was built for may actually DM this agent —
-     *  i.e. it cleared both the workspace tier and this agent's scope. A listed
-     *  entry with `reachable: false` is the "visible but unavailable" state:
-     *  discoverable so peers know to request access, but not messageable.
-     *  Always true for the human panel's directory and for an agent's own `self`. */
+    /**
+     * Whether the CALLER this entry was built for may actually DM this agent —
+     * i.e. it cleared both the workspace tier and this agent's scope. A listed
+     * entry with `reachable: false` is the "visible but unavailable" state:
+     * discoverable so peers know to request access, but not messageable.
+     * Always true for the human panel's directory and for an agent's own `self`.
+     *
+     * PERMISSION, NOT LIVENESS, and the name invites the other reading — which is
+     * how genie#388 was reported. `reachable: true` beside `status: 'away'` and
+     * `chatSessionId: null` is not a contradiction: the inbox is DURABLE, so a DM
+     * to an agent that is not at its prompt queues and is handed over on its next
+     * `receive`. `status` is the liveness field, and the guide now says so where
+     * `reachable` is explained.
+     *
+     * Left as permission deliberately. Redefining it as "a session exists right
+     * now" would make `reachable: false` mean "your message will be lost", which
+     * is exactly what the durable inbox exists to make untrue.
+     */
     reachable: boolean;
     status: AgentInboxStatus;
     /** The captured AI chat-session uuid, or null when unknown/uncaptured. */

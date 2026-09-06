@@ -50,47 +50,49 @@ describe('the saved-config key', () => {
 });
 
 describe('the canonical ref', () => {
-    it('is name:chat-id when the chat-id is bound', () => {
-        // CHANGED CONTRACT: the tui is gone from the ref. It was making the
-        // canonical identity change when an agent switched driver, which is the
-        // one thing a sidecar exists to prevent.
+    it('is {tui}:{name}:{chat-id} when the chat-id is bound', () => {
+        // CHANGED CONTRACT AGAIN, back to naming the tui (genie#388). The tui was
+        // removed for v55's `(workspace, name)` identity; v60 restored
+        // `(workspace, tui, name)` and the ref was left behind, so `list`
+        // published an address `send` could not parse.
         expect(
             agentRef({ tui: 'claude', name: 'tynn', chatSessionId: 'abc-123' }),
-        ).toBe('tynn:abc-123');
+        ).toBe('claude:tynn:abc-123');
     });
 
-    it('is the SAME ref on either driver', () => {
-        expect(agentRef({ tui: 'codex', name: 'tynn', chatSessionId: 'abc-123' })).toBe(
+    it('is a DIFFERENT ref on either driver, because they are different agents', () => {
+        expect(agentRef({ tui: 'codex', name: 'tynn', chatSessionId: 'abc-123' })).not.toBe(
             agentRef({ tui: 'claude', name: 'tynn', chatSessionId: 'abc-123' }),
         );
     });
 
-    it('degrades to the key — not an empty third field — before the bind', () => {
+    it('degrades to {tui}:{name} — not an empty third field — before the bind', () => {
         // Codex spends its entire startup in this state, and `codex:tynn-slave:`
         // reads as "its chat is called nothing" rather than "not bound yet".
         expect(agentRef({ tui: 'codex', name: 'tynn-slave', chatSessionId: null })).toBe(
-            'tynn-slave',
+            'codex:tynn-slave',
         );
-        expect(agentRef({ tui: 'codex', name: 'tynn-slave' })).toBe('tynn-slave');
+        expect(agentRef({ tui: 'codex', name: 'tynn-slave' })).toBe('codex:tynn-slave');
         expect(agentRef({ tui: 'codex', name: 'tynn-slave', chatSessionId: '  ' })).toBe(
-            'tynn-slave',
+            'codex:tynn-slave',
         );
     });
 
-    it('round-trips through parse, in both forms', () => {
-        for (const ref of ['tynn:abc-123', 'tynn-slave']) {
+    it('round-trips through parse, in every form it may be handed', () => {
+        // Including the BARE forms, which is what was printed in between and is
+        // what agents have written down.
+        for (const ref of ['claude:tynn:abc-123', 'codex:tynn-slave', 'tynn:abc-123', 'tynn-slave']) {
             const parsed = parseAgentRef(ref);
             expect(parsed).not.toBeNull();
             expect(agentRef(parsed!)).toBe(ref);
         }
     });
 
-    it('reads a LEGACY tui-prefixed ref, and re-emits it in the new form', () => {
-        // Agents were told the old shape, so reading one keeps working. Writing
-        // one does not: the round trip deliberately NORMALISES to the new form
-        // rather than preserving a shape that encodes the wrong identity.
-        const parsed = parseAgentRef('claude:tynn:abc-123');
-        expect(parsed).toMatchObject({ tui: 'claude', name: 'tynn', chatSessionId: 'abc-123' });
+    it('re-emits a bare ref unchanged rather than inventing a tui', () => {
+        // A bare ref carries no driver, and `undefined:tynn` would name one
+        // called "undefined". Absence stays absence through the round trip.
+        const parsed = parseAgentRef('tynn:abc-123');
+        expect(parsed).toMatchObject({ name: 'tynn', chatSessionId: 'abc-123' });
         expect(agentRef(parsed!)).toBe('tynn:abc-123');
     });
 

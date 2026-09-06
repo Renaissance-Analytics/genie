@@ -240,8 +240,10 @@ describe('registering an agent before start', () => {
         expect(r.ok).toBe(true);
         expect(r.id).toBeTruthy();
         expect(r.reattached).toBe(false);
-        // The canonical machine-facing identity, provider first.
-        expect(r.ref).toMatch(/^tynn-builder:/);
+        // The canonical machine-facing identity, TUI first — which is what this
+        // comment always said, and what the assertion stopped checking when
+        // `ddece5f7` dropped the tui from the ref. genie#388 put it back.
+        expect(r.ref).toMatch(/^claude:tynn-builder:/);
 
         const spec = getTerminalSpec(r.id!);
         expect(spec?.meta?.agent).toBe('claude');
@@ -272,7 +274,9 @@ describe('runAgent start on a SAVED agent', () => {
     it('binds a Codex SessionStart id onto the just-created saved agent without duplicating it', async () => {
         const created = await registerAndStart({ name: 'tynn-builder', agent: 'codex' });
         expect(created.ok).toBe(true);
-        expect(created.ref).toBe('tynn-builder');
+        // `{tui}:{name}`, with no chat id yet — Codex cannot know its session id
+        // until it is running, and this is the state it starts in (genie#388).
+        expect(created.ref).toBe('codex:tynn-builder');
         expect(created.sessionBinding).toBe('pending');
 
         const registered = registerAgentInboxSession(created.id!, 'codex-session-1', {
@@ -285,7 +289,7 @@ describe('runAgent start on a SAVED agent', () => {
         const attached = await start({ name: 'tynn-builder', agent: 'codex' });
         expect(attached.ok).toBe(true);
         expect(attached.id).toBe(created.id);
-        expect(attached.ref).toBe('tynn-builder:codex-session-1');
+        expect(attached.ref).toBe('codex:tynn-builder:codex-session-1');
         expect(attached.sessionBinding).toBe('bound');
         expect(agentSpecs()).toHaveLength(1);
         expect(agentIds()).toHaveLength(1);

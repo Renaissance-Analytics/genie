@@ -523,11 +523,17 @@ For Codex, Genie automatically installs a SessionStart hook that sends Codex's g
   silently not existing. Two tiers decide this and you must clear BOTH: the
   WORKSPACE's access setting (who may reach into it at all — its
   agents) and that agent's own \`scope\`.
+  \`reachable: true\` is PERMISSION, not liveness — it says a DM will be accepted,
+  not that anyone is at the prompt right now. Read \`status\` for that. A DM to an
+  agent that is \`away\` is not lost: the inbox is durable, so it queues and is
+  handed over on that agent's next \`receive\`.
 - \`send\` — DM a peer with \`to\` = their TAG (\`{provider}:{name}\`, e.g. \`claude:tynn\`;
   or \`{workspace}:{provider}:{name}\` for another workspace). That is the \`ref\`
-  \`list\` prints for every peer. A raw \`agentId\` still works, but prefer the tag:
-  an id lives on the TERMINAL spec, so it dies with a replaced terminal while a
-  name does not. Needs \`text\`. Optional \`interrupt: true\` also glows a DM target's
+  \`list\` prints for every peer. A bare name (\`tynn\`) works too when exactly one
+  agent answers to it; when two do — the same name under different TUIs, which is
+  legal — you are told both forms rather than being sent to one of them. A raw
+  \`agentId\` still works, but prefer the tag: an id lives on the TERMINAL spec, so
+  it dies with a replaced terminal while a name does not. Needs \`text\`. Optional \`interrupt: true\` also glows a DM target's
   terminal so they notice (never injected into their pty). Optional
   \`attachments\` — a list of file paths inside **your own workspace** to send
   along. Genie READS each file and stores its BYTES, so the recipient gets a real
@@ -870,7 +876,8 @@ is no longer true.
   workspace or a GApp. Nudging is always on.
 - Address a peer by TAG, not by uuid: \`claude:tynn\`, or
   \`{workspace}:{provider}:{name}\` for another workspace. \`list\` prints
-  the tag for every peer.
+  the tag for every peer, and a bare \`tynn\` resolves when only one agent
+  answers to it.
 
 **What to do**
 

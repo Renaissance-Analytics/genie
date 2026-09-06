@@ -81,18 +81,43 @@ export function savedAgentKey(name: string): string {
 }
 
 /**
- * The canonical machine-facing ref — `{tui}:{name}:{chat-id}`.
+ * The canonical machine-facing ref — `{tui}:{name}[:{chat-id}]`.
  *
- * Degrades to the saved-config key when the chat-id is not bound yet, rather
- * than emitting an empty third field: a ref with a blank tail reads as "this
- * agent's chat is called nothing", and Codex spends its entire startup in that
- * state. Absence is the honest answer, and it round-trips through
- * {@link parseAgentRef}.
+ * ★ This emitted the NAME alone for a while, and the docblock went on describing
+ * the form above. Read the history rather than either half on its own.
+ *
+ * `ddece5f7` dropped the tui, correctly for the schema at the time: v55 had
+ * collapsed identity to `(workspace, name)`. **v60 reversed that a day later** —
+ * `idx_workspace_agents_tui_name` is UNIQUE on `(workspace_id, tui, name)`,
+ * because `codex:tynn` and `claude:tynn` are two agents (genie#324) — and the
+ * ref was not moved back with it.
+ *
+ * What that cost is genie#388. A ref is an ADDRESS: `list` prints it and `send`
+ * takes it, through `agentinbox/address.ts`, which recognises a tag by its
+ * leading TUI. Emitting a bare name made every published ref unparseable there,
+ * so `send` refused the exact string `list` had just handed over — while the
+ * same tool's other error listed that string as reachable, because that list is
+ * built from the published refs. Three agents hit it independently and each
+ * fell back to the raw uuid.
+ *
+ * The SAVED-CONFIG KEY stays the name alone ({@link savedAgentKey}) and that is
+ * not an inconsistency: it has to resolve BEFORE a harness runs, and a saved
+ * agent is the same saved agent under either driver. Identity, addressing and
+ * saved configuration are three questions; only the first two include the tui.
+ *
+ * Degrades to `{tui}:{name}` when the chat-id is not bound yet, rather than
+ * emitting an empty third field: a ref with a blank tail reads as "this agent's
+ * chat is called nothing", and Codex spends its entire startup in that state.
+ * Degrades further to the bare name when the TUI is unknown — `parseAgentRef`
+ * returns no tui for a legacy bare ref, and that value round-trips back through
+ * here, where `undefined:tynn` would name a driver called "undefined".
  */
 export function agentRef(identity: AgentIdentity): string {
-    const key = savedAgentKey(identity.name);
+    const name = savedAgentKey(identity.name);
+    const tui = typeof identity.tui === 'string' && identity.tui.trim() ? identity.tui.trim() : '';
+    const head = tui ? `${tui}${SEP}${name}` : name;
     const chat = identity.chatSessionId?.trim();
-    return chat ? `${key}${SEP}${chat}` : key;
+    return chat ? `${head}${SEP}${chat}` : head;
 }
 
 /**
