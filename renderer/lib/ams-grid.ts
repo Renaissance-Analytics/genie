@@ -30,6 +30,31 @@ export function amsAgentCard(
 
 /* ── The grid, driven by the agent RECORD ──────────────────────────────────── */
 
+/**
+ * One line of a workspace's AGENT ROSTER — the registry and `.agents/` together.
+ *
+ * `registered` and `onDisk` are the two halves of an agent's record and either
+ * can exist without the other. Registered-only means the file was deleted or its
+ * folder moved; ON-DISK-ONLY is the case genie#465 is about — the durable half
+ * an unmount deliberately keeps, which nothing in Genie could turn back into an
+ * agent because nothing ever read `.agents/` at all.
+ */
+export interface AgentRosterEntry {
+    name: string;
+    registered: boolean;
+    onDisk: boolean;
+    agentId?: string;
+    purpose: string;
+    tuis: string[];
+    scope: string | null;
+    personaPath?: string;
+    role?: string;
+    tui?: string;
+    /** Why this on-disk agent will not be offered for adoption. Absent when it
+     *  can be: a reason beside a working button is noise. */
+    refusal?: string;
+}
+
 /** One registered agent, as the renderer receives it from main. */
 export interface AgentRecordSpec {
     id: string;

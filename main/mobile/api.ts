@@ -431,6 +431,11 @@ export interface MobileDataDeps {
      */
     agentRecords?: {
         list: (workspaceId: string) => unknown;
+        /** The registry AND `.agents/` together (genie#465). Bridged for the
+         *  same reason `list` is: a remote window's roster must describe the
+         *  HOST's folder, and the client's `.agents/` is a different machine's. */
+        roster: (workspaceId: string) => unknown;
+        adopt: (workspaceId: string, folder: string) => Promise<unknown>;
         create: (input: {
             workspaceId: string;
             name: string;
@@ -2448,6 +2453,16 @@ export async function handleApi(
                 const agentId = String(b.agentId ?? '');
                 if (op === 'list') {
                     sendJson(res, 200, { result: a.list(wsId) });
+                    return true;
+                }
+                if (op === 'roster') {
+                    sendJson(res, 200, { result: a.roster(wsId) });
+                    return true;
+                }
+                if (op === 'adopt') {
+                    sendJson(res, 200, {
+                        result: await a.adopt(wsId, String(b.folder ?? '')),
+                    });
                     return true;
                 }
                 if (op === 'create') {

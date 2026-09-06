@@ -100,6 +100,8 @@ import {
     startRegisteredAgent,
 } from './mcp/host-tools';
 import { deleteRegisteredAgent, terminalsToStopFor } from './agents/deletion';
+import { adoptionRequest, agentFilesIn, workspaceRoster } from './agents/roster';
+import { nodeAgentFilesFs } from './agents/roster-fs';
 import { requestHandoffBeforeStop } from './agents/handoff-request';
 import { getWorkspaceAgentById } from './agents/lookup';
 import {
@@ -498,6 +500,78 @@ export function agentRecordsList(workspaceId: string) {
     };
 }
 
+/** The registry's side of the roster diff. `tui` is nullable on the row since
+ *  v55 (an agent is not its driver); the roster wants a string either way. */
+function registeredAgentsOf(workspaceId: string) {
+    return listWorkspaceAgents(workspaceId).map((a) => ({
+        id: a.id,
+        name: a.name,
+        purpose: a.purpose,
+        role: a.role,
+        tui: a.tui ?? '',
+    }));
+}
+
+/**
+ * THE ROSTER — every agent this workspace has, from BOTH halves of the record.
+ *
+ * `workspace_agents` is the registry; `.agents/<slug>/AGENT.md` is the durable
+ * half that survives an unmount, a re-add and a clone onto another machine. Only
+ * the first was ever read (genie#465), so an agent whose row was gone had simply
+ * stopped existing as far as Genie was concerned — while its file sat in the
+ * repo, committed, exactly where `deletion.ts` promised to leave it.
+ *
+ * A READ. Nothing here registers anything: the unregistered files come back
+ * marked `registered: false` for a human to accept, because adopting whatever is
+ * on disk without asking would make `git pull` a way to gain agents.
+ */
+export function agentRecordRoster(workspaceId: string) {
+    const ws = getWorkspace(String(workspaceId ?? ''));
+    if (!ws) return { ok: false as const, error: 'That workspace is no longer registered.', roster: [] };
+    const roster = workspaceRoster({
+        registered: registeredAgentsOf(ws.id),
+        files: agentFilesIn(ws.path, nodeAgentFilesFs),
+        sacredName: ws.sacred_name,
+    });
+    return { ok: true as const, roster };
+}
+
+/**
+ * ADOPT one on-disk agent — turn its file back into a registered agent.
+ *
+ * Goes through `registerAgentInWorkspace`, the same core the MCP tool and the
+ * create form use, so adoption cannot become a second way past the name checks,
+ * the reserved list, the workspace-agent role, or the rule that a persona file
+ * is NEVER overwritten. That last one is the whole safety of this feature: two
+ * of the three files it exists to recover are hand-written product deliverables,
+ * and re-rendering one would destroy the thing the human asked to get back.
+ *
+ * The request is built from the FILE (`adoptionRequest`), not from the caller:
+ * the renderer names a folder and nothing else, so it cannot adopt an agent into
+ * a purpose, a driver or a boot folder the file does not state.
+ */
+export async function agentRecordAdopt(workspaceId: string, folder: string) {
+    const ws = getWorkspace(String(workspaceId ?? ''));
+    if (!ws) return { ok: false, error: 'That workspace is no longer registered.' };
+    const name = String(folder ?? '');
+    const file = agentFilesIn(ws.path, nodeAgentFilesFs).find((f) => f.folder === name);
+    if (!file) {
+        return { ok: false, error: `There is no .agents/${name}/AGENT.md in this workspace.` };
+    }
+    // The SAME refusals the roster showed, re-checked here: the list the human
+    // clicked may be stale, and a guard the caller can skip is not a guard.
+    const entry = workspaceRoster({
+        registered: registeredAgentsOf(ws.id),
+        files: [file],
+        sacredName: ws.sacred_name,
+    }).find((e) => e.name === name);
+    if (!entry || entry.registered) {
+        return { ok: false, error: `"${name}" is already registered in this workspace.` };
+    }
+    if (entry.refusal) return { ok: false, error: entry.refusal };
+    return registerAgentInWorkspace(ws, adoptionRequest(file) as never);
+}
+
 export async function agentRecordCreate(input: {
     workspaceId: string;
     name: string;
@@ -743,6 +817,18 @@ export function registerIpcHandlers(): void {
     );
     ipcMain.handle('agents:front', (_e, agentId: string, runtimeId: string) =>
         agentRecordFront(agentId, runtimeId),
+    );
+    // THE ROSTER — the registry AND the files, in one read (genie#465). The
+    // grid and the default-agent dropdown both read `agents:list`, which is the
+    // registry alone; an agent whose row is gone but whose `AGENT.md` is still
+    // committed is invisible to both.
+    ipcMain.handle('agents:roster', (_e, workspaceId: string) =>
+        agentRecordRoster(String(workspaceId ?? '')),
+    );
+    // ADOPT one of them. A human's click, never automatic: a workspace's roster
+    // must not be something a `git pull` decides.
+    ipcMain.handle('agents:adopt', async (_e, workspaceId: string, folder: string) =>
+        agentRecordAdopt(String(workspaceId ?? ''), String(folder ?? '')),
     );
     // Designate a workspace's DEFAULT agent -- the one that boots from the
     // workspace root. A property of a real agent, set by a human in workspace

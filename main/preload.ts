@@ -34,6 +34,29 @@ export interface AgentRecordPayload {
     collisionGroup: string | null;
 }
 
+/**
+ * One line of a workspace's AGENT ROSTER — the registry and `.agents/` together.
+ *
+ * Structural, not imported from `agents/roster.ts`: the preload IS the
+ * main/renderer boundary, and the roster module reaches `agents/registry` and
+ * `agent-file`. The shape is asserted against main's in
+ * `main/agents/__tests__/roster.test.ts`.
+ */
+export interface AgentRosterEntry {
+    name: string;
+    registered: boolean;
+    onDisk: boolean;
+    agentId?: string;
+    purpose: string;
+    tuis: string[];
+    scope: string | null;
+    personaPath?: string;
+    role?: string;
+    tui?: string;
+    /** Why this on-disk agent will not be offered for adoption. */
+    refusal?: string;
+}
+
 /** One TUI an agent may run under. */
 export interface AgentRuntimePayload {
     id: string;
@@ -1482,6 +1505,25 @@ const api = {
             ipcRenderer.invoke('agents:list', workspaceId) as Promise<{
                 agents: AgentRecordPayload[];
                 runtimes: AgentRuntimePayload[];
+            }>,
+        /**
+         * THE ROSTER — registered agents AND the `.agents/<slug>/AGENT.md`
+         * files the registry has never heard of (genie#465). `list` above is
+         * the registry alone, so an agent whose row was lost to an unmount, a
+         * re-add or a clone onto another machine is invisible to it while its
+         * file sits committed in the repo.
+         */
+        roster: (workspaceId: string) =>
+            ipcRenderer.invoke('agents:roster', workspaceId) as Promise<{
+                ok: boolean;
+                error?: string;
+                roster: AgentRosterEntry[];
+            }>,
+        /** Register an on-disk agent from its own file. Never overwrites it. */
+        adopt: (workspaceId: string, folder: string) =>
+            ipcRenderer.invoke('agents:adopt', workspaceId, folder) as Promise<{
+                ok: boolean;
+                error?: string;
             }>,
         /** Make one of an agent's TUIs the visible one. A SWAP, not an add. */
         /** Create an agent: a record and its AGENT.md, never a terminal. */

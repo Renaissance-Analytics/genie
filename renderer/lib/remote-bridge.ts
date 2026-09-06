@@ -1023,6 +1023,25 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
                     json: { workspaceId },
                 })) as { result: Awaited<ReturnType<GenieApi['agents']['list']>> }
             ).result,
+        // The roster reads the HOST's `.agents/` folder. Unbridged it would fall
+        // through the spread above to the local preload and describe THIS
+        // machine's files under a panel that claims to be the host's workspace —
+        // the same fault genie#327 fixed for `create` and `delete`, and a worse
+        // one here, because the answer would look plausible.
+        roster: async (workspaceId) =>
+            (
+                (await req('/api/desktop/agents/roster', {
+                    method: 'POST',
+                    json: { workspaceId },
+                })) as { result: Awaited<ReturnType<GenieApi['agents']['roster']>> }
+            ).result,
+        adopt: async (workspaceId, folder) =>
+            (
+                (await req('/api/desktop/agents/adopt', {
+                    method: 'POST',
+                    json: { workspaceId, folder },
+                })) as { result: Awaited<ReturnType<GenieApi['agents']['adopt']>> }
+            ).result,
         create: async (input) =>
             (
                 (await req('/api/desktop/agents/create', {
