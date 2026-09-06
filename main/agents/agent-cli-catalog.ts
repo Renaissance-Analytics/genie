@@ -154,30 +154,46 @@ const CATALOG = [
         id: 'genie',
         provider: 'genie',
         probe: true,
-        // Genie's own TUI — the gap that started this, now closed. The previous
-        // comment here set two conditions for wiring an installer: the package
-        // public, and its bin named `genie` rather than `genie-tui`. Both are
-        // now true, and both were checked by RUNNING the install rather than by
-        // reading the repo:
+        // Genie's own TUI. It shipped an installer briefly — a GIT SPEC,
+        // `github:Renaissance-Analytics/genie-tui` — and that installer could
+        // never work, because npm cannot install a git spec GLOBALLY when the
+        // package has a `prepare` that needs its own dependencies:
         //
-        //   npm install github:Renaissance-Analytics/genie-tui
-        //   ls node_modules/.bin/genie*        -> genie, genie.cmd, genie.ps1
-        //   ./node_modules/.bin/genie --version -> 0.0.0
+        //   npm install -g --prefix <genie>/npm-global github:Renaissance-Analytics/genie-tui
+        //   -> npm error command failed
+        //      > @genie/tui@0.0.0 build
+        //      > tsc -p tsconfig.build.json
+        //      'tsc' is not recognized as an internal or external command
         //
-        // A GIT SPEC, NOT A REGISTRY NAME, and deliberately. Genie's own posture
-        // is a public GitHub repo that is `private: true` and never published:
-        // `npm view genie` is an unrelated package owned by somebody else, and
-        // the `@genie` scope is not ours. The registry is the wrong place to
-        // reach for here, not merely the road not taken.
+        // npm prepares a git dependency by cloning it and shelling out to a
+        // nested `npm install --force --include=dev …` inside the clone. That
+        // nested process inherits `npm_config_global=true` and
+        // `npm_config_prefix` from the outer `-g`, so it installs GLOBALLY too:
+        // the clone's dependencies land under `<prefix>/node_modules/@genie/tui/
+        // node_modules/` and the clone itself gets no `node_modules/.bin`.
+        // `prepare` then runs `tsc` that is not there. Observed on disk for
+        // `@mastra/core` as well as the dev dependencies, so moving `typescript`
+        // into `dependencies` fixes nothing.
         //
-        // KNOWN LIMIT, stated rather than discovered: update detection reads
-        // `npm outdated -g --json`, which keys by PACKAGE NAME (`@genie/tui`),
-        // while we install by git spec — so the lookup finds nothing and the row
-        // never offers an update. Harmless today (the package is 0.0.0 with no
-        // releases to update to) and real the day it ships one. Installing and
-        // detecting-an-update are two jobs `package` is doing at once; that is
-        // the field to split when this starts to matter.
-        install: { manager: 'npm', package: 'github:Renaissance-Analytics/genie-tui' },
+        // The comment this replaces claimed the installer had been checked by
+        // RUNNING it. It had — as `npm install github:Renaissance-Analytics/
+        // genie-tui`, LOCAL, no `-g` and no `--prefix`. That command succeeds
+        // and is not the command the product runs. Verifying with a weaker
+        // command than the product's is the fault this file exists to stop
+        // repeating; it is enforced now, in the catalog test, rather than
+        // remembered.
+        //
+        // WHAT WOULD MAKE IT INSTALLABLE, in `genie-tui`, either one:
+        //   - commit a built `dist/` and drop `prepare`, so a consumer's install
+        //     runs no build at all; or
+        //   - publish a packed tarball as a GitHub release asset and point
+        //     `install` at that URL — npm treats a tarball as a plain artifact
+        //     and never prepares it.
+        // Publishing to the registry would work too, but `@genie` is not our
+        // scope and `genie` on npm is somebody else's package.
+        install: null,
+        installGap:
+            'Genie’s own TUI installs from its GitHub repository, and npm cannot build a repository into a global install — the build it runs there has no compiler to run. It needs a prebuilt release first; until then, clone it and run it from a checkout.',
         docsUrl: 'https://github.com/Renaissance-Analytics/genie-tui',
     },
 

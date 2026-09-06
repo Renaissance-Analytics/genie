@@ -115,10 +115,14 @@ describe('a gap is stated, never hidden', () => {
         const installable = installableAgentClis().map((e) => e.id);
         expect(installable).toContain('claude-code');
         expect(installable).toContain('codex');
-        // Genie's own TUI IS installable now: the package is public and its bin
-        // is `genie`, the two conditions the catalog comment set. Verified by
-        // running the install, not by reading the repo.
-        expect(installable).toContain('genie');
+        // Genie's own TUI is NOT installable, and that reversal is the point.
+        // It was listed as installable on the strength of a `npm install
+        // github:…` run — LOCAL, which is not the command the product runs.
+        // `npm install -g` of the same git spec fails every time (see the
+        // git-spec suite below), so a button here would be one that always
+        // fails, which the catalog exists to refuse.
+        expect(installable).not.toContain('genie');
+        expect(agentCliDef('genie')?.installGap).toBeTruthy();
         // The negative case still needs a real one, or this only proves that
         // everything is installable. Aider is PyPI-only and Genie has no Python
         // installer, so it is a listed gap rather than a silent absence.
@@ -155,5 +159,65 @@ describe('the list the owner asked to be expanded', () => {
         for (const id of ['gemini-cli', 'opencode', 'copilot-cli', 'crush', 'amp'] as const) {
             expect(agentCliDef(id)?.install?.manager).toBe('npm');
         }
+    });
+});
+
+/**
+ * The install spec has to be a spec npm can actually run — and a GIT spec is not
+ * one, under `npm install -g`.
+ *
+ * The Genie TUI shipped with `install: {manager: 'npm', package:
+ * 'github:Renaissance-Analytics/genie-tui'}` and the Install button failed for
+ * every user who pressed it:
+ *
+ *     > @genie/tui@0.0.0 build
+ *     > tsc -p tsconfig.build.json
+ *     'tsc' is not recognized as an internal or external command
+ *
+ * WHY, established by running both commands rather than reading either repo:
+ *
+ *   - npm prepares a git dependency by cloning it and shelling out to a nested
+ *     `npm install --force … --include=dev …` inside the clone (pacote's
+ *     `fetcher.js`), then running the package's `prepare`.
+ *   - `npm install -g --prefix X` exports `npm_config_global=true` and
+ *     `npm_config_prefix=X` to that nested process, so the nested install is
+ *     ALSO global — the clone's dependencies land in `X/node_modules/@genie/tui/
+ *     node_modules/…` instead of in the clone. Observed on disk, and for
+ *     `@mastra/core` — a plain `dependencies` entry — as well as the dev ones.
+ *   - The clone therefore has no `node_modules/.bin`, so `prepare` →
+ *     `npm run build` → `tsc` cannot resolve, and the whole install fails.
+ *
+ * The catalog comment claimed this installer had been checked by RUNNING it. It
+ * had — as `npm install github:Renaissance-Analytics/genie-tui`, LOCAL, with no
+ * `-g`. That command succeeds and answers a different question from the one the
+ * product asks. The variable was isolated by running all three:
+ *
+ *     npm install                github:…/genie-tui   -> exit 0, .bin/genie
+ *     npm install --prefix X     github:…/genie-tui   -> exit 0, .bin/genie
+ *     npm install -g --prefix X  github:…/genie-tui   -> FAILS, 'tsc' not found
+ *
+ * so it is `-g` that breaks it, not the prefix. A verification that runs a
+ * weaker command than the product does is the fault family this repository
+ * keeps finding; this is the cleanest instance of it.
+ *
+ * Moving `typescript` into `dependencies` does NOT fix it — nothing at all lands
+ * in the clone, dev or not. The fix belongs in the package: ship a prebuilt
+ * `dist` (no `prepare` to run), or install from a packed tarball rather than a
+ * git spec. Until one of those exists the row states the gap, which is what
+ * `install: null` is for.
+ */
+describe('an npm install spec names a REGISTRY package, never a git spec', () => {
+    it('has no git or URL spec anywhere — npm cannot prepare one under `install -g`', () => {
+        for (const entry of AGENT_CLI_CATALOG) {
+            if (entry.install?.manager !== 'npm') continue;
+            expect(entry.install.package, `${entry.id} installs by git spec`).not.toMatch(
+                /^(github:|gitlab:|bitbucket:|gist:|git\+|git:|https?:)/,
+            );
+        }
+    });
+
+    it('still has npm specs to check — the loop above passes on an empty catalog too', () => {
+        const npmSpecs = AGENT_CLI_CATALOG.filter((e) => e.install?.manager === 'npm');
+        expect(npmSpecs.length).toBeGreaterThan(10);
     });
 });

@@ -13,6 +13,7 @@ import {
     type ToolchainSiteUse,
     repairNotice,
     installOutcomeNotice,
+    installFailureNotice,
 } from '../toolchain-page';
 import type { EngineInstall, ToolUpdate, ToolchainStepResult } from '../genie';
 import { AGENT_CLI_IDS } from '../../../main/agents/agent-cli-catalog';
@@ -432,5 +433,73 @@ describe('installOutcomeNotice', () => {
         });
         expect(notice).toMatch(/didn|failed|manually/i);
         expect(notice).not.toMatch(/all set/i);
+    });
+});
+
+/**
+ * What the Toolchain page says when an INSTALL or UPDATE fails.
+ *
+ * Two failures reached the user as one word. Main answers a refusal it has a
+ * sentence for — "Genie has no installer for X, because …" — on `result.error`,
+ * and the page read only `results[].error`, so a refusal with an empty `results`
+ * printed the generic *"The update did not complete."* and threw the reason
+ * away. And a REAL failure printed npm's raw stderr into a one-line note: the
+ * owner's screen ended with `A complete log of this run can be found in: …`,
+ * which is npm telling you where the answer is, not the answer.
+ *
+ * So: a HEADLINE that always says which tool and what happened, in Genie's own
+ * words, and the tool's raw output kept underneath it as DETAIL rather than
+ * deleted — the output is what a bug report needs, and it is the only copy.
+ */
+describe('an install that fails says which tool, and why', () => {
+    const step = (over: Partial<ToolchainStepResult> = {}): ToolchainStepResult => ({
+        tool: 'genie',
+        status: 'failed',
+        ...over,
+    }) as ToolchainStepResult;
+
+    it('is silent when nothing failed', () => {
+        expect(installFailureNotice('codex', { ok: true, results: [] })).toBeNull();
+    });
+
+    it('leads with MAIN’s own sentence when it refused — the reason used to be dropped', () => {
+        const notice = installFailureNotice('genie', {
+            ok: false,
+            results: [],
+            error: 'Genie’s own TUI installs from its GitHub repository, and npm cannot build it.',
+        });
+        expect(notice?.headline).toContain('npm cannot build it');
+        expect(notice?.detail).toBeUndefined();
+    });
+
+    it('names the TOOL when there is no sentence to lead with', () => {
+        const notice = installFailureNotice('gemini-cli', { ok: false, results: [] });
+        // The label, never the internal id — `gemini-cli` is not a product name.
+        expect(notice?.headline).toContain('Gemini CLI');
+    });
+
+    it('keeps the failing command’s output as DETAIL instead of as the message', () => {
+        const npmNoise =
+            "npm error command failed\n> tsc -p tsconfig.build.json\n'tsc' is not recognized as an internal or external command,\nnpm error A complete log of this run can be found in: C:\log";
+        const notice = installFailureNotice('genie', {
+            ok: false,
+            results: [step({ error: npmNoise })],
+        });
+        expect(notice?.headline).toContain('Genie TUI');
+        // The headline is Genie's sentence — not npm's last line, which is where
+        // the log lives rather than what went wrong.
+        expect(notice?.headline).not.toContain('A complete log');
+        // …and the output is still there, whole, for whoever files the bug.
+        expect(notice?.detail).toBe(npmNoise);
+    });
+
+    it('prefers the failing STEP’s output over a generic result error', () => {
+        const notice = installFailureNotice('genie', {
+            ok: false,
+            results: [step({ error: 'the real stderr' })],
+            error: 'a summary',
+        });
+        expect(notice?.headline).toContain('a summary');
+        expect(notice?.detail).toBe('the real stderr');
     });
 });

@@ -52,14 +52,36 @@ export function createLatestFor(deps: LatestForDeps): LatestFor {
     let npmMap: Promise<Record<string, string>> | undefined;
     let pmMap: Promise<Record<string, string>> | undefined;
 
+    /**
+     * Run one outdated command and parse whatever it printed — WITHOUT gating on
+     * the exit code.
+     *
+     * The gate used to be `res.code === 0 ? parse(res.stdout) : {}`, and it made
+     * the npm half of this module dead code. `npm outdated` exits 1 when it
+     * finds something outdated: that is its documented contract, and it is the
+     * only case where the command has anything to report. So the one exit status
+     * that carried an answer was the one that discarded it, and no agent CLI
+     * could ever show an update. From the owner's machine:
+     *
+     *     6 verbose title npm outdated
+     *     7 verbose argv "outdated" "--global" "--json"
+     *     20 verbose exit 1
+     *
+     * Dropping the gate is safe because of the contract `toolchain-outdated`
+     * already holds itself to: every parser is TOTAL — malformed, empty or
+     * unrelated input yields `{}`, and a line it cannot judge is dropped rather
+     * than guessed at. A genuinely failed command prints an error message, which
+     * is not valid JSON and does not match the apt/winget row shapes, so it
+     * parses to "nothing known to be out of date" — the same answer the gate
+     * gave, for the cases the gate was actually right about.
+     */
     const runParse = async (
         bin: string,
         argv: string[],
         parse: (out: string) => Record<string, string>,
     ): Promise<Record<string, string>> => {
         try {
-            const res = await deps.runner.run(bin, argv);
-            return res.code === 0 ? parse(res.stdout) : {};
+            return parse((await deps.runner.run(bin, argv)).stdout);
         } catch {
             return {};
         }

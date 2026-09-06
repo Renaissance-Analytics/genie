@@ -204,19 +204,32 @@ test('a CLI Genie cannot install shows the reason instead of a button that would
 });
 
 /**
- * ...and the one that used to be the example now offers the button.
+ * ...and Genie's OWN TUI is one of them, which took two goes to get right.
  *
- * Without this, moving the case above to `aider` would silently drop all
- * coverage of the Genie TUI row -- the change would look tested and would not
- * be. The positive assertion is the point: a gap row and a broken row are
- * indistinguishable from an absence check alone.
+ * It shipped an Install button briefly, on the strength of a verification run as
+ * `npm install github:Renaissance-Analytics/genie-tui` -- LOCAL, which is not the
+ * command the product runs. `npm install -g` of the same git spec fails every
+ * time: npm prepares a git dependency with a nested install that inherits the
+ * outer `--global`, so the clone never receives its own dependencies and its
+ * `prepare` runs a `tsc` that is not there. The owner pressed the button and got
+ * npm's stderr.
+ *
+ * So the row states the gap, like aider's -- and the two are not redundant. This
+ * one is Genie's own product, which is exactly the row somebody will be tempted
+ * to make installable again; the reason has to be in front of them when they do.
  */
-test('the Genie TUI now offers a real Install, because its package finally works', async () => {
+test('Genie’s own TUI states its gap rather than offering an install that fails', async () => {
     await tab(/Agent CLIs/).click();
     const genie = page.getByTestId('devtool-genie');
     await expect(genie).toContainText('Genie TUI');
-    await expect(genie.getByRole('button', { name: /^install$/i })).toHaveCount(1);
-    await expect(page.getByTestId('devtool-gap-genie')).toHaveCount(0);
+    await expect(genie.getByRole('button', { name: /^install$/i })).toHaveCount(0);
+    await expect(page.getByTestId('devtool-gap-genie')).toContainText(/prebuilt|build/i);
+    // The positive control for this whole group: an Install button still exists
+    // somewhere on the tab, so "no button on the genie row" cannot be satisfied
+    // by a tab that renders no buttons at all.
+    await expect(
+        page.getByTestId('devtool-gemini-cli').getByRole('button', { name: /^install$/i }),
+    ).toHaveCount(1);
 });
 
 /**
