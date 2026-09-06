@@ -28,6 +28,12 @@ import { defineConfig } from '@playwright/test';
 export default defineConfig({
     testDir: './e2e',
     testMatch: '**/*.spec.ts',
+    // Boot Electron ONCE before any spec, so the run's cold start is not inside
+    // a test's budget (genie#369). `agent-access.spec.ts` sorts first, so it
+    // stood in front of that cost every run: 13-15s on a healthy Windows runner,
+    // 34-35s on a slow one, against Playwright's 30s `firstWindow` default —
+    // while the second launch of the same run costs ~5s. Never fails the run.
+    globalSetup: './e2e/global-setup.ts',
     fullyParallel: false,
     workers: 1,
     retries: 0,
