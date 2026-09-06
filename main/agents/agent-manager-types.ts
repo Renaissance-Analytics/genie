@@ -118,6 +118,24 @@ export interface PersonaView {
 
 export type SidecarAction = 'start' | 'stop' | 'restart' | 'restart-fresh';
 
+/* ── Driver ───────────────────────────────────────────────────────────────── */
+
+/**
+ * One TUI an agent holds, as the manager's Driver tab receives it.
+ *
+ * Structurally the same as `SwitchRuntime` in `agents/tui-switch.ts`, and that
+ * is deliberate: the renderer feeds these straight into `decideTuiSwitch`, the
+ * rule the host applies to `runAgent switchTui`, so the surface cannot offer a
+ * switch the host would refuse (genie#463).
+ */
+export interface AgentRuntimeView {
+    id: string;
+    tui: string;
+    terminalSpecId: string | null;
+    /** The visible one. At most one per agent. */
+    fronted: boolean;
+}
+
 /* ── The manager's state ──────────────────────────────────────────────────── */
 
 export interface AgentManagerPersona extends PersonaView {
@@ -182,6 +200,17 @@ export interface AgentManagerState {
          * reload nothing while reporting success.
          */
         terminalSpecId: string | null;
+        /**
+         * The TUIs this agent's own `AGENT.md` permits — `agentAllowedTuis`,
+         * read from the FILE. EMPTY means "no opinion", not "none".
+         *
+         * Not `persona.tuis`: an agent with no file gets a blank persona seeded
+         * with its current driver, and reading the restriction off that would
+         * lock a brand-new agent to the one TUI it happens to be on.
+         */
+        allowedTuis: string[];
+        /** Every TUI this agent holds — the fronted one and its sidecars. */
+        runtimes: AgentRuntimeView[];
     } | null;
     persona: AgentManagerPersona | null;
     mcp: AgentManagerMcp | null;

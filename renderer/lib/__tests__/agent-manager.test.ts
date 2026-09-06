@@ -92,10 +92,14 @@ function state(over: Partial<AgentManagerState> = {}): AgentManagerState {
 }
 
 describe('agentManagerTabs', () => {
-    it('offers identity, prompt, MCP and sidecar', () => {
+    it('offers identity, driver, prompt, MCP and sidecar', () => {
         // The gap the owner reported: the old surface was identity ONLY.
+        // `driver` joined them in genie#463 — `switchTui` had been an
+        // agent-only verb, so a human could not change what their agent runs
+        // under after the one-shot picker in the create form.
         expect(agentManagerTabs(state()).map((t) => t.id)).toEqual([
             'identity',
+            'driver',
             'prompt',
             'mcp',
             'sidecar',
@@ -119,6 +123,7 @@ describe('agentManagerTabs', () => {
         };
         expect(agentManagerTabs(asSidecar).map((t) => t.id)).toEqual([
             'identity',
+            'driver',
             'prompt',
             'mcp',
         ]);
@@ -263,12 +268,39 @@ describe('the MCP drift Restart control', () => {
         expect(SRC).toMatch(/data-testid="agent-manager-restart"/);
     });
 
+    /**
+     * SCOPED to the restart control's own handler.
+     *
+     * This was a whole-file `not.toMatch(/agents\.start\(/)`, which was right
+     * while nothing else in the file had any business calling it. The Driver tab
+     * (genie#463/#474) does: Start brings a DORMANT agent up, which is precisely
+     * what `agents.start` is for. A file-wide ban would now be a rule against
+     * the correct use of the verb, so the assertion is narrowed to the control
+     * it was always about — and is stronger for it, because it also proves the
+     * resume-based restart is called HERE rather than merely somewhere.
+     */
+    const restartHandler = SRC.slice(
+        SRC.indexOf('data-testid="agent-manager-restart"'),
+        SRC.indexOf('data-testid="agent-manager-restart"') +
+            SRC.slice(SRC.indexOf('data-testid="agent-manager-restart"')).indexOf('</Button>'),
+    );
+
+    it('POSITIVE CONTROL: the handler really was isolated, and is not the whole file', () => {
+        expect(restartHandler.length).toBeGreaterThan(200);
+        expect(restartHandler.length).toBeLessThan(SRC.length);
+    });
+
     it('calls the resume-based restart', () => {
-        expect(SRC).toMatch(/terminalSpec\.restartAgent\(/);
+        expect(restartHandler).toMatch(/terminalSpec\.restartAgent\(/);
     });
 
     it('never reaches for agents.start, which would reattach and reload nothing', () => {
-        expect(SRC).not.toMatch(/agents\.start\(/);
+        expect(restartHandler).not.toMatch(/agents\.start\(/);
+        // POSITIVE CONTROL: `agents.start` IS in this file, on the Driver tab,
+        // where starting a dormant agent is exactly the right verb. Without
+        // this the assertion above would pass on a file that had dropped the
+        // call entirely — or on a slice that had stopped matching anything.
+        expect(SRC).toMatch(/agents\.start\(/);
     });
 });
 
@@ -295,6 +327,35 @@ describe('sidecarSummary', () => {
             matchedBy: null,
         };
         expect(sidecarSummary(none)).toMatch(/no sidecar/i);
+    });
+
+    /**
+     * The sentence used to say *"switching drivers creates one"*, which is not
+     * true of THIS tab's sidecar. Two things share the word, and genie#463 reads
+     * them as one:
+     *
+     *   - a parked TUI RUNTIME of this agent — what `switchTui` creates, and
+     *     what the Driver tab manages;
+     *   - a separate AGENT named `<name>-slave` — what this tab manages, and
+     *     what nothing in Genie creates. It is a hand-made convention
+     *     (`agents/sidecar.ts`: *"already in use by hand before it was expressed
+     *     in code"*), so telling someone a driver switch will produce one sends
+     *     them to a tab that stays empty.
+     */
+    it('does not send the reader to the Driver tab to make one of THESE', () => {
+        const none: AgentManagerSidecar = {
+            id: null,
+            name: null,
+            exists: false,
+            running: false,
+            terminalSpecId: null,
+            actions: [],
+            matchedBy: null,
+        };
+        expect(sidecarSummary(none)).not.toMatch(/switching drivers creates one/i);
+        // It says what this tab's sidecar actually is instead — by its name,
+        // which is the only way to tell the two apart.
+        expect(sidecarSummary(none)).toMatch(/-slave/);
     });
 });
 

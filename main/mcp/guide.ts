@@ -418,7 +418,9 @@ Actions (\`action\`):
 - \`read\` — its output (\`cursor\` for new, or \`bytes\` for the last N; add
   \`strip: true\` for plain text with escape codes removed).
 - \`stop\` — terminate the agent \`id\`. The SAVED agent survives; \`start\` brings
-  it back, resuming its conversation.
+  it back, resuming its conversation. The human has the same verb now: **Stop**
+  in the workspace agent roster and on the Driver tab of Agent settings, which is
+  NOT Delete — identity, \`AGENT.md\`, inbox and history are all kept.
 - \`restart\` — relaunch the agent \`id\`. TWO operations, and you pick:
   - default: GRACEFUL. It resumes the SAME conversation (via the provider's
     resume grammar) in a fresh terminal, so its TUI reconnects to the current MCP
@@ -441,9 +443,14 @@ own pty, its own conversation, running alongside the visible one. Switching
 drivers never stops anything, so the one you leave is simply parked and can be
 flipped back to instantly.
 
-Add one with \`runAgent switchTui\`, or from the driver control in the agent's
-panel. The agent's IDENTITY is unchanged either way -- same name, same
-AgentInbox, same history, same \`AGENT.md\`. Only the driver differs.
+Add one with \`runAgent switchTui\`, or -- as the human -- from the **Driver tab**
+of Agent settings, or the driver menu in a live agent panel's header. The agent's
+IDENTITY is unchanged either way -- same name, same AgentInbox, same history,
+same \`AGENT.md\`. Only the driver differs.
+
+A switch is REFUSED, for you and for them alike, when the agent's own
+\`AGENT.md\` lists \`tuis:\` and the one asked for is not among them. An empty
+list places no restriction.
 
 **What you use a sidecar FOR is yours.** Genie builds the capability and takes
 no view on the purpose -- that is the user's call, and the workspace agent's.

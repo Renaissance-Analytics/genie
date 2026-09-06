@@ -739,6 +739,7 @@ export function AgentRosterList({
     busy,
     onAdopt,
     onStart,
+    onStop,
 }: {
     entries: AgentRosterEntry[];
     /** The agent with an action in flight — one at a time; these register and
@@ -746,6 +747,9 @@ export function AgentRosterList({
     busy: string | null;
     onAdopt: (name: string) => void;
     onStart: (name: string) => void;
+    /** END a running agent's run — genie#474. A separate verb from Delete, and
+     *  the only reason it was left out of #473 is that no path to it existed. */
+    onStop: (entry: AgentRosterEntry) => void;
 }) {
     const registered = entries.filter((e) => e.registered);
     const onDiskOnly = entries.filter((e) => !e.registered);
@@ -788,16 +792,40 @@ export function AgentRosterList({
                                     <Badge color="emerald">Workspace agent</Badge>
                                 )}
                                 {!entry.onDisk && <Badge color="amber">No file</Badge>}
+                                {/* Not emerald: the Workspace-agent badge beside
+                                    it already is, and two identical badges read
+                                    as one label. */}
+                                {entry.running && <Badge color="blue">Running</Badge>}
                                 <div className="ws-engine-actions">
-                                    <Action
-                                        size="sm"
-                                        variant="ghost"
-                                        disabled={busy !== null}
-                                        onClick={() => onStart(entry.name)}
-                                        data-testid={`roster-start-${entry.name}`}
-                                    >
-                                        {busy === entry.name ? 'Starting…' : 'Start'}
-                                    </Action>
+                                    {/* ONE control, pointing the way the agent
+                                        is not. A running agent showing Start
+                                        would do nothing (start REATTACHES), and
+                                        the only thing this list offered in the
+                                        other direction used to be Delete — a
+                                        different verb with a different
+                                        consequence (genie#474). */}
+                                    {entry.running ? (
+                                        <Action
+                                            size="sm"
+                                            variant="ghost"
+                                            disabled={busy !== null}
+                                            title="End this agent's run, and its sidecars'. Its identity, AGENT.md, inbox and history are kept — starting it again is the same agent."
+                                            onClick={() => onStop(entry)}
+                                            data-testid={`roster-stop-${entry.name}`}
+                                        >
+                                            {busy === entry.name ? 'Stopping…' : 'Stop'}
+                                        </Action>
+                                    ) : (
+                                        <Action
+                                            size="sm"
+                                            variant="ghost"
+                                            disabled={busy !== null}
+                                            onClick={() => onStart(entry.name)}
+                                            data-testid={`roster-start-${entry.name}`}
+                                        >
+                                            {busy === entry.name ? 'Starting…' : 'Start'}
+                                        </Action>
+                                    )}
                                 </div>
                             </div>
                         </div>
@@ -945,6 +973,38 @@ function WorkspaceAgentRoster({
             setError(e instanceof Error ? e.message : String(e));
         } finally {
             setBusy(null);
+            load();
+        }
+    };
+
+    /**
+     * END a run, KEEP the agent — genie#474.
+     *
+     * `agents.stop`, never `agents.delete`. The notice says what survived,
+     * because the only control this list used to offer in this direction was the
+     * one that removes the record, and a person who has been trained by that has
+     * every reason to expect the worst from a button next to it.
+     */
+    const stop = async (entry: AgentRosterEntry) => {
+        if (!entry.agentId) {
+            setError(`${entry.name} has no registration to stop.`);
+            return;
+        }
+        setBusy(entry.name);
+        setError(null);
+        setNotice(null);
+        try {
+            const res = await api().agents.stop(entry.agentId);
+            if (!res.ok) setError(res.error ?? `${entry.name} did not stop.`);
+            else
+                setNotice(
+                    `${entry.name} is stopped, along with any sidecar of its own. Its identity, AGENT.md, inbox and history are kept — Start brings the same agent back.`,
+                );
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+        } finally {
+            setBusy(null);
+            load();
         }
     };
 
@@ -979,6 +1039,7 @@ function WorkspaceAgentRoster({
                     busy={busy}
                     onAdopt={(name) => void adopt(name)}
                     onStart={(name) => void start(name)}
+                    onStop={(entry) => void stop(entry)}
                 />
             )}
         </Section>

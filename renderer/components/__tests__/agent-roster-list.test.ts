@@ -22,6 +22,7 @@ const entry = (over: Partial<AgentRosterEntry> & { name: string }): AgentRosterE
     purpose: 'does a thing',
     tuis: [],
     scope: null,
+    running: false,
     ...over,
 });
 
@@ -32,6 +33,7 @@ function render(entries: AgentRosterEntry[], busy: string | null = null): string
             busy,
             onAdopt: () => {},
             onStart: () => {},
+            onStop: () => {},
         }),
     );
 }
@@ -105,6 +107,42 @@ describe('the agent roster list', () => {
         // …and the adoptable one is still offered, which is the whole point of
         // that empty state existing beside a populated list.
         expect(html).toContain('roster-adopt-trader');
+    });
+
+    /**
+     * genie#474 — the roster showed an agent running and offered exactly one
+     * control for the other direction: Delete. Stop was left out of #473 on
+     * purpose, because the renderer had no stop path to wire it to.
+     */
+    it('offers STOP for a running agent, and not Start beside it', () => {
+        const html = render([entry({ name: 'moic', registered: true, running: true })]);
+        expect(html).toContain('roster-stop-moic');
+        expect(html).not.toContain('roster-start-moic');
+    });
+
+    it('POSITIVE CONTROL: a dormant agent still gets Start, and no Stop', () => {
+        // Without this pair, a list that rendered neither button — or one that
+        // rendered both on every row — would satisfy the test above.
+        const html = render([entry({ name: 'trader', registered: true, running: false })]);
+        expect(html).toContain('roster-start-trader');
+        expect(html).not.toContain('roster-stop-trader');
+    });
+
+    it('draws each row from ITS OWN state, not the first row’s', () => {
+        const html = render([
+            entry({ name: 'moic', registered: true, running: true }),
+            entry({ name: 'trader', registered: true, running: false }),
+        ]);
+        expect(html).toContain('roster-stop-moic');
+        expect(html).toContain('roster-start-trader');
+        expect(html).not.toContain('roster-stop-trader');
+    });
+
+    it('never offers Stop for an agent that is only a file', () => {
+        // An unregistered `.agents/<name>/AGENT.md` has no process behind it.
+        const html = render([entry({ name: 'ripple', running: false })]);
+        expect(html).not.toContain('roster-stop-ripple');
+        expect(html).toContain('roster-adopt-ripple');
     });
 
     it('names the action in flight on the row it is happening to', () => {

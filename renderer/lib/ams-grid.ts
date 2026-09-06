@@ -50,6 +50,10 @@ export interface AgentRosterEntry {
     personaPath?: string;
     role?: string;
     tui?: string;
+    /** Whether this agent is UP — which way the row's run control points
+     *  (genie#474). Always false for an unregistered file: there is no process
+     *  behind an AGENT.md the registry has never heard of. */
+    running: boolean;
     /** Why this on-disk agent will not be offered for adoption. Absent when it
      *  can be: a reason beside a working button is noise. */
     refusal?: string;
@@ -65,6 +69,15 @@ export interface AgentRecordSpec {
     /** Set when this workspace holds more than one agent under this name and a
      *  human has not yet said which survives. */
     collisionGroup: string | null;
+    /**
+     * The TUIs this agent's own `AGENT.md` permits — `agentAllowedTuis`, read
+     * from the FILE. EMPTY means "no opinion", not "none".
+     *
+     * Carried on the record because the driver control is drawn wherever an
+     * agent is, and a switcher that did not know would offer switches the host
+     * refuses (genie#463).
+     */
+    allowedTuis: string[];
 }
 
 /** One TUI an agent may run under. */

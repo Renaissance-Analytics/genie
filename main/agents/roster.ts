@@ -74,6 +74,8 @@ export interface RegisteredAgentSummary {
     purpose: string;
     role: string;
     tui: string;
+    /** Whether any terminal this agent could be running under is alive. */
+    running: boolean;
 }
 
 /** One line of the roster: an agent, and which halves of it exist. */
@@ -92,6 +94,14 @@ export interface RosterEntry {
     role?: string;
     /** The driver the registry has this agent on. Registered rows only. */
     tui?: string;
+    /**
+     * Whether this agent is UP — genie#474.
+     *
+     * Always false for an unregistered file: there is no process behind an
+     * `AGENT.md` the registry has never heard of, and a row that claimed
+     * otherwise would draw a Stop button over nothing.
+     */
+    running: boolean;
     /**
      * Why this file will NOT be offered for adoption.
      *
@@ -195,6 +205,7 @@ export function workspaceRoster(input: WorkspaceRosterInput): RosterEntry[] {
             scope: file?.config.scope ?? null,
             role: row.role,
             tui: row.tui,
+            running: row.running,
             ...(file ? { personaPath: file.personaPath } : {}),
         };
     });
@@ -212,6 +223,8 @@ export function workspaceRoster(input: WorkspaceRosterInput): RosterEntry[] {
                 tuis: file.config.tuis,
                 scope: file.config.scope,
                 personaPath: file.personaPath,
+                // Nothing is running behind a file with no row.
+                running: false,
                 ...(refusal ? { refusal } : {}),
             };
         });

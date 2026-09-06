@@ -23,6 +23,9 @@ import {
 } from '../../../main/agents/agent-mode';
 import {
     agentManagerTabs,
+    agentRunControl,
+    driverRows,
+    driverSummary,
     mcpDriftNotice,
     mcpManagedNote,
     mcpRowAction,
@@ -49,12 +52,26 @@ import type { RestartMode } from '../../../main/agents/restart-options';
  * already existed with no way to reach it: `main/agents/agent-file.ts` reads and
  * writes `AGENT.md`, and `main/mcp/agent-config.ts` composes the MCP entries.
  * This is the missing UI over working plumbing, not a redesign — the identity
- * controls that were there are kept, and three tabs are added beside them.
+ * controls that were there are kept, and four tabs are added beside them.
  *
- *   Identity      — driver, workspace default, purpose, reachability, IssueWatch
+ *   Identity      — workspace default, purpose, reachability, IssueWatch
+ *   Driver        — what it runs under, its sidecars, its mark, and its RUN
  *   Prompt & rules — the agent's `AGENT.md`, front matter AND body
  *   MCP           — the servers this agent actually gets, and what may change
- *   Sidecar       — start / stop / restart
+ *   Sidecar       — the `<name>-slave` AGENT: start / stop / restart
+ *
+ * The Driver tab is genie#463 and #474: `switchTui` and `stop` were verbs an
+ * agent had over MCP and a human had nowhere. The driver picker that used to sit
+ * in the Identity row moved here rather than being duplicated — this is the one
+ * place in the manager that answers "what is this agent running under, and is it
+ * running".
+ *
+ * A NOTE ON THE WORD SIDECAR, which this modal now uses for two different things
+ * because the product does. On the Driver tab it is a parked TUI RUNTIME of THIS
+ * agent (`runAgent switchTui`'s meaning, and `protocol.ts`'s). On the Sidecar tab
+ * it is a separate AGENT named `<name>-slave` (`sidecar-control.ts`'s meaning).
+ * The copy on each tab says which; renaming either concept is a bigger change
+ * than these issues.
  *
  * Every judgement call lives in `renderer/lib/agent-manager.ts`, which is where
  * they are tested — the renderer has no DOM harness, so a decision left inline
@@ -97,15 +114,196 @@ function Field({
     );
 }
 
+/**
+ * THE DRIVER PANEL — genie#463 and #474.
+ *
+ * Two verbs an agent has had over MCP since v55 and a human had nowhere:
+ * `switchTui` and `stop`. The manager's four tabs did not include a driver at
+ * all, so the only place a person ever picked a TUI was `NewAgentModal` — at
+ * creation, once, and never again; and the only control pointing the other way
+ * from Start was Delete, which is a different verb with a different consequence.
+ *
+ * Two rules this panel holds to:
+ *
+ *  - **It never offers a switch the host would refuse.** The rows come from
+ *    `driverRows`, which is `decideTuiSwitch` — the SAME decision
+ *    `runAgent switchTui` and `agentRecordAddRuntime` make. An agent whose
+ *    `AGENT.md` lists `tuis:` gets the host's own reason where the button would
+ *    have been. An EMPTY list is "no opinion", not "none".
+ *  - **Switching is ONE action.** Flipping to a parked driver and adding one it
+ *    has never run are the same gesture; the row's state is what tells you
+ *    whether a conversation is waiting on the other side. Nothing here stops
+ *    anything — that is what the run control above is for, and it says so.
+ *
+ * Presentational and EXPORTED so it can be rendered in a test, the same reason
+ * `AgentRosterList` is: the renderer has no DOM harness, and this is a surface
+ * with four genuinely different row shapes.
+ */
+export function AgentDriverPanel({
+    agent,
+    drivers,
+    busy,
+    avatar,
+    avatarError,
+    onAvatarChange,
+    onSwitch,
+    onRun,
+}: {
+    agent: NonNullable<AgentManagerState['agent']>;
+    drivers: { tui: string; label: string }[];
+    busy: boolean;
+    /** The agent's own mark, as the form holds it. */
+    avatar: string;
+    avatarError: string | null;
+    onAvatarChange: (next: string) => void;
+    onSwitch: (tui: string) => void;
+    onRun: (action: 'stop' | 'start') => void;
+}) {
+    const rows = driverRows({
+        drivers,
+        runtimes: agent.runtimes,
+        allowed: agent.allowedTuis,
+        // `state.agent.tui` is main's `effectiveTui` — the fronted runtime, else
+        // the record. An agent that has never started has no runtime at all,
+        // and its recorded driver is still the one it will come up under.
+        current: agent.tui,
+    });
+    const run = agentRunControl(agent);
+
+    return (
+        <div style={{ display: 'grid', gap: 14, paddingTop: 8 }}>
+            {/* ── The RUN — is this agent up, and the one verb for the other
+                 direction that is not Delete (genie#474). ───────────────── */}
+            <div style={{ display: 'grid', gap: 6 }}>
+                <Text size="sm" data-testid="driver-run-summary">
+                    {driverSummary(agent, drivers)}
+                </Text>
+                <div>
+                    <Button
+                        variant={run.action === 'stop' ? 'ghost' : 'default'}
+                        disabled={busy}
+                        data-testid={`driver-run-${run.action}`}
+                        onClick={() => onRun(run.action)}
+                    >
+                        {run.label}
+                    </Button>
+                </div>
+                <Text size="xs" color="muted">
+                    {run.note}
+                </Text>
+            </div>
+
+            {/* ── The DRIVERS ─────────────────────────────────────────────── */}
+            <div style={{ display: 'grid', gap: 6 }}>
+                <Text size="sm" weight="medium">
+                    Drivers
+                </Text>
+                {rows.map((row) => (
+                    <div
+                        key={row.tui}
+                        data-testid={`driver-row-${row.tui}`}
+                        style={{
+                            display: 'flex',
+                            gap: 8,
+                            alignItems: 'flex-start',
+                            justifyContent: 'space-between',
+                        }}
+                    >
+                        <div style={{ display: 'grid', gap: 2 }}>
+                            <Text size="sm" weight="medium">
+                                {row.label}
+                                {row.state === 'active' && (
+                                    <>
+                                        {' '}
+                                        <Badge size="sm" variant="soft" color="emerald">
+                                            active
+                                        </Badge>
+                                    </>
+                                )}
+                                {row.state === 'sidecar' && (
+                                    <>
+                                        {' '}
+                                        <Badge size="sm" variant="soft">
+                                            sidecar
+                                        </Badge>
+                                    </>
+                                )}
+                            </Text>
+                            <Text size="xs" color="muted">
+                                {row.state === 'active'
+                                    ? 'The driver in the chair.'
+                                    : row.state === 'sidecar'
+                                      ? 'Parked, with its own conversation waiting.'
+                                      : 'Never run under this driver.'}
+                            </Text>
+                            {/* The HOST's refusal, verbatim, where the button
+                                would have been. An Adopt-style dead control is
+                                worse than none. */}
+                            {row.refusal && (
+                                <Text size="xs" color="muted" data-testid={`driver-refusal-${row.tui}`}>
+                                    {row.refusal}
+                                </Text>
+                            )}
+                        </div>
+                        {row.action && (
+                            <Button
+                                size="sm"
+                                variant="ghost"
+                                disabled={busy}
+                                data-testid={`driver-switch-${row.tui}`}
+                                onClick={() => onSwitch(row.tui)}
+                            >
+                                {row.action.label}
+                            </Button>
+                        )}
+                    </div>
+                ))}
+                <Text size="xs" color="muted">
+                    An agent is not its TUI. Switching keeps this agent — its identity, inbox,
+                    history and <code>AGENT.md</code> — and the driver it leaves keeps its own
+                    pty and conversation as a sidecar you can flip straight back to.{' '}
+                    <strong>Nothing is stopped by a switch.</strong>
+                </Text>
+            </div>
+
+            {/* ── The agent's own MARK ────────────────────────────────────── */}
+            <div style={{ display: 'grid', gap: 6 }}>
+                <Field
+                    label="Avatar"
+                    hint="One emoji, shown wherever this agent appears. It belongs here because the mark it overrides is the driver’s own logo — the thing the control above changes. Clear it to go back to that."
+                >
+                    <Input
+                        data-testid="driver-avatar"
+                        value={avatar}
+                        placeholder="Emoji — empty uses the driver’s logo"
+                        spellCheck={false}
+                        onChange={(e) => onAvatarChange(e.target.value)}
+                    />
+                </Field>
+                {/* Main REJECTS more than one glyph rather than truncating. The
+                    refusal is shown as a refusal, not as muted helper text: a
+                    silently dropped mark reads as a dead field, and this
+                    surface's rule is that a failed write STAYS on screen. */}
+                {avatarError && (
+                    <Callout color="red" data-testid="driver-avatar-error">
+                        <Text size="sm">{avatarError}</Text>
+                    </Callout>
+                )}
+            </div>
+        </div>
+    );
+}
+
 export default function AgentManager({
     agentId,
     identity,
     onChanged,
 }: {
     agentId: string;
-    /** The identity controls that already existed — driver switcher, workspace
-     *  default, purpose, reachability, IssueWatch. Passed in rather than moved,
-     *  so this replaces the surface without shrinking it. */
+    /** The identity controls that already existed — workspace default, purpose,
+     *  reachability, IssueWatch. Passed in rather than moved, so this replaces
+     *  the surface without shrinking it. The driver switcher that used to sit
+     *  here is now the Driver tab, which is a control and not a popover. */
     identity: ReactNode;
     /** The roster changed underneath — rebuild the grid. */
     onChanged?: () => void;
@@ -117,11 +315,14 @@ export default function AgentManager({
     const [error, setError] = useState<string | null>(null);
     const [saved, setSaved] = useState<string | null>(null);
     const [newServer, setNewServer] = useState({ name: '', url: '' });
+    const [avatar, setAvatar] = useState('');
+    const [avatarError, setAvatarError] = useState<string | null>(null);
 
     const load = useCallback(async () => {
         try {
             const next = await api().agents.managerState(agentId);
             setState(next);
+            setAvatar(next.agent?.avatar ?? '');
             // The draft is re-seeded on every load, which is what makes Save →
             // reload leave a CLEAN form rather than one that still looks dirty
             // against the values it just wrote.
@@ -215,6 +416,69 @@ export default function AgentManager({
                 <Tabs.Panels className="agent-manager-panels">
                     {/* ── Identity — everything the old form did, unchanged ── */}
                     <Tabs.Panel value="identity">{identity}</Tabs.Panel>
+
+                    {/* ── Driver — what it runs under, and whether it is up ── */}
+                    <Tabs.Panel value="driver">
+                        {state.agent && (
+                            <AgentDriverPanel
+                                agent={state.agent}
+                                drivers={drivers.map((d) => ({
+                                    tui: String(d.agent),
+                                    label: d.label,
+                                }))}
+                                busy={busy}
+                                avatar={avatar}
+                                avatarError={avatarError}
+                                onAvatarChange={(next) => {
+                                    setAvatar(next);
+                                    setAvatarError(null);
+                                    // Main REJECTS more than one glyph rather
+                                    // than truncating, so the reason is shown;
+                                    // a silently dropped mark reads as a dead
+                                    // field.
+                                    void api()
+                                        .agents.setAvatar(state.agent!.id, next)
+                                        .then((r) => {
+                                            if (!r.ok) {
+                                                setAvatarError(
+                                                    r.error ?? 'Could not save that avatar.',
+                                                );
+                                            } else onChanged?.();
+                                        })
+                                        .catch(() =>
+                                            setAvatarError('Could not save that avatar.'),
+                                        );
+                                }}
+                                onSwitch={(tui) =>
+                                    void run(
+                                        () => api().agents.addRuntime(state.agent!.id, tui),
+                                        // NAMES what did not happen. The whole
+                                        // model is that a switch costs nothing,
+                                        // and a person who has just moved a
+                                        // running agent needs to be told that.
+                                        `${state.agent!.name} now runs under ${
+                                            drivers.find((d) => String(d.agent) === tui)?.label ??
+                                            tui
+                                        }. The driver it left keeps its conversation as a sidecar — nothing was stopped.`,
+                                    )
+                                }
+                                onRun={(action) =>
+                                    void run(
+                                        () =>
+                                            action === 'stop'
+                                                ? api().agents.stop(state.agent!.id)
+                                                : api().agents.start(
+                                                      state.agent!.workspaceId,
+                                                      state.agent!.name,
+                                                  ),
+                                        action === 'stop'
+                                            ? `${state.agent!.name} is stopped. Its identity, AGENT.md, inbox and history are kept — Start brings the same agent back.`
+                                            : `${state.agent!.name} is starting.`,
+                                    )
+                                }
+                            />
+                        )}
+                    </Tabs.Panel>
 
                     {/* ── Prompt & rules — the agent's AGENT.md ───────────── */}
                     <Tabs.Panel value="prompt">

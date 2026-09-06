@@ -6837,6 +6837,15 @@ body.gutter-dragging .grid-gutter {
 .agent-tui-item.is-fronted {
     color: var(--agent, #8b5cf6);
 }
+/* A row with nothing to press: the driver already in the chair, or one this
+   agent's AGENT.md excludes (genie#463). It must not read as a dead button —
+   no pointer, no hover lift. The refusal itself is on the row's title. */
+.agent-tui-item.is-static {
+    cursor: default;
+}
+.agent-tui-item.is-static:hover {
+    background: transparent;
+}
 .agent-tui-label {
     flex: 1 1 auto;
     min-width: 0;
@@ -6846,20 +6855,17 @@ body.gutter-dragging .grid-gutter {
     color: var(--fg-4);
 }
 
-/* The RECORD half of Agent settings: which drivers this agent has, and whether
-   it is the workspace's default. The modal used to describe only the terminal —
-   titled `claude · moic`, with the driver in the identity. */
+/* The RECORD half of Agent settings: whether this agent is the workspace's
+   default. The modal used to describe only the terminal — titled `claude · moic`,
+   with the driver in the identity. The driver picker that also lived in this
+   block is the manager's Driver tab now (genie#463), so its row rule went with
+   it rather than sitting here unreferenced. */
 .agent-settings-record {
     display: grid;
     gap: 8px;
     padding: 10px 0;
     border-bottom: 1px solid var(--border-1);
     margin-bottom: 10px;
-}
-.agent-settings-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
 }
 
 /* The agent's own mark, in the driver popover. Same field chrome as the rest of

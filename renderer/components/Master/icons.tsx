@@ -407,6 +407,15 @@ export const IconPause = ({ size = 13, ...p }: Props) =>
 /** Resume / enable a suspended view — Tier 2. */
 export const IconPlay = ({ size = 13, ...p }: Props) =>
     wrap(size, <polygon points="6 4 20 12 6 20 6 4" />, p.className, p.style);
+/**
+ * STOP — the transport square, paired with {@link IconPlay} (genie#474).
+ *
+ * Deliberately NOT the trash can that `delete` and `remove-orphan` carry: a stop
+ * ends a run and keeps the agent, and borrowing the removal glyph is how the two
+ * verbs the issue is about get read as one.
+ */
+export const IconStop = ({ size = 13, ...p }: Props) =>
+    wrap(size, <rect x="6" y="6" width="12" height="12" rx="1.5" />, p.className, p.style);
 /** Restart / relaunch — circular arrows. */
 export const IconRefresh = ({ size = 13, ...p }: Props) =>
     wrap(

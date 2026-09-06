@@ -67,6 +67,9 @@ test('the surface the owner asked for is actually there', async () => {
     // field and two checkboxes. Prompt, MCP and sidecar were the gap.
     await expect(page.locator('[data-testid="e2e-error"]')).toHaveCount(0);
     await expect(tab(page, 'identity')).toBeVisible();
+    // The driver tab (genie#463) — `switchTui` had no UI at all, and the only
+    // place a human ever picked a TUI was the create form.
+    await expect(tab(page, 'driver')).toBeVisible();
     await expect(tab(page, 'prompt')).toBeVisible();
     await expect(tab(page, 'mcp')).toBeVisible();
     await expect(tab(page, 'sidecar')).toBeVisible();
@@ -196,4 +199,45 @@ test('the sidecar tab finds the agent’s sidecar', async () => {
     await expect(summary).toContainText(/not running/i);
     await expect(page.locator('button', { hasText: 'Start sidecar' })).toBeVisible();
     await expect(page.locator('button', { hasText: 'Stop sidecar' })).toHaveCount(0);
+});
+
+/**
+ * THE DRIVER TAB — genie#463 and #474.
+ *
+ * `runAgent switchTui` and `runAgent stop` were both fully built over MCP, and
+ * the renderer could reach neither. What the unit suite pins is `driverRows` and
+ * `planAgentStop` — pure decisions. What only this can say is whether the tab
+ * actually renders them against a REAL agent whose REAL `AGENT.md` restricts its
+ * drivers: the seed's file carries `tuis: [claude, codex]`, so the refusal here
+ * comes from bytes on disk through `agentAllowedTuis`, not from a fixture.
+ */
+test('the driver tab offers a permitted driver and refuses one the file excludes', async () => {
+    await tab(page, 'driver').click();
+
+    // Seeded on `claude` with no runtime rows yet: the record's driver is the
+    // one in the chair, and it is not offered as a switch to itself.
+    await expect(page.locator('[data-testid="driver-run-summary"]')).toContainText('claude', {
+        ignoreCase: true,
+    });
+    await expect(page.locator('[data-testid="driver-switch-claude"]')).toHaveCount(0);
+
+    // `tuis: [claude, codex]` — codex is switchable…
+    await expect(page.locator('[data-testid="driver-switch-codex"]')).toBeVisible();
+    // …and every other registered provider is refused, WITH the host's reason.
+    // This is the negative half; the line above is its positive control, so a
+    // tab that rendered no switches at all cannot satisfy both.
+    await expect(page.locator('[data-testid="driver-switch-genie"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="driver-refusal-genie"]')).toContainText(
+        'claude, codex',
+    );
+});
+
+test('a dormant agent is offered Start, and never Delete, on the driver tab', async () => {
+    await tab(page, 'driver').click();
+    // The seeded agent has no terminal, so the run control points at Start.
+    await expect(page.locator('[data-testid="driver-run-start"]')).toBeVisible();
+    await expect(page.locator('[data-testid="driver-run-stop"]')).toHaveCount(0);
+    // genie#474's whole complaint: the only control pointing away from Start
+    // used to be the one that tears the record down. It is not on this tab.
+    await expect(page.locator('.agent-manager button', { hasText: /^Delete/ })).toHaveCount(0);
 });

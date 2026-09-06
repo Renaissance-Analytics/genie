@@ -108,10 +108,14 @@ import {
     addAgentMcpServer,
     agentManagerState,
     agentSidecarAction,
+    isAgentRunning,
     removeAgentMcpServer,
     saveAgentPersona,
+    stopRegisteredAgent,
     type McpServerInput,
 } from './agents/agent-manager';
+import { agentAllowedTuis } from './agents/agent-file';
+import { decideTuiSwitch } from './agents/tui-switch';
 import type { PersonaEdit } from './agents/persona';
 import type { SidecarAction } from './agents/sidecar-control';
 import { agentInboxBroker } from './agentinbox/broker';
@@ -493,6 +497,11 @@ export function agentRecordsList(workspaceId: string) {
             avatar: a.avatar,
             role: a.role,
             collisionGroup: a.collision_group ?? null,
+            // The TUIs this agent's own file permits (genie#463). Sent with the
+            // record because the driver control is drawn wherever an agent is —
+            // the panel header as well as the manager — and a switcher that did
+            // not know would offer switches the host refuses.
+            allowedTuis: agentAllowedTuis(a.persona_path),
         })),
         runtimes: agents.flatMap((a) =>
             listAgentRuntimes(a.id).map((r) => ({
@@ -515,6 +524,10 @@ function registeredAgentsOf(workspaceId: string) {
         purpose: a.purpose,
         role: a.role,
         tui: a.tui ?? '',
+        // Which way the roster's run control points (genie#474). The list
+        // offered Start and nothing for the other direction, and it could not
+        // have offered Stop: it had no idea which agents were up.
+        running: isAgentRunning(a),
     }));
 }
 
@@ -642,13 +655,45 @@ export function agentRecordSetDefault(workspaceId: string, agentId: string | nul
     return out;
 }
 
+/**
+ * SWITCH the TUI an agent runs under — the human's half of `runAgent switchTui`.
+ *
+ * Goes through `decideTuiSwitch`, the SAME rule `main/mcp/host-tools.ts` applies
+ * when an agent switches its own driver (genie#463). It did not, which made the
+ * asymmetry run both ways: an agent whose `AGENT.md` lists `tuis:` was refused a
+ * switch its human counterpart could force through the UI, so a prompt written
+ * for one harness could be handed to another by a control that never read the
+ * file. One rule, two callers — a second copy is how two disagreeing versions
+ * ship.
+ *
+ * Starts no terminal: `runAgent start` owns the approval gate and the agent cap,
+ * and a switch must not become a second way past either.
+ */
 export function agentRecordAddRuntime(agentId: string, tui: string) {
     const id = String(agentId ?? '');
-    const existing = listAgentRuntimes(id).find((r) => r.tui === tui);
-    const runtime = existing ?? createAgentRuntime({ agentId: id, tui: String(tui) });
-    frontAgentRuntime(id, runtime.id);
+    const agent = getWorkspaceAgentById(id);
+    if (!agent) return { ok: false, error: 'That agent is no longer registered.' };
+    const decision = decideTuiSwitch({
+        runtimes: listAgentRuntimes(id).map((r) => ({
+            id: r.id,
+            tui: r.tui,
+            terminalSpecId: r.terminal_spec_id,
+            fronted: r.fronted === 1,
+        })),
+        to: String(tui),
+        allowed: agentAllowedTuis(agent.persona_path),
+    });
+    if (decision.kind === 'refuse') return { ok: false, error: decision.reason };
+    // `already` is not a relaunch and not an error — the driver asked for is the
+    // one in the chair. Fronting it again is a harmless no-op that still answers
+    // with the runtime the caller named.
+    const runtimeId =
+        decision.kind === 'create'
+            ? createAgentRuntime({ agentId: id, tui: decision.tui }).id
+            : decision.runtimeId;
+    frontAgentRuntime(id, runtimeId);
     broadcastAgentsChanged();
-    return { ok: true, runtimeId: runtime.id };
+    return { ok: true, runtimeId };
 }
 
 export function agentRecordFront(agentId: string, runtimeId: string) {
@@ -885,6 +930,14 @@ export function registerIpcHandlers(): void {
     // is skipped, because the click is the approval.
     ipcMain.handle('agents:start', async (_e, workspaceId: string, name: string) =>
         agentRecordStart(workspaceId, name),
+    );
+    // STOP a registered agent — end its run, KEEP the agent (genie#474). The
+    // renderer had no path to this at all: the only thing it could do in the
+    // other direction was `agents:delete`, which tears the record down. A Stop
+    // button wired to that would be a control that does something other than
+    // what it says.
+    ipcMain.handle('agents:stop', (_e, agentId: string) =>
+        stopRegisteredAgent(String(agentId ?? '')),
     );
     // CREATE an agent from the UI — a record and a file, never a terminal.
     // Until now this was MCP-only: the form existed in the renderer and was

@@ -23,6 +23,11 @@ import type { RestartOptions } from '../../main/agents/restart-options';
  * `.agents/*` survives. Both offer to take a handoff first, because stopping an
  * agent is the moment its unfinished context is lost.
  *
+ * STOP joins them for a running agent (genie#474), and it is none of those
+ * things: it ends the run and keeps the agent, its files, its inbox and its
+ * history. Until it existed this menu could say an agent was running and offer
+ * nothing in the other direction but the two items that remove it.
+ *
  * RESTART IS TWO ITEMS, not one (genie#443). This menu carried a single
  * "Restart agent" hinted "Relaunches its TUI and resumes the same conversation"
  * — for every agent, including the twelve providers whose restart the host
@@ -40,6 +45,7 @@ import type { RestartOptions } from '../../main/agents/restart-options';
 export interface AgentCardMenuItem {
     id:
         | 'start'
+        | 'stop'
         | 'restart'
         | 'restart-fresh'
         | 'edit'
@@ -173,6 +179,24 @@ export function agentCardMenuItems(
             hint: restart.losesConversation
                 ? 'Relaunches its TUI from scratch. The current conversation is not carried over.'
                 : 'Relaunches its TUI from scratch, starting a new conversation. Works even when it is wedged or dead.',
+        });
+    }
+    // STOP — genie#474. This menu was exactly the surface the issue describes:
+    // it says whether the agent is running, it offers Start, and the only two
+    // items pointing the other way are Unmount and Delete, both of which REMOVE
+    // the agent. There was no way to simply end a run.
+    //
+    // Only for a RUNNING agent, for the same reason the restarts are only there
+    // with a terminal: a Stop over nothing looks like it did something.
+    //
+    // Not `danger`. It sits above two items that are, and styling three in a row
+    // the same way is how the one that keeps everything gets read as the one
+    // that does not.
+    if (row.running) {
+        items.push({
+            id: 'stop',
+            label: 'Stop agent',
+            hint: 'Ends its run and its sidecars’. Keeps the agent, its .agents/ files, its inbox and its history — Start brings the same one back.',
         });
     }
     items.push(

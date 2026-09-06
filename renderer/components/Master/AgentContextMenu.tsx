@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { IconPlay, IconPin, IconAlert, IconTrash } from './icons';
+import { IconPlay, IconPin, IconAlert, IconStop, IconTrash } from './icons';
 import { agentCardMenuItems, type AgentCardMenuItem } from '../../lib/agent-card-menu';
 import type { AgentGridRow } from '../../lib/ams-grid';
 import type { RestartOptions } from '../../../main/agents/restart-options';
@@ -78,6 +78,11 @@ export default function AgentContextMenu({
     const iconFor = (id: AgentCardMenuItem['id']) =>
         id === 'start' ? (
             <IconPlay size={14} />
+        ) : id === 'stop' ? (
+            // The transport square, NOT the trash can the two items below it
+            // carry. Stop keeps the agent; sharing their glyph is how the
+            // distinction genie#474 exists to draw gets lost again.
+            <IconStop size={14} />
         ) : id === 'delete' || id === 'remove-orphan' ? (
             <IconTrash size={14} />
         ) : (

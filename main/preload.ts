@@ -1550,10 +1550,23 @@ const api = {
                 ok: boolean;
                 error?: string;
             }>,
+        /** STOP a registered agent — end its run, KEEP the agent (genie#474).
+         *  Its identity, AGENT.md, inbox and history are untouched; `start`
+         *  brings the same agent back. NOT `delete`, which is a different verb
+         *  with a different consequence. */
+        stop: (agentId: string) =>
+            ipcRenderer.invoke('agents:stop', agentId) as Promise<{
+                ok: boolean;
+                error?: string;
+            }>,
+        /** Switch the TUI this agent runs under, and front it. Starts no
+         *  terminal, and REFUSES a driver the agent's own AGENT.md does not
+         *  list — the same rule `runAgent switchTui` applies (genie#463). */
         addRuntime: (agentId: string, provider: string) =>
             ipcRenderer.invoke('agents:addRuntime', agentId, provider) as Promise<{
                 ok: boolean;
-                runtimeId: string;
+                runtimeId?: string;
+                error?: string;
             }>,
         front: (agentId: string, runtimeId: string) =>
             ipcRenderer.invoke('agents:front', agentId, runtimeId) as Promise<boolean>,

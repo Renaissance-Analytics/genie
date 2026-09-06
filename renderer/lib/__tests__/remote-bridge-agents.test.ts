@@ -50,6 +50,7 @@ function harness(result: unknown = { ok: true }) {
         list: vi.fn(),
         create: vi.fn(),
         start: vi.fn(),
+        stop: vi.fn(),
         delete: vi.fn(),
         setDefault: vi.fn(),
         addRuntime: vi.fn(),
@@ -135,6 +136,25 @@ describe('the agents namespace is host-sourced on a remote window', () => {
 
         expect(calledPath(request)).toBe('/api/desktop/agents/start');
         expect(local.start).not.toHaveBeenCalled();
+    });
+
+    /**
+     * STOP is host-sourced for the same reason DELETE is, and worse: falling
+     * through would kill a terminal on the CLIENT while the host's agent kept
+     * running — a stop that reports success and stops nothing.
+     */
+    it('STOP ends the run on the host, not on the client', async () => {
+        const { request, local, bridge } = harness({ ok: true });
+
+        await bridge.agents.stop('agent-1');
+
+        expect(calledPath(request)).toBe('/api/desktop/agents/stop');
+        expect(request.mock.calls[0]?.[1]).toMatchObject({ json: { agentId: 'agent-1' } });
+        expect(local.stop).not.toHaveBeenCalled();
+        // POSITIVE CONTROL for the verb, not just the transport: stopping must
+        // never reach the endpoint that tears the record down.
+        expect(local.delete).not.toHaveBeenCalled();
+        expect(calledPath(request)).not.toBe('/api/desktop/agents/delete');
     });
 
     it.each([

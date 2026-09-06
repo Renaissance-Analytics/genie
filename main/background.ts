@@ -43,6 +43,9 @@ import {
     agentRecordFront,
     agentRecordSetAvatar,
 } from './ipc';
+/* STOP an agent (genie#474) — end its run, keep the record. Bridged like the
+   rest so a REMOTE window stops the HOST's agent rather than its own. */
+import { stopRegisteredAgent } from './agents/agent-manager';
 import { writeClipboardImagePng } from './clipboard-image';
 import {
     chooseLinuxPasswordStore,
@@ -2384,6 +2387,7 @@ app.whenReady().then(async () => {
                 adopt: (workspaceId, folder) => agentRecordAdopt(workspaceId, folder),
                 create: (input) => agentRecordCreate(input),
                 start: (workspaceId, name) => agentRecordStart(workspaceId, name),
+                stop: (agentId) => stopRegisteredAgent(agentId),
                 remove: (agentId, mode, handoff) => agentRecordDelete(agentId, mode, handoff),
                 setDefault: (workspaceId, agentId) => agentRecordSetDefault(workspaceId, agentId),
                 addRuntime: (agentId, provider) => agentRecordAddRuntime(agentId, provider),

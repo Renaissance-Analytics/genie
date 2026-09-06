@@ -33,7 +33,13 @@ export default function NewAgentModal({
     // Labelled, not raw ids: the list already exists and already knows what to
     // call each driver.
     const tuis = agentTerminalTypes();
-    const [tui, setTui] = useState<string>(tuis[0]?.agent ?? 'claude');
+    // NO hardcoded provider in the fallback (noted in genie#463). The list is
+    // derived from `TUI_REGISTRY` and is never empty today, so the branch is
+    // unreachable — but naming `claude` there says that whatever happens, this
+    // form will register an agent under Anthropic's CLI, and that is not a
+    // decision this form gets to make. Empty instead, and Create stays disabled:
+    // "no driver to offer" is a state to show, not one to paper over.
+    const [tui, setTui] = useState<string>(tuis[0]?.agent ?? '');
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
@@ -41,7 +47,7 @@ export default function NewAgentModal({
     // well as in main — showing someone the slug they are about to create beats
     // silently rewriting what they typed after they commit to it.
     const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-    const ready = slug.length > 0 && purpose.trim().length > 0 && !busy;
+    const ready = slug.length > 0 && purpose.trim().length > 0 && tui.length > 0 && !busy;
 
     const submit = async (): Promise<void> => {
         if (!ready) return;

@@ -4375,10 +4375,20 @@ export interface GenieApi {
         /** Start a registered agent. Same path as `runAgent start` — cap and
          *  reattach still apply; only the approval modal is skipped. */
         start: (workspaceId: string, name: string) => Promise<{ ok: boolean; error?: string }>;
+        /** STOP a registered agent — end its run, KEEP the agent (genie#474).
+         *  Its identity, AGENT.md, inbox and history are untouched, and `start`
+         *  brings the SAME agent back. Deliberately not `delete`: that tears
+         *  the record down, and a Stop wired to it would be a control that does
+         *  something other than what it says. */
+        stop: (agentId: string) => Promise<{ ok: boolean; error?: string }>;
+        /** Switch the TUI this agent runs under, and front it. Starts no
+         *  terminal. REFUSES a driver the agent's own AGENT.md does not list —
+         *  the same `decideTuiSwitch` rule `runAgent switchTui` applies, so the
+         *  human and the agent are held to one contract (genie#463). */
         addRuntime: (
             agentId: string,
             provider: string,
-        ) => Promise<{ ok: boolean; runtimeId: string }>;
+        ) => Promise<{ ok: boolean; runtimeId?: string; error?: string }>;
         front: (agentId: string, runtimeId: string) => Promise<boolean>;
         /** The agent's own mark. ONE glyph; '' clears it back to the TUI's
          *  brand mark. Rejects longer input rather than truncating. */
