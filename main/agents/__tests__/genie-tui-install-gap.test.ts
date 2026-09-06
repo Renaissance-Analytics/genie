@@ -50,22 +50,43 @@ import { AGENT_CLI_CATALOG } from '../agent-cli-catalog';
  * than the product's proves the product nothing. That is now enforced, not
  * remembered — see "an npm install spec names a REGISTRY package".
  */
-describe('the Genie TUI states its install gap', () => {
+describe('the Genie TUI installs, from a packed tarball', () => {
     const genie = AGENT_CLI_CATALOG.find((entry) => entry.id === 'genie');
 
     it('is in the catalog at all — listed, never hidden', () => {
         expect(genie).toBeDefined();
     });
 
-    it('offers no installer, because the only one available cannot work', () => {
-        expect(genie?.install).toBeNull();
+    it('installs from a release TARBALL, which npm never prepares', () => {
+        expect(genie?.install?.manager).toBe('npm');
+        expect(genie?.install?.package).toMatch(/\.tgz$/);
     });
 
-    it('says WHY, in words the row can show where the button would have been', () => {
-        // `installGap` is required IFF install is null, and a row with neither a
-        // button nor a reason is the state the owner was already looking at.
-        expect(genie?.installGap).toBeTruthy();
-        expect(genie?.installGap).toMatch(/build|prebuilt/i);
+    /**
+     * PINNED TO THE TAG, and that is the decision rather than an oversight.
+     *
+     * GitHub's `/releases/latest/download/<name>` resolves only if the LATEST
+     * release carries an asset with that exact name, and ours carries the
+     * version in it. All three shapes were measured against the real release:
+     *
+     *     latest/download/genie-tui-0.1.0.tgz   -> 200  (true only until v0.2.0)
+     *     latest/download/genie-tui.tgz         -> 404  (no alias exists)
+     *     download/v0.1.0/genie-tui-0.1.0.tgz   -> 200  (stable forever)
+     *
+     * So `latest/download/<versioned name>` is a button that works today and
+     * fails in the FIELD the day the next release ships — worse than a pin,
+     * which only goes stale. When `genie-tui` publishes a version-less alias
+     * this flips to `latest/download/genie-tui.tgz` and stops needing edits.
+     */
+    it('pins the TAG rather than trusting `latest/download` with a versioned name', () => {
+        expect(genie?.install?.package).toContain('/releases/download/v');
+        expect(genie?.install?.package).not.toContain('/releases/latest/');
+    });
+
+    it('states no gap, because it no longer has one', () => {
+        // `installGap` beside a working installer is a UI explaining why it
+        // cannot do the thing it is currently doing.
+        expect(genie?.installGap).toBeUndefined();
     });
 
     it('still points at somewhere a person can get it themselves', () => {

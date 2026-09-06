@@ -115,14 +115,16 @@ describe('a gap is stated, never hidden', () => {
         const installable = installableAgentClis().map((e) => e.id);
         expect(installable).toContain('claude-code');
         expect(installable).toContain('codex');
-        // Genie's own TUI is NOT installable, and that reversal is the point.
-        // It was listed as installable on the strength of a `npm install
-        // github:…` run — LOCAL, which is not the command the product runs.
-        // `npm install -g` of the same git spec fails every time (see the
-        // git-spec suite below), so a button here would be one that always
-        // fails, which the catalog exists to refuse.
-        expect(installable).not.toContain('genie');
-        expect(agentCliDef('genie')?.installGap).toBeTruthy();
+        // Genie's own TUI, installable again — and it took two reversals to get
+        // here, which is why the route is spelt out rather than assumed. It was
+        // listed as installable on the strength of a LOCAL `npm install
+        // github:…`, which is not the command the product runs; `npm install -g`
+        // of a git spec fails every time (see the git-spec suite below), so the
+        // entry became a stated gap. It installs from a packed release TARBALL
+        // now, which npm never prepares — verified by running the product's own
+        // command against a throwaway global prefix.
+        expect(installable).toContain('genie');
+        expect(agentCliDef('genie')?.installGap).toBeUndefined();
         // The negative case still needs a real one, or this only proves that
         // everything is installable. Aider is PyPI-only and Genie has no Python
         // installer, so it is a listed gap rather than a silent absence.
