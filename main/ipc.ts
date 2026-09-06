@@ -129,22 +129,7 @@ import { groupPendingByWorkspace, pendingCount } from './ask/inbox';
 import type { ForceAnswer } from './mcp/protocol';
 import { getKnowledgeStore } from './knowledge/store';
 import type { MemoryClass, KnowledgeScopeFilter } from './knowledge/types';
-import {
-    flowActivitySnapshot,
-    flowEventRegistry,
-    FLOW_FILTER_OPERATORS,
-    flowRecipeCatalogue,
-    flowScopeChoices,
-    flowSummaries,
-    listFlowRuns,
-    pushFlowsChanged,
-    reconcileFlowWatches,
-    removeFlow,
-    runFlowManually,
-    saveFlowDraft,
-    setFlowEnabled,
-    type FlowDraft,
-} from './flows';
+
 import type { GenieScope } from './genie-scope';
 import { writeWorkspaceAgentMcp } from './mcp/agent-config';
 import {
@@ -2093,57 +2078,17 @@ export function registerIpcHandlers(): void {
         return { ok: true };
     });
 
-    // --- Flows (Genie's automation system) -------------------------------
-    // The Flow Manager's whole surface. `main/flows/` shipped with a complete
-    // model, store and runtime and NO ipc — nothing in the app could see a Flow,
-    // let alone arm one — so these are the first callers it has ever had.
+    // --- Flows ------------------------------------------------------------
+    // Registered in `flows/ipc.ts`, not here. There is ONE flow system now, so
+    // there is one namespace for it: a GApp's flow is a flow whose SCOPE is
+    // `gapp`, and `flows:list` takes the vantage asking rather than there being
+    // a second channel for the second kind — because there is no second kind.
     //
-    // Live run state does NOT come through here. It is pushed on `flows:activity`
-    // from the runtime's own start/finish callbacks (`main/flows/index.ts`), and
-    // `flows:list` returns the current snapshot alongside the Flows so a window
-    // that opened after the last push is not left blank waiting for the next one
-    // — broadcasts have no persistence and nothing replays them.
-    //
-    // The payload carries everything the EDITOR needs alongside everything the
-    // list needs — the recipe catalogue, the event kinds, the workspaces and
-    // apps a Flow can be scoped to. One fetch rather than four, and the names
-    // in the editor are then the same names `scopeLabel` used in the list,
-    // resolved by the same code.
-    ipcMain.handle('flows:list', () => ({
-        flows: flowSummaries(),
-        events: flowEventRegistry().list(),
-        recipes: flowRecipeCatalogue(),
-        operators: FLOW_FILTER_OPERATORS,
-        ...flowScopeChoices(),
-        ...flowActivitySnapshot(),
-    }));
-    ipcMain.handle('flows:runs', (_e, flowId: string, limit?: number) =>
-        listFlowRuns(String(flowId), typeof limit === 'number' ? limit : undefined),
-    );
-    // Arming and disarming reconciles the file watchers, which is the difference
-    // between a disabled Flow that has stopped and one that has merely stopped
-    // ACTING while its watcher still runs — see `reconcileFlowWatches`.
-    ipcMain.handle('flows:set-enabled', (_e, flowId: string, enabled: boolean) => {
-        setFlowEnabled(String(flowId), !!enabled);
-        reconcileFlowWatches();
-        pushFlowsChanged();
-        return { ok: true };
-    });
-    // Returns the run LOG rather than `{ ok }`: a refusal is a real answer here
-    // ("this Flow has no manual trigger", "its body needs the wizard"), and a
-    // surface that showed a generic failure for all of them would be hiding the
-    // one useful sentence.
-    ipcMain.handle('flows:run', async (_e, flowId: string) => runFlowManually(String(flowId)));
-    // Create and edit, for the manager's editor and for an agent alike. Returns
-    // the ERRORS rather than throwing: "nothing emits files:teleported" and
-    // "this body needs a file the trigger does not carry" are the whole point of
-    // validating at the write, and an exception string would strand them in a
-    // console nobody is reading.
-    //
-    // A new Flow always comes back DISARMED, whatever the caller sent — there is
-    // no `enabled` on a draft to send. See `main/flows/authoring.ts`.
-    ipcMain.handle('flows:save', (_e, draft: FlowDraft) => saveFlowDraft(draft));
-    ipcMain.handle('flows:delete', (_e, flowId: string) => removeFlow(String(flowId)));
+    // Live run state does not come through IPC at all. It is pushed on
+    // `flows:activity` from the runner's own start/finish, and a window that
+    // opened after the last push asks `flows:list`, which carries the current
+    // outcome on each row: broadcasts have no persistence and nothing replays
+    // them.
 
     // --- Backend projects (fans out across signed-in backends) ----------
     /**

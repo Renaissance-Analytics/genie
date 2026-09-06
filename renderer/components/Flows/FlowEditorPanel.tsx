@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { FlowEditor } from '@particle-academy/fancy-flow';
 import '@particle-academy/fancy-flow/styles.css';
-import type { FlowAdmissionView, FlowRunOutcomeView } from '../../lib/genie';
+import { registerFlowKinds } from '../../lib/flow-kinds';
+import type { FlowAdmissionView, FlowRunOutcomeView, FlowScope } from '../../lib/genie';
 
 /**
  * Authoring a Genie App's workflow.
@@ -27,35 +28,91 @@ import type { FlowAdmissionView, FlowRunOutcomeView } from '../../lib/genie';
  * unfinished flow would be unusable. What the panel does instead is CHECK
  * continuously and show the refusals inline, so the problem is visible while it
  * is being made rather than at 3am on the first scheduled fire.
+ *
+ * ## The palette is fetched, and the canvas WAITS for it
+ *
+ * fancy-flow's node registry is per-process, so Genie's steps have to be
+ * registered here or the palette shows only Fancy's builtins — every one of
+ * which the executor refuses. That is exactly what shipped: the kinds existed in
+ * main, on an IPC channel nothing called.
+ *
+ * The editor is not rendered until they are registered. `<FlowEditor>` builds
+ * its node-type map on mount, so a canvas that mounted first would draw every
+ * Genie node as a bare default box and keep doing so until something forced it
+ * to rebuild — which looks like a rendering bug and is really a race.
  */
 
 interface Props {
-    appId: string;
     flowId: string;
+    /**
+     * Whose flow this is.
+     *
+     * Drives the palette and the admission check — the two things that differ
+     * between a machine-wide flow and one owned by an app. It is a PARAMETER
+     * because there is one editor for all three scopes: a GApp's flow is a flow
+     * whose scope is `gapp`, not a different surface.
+     */
+    scope: FlowScope;
 }
 
 /** Debounce for the admission check — it follows keystrokes in the config panel. */
 const CHECK_DELAY_MS = 400;
 
-export default function FlowEditorPanel({ appId, flowId }: Props) {
-    const [name, setName] = useState('');
+export default function FlowEditorPanel({ flowId, scope }: Props) {
+    const [title, setTitle] = useState('');
     const [graph, setGraph] = useState<{ nodes: unknown[]; edges: unknown[] } | null>(null);
     const [enabled, setEnabled] = useState(true);
     const [admission, setAdmission] = useState<FlowAdmissionView | null>(null);
     const [run, setRun] = useState<FlowRunOutcomeView | null>(null);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [kindsReady, setKindsReady] = useState(false);
     const checkTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    /**
+     * Register the steps this app may author with, then let the canvas mount.
+     *
+     * The set registered IS the palette: fancy-flow narrows a palette by
+     * category, not by kind, and a GApp window is its own renderer process
+     * acting for one app — so registering only what the grant covers means the
+     * canvas cannot offer a step certain to be refused at run time.
+     */
+    useEffect(() => {
+        let undo: (() => void) | null = null;
+        let live = true;
+
+        void window.genie.flows
+            .palette(scope)
+            .then((palette) => {
+                if (!live) return;
+                undo = registerFlowKinds(palette.available);
+            })
+            .catch(() => {
+                // A palette that failed to load must not leave a blank panel.
+                // Fancy's own steps still work, and the message says what is
+                // missing rather than letting the author wonder why the Genie
+                // steps are absent.
+                if (live) setError('Genie’s own steps could not be loaded, so the palette is incomplete.');
+            })
+            .finally(() => {
+                if (live) setKindsReady(true);
+            });
+
+        return () => {
+            live = false;
+            undo?.();
+        };
+    }, [scope]);
 
     useEffect(() => {
         let live = true;
-        void window.genie.gappFlows.get(flowId).then((flow) => {
+        void window.genie.flows.get(flowId).then((flow) => {
             if (!live) return;
             if (!flow) {
                 setError('That flow no longer exists.');
                 return;
             }
-            setName(flow.name);
+            setTitle(flow.title);
             setEnabled(flow.enabled);
             // A corrupt stored graph opens as an empty canvas rather than blanking
             // the panel — the row is still editable, and the alternative is a
@@ -79,10 +136,10 @@ export default function FlowEditorPanel({ appId, flowId }: Props) {
         (next: unknown) => {
             if (checkTimer.current) clearTimeout(checkTimer.current);
             checkTimer.current = setTimeout(() => {
-                void window.genie.gappFlows.check(appId, next).then(setAdmission);
+                void window.genie.flows.check(scope, next).then(setAdmission);
             }, CHECK_DELAY_MS);
         },
-        [appId],
+        [scope],
     );
 
     useEffect(() => {
@@ -103,31 +160,31 @@ export default function FlowEditorPanel({ appId, flowId }: Props) {
         if (!graph) return;
         setBusy(true);
         try {
-            await window.genie.gappFlows.save({ id: flowId, appId, name, graph, enabled });
+            await window.genie.flows.save({ id: flowId, title, scope, graph });
             setError(null);
         } catch (e) {
             setError(e instanceof Error ? e.message : 'Could not save this flow.');
         } finally {
             setBusy(false);
         }
-    }, [appId, enabled, flowId, graph, name]);
+    }, [enabled, flowId, graph, scope, title]);
 
     /** Save, then ask MAIN to run it. The renderer never executes a flow. */
     const runNow = useCallback(async () => {
         setBusy(true);
         try {
             if (graph) {
-                await window.genie.gappFlows.save({ id: flowId, appId, name, graph, enabled });
+                await window.genie.flows.save({ id: flowId, title, scope, graph });
             }
-            setRun(await window.genie.gappFlows.run(flowId));
+            setRun(await window.genie.flows.run(flowId));
         } catch (e) {
             setRun({ ok: false, error: e instanceof Error ? e.message : 'The run failed.' });
         } finally {
             setBusy(false);
         }
-    }, [appId, enabled, flowId, graph, name]);
+    }, [enabled, flowId, graph, scope, title]);
 
-    if (!graph) {
+    if (!graph || !kindsReady) {
         return <div className="p-4 text-sm opacity-70">{error ?? 'Loading…'}</div>;
     }
 
@@ -138,19 +195,15 @@ export default function FlowEditorPanel({ appId, flowId }: Props) {
             <div className="flex items-center gap-2">
                 <input
                     className="flex-1 rounded border px-2 py-1 text-sm"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
                     placeholder="Flow name"
                     aria-label="Flow name"
                 />
-                <label className="flex items-center gap-1 text-xs">
-                    <input
-                        type="checkbox"
-                        checked={enabled}
-                        onChange={(e) => setEnabled(e.target.checked)}
-                    />
-                    Enabled
-                </label>
+                {/* Arming is NOT here. It is the switch in the Flow Manager,
+                    behind a confirmation stating what the flow will be able to
+                    do — and saving an edit must never be a way around it. A
+                    checkbox beside Save is exactly that way around. */}
                 <button
                     type="button"
                     className="rounded border px-2 py-1 text-sm"

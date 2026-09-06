@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Text } from '@particle-academy/react-fancy';
-import { api, type FlowSummaryView, type FlowTriggerView } from '../../lib/genie';
+import { api, type FlowScope, type FlowSummaryView } from '../../lib/genie';
+import { describeTriggers } from '../../lib/flow-view';
 import FlowEditorPanel from './FlowEditorPanel';
 
 /**
@@ -15,57 +16,30 @@ import FlowEditorPanel from './FlowEditorPanel';
  * It is Genie's surface rather than the app's for the same reason the tab strip
  * is: this is where a flow's PERMISSIONS are shown, and an app must not be able
  * to paint the screen that says what it is allowed to do.
+ *
+ * ## It is the SAME system as the Flow Manager
+ *
+ * Same table, same runner, same editor, same IPC. The only difference is the
+ * SCOPE it asks with — `{ kind: 'gapp', appId }` — which decides both the flows
+ * it lists and the palette its canvas offers. A GApp's flow is a flow whose
+ * scope is `gapp`, not a second kind of thing with a second implementation.
  */
 
 interface Props {
     appId: string;
 }
 
-/**
- * What a new flow starts as.
- *
- * A manual trigger, and nothing else. Not an empty graph: admission refuses one
- * (an empty graph is nearly always a failed load or a bad edit, and reporting
- * success for it hides both), so a new flow would open already complaining.
- */
-function starterGraph() {
-    return {
-        nodes: [
-            {
-                id: 'start',
-                type: 'trigger',
-                position: { x: 80, y: 80 },
-                data: {
-                    kind: '@particle-academy/manual_trigger',
-                    label: 'Start',
-                    config: {},
-                },
-            },
-        ],
-        edges: [],
-    };
-}
-
-/** "Runs daily at 03:00", roughly — enough for a list row. */
-function describeTriggers(triggers: FlowTriggerView[]): string {
-    if (triggers.length === 0) return 'No trigger';
-    return triggers
-        .map((t) => {
-            if (t.kind === 'schedule') return t.cron ? `Schedule ${t.cron}` : 'Schedule (no cron)';
-            if (t.kind === 'webhook') return 'Webhook (not armed)';
-            return 'Manual';
-        })
-        .join(' · ');
-}
-
 export default function FlowsTab({ appId }: Props) {
+    /** This app's vantage — the one thing that differs from the Flow Manager. */
+    const scope: FlowScope = { kind: 'gapp', appId };
+
     const [flows, setFlows] = useState<FlowSummaryView[] | null>(null);
     const [editing, setEditing] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
 
     const refresh = useCallback(async () => {
         try {
-            setFlows(await api().gappFlows.list(appId));
+            setFlows(await api().flows.list(scope));
         } catch (e) {
             setError(e instanceof Error ? e.message : 'Could not list flows.');
         }
@@ -76,17 +50,18 @@ export default function FlowsTab({ appId }: Props) {
     }, [refresh]);
 
     const create = useCallback(async () => {
-        // Ids are minted here rather than by the database so the editor can open
-        // immediately on the row it just made.
-        const id = `flow-${Date.now().toString(36)}`;
-        await api().gappFlows.save({ id, appId, name: 'New flow', graph: starterGraph() });
+        // Main mints it — the id, and the graph a new flow starts as. The
+        // renderer cannot build that graph itself: it needs the live node
+        // registry, and a `main/` module the renderer imports has to be a leaf
+        // (`renderer-main-boundary.test.ts`). Values cross by IPC.
+        const flow = await api().flows.create({ scope });
         await refresh();
-        setEditing(id);
+        if (flow) setEditing(flow.id);
     }, [appId, refresh]);
 
     const remove = useCallback(
         async (flowId: string) => {
-            await api().gappFlows.remove(flowId);
+            await api().flows.remove(flowId);
             if (editing === flowId) setEditing(null);
             await refresh();
         },
@@ -95,7 +70,7 @@ export default function FlowsTab({ appId }: Props) {
 
     const toggle = useCallback(
         async (flow: FlowSummaryView) => {
-            await api().gappFlows.setEnabled(flow.id, !flow.enabled);
+            await api().flows.setEnabled(flow.id, !flow.enabled);
             await refresh();
         },
         [refresh],
@@ -116,7 +91,7 @@ export default function FlowsTab({ appId }: Props) {
                     </button>
                 </div>
                 <div style={{ flex: 1, minHeight: 0 }}>
-                    <FlowEditorPanel appId={appId} flowId={editing} />
+                    <FlowEditorPanel flowId={editing} scope={scope} />
                 </div>
             </div>
         );
@@ -165,7 +140,7 @@ export default function FlowsTab({ appId }: Props) {
                                     cursor: 'pointer',
                                 }}
                             >
-                                <div>{flow.name}</div>
+                                <div>{flow.title}</div>
                                 <div style={{ fontSize: 11, opacity: 0.7 }}>
                                     {/* A corrupt row is SAID so, not hidden — the user
                                         can open it and repair it. */}

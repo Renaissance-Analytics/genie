@@ -1,18 +1,16 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Action, Badge, Button, Switch, Text } from '@particle-academy/react-fancy';
 import { IconAlert, IconChevronDown, IconFlow, IconPlus, IconTrash, IconX } from './icons';
-import FlowEditorModal from './FlowEditorModal';
+import FlowEditorPanel from '../Flows/FlowEditorPanel';
 import {
     api,
     hasGenieBridge,
     isRemoteWindow,
-    type FlowListPayload,
-    type FlowRunLog,
+    type FlowRunOutcomeView,
     type FlowRunRecord,
-    type FlowSummary,
+    type FlowSummaryView,
 } from '../../lib/genie';
 import {
-    describeClause,
     describeFlowSource,
     describeOutcome,
     describeTrigger,
@@ -40,11 +38,20 @@ import {
  *
  * ## Creating one, and what creation is NOT
  *
- * The editor (`FlowEditorModal`) is reached from the header and from the empty
- * state. It creates a Flow switched OFF, every time — arming is the switch on
- * the row, behind a confirmation that states what the body does. Nothing about
- * authoring may become a way around that, so this surface never turns a Flow on
- * as a side effect of saving it.
+ * New flows are minted by main with a starter graph, switched OFF, every time —
+ * arming is the switch on the row, behind a confirmation that states what the
+ * flow does. Nothing about authoring may become a way around that, so this
+ * surface never turns a flow on as a side effect of saving it.
+ *
+ * ## The canvas, and why the list is not one
+ *
+ * Editing opens `<FlowEditor>` — the real one. The LIST does not: it uses
+ * `<FlowViewer variant="list">`, which is read-only by construction rather than
+ * by a prop, because a viewer that can be switched into an editor is a viewer
+ * somebody eventually switches into an editor by accident. Passing the last
+ * run's statuses to that same component is how "why did this not fire" is
+ * answered — by showing which node stopped, instead of prose reconstructing a
+ * condition.
  *
  * ## Live state is pushed, never polled
  *
@@ -53,10 +60,12 @@ import {
  * has no persistence and nothing replays it, so a window that opened after the
  * last push would otherwise sit blank until something else happened to run.
  *
- * ## Not `renderer/components/Flows/`
+ * ## There is only one kind of flow
  *
- * That is a GApp's node-graph canvas — a different thing at a different scope,
- * reached through `api().gappFlows`.
+ * A GApp's flow is a flow whose SCOPE is `gapp`. It uses this manager, this
+ * table and this editor; the GApp window's own Flows tab is the same components
+ * filtered to that app. Genie used to have two systems under this name, and the
+ * cost was two answers to "which flows are there".
  */
 export default function FlowManagerFlyout({
     open,
@@ -65,21 +74,32 @@ export default function FlowManagerFlyout({
     open: boolean;
     onClose: () => void;
 }) {
-    const [payload, setPayload] = useState<FlowListPayload | null>(null);
+    const [flows, setFlows] = useState<FlowSummaryView[] | null>(null);
     const [running, setRunning] = useState<readonly string[]>([]);
     const [expanded, setExpanded] = useState<string | null>(null);
     const [history, setHistory] = useState<Record<string, FlowRunRecord[]>>({});
     const [pending, setPending] = useState<string | null>(null);
-    const [result, setResult] = useState<FlowRunLog | null>(null);
+    const [result, setResult] = useState<FlowRunOutcomeView | null>(null);
+    /** Which row `result` belongs to — the outcome itself does not say. */
+    const [lastRunFor, setLastRunFor] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
     /** The Flow awaiting an explicit "yes, arm it" — see {@link ArmConfirm}. */
-    const [confirming, setConfirming] = useState<FlowSummary | null>(null);
+    const [confirming, setConfirming] = useState<FlowSummaryView | null>(null);
     /** The host this window drives, for the "whose Flows are these" note. */
     const [hostName, setHostName] = useState<string | undefined>(undefined);
-    /** Open on a Flow to edit it, on `null` to create one, closed otherwise. */
-    const [editing, setEditing] = useState<{ flow: FlowSummary | null } | null>(null);
+    /**
+     * The flow whose canvas is open, or null.
+     *
+     * Just what the canvas needs — an id, a name for the dialog, and the scope
+     * that drives its palette. Holding a whole summary row meant a newly created
+     * flow had to be found again in a refetched list before the editor could
+     * open, which is a round trip and a lookup that can miss.
+     */
+    const [editing, setEditing] = useState<
+        { id: string; title: string; scope: FlowSummaryView['scope'] } | null
+    >(null);
     /** The Flow awaiting an explicit "yes, delete it". */
-    const [deleting, setDeleting] = useState<FlowSummary | null>(null);
+    const [deleting, setDeleting] = useState<FlowSummaryView | null>(null);
     /** Said out loud when a save turned an armed Flow off, or one was deleted. */
     const [notice, setNotice] = useState<string | null>(null);
     const remote = isRemoteWindow();
@@ -104,9 +124,9 @@ export default function FlowManagerFlyout({
     const reload = useCallback(async () => {
         if (!hasGenieBridge()) return;
         try {
-            const next = await api().flows.list();
-            setPayload(next);
-            setRunning(next.running);
+            // The MACHINE's vantage: every flow, at every scope. A GApp window
+            // asks the same channel with its own vantage and gets its own.
+            setFlows(await api().flows.list({ kind: 'system' }));
             setError(null);
         } catch (e) {
             setError(e instanceof Error ? e.message : String(e));
@@ -131,14 +151,11 @@ export default function FlowManagerFlyout({
             // without a round trip.
             if (p.finished) {
                 const finished = p.finished;
-                setPayload((prev) =>
+                setFlows((prev) =>
                     prev
-                        ? {
-                              ...prev,
-                              flows: prev.flows.map((f) =>
-                                  f.id === finished.flowId ? { ...f, lastRun: finished } : f,
-                              ),
-                          }
+                        ? prev.map((f) =>
+                              f.id === finished.flowId ? { ...f, lastRun: finished } : f,
+                          )
                         : prev,
                 );
                 setHistory((prev) =>
@@ -189,15 +206,37 @@ export default function FlowManagerFlyout({
      * confirmation that states it, and one that declares none arms straight
      * away rather than manufacturing ceremony out of nothing.
      */
-    const toggle = (flow: FlowSummary) => {
-        if (!flow.enabled && flow.consequence) {
+    const toggle = (flow: FlowSummaryView) => {
+        if (!flow.enabled && flow.consequence.length > 0) {
             setConfirming(flow);
             return;
         }
         void setEnabled(flow, !flow.enabled);
     };
 
-    const setEnabled = async (flow: FlowSummary, enabled: boolean) => {
+    /**
+     * Mint a flow and open its canvas.
+     *
+     * System-scoped, because that is what "new flow" means from the machine's
+     * own manager. It arrives DISARMED — creating and arming are different
+     * decisions, and this surface never turns one on as a side effect.
+     */
+    const create = async () => {
+        try {
+            // `{ scope }`, not the scope itself — main reads `input.scope`, and
+            // passing the bare object made `parseFlowScope` see `undefined`,
+            // return null, and the handler hand back no flow at all. Nothing
+            // threw; the canvas simply never opened.
+            const flow = await api().flows.create({ scope: { kind: 'system' } });
+            await reload();
+            if (flow) setEditing({ id: flow.id, title: flow.title, scope: flow.scope });
+            else setError('Genie could not create a flow.');
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+        }
+    };
+
+    const setEnabled = async (flow: FlowSummaryView, enabled: boolean) => {
         setPending(flow.id);
         try {
             await api().flows.setEnabled(flow.id, enabled);
@@ -210,7 +249,7 @@ export default function FlowManagerFlyout({
         }
     };
 
-    const runNow = async (flow: FlowSummary) => {
+    const runNow = async (flow: FlowSummaryView) => {
         setPending(flow.id);
         setResult(null);
         try {
@@ -225,7 +264,7 @@ export default function FlowManagerFlyout({
         }
     };
 
-    const remove = async (flow: FlowSummary) => {
+    const remove = async (flow: FlowSummaryView) => {
         setPending(flow.id);
         try {
             await api().flows.remove(flow.id);
@@ -239,7 +278,7 @@ export default function FlowManagerFlyout({
         }
     };
 
-    const showHistory = async (flow: FlowSummary) => {
+    const showHistory = async (flow: FlowSummaryView) => {
         if (expanded === flow.id) {
             setExpanded(null);
             return;
@@ -255,8 +294,8 @@ export default function FlowManagerFlyout({
     };
 
     const sourceNote = describeFlowSource({ remote, hostName });
-    const flows = payload?.flows ?? [];
-    const groups = groupByPurpose(flows);
+    const rows = flows ?? [];
+    const groups = groupByPurpose(rows);
     const liveCount = running.length;
 
     return (
@@ -283,11 +322,11 @@ export default function FlowManagerFlyout({
                         </Badge>
                     )}
                     <span className="grow" />
-                    {payload && (
+                    {flows && (
                         <button
                             type="button"
                             className="gicon flowmgr-new"
-                            onClick={() => setEditing({ flow: null })}
+                            onClick={() => void create()}
                             title="New Flow"
                             aria-label="New Flow"
                         >
@@ -320,13 +359,10 @@ export default function FlowManagerFlyout({
                         <div className="iw-muted">This runs inside Genie.</div>
                     ) : error ? (
                         <div className="iw-muted">{error}</div>
-                    ) : payload === null ? (
+                    ) : flows === null ? (
                         <div className="iw-muted">Reading your Flows…</div>
-                    ) : flows.length === 0 ? (
-                        <EmptyState
-                            events={payload.events.length}
-                            onCreate={() => setEditing({ flow: null })}
-                        />
+                    ) : rows.length === 0 ? (
+                        <EmptyState onCreate={() => void create()} />
                     ) : (
                         groups.map(([purpose, rows]) => (
                             <div key={purpose}>
@@ -339,11 +375,17 @@ export default function FlowManagerFlyout({
                                         busy={pending === flow.id}
                                         expanded={expanded === flow.id}
                                         history={history[flow.id]}
-                                        result={result?.flowId === flow.id ? result : null}
+                                        result={lastRunFor === flow.id ? result : null}
                                         onToggle={() => toggle(flow)}
                                         onRun={() => void runNow(flow)}
                                         onExpand={() => void showHistory(flow)}
-                                        onEdit={() => setEditing({ flow })}
+                                        onEdit={() =>
+                                            setEditing({
+                                                id: flow.id,
+                                                title: flow.title,
+                                                scope: flow.scope,
+                                            })
+                                        }
                                         onDelete={() => setDeleting(flow)}
                                     />
                                 ))}
@@ -360,20 +402,11 @@ export default function FlowManagerFlyout({
             with `z-index: 60`, so it opens a stacking context that would scope
             `.prompt-scrim`'s z-index 100 INSIDE it, quietly breaking the layer
             ladder documented at the top of master.css. */}
-        {editing && payload && (
-            <FlowEditorModal
-                payload={payload}
-                editing={editing.flow}
-                onClose={() => setEditing(null)}
-                onSaved={(result) => {
-                    // A save that turned an armed Flow OFF must say so. A
-                    // switch moving on its own is exactly the kind of silent
-                    // change this surface exists to prevent.
-                    setNotice(
-                        result.disarmed
-                            ? `“${result.flow.title}” was switched off: what it does or where it acts changed, so it needs turning on again.`
-                            : `Saved “${result.flow.title}”.`,
-                    );
+        {editing && (
+            <FlowCanvasModal
+                flow={editing}
+                onClose={() => {
+                    setEditing(null);
                     void reload();
                 }}
             />
@@ -415,7 +448,7 @@ function ArmConfirm({
     onCancel,
     onConfirm,
 }: {
-    flow: FlowSummary;
+    flow: FlowSummaryView;
     busy: boolean;
     onCancel: () => void;
     onConfirm: () => void;
@@ -434,16 +467,23 @@ function ArmConfirm({
                     Turn on “{flow.title}”?
                 </div>
                 <div className="prompt-body">
-                    <p className="flowmgr-consequence">{flow.consequence}</p>
-                    <p>
-                        It will run on its own whenever its trigger fires
-                        {flow.scope.kind === 'workspace'
-                            ? ` in ${flow.scopeLabel}`
-                            : flow.scope.kind === 'system'
-                              ? ' anywhere on this machine'
-                              : ''}
-                        , without asking again. You can turn it off at any time.
-                    </p>
+                    {/* Derived from the graph, so the sentence a person agrees
+                        to cannot drift from what the flow does. An empty list
+                        renders as SILENCE — never as an invented "this is safe",
+                        which would be a promise nobody made. */}
+                    {flow.consequence.length > 0 && (
+                        <p className="flowmgr-consequence">
+                            It will be able to use: {flow.consequence.join(', ')}.
+                        </p>
+                    )}
+                    {/* WHAT THE SCOPE GRANTS, in words, at the moment of arming.
+                        "System" is a value in a dropdown; what it MEANS is that
+                        the flow acts as the workstation operator, in every
+                        workspace, with nobody watching. A user who has read the
+                        graph still has not agreed to that, because the scope is
+                        not visible IN the graph — so it is said here or it is
+                        not said at all. */}
+                    <p>{describeArming(flow)}</p>
                 </div>
                 <div className="prompt-actions">
                     <button
@@ -479,47 +519,87 @@ function ArmConfirm({
  * It says what a Flow IS before offering to make one — an empty list with a
  * lone Add button teaches nothing about what is about to be created.
  */
-function EmptyState({ events, onCreate }: { events: number; onCreate: () => void }) {
+function EmptyState({ onCreate }: { onCreate: () => void }) {
     return (
         <div className="flowmgr-empty">
             <IconFlow size={22} />
             <Text size="sm" style={{ fontWeight: 600 }}>
-                No Flows yet
+                No flows yet
             </Text>
             <Text size="xs" className="text-zinc-500">
-                A Flow is a recipe, the triggers that start it, and the scope it may
-                touch. Genie&rsquo;s automation runs them; nothing has been set up on
-                this machine.
+                A flow is a diagram of steps and what starts them. Draw one on the
+                canvas, and Genie runs it — on a schedule, when something happens,
+                or when you press Run.
             </Text>
             <Text size="xs" className="text-zinc-500">
-                {events === 0
-                    ? 'No triggers are registered, so there is nothing for a Flow to react to yet.'
-                    : `${events} trigger${events === 1 ? '' : 's'} ${
-                          events === 1 ? 'is' : 'are'
-                      } registered and ready for one.`}
+                New flows arrive switched off, so you can see what one does before
+                letting it act on its own.
             </Text>
             <Button size="sm" className="flowmgr-empty-new" onClick={onCreate}>
-                <IconPlus size={12} /> New Flow
+                <IconPlus size={12} /> New flow
             </Button>
         </div>
     );
 }
 
 /**
- * Deleting asks, and arming asks — for opposite reasons.
+ * The canvas, full size, over the master window.
  *
- * Arming is dangerous because the machine starts doing something. Deleting is
- * not dangerous at all; it is IRREVERSIBLE, and the thing lost is a
- * configuration with conditions in it that somebody worked out once. The run
- * history goes with it, which is the part people do not expect.
+ * A flyout column cannot hold a pan-zoom graph editor with a palette and a
+ * config panel — so the MANAGER stays in the flyout and the EDITOR opens over
+ * it. Rendered outside `.docs-flyout-root` for the same two reasons the other
+ * modals here are: that root sets `pointer-events: none` and hands it back only
+ * to the aside and its scrim, and it is `position: fixed` with a z-index, so it
+ * opens a stacking context that would scope this modal's layer inside it.
  */
+function FlowCanvasModal({
+    flow,
+    onClose,
+}: {
+    flow: { id: string; title: string; scope: FlowSummaryView['scope'] };
+    onClose: () => void;
+}) {
+    return (
+        <div className="prompt-scrim" onClick={onClose}>
+            <div
+                className="prompt-card flowmgr-canvas"
+                role="dialog"
+                aria-label={`Edit ${flow.title}`}
+                aria-modal="true"
+                onClick={(e) => e.stopPropagation()}
+            >
+                <div className="prompt-title">
+                    <IconFlow size={15} />
+                    {flow.title}
+                    <span className="grow" />
+                    {/* Its own class, so a spec can reach THIS close button.
+                        `[role="dialog"] .gicon[aria-label="Close"]` matches
+                        every open dialog in the master window, and there are
+                        three. */}
+                    <button
+                        type="button"
+                        className="gicon flowmgr-canvas-close"
+                        onClick={onClose}
+                        aria-label="Close the canvas"
+                    >
+                        <IconX />
+                    </button>
+                </div>
+                <div className="flowmgr-canvas-body">
+                    <FlowEditorPanel flowId={flow.id} scope={flow.scope ?? { kind: 'system' }} />
+                </div>
+            </div>
+        </div>
+    );
+}
+
 function DeleteConfirm({
     flow,
     busy,
     onCancel,
     onConfirm,
 }: {
-    flow: FlowSummary;
+    flow: FlowSummaryView;
     busy: boolean;
     onCancel: () => void;
     onConfirm: () => void;
@@ -579,12 +659,12 @@ function FlowRow({
     onEdit,
     onDelete,
 }: {
-    flow: FlowSummary;
+    flow: FlowSummaryView;
     running: boolean;
     busy: boolean;
     expanded: boolean;
     history?: FlowRunRecord[];
-    result: FlowRunLog | null;
+    result: FlowRunOutcomeView | null;
     onToggle: () => void;
     onRun: () => void;
     onExpand: () => void;
@@ -625,7 +705,18 @@ function FlowRow({
                                 key={i}
                                 size="sm"
                                 variant="soft"
-                                color={t.kind === 'event' && !t.known ? 'orange' : undefined}
+                                color={
+                                    // Orange marks a trigger that cannot fire —
+                                    // a schedule with no time, an event with
+                                    // nothing chosen. The badge is the only
+                                    // place a half-finished trigger is visible
+                                    // without opening the canvas.
+                                    (t.kind === 'event' && (!t.event || t.known === false)) ||
+                                    (t.kind === 'schedule' && !t.cron) ||
+                                    t.kind === 'webhook'
+                                        ? 'orange'
+                                        : undefined
+                                }
                             >
                                 {describeTrigger(t)}
                             </Badge>
@@ -667,7 +758,7 @@ function FlowRow({
                         title="Delete"
                         aria-label={`Delete ${flow.title}`}
                     />
-                    {flow.manuallyRunnable && (
+                    {flow.readable && (
                         <Action
                             variant="ghost"
                             size="xs"
@@ -690,16 +781,16 @@ function FlowRow({
             {/* Off, and what turning it on would mean. A row that says only
                 "disabled" is a switch; a row that says what the switch DOES is
                 a decision the user can actually make. */}
-            {!flow.enabled && flow.consequence && (
+            {!flow.enabled && flow.consequence.length > 0 && (
                 <div className="flowmgr-off">
-                    Off — {flow.consequence}
+                    Off — turning it on lets it use: {flow.consequence.join(', ')}.
                 </div>
             )}
 
             {/* A Flow that looks armed and cannot fire. The one thing a list
                 would never tell you, so it is stated on the row rather than
                 left to be deduced from a badge colour. */}
-            {flow.enabled && !flow.canEverFire && (
+            {flow.enabled && !canEverFire(flow) && (
                 <div className="flowmgr-warn">
                     <IconAlert size={13} />
                     <span>
@@ -711,29 +802,27 @@ function FlowRow({
 
             {result && (
                 <div className="flowmgr-result">
-                    <Badge size="sm" color={describeOutcome(result.outcome).color}>
-                        {describeOutcome(result.outcome).label}
+                    <Badge size="sm" color={describeOutcome(result.ok ? 'ran' : 'failed').color}>
+                        {describeOutcome(result.ok ? 'ran' : 'failed').label}
                     </Badge>
-                    <span>{result.reason ?? 'The Flow ran to completion.'}</span>
+                    <span>{result.error ?? 'The flow ran to completion.'}</span>
+                    {/* Every step that would be turned away, NAMED. A refusal
+                        that says only "not permitted" sends somebody to guess
+                        which of nine steps it meant. */}
+                    {result.refusals && result.refusals.length > 0 && (
+                        <ul className="flowmgr-clauses">
+                            {result.refusals.map((r) => (
+                                <li key={r.nodeId}>
+                                    <code>{r.label ?? r.nodeId}</code> — {r.reason}
+                                </li>
+                            ))}
+                        </ul>
+                    )}
                 </div>
             )}
 
             {expanded && (
                 <div className="flowmgr-history">
-                    {flow.triggers.some((t) => t.kind === 'event' && t.clauses.length > 0) && (
-                        <>
-                            <div className="iw-subhead">Conditions</div>
-                            <ul className="flowmgr-clauses">
-                                {flow.triggers.flatMap((t) =>
-                                    t.kind === 'event'
-                                        ? t.clauses.map((c, i) => (
-                                              <li key={`${t.event}-${i}`}>{describeClause(c)}</li>
-                                          ))
-                                        : [],
-                                )}
-                            </ul>
-                        </>
-                    )}
                     <div className="iw-subhead">Recent runs</div>
                     {history === undefined ? (
                         <div className="iw-muted">Reading…</div>
@@ -771,25 +860,82 @@ function FlowRow({
 }
 
 /** The specific reason, never a generic "misconfigured". */
-function whyItCannotFire(flow: FlowSummary): string {
-    if (flow.scope.kind === 'workspace' && flow.scopeLabel.startsWith('A workspace that')) {
-        return 'the workspace it is scoped to no longer exists';
+/**
+ * Can anything actually start this flow?
+ *
+ * A flow that looks armed and cannot fire is the one thing a list would never
+ * tell you — enabled, titled, and pointing at a trigger nothing reaches. So it
+ * is stated on the row rather than left to be deduced.
+ *
+ * A MANUAL trigger counts: a person can start it, which is a way to fire.
+ */
+function canEverFire(flow: FlowSummaryView): boolean {
+    if (!flow.readable) return false;
+    return flow.triggers.some((t) => {
+        if (t.kind === 'manual') return true;
+        if (t.kind === 'schedule') return !!t.cron;
+        // An event trigger fires only if something still EMITS its event.
+        if (t.kind === 'event') return !!t.event && t.known !== false;
+        return false;
+    });
+}
+
+/**
+ * What arming this flow lets it reach, said plainly.
+ *
+ * The consent has to name the SCOPE and what the scope confers, not just where
+ * the flow lives. A confirmation that says "anywhere on this machine" describes
+ * a location; the thing being agreed to is an authority — acting as the
+ * workstation operator, unattended, until somebody turns it off.
+ */
+function describeArming(flow: FlowSummaryView): string {
+    const ending = ' It keeps doing that until you turn it off.';
+
+    if (flow.scope?.kind === 'workspace') {
+        return (
+            `It will run on its own whenever its trigger fires, without asking again — ` +
+            `acting only inside ${flow.scopeLabel}, and never on another project's files.` +
+            ending
+        );
     }
-    if (flow.scope.kind === 'gapp' && flow.scopeLabel.startsWith('An app that')) {
-        return 'the app that owns it is no longer installed';
+    if (flow.scope?.kind === 'gapp') {
+        return (
+            `It will run on its own whenever its trigger fires, without asking again — ` +
+            `as “${flow.scopeLabel}”, limited to exactly what you granted that app when you ` +
+            `installed it. It can never do more than the app itself can.` + ending
+        );
     }
-    const dead = flow.triggers.filter((t) => t.kind === 'event' && !t.known);
+    if (flow.scope?.kind === 'system') {
+        return (
+            `It will run on its own whenever its trigger fires, without asking again — ` +
+            `as YOU, on the whole machine. That means every workspace, not just this one, ` +
+            `with the same reach the workstation operator has.` + ending
+        );
+    }
+    // An unreadable scope. Genie will refuse to run it anyway, and saying so is
+    // better than a sentence that implies somewhere specific.
+    return 'Genie cannot read where this flow belongs, so it will not run until that is fixed.';
+}
+
+function whyItCannotFire(flow: FlowSummaryView): string {
+    if (!flow.readable) return 'Genie cannot read its graph or its scope';
+    if (flow.triggers.length === 0) return 'it has no trigger at all';
+    const schedule = flow.triggers.find((t) => t.kind === 'schedule' && !t.cron);
+    if (schedule) return 'its schedule has no time set';
+    const unchosen = flow.triggers.find((t) => t.kind === 'event' && !t.event);
+    if (unchosen) return 'its trigger has no event chosen';
+    const dead = flow.triggers.filter((t) => t.kind === 'event' && t.known === false);
     if (dead.length > 0) {
-        return `nothing emits ${dead
-            .map((t) => (t.kind === 'event' ? t.event : ''))
-            .join(', ')} any more`;
+        return `nothing emits ${dead.map((t) => t.event).join(', ')} any more`;
     }
+    const webhook = flow.triggers.find((t) => t.kind === 'webhook');
+    if (webhook) return webhook.unsupported ?? 'Genie cannot arm a webhook yet';
     return 'it has no trigger anything can reach';
 }
 
 /** Grouped by purpose, in the order main already sorted them. */
-function groupByPurpose(flows: readonly FlowSummary[]): [string, FlowSummary[]][] {
-    const out = new Map<string, FlowSummary[]>();
+function groupByPurpose(flows: readonly FlowSummaryView[]): [string, FlowSummaryView[]][] {
+    const out = new Map<string, FlowSummaryView[]>();
     for (const flow of flows) {
         const bucket = out.get(flow.purpose);
         if (bucket) bucket.push(flow);

@@ -271,31 +271,6 @@ const api = {
         backup: (appId: string) => ipcRenderer.invoke('apps:backup', appId),
     },
 
-    // fancy-flow workflows owned by a Genie App. This is Genie's own editing
-    // surface: an installed app never sees it, and it grants nothing — a graph
-    // reaching past the app's permissions saves fine (an author is mid-edit) and
-    // is refused at RUN by `decideFlowAdmission`.
-    //
-    // `gappFlows`, not `flows`: the bare name belongs to Genie's AUTOMATION
-    // system (`main/flows/`, below), the way the `flows` TABLE has since v67
-    // renamed this module's to `gapp_flows`. Two unrelated things called Flows
-    // sharing one namespace is how `flows:list` came to mean both.
-    gappFlows: {
-        list: (appId: string) => ipcRenderer.invoke('gapp-flows:list', appId),
-        get: (flowId: string) => ipcRenderer.invoke('gapp-flows:get', flowId),
-        save: (input: { id: string; appId: string; name: string; graph: unknown; enabled?: boolean }) =>
-            ipcRenderer.invoke('gapp-flows:save', input),
-        remove: (flowId: string) => ipcRenderer.invoke('gapp-flows:delete', flowId),
-        setEnabled: (flowId: string, enabled: boolean) =>
-            ipcRenderer.invoke('gapp-flows:set-enabled', flowId, enabled),
-        // What this graph WOULD be allowed to do, without running it — so a
-        // refusal lands on the canvas rather than at 3am on the first fire.
-        check: (appId: string, graph: unknown) =>
-            ipcRenderer.invoke('gapp-flows:check', appId, graph),
-        palette: (appId: string) => ipcRenderer.invoke('gapp-flows:palette', appId),
-        run: (flowId: string) => ipcRenderer.invoke('gapp-flows:run', flowId),
-    },
-
     // The GApp window's own bridge. NOT the app's — this is Genie's renderer
     // drawing the frame and the tab strip; the app's two-call surface is the
     // separate `app-preload`, in a view with none of this.
@@ -1327,35 +1302,55 @@ const api = {
     },
 
     /**
-     * Flows — Genie's automation system, and the Flow Manager that runs it.
+     * Flows — Genie's automation system. ONE system, three scopes.
      *
-     * `list()` returns the live run snapshot alongside the Flows on purpose:
-     * `flows:activity` is a broadcast, and a broadcast that fires before a window
-     * exists reaches nobody and is never replayed. Fetch, then subscribe.
+     * A GApp's flow is a flow whose SCOPE is `gapp`; it is not a separate
+     * surface and has no separate namespace. Genie used to have both, and the
+     * cost was two answers to "which flows are there".
+     *
+     * `list(vantage)` says where the caller is asking FROM — the machine, a
+     * workspace, or an app — and gets back what that vantage may see. Live run
+     * state does not come through here: it is pushed on `flows:activity`, and a
+     * broadcast that fires before a window exists reaches nobody and is never
+     * replayed. Fetch, then subscribe.
      */
     flows: {
-        list: () => ipcRenderer.invoke('flows:list'),
-        /** One Flow's run history, newest first. */
+        list: (vantage?: unknown) => ipcRenderer.invoke('flows:list', vantage),
+        get: (flowId: string) => ipcRenderer.invoke('flows:get', flowId),
+        /** One flow's run history, newest first. */
         runs: (flowId: string, limit?: number) =>
             ipcRenderer.invoke('flows:runs', flowId, limit),
-        /** Arm or disarm. Reconciles the file watchers as well as the row. */
+        /**
+         * Mint a new flow at a scope. Born DISARMED, with a starter graph.
+         *
+         * Main builds the graph: it needs the live node registry, and a `main/`
+         * module the renderer imports has to be a leaf.
+         */
+        create: (input: { scope: unknown; title?: string; purpose?: string }) =>
+            ipcRenderer.invoke('flows:create', input),
+        /**
+         * Save an edit. Never arms.
+         *
+         * There is no `enabled` in the payload on purpose. Changing what a flow
+         * DOES or WHERE it acts disarms an armed one, because the confirmation
+         * it was armed against stated both.
+         */
+        save: (input: unknown) => ipcRenderer.invoke('flows:save', input),
+        /** Arm or disarm. Reconciles the schedules and the file watchers too. */
         setEnabled: (flowId: string, enabled: boolean) =>
             ipcRenderer.invoke('flows:set-enabled', flowId, enabled),
-        /** Start a Flow by hand. Resolves with the run log — refusals included. */
-        run: (flowId: string) => ipcRenderer.invoke('flows:run', flowId),
-        /**
-         * Create or update a Flow.
-         *
-         * A draft has no `enabled`: a new Flow is always created DISARMED, and
-         * arming it is a separate act with a confirmation in front of it that
-         * states, in the recipe's own words, what it will do.
-         *
-         * Resolves with `{ ok: false, errors }` rather than rejecting — the
-         * reasons ARE the surface, and an exception string would strand them.
-         */
-        save: (draft: unknown) => ipcRenderer.invoke('flows:save', draft),
-        /** Remove a Flow and its run history. */
+        /** Remove a flow and its run history. */
         remove: (flowId: string) => ipcRenderer.invoke('flows:delete', flowId),
+        /**
+         * What this graph WOULD be allowed to do, without running it — so a
+         * refusal lands on the canvas rather than at 3am on the first fire.
+         */
+        check: (scope: unknown, graph: unknown) =>
+            ipcRenderer.invoke('flows:check', scope, graph),
+        /** The steps this scope may author with. */
+        palette: (scope: unknown) => ipcRenderer.invoke('flows:palette', scope),
+        /** Start a flow by hand. Resolves with the run result — refusals included. */
+        run: (flowId: string) => ipcRenderer.invoke('flows:run', flowId),
     },
 
     files: {

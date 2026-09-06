@@ -35,22 +35,23 @@ import { runMigrations } from '../db';
  * A database rewound to the v66 world: `wishes` holding Flow definitions,
  * `flows` holding GApp canvas graphs, and v67 not yet applied.
  *
- * Built by migrating fully and then undoing v67, rather than by hand-writing
- * the old schema — a hand-written copy can drift from what v47 and v66 actually
- * created, and then the test proves the migration works on a table no user has.
+ * Stopped at v66, rather than migrated fully and undone. The undo used to be a
+ * pair of renames, which worked while both tables still existed at HEAD; **v74
+ * later DROPPED the recipe table entirely**, so there is nothing left to rename
+ * back and no way to reconstruct it except by hand — which is exactly what this
+ * docblock has always warned against, because a hand-written copy drifts from
+ * what v66 actually created and then the test proves the migration works on a
+ * table no user has.
+ *
+ * ## v67 still matters, even though v74 undoes half of it
+ *
+ * A user upgrading from beta.298 walks v67 and then v74 in the same launch. If
+ * v67 throws, the upgrade fails before v74 is ever reached — so the rename has
+ * to keep working, and this keeps asserting that it does.
  */
 function preV67(): Database.Database {
     const d = new Database(':memory:');
-    runMigrations(d);
-    d.exec(`
-        DROP INDEX IF EXISTS idx_flows_purpose;
-        DROP INDEX IF EXISTS idx_gapp_flows_app;
-        ALTER TABLE flows RENAME TO wishes;
-        ALTER TABLE gapp_flows RENAME TO flows;
-        CREATE INDEX IF NOT EXISTS idx_wishes_purpose ON wishes(purpose);
-        CREATE INDEX IF NOT EXISTS idx_flows_app ON flows(app_id);
-    `);
-    d.prepare('DELETE FROM schema_version WHERE version >= 67').run();
+    runMigrations(d, { upTo: 66 });
     return d;
 }
 
@@ -102,9 +103,13 @@ describe('v67 renames the tables', () => {
     it('lands a FRESH database on both tables, fully formed', () => {
         // v47 declines to create its table once `gapp_flows` exists, so the
         // fresh path — where it must still create it, for v67 to rename — is
-        // asserted on its own rather than only through `preV67`'s rewind.
+        // asserted on its own rather than only through `preV67`.
+        //
+        // Stopped AT v67: this is the state a fresh database passes THROUGH, not
+        // the one it ends in. v74 collapses both tables back into one `flows`,
+        // which is what a user actually ends up with.
         const d = new Database(':memory:');
-        runMigrations(d);
+        runMigrations(d, { upTo: 67 });
 
         const t = tables(d);
         expect(t.has('flows')).toBe(true);
@@ -130,7 +135,7 @@ describe('v67 renames the tables', () => {
 
     it('gives `flows` to the Flow definitions and `gapp_flows` to the canvas graphs', () => {
         const d = preV67();
-        runMigrations(d);
+        runMigrations(d, { upTo: 67 });
 
         const t = tables(d);
         expect(t.has('wishes')).toBe(false);
@@ -157,7 +162,7 @@ describe('v67 renames the tables', () => {
 
     it('renames the indexes with their tables', () => {
         const d = preV67();
-        runMigrations(d);
+        runMigrations(d, { upTo: 67 });
 
         const i = indexes(d);
         expect(i.has('idx_flows_purpose')).toBe(true);
@@ -179,7 +184,7 @@ describe('v67 renames the tables', () => {
              VALUES ('f-1', 'trader', 'nightly', '{"nodes":[]}', 1, datetime('now'), datetime('now'))`,
         ).run();
 
-        runMigrations(d);
+        runMigrations(d, { upTo: 67 });
 
         expect(
             d.prepare<[], { n: number }>('SELECT COUNT(*) AS n FROM flows').get()?.n,
@@ -201,7 +206,7 @@ describe('v67 renames the tables', () => {
              VALUES ('f-1', 'trader', 'nightly', '{"nodes":[]}', 1, datetime('now'), datetime('now'))`,
         ).run();
 
-        runMigrations(d);
+        runMigrations(d, { upTo: 67 });
 
         const row = d
             .prepare<[string], { name: string; graph_json: string }>(
@@ -218,7 +223,7 @@ describe('v67 collapses the scope ladder to system / workspace / gapp', () => {
         const d = preV67();
         wish(d, 'w-station', { kind: 'workstation' });
 
-        runMigrations(d);
+        runMigrations(d, { upTo: 67 });
 
         expect(storedScope(d, 'w-station')).toEqual({ kind: 'system' });
     });
@@ -227,7 +232,7 @@ describe('v67 collapses the scope ladder to system / workspace / gapp', () => {
         const d = preV67();
         wish(d, 'w-internal', { kind: 'app', appId: 'trader', exposure: 'internal' });
 
-        runMigrations(d);
+        runMigrations(d, { upTo: 67 });
 
         expect(storedScope(d, 'w-internal')).toEqual({ kind: 'gapp', appId: 'trader' });
     });
@@ -239,7 +244,7 @@ describe('v67 collapses the scope ladder to system / workspace / gapp', () => {
         const d = preV67();
         wish(d, 'w-exposed', { kind: 'app', appId: 'trader', exposure: 'workstation' });
 
-        runMigrations(d);
+        runMigrations(d, { upTo: 67 });
 
         expect(storedScope(d, 'w-exposed')).toEqual({ kind: 'system' });
     });
@@ -250,7 +255,7 @@ describe('v67 collapses the scope ladder to system / workspace / gapp', () => {
         const d = preV67();
         wish(d, 'w-ws', { kind: 'workspace', workspaceId: 'ws-7' });
 
-        runMigrations(d);
+        runMigrations(d, { upTo: 67 });
 
         expect(storedScope(d, 'w-ws')).toEqual({ kind: 'workspace', workspaceId: 'ws-7' });
     });
@@ -267,7 +272,7 @@ describe('v67 collapses the scope ladder to system / workspace / gapp', () => {
                      datetime('now'), datetime('now'))`,
         ).run();
 
-        runMigrations(d);
+        runMigrations(d, { upTo: 67 });
 
         expect(
             d
@@ -281,8 +286,8 @@ describe('v67 collapses the scope ladder to system / workspace / gapp', () => {
     it('is idempotent — re-running converges without throwing', () => {
         const d = preV67();
         wish(d, 'w-station', { kind: 'workstation' });
-        runMigrations(d);
-        expect(() => runMigrations(d)).not.toThrow();
+        runMigrations(d, { upTo: 67 });
+        expect(() => runMigrations(d, { upTo: 67 })).not.toThrow();
         expect(storedScope(d, 'w-station')).toEqual({ kind: 'system' });
     });
 
@@ -293,10 +298,10 @@ describe('v67 collapses the scope ladder to system / workspace / gapp', () => {
         // whole tail. Every one of those tests runs v67 a second time against a
         // database where the rename already happened, so v67 has to notice.
         const d = new Database(':memory:');
-        runMigrations(d);
+        runMigrations(d, { upTo: 67 });
         d.prepare('DELETE FROM schema_version WHERE version >= 57').run();
 
-        expect(() => runMigrations(d)).not.toThrow();
+        expect(() => runMigrations(d, { upTo: 67 })).not.toThrow();
 
         const t = tables(d);
         expect(t.has('flows')).toBe(true);

@@ -31,7 +31,7 @@
  * duration it does not have.
  */
 
-import type { FlowRunLog, FlowRunStart } from './runtime';
+import type { FlowRunLog, FlowRunStart } from './types';
 
 /**
  * A run's state as the STORE knows it — the runtime's outcomes plus two the

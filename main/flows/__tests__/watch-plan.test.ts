@@ -16,7 +16,31 @@
 import { describe, expect, it } from 'vitest';
 import { createFlowEventRegistry } from '../events';
 import { planFlowFileWatches } from '../watch-plan';
-import type { Flow } from '../types';
+import { GENIE_EVENT_TRIGGER_KIND } from '../event-trigger';
+import type { FlowRow } from '../store';
+
+/**
+ * Triggers come off the GRAPH now, not from a list beside it.
+ *
+ * That is the whole shape of the change: a flow IS a fancy-flow graph, and the
+ * trigger nodes in it are the answer to "what starts this". A second stored
+ * trigger list was one of the two answers the old split maintained.
+ */
+const eventTrigger = (event: string) => ({
+    id: `t-${event}`,
+    type: GENIE_EVENT_TRIGGER_KIND,
+    position: { x: 0, y: 0 },
+    data: { kind: GENIE_EVENT_TRIGGER_KIND, label: 'When', config: { event } },
+});
+
+const manualTrigger = () => ({
+    id: 't-manual',
+    type: '@particle-academy/manual_trigger',
+    position: { x: 0, y: 0 },
+    data: { kind: '@particle-academy/manual_trigger', label: 'Start', config: {} },
+});
+
+const graphOf = (...nodes: unknown[]) => ({ nodes, edges: [] });
 
 const registry = createFlowEventRegistry();
 registry.register({ id: 'demo:pinged', label: 'Ping', props: [] });
@@ -26,26 +50,28 @@ const WORKSPACES = [
     { id: 'ws-2', path: '/p/two' },
 ];
 
-function flow(over: Partial<Flow> = {}): Flow {
+function flow(over: Partial<FlowRow> = {}): FlowRow {
     return {
         id: 'w',
+        appId: null,
         title: 'W',
         purpose: 'Files',
         scope: { kind: 'system' },
         enabled: true,
-        triggers: [{ kind: 'event', event: 'files:added' }],
-        recipe: { kind: 'builtin', recipeId: 'r' },
+        graph: graphOf(eventTrigger('files:added')) as never,
+        createdAt: 'x',
+        updatedAt: 'x',
         ...over,
     };
 }
 
-const plan = (flows: Flow[]) => planFlowFileWatches(flows, WORKSPACES, registry);
+const plan = (flows: FlowRow[]) => planFlowFileWatches(flows, WORKSPACES, registry);
 
 describe('planFlowFileWatches', () => {
     it('watches nothing when no Flow asks for a file event', () => {
         expect(plan([])).toEqual([]);
-        expect(plan([flow({ triggers: [{ kind: 'manual' }] })])).toEqual([]);
-        expect(plan([flow({ triggers: [{ kind: 'event', event: 'demo:pinged' }] })])).toEqual([]);
+        expect(plan([flow({ graph: graphOf(manualTrigger()) as never })])).toEqual([]);
+        expect(plan([flow({ graph: graphOf(eventTrigger('demo:pinged')) as never })])).toEqual([]);
     });
 
     it('watches every workspace for a system-scoped file Flow', () => {

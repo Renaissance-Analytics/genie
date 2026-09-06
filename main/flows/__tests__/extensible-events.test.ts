@@ -1,191 +1,135 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { createFlowEventRegistry } from '../events';
+import { GENIE_EVENT_TRIGGER_KIND, registerEventTriggerKind } from '../event-trigger';
+import { getNodeKind } from '@particle-academy/fancy-flow/engine';
+import { selectFlowsForEvent } from '../select';
+import { eventTriggersFor } from '../triggers';
+import type { FlowRow } from '../store';
+
 /**
- * ★ THE HEADLINE TEST — a new system event kind is DATA, not a code path.
+ * Adding an event kind must stay "add an entry to a list".
  *
  * The owner's constraint for #270, verbatim:
  *
  *   > this list will need to be able to expand without a huge system overhaul.
  *
- * A comment claiming that would prove nothing, so this file proves it twice:
+ * A trigger system that needs an engine change to learn a new event ossifies,
+ * and the feature calcifies with it. So this holds the property down from BOTH
+ * ends, because either half alone can pass while the property is broken:
  *
- *  1. BEHAVIOURALLY — an event kind that exists nowhere in Genie's source is
- *     registered from a test, a Flow filters on ITS props, and the Flow runs.
- *     Nothing in `main/flows/` is edited to make that happen.
- *  2. STRUCTURALLY — the matching/filtering/dispatch modules are asserted to
- *     contain NO event id at all. That is the invariant that keeps property (1)
- *     true: the day somebody adds `if (event === 'files:added')` to the engine,
- *     this test fails and says why.
+ *   1. **Behaviourally** — an event Genie has never heard of, registered here
+ *      and nowhere else, selects a flow and offers itself in the trigger node's
+ *      menu.
+ *   2. **Structurally** — the modules that read triggers and select flows name
+ *      NO event id at all. A behavioural test alone would still pass if
+ *      `files:added` were special-cased somewhere, as long as the new event
+ *      happened to take the general path.
  *
- * Both directions are controlled: a filter that excludes is paired with one that
- * includes, because "the Flow did not fire" passes just as well against a Flow
- * that never fires at all.
+ * The old version of this file drove `FlowRuntime`, the recipe engine that no
+ * longer exists. The property outlived the engine, which is the point of writing
+ * a test about a property rather than about a class.
  */
 
-import { describe, expect, it } from 'vitest';
-import fs from 'node:fs';
-import path from 'node:path';
-import { BUILT_IN_FLOW_EVENTS, createFlowEventRegistry } from '../events';
-import { FlowLoopGuard } from '../loop';
-import { FlowRuntime } from '../runtime';
-import type { Flow, FlowRecipe } from '../types';
+const FLOWS_DIR = path.join(__dirname, '..');
 
-/** An event kind Genie has never heard of, declared entirely here. */
-const DEMO_EVENT = {
-    id: 'demo:pinged',
-    label: 'A demo ping arrived',
-    purpose: 'Testing',
-    props: [
-        { key: 'level', type: 'number', label: 'Ping level' },
-        { key: 'room', type: 'string', label: 'Room' },
-    ],
-} as const;
+const WEATHER = {
+    id: 'weather:changed',
+    label: 'The weather changed',
+    props: [{ key: 'workspaceId', type: 'string' as const, label: 'Workspace' }],
+};
 
-function harness() {
-    const registry = createFlowEventRegistry();
-    registry.register(DEMO_EVENT);
-
-    const ran: number[] = [];
-    const recipe: FlowRecipe = {
-        id: 'demo.record',
-        title: 'Record the ping',
-        steps: [
-            {
-                type: 'task',
-                id: 'record',
-                title: 'Record',
-                run: async (ctx) => {
-                    ran.push(Number(ctx.get('level')));
-                },
-            },
-        ],
-    };
-
-    const flow: Flow = {
-        id: 'flow-demo',
-        title: 'Record loud pings',
-        purpose: 'Testing',
+function flow(graph: unknown): FlowRow {
+    return {
+        id: 'f1',
+        appId: null,
+        title: 'Whatever',
+        purpose: 'Automation',
         scope: { kind: 'system' },
+        graph: graph as never,
         enabled: true,
-        triggers: [
-            {
-                kind: 'event',
-                event: 'demo:pinged',
-                filter: { all: [{ prop: 'level', op: 'gte', value: 5 }] },
-            },
-        ],
-        recipe: { kind: 'builtin', recipeId: 'demo.record' },
+        createdAt: 'x',
+        updatedAt: 'x',
     };
-
-    const runtime = new FlowRuntime({
-        registry,
-        guard: new FlowLoopGuard(),
-        listFlows: () => [flow],
-        resolveRecipe: (ref) => (ref.recipeId === 'demo.record' ? recipe : null),
-    });
-
-    return { runtime, ran };
 }
 
-describe('a new system event kind is added as DATA', () => {
-    it('fires a Flow that filters on props the new event declares', async () => {
-        const { runtime, ran } = harness();
+const triggerNode = (event: string) => ({
+    id: 'e',
+    type: GENIE_EVENT_TRIGGER_KIND,
+    position: { x: 0, y: 0 },
+    data: { kind: GENIE_EVENT_TRIGGER_KIND, label: 'When', config: { event } },
+});
 
-        const logs = await runtime.emit({
-            event: 'demo:pinged',
-            props: { level: 7, room: 'library' },
-            source: { kind: 'system' },
-        });
+describe('an event Genie has never heard of', () => {
+    it('is selectable in the trigger node the moment it is registered', () => {
+        const registry = createFlowEventRegistry([]);
+        registry.register(WEATHER);
+        registerEventTriggerKind(registry);
 
-        expect(ran).toEqual([7]);
-        expect(logs.map((l) => l.outcome)).toEqual(['ran']);
+        const field = getNodeKind(GENIE_EVENT_TRIGGER_KIND)?.configSchema?.find(
+            (f) => f.key === 'event',
+        );
+        expect(
+            (field as { options?: { value: string }[] })?.options?.map((o) => o.value),
+        ).toEqual(['weather:changed']);
     });
 
-    it('does NOT fire when the filter excludes — and the same Flow fires at the boundary', async () => {
-        // Negative control.
-        const excluded = harness();
-        await excluded.runtime.emit({
-            event: 'demo:pinged',
-            props: { level: 2, room: 'library' },
-            source: { kind: 'system' },
-        });
-        expect(excluded.ran).toEqual([]);
+    it('is read off a graph like any other', () => {
+        const graph = { nodes: [triggerNode('weather:changed')], edges: [] };
 
-        // POSITIVE control for that negative: the identical Flow, one prop value
-        // different, DOES fire. Without this, a Flow that could never run would
-        // pass the assertion above.
-        const included = harness();
-        await included.runtime.emit({
-            event: 'demo:pinged',
-            props: { level: 5, room: 'library' },
-            source: { kind: 'system' },
-        });
-        expect(included.ran).toEqual([5]);
+        expect(eventTriggersFor(graph, 'weather:changed').map((t) => t.nodeId)).toEqual(['e']);
     });
 
-    it('refuses a trigger naming an event nobody registered, and says so', async () => {
-        const registry = createFlowEventRegistry();
-        const flow: Flow = {
-            id: 'flow-ghost',
-            title: 'React to nothing',
-            purpose: 'Testing',
-            scope: { kind: 'system' },
-            enabled: true,
-            triggers: [{ kind: 'event', event: 'demo:pinged' }],
-            recipe: { kind: 'builtin', recipeId: 'demo.record' },
-        };
-        const runtime = new FlowRuntime({
-            registry,
-            guard: new FlowLoopGuard(),
-            listFlows: () => [flow],
-            resolveRecipe: () => null,
-        });
+    it('runs a flow that listens for it', () => {
+        const graph = { nodes: [triggerNode('weather:changed')], edges: [] };
 
-        const logs = await runtime.emit({
-            event: 'demo:pinged',
-            props: { level: 9 },
-            source: { kind: 'system' },
-        });
-        expect(logs).toEqual([]);
+        expect(
+            selectFlowsForEvent([flow(graph)], {
+                event: 'weather:changed',
+                props: {},
+                source: { kind: 'system' },
+            }),
+        ).toEqual([{ flowId: 'f1', nodeIds: ['e'] }]);
     });
 });
 
-/**
- * The structural half. `ENGINE_MODULES` decide WHICH Flow runs and WHETHER it
- * may — they must be able to say that about an event kind they have never been
- * told about, so they may not name one.
- */
-const ENGINE_MODULES = ['runtime.ts', 'match.ts', 'filter.ts', 'loop.ts', 'admission.ts', 'recipe.ts'];
+describe('nothing on the path names an event', () => {
+    /**
+     * The structural half.
+     *
+     * A producer OWNS its event id — `file-source.ts` declares `files:added` and
+     * is also the code that emits it, which is what keeps the declaration and
+     * the emitter from drifting. What must contain no event id is everything
+     * between: the modules that decide which flows an event reaches and which
+     * of their nodes fired.
+     */
+    it.each([['select.ts'], ['triggers.ts'], ['event-trigger.ts'], ['runner.ts']])(
+        '%s mentions no event id',
+        (file) => {
+            const source = fs.readFileSync(path.join(FLOWS_DIR, file), 'utf8');
+            // Strip comments: the docblocks legitimately give `files:added` as an
+            // example, and a guard that reads prose as code is a guard that
+            // fails for the wrong reason. Line comments first, then blocks.
+            const code = source
+                .replace(/\/\*[\s\S]*?\*\//g, '')
+                .split('\n')
+                .map((line) => line.replace(/\/\/.*$/, ''))
+                .join('\n');
 
-/** A module that legitimately DOES name the event — the positive control. */
-const EVENT_SOURCE_MODULE = 'file-source.ts';
+            // `<domain>:<event>` in a string literal — the shape every event id
+            // has, so a new one is caught as surely as the ones that exist.
+            const literals = code.match(/['"`][a-z][a-z0-9.-]*:[a-z][a-z0-9-]*['"`]/g) ?? [];
+            expect(literals, `${file} names an event id`).toEqual([]);
+        },
+    );
 
-function readModule(name: string): string {
-    return fs.readFileSync(path.join(__dirname, '..', name), 'utf8');
-}
-
-describe('the engine names no event kind', () => {
-    it('has at least one built-in event id to look for', () => {
-        expect(BUILT_IN_FLOW_EVENTS.length).toBeGreaterThan(0);
-    });
-
-    it('finds every built-in event id in the module that PRODUCES it (control)', () => {
-        // Proves the check below can detect a mention at all. Without this, an
-        // absent-string assertion would pass against a typo in the search term.
-        const source = readModule(EVENT_SOURCE_MODULE);
-        for (const def of BUILT_IN_FLOW_EVENTS) {
-            expect(source).toContain(def.id);
-        }
-    });
-
-    it('finds NO event id anywhere in the modules that dispatch, match or judge', () => {
-        for (const moduleName of ENGINE_MODULES) {
-            const source = readModule(moduleName);
-            for (const def of BUILT_IN_FLOW_EVENTS) {
-                expect(
-                    source.includes(def.id),
-                    `${moduleName} names the event "${def.id}". The engine must decide about ` +
-                        `event kinds it has never heard of — move this into a registry entry.`,
-                ).toBe(false);
-            }
-        }
+    it('would notice one — the guard is not vacuous', () => {
+        // A positive control. "No matches" passes just as well on a regex that
+        // matches nothing at all, which is how a source guard rots silently.
+        const sample = `const x = 'files:added';`;
+        expect(sample.match(/['"`][a-z][a-z0-9.-]*:[a-z][a-z0-9-]*['"`]/g)).toEqual([
+            `'files:added'`,
+        ]);
     });
 });

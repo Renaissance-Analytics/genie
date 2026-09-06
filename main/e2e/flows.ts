@@ -27,6 +27,10 @@
 import Database from 'better-sqlite3';
 import { getDb } from '../db';
 import { broadcastLocal } from '../remote';
+import { GENIE_EVENT_TRIGGER_KIND } from '../flows/event-trigger';
+import { newFlowEdge, newFlowNode } from '../flows/graph';
+import { nodeKindForTool } from '../flows/nodes';
+import { registerGenieKinds } from '../flows/kinds';
 
 /** A Flow with a manual trigger — the manager's Run button acts on this one. */
 export const E2E_MANUAL_FLOW_ID = 'e2e-flow-manual';
@@ -49,6 +53,41 @@ export interface FlowsFixture {
     emit: (running: string[]) => void;
 }
 
+/**
+ * A trigger node, built by hand rather than through `newFlowNode`.
+ *
+ * `newFlowNode` reads the live registry, and `@genie/event_trigger` is
+ * registered by `startFlows` with the events that exist RIGHT NOW — so a
+ * hand-written node is the only way to seed a trigger naming an event nothing
+ * emits, which is the whole point of the dead flow below. A flow goes dead when
+ * its producer disappears LATER; it is not something the editor can create, and
+ * the seed must not pretend otherwise.
+ */
+function deadEventTrigger(event: string) {
+    return {
+        id: 'ghost',
+        type: GENIE_EVENT_TRIGGER_KIND,
+        position: { x: 80, y: 80 },
+        data: { kind: GENIE_EVENT_TRIGGER_KIND, label: 'When', config: { event } },
+    };
+}
+
+/**
+ * A graph the CANVAS could have produced.
+ *
+ * Built through `newFlowNode`, the one function Genie uses to make a node
+ * anywhere, so the fixture cannot drift into a shape no user can author — which
+ * is exactly how the executor-resolution bug survived a green unit suite.
+ */
+function manualGraph() {
+    const start = newFlowNode('@particle-academy/manual_trigger', { x: 80, y: 80 }, 'start')!;
+    const step = newFlowNode(nodeKindForTool('checkIssues'), { x: 80, y: 220 }, 'step');
+    return {
+        nodes: step ? [start, step] : [start],
+        edges: step ? [newFlowEdge('start', 'step')] : [],
+    };
+}
+
 function seedFlow(
     d: Database.Database,
     row: {
@@ -56,38 +95,45 @@ function seedFlow(
         title: string;
         purpose: string;
         description: string;
-        triggers: unknown;
+        graph: unknown;
+        enabled?: boolean;
     },
 ): void {
     const now = new Date().toISOString();
-    // Written straight to the table rather than through `upsertFlow`, because
-    // the store REFUSES both of these — correctly, and that is the point. The
-    // dead one names an event nothing emits; the manual one gives
-    // `genie.relocate-file` no file to act on. Each is a row the manager has to
-    // handle and the editor must never be able to create: a Flow goes dead when
-    // its producer disappears LATER, not when it is written.
+    // Written straight to the table rather than through `upsertFlow` for the
+    // dead one: nothing in Genie can CREATE a flow whose trigger names an event
+    // with no producer, and it must stay that way. The manager still has to
+    // handle the row, because a producer can go away after the flow was made.
     d.prepare(
-        `INSERT INTO flows (id, title, purpose, description, scope_json, triggers_json,
-                            recipe_json, enabled, created_at, updated_at)
-         VALUES (@id, @title, @purpose, @description, @scope_json, @triggers_json,
-                 @recipe_json, 1, @now, @now)
+        `INSERT INTO flows (id, app_id, title, purpose, description, scope_json,
+                            graph_json, enabled, created_at, updated_at)
+         VALUES (@id, NULL, @title, @purpose, @description, @scope_json,
+                 @graph_json, @enabled, @now, @now)
          ON CONFLICT(id) DO UPDATE SET
              title = excluded.title, purpose = excluded.purpose,
-             description = excluded.description, triggers_json = excluded.triggers_json,
-             enabled = 1, updated_at = excluded.updated_at`,
+             description = excluded.description, graph_json = excluded.graph_json,
+             enabled = excluded.enabled, updated_at = excluded.updated_at`,
     ).run({
         id: row.id,
         title: row.title,
         purpose: row.purpose,
         description: row.description,
         scope_json: JSON.stringify({ kind: 'system' }),
-        triggers_json: JSON.stringify(row.triggers),
-        recipe_json: JSON.stringify({ kind: 'builtin', recipeId: 'genie.relocate-file' }),
+        graph_json: JSON.stringify(row.graph),
+        enabled: row.enabled === false ? 0 : 1,
         now,
     });
 }
 
 export function seedFlowsE2E(): FlowsFixture {
+    // `newFlowNode` reads the live node registry, so Genie's own kinds have to
+    // be in it. `startFlows` registers them at boot and this runs later — but
+    // depending on that ordering would make the fixture silently degrade to a
+    // trigger-only graph if it ever changed, and the specs would then fail on
+    // an arming sentence with nothing in it. Registration is idempotent, so
+    // asking again costs nothing and removes the dependency.
+    registerGenieKinds();
+
     const d = getDb();
     // The E2E profile is reused across runs — replace rather than accumulate.
     d.prepare('DELETE FROM flow_runs WHERE flow_id IN (?, ?)').run(
@@ -102,14 +148,14 @@ export function seedFlowsE2E(): FlowsFixture {
         title: 'Tidy the workspace',
         purpose: 'Files',
         description: 'Runs when you ask it to.',
-        triggers: [{ kind: 'manual' }],
+        graph: manualGraph(),
     });
     seedFlow(d, {
         id: E2E_DEAD_FLOW_ID,
         title: 'Watch a thing that left',
         purpose: 'Files',
         description: 'Its trigger no longer has a producer.',
-        triggers: [{ kind: 'event', event: 'ghost:vanished' }],
+        graph: { nodes: [deadEventTrigger('ghost:vanished')], edges: [] },
     });
 
     const fixture: FlowsFixture = {

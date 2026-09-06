@@ -17,7 +17,8 @@
 
 import { FILE_ADDED_EVENT } from './file-source';
 import type { FlowEventRegistry } from './events';
-import type { Flow } from './types';
+import { declaredTriggers } from './triggers';
+import type { FlowRow } from './store';
 
 /** The minimum this needs to know about a workspace. */
 export interface WatchableWorkspace {
@@ -42,7 +43,7 @@ const WATCH_BACKED_EVENTS: ReadonlySet<string> = new Set([FILE_ADDED_EVENT.id]);
  * at a workspace that no longer exists is ignored for the same reason.
  */
 export function planFlowFileWatches(
-    flows: readonly Flow[],
+    flows: readonly FlowRow[],
     workspaces: readonly WatchableWorkspace[],
     registry: FlowEventRegistry,
 ): WatchableWorkspace[] {
@@ -50,10 +51,17 @@ export function planFlowFileWatches(
     let all = false;
 
     for (const flow of flows) {
-        if (!flow.enabled) continue;
-        const watchBacked = flow.triggers.some(
+        // A corrupt graph or an unreadable scope buys no watcher. Watching on a
+        // guess is real cost for a flow that cannot run anyway.
+        if (!flow.enabled || !flow.graph || !flow.scope) continue;
+
+        // Triggers are read off the GRAPH — there is no trigger list beside it
+        // any more, and a second answer to "what starts this" is exactly what
+        // the two-system split cost.
+        const watchBacked = declaredTriggers(flow.graph).some(
             (t) =>
                 t.kind === 'event' &&
+                t.event !== undefined &&
                 WATCH_BACKED_EVENTS.has(t.event) &&
                 registry.get(t.event) !== undefined,
         );

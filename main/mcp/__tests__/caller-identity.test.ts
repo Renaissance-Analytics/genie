@@ -10,14 +10,18 @@ import { callerIdForApp, resolveCaller, type CallerLookups } from '../caller-ide
  * scope. Building a second dispatch path for apps would mean two implementations
  * of "may this caller act here?", and the laxer one would eventually win.
  *
- * So instead there is one caller identity with two kinds, resolved in one place.
- * The security consequence is that an app's authority is read from the GRANT — the
- * record of what the user consented to — and never from anything the caller says
- * about itself.
+ * So instead there is one caller identity, resolved in one place. A FLOW is a
+ * third kind for the same reason — it has no terminal either — and its own
+ * behaviour is pinned next door in `flow-caller.test.ts`.
+ *
+ * The security consequence is that an app's authority is read from the GRANT —
+ * the record of what the user consented to — and never from anything the caller
+ * says about itself.
  */
 
 const lookups = (over: Partial<CallerLookups> = {}): CallerLookups => ({
     terminalWorkspaceId: (id) => (id === 'term-1' ? 'ws-project' : null),
+    flowWorkspaceId: () => undefined,
     appGrant: (appId) =>
         appId === 'com.example.trader'
             ? {

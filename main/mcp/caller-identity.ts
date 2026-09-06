@@ -23,9 +23,34 @@ import type { AppGrant } from '../apps/bridge-decision';
 
 const GAPP_CALLER_PREFIX = 'gapp:';
 
+/**
+ * A FLOW's caller prefix.
+ *
+ * A flow has no terminal either, and it has something neither of the other two
+ * kinds does: it runs with NOBODY WATCHING. Its authority therefore comes from
+ * the flow's scope — the record of what the user armed — exactly as an app's
+ * comes from its grant, and never from anything the caller says about itself.
+ *
+ * Reserved for the same reason `gapp:` is: a terminal literally named
+ * `flow:nightly` must not inherit a flow's authority.
+ */
+const FLOW_CALLER_PREFIX = 'flow:';
+
 /** The caller id a GApp's bridge calls present. */
 export function callerIdForApp(appId: string): string {
     return `${GAPP_CALLER_PREFIX}${appId}`;
+}
+
+/** The caller id a flow run presents. */
+export function flowCallerId(flowId: string): string {
+    return `${FLOW_CALLER_PREFIX}${flowId}`;
+}
+
+/** The flow id inside a flow caller id, or null when it is not one. */
+export function flowIdFromCallerId(callerId: string): string | null {
+    return callerId.startsWith(FLOW_CALLER_PREFIX)
+        ? callerId.slice(FLOW_CALLER_PREFIX.length) || null
+        : null;
 }
 
 /** The app id inside a GApp caller id, or null when it is not one. */
@@ -40,11 +65,29 @@ export interface CallerLookups {
     terminalWorkspaceId: (terminalId: string) => string | null;
     /** The installed app's grant, or null when it is not installed. */
     appGrant: (appId: string) => AppGrant | null;
+    /**
+     * The workspace a flow's SCOPE confines it to.
+     *
+     * Three answers, and they are all different:
+     *   - a workspace id  → confined to it;
+     *   - `null`          → a `system` flow, not confined;
+     *   - `undefined`     → no such flow. Fails closed.
+     *
+     * A `gapp` flow never reaches here — it calls through `dispatchAppCall` as
+     * its app and resolves as `kind: 'app'`.
+     */
+    flowWorkspaceId: (flowId: string) => string | null | undefined;
 }
 
 export type Caller =
     | { kind: 'terminal'; terminalId: string; workspaceId: string | null }
     | { kind: 'app'; appId: string; grant: AppGrant; workspaceId: string | null }
+    /**
+     * A flow run. `workspaceId: null` means UNCONFINED (a `system` flow), not
+     * "nowhere" — which is the opposite of what it means for a terminal, and is
+     * why this is its own kind rather than a terminal with a funny id.
+     */
+    | { kind: 'flow'; flowId: string; workspaceId: string | null }
     | { kind: 'none'; workspaceId: null };
 
 export function resolveCaller(callerId: string, lookups: CallerLookups): Caller {
@@ -63,6 +106,16 @@ export function resolveCaller(callerId: string, lookups: CallerLookups): Caller 
             // Revoked means no authority anywhere, immediately.
             workspaceId: grant.revoked ? null : grant.workspaceId || null,
         };
+    }
+
+    const flowId = flowIdFromCallerId(callerId);
+    if (flowId !== null) {
+        const workspaceId = lookups.flowWorkspaceId(flowId);
+        // A flow that is not there fails closed rather than falling through to a
+        // terminal lookup that might happen to match — the same rule an
+        // uninstalled app gets, and for the same reason.
+        if (workspaceId === undefined) return { kind: 'none', workspaceId: null };
+        return { kind: 'flow', flowId, workspaceId };
     }
 
     return {

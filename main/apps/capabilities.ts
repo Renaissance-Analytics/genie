@@ -155,6 +155,8 @@ export const UNGRANTABLE_TOOLS: Readonly<Record<string, string>> = {
         'Hands back a map of the workspace and its repos — reconnaissance an app should not get for free from a tool meant to onboard agents.',
     manageGappDev:
         'Opens a REAL GApp window over whatever source a folder holds, with its own permission consent. An installed app that could drive that would be an app launching apps — a way to run unreviewed code in Genie’s own window that no capability the user granted describes.',
+    manageFlows:
+        'Authors AUTOMATION. A flow can do no more than its owner’s grant, but it can do it UNATTENDED — which an app’s window never can — so an app that wrote its own flows would widen its reach in the one dimension that matters, without the user agreeing to anything new. A GApp’s flows are authored by a person, in that app’s Flows tab.',
 };
 
 const TOOL_TO_CAPABILITY: ReadonlyMap<string, string> = new Map(

@@ -268,7 +268,7 @@ import { setSecretEncryptor } from './secrets/store';
 import { buildHostServerDeps } from './host-core/server-deps';
 import { registerAppBridge } from './apps/bridge';
 import { registerAppsIpc, sweepPreviewsAtBoot } from './apps/ipc';
-import { registerFlowsIpc } from './apps/flows/ipc';
+import { registerFlowsIpc } from './flows/ipc';
 import { registerAppsE2E } from './e2e/apps';
 import type { HostCorePorts } from './host-core/ports';
 import {
@@ -1848,13 +1848,6 @@ app.whenReady().then(async () => {
         /* best-effort — knowledge is additive; a failure never blocks startup */
     }
     registerFilesIpc();
-    // Genie Flows (genie#394, Tynn #270): a Flow is a Recipe + Triggers + a
-    // Scope, and the trigger half is what starts here. It rides the SAME
-    // workspace watcher the Code view uses rather than opening a second one, so
-    // this must come after `registerFilesIpc`. Watches only the workspaces the
-    // stored Flows actually need — with none stored, it watches nothing and
-    // costs nothing.
-    startFlows();
     registerGithubIpc();
     // Repository panel (the first plugin-panel consumer): host-side git ops.
     registerRepoIpc();
@@ -2043,6 +2036,15 @@ app.whenReady().then(async () => {
     // reconciles every declared schedule, which is what makes a time-based trigger
     // arm itself rather than waiting for anyone to ask.
     registerFlowsIpc(mcpDeps);
+    // Genie Flows: ONE system, one graph engine, three scopes (genie#394).
+    //
+    // Started HERE rather than beside `registerFilesIpc`, because a flow's steps
+    // are Genie tool calls and the runner needs the same deps the MCP server
+    // got. It still rides the SAME workspace watcher the Code view uses rather
+    // than opening a second one, so it stays after `registerFilesIpc` — which it
+    // is. Watches only the workspaces the stored flows actually need: with none
+    // stored, it watches nothing and costs nothing.
+    startFlows(mcpDeps);
     // A GApp PREVIEW cannot outlive its window, and a window cannot outlive this
     // process — so any preview workspace still in the database now is the residue
     // of a crash or a kill, with no window, no grant and no site behind it. This

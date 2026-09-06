@@ -12,12 +12,11 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-    describeClause,
     describeOutcome,
     describeTrigger,
+    describeTriggers,
     relativeTime,
 } from '../flow-view';
-import type { FlowSummaryTrigger } from '../genie';
 
 describe('outcomes, said in words with a colour', () => {
     it('distinguishes the two that actually executed a body from the rest', () => {
@@ -45,108 +44,60 @@ describe('outcomes, said in words with a colour', () => {
 });
 
 describe('triggers, said in words', () => {
-    it('describes a manual trigger', () => {
-        expect(describeTrigger({ kind: 'manual' })).toBe('When you run it');
+    /**
+     * Triggers are read off the GRAPH now, so these describe trigger NODES.
+     * The clause-prose suite that used to sit below this is gone with the filter
+     * language it described: a condition is a `branch` node on the canvas, and
+     * "why did this not fire" is answered by node statuses on the graph rather
+     * than by a sentence reconstructing a predicate.
+     */
+    it('names a manual trigger for what it is', () => {
+        expect(describeTrigger({ nodeId: 't', kind: 'manual' })).toBe('When you run it');
     });
 
-    it('uses the event label, not the id', () => {
-        const t: FlowSummaryTrigger = {
-            kind: 'event',
-            event: 'files:added',
-            eventLabel: 'A file was added',
-            known: true,
-            clauses: [],
-        };
-        expect(describeTrigger(t)).toBe('A file was added');
+    it('gives a schedule its cron, because that is the answer people want', () => {
+        expect(describeTrigger({ nodeId: 't', kind: 'schedule', cron: '0 3 * * *' })).toBe(
+            'On a schedule (0 3 * * *)',
+        );
     });
 
-    it('counts the conditions when a filter narrows it', () => {
-        const t: FlowSummaryTrigger = {
-            kind: 'event',
-            event: 'files:added',
-            eventLabel: 'A file was added',
-            known: true,
-            clauses: [
-                { group: 'all', prop: 'sizeBytes', propLabel: 'Size', op: 'gt', value: 5 },
-                { group: 'none', prop: 'relPath', propLabel: 'Path', op: 'startsWith', value: '.git' },
-            ],
-        };
-        expect(describeTrigger(t)).toBe('A file was added, with 2 conditions');
+    it('says a schedule has no cron rather than implying it will fire', () => {
+        // The worst failure available for a schedule is looking armed and never
+        // firing, so an unset cron is SAID.
+        expect(describeTrigger({ nodeId: 't', kind: 'schedule' })).toBe(
+            'On a schedule — none set',
+        );
     });
 
-    it('says an unknown event cannot fire instead of printing a bare id', () => {
-        const t: FlowSummaryTrigger = {
-            kind: 'event',
-            event: 'ghost:vanished',
-            eventLabel: 'ghost:vanished',
-            known: false,
-            clauses: [],
-        };
-        expect(describeTrigger(t)).toBe('ghost:vanished — nothing emits this any more');
+    it('names the event an event trigger listens for', () => {
+        expect(describeTrigger({ nodeId: 't', kind: 'event', event: 'files:added' })).toBe(
+            'When files:added',
+        );
     });
-});
 
-describe('one condition, said in words', () => {
-    it('reads an `all` clause as a plain requirement', () => {
+    it('says an event trigger has nothing chosen — it is not a wildcard', () => {
+        expect(describeTrigger({ nodeId: 't', kind: 'event' })).toBe(
+            'When something happens — nothing chosen',
+        );
+    });
+
+    it('passes on the reason a webhook cannot be armed', () => {
         expect(
-            describeClause({
-                group: 'all',
-                prop: 'sizeBytes',
-                propLabel: 'Size in bytes',
-                op: 'gt',
-                value: 5_242_880,
-            }),
-        ).toBe('Size in bytes is over 5,242,880');
+            describeTrigger({ nodeId: 't', kind: 'webhook', unsupported: 'nowhere to land' }),
+        ).toBe('nowhere to land');
     });
 
-    it('negates a `none` clause rather than reading like an `all` one', () => {
-        // The reference case is "over 5 MB, but NOT already in the folder we move
-        // to". Dropping the negation inverts what the Flow does.
-        expect(
-            describeClause({
-                group: 'none',
-                prop: 'relPath',
-                propLabel: 'Path',
-                op: 'startsWith',
-                value: '.genie/',
-            }),
-        ).toBe('Path does not start with “.genie/”');
+    it('says so when a flow has no trigger at all', () => {
+        expect(describeTriggers([])).toBe('No trigger');
     });
 
-    it('marks an `any` clause as one of several alternatives', () => {
+    it('joins several, because a graph may hold more than one', () => {
         expect(
-            describeClause({
-                group: 'any',
-                prop: 'ext',
-                propLabel: 'Extension',
-                op: 'eq',
-                value: 'png',
-            }),
-        ).toBe('or Extension is “png”');
-    });
-
-    it('renders a list value as a list', () => {
-        expect(
-            describeClause({
-                group: 'all',
-                prop: 'ext',
-                propLabel: 'Extension',
-                op: 'in',
-                value: ['png', 'jpg'],
-            }),
-        ).toBe('Extension is one of “png”, “jpg”');
-    });
-
-    it('falls back to the operator itself for one it has no phrasing for', () => {
-        expect(
-            describeClause({
-                group: 'all',
-                prop: 'x',
-                propLabel: 'X',
-                op: 'approximately',
-                value: 1,
-            }),
-        ).toBe('X approximately 1');
+            describeTriggers([
+                { nodeId: 'a', kind: 'manual' },
+                { nodeId: 'b', kind: 'schedule', cron: '0 3 * * *' },
+            ]),
+        ).toBe('When you run it · On a schedule (0 3 * * *)');
     });
 });
 
@@ -205,5 +156,32 @@ describe('the two states the runtime cannot report about itself', () => {
         // Positive control: something IS green, so the two assertions above are
         // about these states rather than about nothing ever being green.
         expect(describeOutcome('ran').color).toBe('emerald');
+    });
+});
+
+describe('a trigger whose producer went away', () => {
+    /**
+     * The one thing a list would never tell you. A flow whose event no longer
+     * has a producer looks completely normal — enabled, titled, pointing at an
+     * event — and simply never fires.
+     */
+    it('says so where the trigger is named', () => {
+        expect(
+            describeTrigger({ nodeId: 't', kind: 'event', event: 'ghost:vanished', known: false }),
+        ).toBe('ghost:vanished — nothing emits this any more');
+    });
+
+    it('says nothing unusual when the producer is still there', () => {
+        expect(
+            describeTrigger({ nodeId: 't', kind: 'event', event: 'files:added', known: true }),
+        ).toBe('When files:added');
+    });
+
+    it('treats an unannotated trigger as fine, not as dead', () => {
+        // `known` is absent on a schedule or a manual trigger, and absent is not
+        // false: reading it as dead would warn about every flow in the list.
+        expect(describeTrigger({ nodeId: 't', kind: 'event', event: 'files:added' })).toBe(
+            'When files:added',
+        );
     });
 });
