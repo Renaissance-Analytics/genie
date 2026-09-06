@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { GENIE_AGENTS_BRIEF, GENIE_MCP_GUIDE } from '../guide';
+import { agentRef, isAgentTui } from '../../agents/identity';
 import { guideTopics } from '../guide-topics';
 import { handleMcpMessage, type McpContext } from '../protocol';
 
@@ -615,5 +616,72 @@ describe('the agent guide stays in sync with the knowledge scope ladder', () => 
         const topic = knowledgeTopic();
         expect(topic).toContain('unresolved');
         expect(topic).toMatch(/ambiguous/i);
+    });
+});
+
+/**
+ * The ADDRESS the guide teaches must be the address the tools emit (genie#388).
+ *
+ * `guide.ts` told every agent that a peer's tag is `{provider}:{name}` and that
+ * *"that is the `ref` `list` prints for every peer"*. `ddece5f7` stopped
+ * `agentRef` emitting the tui, and nobody came back to the sentence — so the
+ * repository's own guide taught a form the code no longer produced, `send`
+ * refused what `list` printed, and three agents worked it out by trial.
+ *
+ * A guide sentence about another module's output is a dependency nothing
+ * typechecks; this is the typecheck.
+ */
+describe('the guide teaches the address the code emits (genie#388)', () => {
+    /**
+     * ONE bullet of the `agentinbox` action list, not the whole guide.
+     *
+     * `toContain` over 43KB is a coincidence detector — this file's own header
+     * says so, and the first draft of these assertions proved it: `status` and
+     * `durable` both matched somewhere else entirely and passed against a guide
+     * that said nothing about either.
+     */
+    const bullet = (action: string): string => {
+        // Anchored to the `agentinbox` SECTION first. `- \`send\`` matches
+        // runAgent's action list eleven hundred lines earlier, and the first
+        // draft of this helper asserted against that bullet — a guard reading
+        // the wrong half of the file, which is the failure it exists to catch.
+        const sectionStart = GENIE_MCP_GUIDE.indexOf('### agentinbox');
+        expect(sectionStart).toBeGreaterThan(-1);
+        const sectionRest = GENIE_MCP_GUIDE.slice(sectionStart + 1);
+        const sectionEnd = sectionRest.search(/\n#{2,3} /);
+        const section = sectionRest.slice(0, sectionEnd === -1 ? undefined : sectionEnd);
+
+        const start = section.indexOf(`- \`${action}\``);
+        expect(start).toBeGreaterThan(-1);
+        const rest = section.slice(start + 1);
+        const end = rest.search(/\n- `/);
+        return rest.slice(0, end === -1 ? undefined : end);
+    };
+
+    it('leads with a TUI, in both the emitter and the guide', () => {
+        const printed = agentRef({ tui: 'claude', name: 'tynn', chatSessionId: null });
+        // What the emitter does…
+        expect(isAgentTui(printed.split(':')[0]!)).toBe(true);
+        // …and what the `send` bullet says it does, with an example that IS one.
+        expect(bullet('send')).toContain('`{provider}:{name}`');
+        expect(bullet('send')).toContain(`\`${printed}\``);
+    });
+
+    it('says a bare name works, and that two agents may answer to one', () => {
+        // The forgiving path exists because bare names were printed for a while
+        // and agents wrote them down. An agent told only about tags would keep
+        // paying the discovery cost that filed this issue.
+        expect(bullet('send')).toMatch(/bare name/i);
+        expect(bullet('send')).toMatch(/different TUIs/i);
+    });
+
+    it('says what `reachable` does NOT promise, where `reachable` is explained', () => {
+        // `reachable: true` is a PERMISSION answer. The report that opened
+        // genie#388 read it as "this agent is at its prompt", sent to an agent
+        // with no session, and blamed the wrong field.
+        const list = bullet('list');
+        expect(list).toContain('reachable');
+        expect(list).toContain('`status`');
+        expect(list).toMatch(/queue|durable/i);
     });
 });
