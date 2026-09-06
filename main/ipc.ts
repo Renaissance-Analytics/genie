@@ -419,8 +419,14 @@ export async function applyStartupToolchainPrecedence(): Promise<void> {
 function artboardDeps(): WireDeps {
     return {
         workspaceRoot: (id) => getWorkspace(id)?.path ?? null,
-        deliver: (terminalId, text) =>
-            agentInboxBroker.deliverHumanMessageToTerminal(terminalId, text),
+        // The REASON, not just yes/no (genie#462): the panel has to tell the
+        // reviewer why their verdict did not reach the agent, and "no agent on
+        // that terminal" and "the broker refused the message" are different
+        // facts. One boolean is what let the panel invent a cause.
+        deliver: (terminalId, text) => {
+            const r = agentInboxBroker.deliverHumanMessageToTerminalResult(terminalId, text);
+            return r.ok ? 'delivered' : r.reason;
+        },
     };
 }
 

@@ -6,7 +6,12 @@ import {
 } from '@particle-academy/fancy-artboard';
 import type { ComponentProps } from 'react';
 import { api, type WorkspaceRow } from '../../lib/genie';
-import { resolveActiveBoardPost, resolveBoardFocus, type BoardPost } from '../../lib/artboard-model';
+import {
+    resolveActiveBoardPost,
+    resolveBoardFocus,
+    reviewNotice,
+    type BoardPost,
+} from '../../lib/artboard-model';
 
 /**
  * The first-party ArtBoard PANEL adapter — what the plugin's declared
@@ -99,15 +104,12 @@ export default function ArtBoardPanel({ workspace, requestedPostId }: Props) {
                 setError(res.error ?? 'The verdict was not recorded.');
                 return;
             }
-            // NAME whether the agent actually heard it. A verdict recorded but
-            // undelivered (its terminal has closed) is a success with a caveat,
-            // and reporting it as a clean success would imply someone is acting
-            // on it.
-            setNotice(
-                res.delivered
-                    ? `“${post.title}” ${verdict}. The agent has been told.`
-                    : `“${post.title}” ${verdict}, and recorded on the board — but the agent that posted it is no longer running, so nothing was delivered.`,
-            );
+            // NAME whether the agent actually heard it, and when it did not, say
+            // the cause the HOST established rather than one this panel made up
+            // (genie#462). A verdict recorded but undelivered is a success with a
+            // caveat, and reporting it as a clean success would imply someone is
+            // acting on it.
+            setNotice(reviewNotice(post.title, verdict, res.delivery));
             setComments((c) => ({ ...c, [post.id]: '' }));
         } catch (e) {
             setError(e instanceof Error ? e.message : String(e));

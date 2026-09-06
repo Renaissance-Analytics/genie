@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { BOARD_DIR, BOARD_INDEX, parseBoard, type BoardPost } from './board';
 import { resolveBoard, type ResolvedBoard } from './resolve';
-import { reviewPost, type ReviewResult } from './host';
+import { reviewPost, type DeliveryAttempt, type ReviewResult } from './host';
 
 /**
  * ArtBoard's concrete wiring — the real filesystem and the real delivery path,
@@ -17,8 +17,9 @@ import { reviewPost, type ReviewResult } from './host';
 export interface WireDeps {
     /** Absolute path of the workspace, or null when it is unknown. */
     workspaceRoot: (workspaceId: string) => string | null;
-    /** Deliver a message from the human to the agent on a terminal. */
-    deliver: (terminalId: string, text: string) => boolean;
+    /** Deliver a message from the human to the agent on a terminal, saying WHY
+     *  when it does not land — the panel has to explain that to a person. */
+    deliver: (terminalId: string, text: string) => DeliveryAttempt;
 }
 
 function boardDir(root: string): string {
@@ -64,7 +65,7 @@ export function reviewBoardPost(
 ): ReviewResult {
     const root = deps.workspaceRoot(workspaceId);
     if (!root) {
-        return { ok: false, delivered: false, error: 'That workspace is not open.' };
+        return { ok: false, error: 'That workspace is not open.' };
     }
     return reviewPost(workspaceId, postId, review, {
         readBoard: () => readStored(root),

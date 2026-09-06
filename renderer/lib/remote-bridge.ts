@@ -288,8 +288,7 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
         // refused outright rather than recorded against the wrong machine.
         artboardRead: async () => ({ posts: [] }),
         artboardReview: async () => ({
-            ok: false,
-            delivered: false,
+            ok: false as const,
             error: 'ArtBoard is read on the machine that holds the workspace.',
         }),
         toolchainSetDefault: async () => ({
