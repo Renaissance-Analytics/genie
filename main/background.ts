@@ -340,6 +340,7 @@ import { seedAgentAccessE2E } from './e2e/agent-access';
 import { seedAgentManagerE2E } from './e2e/agent-manager';
 import { seedRepoE2E } from './e2e/repo';
 import { seedAgentPulseE2E } from './e2e/agent-pulse';
+import { raiseAskE2E, seedAskE2E } from './e2e/ask';
 import { seedTynnImportE2E } from './e2e/tynn-import';
 import { seedWorkspaceCreateE2E } from './e2e/workspace-create';
 import { seedMasterE2E } from './e2e/master';
@@ -1976,11 +1977,7 @@ app.whenReady().then(async () => {
     // the Host was down.
     startSchedules();
     // ForceTheQuestion modal IPC (the agent-integration MCP raises it).
-    registerForceQuestionIpc({
-        isDev,
-        preloadPath: path.join(__dirname, 'preload.js'),
-        getMasterWindow: () => masterWindow,
-    });
+    registerForceQuestionIpc(forceQuestionIpcConfig());
     // Wire the openFileForUser tool's renderer round-trip: resolve workspace +
     // path in main, then ask the master Floor to reuse/open an editor panel.
     registerOpenFile({
@@ -2762,12 +2759,29 @@ app.whenReady().then(async () => {
  * Plain BrowserWindow, shown immediately so Playwright can attach to its first
  * window.
  */
+/**
+ * The ForceTheQuestion modal's IPC config. Shared because the E2E ask fixture
+ * has to register it EARLY — `showE2EWindow` runs well before the ordinary
+ * registration below, and `createAskWindow` refuses to open a window until the
+ * IPC is registered, so a question raised beforehand would be deferred to the
+ * inbox and no modal would ever appear for Playwright to attach to.
+ */
+function forceQuestionIpcConfig(): Parameters<typeof registerForceQuestionIpc>[0] {
+    return {
+        isDev,
+        preloadPath: path.join(__dirname, 'preload.js'),
+        getMasterWindow: () => masterWindow,
+    };
+}
+
 function showE2EWindow(): void {
     // Allowlist the harness routes so a stray env value can't load an arbitrary
     // page; default to the issue-watch harness for back-compat.
     const requested = process.env.GENIE_E2E_PAGE ?? 'e2e-issuewatch';
     const ALLOWED = [
         'e2e-ghcaps',
+        // Not a harness page either — see the `ask` branch below.
+        'ask',
         'e2e-issuewatch',
         'e2e-agent-access',
         'e2e-agent-manager',
@@ -2877,6 +2891,21 @@ function showE2EWindow(): void {
                 broadcastToWindows(TERMINAL_RECOVERY_STATUS_CHANNEL, { state }),
             reattach: (ids: string[]) => broadcastToWindows(TERMINAL_RECOVER_CHANNEL, { ids }),
         };
+    }
+    if (page === 'ask') {
+        // NOT a harness page, and not a page load either: the ForceTheQuestion
+        // modal is a window the PRODUCT opens, so the fixture raises real
+        // questions and `createAskWindow` makes the window Playwright attaches
+        // to. Opening a harness window here as well would hand the spec the
+        // wrong `firstWindow`.
+        try {
+            registerForceQuestionIpc(forceQuestionIpcConfig());
+            seedAskE2E();
+            raiseAskE2E();
+        } catch (e) {
+            console.error('[e2e] ask seed failed', e);
+        }
+        return;
     }
     const win = new BrowserWindow({
         width: 900,

@@ -1570,6 +1570,10 @@ const api = {
                 id: string;
                 /** The requesting workspace's display name (for the modal title). */
                 workspaceLabel?: string;
+                /** That workspace's local root — the file drawer resolves a path
+                 *  the question NAMES against it (Tynn #272). Absent for a
+                 *  forwarded question: that path lives on the host. */
+                workspacePath?: string;
                 questions: Array<{
                     header: string;
                     question: string;
@@ -1592,6 +1596,8 @@ const api = {
                 pending: Array<{
                     id: string;
                     workspaceLabel?: string;
+                    /** See `onShow` — the workspace root the file drawer reads from. */
+                    workspacePath?: string;
                     questions: Array<{
                         header: string;
                         question: string;
@@ -1628,6 +1634,9 @@ const api = {
             ipcRenderer.invoke('ask:draft:get', id) as Promise<AskDraftEntry | null>,
         draftSet: (id: string, entry: AskDraftEntry) =>
             ipcRenderer.invoke('ask:draft:set', id, entry) as Promise<void>,
+        /** The file drawer opened/closed — main widens or narrows the window so
+         *  the file sits BESIDE the question rather than on top of it (#272). */
+        drawer: (open: boolean) => ipcRenderer.invoke('ask:drawer', open) as Promise<void>,
     },
 
     on: {

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Action, ContentRenderer, Heading, Icon, Text } from '@particle-academy/react-fancy';
+import { FileViewer } from '@particle-academy/fancy-code';
 import { api, hasGenieBridge, type ForceQuestionSpec } from '../lib/genie';
+import { extractFileRefs, type AskFileRef } from '../lib/ask-file-refs';
 import {
     clearDraft,
     draftFor,
@@ -34,12 +36,21 @@ import {
 type PendingItem = {
     id: string;
     workspaceLabel?: string;
+    /** The asking workspace's local root — the file drawer resolves a path the
+     *  question NAMES against it (Tynn #272). Absent ⇒ no drawer. */
+    workspacePath?: string;
     questions: ForceQuestionSpec[];
     index: number;
     priority?: 'low' | 'normal' | 'high' | 'urgent';
     /** §8 attribution — the remote host this was forwarded from, or undefined (local). */
     remoteHost?: string;
 };
+
+/** What the file drawer is showing, for the file it was asked to open. */
+type FileState =
+    | { status: 'loading' }
+    | { status: 'ready'; content: string; truncated: boolean }
+    | { status: 'error'; message: string };
 
 const PRIORITY_META: Record<
     NonNullable<PendingItem['priority']>,
@@ -63,6 +74,9 @@ export default function AskPage() {
     const [drafts, setDrafts] = useState<AskDrafts>({});
     // The request whose submit is in flight (per id — the user can switch away).
     const [submittingId, setSubmittingId] = useState<string | null>(null);
+    // The file being read beside the question, and what came back for it (#272).
+    const [openFile, setOpenFile] = useState<AskFileRef | null>(null);
+    const [fileState, setFileState] = useState<FileState>({ status: 'loading' });
 
     useEffect(() => {
         if (hasGenieBridge()) setBridgeReady(true);
@@ -70,10 +84,12 @@ export default function AskPage() {
 
     useEffect(() => {
         if (!bridgeReady) return;
-        const offShow = api().ask.onShow(({ id, questions: qs, workspaceLabel: ws, queued }) => {
-            setHead({ id, questions: qs, workspaceLabel: ws, index: 0 });
-            void queued; // count is derived from `pending` now
-        });
+        const offShow = api().ask.onShow(
+            ({ id, questions: qs, workspaceLabel: ws, workspacePath: wp, queued }) => {
+                setHead({ id, questions: qs, workspaceLabel: ws, workspacePath: wp, index: 0 });
+                void queued; // count is derived from `pending` now
+            },
+        );
         const offQueue = api().ask.onQueue(({ pending: p }) => setPending(p as PendingItem[]));
         // Attached → tell main to deliver.
         void api().ask.ready().catch(() => {});
@@ -132,6 +148,57 @@ export default function AskPage() {
         void api().ask.draftSet(activeId, activeDraft).catch(() => {});
     }, [activeId, activeDraft]);
 
+    // --- The file drawer (Tynn #272) -------------------------------------
+    // A question that names a file used to hand the reader a path and nothing
+    // else. The paths it names become chips; opening one reads the file and
+    // shows it BESIDE the question. Nothing here navigates — genie#196 turned
+    // this window into a browser tab once and stranded the question behind it.
+
+    /** The files each question names, keyed by question index. */
+    const fileRefs = useMemo(
+        () => questions.map((q) => extractFileRefs(q.question)),
+        [questions],
+    );
+    const workspacePath = active?.workspacePath;
+    // Files can only be opened when we know which workspace to resolve them in —
+    // a forwarded question's paths are on the HOST, and reading a same-named
+    // local file would show the reader the wrong file with no sign of it.
+    const canOpenFiles = !!workspacePath;
+
+    // Switching to a different request closes whatever file the last one opened:
+    // it belongs to that question, not to this window.
+    useEffect(() => {
+        setOpenFile(null);
+    }, [activeId]);
+
+    useEffect(() => {
+        if (!openFile || !workspacePath) return;
+        let cancelled = false;
+        setFileState({ status: 'loading' });
+        void api()
+            .files.read(workspacePath, openFile.path)
+            .then((r) => {
+                if (!cancelled) {
+                    setFileState({ status: 'ready', content: r.content, truncated: r.truncated });
+                }
+            })
+            .catch((e: unknown) => {
+                if (cancelled) return;
+                const message = e instanceof Error ? e.message : String(e);
+                setFileState({ status: 'error', message });
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [openFile, workspacePath]);
+
+    // The drawer sits beside the question, so the WINDOW has to grow for it —
+    // main owns that (and keeping the widened window on screen).
+    const drawerOpen = !!openFile;
+    useEffect(() => {
+        void api().ask.drawer(drawerOpen).catch(() => {});
+    }, [drawerOpen]);
+
     const toggle = (qi: number, label: string, multi: boolean) => {
         if (!active) return;
         setDrafts((prev) => toggleDraftOption(prev, active.id, qi, label, multi));
@@ -164,14 +231,17 @@ export default function AskPage() {
 
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') {
-                e.preventDefault();
-                dismiss();
-            }
+            if (e.key !== 'Escape') return;
+            e.preventDefault();
+            // Escape closes the FILE first. Someone who opened a file to check it
+            // and pressed Escape to put it away meant the file, not the question —
+            // and dismissing the question cancels it for the agent waiting on it.
+            if (drawerOpen) setOpenFile(null);
+            else dismiss();
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
-    }, []);
+    }, [drawerOpen]);
 
     const ready = isDraftReady(draft, questions.length);
 
@@ -214,161 +284,244 @@ export default function AskPage() {
 
     if (!bridgeReady || !active) {
         return (
-            <div className="ask-frame">
-                {header}
-                <div className="ask-loading">
-                    <Text size="sm" className="text-zinc-500">
-                        Waiting for the question…
-                    </Text>
+            <div className="ask-shell">
+                <div className="ask-frame">
+                    {header}
+                    <div className="ask-loading">
+                        <Text size="sm" className="text-zinc-500">
+                            Waiting for the question…
+                        </Text>
+                    </div>
                 </div>
             </div>
         );
     }
 
     return (
-        <div className="ask-frame">
-            {header}
+        <div className={`ask-shell${drawerOpen ? ' with-file' : ''}`}>
+            <div className="ask-frame">
+                {header}
 
-            {/* PendingQuestions v2 — the queue: pick which to answer next. Higher
-                priority sorts up, but the user chooses; nothing is auto-answered. */}
-            {others.length > 0 && (
-                <div
-                    style={{
-                        display: 'flex',
-                        gap: 6,
-                        flexWrap: 'wrap',
-                        padding: '8px 14px',
-                        borderBottom: '1px solid var(--zinc-800, #27272a)',
-                    }}
-                >
-                    {pending.map((p) => {
-                        const on = p.id === active.id;
-                        const meta = p.priority ? PRIORITY_META[p.priority] : PRIORITY_META.normal;
-                        return (
-                            <button
-                                key={p.id}
-                                type="button"
-                                onClick={() => setPinnedId(p.id)}
-                                title={p.workspaceLabel ?? undefined}
-                                style={{
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: 6,
-                                    padding: '3px 9px',
-                                    borderRadius: 999,
-                                    border: on
-                                        ? '1px solid var(--violet-500, #8b5cf6)'
-                                        : '1px solid var(--zinc-700, #3f3f46)',
-                                    background: on ? 'var(--violet-500-a, rgba(139,92,246,.12))' : 'transparent',
-                                    color: 'inherit',
-                                    cursor: 'pointer',
-                                    fontSize: 12,
-                                }}
-                            >
-                                {meta.color && (
-                                    <span
-                                        aria-hidden
-                                        style={{
-                                            width: 7,
-                                            height: 7,
-                                            borderRadius: 999,
-                                            background: meta.color,
-                                        }}
-                                    />
-                                )}
-                                <span>{p.questions[0]?.header ?? 'Question'}</span>
-                                {p.remoteHost ? (
-                                    <span
-                                        style={{
-                                            opacity: 0.75,
-                                            display: 'inline-flex',
-                                            alignItems: 'center',
-                                            gap: 3,
-                                        }}
-                                        title={`Remote host: ${p.remoteHost}`}
-                                    >
-                                        <Icon name="cloud" size="xs" /> {p.remoteHost}
-                                    </span>
-                                ) : p.workspaceLabel ? (
-                                    <span style={{ opacity: 0.6 }}>· {p.workspaceLabel}</span>
-                                ) : null}
-                            </button>
-                        );
-                    })}
-                </div>
-            )}
-
-            <div className="ask-body">
-                {questions.map((q, qi) => (
-                    <div key={qi} className="ask-q">
-                        <div className="ask-q-head">
-                            <span className="ask-chip">{q.header}</span>
-                            {q.multiSelect && (
-                                <Text size="xs" className="text-zinc-500">
-                                    choose any
-                                </Text>
-                            )}
-                        </div>
-                        <ContentRenderer
-                            value={q.question}
-                            format="markdown"
-                            lineSpacing={1.55}
-                            className="ask-q-content"
-                        />
-                        <div className="ask-options">
-                            {q.options.map((o) => {
-                                const on = (draft.selected[qi] ?? []).includes(o.label);
-                                return (
-                                    <button
-                                        key={o.label}
-                                        type="button"
-                                        className={`ask-opt${on ? ' on' : ''}`}
-                                        onClick={() => toggle(qi, o.label, !!q.multiSelect)}
-                                    >
-                                        <span className="ask-opt-label">
-                                            {on && <Icon name="check" size="xs" />} {o.label}
+                {/* PendingQuestions v2 — the queue: pick which to answer next. Higher
+                    priority sorts up, but the user chooses; nothing is auto-answered. */}
+                {others.length > 0 && (
+                    <div
+                        style={{
+                            display: 'flex',
+                            gap: 6,
+                            flexWrap: 'wrap',
+                            padding: '8px 14px',
+                            borderBottom: '1px solid var(--zinc-800, #27272a)',
+                        }}
+                    >
+                        {pending.map((p) => {
+                            const on = p.id === active.id;
+                            const meta = p.priority ? PRIORITY_META[p.priority] : PRIORITY_META.normal;
+                            return (
+                                <button
+                                    key={p.id}
+                                    type="button"
+                                    onClick={() => setPinnedId(p.id)}
+                                    title={p.workspaceLabel ?? undefined}
+                                    style={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: 6,
+                                        padding: '3px 9px',
+                                        borderRadius: 999,
+                                        border: on
+                                            ? '1px solid var(--violet-500, #8b5cf6)'
+                                            : '1px solid var(--zinc-700, #3f3f46)',
+                                        background: on ? 'var(--violet-500-a, rgba(139,92,246,.12))' : 'transparent',
+                                        color: 'inherit',
+                                        cursor: 'pointer',
+                                        fontSize: 12,
+                                    }}
+                                >
+                                    {meta.color && (
+                                        <span
+                                            aria-hidden
+                                            style={{
+                                                width: 7,
+                                                height: 7,
+                                                borderRadius: 999,
+                                                background: meta.color,
+                                            }}
+                                        />
+                                    )}
+                                    <span>{p.questions[0]?.header ?? 'Question'}</span>
+                                    {p.remoteHost ? (
+                                        <span
+                                            style={{
+                                                opacity: 0.75,
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                gap: 3,
+                                            }}
+                                            title={`Remote host: ${p.remoteHost}`}
+                                        >
+                                            <Icon name="cloud" size="xs" /> {p.remoteHost}
                                         </span>
-                                        {o.description && (
-                                            <span className="ask-opt-desc">{o.description}</span>
-                                        )}
-                                    </button>
-                                );
-                            })}
-                        </div>
-                        <textarea
-                            className="input ask-note"
-                            value={draft.notes[qi] ?? ''}
-                            onChange={(e) => {
-                                if (!active) return;
-                                const text = e.target.value;
-                                setDrafts((prev) => setDraftNote(prev, active.id, qi, text));
-                            }}
-                            placeholder="Add a note (optional)…"
-                            rows={2}
-                        />
+                                    ) : p.workspaceLabel ? (
+                                        <span style={{ opacity: 0.6 }}>· {p.workspaceLabel}</span>
+                                    ) : null}
+                                </button>
+                            );
+                        })}
                     </div>
-                ))}
+                )}
+
+                <div className="ask-body">
+                    {questions.map((q, qi) => (
+                        <div key={qi} className="ask-q">
+                            <div className="ask-q-head">
+                                <span className="ask-chip">{q.header}</span>
+                                {q.multiSelect && (
+                                    <Text size="xs" className="text-zinc-500">
+                                        choose any
+                                    </Text>
+                                )}
+                            </div>
+                            <ContentRenderer
+                                value={q.question}
+                                format="markdown"
+                                lineSpacing={1.55}
+                                className="ask-q-content"
+                            />
+                            {canOpenFiles && (fileRefs[qi]?.length ?? 0) > 0 && (
+                                <div className="ask-file-chips">
+                                    {fileRefs[qi]!.map((ref) => (
+                                        <button
+                                            key={`${ref.path}:${ref.line ?? ''}${ref.section ?? ''}`}
+                                            type="button"
+                                            className={`ask-file-chip${
+                                                openFile?.path === ref.path ? ' on' : ''
+                                            }`}
+                                            title={`Open ${ref.path}`}
+                                            onClick={() =>
+                                                setOpenFile((cur) =>
+                                                    cur?.path === ref.path ? null : ref,
+                                                )
+                                            }
+                                        >
+                                            <Icon name="file-text" size="xs" />
+                                            <span className="ask-file-chip-name">{ref.name}</span>
+                                            {ref.section && (
+                                                <span className="ask-file-chip-at">{ref.section}</span>
+                                            )}
+                                            {ref.line !== undefined && (
+                                                <span className="ask-file-chip-at">:{ref.line}</span>
+                                            )}
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                            <div className="ask-options">
+                                {q.options.map((o) => {
+                                    const on = (draft.selected[qi] ?? []).includes(o.label);
+                                    return (
+                                        <button
+                                            key={o.label}
+                                            type="button"
+                                            className={`ask-opt${on ? ' on' : ''}`}
+                                            onClick={() => toggle(qi, o.label, !!q.multiSelect)}
+                                        >
+                                            <span className="ask-opt-label">
+                                                {on && <Icon name="check" size="xs" />} {o.label}
+                                            </span>
+                                            {o.description && (
+                                                <span className="ask-opt-desc">{o.description}</span>
+                                            )}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                            <textarea
+                                className="input ask-note"
+                                value={draft.notes[qi] ?? ''}
+                                onChange={(e) => {
+                                    if (!active) return;
+                                    const text = e.target.value;
+                                    setDrafts((prev) => setDraftNote(prev, active.id, qi, text));
+                                }}
+                                placeholder="Add a note (optional)…"
+                                rows={2}
+                            />
+                        </div>
+                    ))}
+                </div>
+
+                <div className="ask-foot">
+                    <span className="kbd">esc</span>
+                    <Text size="xs" className="text-zinc-500">
+                        dismiss
+                    </Text>
+                    <div style={{ flex: 1 }} />
+                    <Action variant="ghost" size="sm" onClick={cancelActive}>
+                        Cancel
+                    </Action>
+                    <Action
+                        color="blue"
+                        size="sm"
+                        icon="check"
+                        onClick={submit}
+                        disabled={!ready || submitting}
+                    >
+                        {submitting ? 'Sending…' : 'Submit'}
+                    </Action>
+                </div>
             </div>
 
-            <div className="ask-foot">
-                <span className="kbd">esc</span>
-                <Text size="xs" className="text-zinc-500">
-                    dismiss
-                </Text>
-                <div style={{ flex: 1 }} />
-                <Action variant="ghost" size="sm" onClick={cancelActive}>
-                    Cancel
-                </Action>
-                <Action
-                    color="blue"
-                    size="sm"
-                    icon="check"
-                    onClick={submit}
-                    disabled={!ready || submitting}
-                >
-                    {submitting ? 'Sending…' : 'Submit'}
-                </Action>
-            </div>
+            {/* The file the question is about, BESIDE the question — never over it,
+                and never by navigating this window (genie#196). The window itself
+                widened to make room; see main/ask/drawer-bounds.ts. */}
+            {openFile && (
+                <aside className="ask-file-pane">
+                    <div className="ask-file-head">
+                        <Icon name="file-text" size="sm" className="text-zinc-500" />
+                        <span className="ask-file-title">{openFile.name}</span>
+                        {openFile.section && (
+                            <span className="ask-file-chip-at">{openFile.section}</span>
+                        )}
+                        <span className="ask-file-path" title={openFile.path}>
+                            {openFile.path}
+                        </span>
+                        <div style={{ flex: 1 }} />
+                        <button
+                            type="button"
+                            className="ask-x"
+                            onClick={() => setOpenFile(null)}
+                            title="Close the file (Esc)"
+                            aria-label="Close the file"
+                        >
+                            ✕
+                        </button>
+                    </div>
+                    <div className="ask-file-view">
+                        {fileState.status === 'loading' && (
+                            <div className="ask-file-note">Opening {openFile.name}…</div>
+                        )}
+                        {fileState.status === 'error' && (
+                            <div className="ask-file-note">
+                                {openFile.path} could not be opened: {fileState.message}
+                            </div>
+                        )}
+                        {fileState.status === 'ready' && (
+                            <FileViewer
+                                key={openFile.path}
+                                filename={openFile.name}
+                                value={fileState.content}
+                                wordWrap
+                            />
+                        )}
+                    </div>
+                    {fileState.status === 'ready' && fileState.truncated && (
+                        <div className="ask-file-note">
+                            This file is too large to show in full — the rest is on disk.
+                        </div>
+                    )}
+                </aside>
+            )}
         </div>
     );
 }
