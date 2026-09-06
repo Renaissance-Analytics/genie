@@ -4411,6 +4411,10 @@ export interface GenieApi {
             cb: (payload: {
                 id: string;
                 workspaceLabel?: string;
+                /** That workspace's local root — the file drawer resolves a path
+                 *  the question NAMES against it (Tynn #272). Absent for a
+                 *  forwarded question: that path lives on the host. */
+                workspacePath?: string;
                 questions: ForceQuestionSpec[];
                 /** How many other requests are still queued behind this one. */
                 queued?: number;
@@ -4423,6 +4427,8 @@ export interface GenieApi {
                 pending: Array<{
                     id: string;
                     workspaceLabel?: string;
+                    /** See `onShow` — the workspace root the file drawer reads from. */
+                    workspacePath?: string;
                     questions: ForceQuestionSpec[];
                     index: number;
                     priority?: 'low' | 'normal' | 'high' | 'urgent';
@@ -4441,6 +4447,9 @@ export interface GenieApi {
          *  an answer begun in one surface is finished in the other. */
         draftGet: (id: string) => Promise<AskDraftSpec | null>;
         draftSet: (id: string, entry: AskDraftSpec) => Promise<void>;
+        /** The file drawer opened/closed — main widens or narrows the window so
+         *  the file sits BESIDE the question rather than on top of it (#272). */
+        drawer: (open: boolean) => Promise<void>;
     };
     on: {
         authChanged: (

@@ -1,7 +1,7 @@
-import { BrowserWindow, ipcMain, powerMonitor, shell } from 'electron';
+import { BrowserWindow, ipcMain, powerMonitor, screen, shell } from 'electron';
 import crypto from 'crypto';
 import path from 'path';
-import { getAllSettings, setSettings } from '../db';
+import { getAllSettings, listWorkspaces, setSettings } from '../db';
 import {
     dropDraft,
     parseDraftStore,
@@ -22,6 +22,7 @@ import type {
 } from '../mcp/protocol';
 import type { QuestionTransport } from '../host-core/ports';
 import { insertByPriority, type QuestionPriority } from './question-priority';
+import { ASK_MODAL_WIDTH, askWindowBounds } from './drawer-bounds';
 import {
     asFtqAvailability,
     resolveDndMessage,
@@ -81,6 +82,30 @@ export function setAvailabilityReader(
     r: ((scope: QuestionScope) => AvailabilityDecision) | null,
 ): void {
     availabilityReader = r ?? readAvailabilityFromSettings;
+}
+
+/**
+ * The local root of the workspace a question came from — what the modal's file
+ * drawer resolves a named path against (Tynn story #272). A question that says
+ * `.ai/plans/spec.md` means that file in ITS workspace, and the read is confined
+ * to that root by the existing `files:read` handler.
+ *
+ * Injectable like {@link availabilityReader} so the enqueue path stays testable
+ * without the workspaces table; unreadable ⇒ undefined ⇒ the chips render as
+ * plain text and open nothing, which is exactly what shipped before.
+ */
+function readWorkspacePath(workspaceId: string): string | undefined {
+    try {
+        return listWorkspaces().find((w) => w.id === workspaceId)?.path || undefined;
+    } catch {
+        return undefined;
+    }
+}
+let workspacePathReader: (workspaceId: string) => string | undefined = readWorkspacePath;
+export function setWorkspacePathReader(
+    r: ((workspaceId: string) => string | undefined) | null,
+): void {
+    workspacePathReader = r ?? readWorkspacePath;
 }
 
 export interface UserPresence {
@@ -236,6 +261,9 @@ interface DeferredQuestion {
     id: string;
     questions: ForceQuestion[];
     workspaceLabel?: string;
+    /** The workspace's local root — the file drawer resolves named paths against
+     *  it (Tynn #272). Absent for a forwarded question: that path is on the HOST. */
+    workspacePath?: string;
     priority?: QuestionPriority;
     remoteHost?: string;
     /** When the question ARRIVED (ms epoch) — stamped as it's deferred, so the
@@ -302,6 +330,10 @@ interface QueueItem {
     resolve: (r: ForceQuestionResult) => void;
     questions: ForceQuestion[];
     workspaceLabel?: string;
+    /** The workspace's local root — the file drawer resolves named paths against
+     *  it (Tynn #272). Absent for a forwarded question: that path is on the HOST,
+     *  so the drawer stays shut rather than reading a same-named local file. */
+    workspacePath?: string;
     /** PendingQuestions v2 — orders the queue (default 'normal'). Higher priority
      *  is answered sooner but never preempts the shown head. */
     priority?: QuestionPriority;
@@ -405,6 +437,10 @@ export interface PendingQuestion {
     id: string;
     questions: ForceQuestion[];
     workspaceLabel?: string;
+    /** The workspace's local root, when this question was raised locally — the
+     *  modal's file drawer resolves a path the question names against it (Tynn
+     *  #272). Absent for a FORWARDED question: that path is on the host. */
+    workspacePath?: string;
     /** Position in the queue (0 = currently shown on the desktop). Already ordered
      *  by priority (v2), so index reflects answer order. */
     index: number;
@@ -439,6 +475,7 @@ export function listPendingQuestions(): PendingQuestion[] {
         id: item.id,
         questions: item.questions,
         workspaceLabel: item.workspaceLabel,
+        workspacePath: item.workspacePath,
         index,
         priority: item.priority,
         remoteHost: item.forward?.hostLabel,
@@ -448,6 +485,7 @@ export function listPendingQuestions(): PendingQuestion[] {
         id: d.id,
         questions: d.questions,
         workspaceLabel: d.workspaceLabel,
+        workspacePath: d.workspacePath,
         index: queue.length + i,
         priority: d.priority,
         remoteHost: d.remoteHost,
@@ -532,12 +570,14 @@ function payloadFor(item: QueueItem): {
     id: string;
     questions: ForceQuestion[];
     workspaceLabel?: string;
+    workspacePath?: string;
     queued: number;
 } {
     return {
         id: item.id,
         questions: item.questions,
         workspaceLabel: item.workspaceLabel,
+        workspacePath: item.workspacePath,
         // How many OTHER requests are still waiting behind the current one.
         queued: Math.max(0, queue.length - 1),
     };
@@ -690,12 +730,43 @@ export function registerForceQuestionIpc(cfg: Config): void {
         const item = itemBySender(e.sender.id);
         if (item) finish(item.id, { cancelled: true, answers: [] });
     });
+    // The file drawer opened or closed (Tynn #272). It sits BESIDE the question,
+    // never over it, so the window has to grow — and shrink back — rather than
+    // the question giving up half its width to a file it is only referring to.
+    ipcMain.handle('ask:drawer', (e, open: boolean) => {
+        setAskDrawerOpen(e.sender.id, !!open);
+    });
+}
+
+/**
+ * Widen (or narrow) the ask window for the file drawer, keeping the whole thing
+ * on the display it is on. Only the window that ASKED is resized — a stale
+ * renderer from a closed modal must not move the live one.
+ */
+function setAskDrawerOpen(senderId: number, open: boolean): void {
+    if (!win || win.isDestroyed() || win.webContents.id !== senderId) return;
+    try {
+        const current = win.getBounds();
+        const workArea = screen.getDisplayMatching(current).workArea;
+        // The modal is deliberately NOT user-resizable (nothing about a question
+        // wants a drag handle), and a non-resizable window can refuse a
+        // programmatic resize. Lift it for the one call, then put it back — the
+        // user never gets a grab edge either way.
+        const resizable = win.isResizable();
+        if (!resizable) win.setResizable(true);
+        win.setBounds(askWindowBounds({ current, workArea, drawerOpen: open }));
+        if (!resizable) win.setResizable(false);
+    } catch {
+        /* No display / a screen module that throws under test: the drawer still
+           renders, just in the width the window already has. Never take the
+           question down over a resize. */
+    }
 }
 
 function createAskWindow(): BrowserWindow {
     if (!config) throw new Error('ForceTheQuestion IPC not registered');
     const w = new BrowserWindow({
-        width: 560,
+        width: ASK_MODAL_WIDTH,
         height: 560,
         show: false,
         frame: false,
@@ -850,6 +921,12 @@ function raiseDesktopModal(
     return new Promise((resolve) => {
         const id = crypto.randomBytes(9).toString('hex');
         const decision = availabilityReader(scope ?? {});
+        // The workspace this question came from, so the modal's file drawer can
+        // open a path the question NAMES (Tynn #272). Resolved once, here, where
+        // the scope is in hand.
+        const workspacePath = scope?.workspaceId
+            ? workspacePathReader(scope.workspaceId)
+            : undefined;
         if (decision.availability === 'dnd') {
             // DND for this scope: NEVER pop the modal or steal focus. Park the question
             // in the top-bar inbox (deferred) to answer at leisure. Record the asking
@@ -861,6 +938,7 @@ function raiseDesktopModal(
                 id,
                 questions,
                 workspaceLabel,
+                workspacePath,
                 priority,
                 createdAt: questionClock(),
                 askerTerminalId,
@@ -893,6 +971,7 @@ function raiseDesktopModal(
                 id,
                 questions,
                 workspaceLabel,
+                workspacePath,
                 priority,
                 askerTerminalId,
                 resolve: (lateResult) => {
@@ -924,7 +1003,7 @@ function raiseDesktopModal(
             });
             return;
         }
-        enqueue({ id, resolve, questions, workspaceLabel, priority, askerTerminalId });
+        enqueue({ id, resolve, questions, workspaceLabel, workspacePath, priority, askerTerminalId });
     });
 }
 

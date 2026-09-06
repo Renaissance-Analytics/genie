@@ -55,6 +55,10 @@ export const E2E_USERDATA = path.join(os.tmpdir(), 'genie-e2e-profile');
  * loads `master.html` — the app's real main window — against the fixture in
  * main/e2e/master.ts. Every other entry here mounts a component in isolation;
  * this one mounts the product.
+ *
+ * `ask` goes one step further: it loads NO page at all. The ForceTheQuestion
+ * modal is a window the product OPENS, so main/e2e/ask.ts raises real questions
+ * and `createAskWindow` makes the window Playwright attaches to (Tynn #272).
  */
 export type E2EHarnessPage =
     | 'issuewatch'
@@ -69,6 +73,7 @@ export type E2EHarnessPage =
     | 'tynn-import'
     | 'workspace-create'
     | 'agent-pulse'
+    | 'ask'
     | 'master';
 
 const HARNESS_ROUTE: Record<E2EHarnessPage, string> = {
@@ -84,6 +89,7 @@ const HARNESS_ROUTE: Record<E2EHarnessPage, string> = {
     'tynn-import': 'e2e-tynn-import',
     'workspace-create': 'e2e-workspace-create',
     'agent-pulse': 'e2e-agent-pulse',
+    ask: 'ask',
     master: 'master',
 };
 
