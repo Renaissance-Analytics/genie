@@ -22,6 +22,17 @@ import {
 const SCREEN = { x: 0, y: 0, width: 1920, height: 1080 };
 const OPEN = ASK_MODAL_WIDTH + ASK_DRAWER_WIDTH;
 
+/**
+ * An x with genuine room for the drawer, DERIVED from the widths rather than
+ * written as a number.
+ *
+ * A hardcoded 680 used to satisfy "has room" and stopped doing so the moment the
+ * modal got wider (genie#458) — at which point the test failed for a reason that
+ * had nothing to do with the rule it was guarding. The premise is now computed,
+ * so it stays true whatever the widths become.
+ */
+const ROOMY_X = SCREEN.width - OPEN - 40;
+
 describe('askWindowBounds', () => {
     it('is the bare modal width when the drawer is closed', () => {
         const b = askWindowBounds({
@@ -42,12 +53,16 @@ describe('askWindowBounds', () => {
     });
 
     it('leaves the question where it is when the drawer has room', () => {
+        // The premise, asserted rather than assumed: if this fails the test
+        // below is vacuous, because there was never room to begin with.
+        expect(ROOMY_X + OPEN).toBeLessThanOrEqual(SCREEN.x + SCREEN.width);
+
         const b = askWindowBounds({
-            current: { x: 680, y: 260, width: ASK_MODAL_WIDTH, height: 560 },
+            current: { x: ROOMY_X, y: 260, width: ASK_MODAL_WIDTH, height: 560 },
             workArea: SCREEN,
             drawerOpen: true,
         });
-        expect(b.x).toBe(680);
+        expect(b.x).toBe(ROOMY_X);
     });
 
     it('slides left rather than opening the drawer off the screen', () => {

@@ -45,6 +45,11 @@ export interface ReviewOutcome {
     error?: string;
 }
 
+/**
+ * Which post the REVIEW CARD shows. Falling back to the newest post is right
+ * here: the card is the panel's content, and a board with posts on it should
+ * never show an empty card.
+ */
 export function resolveActiveBoardPost(
     posts: readonly BoardPost[],
     requestedId?: string | null,
@@ -54,4 +59,26 @@ export function resolveActiveBoardPost(
         if (requested) return requested;
     }
     return posts[0] ?? null;
+}
+
+/**
+ * Which post the CANVAS is zoomed into — a different question, and deliberately
+ * WITHOUT the fallback above.
+ *
+ * fancy-artboard is controlled for focus, so whatever this returns is what the
+ * canvas shows on the next render. Falling back to the newest post would mean a
+ * board with any post on it is permanently in focus mode: dismissing it calls
+ * `onFocusChange(null)`, and the fallback would hand the same post straight back
+ * (genie#457). Null is a state the canvas must be able to reach and stay in.
+ *
+ * A focus naming a post that has since left the board resolves to null rather
+ * than to a different post — the reviewer asked to look at THAT artifact, and
+ * silently zooming a neighbour would answer a question they did not ask.
+ */
+export function resolveBoardFocus(
+    posts: readonly BoardPost[],
+    focusedId: string | null,
+): string | null {
+    if (!focusedId) return null;
+    return posts.some((post) => post.id === focusedId) ? focusedId : null;
 }
