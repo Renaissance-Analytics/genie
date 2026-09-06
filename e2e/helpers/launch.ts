@@ -703,15 +703,80 @@ export async function announceInboxIncoming(
 }
 
 /**
+ * Bound one teardown step, and SAY SO when it overruns (genie#490).
+ *
+ * A hook that hangs is worse than one that fails, because the failure is
+ * reported against whichever test happened to run last. On `main` at `7f594b1d`
+ * that was `master-window.spec.ts:961` — *"the palette offers no step Genie
+ * would refuse"* — a test that passed its own assertions and had nothing to do
+ * with it. Anyone reading the run concludes the Flows palette regressed.
+ *
+ * `.catch(() => {})` does not prevent this and reading it as a safety net is the
+ * trap: it handles a REJECTION, and the failure here is a promise that never
+ * settles at all. `await` on one waits forever regardless of what is chained to
+ * it. That is the general lesson — a rejection handler is not a timeout.
+ *
+ * Rejections still propagate. A step that fails fast and one that hangs need
+ * different answers, and collapsing them would bury a real teardown error under
+ * "timed out".
+ */
+export async function withTeardownBound<T>(
+    work: Promise<T>,
+    ms: number,
+    label: string,
+): Promise<T | null> {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+        const outcome = await Promise.race([
+            work,
+            new Promise<typeof OVERRAN>((r) => {
+                timer = setTimeout(() => r(OVERRAN), ms);
+            }),
+        ]);
+        if (outcome !== OVERRAN) return outcome;
+        // Named, so the next occurrence points at the STEP instead of at an
+        // innocent test. genie#490 asks for this to be measured rather than
+        // reasoned about from the source; this is that measurement, made
+        // permanent and free.
+        console.warn(
+            `[e2e teardown] ${label} did not finish within ${ms}ms — continuing. ` +
+                `The app is wedged or already gone; this is the genie#490 shape.`,
+        );
+        return null;
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
+}
+
+const OVERRAN = Symbol('teardown-step-overran');
+
+/**
  * Kill the fixture's ptys. Call this BEFORE `app.close()`: a manual quit with a
  * live terminal and a window open raises the keep-or-shut-down confirmation, and
  * because this harness IS the real master page it really renders that modal —
  * quit then sits for its 30s decision timeout with nobody there to answer.
+ *
+ * BOUNDED (genie#490). `app.evaluate` has no timeout of its own, and an app too
+ * wedged to answer it used to hang this call forever — taking the `afterAll`,
+ * then the worker teardown, then the shard. `identify()` above already races its
+ * own evaluate for exactly this reason; this is the same idiom, applied to the
+ * other place in this file that awaits an app that may never answer.
+ *
+ * Giving up here is safe and is not a silent failure: it is logged by name, and
+ * the ptys die with the app moments later either way. What it stops is the
+ * 60-second wait for an answer that is not coming.
  */
-export async function killMasterTerminals(app: ElectronApplication): Promise<void> {
-    await app.evaluate(() => {
-        (globalThis as Record<string, any>).__GENIE_E2E_MASTER__?.killTerminals?.();
-    });
+export async function killMasterTerminals(
+    app: ElectronApplication,
+    timeoutMs = 10_000,
+): Promise<void> {
+    await withTeardownBound(
+        app.evaluate(() => {
+            (globalThis as Record<string, any>).__GENIE_E2E_MASTER__?.killTerminals?.();
+        }),
+        timeoutMs,
+        'killMasterTerminals',
+    );
 }
 
 /**

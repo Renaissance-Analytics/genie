@@ -2,6 +2,7 @@ import { test, expect, type ElectronApplication, type Page } from '@playwright/t
 import {
     announceInboxIncoming,
     killMasterTerminals,
+    withTeardownBound,
     launchGenieE2E,
     readLiveTerminals,
     readMasterSeed,
@@ -109,8 +110,20 @@ test.afterAll(async () => {
     // window open raises the keep-or-shut-down confirmation, and this harness is
     // the real master page, so it really renders that modal — quit would then sit
     // out its 30s decision timeout with nobody there to answer.
+    //
+    // BOTH steps are bounded, and each names itself if it overruns (genie#490).
+    // This hook blew its 60s on `main` at `7f594b1d` and the failure was
+    // reported against test 961, which had passed — so the run read as a Flows
+    // palette regression. Neither step was bounded, so the log could not even
+    // say which of the two was stuck, and reading the source cannot settle it
+    // either: both are plausible against a wedged app.
+    //
+    // The `.catch(() => {})` that used to guard the first step could not help.
+    // It handles a REJECTION; the failure is a promise that never settles, and
+    // `await` on one waits forever whatever is chained to it. A rejection
+    // handler is not a timeout — the general point, not a fact about ptys.
     if (app) await killMasterTerminals(app).catch(() => {});
-    await app?.close();
+    if (app) await withTeardownBound(app.close(), 20_000, 'app.close()').catch(() => {});
 });
 
 /** A panel by the terminal label its head shows. */
