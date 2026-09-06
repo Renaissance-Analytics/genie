@@ -751,6 +751,12 @@ the decision is a true blocker — never poll ForceTheQuestion.
 - **Batch ALL your open questions into a single call** — never fire it repeatedly
   in a row; gather everything you need and ask once.
 - Returns each question's selected option(s) + note, or a cancellation.
+- **A question you already asked is REJOINED, not duplicated.** If your session
+  drops, or Genie restarts, before the answer reaches you, asking the SAME
+  question again from the same terminal returns the ORIGINAL \`questionId\` — the
+  user is not shown it twice. Pending questions survive a Genie restart, so a
+  question raised before an upgrade is still waiting after it. You cannot pass a
+  key for this; Genie derives it from your terminal and the question itself.
 - **VERNACULAR (who-does-what):** the modal is read by the USER, so first-person
   pronouns INVERT and confuse. By convention the **agent is \`I\`/\`the agent\`** and
   the **user is \`you\`/\`the owner\`**; when an option is about WHO performs an action,

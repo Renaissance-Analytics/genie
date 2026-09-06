@@ -184,6 +184,7 @@ import {
     desktopQuestionTransport,
     setDeferredAnswerSink,
     formatDeferredAnswer,
+    rehydratePendingQuestions,
     type DeferredAnswerDelivery,
 } from './ask/force-question';
 import { listAllProcesses } from './terminal/process-list';
@@ -1978,6 +1979,29 @@ app.whenReady().then(async () => {
     startSchedules();
     // ForceTheQuestion modal IPC (the agent-integration MCP raises it).
     registerForceQuestionIpc(forceQuestionIpcConfig());
+    // Bring back the questions the LAST run was still waiting on. The queue used
+    // to be in memory and nothing else, so every upgrade — and Genie upgrades
+    // constantly — silently erased whatever the user had not answered yet: the
+    // agent waited forever, and nobody ever learned a question had existed.
+    //
+    // A question only comes back if its answer could still reach the agent that
+    // asked. Same test the ask path applies before ACCEPTING a question
+    // (genie#321): a terminal in a workspace, with an AgentInbox identity bound
+    // to it. Anything else is dropped rather than parked, because putting it in
+    // the inbox would spend the user's attention on an answer with nowhere to go.
+    // Runs after setDeferredAnswerSink above, so a restored question can deliver.
+    //
+    // Deliberately NOT wrapped in a try/catch. A throw here means "cannot tell",
+    // and rehydrate keeps such a row for the next boot rather than deciding on a
+    // failed lookup — swallowing it into `false` would delete a real pending
+    // question because a query happened to fail once.
+    rehydratePendingQuestions((terminalId) => {
+        const workspaceId = getTerminalSpec(terminalId)?.workspace_id ?? null;
+        return (
+            !!workspaceId &&
+            listWorkspaceAgents(workspaceId).some((a) => a.terminal_spec_id === terminalId)
+        );
+    });
     // Wire the openFileForUser tool's renderer round-trip: resolve workspace +
     // path in main, then ask the master Floor to reuse/open an editor panel.
     registerOpenFile({

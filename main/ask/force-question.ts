@@ -22,6 +22,12 @@ import type {
 } from '../mcp/protocol';
 import type { QuestionTransport } from '../host-core/ports';
 import { insertByPriority, type QuestionPriority } from './question-priority';
+import { deriveAskKey } from './ask-key';
+import {
+    dbQuestionStore,
+    type PersistedQuestion,
+    type QuestionStorePort,
+} from './question-store';
 import { ASK_MODAL_WIDTH, askWindowBounds } from './drawer-bounds';
 import {
     asFtqAvailability,
@@ -146,10 +152,15 @@ function deferredAgentMessage(decision: AvailabilityDecision): string {
  *   - `'dnd'`: the scope was in Do Not Disturb — the modal never popped.
  *   - `'unshowable'`: the modal could not be raised (no display) for an otherwise
  *     available user.
+ *   - `'restart'`: Genie restarted while the question was pending, and it was
+ *     rebuilt from the database into the inbox (see
+ *     {@link rehydratePendingQuestions}). Distinct from the other two because the
+ *     agent was never told anything about DND or a display — from its side the
+ *     answer simply took an upgrade longer than expected.
  *   - `undefined`: the modal WAS shown and this is its ordinary answer; only the
  *     DELIVERY is asynchronous, by design (see `raiseDesktopModal`).
  */
-export type DeferralReason = 'dnd' | 'unshowable';
+export type DeferralReason = 'dnd' | 'unshowable' | 'restart';
 
 /**
  * An asynchronous agent question's late answer, ready to hand back to the asker.
@@ -229,7 +240,9 @@ export function formatDeferredAnswer(d: DeferredAnswerDelivery): string {
             ? 'Your ForceTheQuestion was answered (it had been deferred while you were in DND):'
             : d.deferralReason === 'unshowable'
               ? 'Your ForceTheQuestion was answered (it had been deferred because the modal could not be shown):'
-              : 'Your ForceTheQuestion was answered:';
+              : d.deferralReason === 'restart'
+                ? 'Your ForceTheQuestion was answered (Genie restarted while it was pending, so it waited in the user’s inbox):'
+                : 'Your ForceTheQuestion was answered:';
     return `${intro}\n\n${lines.join('\n')}\n\n(questionId: ${d.questionId})`;
 }
 
@@ -241,6 +254,25 @@ export function formatDeferredAnswer(d: DeferredAnswerDelivery): string {
 let questionClock: () => number = () => Date.now();
 export function setQuestionClock(fn: (() => number) | null): void {
     questionClock = fn ?? (() => Date.now());
+}
+
+/**
+ * Where a pending question is WRITTEN DOWN so it outlives this process.
+ *
+ * The queue below is in memory, and until this existed that was all it was: an
+ * upgrade, a crash or a killed process erased every pending question. The agent
+ * that asked was left waiting on an answer that could never arrive, and the
+ * human never learned a question had existed. Genie upgrades constantly, so this
+ * was not a rare edge.
+ *
+ * Injected (like {@link deferredAnswerSink}) so the queue stays unit-testable
+ * without a database; the default is the real genie.db store, so durability does
+ * not depend on a composition root remembering to wire it.
+ */
+let questionStore: QuestionStorePort = dbQuestionStore;
+/** Install the durable question store. Pass null to restore the genie.db one. */
+export function setQuestionStore(s: QuestionStorePort | null): void {
+    questionStore = s ?? dbQuestionStore;
 }
 
 let deferredAnswerSink: ((d: DeferredAnswerDelivery) => void) | null = null;
@@ -259,8 +291,13 @@ export function setDeferredAnswerSink(fn: ((d: DeferredAnswerDelivery) => void) 
  */
 interface DeferredQuestion {
     id: string;
+    /** The derived re-attach key — present only for a question that was stored
+     *  (i.e. one with an asking terminal). See {@link deriveAskKey}. */
+    askKey?: string;
     questions: ForceQuestion[];
     workspaceLabel?: string;
+    /** The asking workspace's id — stored so a rebuilt question still knows it. */
+    workspaceId?: string;
     /** The workspace's local root — the file drawer resolves named paths against
      *  it (Tynn #272). Absent for a forwarded question: that path is on the HOST. */
     workspacePath?: string;
@@ -327,9 +364,14 @@ interface Config {
 /** One queued ForceTheQuestion request awaiting (or currently taking) its turn. */
 interface QueueItem {
     id: string;
+    /** The derived re-attach key — present only for a question that was stored
+     *  (i.e. one with an asking terminal). See {@link deriveAskKey}. */
+    askKey?: string;
     resolve: (r: ForceQuestionResult) => void;
     questions: ForceQuestion[];
     workspaceLabel?: string;
+    /** The asking workspace's id — stored so a rebuilt question still knows it. */
+    workspaceId?: string;
     /** The workspace's local root — the file drawer resolves named paths against
      *  it (Tynn #272). Absent for a forwarded question: that path is on the HOST,
      *  so the drawer stays shut rather than reading a same-named local file. */
@@ -520,6 +562,8 @@ export function answerPendingQuestion(
     const di = deferred.findIndex((d) => d.id === id);
     if (di !== -1) {
         const [d] = deferred.splice(di, 1);
+        // Answered — so it must not come back from the dead on the next boot.
+        forget(d.id);
         d.resolve?.({ cancelled: false, answers: answers ?? [] });
         if (d.askerTerminalId && deferredAnswerSink) {
             try {
@@ -538,6 +582,147 @@ export function answerPendingQuestion(
         return true;
     }
     return false;
+}
+
+/**
+ * Write one question down so it survives this process.
+ *
+ * Only a question with BOTH an `askKey` and an `askerTerminalId` is stored, and
+ * that pair is the whole eligibility rule: the key makes it re-joinable, and the
+ * terminal is where an answer can still be delivered after a restart. Everything
+ * else is deliberately NOT durable —
+ *
+ *  - an INTERNAL approval gate (a process run, a plugin consent) holds an
+ *    in-process promise that dies with the process. Rebuilding it would put a
+ *    question in front of the human for an operation nobody is waiting on;
+ *  - a FORWARDED host question belongs to a live bridge connection. There is
+ *    nothing to POST an answer back through after a restart, and the host
+ *    re-forwards its own pending questions when the bridge reconnects, so a
+ *    stored copy could only become a duplicate that resolves nothing.
+ */
+function persist(
+    q: { id: string; askKey?: string; askerTerminalId?: string } & Omit<
+        PersistedQuestion,
+        'id' | 'askKey' | 'terminalId'
+    >,
+): void {
+    if (!q.askKey || !q.askerTerminalId) return;
+    questionStore.save({
+        id: q.id,
+        askKey: q.askKey,
+        terminalId: q.askerTerminalId,
+        questions: q.questions,
+        workspaceId: q.workspaceId,
+        workspaceLabel: q.workspaceLabel,
+        workspacePath: q.workspacePath,
+        priority: q.priority,
+        deferred: q.deferred,
+        deferralReason: q.deferralReason,
+        createdAt: q.createdAt,
+    });
+}
+
+/** Forget a stored question — it was answered, cancelled or retracted. A no-op
+ *  for the questions that were never stored. */
+function forget(id: string): void {
+    questionStore.remove(id);
+}
+
+/**
+ * The pending question this agent already raised with this exact content, if it
+ * is still waiting. Searched across BOTH surfaces — the modal queue and the
+ * inbox — because which one it landed in is the user's availability setting, not
+ * something the reconnecting agent knows or should have to.
+ */
+function findByAskKey(askKey: string): string | undefined {
+    return (
+        queue.find((q) => q.askKey === askKey)?.id ??
+        deferred.find((d) => d.askKey === askKey)?.id
+    );
+}
+
+/**
+ * Rebuild the pending queue from the database after a restart.
+ *
+ * Restored questions land in the INBOX, never the modal, even for a user who is
+ * Available. Boot is the worst moment to throw always-on-top windows at someone:
+ * they may not be at the machine, there may be several, and the agents that
+ * asked were already told their answers arrive through AgentInbox — so the
+ * inbox is where those questions were always going to be answered from.
+ *
+ * `canDeliverTo` decides whether a stored question comes back at all. A question
+ * whose terminal no longer exists is DROPPED — deleted, not parked — because
+ * asking the human for an answer that has nowhere to go is precisely the failure
+ * `forceQuestionRefusal` already refuses at ask time (genie#321); putting it in
+ * the inbox would spend their attention on an answer that gets discarded, and
+ * leaving the row would re-offer it on every boot from now on.
+ *
+ * A question whose terminal IS still there is kept however old it is. Age alone
+ * is not evidence that a decision stopped mattering, and the inbox already shows
+ * how long each one has been waiting — so the human retires it, not a timer.
+ *
+ * A `canDeliverTo` that THROWS means "cannot tell", which is not the same answer
+ * as `false` and must not be treated as one: dropping is permanent, and losing a
+ * real pending question to a transient lookup failure is the exact harm this
+ * whole path exists to undo. Such a row is left in the database, undecided, for
+ * the next boot to judge.
+ *
+ * Idempotent: a question already in memory is left alone, so calling this twice
+ * cannot double it.
+ */
+export function rehydratePendingQuestions(
+    canDeliverTo: (terminalId: string) => boolean,
+): { restored: number; dropped: number } {
+    let restored = 0;
+    let dropped = 0;
+    for (const row of questionStore.load()) {
+        if (queue.some((q) => q.id === row.id) || deferred.some((d) => d.id === row.id)) continue;
+        let deliverable: boolean;
+        try {
+            deliverable = canDeliverTo(row.terminalId);
+        } catch {
+            continue; // cannot tell — leave the row for the next boot to decide
+        }
+        if (!deliverable) {
+            forget(row.id);
+            dropped += 1;
+            continue;
+        }
+        deferred.push({
+            id: row.id,
+            askKey: row.askKey,
+            questions: row.questions,
+            workspaceLabel: row.workspaceLabel,
+            workspaceId: row.workspaceId,
+            workspacePath: row.workspacePath,
+            priority: row.priority,
+            createdAt: row.createdAt,
+            askerTerminalId: row.terminalId,
+            // Not the reason it was originally parked (it may never have been
+            // parked at all — it could have been a live modal). This is why the
+            // answer is arriving LATE now, which is the part the agent needs to
+            // be told truthfully (genie#315).
+            deferralReason: 'restart',
+        });
+        // Re-save so the stored row matches what is now in memory: a question
+        // that was a live modal before the restart is an inbox row after it.
+        persist({
+            id: row.id,
+            askKey: row.askKey,
+            askerTerminalId: row.terminalId,
+            questions: row.questions,
+            workspaceId: row.workspaceId,
+            workspaceLabel: row.workspaceLabel,
+            workspacePath: row.workspacePath,
+            priority: row.priority,
+            deferred: true,
+            deferralReason: 'restart',
+            createdAt: row.createdAt,
+        });
+        restored += 1;
+    }
+    if (restored) notifyQuestionsChanged();
+    return { restored, dropped };
 }
 
 /** Subscribe to pending-question changes (mobile push). Returns an unsubscribe. */
@@ -635,6 +820,9 @@ function finish(id: string, result: ForceQuestionResult): void {
     // covers every route out -- the modal, the flyout, the phone, and a host
     // question resolved first -- because they all land in finish().
     forgetDraft(item.id);
+    // Same reasoning for the durable copy: this question has been resolved, so
+    // the next boot must not raise it again.
+    forget(item.id);
     item.resolve(result);
     // A pending question was removed — tell the mobile push channel so it can
     // emit question:resolved. Fires for BOTH head and queued removals.
@@ -821,7 +1009,13 @@ function createAskWindow(): BrowserWindow {
     w.on('closed', () => {
         if (win === w) win = null;
         const dropped = queue.splice(0, queue.length);
-        for (const item of dropped) item.resolve({ cancelled: true, answers: [] });
+        for (const item of dropped) {
+            // Cancelled deliberately (the user shut the window on them), so the
+            // durable copies go too — resurrecting these would re-ask questions
+            // they have already declined to answer.
+            forget(item.id);
+            item.resolve({ cancelled: true, answers: [] });
+        }
         // The whole queue was cancelled — push the cleared state to the mobile
         // channel too (one notify covers the batch).
         if (dropped.length) notifyQuestionsChanged();
@@ -875,12 +1069,30 @@ function enqueue(item: QueueItem): ForceQuestionResult | undefined {
         if (idx !== -1) queue.splice(idx, 1);
         deferred.push({
             id: item.id,
+            askKey: item.askKey,
             questions: item.questions,
             workspaceLabel: item.workspaceLabel,
+            workspaceId: item.workspaceId,
+            workspacePath: item.workspacePath,
             priority: item.priority,
             createdAt: item.createdAt,
             askerTerminalId: item.askerTerminalId,
             deferralReason: 'unshowable',
+        });
+        // It moved from the modal queue to the inbox; the stored row follows, so
+        // a restart rebuilds it as what it actually is now.
+        persist({
+            id: item.id,
+            askKey: item.askKey,
+            askerTerminalId: item.askerTerminalId,
+            questions: item.questions,
+            workspaceId: item.workspaceId,
+            workspaceLabel: item.workspaceLabel,
+            workspacePath: item.workspacePath,
+            priority: item.priority,
+            deferred: true,
+            deferralReason: 'unshowable',
+            createdAt: item.createdAt ?? questionClock(),
         });
         notifyQuestionsChanged();
         const failure: ForceQuestionResult = {
@@ -920,6 +1132,32 @@ function raiseDesktopModal(
 ): Promise<ForceQuestionResult> {
     return new Promise((resolve) => {
         const id = crypto.randomBytes(9).toString('hex');
+        // The RE-ATTACH key, derived from the asking terminal plus the question
+        // content — never taken from the caller (see `ask-key.ts` for why that
+        // is a safety property and not a preference). An internal gate has no
+        // terminal, so it has no key and never rejoins: two identical approval
+        // prompts really are two decisions, each with its own caller waiting.
+        const askKey = askerTerminalId ? deriveAskKey(askerTerminalId, questions) : undefined;
+        if (askKey) {
+            // This agent already has this exact question pending. Hand back the
+            // SAME question rather than raising a second one: an ask that was
+            // cut off — a dropped MCP session, a restart — used to leave the
+            // agent no choice but to re-ask, and the user saw the re-ask as a
+            // separate question they had to answer twice.
+            const existingId = findByAskKey(askKey);
+            if (existingId) {
+                resolve({
+                    cancelled: true,
+                    answers: [],
+                    deferred: true,
+                    questionId: existingId,
+                    dndMessage:
+                        'you had already asked this — you have re-joined the question you raised earlier ' +
+                        'rather than raising a second one, and it is still waiting for the user',
+                });
+                return;
+            }
+        }
         const decision = availabilityReader(scope ?? {});
         // The workspace this question came from, so the modal's file drawer can
         // open a path the question NAMES (Tynn #272). Resolved once, here, where
@@ -934,15 +1172,34 @@ function raiseDesktopModal(
             // AgentInbox (ping/poll/pull) — a deferred ForceTheQuestion is NOT a dead
             // end. Resolve NOW (never block) with the notice + questionId so the agent
             // knows to pull the answer later. `cancelled: true` marks "not inline".
+            const createdAt = questionClock();
             deferred.push({
                 id,
+                askKey,
                 questions,
+                workspaceLabel,
+                workspaceId: scope?.workspaceId,
+                workspacePath,
+                priority,
+                createdAt,
+                askerTerminalId,
+                deferralReason: 'dnd',
+            });
+            // Written down while it is raised, not when it is answered — a
+            // question the user has not got to yet is exactly the one a restart
+            // used to erase.
+            persist({
+                id,
+                askKey,
+                askerTerminalId,
+                questions,
+                workspaceId: scope?.workspaceId,
                 workspaceLabel,
                 workspacePath,
                 priority,
-                createdAt: questionClock(),
-                askerTerminalId,
+                deferred: true,
                 deferralReason: 'dnd',
+                createdAt,
             });
             // Opt-in AUDIBLE cue: a chime (no modal, no focus steal) so the owner
             // knows a question landed while heads-down — the whole point of DND is to
@@ -967,12 +1224,33 @@ function raiseDesktopModal(
             // but availability still controls ATTENTION: show the always-on-top
             // modal now. The tool call returns immediately and the eventual answer
             // is force-pushed through AgentInbox to the asking terminal.
-            const failure = enqueue({
+            //
+            // Written down BEFORE the window goes up: the gap this closes is a
+            // question raised and then lost to an upgrade, so the durable copy
+            // has to exist before anything can go wrong. `enqueue` re-saves it as
+            // deferred if the modal turns out to be unshowable.
+            const createdAt = questionClock();
+            persist({
                 id,
+                askKey,
+                askerTerminalId,
                 questions,
+                workspaceId: scope?.workspaceId,
                 workspaceLabel,
                 workspacePath,
                 priority,
+                deferred: false,
+                createdAt,
+            });
+            const failure = enqueue({
+                id,
+                askKey,
+                questions,
+                workspaceLabel,
+                workspaceId: scope?.workspaceId,
+                workspacePath,
+                priority,
+                createdAt,
                 askerTerminalId,
                 resolve: (lateResult) => {
                     // enqueue already moved an unshowable question into `deferred`;
@@ -1003,7 +1281,19 @@ function raiseDesktopModal(
             });
             return;
         }
-        enqueue({ id, resolve, questions, workspaceLabel, workspacePath, priority, askerTerminalId });
+        // No asking terminal: an internal approval gate. Its promise is the only
+        // thing waiting on the answer and it dies with this process, so there is
+        // nothing durable to write down — see `persist`.
+        enqueue({
+            id,
+            resolve,
+            questions,
+            workspaceLabel,
+            workspaceId: scope?.workspaceId,
+            workspacePath,
+            priority,
+            askerTerminalId,
+        });
     });
 }
 

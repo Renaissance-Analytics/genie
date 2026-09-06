@@ -2752,6 +2752,46 @@ export function runMigrations(
                 `);
             },
         },
+        {
+            // v75 — a PENDING QUESTION outlives the process that raised it.
+            //
+            // The ForceTheQuestion queue was an in-memory array and nothing
+            // else, so an upgrade, a crash or a killed process took every
+            // pending question with it: the agent waited forever on an answer
+            // that could not arrive, and the human never learned a question had
+            // existed. Genie upgrades constantly, so this fired often.
+            //
+            // `ask_key` is UNIQUE and that is the whole re-attach guarantee. It
+            // is derived from (terminalId + question content) in
+            // `main/ask/ask-key.ts` and NEVER supplied by the agent, so a
+            // reconnecting agent's re-ask lands on the row it already has
+            // instead of raising a duplicate the human would see twice.
+            //
+            // Only a question with a TERMINAL to answer back to is stored. An
+            // internal approval gate's promise dies with the process, and a
+            // forwarded host question belongs to a bridge connection that will
+            // re-forward it — persisting either would resurrect a question
+            // nobody could answer. Hence `terminal_id NOT NULL`.
+            version: 75,
+            runner: (db) =>
+                db.exec(`
+                    CREATE TABLE IF NOT EXISTS pending_questions (
+                        id              TEXT PRIMARY KEY,
+                        ask_key         TEXT NOT NULL UNIQUE,
+                        terminal_id     TEXT NOT NULL,
+                        questions_json  TEXT NOT NULL,
+                        workspace_id    TEXT,
+                        workspace_label TEXT,
+                        workspace_path  TEXT,
+                        priority        TEXT,
+                        deferred        INTEGER NOT NULL DEFAULT 0,
+                        deferral_reason TEXT,
+                        created_at      INTEGER NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_pending_questions_terminal
+                        ON pending_questions(terminal_id);
+                `),
+        },
     ];
 
     const apply = d.transaction(
@@ -6310,3 +6350,81 @@ export function forgetRetainedAppData(appId: string): void {
 }
 
 
+
+/* -------------------------------------------------------------------------- */
+/* Pending ForceTheQuestion rows — the queue that survives a restart (v75)     */
+/* -------------------------------------------------------------------------- */
+
+/** One stored pending question, exactly as the table holds it. */
+export interface PendingQuestionRecord {
+    id: string;
+    ask_key: string;
+    terminal_id: string;
+    questions_json: string;
+    workspace_id: string | null;
+    workspace_label: string | null;
+    workspace_path: string | null;
+    priority: string | null;
+    deferred: number;
+    deferral_reason: string | null;
+    created_at: number;
+}
+
+/**
+ * Store (or update) a pending question.
+ *
+ * Two conflict targets, and they mean different things. `id` is an UPDATE: the
+ * same question changing state — it moved from the modal to the inbox because
+ * the modal could not be shown. `ask_key` is a REFUSAL: a different id carrying
+ * a key that already exists is a duplicate of a question that is still pending,
+ * and the caller was supposed to rejoin that one. Storing it would put the same
+ * question in front of the user twice, which is the failure the key exists to
+ * prevent — so it is dropped here rather than allowed to throw on a path that
+ * is raising a question.
+ *
+ * `database` is explicit so this is exercisable against an in-memory db, the
+ * same as the workspace-todo helpers above.
+ */
+export function upsertPendingQuestion(
+    database: Database.Database,
+    r: PendingQuestionRecord,
+): void {
+    database
+        .prepare(
+            `INSERT INTO pending_questions
+                (id, ask_key, terminal_id, questions_json, workspace_id,
+                 workspace_label, workspace_path, priority, deferred,
+                 deferral_reason, created_at)
+             VALUES
+                (@id, @ask_key, @terminal_id, @questions_json, @workspace_id,
+                 @workspace_label, @workspace_path, @priority, @deferred,
+                 @deferral_reason, @created_at)
+             ON CONFLICT(id) DO UPDATE SET
+                questions_json  = excluded.questions_json,
+                workspace_id    = excluded.workspace_id,
+                workspace_label = excluded.workspace_label,
+                workspace_path  = excluded.workspace_path,
+                priority        = excluded.priority,
+                deferred        = excluded.deferred,
+                deferral_reason = excluded.deferral_reason
+             WHERE true
+             ON CONFLICT(ask_key) DO NOTHING`,
+        )
+        .run(r);
+}
+
+/** Forget one pending question — it was answered, cancelled or retracted. */
+export function deletePendingQuestion(database: Database.Database, id: string): void {
+    database.prepare('DELETE FROM pending_questions WHERE id = ?').run(id);
+}
+
+/** Every stored pending question, oldest first (arrival order). */
+export function listPendingQuestionRecords(
+    database: Database.Database,
+): PendingQuestionRecord[] {
+    return database
+        .prepare<[], PendingQuestionRecord>(
+            'SELECT * FROM pending_questions ORDER BY created_at ASC, id ASC',
+        )
+        .all();
+}
