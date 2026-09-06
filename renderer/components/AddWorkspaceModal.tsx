@@ -40,6 +40,9 @@ import {
     type AddWorkspaceDraft,
 } from '../lib/add-workspace';
 import { tynnImportChoices, tynnImportRoute } from '../lib/tynn-import';
+import { ImportedAgents } from './ImportedAgents';
+import { importedAgentsOffer } from '../lib/imported-agents';
+import type { AgentRosterEntry } from '../lib/ams-grid';
 
 /**
  * ADD WORKSPACE — one flow, entered five ways.
@@ -77,7 +80,12 @@ type Stage =
     /** Content, for the two entry points with something on disk to read. */
     | 'inspect'
     /** This Tynn project already has a workspace here. */
-    | 'open-existing';
+    | 'open-existing'
+    /**
+     * Made, and it came with agents this machine has never registered
+     * (genie#459). Reached ONLY when there are some — see {@link finish}.
+     */
+    | 'agents';
 
 interface Props {
     onClose: () => void;
@@ -92,6 +100,12 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
     const [projectsError, setProjectsError] = useState<string | null>(null);
     const [primaryWorkspace, setPrimaryWorkspace] = useState('');
     const [draft, setDraft] = useState<AddWorkspaceDraft | null>(null);
+    // The workspace that was just made, and what its `.agents/` folder turned
+    // out to hold. Set only on the branch that stops for it.
+    const [created, setCreated] = useState<{
+        row: WorkspaceRow;
+        roster: AgentRosterEntry[];
+    } | null>(null);
 
     useEffect(() => {
         Promise.all([api().tynn.projects(), api().workspaces.list()])
@@ -136,7 +150,34 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
         setStage(next.content.kind === 'inspect' ? 'inspect' : 'form');
     };
 
-    const finish = (row: WorkspaceRow) => {
+    /**
+     * The workspace exists. One question is left, and only sometimes: **did it
+     * come with agents?**
+     *
+     * A project's agents travel as `.agents/<slug>/AGENT.md` and its
+     * REGISTRATIONS do not — `workspace_agents` is in the local `genie.db` — so
+     * an imported workspace lands with its agents on disk and none of them
+     * registered here. Until this, the next thing on screen was an empty agent
+     * grid whose one affordance is *create an agent*, which is the act that
+     * discards the identity, the saved session and everything the agent knew
+     * (genie#459).
+     *
+     * Asked HERE, once, and only stopped for when the answer is yes: a step that
+     * lists nothing is worse than no step. A roster that cannot be read is not a
+     * reason to hold the workspace hostage — the workspace opens, and the roster
+     * is still in the workspace menu.
+     */
+    const finish = async (row: WorkspaceRow) => {
+        try {
+            const { roster } = await api().agents.roster(row.id);
+            if (importedAgentsOffer(roster).offer) {
+                setCreated({ row, roster });
+                setStage('agents');
+                return;
+            }
+        } catch {
+            /* the workspace is made; opening it must not depend on this read */
+        }
         onAdded(row);
         onClose();
     };
@@ -179,7 +220,7 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
                         projects={projects}
                         loadingProjects={loadingProjects}
                         onCancel={() => setStage('source')}
-                        onCreated={finish}
+                        onCreated={(row) => void finish(row)}
                     />
                 )}
 
@@ -191,7 +232,7 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
                         loadingProjects={loadingProjects}
                         onProjectCreated={onProjectCreated}
                         onCancel={() => setStage(draft.source === 'tynn' ? 'tynn-pick' : 'source')}
-                        onCreated={finish}
+                        onCreated={(row) => void finish(row)}
                     />
                 )}
 
@@ -203,6 +244,17 @@ export default function AddWorkspaceModal({ onClose, onAdded }: Props) {
                         }
                         onBack={() => setStage('tynn-pick')}
                         onOpened={onClose}
+                    />
+                )}
+
+                {stage === 'agents' && created && (
+                    <WorkspaceBroughtAgents
+                        workspace={created.row}
+                        roster={created.roster}
+                        onOpen={() => {
+                            onAdded(created.row);
+                            onClose();
+                        }}
                     />
                 )}
             </Modal.Body>
@@ -571,6 +623,52 @@ function Summary({
 }
 
 /**
+ * THE LAST STEP OF AN IMPORT, and only when there is one (genie#459).
+ *
+ * The workspace is made. What it came with that this machine has never seen is
+ * the one thing the flow can say here and nowhere else — after this the modal is
+ * gone and the agent grid is empty, which reads as "this project has no agents"
+ * when the truth is "their files are right there, unregistered".
+ *
+ * Exported so it can be rendered in a test. The renderer test env has no DOM but
+ * the server renderer runs every component function and throws where the browser
+ * would, and a screen that only appears after a real clone is exactly the one
+ * that should not first be rendered on a user's machine.
+ */
+export function WorkspaceBroughtAgents({
+    workspace,
+    roster,
+    onOpen,
+}: {
+    workspace: WorkspaceRow;
+    roster: AgentRosterEntry[];
+    onOpen: () => void;
+}) {
+    return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div>
+                <Heading as="h3" size="sm">
+                    {workspace.project_name || 'The workspace'} is ready — and it came with agents
+                </Heading>
+                <Text size="xs" className="text-zinc-500" style={{ display: 'block', marginTop: 4 }}>
+                    It is at <code>{workspace.path}</code>. Adopt an agent to have it back as it
+                    was; skip and the same list is in the workspace menu under Agents.
+                </Text>
+            </div>
+            {/* `keepOpen`: this screen exists BECAUSE there was something to
+                adopt, so adopting the last one must leave the list on screen —
+                it is the only confirmation the act worked. */}
+            <ImportedAgents workspaceId={workspace.id} roster={roster} keepOpen />
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
+                <Action color="blue" onClick={onOpen} icon="check">
+                    Open workspace
+                </Action>
+            </div>
+        </div>
+    );
+}
+
+/**
  * The project already has a workspace here. Importing again would clone a second
  * copy of the same envelope and leave two rows pointing at one project, so the
  * offer is to open the one that exists.
@@ -612,6 +710,12 @@ function TynnAlreadyImported({
                     cloning a second copy.
                 </Text>
             </div>
+            {/* Already here is not the same as already SET UP. A workspace that
+                was re-added, or whose agents were pulled in after it, carries
+                agent files with no registration on this machine — and this is
+                the screen the human is on when they are looking for them
+                (genie#459). Draws nothing when there are none. */}
+            {workspace && <ImportedAgents workspaceId={workspace.id} />}
             {error && (
                 <Text size="xs" className="text-rose-500">
                     {error}

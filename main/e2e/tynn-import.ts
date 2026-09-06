@@ -18,7 +18,7 @@
  * that could not have caught this bug, which was a flow reaching the wrong
  * screen and creating nothing.
  *
- * THE THREE PROJECTS ARE THE TEST.
+ * THE FOUR PROJECTS ARE THE TEST.
  *
  *   1. `bare` — a real Tynn project with NO repositories. The defect: it used to
  *      fall into the scan-and-convert wizard in `mode: 'local'`, i.e. "go and
@@ -28,6 +28,12 @@
  *   3. `plain` — declares an ordinary code repo. SECOND POSITIVE CONTROL: the
  *      content a project HAS must end up in the workspace, or "no repositories
  *      is fine" would be indistinguishable from "repositories are ignored".
+ *   4. `agents` — a container with `.agents/*` COMMITTED IN IT (genie#459). That
+ *      is how an agent reaches a second machine: the files travel with the repo
+ *      and `workspace_agents` does not, so the clone lands with every agent on
+ *      disk and none registered. Its two personas are deliberately unalike — one
+ *      with Genie's rendered frontmatter, one hand-written with none — because
+ *      the second is the shape adoption must never rewrite.
  */
 
 import { ipcMain } from 'electron';
@@ -45,6 +51,20 @@ export function isE2ETynnImport(): boolean {
 export const E2E_ENVELOPE_PROJECT_ID = 'e2e-envelope-project';
 export const E2E_PLAIN_PROJECT_ID = 'e2e-plain-project';
 export const E2E_BARE_PROJECT_ID = 'e2e-bare-project';
+export const E2E_AGENTS_PROJECT_ID = 'e2e-agents-project';
+
+/**
+ * The persona a HUMAN wrote — no frontmatter at all, which is the real shape of
+ * `trader` and `ripple` on the owner's machine: deliverables of the GApps they
+ * live in, not anything Genie rendered. Exported so the spec asserts the bytes
+ * it committed rather than a copy that could drift from them.
+ */
+export const E2E_HAND_WRITTEN_PERSONA =
+    '# Relay — the dispatcher\n\nYou are **Relay**. Hand work between the others.\n';
+
+/** The persona REGISTRATION renders: frontmatter, then a body. */
+const E2E_RENDERED_PERSONA =
+    '---\nname: scout\npurpose: Reads the codebase ahead of the others\ntuis: [claude]\n---\n\nYou are scout.\n';
 
 /** Where the fixture's real source repositories live. */
 function sourcesRoot(): string {
@@ -86,6 +106,10 @@ export interface TynnImportSeed {
     envelopePath: string;
     plainPath: string;
     barePath: string;
+    agentsProjectId: string;
+    agentsPath: string;
+    /** The hand-written persona, so the spec can assert on the exact bytes. */
+    handWrittenPersona: string;
 }
 
 /**
@@ -113,7 +137,24 @@ export function seedTynnImportE2E(): TynnImportSeed {
     // An ordinary code repo, for the project that has one but no container.
     seedRepo(path.join(sources, 'plain'), { 'README.md': '# plain\n' });
 
-    for (const id of [E2E_ENVELOPE_PROJECT_ID, E2E_PLAIN_PROJECT_ID, E2E_BARE_PROJECT_ID]) {
+    // A container carrying AGENTS (genie#459) — the only way an agent reaches a
+    // second machine. `skills/` sits beside them holding no AGENT.md, because a
+    // scan that took every subdirectory under `.agents/` would offer to adopt
+    // shared instructions and skill files as if they were agents.
+    seedRepo(path.join(sources, 'with-agents.agi'), {
+        'project.json': `${JSON.stringify({ name: 'Imported Agents', version: 1, repos: [] }, null, 4)}\n`,
+        'repos/.gitkeep': '',
+        '.agents/scout/AGENT.md': E2E_RENDERED_PERSONA,
+        '.agents/relay/AGENT.md': E2E_HAND_WRITTEN_PERSONA,
+        '.agents/skills/SKILL.md': '# a skill, not an agent\n',
+    });
+
+    for (const id of [
+        E2E_ENVELOPE_PROJECT_ID,
+        E2E_PLAIN_PROJECT_ID,
+        E2E_BARE_PROJECT_ID,
+        E2E_AGENTS_PROJECT_ID,
+    ]) {
         if (getWorkspace(id)) removeWorkspace(id);
     }
 
@@ -131,6 +172,9 @@ export function seedTynnImportE2E(): TynnImportSeed {
         envelopePath: path.join(parentPath, 'enveloped-product.agi'),
         plainPath: path.join(parentPath, 'plain-product.agi'),
         barePath: path.join(parentPath, 'bare-project.agi'),
+        agentsProjectId: E2E_AGENTS_PROJECT_ID,
+        agentsPath: path.join(parentPath, 'imported-agents.agi'),
+        handWrittenPersona: E2E_HAND_WRITTEN_PERSONA,
     };
     (globalThis as Record<string, unknown>).__GENIE_E2E_TYNN_IMPORT__ = seed;
     return seed;
@@ -181,6 +225,25 @@ function projects() {
                     url: path.join(sources, 'plain'),
                     defaultBranch: 'main',
                     kind: 'code' as const,
+                },
+            ],
+        },
+        {
+            // A container with agents committed in it (genie#459).
+            backend: 'tynn' as const,
+            id: E2E_AGENTS_PROJECT_ID,
+            name: 'Imported Agents',
+            slug: 'imported-agents',
+            owner_type: 'user',
+            owner_name: 'e2e',
+            isGapp: false,
+            isWorkspace: true,
+            sacredAgentName: null,
+            repositories: [
+                {
+                    url: path.join(sources, 'with-agents.agi'),
+                    defaultBranch: 'main',
+                    kind: 'envelope' as const,
                 },
             ],
         },
