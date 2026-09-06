@@ -510,7 +510,9 @@ describe('ForceTheQuestion DND availability', () => {
     it('DND: delivers the answer back to the asking agent on answer (ping/poll/pull), and marks the result deferred', async () => {
         setAvailabilityReader(() => ({ availability: 'dnd', dndMessage: 'heads-down' }));
         const delivered: DeferredAnswerDelivery[] = [];
-        setDeferredAnswerSink((d) => delivered.push(d));
+        setDeferredAnswerSink((d) => {
+            delivered.push(d);
+        });
 
         // An agent on terminal T1 asks under DND: it defers + resolves at once
         // (never blocks), carrying the questionId so the agent can correlate the
@@ -594,7 +596,9 @@ describe('ForceTheQuestion DND availability', () => {
         setAvailabilityReader(() => ({ availability: 'available', dndMessage: 'x' }));
         setUserPresenceReader(() => ({ away: false, idleSeconds: 12 }));
         const delivered: DeferredAnswerDelivery[] = [];
-        setDeferredAnswerSink((d) => delivered.push(d));
+        setDeferredAnswerSink((d) => {
+            delivered.push(d);
+        });
         const before = state.windows.length;
 
         const result = await forceQuestion(
@@ -669,7 +673,9 @@ describe('ForceTheQuestion DND availability', () => {
         setAvailabilityReader(() => ({ availability: 'available', dndMessage: 'x' }));
         state.throwOnCreate = true; // the next createAskWindow throws (no display)
         const delivered: DeferredAnswerDelivery[] = [];
-        setDeferredAnswerSink((d) => delivered.push(d));
+        setDeferredAnswerSink((d) => {
+            delivered.push(d);
+        });
 
         // A real MCP agent call always carries its terminal id — exercise that,
         // not just the terminal-less internal-gate path the sibling test covers.
