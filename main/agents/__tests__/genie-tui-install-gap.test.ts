@@ -63,24 +63,31 @@ describe('the Genie TUI installs, from a packed tarball', () => {
     });
 
     /**
-     * PINNED TO THE TAG, and that is the decision rather than an oversight.
+     * The URL names the VERSION-LESS ALIAS, so this entry never needs editing
+     * on a release.
      *
      * GitHub's `/releases/latest/download/<name>` resolves only if the LATEST
-     * release carries an asset with that exact name, and ours carries the
-     * version in it. All three shapes were measured against the real release:
+     * release carries an asset with that exact name, so a URL naming the
+     * versioned asset works today and 404s the moment the next release ships —
+     * a button that fails in the field rather than at edit time. That was the
+     * case when this shipped, and the entry pinned the tag instead: stale beats
+     * broken. genie-tui now publishes the same bytes twice on every release,
+     * under the versioned name and under `genie-tui.tgz`, and backfilled the
+     * alias onto v0.1.0, so the stable URL resolves today.
      *
-     *     latest/download/genie-tui-0.1.0.tgz   -> 200  (true only until v0.2.0)
-     *     latest/download/genie-tui.tgz         -> 404  (no alias exists)
-     *     download/v0.1.0/genie-tui-0.1.0.tgz   -> 200  (stable forever)
+     * Re-measured after that landed rather than taken on report:
      *
-     * So `latest/download/<versioned name>` is a button that works today and
-     * fails in the FIELD the day the next release ships — worse than a pin,
-     * which only goes stale. When `genie-tui` publishes a version-less alias
-     * this flips to `latest/download/genie-tui.tgz` and stops needing edits.
+     *     latest/download/genie-tui.tgz         -> 200
+     *     download/v0.1.0/genie-tui-0.1.0.tgz   -> 200
+     *     cmp of the two downloads              -> byte-identical
+     *     npm install -g --prefix <tmp> <alias> -> added 255 packages
+     *     <tmp>/genie --version                 -> 0.1.0
      */
-    it('pins the TAG rather than trusting `latest/download` with a versioned name', () => {
-        expect(genie?.install?.package).toContain('/releases/download/v');
-        expect(genie?.install?.package).not.toContain('/releases/latest/');
+    it('names the version-less alias, so a release does not strand this line', () => {
+        expect(genie?.install?.package).toContain('/releases/latest/download/');
+        // A VERSION in the filename is the failure mode this exists to stop:
+        // `latest/download/genie-tui-0.1.0.tgz` is a 200 that becomes a 404.
+        expect(genie?.install?.package).not.toMatch(/\d+\.\d+\.\d+/);
     });
 
     it('states no gap, because it no longer has one', () => {

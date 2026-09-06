@@ -176,22 +176,27 @@ const CATALOG = [
         //     npm install -g --prefix <tmp> <the URL below>   -> added 255 packages
         //     <tmp>/genie --version                           -> 0.1.0
         //
-        // THE URL IS PINNED TO THE TAG, and that is deliberate. GitHub's
-        // `/releases/latest/download/<name>` resolves only if the LATEST release
-        // carries an asset with that exact name, and ours carries the version in
-        // it — so `latest/download/genie-tui-0.1.0.tgz` answers 200 today and
-        // 404s the moment v0.2.0 ships, which is a button that fails in the
-        // field rather than at edit time. Measured, not assumed:
+        // THE URL IS THE VERSION-LESS ALIAS, so this line never needs editing
+        // again. GitHub's `/releases/latest/download/<name>` resolves only if the
+        // LATEST release carries an asset with that exact name — so a URL naming
+        // the versioned asset answers 200 today and 404s the moment the next
+        // release ships, which is a button that fails in the FIELD rather than at
+        // edit time. genie-tui therefore publishes the same bytes twice on every
+        // release, under the versioned name and under `genie-tui.tgz`, and
+        // backfilled the alias onto v0.1.0 so the stable URL resolves now.
         //
-        //     latest/download/genie-tui-0.1.0.tgz   -> 200  (true only until v0.2.0)
-        //     latest/download/genie-tui.tgz         -> 404  (no version-less alias exists)
-        //     download/v0.1.0/genie-tui-0.1.0.tgz   -> 200  (stable forever)
+        // Measured against the real release rather than assumed, and re-measured
+        // after the alias landed rather than taken on report:
         //
-        // A pin is stale — it keeps installing 0.1.0 until somebody edits this
-        // line — and stale beats broken. The fix belongs in `genie-tui`: publish
-        // a version-less `genie-tui.tgz` alias beside the versioned asset, and
-        // this becomes `latest/download/genie-tui.tgz` and never needs editing
-        // again.
+        //     latest/download/genie-tui.tgz         -> 200
+        //     download/v0.1.0/genie-tui-0.1.0.tgz   -> 200
+        //     cmp of the two downloads              -> byte-identical
+        //       (sha256 73bd2269…d097692, 33741 bytes each)
+        //
+        // A pin to the tag was the honest answer while no alias existed — stale
+        // beats broken — and it is the wrong answer now that one does, because it
+        // would have to be edited on every release and the edit is the step
+        // somebody forgets.
         //
         // KNOWN LIMIT, stated rather than discovered: update detection reads
         // `npm outdated -g --json`, which keys by PACKAGE NAME, and this field
@@ -203,7 +208,7 @@ const CATALOG = [
         install: {
             manager: 'npm',
             package:
-                'https://github.com/Renaissance-Analytics/genie-tui/releases/download/v0.1.0/genie-tui-0.1.0.tgz',
+                'https://github.com/Renaissance-Analytics/genie-tui/releases/latest/download/genie-tui.tgz',
         },
         docsUrl: 'https://github.com/Renaissance-Analytics/genie-tui',
     },
