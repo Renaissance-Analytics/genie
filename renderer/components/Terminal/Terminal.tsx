@@ -35,6 +35,15 @@ interface TerminalProps {
      *  the term `open` frame so the host scopes the terminal to the grant's
      *  workspaces; ignored for a local pty spawn. */
     workspaceId?: string;
+    /**
+     * Is this terminal's panel on the ACTIVE workspace?
+     *
+     * Off-workspace panels stay MOUNTED (display:none) so their ptys survive a
+     * switch. `false` refuses every re-fit outright, whatever the container
+     * measures — a measurement cannot tell "hidden" from "mid-reflow", and 67
+     * columns of the wrong container is as damaging as zero (genie#491).
+     */
+    onScreen?: boolean;
     /** Fires when the underlying pty exits, with the captured exit code. */
     onExit?: (info: { exitCode: number; signal?: number }) => void;
     /** Optional className applied to the host element (height/width should be set here). */
@@ -78,6 +87,7 @@ export default function Terminal({
     args,
     env,
     workspaceId,
+    onScreen,
     onExit,
     className,
     shells,
@@ -85,6 +95,11 @@ export default function Terminal({
     onShellChange,
 }: TerminalProps) {
     const handleRef = useRef<TerminalHandle>(null);
+    // Read inside the ResizeObserver effect, which mounts ONCE — a captured
+    // `onScreen` would be frozen at whatever it was when the panel first
+    // rendered, which for a background panel is the answer that matters.
+    const onScreenRef = useRef(onScreen);
+    onScreenRef.current = onScreen;
     // The host element wrapping fancy-term's <Terminal>. We observe THIS for
     // size changes and re-fit — see the ResizeObserver effect below.
     const hostElRef = useRef<HTMLDivElement>(null);
@@ -177,7 +192,11 @@ export default function Terminal({
                 // to that width. The damage was already written by the time the
                 // panel came back, which is why switching workspaces returned a
                 // terminal wrapped at a width the window never had.
-                if (!shouldFit(el.getBoundingClientRect())) return;
+                // Visibility is asked as a FACT, not inferred from the size:
+                // an off-workspace panel measured mid-reflow reports a real,
+                // usable width belonging to a container this terminal is not in,
+                // and fitting to it reflows the scrollback (genie#491).
+                if (!shouldFit(el.getBoundingClientRect(), onScreenRef.current)) return;
                 handleRef.current?.fit();
             });
         });
@@ -440,7 +459,9 @@ export default function Terminal({
 
         // Same guard as the observer: a panel created while hidden (a restored
         // session in a background workspace) must not fit against a zero box.
-        if (shouldFit(hostElRef.current?.getBoundingClientRect())) handle.fit();
+        if (shouldFit(hostElRef.current?.getBoundingClientRect(), onScreenRef.current)) {
+            handle.fit();
+        }
 
         // Load the SerializeAddon onto the live xterm instance, exposed by
         // fancy-term 0.3.0's `handle.xterm` escape hatch (non-null after the

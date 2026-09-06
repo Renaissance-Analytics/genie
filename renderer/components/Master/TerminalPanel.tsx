@@ -26,6 +26,9 @@ interface Props {
      */
     onDisable?: () => void;
     focused?: boolean;
+    /** Is this panel on the ACTIVE workspace? Threaded to the terminal so an
+     *  off-workspace panel is never re-fitted (genie#491). */
+    onScreen?: boolean;
     /** Agent-integration MCP: pulse the panel border (imDone) until focused. */
     attention?: boolean;
     pendingNudge?: AgentInboxIncomingNotice;
@@ -76,6 +79,7 @@ export default function TerminalPanel({
     onMinimize,
     onDisable,
     focused,
+    onScreen,
     attention,
     pendingNudge,
     onSendPendingNudge,
@@ -262,6 +266,7 @@ export default function TerminalPanel({
                     <Terminal
                         key={`${spec.id}:${shell.command ?? 'default'}`}
                         id={spec.id}
+                        onScreen={onScreen}
                         // Tier 1: a fresh shell starts where the old one was —
                         // the OSC-7-tracked live_cwd wins over the static spec
                         // cwd when present, falling back when cwd tracking is
