@@ -201,7 +201,7 @@ textarea.input {
 /* With the file drawer open the question column keeps its own width and the
    drawer takes the rest of the (widened) window — see main/ask/drawer-bounds. */
 .ask-shell.with-file .ask-frame {
-    flex: 0 0 560px;
+    flex: 0 0 var(--ask-modal-width);
     border-right: 1px solid var(--border-1);
 }
 .ask-loading {

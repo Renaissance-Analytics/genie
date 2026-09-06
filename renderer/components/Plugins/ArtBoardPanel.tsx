@@ -6,7 +6,7 @@ import {
 } from '@particle-academy/fancy-artboard';
 import type { ComponentProps } from 'react';
 import { api, type WorkspaceRow } from '../../lib/genie';
-import { resolveActiveBoardPost, type BoardPost } from '../../lib/artboard-model';
+import { resolveActiveBoardPost, resolveBoardFocus, type BoardPost } from '../../lib/artboard-model';
 
 /**
  * The first-party ArtBoard PANEL adapter — what the plugin's declared
@@ -48,6 +48,12 @@ export default function ArtBoardPanel({ workspace, requestedPostId }: Props) {
     const [busy, setBusy] = useState<string | null>(null);
     const [notice, setNotice] = useState<string | null>(null);
     const [selectedPostId, setSelectedPostId] = useState<string | null>(requestedPostId ?? null);
+    /**
+     * What the CANVAS is zoomed into — separate state from `selectedPostId`
+     * because dismissing the zoom must not also blank the review card, and the
+     * card's "newest post" default must not pin the zoom open (genie#457).
+     */
+    const [focusedPostId, setFocusedPostId] = useState<string | null>(requestedPostId ?? null);
 
     const workspaceId = workspace?.id ?? null;
 
@@ -70,7 +76,12 @@ export default function ArtBoardPanel({ workspace, requestedPostId }: Props) {
 
     useEffect(refresh, [refresh]);
     useEffect(() => {
-        if (requestedPostId) setSelectedPostId(requestedPostId);
+        if (requestedPostId) {
+            setSelectedPostId(requestedPostId);
+            // An agent asking Genie to surface its artifact DOES open the zoom;
+            // what genie#457 fixes is that the reviewer can then close it.
+            setFocusedPostId(requestedPostId);
+        }
     }, [requestedPostId]);
 
     const decide = async (post: BoardPost, verdict: 'approved' | 'rejected') => {
@@ -153,8 +164,14 @@ export default function ArtBoardPanel({ workspace, requestedPostId }: Props) {
                 <div className="artboard-workbench">
                     <FancyArtBoard
                         value={boardValue}
-                        focus={activePost?.id ?? null}
-                        onFocusChange={setSelectedPostId}
+                        focus={resolveBoardFocus(boardPosts, focusedPostId)}
+                        onFocusChange={(id: string | null) => {
+                            setFocusedPostId(id);
+                            // Focusing an artifact also brings its review card
+                            // up; DISMISSING focus leaves the card where it is,
+                            // so the reviewer keeps what they were reading.
+                            if (id) setSelectedPostId(id);
+                        }}
                         htmlPolicy={{ pending: 'sandbox', accepted: 'sanitize' }}
                         style={{ height: 'min(620px, 68vh)', minHeight: 420 }}
                     />

@@ -23,7 +23,7 @@ export interface AskWindowGeometry {
 }
 
 /** The question column — the modal's width with no drawer. */
-export const ASK_MODAL_WIDTH = 560;
+export const ASK_MODAL_WIDTH = 760;
 /** How much wider the window gets when the file drawer opens. */
 export const ASK_DRAWER_WIDTH = 520;
 

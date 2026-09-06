@@ -178,3 +178,71 @@ describe('ArtBoard.post panel handoff', () => {
         });
     });
 });
+
+describe('ArtBoard.post records the terminal a verdict must go back to (genie#456)', () => {
+    /**
+     * The delivery path is `post.terminalId ? deliver(...) : false`
+     * (`main/artboard/host.ts:57`), so a post stored without a terminal makes
+     * every verdict on it silently undeliverable — recorded on the board and
+     * never seen by the agent that asked.
+     *
+     * The terminal reaches a plugin on the BRIDGE (`worker-host.ts:187`), which
+     * is the second and last argument the worker passes
+     * (`fn(m.args || {}, makeBridge(m))`). This calls it exactly that way, so a
+     * handler that reads the terminal from anywhere else fails here.
+     */
+    it('stamps the posting terminal from the bridge, where the host actually puts it', async () => {
+        const tools = loadTools('ai.genie.artboard');
+        const files = new Map<string, string>();
+        const bridge = {
+            tool: 'post',
+            terminalId: 'c451ee41-b285-46e3-8633-751b9760b060',
+            fs: {
+                readFile: async (name: string) => {
+                    if (!files.has(name)) throw new Error('missing');
+                    return files.get(name)!;
+                },
+                writeFile: async (name: string, value: string) => void files.set(name, value),
+            },
+        };
+
+        const res = await tools.post(
+            { id: 'mockup', title: 'Mockup', html: '<main>x</main>' },
+            bridge,
+        );
+        expect(res.isError).toBeFalsy();
+
+        const index = JSON.parse(files.get('.artboard/index.json')!) as {
+            posts: Array<{ id: string; title: string; terminalId?: string }>;
+        };
+
+        // POSITIVE CONTROL: the write path ran and produced the post we asked
+        // for. Without this, a missing `terminalId` is indistinguishable from
+        // an index that was never written at all.
+        expect(index.posts[0]).toMatchObject({ id: 'mockup', title: 'Mockup' });
+
+        expect(index.posts[0].terminalId).toBe('c451ee41-b285-46e3-8633-751b9760b060');
+    });
+
+    it('omits the terminal rather than inventing one when the bridge has none', async () => {
+        const tools = loadTools('ai.genie.artboard');
+        const files = new Map<string, string>();
+        const bridge = {
+            fs: {
+                readFile: async (name: string) => {
+                    if (!files.has(name)) throw new Error('missing');
+                    return files.get(name)!;
+                },
+                writeFile: async (name: string, value: string) => void files.set(name, value),
+            },
+        };
+
+        await tools.post({ id: 'm2', title: 'M2', html: '<p>x</p>' }, bridge);
+
+        const index = JSON.parse(files.get('.artboard/index.json')!) as {
+            posts: Array<{ id: string; terminalId?: string }>;
+        };
+        expect(index.posts[0].id).toBe('m2');
+        expect(index.posts[0].terminalId).toBeUndefined();
+    });
+});

@@ -66,7 +66,7 @@ async function readIndex(bridge) {
     }
 }
 
-async function post(args, bridge, ctx) {
+async function post(args, bridge) {
     var input = (args && typeof args === 'object') ? args : {};
     var title = (typeof input.title === 'string' && input.title.trim()) ? input.title.trim() : '';
     if (!title) {
@@ -111,10 +111,15 @@ async function post(args, bridge, ctx) {
         file: file,
         createdAt: new Date().toISOString()
     };
-    // The terminal is HOST-supplied (worker-host passes it into every call), never
-    // taken from args - a post must not be able to ask for someone else's verdict
-    // to be routed to it.
-    if (ctx && typeof ctx.terminalId === 'string' && ctx.terminalId) entry.terminalId = ctx.terminalId;
+    // The terminal is HOST-supplied and read off the BRIDGE, never taken from
+    // args - a post must not be able to ask for someone else's verdict to be
+    // routed to it. The bridge is where worker-host puts it, and the bridge is
+    // the last argument a tool is called with; an earlier version read it from a
+    // third ctx parameter that nothing passes, so every post was stored with no
+    // terminal and every verdict on it was silently undeliverable (genie#456).
+    if (bridge && typeof bridge.terminalId === 'string' && bridge.terminalId) {
+        entry.terminalId = bridge.terminalId;
+    }
     if (typeof input.note === 'string' && input.note.trim()) entry.note = input.note.trim();
 
     var posts = await readIndex(bridge);

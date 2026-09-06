@@ -3,6 +3,7 @@ import { Action, ContentRenderer, Heading, Icon, Text } from '@particle-academy/
 import { FileViewer } from '@particle-academy/fancy-code';
 import { api, hasGenieBridge, type ForceQuestionSpec } from '../lib/genie';
 import { extractFileRefs, type AskFileRef } from '../lib/ask-file-refs';
+import { ASK_MODAL_WIDTH } from '../../main/ask/drawer-bounds';
 import {
     clearDraft,
     draftFor,
@@ -282,9 +283,18 @@ export default function AskPage() {
         </div>
     );
 
+    /**
+     * The question column's width comes from the SAME constant that sizes the
+     * BrowserWindow (`main/ask/drawer-bounds`), handed to CSS as a custom
+     * property. The stylesheet used to repeat the number, so widening the window
+     * alone would have left the column at its old width and given every new
+     * pixel to the file drawer — a change that looks like no change (genie#458).
+     */
+    const shellStyle = { '--ask-modal-width': `${ASK_MODAL_WIDTH}px` } as React.CSSProperties;
+
     if (!bridgeReady || !active) {
         return (
-            <div className="ask-shell">
+            <div className="ask-shell" style={shellStyle}>
                 <div className="ask-frame">
                     {header}
                     <div className="ask-loading">
@@ -298,7 +308,7 @@ export default function AskPage() {
     }
 
     return (
-        <div className={`ask-shell${drawerOpen ? ' with-file' : ''}`}>
+        <div className={`ask-shell${drawerOpen ? ' with-file' : ''}`} style={shellStyle}>
             <div className="ask-frame">
                 {header}
 
