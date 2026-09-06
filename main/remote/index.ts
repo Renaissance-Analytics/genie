@@ -629,23 +629,31 @@ function notifyForwardedAnswerFailed(conn: RemoteConnection, err: unknown): void
     }
 }
 
+/**
+ * May this connection be shown an actionable host prompt right now?
+ *
+ * Today every connection is a control driver; the grant model (later phase)
+ * supplies readonly, at which point this stops forwarding actionable prompts to
+ * a viewer. Not forwardable (readonly driver, or the host's kill-switch is
+ * engaged and will 423 every answer) ⇒ raise nothing, and RETRACT anything
+ * already raised. Dropping it at the SOURCE mirrors remoteTerminalInput dropping
+ * keystrokes, and keeps the prompt where it can actually be answered: on the
+ * host. Nothing is lost — unlocking re-syncs (setConnControl) and the
+ * still-pending question comes back.
+ *
+ * Read live off `conn`, and deliberately cheap, because it is asked TWICE per
+ * sync — see `syncForwardedQuestions`.
+ */
+function canForwardTo(conn: RemoteConnection): boolean {
+    return shouldForwardToDriver({
+        connected: true,
+        capability: 'control',
+        controlLocked: conn.controlLocked,
+    });
+}
+
 async function syncForwardedQuestions(conn: RemoteConnection): Promise<void> {
-    // Today every connection is a control driver; the grant model (later phase)
-    // supplies readonly, at which point this guard stops forwarding actionable
-    // prompts to a viewer.
-    // Not forwardable (readonly driver, or the host's kill-switch is engaged and
-    // will 423 every answer) ⇒ raise nothing, and RETRACT anything already raised,
-    // since the lock can engage while a forwarded modal is open. Dropping it at the
-    // SOURCE mirrors remoteTerminalInput dropping keystrokes, and keeps the prompt
-    // where it can actually be answered: on the host. Nothing is lost — unlocking
-    // re-syncs (setConnControl) and the still-pending question comes back.
-    if (
-        !shouldForwardToDriver({
-            connected: true,
-            capability: 'control',
-            controlLocked: conn.controlLocked,
-        })
-    ) {
+    if (!canForwardTo(conn)) {
         dismissForwardedQuestionsForConn(conn.connKey);
         return;
     }
@@ -657,6 +665,25 @@ async function syncForwardedQuestions(conn: RemoteConnection): Promise<void> {
         pending = data?.questions ?? [];
     } catch {
         return; // host unreachable / transient — try again on the next push
+    }
+    // ASK AGAIN, because the answer above is a network round-trip old and the
+    // baton is most likely to move during exactly that window: the host owner
+    // grabs control BECAUSE they want to answer the question themselves.
+    //
+    // The check at the top of this function is not enough on its own. It decided
+    // before the await; the raise happens after it. In between, `setConnControl`
+    // can run its retraction — and find nothing open, because the modal it was
+    // meant to retract has not been raised yet. The loop below would then put an
+    // always-on-top modal, with a chime, in front of a driver who is now
+    // view-only, for a question whose answer the host will 423. The retraction is
+    // repeated here rather than skipped: it is idempotent, and a question that
+    // slipped through an earlier lap of this same race is exactly what it clears.
+    //
+    // Nothing between here and the raises awaits, so one re-check covers every
+    // question in the loop.
+    if (!canForwardTo(conn)) {
+        dismissForwardedQuestionsForConn(conn.connKey);
+        return;
     }
     const shown = forwardedShown.get(conn.connKey) ?? new Set<string>();
     forwardedShown.set(conn.connKey, shown);
