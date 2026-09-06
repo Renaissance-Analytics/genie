@@ -1801,7 +1801,17 @@ app.whenReady().then(async () => {
         // stream-nudge — so the agent PULLs it (ping/poll/pull) instead of the answer
         // being dropped. force-question stays broker-free via this injected sink.
         setDeferredAnswerSink((d: DeferredAnswerDelivery) => {
-            agentInboxBroker.deliverHumanMessageToTerminal(
+            // The outcome used to be discarded (genie#482), and the delivery
+            // fails for real: `no-agent` when the asking terminal has no
+            // registered agent identity — it closed, it restarted, the agent
+            // never rejoined — so the answer went nowhere while the user was
+            // shown a success. Passing it back lets force-question say so.
+            //
+            // The RESULT form rather than the boolean (genie#462), because
+            // `no-agent` and `refused` are different facts about different
+            // things, and a caller that reports one as the other is inventing a
+            // cause it never checked.
+            const outcome = agentInboxBroker.deliverHumanMessageToTerminalResult(
                 d.terminalId,
                 formatDeferredAnswer(d),
                 // This is the human ANSWERING a question this agent asked, not
@@ -1809,6 +1819,9 @@ app.whenReady().then(async () => {
                 // You as a DM" — which reads as a note the agent sent itself.
                 'ftq-answer',
             );
+            return outcome.ok
+                ? { delivered: true }
+                : { delivered: false, reason: outcome.reason };
         });
         rehydrateAgentInbox();
         agentInboxBroker.rehydrateMessages();

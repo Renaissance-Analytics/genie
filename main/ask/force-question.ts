@@ -1,4 +1,4 @@
-import { BrowserWindow, ipcMain, powerMonitor, screen, shell } from 'electron';
+import { BrowserWindow, Notification, ipcMain, powerMonitor, screen, shell } from 'electron';
 import crypto from 'crypto';
 import path from 'path';
 import { getAllSettings, listWorkspaces, setSettings } from '../db';
@@ -275,11 +275,97 @@ export function setQuestionStore(s: QuestionStorePort | null): void {
     questionStore = s ?? dbQuestionStore;
 }
 
-let deferredAnswerSink: ((d: DeferredAnswerDelivery) => void) | null = null;
+/**
+ * Whether an answer actually reached the agent that asked for it.
+ *
+ * The transport (`AgentInboxBroker.deliverHumanMessageToTerminal`) has always
+ * been able to say no — it returns false when the terminal has no registered
+ * agent identity, because it closed, restarted, or the agent never rejoined. The
+ * sink was typed `=> void` and the composition root threw the answer away, so
+ * nothing could act on it (genie#482).
+ *
+ * `reason` is optional because the boolean transport cannot always tell
+ * `no-agent` from `refused`; a transport that can distinguish them says so.
+ */
+export interface AnswerDelivery {
+    delivered: boolean;
+    reason?: 'no-agent' | 'refused';
+}
+
+/**
+ * The sink may report the outcome. `void` is still accepted, and read as
+ * DELIVERED: a sink that says nothing is not evidence of failure, and warning
+ * the user on every answer would be a worse bug than the silence being fixed.
+ */
+let deferredAnswerSink:
+    | ((d: DeferredAnswerDelivery) => AnswerDelivery | void)
+    | null = null;
 /** Install the deferred-answer delivery sink (composition root → AgentInbox broker).
  *  Pass null to disable delivery (the default; internal gates don't route back). */
-export function setDeferredAnswerSink(fn: ((d: DeferredAnswerDelivery) => void) | null): void {
+export function setDeferredAnswerSink(
+    fn: ((d: DeferredAnswerDelivery) => AnswerDelivery | void) | null,
+): void {
     deferredAnswerSink = fn;
+}
+
+/**
+ * Tell the USER that the answer they just gave did not reach anybody.
+ *
+ * This is the whole point of genie#482. The user answers, the card disappears,
+ * and the disappearance IS the confirmation they read — so an answer that landed
+ * nowhere is indistinguishable from one that worked, on a surface where they
+ * have no other way to find out. The agent cannot tell them: it is precisely the
+ * thing that is gone.
+ *
+ * An OS notification rather than inline text because there are three surfaces
+ * that can answer — the always-on-top modal (which closes on answer), the
+ * top-bar flyout, and the phone — and only this one reaches all three. It
+ * mirrors `notifyForwardedAnswerFailed` in `main/remote/index.ts`, which exists
+ * for the same situation over the bridge.
+ *
+ * Deliberately NOT gated on `notify_toast`: that setting governs ambient
+ * chatter, and this is a failure the user has to know about to act on.
+ */
+function notifyAnswerUndelivered(d: DeferredAnswerDelivery): void {
+    const named = d.questions[0]?.header ?? d.questions[0]?.question ?? 'a question';
+    try {
+        if (!Notification.isSupported()) return;
+        new Notification({
+            title: 'Genie — answer not delivered',
+            body:
+                `Your answer to "${named}" was recorded, but the agent that asked ` +
+                `is no longer running, so it was not told.`,
+        }).show();
+    } catch {
+        /* best-effort: never let the notice break answering the question */
+    }
+}
+
+/**
+ * Hand an answer to the asking agent, and tell the user if it did not land.
+ *
+ * The single place both answer paths funnel through — the DND-deferred inbox row
+ * and the ordinary modal — so neither can quietly lose the outcome again. A sink
+ * that throws counts as undelivered: it must not break answering the question
+ * (the old comment was right about that) but it is not success either (the old
+ * comment was wrong to stop there).
+ *
+ * Returns nothing ON PURPOSE. The outcome is CONSUMED here, by the notification,
+ * rather than handed back to a caller that would have to remember to look at it
+ * — which is the exact failure this whole change is about. Threading it onward
+ * so the flyout can also say it inline is a follow-up, and it will replace this
+ * signature rather than add a second, ignorable channel.
+ */
+function deliverAnswer(d: DeferredAnswerDelivery): void {
+    if (!deferredAnswerSink) return; // nothing wired to deliver through
+    let outcome: AnswerDelivery;
+    try {
+        const reported = deferredAnswerSink(d);
+        outcome = reported && typeof reported === 'object' ? reported : { delivered: true };
+    } catch {
+        outcome = { delivered: false, reason: 'refused' };
+    }
+    if (!outcome.delivered) notifyAnswerUndelivered(d);
 }
 
 /**
@@ -562,22 +648,29 @@ export function answerPendingQuestion(
     const di = deferred.findIndex((d) => d.id === id);
     if (di !== -1) {
         const [d] = deferred.splice(di, 1);
-        // Answered — so it must not come back from the dead on the next boot.
-        forget(d.id);
         d.resolve?.({ cancelled: false, answers: answers ?? [] });
-        if (d.askerTerminalId && deferredAnswerSink) {
-            try {
-                deferredAnswerSink({
-                    terminalId: d.askerTerminalId,
-                    questionId: d.id,
-                    questions: d.questions,
-                    answers: answers ?? [],
-                    deferralReason: d.deferralReason,
-                });
-            } catch {
-                /* a delivery failure must never break answering the question */
-            }
+        // DELIVER FIRST, forget second. This ran the other way round, and doing
+        // the irreversible thing before the reportable one is how the outcome
+        // became unobservable: by the time delivery failed the durable row was
+        // already gone, so there was nothing left to act on (genie#482).
+        if (d.askerTerminalId) {
+            deliverAnswer({
+                terminalId: d.askerTerminalId,
+                questionId: d.id,
+                questions: d.questions,
+                answers: answers ?? [],
+                deferralReason: d.deferralReason,
+            });
         }
+        // Forgotten either way, INCLUDING when delivery failed. Keeping the row
+        // would preserve the prompt and discard the reply: it is gone from the
+        // flyout regardless, the next boot's `canDeliverTo` drops it for the very
+        // condition that failed delivery, and if the agent did come back the user
+        // would be re-asked something they had already answered — with the first
+        // answer lost, because only the question is durable and the answer never
+        // was. The missing thing is the report, not the retention. Keeping the
+        // answer instead is genie#484.
+        forget(d.id);
         notifyQuestionsChanged();
         return true;
     }
@@ -820,10 +913,13 @@ function finish(id: string, result: ForceQuestionResult): void {
     // covers every route out -- the modal, the flyout, the phone, and a host
     // question resolved first -- because they all land in finish().
     forgetDraft(item.id);
-    // Same reasoning for the durable copy: this question has been resolved, so
-    // the next boot must not raise it again.
-    forget(item.id);
+    // `resolve` is what hands the answer to the asking agent (see the closure in
+    // raiseDesktopModal), so it runs BEFORE the durable row is dropped — same
+    // ordering rule as the deferred path, and for the same reason: destroying
+    // the record first is what left a failed delivery with nothing to act on.
     item.resolve(result);
+    // Resolved, so the next boot must not raise it again.
+    forget(item.id);
     // A pending question was removed — tell the mobile push channel so it can
     // emit question:resolved. Fires for BOTH head and queued removals.
     notifyQuestionsChanged();
@@ -1255,17 +1351,18 @@ function raiseDesktopModal(
                 resolve: (lateResult) => {
                     // enqueue already moved an unshowable question into `deferred`;
                     // its eventual inbox answer owns delivery in that case.
-                    if (lateResult.deferred || !deferredAnswerSink) return;
-                    try {
-                        deferredAnswerSink({
-                            terminalId: askerTerminalId,
-                            questionId: id,
-                            questions,
-                            answers: lateResult.answers ?? [],
-                        });
-                    } catch {
-                        /* answer delivery must never break the modal queue */
-                    }
+                    if (lateResult.deferred) return;
+                    // The ORDINARY modal answer — the common path, and it had the
+                    // same swallow as the DND one (genie#482). It went through a
+                    // bare try/catch that was right about never breaking the modal
+                    // queue and wrong about never reporting: an answer the agent
+                    // never received looked exactly like one it did.
+                    deliverAnswer({
+                        terminalId: askerTerminalId,
+                        questionId: id,
+                        questions,
+                        answers: lateResult.answers ?? [],
+                    });
                 },
             });
             if (failure) {

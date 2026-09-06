@@ -442,7 +442,9 @@ describe('rebuilding the queue after a restart', () => {
 
     it('delivers a rebuilt question’s answer to the agent that asked it', async () => {
         const delivered: DeferredAnswerDelivery[] = [];
-        fq.setDeferredAnswerSink((d) => delivered.push(d));
+        fq.setDeferredAnswerSink((d) => {
+            delivered.push(d);
+        });
         store.save(stored({ terminalId: 'T-ALIVE' }));
         fq.rehydratePendingQuestions(() => true);
 
