@@ -488,6 +488,18 @@ export interface McpContext {
      * on call, rather than pretending the workspace is not a GDW — the two are
      * different answers and only one of them is ever true.
      */
+    /**
+     * Author a Flow (manageFlows).
+     *
+     * Takes the caller's terminal id so the tool can resolve WHOSE workspace
+     * the flow belongs to: a flow an agent writes is scoped to that agent's
+     * workspace and nothing wider, and the scope comes from the CALLER rather
+     * than from anything the arguments claim.
+     */
+    manageFlows?: (
+        args: Record<string, unknown>,
+        terminalId: string,
+    ) => Promise<unknown>;
     manageGappDev?: (
         terminalId: string,
         req: ManageGappDevRequest,
@@ -3471,6 +3483,45 @@ const MANAGE_GAPP_DEV_TOOL = {
     },
 };
 
+const MANAGE_FLOWS_TOOL = {
+    name: 'manageFlows',
+    description:
+        "AUTOMATE something. A Flow is a fancy-flow GRAPH — steps joined by edges, started by a trigger — that Genie runs on a schedule, when an event happens, or when somebody presses Run. This is how you author one without a canvas. Actions: `nodes` (every step you may use, with its config fields — CALL THIS FIRST rather than guessing a kind name); `list` / `get`; `check` (judge a graph and store NOTHING — every step that would be refused, and why); `save` (create or update; pass `graph` as `{nodes,edges}` and `flowId` to update); `run` (start one by hand); `disable`; `delete`. A node is `{id, type: <kind>, position: {x,y}, data: {kind: <kind>, label, config}}` — `type` and `data.kind` are the SAME kind id, and an edge is `{id, source, target}` plus optional `sourceHandle` for a branch's `true`/`false`. TWO THINGS YOU CANNOT DO, deliberately: you cannot ARM a flow (`enable` always refuses — arming grants standing permission to act unattended, which is the user's call: ask with ForceTheQuestion, or point them at the Flow Manager), and you cannot give a flow the whole machine (it is created in YOUR workspace; a person widens it). Saving does not authorise: a graph reaching past what it may do saves fine and comes back with the refusals, because you are allowed to be mid-edit — but it will not RUN until they are gone.",
+    inputSchema: {
+        type: 'object',
+        properties: {
+            ...TERMINAL_ID_PROP,
+            action: {
+                type: 'string',
+                enum: ['nodes', 'list', 'get', 'check', 'save', 'run', 'enable', 'disable', 'delete'],
+                description: 'What to do. Start with `nodes`.',
+            },
+            flowId: {
+                type: 'string',
+                description: 'get/save/run/disable/delete: which flow. Omit on save to create one.',
+            },
+            title: { type: 'string', description: 'save: what to call it.' },
+            purpose: {
+                type: 'string',
+                description: 'save (optional): what it is FOR. The manager groups by this.',
+            },
+            description: { type: 'string', description: 'save (optional): a sentence about it.' },
+            graph: {
+                type: 'object',
+                description:
+                    'check/save: the workflow, as `{nodes, edges}`. See the description for a node’s shape.',
+            },
+            scope: {
+                type: 'object',
+                description:
+                    'check/save (optional): where it belongs. Defaults to YOUR workspace, which is also the widest you may choose.',
+            },
+        },
+        required: ['action'],
+        additionalProperties: false,
+    },
+};
+
 const FORCE_QUESTION_TOOL = {
     name: 'ForceTheQuestion',
     description:
@@ -3581,6 +3632,7 @@ export const CORE_TOOLS = [
     MANAGE_SITE_TOOL,
     MANAGE_SERVICE_TOOL,
     MANAGE_GAPP_DEV_TOOL,
+    MANAGE_FLOWS_TOOL,
     MANAGE_TERMINALS_TOOL,
     REGISTER_AGENT_TOOL,
     RUN_AGENT_TOOL,
@@ -3921,6 +3973,32 @@ ${body}` }],
                             text: `${manageSiteSummary(result)}\n\n${JSON.stringify(result, null, 2)}`,
                         },
                     ],
+                });
+            }
+            if (params.name === 'manageFlows') {
+                if (!ctx.manageFlows) {
+                    return ok(msg.id, {
+                        isError: true,
+                        content: [
+                            {
+                                type: 'text',
+                                text: 'Flows are not wired in this Genie host.',
+                            },
+                        ],
+                    });
+                }
+                const result = await ctx.manageFlows(
+                    (params.arguments ?? {}) as Record<string, unknown>,
+                    ctx.terminalId ?? '',
+                );
+                return ok(msg.id, {
+                    // `isError` on a refusal, so an agent cannot read "you may
+                    // not arm this" as "armed". A refusal that arrives looking
+                    // like a success is the one failure this tool must not have.
+                    ...(result && typeof result === 'object' && 'error' in result && result.error
+                        ? { isError: true }
+                        : {}),
+                    content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
                 });
             }
             if (params.name === 'manageGappDev') {

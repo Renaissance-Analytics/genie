@@ -148,6 +148,16 @@ export interface ServerDeps {
     /** Is a container runtime usable here? Gates manageSite/manageService out of tools/list. */
     devServerAvailable?: (terminalId: string) => Promise<boolean>;
     /** Tell an agent it is in a GApp Development Workspace, and run the app tools
+     * Author a Flow (manageFlows). Optional: absent ⇒ the tool says so on call.
+     *
+     * Takes the caller's terminal id so the tool can resolve WHOSE workspace the
+     * flow belongs to — a flow an agent writes is scoped to that agent's
+     * workspace, and nothing wider. */
+    manageFlows?: (
+        args: Record<string, unknown>,
+        terminalId: string,
+    ) => Promise<unknown>;
+     /** Drive a GApp Development Workspace and open a real preview window
      *  over it (manageGappDev). Optional: absent ⇒ the tool says so on call. */
     manageGappDev?: (
         terminalId: string,
@@ -698,6 +708,7 @@ async function handle(
         manageSite: deps.manageSite,
         manageService: deps.manageService,
         manageGappDev: deps.manageGappDev,
+        manageFlows: deps.manageFlows,
         devServerAvailable: deps.devServerAvailable,
         provisionWorkspaces: deps.provisionWorkspaces,
         manageTerminals: deps.manageTerminals,

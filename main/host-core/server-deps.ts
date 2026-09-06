@@ -32,6 +32,7 @@ import {
 } from '../mcp/host-tools';
 import { devServerAvailableForMcp, manageSiteForMcp } from '../mcp/dev-site-tools';
 import { manageGappDevForMcp } from '../mcp/gapp-dev-tools';
+import { manageFlowsForMcp } from '../flows/mcp-host';
 import { manageServiceForMcp } from '../mcp/dev-service-tools';
 import { openFileForUserForMcp } from '../editor/open-file';
 import { applySetEnv, applyCheckEnv } from '../env-store';
@@ -252,6 +253,10 @@ export function buildHostServerDeps(
         // absent, the tool SAYS a preview cannot open here rather than doing
         // nothing, which is the failure this whole surface is a reaction to.
         manageGappDev: (terminalId, req) => manageGappDevForMcp(terminalId, req),
+        // Authoring a Flow. The caller's terminal decides WHOSE workspace the
+        // flow belongs to — scope comes from the caller, never from the
+        // arguments, the same rule every other tool here follows.
+        manageFlows: (args, terminalId) => manageFlowsForMcp(args, terminalId),
         provisionWorkspaces: (terminalId, req) => provisionWorkspacesForMcp(terminalId, req),
         manageTerminals: (terminalId, req) => manageTerminalsForMcp(terminalId, req),
         // agentUpgrade's caller facts (genie#372). The tool answered from a

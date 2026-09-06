@@ -233,6 +233,37 @@ present in a site's BUILD steps, so a \`manageSite\` app needs no \`.env\` edit.
 WebSockets run natively on the Genie Host without Docker. The other engines require
 Docker or Podman and return an install hint when no runtime is available. Pass \`terminalId\`.
 
+### manageFlows
+**Automate something.** A **Flow** is a graph — steps joined by edges, started by
+a trigger — that Genie runs on a schedule, when an event happens on this
+machine, or when somebody presses Run. It is the same document the canvas in the
+Flow Manager edits, so a flow you write is one a person can open and read.
+
+**Call \`action:'nodes'\` first.** It returns every step you may use with its
+config fields — Genie's own (terminals, agents, workspaces, sites, services,
+issues, knowledge, asking the user) and the logic kit (branch, switch, merge,
+wait, transform, variable, log). Guessing a kind name gets you a node that
+refuses at run time.
+
+A node is \`{id, type: <kind>, position:{x,y}, data:{kind: <kind>, label, config}}\`
+— \`type\` and \`data.kind\` are the SAME kind id — and an edge is
+\`{id, source, target}\`, plus \`sourceHandle\` to leave a branch's \`true\` or
+\`false\`. Actions: \`nodes\`, \`list\`, \`get\`, \`check\` (judge a graph, store
+nothing), \`save\`, \`run\`, \`disable\`, \`delete\`.
+
+**Check before you save.** \`check\` names every step that would be refused and
+why. Saving does not authorise — a graph reaching too far saves fine and comes
+back with the refusals, because you are allowed to be mid-edit — but it will not
+RUN until they are gone.
+
+**TWO THINGS YOU CANNOT DO, and both are deliberate.** You cannot **arm** a flow:
+\`enable\` always refuses, because arming grants standing permission to act
+unattended and that is the user's decision — ask with \`ForceTheQuestion\`, or
+point them at the Flow Manager, where the switch states what the flow will be
+able to do. And you cannot give a flow the **whole machine**: it is created in
+YOUR workspace, and a person widens it. You *can* \`disable\` one — the machine
+doing less needs nobody's permission.
+
 ### manageGappDev
 **Build the Genie App this workspace is the home of** — the GApp Development
 Workspace (GDW) tools.

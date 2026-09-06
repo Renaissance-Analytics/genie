@@ -190,6 +190,25 @@ export async function runFlowManually(flowId: string, deps: ServerDeps) {
     return runAndRecord(flowId, { trigger: 'manual' }, deps);
 }
 
+/**
+ * Run one by hand using the deps the flow system was STARTED with.
+ *
+ * For callers that have a flow id and no ServerDeps — the MCP tool, which is
+ * reached from the host's own dependency factory and so cannot build one
+ * without closing a cycle. Refuses rather than inventing deps when the system
+ * is not up: a run that silently did nothing would look like a flow that ran
+ * and produced no effect, which is the worst answer available.
+ */
+export async function runFlowByHand(
+    flowId: string,
+): Promise<{ ok: boolean; error?: string }> {
+    if (!serverDeps) {
+        return { ok: false, error: 'Genie’s flow system is not running.' };
+    }
+    const result = await runAndRecord(flowId, { trigger: 'manual' }, serverDeps);
+    return { ok: result.ok, ...(result.error ? { error: result.error } : {}) };
+}
+
 /* ===== the bus ======================================================== */
 
 let serverDeps: ServerDeps | null = null;
