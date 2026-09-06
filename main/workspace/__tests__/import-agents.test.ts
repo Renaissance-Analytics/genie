@@ -155,6 +155,10 @@ function rosterOf(ws: WorkspaceRow) {
             purpose: a.purpose,
             role: a.role,
             tui: a.tui ?? '',
+            // `ipc.ts` asks the terminal manager (genie#474). Nothing is
+            // started in this suite, so false is the answer and not a stub —
+            // an imported agent has no run behind it until somebody starts one.
+            running: false,
         })),
         files: agentFilesIn(ws.path, nodeAgentFilesFs),
         sacredName: ws.sacred_name,

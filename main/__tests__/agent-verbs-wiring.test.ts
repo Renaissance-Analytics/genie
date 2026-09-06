@@ -126,6 +126,11 @@ describe('stop is its own verb, everywhere it is offered (genie#474)', () => {
         for (const component of [
             'components/Master/WorkspaceSettingsModal.tsx',
             'components/Master/AgentManager.tsx',
+            // The imported-project panel (genie#459) mounts the same roster
+            // list. Its whole promise is that the AGENT.md files are safe, so a
+            // control here reaching the record-removing verb would break it
+            // exactly where a person is most anxious about their agents.
+            'components/ImportedAgents.tsx',
         ]) {
             const src = fs.readFileSync(path.join(rendererDir, component), 'utf8');
             // POSITIVE CONTROL first: the file really does call stop, so the

@@ -110,6 +110,26 @@ export function ImportedAgents({
     const start = (name: string) =>
         void run(name, () => api().agents.start(workspaceId, name), `${name} is starting.`);
 
+    /**
+     * END a run, KEEP the agent — genie#474. `agents.stop`, never
+     * `agents.delete`: this panel's whole promise is that the file is safe, and
+     * a control here that removed a record would break it in the one place a
+     * person is most anxious about their agents.
+     *
+     * Rare on this surface — a freshly imported agent is unregistered and
+     * therefore dormant — but `keepOpen` leaves the list up after an adoption,
+     * so an agent adopted and started from here can be running while it is
+     * still on screen.
+     */
+    const stop = (entry: AgentRosterEntry) => {
+        if (!entry.agentId) return;
+        void run(
+            entry.name,
+            () => api().agents.stop(entry.agentId!),
+            `${entry.name} is stopped. Its identity, AGENT.md, inbox and history are kept — Start brings the same agent back.`,
+        );
+    };
+
     if (roster === null) return null;
     if (!offer.offer && !(keepOpen && roster.length > 0)) return null;
 
@@ -146,6 +166,7 @@ export function ImportedAgents({
                 busy={busy}
                 onAdopt={(name) => void adopt(name)}
                 onStart={start}
+                onStop={stop}
             />
         </div>
     );
