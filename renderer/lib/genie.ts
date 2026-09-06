@@ -1,4 +1,4 @@
-import type { AgentRecordSpec, AgentRuntimeSpec } from './ams-grid';
+import type { AgentRecordSpec, AgentRosterEntry, AgentRuntimeSpec } from './ams-grid';
 import type { BoardRead, ReviewOutcome } from './artboard-model';
 /**
  * Typed handle on the contextBridge surface exposed in main/preload.ts.
@@ -4339,6 +4339,22 @@ export interface GenieApi {
             agents: AgentRecordSpec[];
             runtimes: AgentRuntimeSpec[];
         }>;
+        /**
+         * THE ROSTER — registered agents AND the `.agents/<slug>/AGENT.md` files
+         * the registry has never heard of (genie#465).
+         *
+         * `list` above is the registry alone, so an agent whose row was lost —
+         * to an unmount and re-add of an unlinked workspace, or to opening the
+         * project on a machine whose `genie.db` never had it — is invisible
+         * there while its file sits committed in the repo.
+         */
+        roster: (workspaceId: string) => Promise<{
+            ok: boolean;
+            error?: string;
+            roster: AgentRosterEntry[];
+        }>;
+        /** Register an on-disk agent FROM ITS OWN FILE. Never overwrites it. */
+        adopt: (workspaceId: string, folder: string) => Promise<{ ok: boolean; error?: string }>;
         /** Make one of an agent's TUIs the visible one. A SWAP, not an add. */
         /** Create an agent: a record and its AGENT.md, never a terminal. */
         create: (input: {

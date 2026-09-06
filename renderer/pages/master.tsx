@@ -13,7 +13,9 @@ import {
     restartOptionsFor,
     type RestartMode,
 } from '../../main/agents/restart-options';
-import WorkspaceSettingsModal from '../components/Master/WorkspaceSettingsModal';
+import WorkspaceSettingsModal, {
+    WorkspaceAgentsModal,
+} from '../components/Master/WorkspaceSettingsModal';
 import WorkspaceSiteManager from '../components/Master/WorkspaceSiteManager';
 import SpecContextMenu from '../components/Master/SpecContextMenu';
 import { PromptHost, showPrompt } from '../components/Master/Prompt';
@@ -332,6 +334,9 @@ function MasterInner() {
     } | null>(null);
     const [addingWorkspace, setAddingWorkspace] = useState(false);
     const [settingsWorkspaceId, setSettingsWorkspaceId] = useState<string | null>(null);
+    /** The workspace whose AGENT ROSTER is open — the registry plus the
+     *  `.agents/*` files Genie has not registered (genie#465). */
+    const [agentsWsId, setAgentsWsId] = useState<string | null>(null);
 
     // Terminal-scoped hotkeys (Tynn #246/#247): F5 nudges the focused agent to
     // re-ask through ForceTheQuestion, Ctrl+K opens the Command Window. Both bind
@@ -2541,6 +2546,7 @@ function MasterInner() {
                         onClose={() => setProjectMenu(null)}
                         onAddTerminal={() => void addSpec(ws.id)}
                         onNewAgent={() => setNewAgentWsId(ws.id)}
+                        onAgents={() => setAgentsWsId(ws.id)}
                         onOpenStage={() => openProjectInStage(ws.id)}
                         onOpenInBrowser={() => openProjectInBrowser(ws.id)}
                         onSettings={() => setSettingsWorkspaceId(ws.id)}
@@ -2559,6 +2565,17 @@ function MasterInner() {
                         workspace={ws}
                         open
                         onClose={() => setFeedbackWsId(null)}
+                    />
+                );
+            })()}
+
+            {agentsWsId && (() => {
+                const ws = workspacesById.get(agentsWsId);
+                if (!ws) return null;
+                return (
+                    <WorkspaceAgentsModal
+                        workspace={ws}
+                        onClose={() => setAgentsWsId(null)}
                     />
                 );
             })()}

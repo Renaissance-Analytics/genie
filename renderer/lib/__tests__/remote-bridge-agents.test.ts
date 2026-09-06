@@ -55,6 +55,8 @@ function harness(result: unknown = { ok: true }) {
         addRuntime: vi.fn(),
         front: vi.fn(),
         setAvatar: vi.fn(),
+        roster: vi.fn(),
+        adopt: vi.fn(),
     };
     const bridge = makeRemoteBridge(fakeLocal(request, local));
     return { request, local, bridge };
@@ -98,6 +100,32 @@ describe('the agents namespace is host-sourced on a remote window', () => {
 
         expect(calledPath(request)).toBe('/api/desktop/agents/list');
         expect(local.list).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The ROSTER reads a FOLDER (genie#465) — `.agents/<slug>/AGENT.md` — which
+     * makes falling through worse than for the database calls above: the client
+     * machine has a `.agents/` too, so an unbridged roster would answer with a
+     * plausible list of somebody else's agents under a panel that claims to be
+     * the host's workspace. And an ADOPT that fell through would register an
+     * agent on the wrong machine, from the wrong file.
+     */
+    it('the ROSTER reads the HOST folder, not the client one of the same name', async () => {
+        const { request, local, bridge } = harness({ ok: true, roster: [] });
+
+        await bridge.agents.roster('host-ws');
+
+        expect(calledPath(request)).toBe('/api/desktop/agents/roster');
+        expect(local.roster).not.toHaveBeenCalled();
+    });
+
+    it('ADOPT registers on the host, from the host file', async () => {
+        const { request, local, bridge } = harness({ ok: true });
+
+        await bridge.agents.adopt('host-ws', 'ripple');
+
+        expect(calledPath(request)).toBe('/api/desktop/agents/adopt');
+        expect(local.adopt).not.toHaveBeenCalled();
     });
 
     it('START launches on the host', async () => {

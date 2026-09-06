@@ -83,4 +83,12 @@ export default defineConfig({
             electron: path.resolve(__dirname, 'test/electron-mock.ts'),
         },
     },
+    // The AUTOMATIC JSX runtime, matching the root `tsconfig.json` (`"jsx":
+    // "react-jsx"`) and what Next compiles the renderer with. Without it esbuild
+    // falls back to the classic transform, so a component in a file that does
+    // not happen to `import React` renders as "React is not defined" — a failure
+    // about the test runner, in a test about the component. Renderer components
+    // ARE tested here now (through `react-dom/server`, since the env has no
+    // DOM), so the two transforms have to agree.
+    esbuild: { jsx: 'automatic' },
 });

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import type { AgentRecordSpec } from '../../lib/ams-grid';
-import { Action, Heading, Icon, Input, Modal, Select, Text } from '@particle-academy/react-fancy';
+import type { AgentRecordSpec, AgentRosterEntry } from '../../lib/ams-grid';
+import { Action, Badge, Heading, Icon, Input, Modal, Select, Text } from '@particle-academy/react-fancy';
 import TynnProvisionPanel from '../TynnProvisionPanel';
 import type {
     AppCheckReport,
@@ -439,6 +439,11 @@ export default function WorkspaceSettingsModal({
 
                 {workspace.path && <OpsWorkspacesPanel workspacePath={workspace.path} />}
 
+                <WorkspaceAgentRoster
+                    workspaceId={workspace.id}
+                    onChanged={loadAgents}
+                />
+
                 <Section title="Agent behavior">
                     {/* THE WORKSPACE AGENT. Not an agent named 'workspace' — v50
                         seeded one of those and it was a phantom in every
@@ -715,6 +720,305 @@ function Row({
             </div>
             <div className="set-row-control">{children}</div>
         </div>
+    );
+}
+
+/**
+ * The roster's ROWS — presentational only, and exported so they can be rendered
+ * in a test.
+ *
+ * Split from the panel below for the reason `ToolUpdateList` is: the renderer
+ * test env has no DOM, but the server renderer runs every component function and
+ * throws where the browser would. A list with four genuinely different row
+ * shapes — registered, registered-with-no-file, adoptable, and one Genie refuses
+ * to adopt — is exactly the thing that should not first be rendered on a user's
+ * machine.
+ */
+export function AgentRosterList({
+    entries,
+    busy,
+    onAdopt,
+    onStart,
+}: {
+    entries: AgentRosterEntry[];
+    /** The agent with an action in flight — one at a time; these register and
+     *  spawn. */
+    busy: string | null;
+    onAdopt: (name: string) => void;
+    onStart: (name: string) => void;
+}) {
+    const registered = entries.filter((e) => e.registered);
+    const onDiskOnly = entries.filter((e) => !e.registered);
+
+    return (
+        <>
+            {registered.length === 0 ? (
+                <div className="set-note">
+                    No agents are registered here yet. Create one from the workspace menu, or
+                    adopt a file below if this project already carries one.
+                </div>
+            ) : (
+                <div className="ws-tools" data-testid="roster-registered">
+                    {registered.map((entry) => (
+                        <div
+                            className="ws-engine"
+                            key={entry.name}
+                            data-testid={`roster-agent-${entry.name}`}
+                        >
+                            <div className="ws-engine-head">
+                                <div className="ws-engine-name">
+                                    <Text size="sm" style={{ fontWeight: 600 }}>
+                                        {entry.name}
+                                    </Text>
+                                    <Text size="xs" className="text-zinc-500">
+                                        {entry.purpose}
+                                    </Text>
+                                    {/* WHERE the durable half is, or that there is
+                                        not one. A registered agent with no file
+                                        boots with the workspace framing and no
+                                        specialization at all, which is worth
+                                        knowing before wondering why it is vague. */}
+                                    <Text size="xs" className="text-zinc-500">
+                                        {entry.onDisk
+                                            ? `.agents/${entry.name}/AGENT.md`
+                                            : `No .agents/${entry.name}/AGENT.md — this agent has no persona file.`}
+                                    </Text>
+                                </div>
+                                {entry.role === 'workspace' && (
+                                    <Badge color="emerald">Workspace agent</Badge>
+                                )}
+                                {!entry.onDisk && <Badge color="amber">No file</Badge>}
+                                <div className="ws-engine-actions">
+                                    <Action
+                                        size="sm"
+                                        variant="ghost"
+                                        disabled={busy !== null}
+                                        onClick={() => onStart(entry.name)}
+                                        data-testid={`roster-start-${entry.name}`}
+                                    >
+                                        {busy === entry.name ? 'Starting…' : 'Start'}
+                                    </Action>
+                                </div>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            {onDiskOnly.length > 0 && (
+                <>
+                    <div className="set-note">
+                        These have an AGENT.md in this project and no registration here. That is
+                        the ordinary state after an unmount and re-add, or the first time the
+                        project is opened on this machine — the files travel with the repo, the
+                        registry does not. Adopting one READS its file; it never rewrites it.
+                    </div>
+                    <div className="ws-tools" data-testid="roster-adoptable">
+                        {onDiskOnly.map((entry) => (
+                            <div
+                                className="ws-engine"
+                                key={entry.name}
+                                data-testid={`roster-ondisk-${entry.name}`}
+                            >
+                                <div className="ws-engine-head">
+                                    <div className="ws-engine-name">
+                                        <Text size="sm" style={{ fontWeight: 600 }}>
+                                            {entry.name}
+                                        </Text>
+                                        <Text size="xs" className="text-zinc-500">
+                                            {entry.purpose}
+                                        </Text>
+                                        <Text size="xs" className="text-zinc-500">
+                                            {`.agents/${entry.name}/AGENT.md`}
+                                        </Text>
+                                    </div>
+                                    <Badge color="zinc">Not registered</Badge>
+                                    <div className="ws-engine-actions">
+                                        {/* A file Genie cannot adopt gets the
+                                            REASON where the button would have
+                                            been. An Adopt that always fails is
+                                            worse than none — the same rule the
+                                            agent-CLI rows hold themselves to. */}
+                                        {!entry.refusal && (
+                                            <Action
+                                                size="sm"
+                                                disabled={busy !== null}
+                                                onClick={() => onAdopt(entry.name)}
+                                                data-testid={`roster-adopt-${entry.name}`}
+                                            >
+                                                {busy === entry.name ? 'Adopting…' : 'Adopt'}
+                                            </Action>
+                                        )}
+                                    </div>
+                                </div>
+                                {entry.refusal && (
+                                    <div
+                                        className="set-note"
+                                        data-testid={`roster-refusal-${entry.name}`}
+                                    >
+                                        {entry.refusal}
+                                    </div>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                </>
+            )}
+        </>
+    );
+}
+
+/**
+ * THE WORKSPACE AGENT ROSTER — both halves of the record, in one list.
+ *
+ * An agent is a ROW in `workspace_agents` and a FILE at `.agents/<slug>/AGENT.md`,
+ * and until now only the row was ever read. `deletion.ts` keeps the file through
+ * an unmount on purpose — *"keeping every `.agents/*` file is the entire point"* —
+ * and nothing could turn one back into an agent, so the owner had three agents
+ * sitting committed in their repos that Genie could not see at all (genie#465).
+ * The same gap is why a project opened on a SECOND machine arrives with no
+ * agents: the files travel with the repo, `genie.db` does not.
+ *
+ * ADOPTION IS OFFERED, NEVER AUTOMATIC. A workspace's roster must not be
+ * something a `git pull` decides, so an unregistered file is listed with what it
+ * says it is for and a button, and nothing happens until a human presses it.
+ */
+function WorkspaceAgentRoster({
+    workspaceId,
+    onChanged,
+}: {
+    workspaceId: string;
+    onChanged: () => void;
+}) {
+    const [roster, setRoster] = useState<AgentRosterEntry[] | null>(null);
+    const [busy, setBusy] = useState<string | null>(null);
+    const [error, setError] = useState<string | null>(null);
+    const [notice, setNotice] = useState<string | null>(null);
+
+    const load = useCallback(() => {
+        void api()
+            .agents.roster(workspaceId)
+            .then((r) => {
+                setRoster(r.roster);
+                setError(r.ok ? null : (r.error ?? 'The roster could not be read.'));
+            })
+            .catch((e: unknown) => {
+                setRoster([]);
+                setError(e instanceof Error ? e.message : String(e));
+            });
+    }, [workspaceId]);
+    useEffect(load, [load]);
+
+    const adopt = async (name: string) => {
+        setBusy(name);
+        setError(null);
+        setNotice(null);
+        try {
+            const res = await api().agents.adopt(workspaceId, name);
+            if (!res.ok) {
+                setError(res.error ?? `${name} could not be adopted.`);
+                return;
+            }
+            // NAME what happened, and what it did NOT do. The file is the thing
+            // the person is afraid for, so say it was left alone.
+            setNotice(
+                `${name} is registered. Its .agents/${name}/AGENT.md was read, not rewritten.`,
+            );
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+        } finally {
+            setBusy(null);
+            load();
+            onChanged();
+        }
+    };
+
+    const start = async (name: string) => {
+        setBusy(name);
+        setError(null);
+        setNotice(null);
+        try {
+            const res = await api().agents.start(workspaceId, name);
+            if (!res.ok) setError(res.error ?? `${name} did not start.`);
+            else setNotice(`${name} is starting.`);
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+        } finally {
+            setBusy(null);
+        }
+    };
+
+    return (
+        <Section
+            title="Agents"
+            sub="Every agent this workspace has — the ones Genie has registered, and the AGENT.md files in .agents/ it has not"
+            action={
+                <Action
+                    size="sm"
+                    variant="ghost"
+                    icon="refresh-cw"
+                    disabled={busy !== null}
+                    onClick={load}
+                    title="Re-read this workspace's .agents/ folder and its registered agents."
+                >
+                    Re-read
+                </Action>
+            }
+        >
+            {error && <div className="set-note bad">{error}</div>}
+            {notice && (
+                <div className="set-note" role="status" data-testid="roster-notice">
+                    {notice}
+                </div>
+            )}
+            {roster === null ? (
+                <div className="set-note">Reading this workspace&apos;s agents…</div>
+            ) : (
+                <AgentRosterList
+                    entries={roster}
+                    busy={busy}
+                    onAdopt={(name) => void adopt(name)}
+                    onStart={(name) => void start(name)}
+                />
+            )}
+        </Section>
+    );
+}
+
+/**
+ * The roster ON ITS OWN — the workspace menu's "Agents…".
+ *
+ * The same component the settings modal mounts, in a window of its own, because
+ * the owner's complaint was *"where the fuck is my agent management ux for
+ * workspaces"* and the answer must not be "two clicks into Workspace settings,
+ * below the IssueWatch buckets". Agent management is a thing you go and DO, like
+ * the Site Manager, not a preference you set.
+ *
+ * One component, two mounts, so the two surfaces cannot drift.
+ */
+export function WorkspaceAgentsModal({
+    workspace,
+    onClose,
+}: {
+    workspace: WorkspaceRow;
+    onClose: () => void;
+}) {
+    return (
+        <Modal open onClose={onClose} size="lg">
+            <div className="ws-settings">
+                <div className="ws-settings-head">
+                    <Heading as="h2" size="sm">
+                        Agents — {workspace.project_name}
+                    </Heading>
+                    {workspace.path && (
+                        <Text size="xs" className="text-zinc-500">
+                            {workspace.path}
+                        </Text>
+                    )}
+                </div>
+                <WorkspaceAgentRoster workspaceId={workspace.id} onChanged={() => {}} />
+            </div>
+        </Modal>
     );
 }
 

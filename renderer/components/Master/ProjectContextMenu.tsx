@@ -25,6 +25,8 @@ interface Props {
     onClose: () => void;
     onAddTerminal: () => void;
     onNewAgent: () => void;
+    /** Open the workspace's agent roster. */
+    onAgents?: () => void;
     onOpenStage: () => void;
     onOpenInBrowser: () => void;
     onSettings: () => void;
@@ -48,6 +50,7 @@ export default function ProjectContextMenu({
     onClose,
     onAddTerminal,
     onNewAgent,
+    onAgents,
     onOpenStage,
     onOpenInBrowser,
     onSettings,
@@ -135,6 +138,21 @@ export default function ProjectContextMenu({
                         onClose();
                     }}
                 />
+                {/* The workspace's AGENTS — the roster, and the `.agents/*`
+                    files it has that Genie has not registered (genie#465). Its
+                    own entry, beside the other "go and do something with this
+                    workspace" items, rather than a section two clicks into
+                    settings: agent management is a thing you DO. */}
+                {onAgents && (
+                    <CtxItem
+                        icon={<IconCpu size={14} />}
+                        label="Agents…"
+                        onClick={() => {
+                            onAgents();
+                            onClose();
+                        }}
+                    />
+                )}
                 <CtxItem
                     icon={<IconGlobe size={14} />}
                     label="Open project in browser"

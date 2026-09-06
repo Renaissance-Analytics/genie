@@ -33,6 +33,8 @@ import { appendLaunchFlags } from './agentinbox/session-capture';
 import { registerIpcHandlers, applyStartupToolchainPrecedence, addWorkspaceFromFolder } from './ipc';
 import {
     agentRecordsList,
+    agentRecordRoster,
+    agentRecordAdopt,
     agentRecordCreate,
     agentRecordStart,
     agentRecordDelete,
@@ -2378,6 +2380,8 @@ app.whenReady().then(async () => {
             // call -- one implementation, two transports.
             agentRecords: {
                 list: (workspaceId) => agentRecordsList(workspaceId),
+                roster: (workspaceId) => agentRecordRoster(workspaceId),
+                adopt: (workspaceId, folder) => agentRecordAdopt(workspaceId, folder),
                 create: (input) => agentRecordCreate(input),
                 start: (workspaceId, name) => agentRecordStart(workspaceId, name),
                 remove: (agentId, mode, handoff) => agentRecordDelete(agentId, mode, handoff),
