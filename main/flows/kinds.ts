@@ -33,7 +33,7 @@
  */
 
 import { getNodeKind, registerNodeKind } from '@particle-academy/fancy-flow/engine';
-import { CORE_TOOLS } from '../../mcp/protocol';
+import { CORE_TOOLS } from '../mcp/protocol';
 import { listGenieNodeKinds, type GenieFlowNodeKind } from './nodes';
 
 /* ===== the serializable definition ====================================== */

@@ -17,6 +17,7 @@
 
 import { getTerminalSpec } from '../db';
 import { appGrantFor } from '../apps/grant-lookup';
+import { flowWorkspaceId } from '../flows/scope-lookup';
 import { resolveCaller, type Caller } from './caller-identity';
 import { workspaceSlug } from '../agentinbox/slug';
 
@@ -28,6 +29,10 @@ export function resolveCallerFor(callerId: string): Caller {
         // `me()` answer while every `call()` it made resolved to no workspace at
         // all — an app that looks alive and can do nothing.
         appGrant: (appId) => appGrantFor(appId),
+        // Straight from the row, through a leaf module: `flows/store.ts` reaches
+        // the bridge, which reaches the MCP protocol, which reaches host-tools,
+        // which reaches here. Reading one column depends on nothing.
+        flowWorkspaceId: (flowId) => flowWorkspaceId(flowId),
     });
 }
 

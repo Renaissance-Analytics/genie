@@ -23,7 +23,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { FlowActivity } from '../activity';
-import type { FlowRunLog } from '../runtime';
+import type { FlowRunLog } from '../types';
 
 function log(over: Partial<FlowRunLog> = {}): FlowRunLog {
     return {

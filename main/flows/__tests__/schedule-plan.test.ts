@@ -23,7 +23,7 @@ import type { ScheduledFlow } from '../store';
 const desired = (over: Partial<ScheduledFlow> = {}): ScheduledFlow => ({
     flowId: 'f1',
     appId: 'app-1',
-    name: 'Nightly triage',
+    title: 'Nightly triage',
     nodeId: 's1',
     cron: '0 3 * * *',
     ...over,
@@ -98,7 +98,7 @@ describe('changing what drifted', () => {
     });
 
     it('updates a schedule whose flow was renamed', () => {
-        const plan = planFlowSchedules([desired({ name: 'Renamed' })], [existing()]);
+        const plan = planFlowSchedules([desired({ title: 'Renamed' })], [existing()]);
 
         expect(plan.update).toHaveLength(1);
         expect(plan.update[0]!.label).toContain('Renamed');

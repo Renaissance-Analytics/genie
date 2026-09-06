@@ -1,120 +1,245 @@
 /**
- * PURE. May this Flow's body run, given that nobody is watching?
+ * PURE. May this app run this graph — decided before the first node executes.
  *
- * ## The hazard
+ * A flow graph is inert JSON, and every effectful step names its tool
+ * STRUCTURALLY rather than deciding it at run time. That is the property an agent
+ * transcript never has, and it means a whole flow can be judged up front.
  *
- * A Flow's body is a Recipe, and a Recipe can contain a `terminal` step, which
- * runs a command. A system trigger fires with no human present. Put together
- * without a decision in between, a Flow is a way to run arbitrary commands on a
- * schedule nobody consented to — and the existing gate does not help, because
- * `approveProcessRun` raises a MODAL and blocks until someone answers it. At 3am
- * that is either a command nobody sanctioned or a run wedged forever.
+ * Worth doing for one blunt reason: refusing at node 7, after six irreversible
+ * side effects have already happened, is a strictly worse answer than refusing at
+ * node 0. Admission also lets a consent-shaped surface say what a flow WILL do
+ * before anyone agrees to it.
  *
- * ## The decision
+ * ## This is not the enforcement
  *
- * **An unattended run may execute first-party code and nothing else.**
+ * `dispatchAppCall` in the executor is. It stays for an admitted graph, because a
+ * graph can be edited between admission and run, and because defence that only
+ * happens once is defence that eventually gets skipped. Admission is fail-fast
+ * and an honest explanation; the bridge is the lock.
  *
- * `task` steps are in-repo TypeScript, reviewed when they were written, and a
- * stored Flow can only REFERENCE one by id — a JSON row cannot smuggle a
- * function in. Every other step type is refused when unattended:
+ * ## Every refusal is `decideAppCall`'s
  *
- *  - `terminal` runs a shell command with nobody to sanction it;
- *  - `form` and `choice` need a person to answer them, so unattended they would
- *    hang rather than fail — a wedged run that reports nothing is worse than a
- *    refusal that explains itself;
- *  - `browser` opens a window on a machine nobody is sitting at.
+ * Nothing here invents an authority rule. Each Genie node is put to the same gate
+ * a GApp window's call goes through, so a flow cannot become a second, laxer path
+ * to the same tools. If that gate changes, flows change with it.
  *
- * This is the brief's own fallback taken deliberately: *a Flow that cannot run is
- * far better than one that runs commands nobody sanctioned.* The alternative —
- * a per-Flow "yes, run shells unattended" sanction — is a real thing to build,
- * but it needs a human-approval surface to record consent, and shipping the
- * FIELD before the surface would mean the safe default is one JSON edit away
- * from being off with nobody having agreed to anything.
+ * ## It reads UNTRUSTED shape
  *
- * ## Why up front, before any step
- *
- * `main/apps/flows/runner.ts` states this rule for graphs and it is the same rule
- * here: refusing at step 7 after six irreversible side effects is strictly worse
- * than refusing at step 0. So the whole recipe is judged before any of it
- * happens, and one unsafe step refuses all of it.
- *
- * An ATTENDED run admits everything — the person is there, and the existing
- * workspace gates (`workspaceProcessApproval`, `workspaceTerminalApproval`) are
- * the ones that apply, unchanged. Nothing here weakens them.
+ * `importWorkflow` coerces garbage into an empty graph rather than rejecting it
+ * (verified — see the research note), so nothing upstream is validating this. A
+ * stored graph may be hand-edited, migrated, or corrupt. Every read here is
+ * therefore defensive, and anything unreadable is refused rather than guessed at.
  */
 
-import type { FlowRecipe, FlowRecipeStep } from './types';
+import { decideAppCall } from '../apps/bridge-decision';
+import { capabilityForTool } from '../apps/capabilities';
+import { isGenieNodeKind, toolForNodeKind } from './nodes';
+import { describeAuthority, type FlowAuthority } from './authority';
 
-export type FlowRunMode = 'attended' | 'unattended';
+/**
+ * The minimum Genie needs to read off a node.
+ *
+ * Deliberately structural and all-optional rather than fancy-flow's `FlowNode`:
+ * this runs on input that may not be a graph at all, and a type asserting more
+ * than the data guarantees would be a lie the compiler helps tell.
+ */
+export interface FlowNodeLike {
+    id?: unknown;
+    type?: unknown;
+    data?: { kind?: unknown; label?: unknown; config?: unknown } | null;
+}
 
-export interface FlowStepRefusal {
-    stepId: string;
-    stepType: string;
+export interface FlowGraphLike {
+    nodes?: readonly FlowNodeLike[];
+    edges?: unknown;
+}
+
+export interface FlowNodeRefusal {
+    nodeId: string;
+    /** The node's label, when it had one — an author navigates by name, not id. */
+    label?: string;
+    /** Why, in words the user could act on. Verbatim from `decideAppCall`. */
     reason: string;
 }
 
 export interface FlowAdmission {
-    ok: boolean;
-    refusals: FlowStepRefusal[];
+    allowed: boolean;
+    /** Capabilities this graph actually uses — deduped, for a run summary. */
+    capabilities: string[];
+    /** Every node that cannot run. Empty when the refusal is graph-wide. */
+    refusals: FlowNodeRefusal[];
+    /** Set when the whole graph is refused for a reason no single node caused. */
+    reason?: string;
+}
+
+function refuseGraph(reason: string): FlowAdmission {
+    return { allowed: false, capabilities: [], refusals: [], reason };
+}
+
+function asString(value: unknown): string | null {
+    return typeof value === 'string' ? value : null;
 }
 
 /**
- * The step types an unattended run may execute. Widening this set is the single
- * change in this feature that could let a system trigger run arbitrary commands,
- * so it is asserted by a test rather than merely written down.
- */
-export const UNATTENDED_SAFE_STEP_TYPES: ReadonlySet<string> = new Set(['task']);
-
-/**
- * Why each known step type is unsafe unattended. Data, so adding a step type
- * means adding a sentence — and a type with no sentence is refused by the
- * fallback below rather than admitted by omission.
- */
-const UNATTENDED_REASONS: Readonly<Record<string, string>> = {
-    terminal:
-        'it runs a shell command, and with no human present there is nobody to sanction it. ' +
-        'Give this Flow a manual trigger and run it yourself, or move the work into a ' +
-        'first-party task step.',
-    form: 'it asks a person to fill something in, and unattended there is nobody to answer it.',
-    choice: 'it asks a person to choose, and unattended there is nobody to choose.',
-    browser: 'it opens a browser window on a machine nobody is sitting at.',
-};
-
-function refusalFor(step: FlowRecipeStep): FlowStepRefusal | null {
-    const stepType = String((step as { type?: unknown }).type);
-    if (UNATTENDED_SAFE_STEP_TYPES.has(stepType)) return null;
-    return {
-        stepId: String((step as { id?: unknown }).id ?? '(unnamed)'),
-        stepType,
-        reason:
-            UNATTENDED_REASONS[stepType] ??
-            `Genie cannot account for a "${stepType}" step with no human present, ` +
-                `so it refuses rather than guessing that it is safe.`,
-    };
-}
-
-/**
- * Judge the whole recipe before any of it runs.
+ * The workspace a node targets.
  *
- * `refusals` is every unsafe step, not the first — an author fixing a Flow wants
- * the full list, and reporting one at a time turns a single edit into four
- * rounds.
+ * Three outcomes, and the third is the interesting one:
+ *   - absent      → the app's own workspace (`decideAppCall`'s default)
+ *   - a string    → that workspace, subject to the app's scope
+ *   - anything else → UNREADABLE, and refused rather than defaulted. A target
+ *     nobody can read is not a target anybody should act on; silently treating it
+ *     as "the app's own" would turn a corrupt field into a successful write.
  */
-export function decideFlowAdmission(recipe: FlowRecipe, mode: FlowRunMode): FlowAdmission {
-    if (mode === 'attended') return { ok: true, refusals: [] };
-
-    const refusals = recipe.steps
-        .map(refusalFor)
-        .filter((r): r is FlowStepRefusal => r !== null);
-
-    return { ok: refusals.length === 0, refusals };
+function targetWorkspace(config: unknown): string | null | 'unreadable' {
+    if (config === null || config === undefined) return null;
+    if (typeof config !== 'object') return 'unreadable';
+    const raw = (config as { workspaceId?: unknown }).workspaceId;
+    if (raw === undefined || raw === null) return null;
+    return typeof raw === 'string' ? raw : 'unreadable';
 }
 
-/** One line naming what was refused and why — for a log or a notice. */
-export function describeAdmissionRefusal(recipe: FlowRecipe, refusals: FlowStepRefusal[]): string {
-    const parts = refusals.map((r) => `"${r.stepId}" (${r.stepType}) — ${r.reason}`);
-    return (
-        `Recipe "${recipe.id}" cannot run unattended: ${parts.join(' ')} ` +
-        `Nothing was run: the whole recipe is refused so it cannot stop half-done.`
-    );
+/**
+ * An UNGRANTABLE tool is unreachable here, and deliberately not re-checked.
+ *
+ * `UNGRANTABLE_TOOLS` are the ones no app may ever hold, each with a stated
+ * reason in `capabilities.ts`, and a user-scoped flow is not an exception to
+ * that list — a timer is the most unattended caller there is.
+ *
+ * But it is enforced one layer up and by CONSTRUCTION: `nodes.ts` derives its
+ * kind map from the classified tools only, so an ungrantable tool has no node
+ * kind, `toolForNodeKind` returns null for it, and the node is refused below as
+ * naming nothing real. A second check here could never fire — every path to
+ * `tool` is that same lookup — and an unreachable guard is worse than none: it
+ * reads as defence in depth while proving nothing, and the next person to touch
+ * this file would trust it.
+ *
+ * What holds the property down instead is a test that an ungrantable tool
+ * produces no kind (`nodes.test.ts`, `kinds.test.ts`) plus the build failure in
+ * `capabilities.test.ts` when a new tool is classified into neither list.
+ */
+
+export function decideFlowAdmission(
+    graph: FlowGraphLike | null | undefined,
+    authority: FlowAuthority | null | undefined,
+): FlowAdmission {
+    if (!authority) {
+        // An unreadable scope. Emphatically NOT "run it as the machine" — that
+        // would turn a corrupt column into the widest authority Genie has.
+        return refuseGraph(
+            'Genie could not read who this flow belongs to, so it will not be run.',
+        );
+    }
+    if (authority.kind === 'app') {
+        if (!authority.grant) {
+            return refuseGraph('This app has no permission grant, so it cannot run a flow.');
+        }
+        if (authority.grant.revoked) {
+            // Checked before any node, because revocation is total. A stored flow
+            // is exactly the thing that would otherwise keep running after "stop".
+            return refuseGraph(
+                `“${authority.grant.appName}” has been revoked — its permissions were turned off, so none of its flows will run.`,
+            );
+        }
+    }
+
+    const nodes = graph && Array.isArray(graph.nodes) ? graph.nodes : null;
+    if (!nodes) {
+        return refuseGraph('This flow could not be read as a graph, so it will not be run.');
+    }
+    if (nodes.length === 0) {
+        // Not "trivially allowed". An empty graph is almost always a failed load
+        // or a bad edit, and reporting success for it would hide both.
+        return refuseGraph('This flow has no steps.');
+    }
+
+    const refusals: FlowNodeRefusal[] = [];
+    const capabilities = new Set<string>();
+
+    for (const raw of nodes) {
+        if (!raw || typeof raw !== 'object') continue;
+
+        const kind = asString(raw.data?.kind);
+        // Not a Genie node: a Fancy builtin, an annotation, or unreadable. None of
+        // them can reach Genie, so none of them is admission's business.
+        if (!kind) continue;
+        const tool = toolForNodeKind(kind);
+        const nodeId = asString(raw.id) ?? '';
+        const label = asString(raw.data?.label);
+
+        if (!tool) {
+            // The distinction that earns its keep. A kind OUTSIDE Genie's
+            // namespace is simply somebody else's node. A kind INSIDE it that
+            // resolves to nothing is a broken graph — a typo, a tool that was
+            // removed, or a hand-written `genie.submitFeedback` hoping the
+            // executor trusts the string.
+            //
+            // Either way it would fail closed at run time, but only AFTER
+            // everything upstream had already run. That is the exact outcome
+            // admission exists to prevent, so it is refused here instead.
+            if (!isGenieNodeKind(kind)) continue;
+            refusals.push({
+                nodeId,
+                ...(label ? { label } : {}),
+                reason: `“${kind}” is not a Genie step. It may be misspelt, or name something no app may use.`,
+            });
+            continue;
+        }
+
+        const target = targetWorkspace(raw.data?.config);
+
+        if (target === 'unreadable') {
+            refusals.push({
+                nodeId,
+                ...(label ? { label } : {}),
+                reason: 'This step names a workspace Genie could not read, so it will not run.',
+            });
+            continue;
+        }
+
+        if (authority.kind === 'app') {
+            const decision = decideAppCall(
+                { tool, ...(target ? { workspaceId: target } : {}) },
+                authority.grant!,
+            );
+            if (!decision.allowed) {
+                refusals.push({
+                    nodeId,
+                    ...(label ? { label } : {}),
+                    reason: decision.reason ?? 'This step is not permitted.',
+                });
+                continue;
+            }
+            if (decision.capability) capabilities.add(decision.capability);
+            continue;
+        }
+
+        // A USER-scoped flow. There is no grant to consult — the user holds
+        // everything an app could be granted — so the only remaining question is
+        // WHERE it may act.
+        //
+        // A workspace flow naming another workspace is REFUSED, not retargeted.
+        // Retargeting would make the flow do something its author did not write,
+        // and silently: the canvas would still show the workspace they typed.
+        if (
+            authority.workspaceId !== null &&
+            target !== null &&
+            target !== authority.workspaceId
+        ) {
+            refusals.push({
+                nodeId,
+                ...(label ? { label } : {}),
+                reason: `This step acts on another workspace (“${target}”), and ${describeAuthority(authority)} flow may only act on its own.`,
+            });
+            continue;
+        }
+
+        const capability = capabilityForTool(tool);
+        if (capability) capabilities.add(capability);
+    }
+
+    return {
+        allowed: refusals.length === 0,
+        capabilities: [...capabilities].sort(),
+        refusals,
+    };
 }

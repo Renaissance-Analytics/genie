@@ -34,8 +34,8 @@ import {
     listTerminalSpecs,
     updateTerminalSpec,
     type TerminalSpecRow,
-} from '../../db';
-import { armSchedule, disarmSchedule, forgetSchedule } from '../../terminal/process-scheduler';
+} from '../db';
+import { armSchedule, disarmSchedule, forgetSchedule } from '../terminal/process-scheduler';
 import {
     FLOW_SCHEDULE_PREFIX,
     planFlowSchedules,
@@ -61,10 +61,19 @@ function existingFlowSchedules(specs: readonly TerminalSpecRow[]): ExistingFlowS
         }));
 }
 
-/** Where a flow's scheduled task is filed — its app's workspace. */
+/**
+ * Where a flow's scheduled task is FILED — not where it may act.
+ *
+ * A `gapp` flow's task is filed in its app's workspace, which is where a person
+ * looking for it in the Processes list would expect to find it. A user-scoped
+ * flow has no owning app and its task is filed against no workspace: `system`
+ * really is machine-wide, and a `workspace` flow's reach is decided by its scope
+ * at run time, not by which list its timer appears in.
+ */
 function workspaceForFlow(desired: readonly ScheduledFlow[], flowId: string): string | null {
     const flow = desired.find((d) => d.flowId === flowId);
-    return flow ? (getAppGrant(flow.appId)?.workspaceId ?? null) : null;
+    if (!flow?.appId) return null;
+    return getAppGrant(flow.appId)?.workspaceId ?? null;
 }
 
 function applyCreate(spec: FlowScheduleSpec, workspaceId: string | null): void {

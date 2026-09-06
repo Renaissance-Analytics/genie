@@ -3,32 +3,32 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 /**
- * Two unrelated things called Flows must not fight over one IPC namespace.
+ * The flow IPC surface, checked at both ends.
  *
- * Genie has two:
+ * ★ This file used to assert that two unrelated things called Flows did not
+ * fight over one namespace — `main/ipc.ts` owned `flows:*` for the recipe
+ * engine, `main/apps/flows/ipc.ts` owned `gapp-flows:*` for the canvas, and
+ * `ipcMain.handle` THROWS on a second registration, so a collision was Genie
+ * failing to start.
  *
- *  - `main/flows/` — the AUTOMATION system. A Flow is a Recipe, the Triggers
- *    that start it and the Scope it may touch. Workstation-wide. This is the
- *    thing the Flow Manager manages.
- *  - `main/apps/flows/` — a GApp's node-graph CANVAS, one fancy-flow workflow
- *    owned by one Genie App.
+ * **There is one system now.** A GApp's flow is a flow whose SCOPE is `gapp`;
+ * `flows:list` takes the vantage asking rather than there being a second channel
+ * for a second kind, because there is no second kind. So the collision this file
+ * guarded against is now impossible by construction rather than by assertion,
+ * and what remains is the half that was always the harder failure to see.
  *
- * v67 already separated them in the database: the automation table took the name
- * `flows` and the canvas table was renamed `gapp_flows`. The IPC and the
- * renderer API were left behind on the old name, so the canvas still owned
- * `flows:list`, `flows:run` and `flows:set-enabled` — exactly the three the
- * manager needs.
+ * ## A push channel drifts SILENTLY
  *
- * ## Why this is a test and not a code review note
+ * A wrong `ipcMain.handle` name throws. A wrong `broadcastLocal` name does not:
+ * the send goes out, nobody is listening, and the header simply never animates.
+ * No error, no failed call, nothing in a log — the feature is quietly dead,
+ * which is the exact failure mode an automation system must not have.
  *
- * `ipcMain.handle` THROWS on a second registration for the same channel
- * ("Attempted to register a second handler for 'flows:list'"). Both modules
- * register at boot, so the collision is not a subtle bug that shows up under
- * load — it is Genie failing to start. And nothing in the type system can see
- * it: the channel is a string in one file and a string in another.
+ * A wrong `ipcRenderer.invoke` name is nearly as quiet: it rejects at run time,
+ * in a promise a component usually catches into a muted "could not load".
  *
- * A disjointness assertion is the only thing that catches it before a person
- * launches the app, which is why it lives here rather than being remembered.
+ * So both ends are compared as strings, here, rather than trusted to a person
+ * noticing.
  */
 
 const MAIN = path.join(__dirname, '..');
@@ -39,32 +39,58 @@ function handledChannels(relPath: string): string[] {
     return [...source.matchAll(/ipcMain\.handle\(\s*'([^']+)'/g)].map((m) => m[1] as string);
 }
 
-const managerChannels = handledChannels('ipc.ts').filter((c) => c.startsWith('flows:'));
-const canvasChannels = handledChannels('apps/flows/ipc.ts');
+function invokedChannels(relPath: string): string[] {
+    const source = fs.readFileSync(path.join(MAIN, relPath), 'utf8');
+    return [...source.matchAll(/ipcRenderer\.invoke\(\s*'(flows:[^']+)'/g)].map((m) => m[1] as string);
+}
 
-describe('the Flow Manager and the GApp flow canvas own separate channels', () => {
-    it('finds channels in both modules to compare (control)', () => {
-        // Without this, two empty lists would be trivially disjoint and the
-        // assertion below would pass against a regex that matches nothing.
-        expect(managerChannels.length).toBeGreaterThan(0);
-        expect(canvasChannels.length).toBeGreaterThan(0);
+describe('every flow channel the preload calls is one main answers', () => {
+    const handled = [...new Set(handledChannels('flows/ipc.ts'))].sort();
+    const invoked = [...new Set(invokedChannels('preload.ts'))].sort();
+
+    it('finds channels at both ends to compare (control)', () => {
+        // Without this, two empty lists would match trivially and the assertion
+        // below would pass against a regex that matches nothing.
+        expect(handled.length).toBeGreaterThan(0);
+        expect(invoked.length).toBeGreaterThan(0);
     });
 
-    it('registers no channel twice', () => {
-        const clash = managerChannels.filter((c) => canvasChannels.includes(c));
-        expect(
-            clash,
-            `Both main/ipc.ts and main/apps/flows/ipc.ts register ${clash.join(', ')}. ` +
-                `ipcMain.handle throws on the second one, so Genie would not boot.`,
-        ).toEqual([]);
+    it('matches them exactly, in both directions', () => {
+        // A preload calling a channel nothing handles rejects at run time, in a
+        // promise a component usually catches into a muted "could not load". A
+        // handler nothing calls is dead code that reads as a live feature.
+        expect(invoked).toEqual(handled);
     });
 
-    it('gives the GApp canvas the `gapp-flows:` prefix, matching its `gapp_flows` table', () => {
-        // The automation system owns the bare name at every layer — table, IPC,
-        // renderer API — so a reader who finds `flows:` anywhere lands on the
-        // same thing every time.
-        const notPrefixed = canvasChannels.filter((c) => !c.startsWith('gapp-flows:'));
-        expect(notPrefixed).toEqual([]);
+    it('leaves no `gapp-flows:` CHANNEL anywhere — there is one system', () => {
+        // Matches a quoted channel string, not the bare word: the docblocks here
+        // and in `flows/ipc.ts` legitimately name the old namespace when
+        // explaining why it is gone, and a guard that reads prose as code fails
+        // for the wrong reason.
+        //
+        // Deliberately NOT done by stripping comments first. A regex that tries
+        // to remove block comments will happily eat a `/*` that lives inside a
+        // string, blinding the guard over whatever follows — and a guard that
+        // then reports "clean" is worse than no guard.
+        const CHANNEL = /['"]gapp-flows:/;
+        for (const file of ['ipc.ts', 'preload.ts', 'flows/ipc.ts']) {
+            const source = fs.readFileSync(path.join(MAIN, file), 'utf8');
+            expect(CHANNEL.test(source), `${file} still uses a gapp-flows: channel`).toBe(false);
+        }
+    });
+
+    it('would notice one — the channel guard is not vacuous', () => {
+        const CHANNEL = /['"]gapp-flows:/;
+        expect(CHANNEL.test("invoke('gapp-flows:list')")).toBe(true);
+        expect(CHANNEL.test('a docblock naming `gapp-flows:*` in prose')).toBe(false);
+    });
+
+    it('registers the flow channels in ONE module', () => {
+        // `ipcMain.handle` throws on a second registration for the same channel,
+        // so two modules both owning `flows:*` is Genie failing to boot — which
+        // is exactly what happened when the two systems shared the name.
+        const elsewhere = handledChannels('ipc.ts').filter((c) => c.startsWith('flows:'));
+        expect(elsewhere).toEqual([]);
     });
 });
 

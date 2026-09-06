@@ -44,6 +44,7 @@
 import { getNodeKind } from '@particle-academy/fancy-flow/engine';
 import { builtinExecutor, refusalFor, type FlowRunScope } from './builtins';
 import { toolForNodeKind } from './nodes';
+import type { FlowAuthority } from './authority';
 
 /** What the bridge gives back. Structurally `AppCallResult` from `apps/bridge`. */
 export interface FlowDispatchResult {
@@ -53,14 +54,25 @@ export interface FlowDispatchResult {
 }
 
 /**
- * The bridge, as this module needs it.
+ * WHO is calling, as the dispatcher needs it.
+ *
+ * A `gapp` flow calls as its APP and is bounded by that app's grant. A `system`
+ * or `workspace` flow calls as ITSELF, and its reach is read from its scope by
+ * `resolveAgentTarget`. Two callers, one set of tools, no second implementation
+ * of any of them.
+ */
+export type FlowCaller = { kind: 'app'; appId: string } | { kind: 'flow'; flowId: string };
+
+/**
+ * The way out to Genie's tools, as this module needs it.
  *
  * Injected rather than imported so the security decisions here are testable
- * without an Electron main process, and so there is exactly one implementation
- * in production: `dispatchAppCall`.
+ * without an Electron main process, and so there are exactly two
+ * implementations in production — `dispatchAppCall` and `dispatchFlowCall` —
+ * both of which end at the same `handleMcpMessage`.
  */
 export type FlowDispatch = (
-    appId: string,
+    caller: FlowCaller,
     input: { tool: string; args: unknown; workspaceId: string | undefined },
 ) => Promise<FlowDispatchResult>;
 
@@ -106,11 +118,12 @@ export function canonicalKind(node: ExecutorCtx['node']): string | null {
 /**
  * Build the executor registry for one flow run.
  *
- * `appId` is closed over — that is the whole identity story. Everything else is
- * decided per node, by kind, at the one door below.
+ * The CALLER is closed over — that is the whole identity story, and it comes
+ * from the run rather than from the graph. Everything else is decided per node,
+ * by kind, at the one door below.
  */
 export function buildFlowExecutors(
-    appId: string,
+    caller: FlowCaller,
     dispatch: FlowDispatch,
 ): Record<string, Executor> {
     /**
@@ -136,7 +149,7 @@ export function buildFlowExecutors(
                     ? (readString((config as { workspaceId?: unknown }).workspaceId) ?? undefined)
                     : undefined;
 
-            const outcome = await dispatch(appId, { tool, args: config, workspaceId });
+            const outcome = await dispatch(caller, { tool, args: config, workspaceId });
             if (!outcome.ok) {
                 return ctx.abort(outcome.error ?? `“${tool}” was refused.`);
             }

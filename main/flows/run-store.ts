@@ -31,7 +31,7 @@
 import type Database from 'better-sqlite3';
 import { getDb } from '../db';
 import type { FlowRunRecord } from './activity';
-import type { FlowRunStart } from './runtime';
+import type { FlowRunStart } from './types';
 
 export type { FlowRunRecord, FlowRunStatus } from './activity';
 

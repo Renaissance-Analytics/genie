@@ -6,7 +6,7 @@ import {
     paletteForCapabilities,
     toolForNodeKind,
 } from '../nodes';
-import { APP_CAPABILITIES, UNGRANTABLE_TOOLS } from '../../capabilities';
+import { APP_CAPABILITIES, UNGRANTABLE_TOOLS } from '../../apps/capabilities';
 
 /**
  * The flow palette is DERIVED from the capability model, never written by hand.

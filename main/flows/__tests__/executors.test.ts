@@ -65,11 +65,11 @@ describe('a granted Genie step', () => {
     it('calls the tool its kind names, and hands back the result', async () => {
         const dispatch = dispatchOk();
         const out = await runNode(
-            buildFlowExecutors('com.example.trader', dispatch),
+            buildFlowExecutors({ kind: 'app', appId: 'com.example.trader' }, dispatch),
             genieNode('a', 'genie.manageSite', { action: 'list' }),
         );
 
-        expect(dispatch).toHaveBeenCalledWith('com.example.trader', {
+        expect(dispatch).toHaveBeenCalledWith({ kind: 'app', appId: 'com.example.trader' }, {
             tool: 'manageSite',
             args: { action: 'list' },
             workspaceId: undefined,
@@ -80,11 +80,11 @@ describe('a granted Genie step', () => {
     it('forwards the workspace the step targets', async () => {
         const dispatch = dispatchOk();
         await runNode(
-            buildFlowExecutors('app', dispatch),
+            buildFlowExecutors({ kind: 'app', appId: 'app' }, dispatch),
             genieNode('a', 'genie.manageSite', { workspaceId: 'ws-two', action: 'list' }),
         );
 
-        expect(dispatch).toHaveBeenCalledWith('app', {
+        expect(dispatch).toHaveBeenCalledWith({ kind: 'app', appId: 'app' }, {
             tool: 'manageSite',
             args: { workspaceId: 'ws-two', action: 'list' },
             workspaceId: 'ws-two',
@@ -96,11 +96,11 @@ describe('a granted Genie step', () => {
         // never from the graph. A graph is data an app can write.
         const dispatch = dispatchOk();
         await runNode(
-            buildFlowExecutors('the-real-app', dispatch),
+            buildFlowExecutors({ kind: 'app', appId: 'the-real-app' }, dispatch),
             genieNode('a', 'genie.manageSite', { appId: 'some-other-app' }),
         );
 
-        expect(dispatch).toHaveBeenCalledWith('the-real-app', expect.anything());
+        expect(dispatch).toHaveBeenCalledWith({ kind: 'app', appId: 'the-real-app' }, expect.anything());
     });
 });
 
@@ -135,7 +135,7 @@ describe('a step that must never reach Genie', () => {
         // — and a GApp flow must not be able to exfiltrate through a node kind
         // nobody classified.
         const dispatch = dispatchOk();
-        const executors = buildFlowExecutors('app', dispatch);
+        const executors = buildFlowExecutors({ kind: 'app', appId: 'app' }, dispatch);
 
         await expect(runNode(executors, node('x', '@particle-academy/api_request'))).rejects.toThrow(
             /arbitrary web requests/,
@@ -150,7 +150,7 @@ describe('a step that must never reach Genie', () => {
         const dispatch = dispatchOk();
 
         await expect(
-            runNode(buildFlowExecutors('app', dispatch), genieNode('x', 'genie.submitFeedback')),
+            runNode(buildFlowExecutors({ kind: 'app', appId: 'app' }, dispatch), genieNode('x', 'genie.submitFeedback')),
         ).rejects.toThrow();
         expect(dispatch).not.toHaveBeenCalled();
     });
@@ -160,7 +160,7 @@ describe('a step that must never reach Genie', () => {
         const bare = { id: 'x', position: { x: 0, y: 0 }, data: { label: 'x' } };
 
         await expect(
-            runNode(buildFlowExecutors('app', dispatch), bare as never),
+            runNode(buildFlowExecutors({ kind: 'app', appId: 'app' }, dispatch), bare as never),
         ).rejects.toThrow();
         expect(dispatch).not.toHaveBeenCalled();
     });
@@ -172,7 +172,7 @@ describe('a step that must never reach Genie', () => {
 
         await expect(
             runNode(
-                buildFlowExecutors('app', dispatch),
+                buildFlowExecutors({ kind: 'app', appId: 'app' }, dispatch),
                 { id: 'x', type: '@acme/salesforce_upsert', position: { x: 0, y: 0 },
                   data: { kind: '@acme/salesforce_upsert', label: 'x', config: {} } } as never,
             ),
@@ -184,7 +184,7 @@ describe('a step that must never reach Genie', () => {
         // Was asserted by the ABSENCE of a `subgraph` registry key, which a
         // wildcard registry makes vacuously true. Assert the behaviour instead.
         await expect(
-            runNode(buildFlowExecutors('app', dispatchOk()), node('s', '@particle-academy/subflow')),
+            runNode(buildFlowExecutors({ kind: 'app', appId: 'app' }, dispatchOk()), node('s', '@particle-academy/subflow')),
         ).rejects.toThrow(/whose permissions/);
     });
 });
@@ -200,7 +200,7 @@ describe('a refusal from the bridge', () => {
         }));
 
         await expect(
-            runNode(buildFlowExecutors('app', dispatch), genieNode('x', 'genie.manageTerminals')),
+            runNode(buildFlowExecutors({ kind: 'app', appId: 'app' }, dispatch), genieNode('x', 'genie.manageTerminals')),
         ).rejects.toThrow(/Run commands/);
     });
 });
@@ -208,7 +208,7 @@ describe('a refusal from the bridge', () => {
 describe('the built-in logic steps Genie implements', () => {
     it('starts a run from a trigger', async () => {
         const out = await runNode(
-            buildFlowExecutors('app', dispatchOk()),
+            buildFlowExecutors({ kind: 'app', appId: 'app' }, dispatchOk()),
             node('t', '@particle-academy/manual_trigger'),
         );
 
@@ -217,7 +217,7 @@ describe('the built-in logic steps Genie implements', () => {
 
     it('passes a value through an output node', async () => {
         const out = await runNode(
-            buildFlowExecutors('app', dispatchOk()),
+            buildFlowExecutors({ kind: 'app', appId: 'app' }, dispatchOk()),
             node('o', '@particle-academy/output'),
             { value: 42 },
         );
@@ -226,7 +226,7 @@ describe('the built-in logic steps Genie implements', () => {
     });
 
     it('routes true and false on a real condition', async () => {
-        const executors = buildFlowExecutors('app', dispatchOk());
+        const executors = buildFlowExecutors({ kind: 'app', appId: 'app' }, dispatchOk());
         const branchOn = (right: string) =>
             node('d', '@particle-academy/branch', {
                 match: 'all',
@@ -244,7 +244,7 @@ describe('the built-in logic steps Genie implements', () => {
     it('refuses a branch with no conditions instead of guessing a direction', async () => {
         await expect(
             runNode(
-                buildFlowExecutors('app', dispatchOk()),
+                buildFlowExecutors({ kind: 'app', appId: 'app' }, dispatchOk()),
                 node('d', '@particle-academy/branch', { conditions: [] }),
             ),
         ).rejects.toThrow(/no conditions/);
@@ -262,7 +262,7 @@ describe('end to end, through the real engine', () => {
             edges: [{ id: 'e', source: 't', target: 'a' }],
         };
 
-        const res = await runFlow(graph as never, buildFlowExecutors('app', dispatch) as never);
+        const res = await runFlow(graph as never, buildFlowExecutors({ kind: 'app', appId: 'app' }, dispatch) as never);
 
         expect(res.ok).toBe(true);
         expect(dispatch).toHaveBeenCalledTimes(1);
@@ -282,7 +282,7 @@ describe('end to end, through the real engine', () => {
             ],
         };
 
-        const res = await runFlow(graph as never, buildFlowExecutors('app', dispatch) as never);
+        const res = await runFlow(graph as never, buildFlowExecutors({ kind: 'app', appId: 'app' }, dispatch) as never);
 
         expect(res.ok).toBe(false);
         // The step AFTER the refused one never ran — the whole point.

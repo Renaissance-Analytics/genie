@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { runStoredFlow, type FlowRunnerDeps } from '../runner';
-import type { AppGrant } from '../../bridge-decision';
+import type { AppGrant } from '../../apps/bridge-decision';
 import type { FlowRow } from '../store';
 
 /**
@@ -26,14 +26,31 @@ const grant = (over: Partial<AppGrant> = {}): AppGrant => ({
     ...over,
 });
 
+/**
+ * A flow, shaped the way the canvas shapes one.
+ *
+ * `type` is the KIND id, not a coarse kit — that is what `<FlowEditor>` writes,
+ * and hand-writing the old shape here is precisely how the executor-resolution
+ * bug survived a green suite.
+ */
 const flow = (over: Partial<FlowRow> = {}): FlowRow => ({
     id: 'f1',
     appId: 'app-1',
-    name: 'Nightly',
+    title: 'Nightly',
+    purpose: 'Automation',
+    scope: { kind: 'gapp', appId: 'app-1' },
     graph: {
         nodes: [
-            { id: 't', type: 'trigger', data: { kind: '@particle-academy/manual_trigger' } },
-            { id: 'a', type: 'action', data: { kind: 'genie.manageSite', config: {} } },
+            {
+                id: 't',
+                type: '@particle-academy/manual_trigger',
+                data: { kind: '@particle-academy/manual_trigger', config: {} },
+            },
+            {
+                id: 'a',
+                type: '@genie/manageSite',
+                data: { kind: '@genie/manageSite', config: {} },
+            },
         ],
         edges: [{ id: 'e', source: 't', target: 'a' }],
     } as never,
@@ -42,6 +59,9 @@ const flow = (over: Partial<FlowRow> = {}): FlowRow => ({
     updatedAt: '',
     ...over,
 });
+
+/** Every run here is a hand-pressed Run, unless a test says otherwise. */
+const MANUAL = { trigger: 'manual' } as const;
 
 const deps = (over: Partial<FlowRunnerDeps> = {}): FlowRunnerDeps => ({
     loadFlow: () => flow(),
@@ -53,7 +73,7 @@ const deps = (over: Partial<FlowRunnerDeps> = {}): FlowRunnerDeps => ({
 describe('a flow the app may run', () => {
     it('runs, and reports the capabilities it used', async () => {
         const d = deps();
-        const out = await runStoredFlow('f1', d);
+        const out = await runStoredFlow('f1', MANUAL, d);
 
         expect(out.ok).toBe(true);
         expect(out.capabilities).toEqual(['hosting']);
@@ -64,7 +84,7 @@ describe('a flow the app may run', () => {
 describe('a flow the app may NOT run', () => {
     it('is refused with nothing executed at all', async () => {
         const d = deps({ loadGrant: () => grant({ capabilities: [] }) });
-        const out = await runStoredFlow('f1', d);
+        const out = await runStoredFlow('f1', MANUAL, d);
 
         expect(out.ok).toBe(false);
         expect(out.refusals?.[0]?.nodeId).toBe('a');
@@ -74,7 +94,7 @@ describe('a flow the app may NOT run', () => {
 
     it('is refused when the app is revoked', async () => {
         const d = deps({ loadGrant: () => grant({ revoked: true }) });
-        const out = await runStoredFlow('f1', d);
+        const out = await runStoredFlow('f1', MANUAL, d);
 
         expect(out.ok).toBe(false);
         expect(out.error).toContain('revoked');
@@ -84,7 +104,7 @@ describe('a flow the app may NOT run', () => {
     it('is refused when the app has no grant at all', async () => {
         const d = deps({ loadGrant: () => null });
 
-        expect((await runStoredFlow('f1', d)).ok).toBe(false);
+        expect((await runStoredFlow('f1', MANUAL, d)).ok).toBe(false);
         expect(d.dispatch).not.toHaveBeenCalled();
     });
 });
@@ -92,7 +112,7 @@ describe('a flow the app may NOT run', () => {
 describe('a flow that cannot be loaded', () => {
     it('reports a missing flow rather than running an empty graph', async () => {
         const d = deps({ loadFlow: () => null });
-        const out = await runStoredFlow('nope', d);
+        const out = await runStoredFlow('nope', MANUAL, d);
 
         expect(out.ok).toBe(false);
         expect(out.error).toBeTruthy();
@@ -104,18 +124,39 @@ describe('a flow that cannot be loaded', () => {
         // throwing, so the runner is where that becomes a refusal.
         const d = deps({ loadFlow: () => flow({ graph: null }) });
 
-        expect((await runStoredFlow('f1', d)).ok).toBe(false);
+        expect((await runStoredFlow('f1', MANUAL, d)).ok).toBe(false);
         expect(d.dispatch).not.toHaveBeenCalled();
     });
 
-    it('refuses a disabled flow', async () => {
-        // Disabled means disabled however the run was asked for — by schedule, or
-        // by hand. Honouring it only in the scheduler would leave a stopped flow
-        // runnable from the UI.
+    it('refuses a disabled flow on a SCHEDULE or an event', async () => {
+        // ★ This changed, so read the reasoning rather than trusting either half
+        // from memory. It used to be "disabled means disabled however the run was
+        // asked for", on the argument that honouring it only in the scheduler
+        // would leave a stopped flow runnable from the UI.
+        //
+        // What `enabled` actually governs is UNATTENDED firing — that is what
+        // arming a flow consents to, and what turning it off withdraws. A manual
+        // run is attended by definition: a person or an agent asked for it, now.
+        //
+        // The old rule also had a cost nobody had noticed: a flow is BORN
+        // disarmed, so refusing manual runs meant you could not try one without
+        // first arming it — which pushed people to grant standing unattended
+        // permission in order to test something once. That is worse security,
+        // not better.
         const d = deps({ loadFlow: () => flow({ enabled: false }) });
 
-        expect((await runStoredFlow('f1', d)).ok).toBe(false);
+        expect((await runStoredFlow('f1', { trigger: 'schedule' }, d)).ok).toBe(false);
+        expect((await runStoredFlow('f1', { trigger: 'event' }, d)).ok).toBe(false);
         expect(d.dispatch).not.toHaveBeenCalled();
+    });
+
+    it('still runs a disabled flow BY HAND, so one can be tested before arming', async () => {
+        const d = deps({
+            loadFlow: () => flow({ enabled: false }),
+        });
+
+        expect((await runStoredFlow('f1', MANUAL, d)).ok).toBe(true);
+        expect(d.dispatch).toHaveBeenCalledTimes(1);
     });
 });
 
@@ -124,7 +165,7 @@ describe('a step that fails once the run is under way', () => {
         const d = deps({
             dispatch: vi.fn(async () => ({ ok: false as const, error: 'the site is not there' })),
         });
-        const out = await runStoredFlow('f1', d);
+        const out = await runStoredFlow('f1', MANUAL, d);
 
         expect(out.ok).toBe(false);
         expect(out.error).toContain('the site is not there');
@@ -134,7 +175,7 @@ describe('a step that fails once the run is under way', () => {
 describe('the event feed', () => {
     it('hands every engine event to the listener', async () => {
         const events: string[] = [];
-        await runStoredFlow('f1', deps(), (e) => events.push((e as { type: string }).type));
+        await runStoredFlow('f1', MANUAL, deps(), (e) => events.push((e as { type: string }).type));
 
         expect(events).toContain('run-start');
         expect(events).toContain('run-end');
@@ -146,6 +187,7 @@ describe('the event feed', () => {
         const events: string[] = [];
         await runStoredFlow(
             'f1',
+            MANUAL,
             deps({ loadGrant: () => grant({ capabilities: [] }) }),
             (e) => events.push((e as { type: string }).type),
         );

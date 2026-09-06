@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { getNodeKind, listNodeKinds, validateConfig } from '@particle-academy/fancy-flow/engine';
-import { CORE_TOOLS } from '../../../mcp/protocol';
-import { APP_CAPABILITIES, UNGRANTABLE_TOOLS } from '../../capabilities';
+import { CORE_TOOLS } from '../../mcp/protocol';
+import { APP_CAPABILITIES, UNGRANTABLE_TOOLS } from '../../apps/capabilities';
 import { GENIE_NODE_NAMESPACE, isGenieNodeKind, nodeKindForTool, toolForNodeKind } from '../nodes';
 import { genieNodeDefinitions, registerGenieKinds } from '../kinds';
 import { newFlowNode } from '../graph';

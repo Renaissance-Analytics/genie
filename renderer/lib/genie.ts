@@ -102,30 +102,63 @@ export interface FlowNodeDefinitionView {
     sideEffects: 'none' | 'idempotent' | 'unsafe-to-replay';
 }
 
-/** What starts a flow, read off its graph. */
+/** What starts a flow, read off its GRAPH — there is no trigger list beside it. */
 export interface FlowTriggerView {
     nodeId: string;
-    kind: 'manual' | 'schedule' | 'webhook';
+    kind: 'manual' | 'schedule' | 'webhook' | 'event';
     cron?: string;
+    /** `event` only: the event id this trigger listens for. */
+    event?: string;
+    /**
+     * `event` only: does anything still EMIT that event?
+     *
+     * False is the standing warning a list would otherwise never give: a flow
+     * whose producer went away looks completely normal and simply never fires.
+     * It is checked per read, not at authoring time, because a flow goes dead
+     * LATER.
+     */
+    known?: boolean;
     /** Set when Genie recognises the trigger but cannot arm it yet. */
     unsupported?: string;
 }
 
+/** A flow, as a list row shows it — without loading its canvas. */
 export interface FlowSummaryView {
     id: string;
-    appId: string;
-    name: string;
+    title: string;
+    purpose: string;
+    description?: string;
+    /** Null when the stored scope could not be read. */
+    scope: FlowScope | null;
+    /** The owning app, for a `gapp` flow. Null otherwise. */
+    appId: string | null;
+    /** Where it belongs, named for a person. */
+    scopeLabel: string;
+    /**
+     * What arming it lets it DO — the capability labels its steps reach.
+     *
+     * Derived from the graph in main, never a stored sentence: the consent
+     * prompt cannot drift from the flow, because it IS the flow. Empty for a
+     * graph that reaches no Genie step, and an empty list must render as
+     * silence rather than as an invented reassurance.
+     */
+    consequence: string[];
     enabled: boolean;
     updatedAt: string;
     triggers: FlowTriggerView[];
-    /** False when the stored graph could not be parsed — say so, do not hide it. */
+    /** False when the stored graph or scope could not be read. Say so, don't hide it. */
     readable: boolean;
+    lastRun?: FlowRunRecord;
 }
 
+/** One flow, whole — the row the editor opens. */
 export interface FlowView {
     id: string;
-    appId: string;
-    name: string;
+    title: string;
+    purpose: string;
+    description?: string;
+    scope: FlowScope | null;
+    appId: string | null;
     graph: unknown;
     enabled: boolean;
     createdAt: string;
@@ -2766,48 +2799,30 @@ export interface LinkAuditEntry {
 /* ===== Flows — Genie's automation system ============================== */
 
 /** How a run ended. `ran` and `failed` are the only two that executed a body. */
+/**
+ * How a run ended.
+ *
+ * Only `ran` means the flow did its job. `blocked`, `refused` and `handoff` are
+ * the system DECLINING to act, often correctly — but none of them is a flow that
+ * worked, and collapsing them into one word turns the run list into decoration.
+ */
 export type FlowRunOutcome = 'ran' | 'failed' | 'refused' | 'blocked' | 'handoff' | 'error';
 
-/**
- * A run's state as the STORE knows it — the outcomes above plus two the runtime
- * can never report about itself.
- *
- * `running` is written when a body starts, so a run cut short leaves a trace
- * rather than vanishing from the history. `interrupted` is what BOOT turns those
- * into: the runtime cannot log "Genie died on top of me", so boot does it —
- * sound because at boot nothing is running, making a `running` row orphaned by
- * definition rather than by a guess about its age.
- */
+/** The outcomes plus two the runner cannot report about itself. */
 export type FlowRunStatus = FlowRunOutcome | 'running' | 'interrupted';
 
-/** Who a Flow belongs to and who may see it. */
+/**
+ * Who a flow belongs to and who lists it. Three rungs, no fourth.
+ *
+ * A GApp's flow is a flow whose scope is `gapp` — not a separate system, not a
+ * separate table, not a separate editor.
+ */
 export type FlowScope =
     | { kind: 'system' }
     | { kind: 'workspace'; workspaceId: string }
     | { kind: 'gapp'; appId: string };
 
-/** One predicate in a trigger's filter, with its prop resolved to a label. */
-export interface FlowSummaryClause {
-    /** `all` must hold, `any` is a disjunction, `none` must not hold. */
-    group: 'all' | 'any' | 'none';
-    prop: string;
-    propLabel: string;
-    op: string;
-    value: string | number | boolean | readonly (string | number | boolean)[];
-}
-
-export type FlowSummaryTrigger =
-    | { kind: 'manual' }
-    | {
-          kind: 'event';
-          event: string;
-          eventLabel: string;
-          /** False when NOTHING emits this event — the Flow cannot fire on it. */
-          known: boolean;
-          clauses: FlowSummaryClause[];
-      };
-
-/** One finished run, as the manager shows it. */
+/** One run, as the manager shows it. */
 export interface FlowRunRecord {
     runId: string;
     flowId: string;
@@ -2819,149 +2834,12 @@ export interface FlowRunRecord {
     finishedAt: number;
 }
 
-/** What `flows.run()` resolves with — including a refusal and its reason. */
-export interface FlowRunLog {
-    flowId: string;
-    runId: string;
-    event?: string;
-    outcome: FlowRunOutcome;
-    reason?: string;
-    at: number;
-}
-
-/** One Flow, joined with everything the manager's list needs. */
-export interface FlowSummary {
-    id: string;
-    title: string;
-    purpose: string;
-    description?: string;
-    enabled: boolean;
-    scope: FlowScope;
-    /** Who owns it, in words — the workspace's NAME, or that it is gone. */
-    scopeLabel: string;
-    triggers: FlowSummaryTrigger[];
-    manuallyRunnable: boolean;
-    /**
-     * Anything at all could still start it. False for a disabled Flow, one whose
-     * every event trigger is unregistered, and one scoped to a workspace that no
-     * longer exists — the last two look armed and can never run again.
-     */
-    canEverFire: boolean;
-    running: boolean;
-    lastRun?: FlowRunRecord;
-    recipeId: string;
-    /** The standing values stored for the body's inputs, for editing. */
-    args?: Record<string, string | number | boolean>;
-    /**
-     * What ARMING this Flow will do, in its recipe's own words — shown on the
-     * disabled row and confirmed at the moment of enabling. Absent when the body
-     * declares none, which renders as silence rather than as a reassurance
-     * nobody made.
-     */
-    consequence?: string;
-}
-
-/** One event kind a Flow can trigger on, as the registry declares it. */
+/** An event kind some producer actually emits. */
 export interface FlowEventDefinition {
     id: string;
     label: string;
     purpose?: string;
-    props: { key: string; type: 'string' | 'number' | 'boolean'; label: string; description?: string }[];
-}
-
-/** One value a recipe's body reads, declared by the recipe itself. */
-export interface FlowRecipeInput {
-    key: string;
-    type: 'string' | 'number' | 'boolean';
-    label: string;
-    description?: string;
-    /** The body cannot run without it. */
-    required?: boolean;
-    /** What the body falls back to when the Flow says nothing. */
-    default?: string | number | boolean;
-    /** A triggering event's prop of the same key supplies this. */
-    fromEvent?: boolean;
-}
-
-/**
- * A Flow body as the editor sees it: the serializable half.
- *
- * The recipe declares its own inputs and its own consequence, so a second
- * recipe appears in the picker with working fields and a real warning without
- * anything in the renderer being taught about it.
- */
-export interface FlowRecipeSummary {
-    id: string;
-    title: string;
-    consequence?: string;
-    purpose?: string;
-    inputs: FlowRecipeInput[];
-    /** False when an event trigger could never run this body. */
-    runsUnattended: boolean;
-    unattendedRefusals: { stepId: string; stepType: string; reason: string }[];
-    /** True when running it by hand hands off to the recipe wizard. */
-    needsWizard: boolean;
-}
-
-/** What a caller hands in to create or edit a Flow. NO `enabled` — see `save`. */
-export interface FlowDraft {
-    /** Absent to create; the id of the Flow being edited otherwise. */
-    id?: string;
-    title: string;
-    /** Left out, Genie groups the Flow by its trigger's own purpose. */
-    purpose?: string;
-    description?: string;
-    scope: FlowScope;
-    triggers: FlowTrigger[];
-    recipeId: string;
-    args?: Record<string, string | number | boolean>;
-}
-
-/** One predicate in a trigger's filter, as authored. */
-export interface FlowFilterClause {
-    prop: string;
-    op: string;
-    value: string | number | boolean | (string | number | boolean)[];
-}
-
-export interface FlowFilter {
-    all?: FlowFilterClause[];
-    any?: FlowFilterClause[];
-    none?: FlowFilterClause[];
-}
-
-export type FlowTrigger =
-    | { kind: 'manual' }
-    | { kind: 'event'; event: string; filter?: FlowFilter };
-
-export type FlowSaveResult =
-    | { ok: true; flow: FlowSummary; disarmed: boolean }
-    | { ok: false; errors: string[] };
-
-export interface FlowListPayload {
-    flows: FlowSummary[];
-    /** Every event kind that currently has a producer. */
-    events: FlowEventDefinition[];
-    /** Every body a Flow can be given. */
-    recipes: FlowRecipeSummary[];
-    /** The workspaces a Flow can be scoped to, named. */
-    workspaces: { id: string; name: string }[];
-    /** The installed Genie Apps a Flow can be scoped to, named. */
-    apps: { id: string; name: string }[];
-    /**
-     * Which operators apply to which prop type, from `main/flows/filter.ts`.
-     *
-     * Sent rather than listed renderer-side: a second copy would eventually
-     * offer one the store refuses, with the menu having just said it was fine.
-     */
-    operators: {
-        op: string;
-        accepts: ('string' | 'number' | 'boolean')[];
-        listValue: boolean;
-    }[];
-    /** Flow ids with a run in flight, right now. */
-    running: string[];
-    busy: boolean;
+    props: { key: string; type: 'string' | 'number' | 'boolean'; label: string }[];
 }
 
 /** One memory in the Knowledge Graph store. */
@@ -3270,46 +3148,6 @@ export interface GenieApi {
         ) => Promise<{ ok: boolean } & Partial<AppBackupSettingsView>>;
         /** Dump this app's live database engines now. */
         backup: (appId: string) => Promise<AppBackupRunView>;
-    };
-    /**
-     * fancy-flow workflows owned by a Genie App — Genie's own editing surface.
-     *
-     * `gappFlows`, not `flows`: the bare name belongs to Genie's AUTOMATION
-     * system (see `flows` below), matching the `gapp_flows` table this module
-     * was renamed to in v67.
-     *
-     * Saving grants nothing. A graph reaching past the app's permissions saves
-     * fine, because an author is allowed to be mid-edit; it is refused at RUN.
-     * `check` is how the canvas shows that before anyone waits for 3am.
-     */
-    gappFlows: {
-        list: (appId: string) => Promise<FlowSummaryView[]>;
-        get: (flowId: string) => Promise<FlowView | null>;
-        /** Mint a new flow, starter graph and all. Born disarmed. */
-        create: (appId: string, name?: string) => Promise<FlowView | null>;
-        save: (input: {
-            id: string;
-            appId: string;
-            name: string;
-            graph: unknown;
-            enabled?: boolean;
-        }) => Promise<FlowView | null>;
-        remove: (flowId: string) => Promise<boolean>;
-        setEnabled: (flowId: string, enabled: boolean) => Promise<FlowView | null>;
-        check: (appId: string, graph: unknown) => Promise<FlowAdmissionView>;
-        /**
-         * What this app may author with.
-         *
-         * `available` carries full DEFINITIONS because the renderer registers
-         * them — registries are per-process and `<FlowEditor>` reads the
-         * renderer's. `all` is names only, for a surface that shows what is
-         * possible but not yet permitted: shown, and deliberately unauthorable.
-         */
-        palette: (appId: string) => Promise<{
-            available: FlowNodeDefinitionView[];
-            all: FlowNodeKindView[];
-        }>;
-        run: (flowId: string) => Promise<FlowRunOutcomeView>;
     };
     /**
      * The GApp window's own surface. Only a GApp window answers these; Genie's
@@ -3995,34 +3833,65 @@ export interface GenieApi {
         openWindow: () => Promise<{ ok: boolean }>;
     };
     /**
-     * Flows — Genie's automation system (a Recipe, the Triggers that start it,
-     * and the Scope it may touch), and the Flow Manager that runs it.
+     * Flows — Genie's automation system. ONE system, three scopes.
      *
-     * Not to be confused with `renderer/components/Flows/`, which is a GApp's
-     * node-graph canvas: a different thing at a different scope.
+     * A flow is a fancy-flow GRAPH plus a scope. A GApp's flow is a flow whose
+     * scope is `gapp`: same table, same runner, same palette, same editor.
+     * Genie used to have two systems under this name and the cost was two
+     * answers to "which flows are there".
      */
     flows: {
-        /** Every Flow, joined with its last run — plus the LIVE snapshot, so a
-         *  window that opened after the last `flowActivity` push is not left
-         *  blank waiting for the next one. */
-        list: () => Promise<FlowListPayload>;
-        /** One Flow's run history, newest first. */
-        runs: (flowId: string, limit?: number) => Promise<FlowRunRecord[]>;
-        /** Arm or disarm. Reconciles the file watchers, not just the row. */
-        setEnabled: (flowId: string, enabled: boolean) => Promise<{ ok: boolean }>;
-        /** Start a Flow by hand. Resolves with the run log — a refusal carries
-         *  the reason, which is the only useful thing to show when one happens. */
-        run: (flowId: string) => Promise<FlowRunLog>;
         /**
-         * Create or update a Flow.
+         * The flows a vantage may see — the machine, a workspace, or an app.
          *
-         * A draft carries no `enabled`: a new Flow is created DISARMED and
-         * arming it is a separate, confirmed act. Resolves with the reasons
-         * rather than rejecting — they are what the editor shows.
+         * Live run state is NOT in here. It arrives on `onFlowActivity`, and
+         * each row carries its last outcome so a window that opened after the
+         * last push is not blank waiting for the next one.
          */
-        save: (draft: FlowDraft) => Promise<FlowSaveResult>;
-        /** Remove a Flow and its run history. */
-        remove: (flowId: string) => Promise<{ ok: boolean }>;
+        list: (vantage?: FlowScope) => Promise<FlowSummaryView[]>;
+        get: (flowId: string) => Promise<FlowView | null>;
+        /** One flow's run history, newest first. */
+        runs: (flowId: string, limit?: number) => Promise<FlowRunRecord[]>;
+        /** Mint a new flow at a scope. Born DISARMED, with a starter graph. */
+        create: (input: {
+            scope: FlowScope;
+            title?: string;
+            purpose?: string;
+        }) => Promise<FlowView | null>;
+        /**
+         * Save an edit. Never arms.
+         *
+         * Changing what a flow DOES or WHERE it acts disarms an armed one — the
+         * confirmation it was armed against stated both, so a change to either
+         * leaves consent that no longer describes the flow.
+         */
+        save: (input: {
+            id: string;
+            title?: string;
+            purpose?: string;
+            description?: string;
+            scope?: FlowScope;
+            graph: unknown;
+        }) => Promise<FlowView | null>;
+        /** Arm or disarm. Reconciles the schedules and the file watchers too. */
+        setEnabled: (flowId: string, enabled: boolean) => Promise<FlowView | null>;
+        remove: (flowId: string) => Promise<boolean>;
+        /** What this graph WOULD be allowed to do, without running it. */
+        check: (scope: FlowScope, graph: unknown) => Promise<FlowAdmissionView>;
+        /**
+         * The steps this scope may author with.
+         *
+         * `available` carries full DEFINITIONS because the renderer registers
+         * them — registries are per-process and `<FlowEditor>` reads the
+         * renderer's. `all` is names only, for a surface that shows what is
+         * possible but not yet permitted: shown, and deliberately unauthorable.
+         */
+        palette: (scope: FlowScope) => Promise<{
+            available: FlowNodeDefinitionView[];
+            all: FlowNodeKindView[];
+        }>;
+        /** Start a flow by hand. Resolves with the result — refusals included. */
+        run: (flowId: string) => Promise<FlowRunOutcomeView>;
     };
     process: {
         /** Start a background Process service runner. */

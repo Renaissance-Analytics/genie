@@ -799,100 +799,93 @@ test('a Flow row opens its run history, and says so when there is none', async (
  */
 const AUTHORED = 'Made in the manager';
 
-const editor = () => page.locator('[role="dialog"][aria-label="New Flow"]');
 
 /**
  * What only an E2E can answer about authoring.
  *
- * The rules themselves are decided in main and pinned there:
- * `main/flows/__tests__/authoring.test.ts` proves a new Flow is built disarmed
- * whatever the caller asks for, and that a body whose inputs nothing supplies is
- * refused. Neither can see whether a person can actually reach any of it.
+ * The rules are decided in main and pinned there: `flows/__tests__/store.test.ts`
+ * proves a flow is stored disarmed whatever the caller passes, and
+ * `flows/__tests__/kinds.test.ts` proves the palette covers every classified
+ * Genie tool. Neither can see whether a person can actually REACH any of it —
+ * and reaching it is precisely what was broken.
  *
  * These two can:
  *
- *  1. **A Flow made in the editor arrives OFF, and arming it still asks** — the
- *     safety property of the whole feature, end to end through the real store.
- *     A unit test proving `enabled: false` says nothing about a form that
- *     helpfully flips the switch afterwards.
- *  2. **A refusal reaches the user.** The store's reasons are the reason it
- *     validates at the write at all; a save that swallowed them would leave the
- *     Create button doing nothing at all, silently.
+ *  1. **A flow made in the manager arrives OFF, on a canvas.** The safety
+ *     property of the whole feature, end to end through the real store: a unit
+ *     test proving `enabled: false` says nothing about a surface that helpfully
+ *     flips the switch afterwards. And the canvas being a CANVAS is the other
+ *     half — this is where a fallback to a plain React Flow node, or to no
+ *     editor at all, would show.
+ *  2. **The palette carries Genie's own steps.** For a year it did not: they
+ *     were computed in main, served on a channel nothing called, and never
+ *     registered with fancy-flow, so every step a person could drag was one the
+ *     executor refuses. Main computing the list correctly is exactly what the
+ *     unit tests already proved while the product was broken.
  */
-test('a Flow made in the manager arrives switched off, and arming it still asks', async () => {
+test('a flow made in the manager arrives switched off, and opens on a canvas', async () => {
+    // ★ This spec used to drive a MODAL FORM — "What it does" as a dropdown with
+    // one option, conditions built from selects. That whole surface is gone:
+    // Genie's flows are fancy-flow GRAPHS, and the editor is `<FlowEditor>`.
+    //
+    // What survives is the property the old spec was really about, and it is
+    // the one worth keeping: **creating is not arming.** A new flow arrives OFF
+    // however it was made.
     await setFlowsRunning([]);
     await openFlows();
 
     await flowsPanel().locator('.flowmgr-new').click();
-    await expect(editor()).toBeVisible();
 
-    await editor().getByLabel('Flow name').fill(AUTHORED);
-    // The whole machine, so this does not depend on the seeded workspaces.
-    await editor().getByLabel('Where it applies').selectOption('system');
+    // The canvas, not a form. `.react-flow` is React Flow's own root, so this
+    // fails if the editor silently fell back to anything else.
+    const canvas = page.locator('[role="dialog"] .flowmgr-canvas-body');
+    await expect(canvas).toBeVisible();
+    await expect(canvas.locator('.react-flow')).toBeVisible();
 
-    // A condition on the event's own declared prop — the reference case, built
-    // from what main sent rather than from anything the renderer knows.
-    await editor().getByRole('button', { name: /Add a condition/ }).click();
-    await editor().getByLabel('Condition prop').selectOption('sizeBytes');
-    await editor().getByLabel('Condition operator').selectOption('gt');
-    await editor().getByLabel('Condition value').fill('5242880');
-
-    await editor().getByRole('button', { name: /Create Flow/ }).click();
-    await expect(editor()).toHaveCount(0);
+    await canvas.getByLabel('Flow name').fill(AUTHORED);
+    await canvas.getByRole('button', { name: 'Save' }).click();
+    await page.locator('[role="dialog"] .gicon[aria-label="Close"]').click();
 
     const row = flowRow(AUTHORED);
     await expect(row).toBeVisible();
-    await expect(row).toContainText('Whole machine');
-    // Both halves: it is OFF, and the row says what turning it on would do.
-    await expect(row.getByRole('switch')).not.toBeChecked();
-    await expect(row.locator('.flowmgr-off')).toContainText(
-        'Moves files out of your workspace',
-    );
-
-    // Creating is not arming. The confirmation is still in front of the switch,
-    // and it names the scope this Flow was just given.
-    await row.getByRole('switch').click();
-    const armDialog = page.locator('[role="dialog"][aria-label*="Turn on"]');
-    await expect(armDialog).toBeVisible();
-    await expect(armDialog).toContainText('anywhere on this machine');
-    await armDialog.getByRole('button', { name: 'Cancel' }).click();
+    await expect(row).toContainText('This machine');
+    // It is OFF, and nothing along the way asked it to be anything else.
     await expect(row.getByRole('switch')).not.toBeChecked();
 
-    // Delete it, which is both the other half of authoring and what keeps this
-    // spec from leaving a row behind for the next run.
+    // A starter graph reaches no Genie step, so there is nothing to warn about
+    // — and the row must NOT invent a reassurance for that case, which is why
+    // this asserts the switch rather than a sentence.
     await row.getByRole('button', { name: `Delete ${AUTHORED}` }).click();
     const deleteDialog = page.locator('[role="dialog"][aria-label*="Delete"]');
     await deleteDialog.getByRole('button', { name: /Delete it/ }).click();
     await expect(flowRow(AUTHORED)).toHaveCount(0);
 
     await page.keyboard.press('Escape');
-    await expect(flowsRoot()).not.toHaveClass(/\bopen\b/);
+    await expect(flowsRoot()).not.toHaveClass(/open/);
 });
 
-test('the editor shows the store’s refusal rather than failing silently', async () => {
+test('the canvas offers Genie’s OWN steps, not just fancy-flow’s builtins', async () => {
+    // The bug this is the standing answer to: Genie's node kinds were derived in
+    // main, served on an IPC channel nothing called, and never registered with
+    // fancy-flow at all — so the palette offered only the 27 builtins, every one
+    // of which Genie's executor is designed to REFUSE. The canvas could author
+    // only steps that would not run.
+    //
+    // Asserted through the palette a person actually sees, because a unit test
+    // can only prove main COMPUTED the list.
     await setFlowsRunning([]);
     await openFlows();
-    await flowsPanel().locator('.flowmgr-new').click();
-    await expect(editor()).toBeVisible();
+    await flowRow('Tidy the workspace').getByRole('button', { name: /Edit/ }).click();
 
-    await editor().getByLabel('Flow name').fill(AUTHORED);
-    // A Flow you can only run by hand, on a body that reads its file off the
-    // event. Nothing would supply that file, so pressing Run could only ever
-    // throw — and the store says so at the write instead.
-    await editor().getByRole('button', { name: /Remove this trigger/ }).click();
-    await editor().getByRole('button', { name: /Let me run it by hand/ }).click();
-    await editor().getByRole('button', { name: /Create Flow/ }).click();
+    const canvas = page.locator('[role="dialog"] .flowmgr-canvas-body');
+    await expect(canvas.locator('.react-flow')).toBeVisible();
 
-    await expect(editor().locator('.floweditor-errors')).toContainText('relPath');
-    // The dialog STAYS, holding what was typed. A refusal that closed the form
-    // would be indistinguishable from a save.
-    await expect(editor()).toBeVisible();
+    // Both halves. Fancy's kit alone would pass a check for "Branch", and a
+    // palette showing only Genie's would mean the builtins went missing.
+    await expect(canvas.getByText('Terminals', { exact: false }).first()).toBeVisible();
+    await expect(canvas.getByText('Branch', { exact: false }).first()).toBeVisible();
 
-    await editor().getByRole('button', { name: 'Cancel' }).click();
-    await expect(editor()).toHaveCount(0);
-    // Nothing was written: the refusal has to be a refusal, not a warning.
-    await expect(flowRow(AUTHORED)).toHaveCount(0);
-
+    await page.locator('[role="dialog"] .gicon[aria-label="Close"]').click();
     await page.keyboard.press('Escape');
-    await expect(flowsRoot()).not.toHaveClass(/\bopen\b/);
+    await expect(flowsRoot()).not.toHaveClass(/open/);
 });

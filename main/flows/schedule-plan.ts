@@ -70,7 +70,7 @@ export function flowScheduleSpecId(flowId: string, nodeId: string): string {
 
 /** How a flow's schedule appears in the Processes list. */
 function labelFor(flow: ScheduledFlow): string {
-    return `${flow.name} (flow)`;
+    return `${flow.title} (flow)`;
 }
 
 export function planFlowSchedules(

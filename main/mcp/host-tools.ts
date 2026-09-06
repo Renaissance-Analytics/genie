@@ -1392,6 +1392,20 @@ export async function resolveAgentTarget(
 
     const callerWorkspaceId = caller.workspaceId;
     const callerWs = callerWorkspaceId ? getWorkspace(callerWorkspaceId) : null;
+
+    // A FLOW's reach is its SCOPE, which is what the user armed.
+    //
+    // A `workspace` flow is confined to that workspace and is otherwise an
+    // ordinary caller. A `system` flow carries no workspace and is machine-wide
+    // — deliberately, because that is what a machine-wide flow IS, and because
+    // the arming was done against a graph the user could read. It is not an
+    // escalation a caller can claim: the scope is a stored column, the flow was
+    // born disarmed, and a person turned it on.
+    //
+    // A `gapp` flow never arrives here. It calls through `dispatchAppCall` as
+    // its app and resolves as `kind: 'app'` above.
+    const isUnconfinedFlow = caller.kind === 'flow' && caller.workspaceId === null;
+
     const decision = await resolveTargetWorkspace(requestedWorkspaceId, {
         callerWorkspaceId,
         governedWorkspaceIds: () =>
@@ -1404,7 +1418,11 @@ export async function resolveAgentTarget(
         // built-in operator's own row carries the designation, so it is
         // authorized HERE rather than through the `osAgentCapability` escape
         // hatch that existed only because it had no row to read.
-        callerIsOperator: callerWorkspaceId ? isWorkstationOperator(callerWorkspaceId) : false,
+        callerIsOperator: isUnconfinedFlow
+            ? true
+            : callerWorkspaceId
+              ? isWorkstationOperator(callerWorkspaceId)
+              : false,
     });
     const ws = decision.allowed ? getWorkspace(decision.workspaceId) ?? null : null;
     return { decision, ws };

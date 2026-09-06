@@ -30,16 +30,19 @@
  * looks armed and never fires.
  */
 
-import { isValidCron } from '../../terminal/cron';
+import { isValidCron } from '../terminal/cron';
+import { GENIE_EVENT_TRIGGER_KIND } from './event-trigger';
 import type { FlowGraphLike, FlowNodeLike } from './admission';
 
-export type FlowTriggerKind = 'manual' | 'schedule' | 'webhook';
+export type FlowTriggerKind = 'manual' | 'schedule' | 'webhook' | 'event';
 
 export interface FlowTrigger {
     nodeId: string;
     kind: FlowTriggerKind;
     /** `schedule` only: a 5-field cron expression, in the host's local time. */
     cron?: string;
+    /** `event` only: the event id this trigger listens for. */
+    event?: string;
     /** Set when Genie recognises the trigger but cannot arm it yet, and why. */
     unsupported?: string;
 }
@@ -67,6 +70,10 @@ const TRIGGER_KINDS: ReadonlyMap<string, FlowTriggerKind> = new Map([
     ['@particle-academy/webhook_trigger', 'webhook'],
     ['webhook_trigger', 'webhook'],
     ['@fancy/webhook_trigger', 'webhook'],
+    // Genie's own. Not a fancy builtin, because fancy-flow observes no host —
+    // see `event-trigger.ts`.
+    [GENIE_EVENT_TRIGGER_KIND, 'event'],
+    ['genie.event_trigger', 'event'],
 ]);
 
 const WEBHOOK_UNSUPPORTED =
@@ -92,15 +99,19 @@ export function declaredTriggers(graph: FlowGraphLike | null | undefined): FlowT
 
         const nodeId = readString(raw.id) ?? '';
         const config = raw.data?.config;
-        const cron =
-            kind === 'schedule' && config && typeof config === 'object'
-                ? readString((config as { cron?: unknown }).cron)
+        const readConfig = (key: string): string | null =>
+            config && typeof config === 'object'
+                ? readString((config as Record<string, unknown>)[key])
                 : null;
+
+        const cron = kind === 'schedule' ? readConfig('cron') : null;
+        const event = kind === 'event' ? readConfig('event') : null;
 
         found.push({
             nodeId,
             kind,
             ...(cron !== null ? { cron } : {}),
+            ...(event !== null && event !== '' ? { event } : {}),
             ...(kind === 'webhook' ? { unsupported: WEBHOOK_UNSUPPORTED } : {}),
         });
     }
@@ -126,4 +137,19 @@ export function armableSchedules(graph: FlowGraphLike | null | undefined): Armab
 /** Whether this graph gives Genie any scheduling to do at all. */
 export function hasTimeTrigger(graph: FlowGraphLike | null | undefined): boolean {
     return armableSchedules(graph).length > 0;
+}
+
+/**
+ * The trigger nodes in this graph that listen for `eventId`.
+ *
+ * A trigger with NO event chosen matches nothing. That is the important half: a
+ * half-finished node must not become a wildcard, because the failure mode is an
+ * automation firing on things nobody selected — and it would look, from the
+ * outside, exactly like a working flow.
+ */
+export function eventTriggersFor(
+    graph: FlowGraphLike | null | undefined,
+    eventId: string,
+): FlowTrigger[] {
+    return declaredTriggers(graph).filter((t) => t.kind === 'event' && t.event === eventId);
 }

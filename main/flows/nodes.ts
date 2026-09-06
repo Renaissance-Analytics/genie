@@ -24,7 +24,7 @@
  * call by call through the same bridge the GApp window uses.
  */
 
-import { APP_CAPABILITIES, isAppCapability, type CapabilityRisk } from '../capabilities';
+import { APP_CAPABILITIES, isAppCapability, type CapabilityRisk } from '../apps/capabilities';
 
 /**
  * Namespace for every Genie node kind.

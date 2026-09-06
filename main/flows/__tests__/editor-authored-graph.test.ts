@@ -37,7 +37,7 @@ async function runSingle(kindName: string) {
     expect(node, `no registered kind called ${kindName}`).not.toBeNull();
     return runFlow(
         { nodes: [node!], edges: [] } as never,
-        buildFlowExecutors('com.example.app', dispatch) as never,
+        buildFlowExecutors({ kind: 'app', appId: 'com.example.app' }, dispatch) as never,
         () => {},
         {},
     );
@@ -122,7 +122,7 @@ describe('a two-node graph, wired the way the canvas wires one', () => {
 
         const result = await runFlow(
             { nodes: [trigger, log], edges: [newFlowEdge('t', 'l')] } as never,
-            buildFlowExecutors('com.example.app', dispatch) as never,
+            buildFlowExecutors({ kind: 'app', appId: 'com.example.app' }, dispatch) as never,
             () => {},
             {},
         );
@@ -145,7 +145,7 @@ describe('the graph a new flow starts as', () => {
 
         const result = await runFlow(
             graph as never,
-            buildFlowExecutors('com.example.app', dispatch) as never,
+            buildFlowExecutors({ kind: 'app', appId: 'com.example.app' }, dispatch) as never,
             () => {},
             {},
         );

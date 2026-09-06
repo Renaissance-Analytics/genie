@@ -135,11 +135,45 @@ function migrationHasTable(db: Database.Database, name: string): boolean {
 }
 
 /**
+ * Does `table` have `column`?
+ *
+ * `PRAGMA table_info` takes no bound parameters, so the table name is
+ * interpolated — every caller passes a literal from this file, never input.
+ * Returns false for a table that does not exist, which is the reading a
+ * migration guard wants: "not there in the shape I need" covers both.
+ */
+function migrationHasColumn(db: Database.Database, table: string, column: string): boolean {
+    if (!migrationHasTable(db, table)) return false;
+    return db
+        .prepare<[], { name: string }>(`PRAGMA table_info(${table})`)
+        .all()
+        .some((c) => c.name === column);
+}
+
+/**
  * Run all pending append-only migrations against `d`. Exported so the
  * migration suite can exercise the runner against a fresh `:memory:`
  * database without the Electron `app.getPath` singleton path.
  */
-export function runMigrations(d: Database.Database): MigrationResult {
+/**
+ * Apply every migration this build knows about.
+ *
+ * `upTo` stops after that version, and exists for ONE reason: a migration test
+ * needs the database as it stood BEFORE the migration under test, and for a
+ * migration that renames or drops a table there is no way back once it has run.
+ * The alternative — hand-writing the old schema in the test — is what the v67
+ * test warns against in its own docblock: a hand-written copy drifts from what
+ * the migrations really created, and then the test proves the migration works
+ * on a table no user has.
+ *
+ * Production never passes it. It is not a feature flag and not a rollback: it
+ * only declines to run migrations it has not reached yet, which is the same
+ * thing an older build does.
+ */
+export function runMigrations(
+    d: Database.Database,
+    options: { upTo?: number } = {},
+): MigrationResult {
     d.exec(`CREATE TABLE IF NOT EXISTS schema_version (
         version INTEGER PRIMARY KEY
     )`);
@@ -1333,7 +1367,14 @@ export function runMigrations(d: Database.Database): MigrationResult {
                 // sitting under the name and then index a column it does not
                 // have. The canvas table's presence under its later name is what
                 // says there is nothing to create here.
+                // v74 later collapsed both tables back into one called `flows`,
+                // carrying `graph_json` and a `scope_json`. On a replay from
+                // before v47 that table is already there and is the FINISHED
+                // shape, so recreating anything here would fight it. Either
+                // marker -- the v67 name or the v74 columns -- says this
+                // database is already past this migration.
                 if (migrationHasTable(db, 'gapp_flows')) return;
+                if (migrationHasColumn(db, 'flows', 'graph_json')) return;
                 db.exec(`
                     CREATE TABLE IF NOT EXISTS flows (
                         id         TEXT PRIMARY KEY,
@@ -2164,6 +2205,23 @@ export function runMigrations(d: Database.Database): MigrationResult {
             // straight back into v67.
             version: 67,
             runner: (db) => {
+                // v74 UNIFIED these two tables again, and its result is a `flows`
+                // carrying both `graph_json` and `scope_json`. Replaying the
+                // rename over that would push the finished table back under
+                // `gapp_flows` and hand the general name to a `wishes` table v66
+                // had just recreated empty -- so the tail would then walk v74
+                // reading a column (`name`) the unified table does not have.
+                //
+                // Stated here rather than fixed downstream because this is the
+                // same precondition v47 and the block below already state: a
+                // migration on a replayed tail has to be able to recognise a
+                // database that is already past it.
+                if (
+                    migrationHasColumn(db, 'flows', 'graph_json') &&
+                    migrationHasColumn(db, 'flows', 'scope_json')
+                ) {
+                    return;
+                }
                 if (migrationHasTable(db, 'gapp_flows')) {
                     // Already renamed. A `wishes` table here is v66 replayed
                     // after the fact: nothing has written to that name since the
@@ -2599,6 +2657,101 @@ export function runMigrations(d: Database.Database): MigrationResult {
                 ).run();
             },
         },
+        {
+            // v74 -- ONE FLOWS SYSTEM. The canvas table takes the name back.
+            //
+            // v67 split the name between two systems: `flows` went to the RECIPE
+            // engine that shipped as Wishes in beta.298, and the fancy-flow
+            // canvas -- the one with a real graph, a real engine and a real
+            // editor -- was demoted to `gapp_flows`. That was the wrong way
+            // round. Genie's automation is fancy-flow, and **a GApp flow is a
+            // flow whose SCOPE is `gapp`, not a separate system**. So there is
+            // one table, and scope is a column on it.
+            //
+            // ## The recipe rows are DROPPED
+            //
+            // Every one references `genie.relocate-file` -- the only built-in
+            // body that ever existed -- and every one was born disarmed, with any
+            // edit to what it does or where it acts disarming it again. An armed
+            // row is therefore consent to a body that will not exist after this
+            // migration. Rewriting that into a graph the user never saw would
+            // carry the consent somewhere it was never given; the equivalent
+            // flow ships as a TEMPLATE instead, so the decision is made again
+            // against a body the author can read.
+            //
+            // ## `app_id` becomes nullable, and the cascade must survive it
+            //
+            // A `gapp` flow keeps the foreign key and ON DELETE CASCADE -- a
+            // scheduled flow outliving its app is exactly what keeps firing
+            // after somebody thought they had removed it. A `system` or
+            // `workspace` flow has no owning app, so the column is null and the
+            // cascade cannot reach it. SQLite cannot relax NOT NULL in place, so
+            // the table is rebuilt.
+            //
+            // Guarded, because the suite REWINDS `schema_version` and replays
+            // the tail: `ALTER TABLE ... RENAME TO` has no IF NOT EXISTS, and
+            // v47 took 36 tests in four unrelated files down by forgetting that.
+            // The new table's presence -- `flows` carrying `graph_json` -- is
+            // what says this already ran.
+            version: 74,
+            runner: (db) => {
+                const flowsIsGraphTable =
+                    migrationHasTable(db, 'flows') && migrationHasColumn(db, 'flows', 'graph_json');
+                if (flowsIsGraphTable && !migrationHasTable(db, 'gapp_flows')) return;
+
+                // The recipe rows go. Nothing reads them after this.
+                db.exec('DROP INDEX IF EXISTS idx_flows_purpose;');
+                if (!flowsIsGraphTable) db.exec('DROP TABLE IF EXISTS flows;');
+                db.exec('DROP TABLE IF EXISTS wishes;');
+
+                // The one table. Built fresh rather than ALTERed, because
+                // `app_id` has to go from NOT NULL to nullable and SQLite has no
+                // statement for that.
+                db.exec(`
+                    DROP INDEX IF EXISTS idx_gapp_flows_app;
+                    DROP INDEX IF EXISTS idx_flows_app;
+                    CREATE TABLE IF NOT EXISTS flows_v74 (
+                        id          TEXT PRIMARY KEY,
+                        app_id      TEXT REFERENCES app_grants(app_id) ON DELETE CASCADE,
+                        title       TEXT NOT NULL,
+                        purpose     TEXT NOT NULL DEFAULT 'Automation',
+                        description TEXT,
+                        scope_json  TEXT NOT NULL,
+                        graph_json  TEXT NOT NULL,
+                        enabled     INTEGER NOT NULL DEFAULT 0,
+                        created_at  TEXT NOT NULL,
+                        updated_at  TEXT NOT NULL
+                    );
+                `);
+
+                // Carry the canvas graphs over. Each becomes a `gapp`-scoped
+                // flow -- the only thing it could honestly become, since it was
+                // only ever visible inside that one app.
+                const source = migrationHasTable(db, 'gapp_flows')
+                    ? 'gapp_flows'
+                    : flowsIsGraphTable
+                      ? 'flows'
+                      : null;
+                if (source) {
+                    db.exec(`
+                        INSERT OR IGNORE INTO flows_v74
+                            (id, app_id, title, purpose, description, scope_json,
+                             graph_json, enabled, created_at, updated_at)
+                        SELECT id, app_id, name, 'Automation', NULL,
+                               json_object('kind', 'gapp', 'appId', app_id),
+                               graph_json, enabled, created_at, updated_at
+                          FROM ${source};
+                    `);
+                    db.exec(`DROP TABLE ${source};`);
+                }
+
+                db.exec(`
+                    ALTER TABLE flows_v74 RENAME TO flows;
+                    CREATE INDEX IF NOT EXISTS idx_flows_app ON flows(app_id);
+                    CREATE INDEX IF NOT EXISTS idx_flows_scope ON flows(scope_json);
+                `);
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -2610,8 +2763,9 @@ export function runMigrations(d: Database.Database): MigrationResult {
         },
     );
 
+    const ceiling = options.upTo ?? Number.POSITIVE_INFINITY;
     for (const m of migrations) {
-        if (m.version > current) {
+        if (m.version > current && m.version <= ceiling) {
             apply(m);
             applied.push(m.version);
         }

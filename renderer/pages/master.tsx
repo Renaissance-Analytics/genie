@@ -518,18 +518,19 @@ function MasterInner() {
         // forever, which is the stuck badge this whole feature is careful not to
         // produce. The manager itself says whose Flows it is listing.
         if (isRemoteWindow()) return;
-        let alive = true;
-        api()
-            .flows.list()
-            .then((r) => {
-                if (alive) setFlowsBusy(r.busy);
-            })
-            .catch(() => {});
+        // The push IS the source. `flows.list()` used to carry a `busy` flag for
+        // the seed, back when it returned one kitchen-sink payload; the unified
+        // list returns rows and nothing else, which is right — a badge whose
+        // state is fetched from a list is a badge that can disagree with the
+        // runs it is meant to be reporting.
+        //
+        // Losing the seed costs nothing here. `flowsBusy` starts false, which is
+        // the honest answer for a window that has not been told otherwise, and
+        // the first push corrects it. The failure this whole feature avoids is
+        // the OPPOSITE one — a badge lit with no run behind it, which no push
+        // ever arrives to clear.
         const off = api().on.flowActivity?.((p) => setFlowsBusy(p.busy));
-        return () => {
-            alive = false;
-            off?.();
-        };
+        return () => off?.();
     }, []);
     // PendingQuestions inbox: the top-bar question icon + its live pending count.
     // The panel owns the grouped list; the master just tracks the badge total and
