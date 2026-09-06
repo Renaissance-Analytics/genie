@@ -30,6 +30,7 @@ import { broadcastLocal } from '../remote';
 import { GENIE_EVENT_TRIGGER_KIND } from '../flows/event-trigger';
 import { newFlowEdge, newFlowNode } from '../flows/graph';
 import { nodeKindForTool } from '../flows/nodes';
+import { registerGenieKinds } from '../flows/kinds';
 
 /** A Flow with a manual trigger — the manager's Run button acts on this one. */
 export const E2E_MANUAL_FLOW_ID = 'e2e-flow-manual';
@@ -125,6 +126,14 @@ function seedFlow(
 }
 
 export function seedFlowsE2E(): FlowsFixture {
+    // `newFlowNode` reads the live node registry, so Genie's own kinds have to
+    // be in it. `startFlows` registers them at boot and this runs later — but
+    // depending on that ordering would make the fixture silently degrade to a
+    // trigger-only graph if it ever changed, and the specs would then fail on
+    // an arming sentence with nothing in it. Registration is idempotent, so
+    // asking again costs nothing and removes the dependency.
+    registerGenieKinds();
+
     const d = getDb();
     // The E2E profile is reused across runs — replace rather than accumulate.
     d.prepare('DELETE FROM flow_runs WHERE flow_id IN (?, ?)').run(

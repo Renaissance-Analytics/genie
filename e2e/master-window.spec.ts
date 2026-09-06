@@ -710,7 +710,7 @@ test('the Flow Manager lists the seeded Flows, and warns about the one that cann
 
     const tidy = flowRow('Tidy the workspace');
     await expect(tidy).toBeVisible();
-    await expect(tidy).toContainText('Whole machine');
+    await expect(tidy).toContainText('This machine');
     await expect(tidy).toContainText('When you run it');
     await expect(tidy).toContainText('Never run');
 
@@ -736,7 +736,7 @@ test('the Flow Manager marks the running Flow, and only that one', async () => {
     await page.keyboard.press('Escape');
 });
 
-test('turning a Flow off is one click; turning it back on states what it will do', async () => {
+test('turning a flow off is one click; turning it back on states what it will do', async () => {
     await setFlowsRunning([]);
     await openFlows();
 
@@ -750,27 +750,39 @@ test('turning a Flow off is one click; turning it back on states what it will do
     // confirm on both directions trains people to click through both.
     await toggle.click();
     await expect(armDialog).toHaveCount(0);
-    // The Run button going away is evidence the STORE changed and came back on
-    // `flows:changed` — not that the renderer flipped a local boolean.
-    await expect(runButton).toHaveCount(0);
-    await expect(row.locator('.flowmgr-off')).toContainText('Moves files out of your workspace');
 
-    // ON asks, in the recipe's own words.
+    // The "off" line appearing is evidence the STORE changed and came back on
+    // `flows:changed` — it is rendered from the reloaded row, not from a local
+    // boolean the renderer flipped.
+    //
+    // ★ The Run button DELIBERATELY stays. A disarmed flow can still be run by
+    // hand: `enabled` governs unattended firing, and a manual run is attended by
+    // definition. The old rule meant you had to ARM a flow to try it once —
+    // granting standing permission in order to test something.
+    await expect(row.locator('.flowmgr-off')).toContainText('turning it on lets it use');
+    await expect(row.locator('.flowmgr-off')).toContainText('Issues and security alerts');
+    await expect(runButton).toHaveCount(1);
+
+    // ON asks, and says what it will be able to do — derived from the steps on
+    // the canvas, so the sentence cannot drift from the flow.
     await toggle.click();
     await expect(armDialog).toBeVisible();
-    await expect(armDialog).toContainText('Moves files out of your workspace');
+    await expect(armDialog).toContainText('It will be able to use');
+    await expect(armDialog).toContainText('Issues and security alerts');
     await expect(armDialog).toContainText('without asking again');
 
     // Cancel leaves it OFF. A confirmation that arms anyway is worse than none:
     // it teaches the user the dialog is decoration.
     await armDialog.getByRole('button', { name: 'Cancel' }).click();
     await expect(armDialog).toHaveCount(0);
-    await expect(runButton).toHaveCount(0);
+    await expect(toggle).not.toBeChecked();
 
     await toggle.click();
     await armDialog.getByRole('button', { name: 'Turn it on' }).click();
     await expect(armDialog).toHaveCount(0);
-    await expect(runButton).toHaveCount(1);
+    await expect(toggle).toBeChecked();
+    // Armed, so the row no longer offers the "turning it on" sentence.
+    await expect(row.locator('.flowmgr-off')).toHaveCount(0);
 
     await page.keyboard.press('Escape');
 });
