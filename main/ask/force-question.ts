@@ -209,20 +209,36 @@ export interface AskDeliverability {
  * `agentinbox` and `submitFeedback` already refuse an unbound terminal plainly.
  * This applies the same rule at ask time, where it costs the agent an error
  * instead of costing the human their answer.
+ *
+ * ## The wording was as wrong as the lookup behind it (genie#502)
+ *
+ * The identity refusal used to add *"This happens when an agent was started by
+ * hand rather than launched by Genie"* and end on *"Ask the user directly in
+ * your own terminal instead."* Both were false for the caller it fired on most —
+ * the workstation operator, a terminal Genie creates itself at boot — and the
+ * advice is the one thing that provably does not work: nobody is reading that
+ * terminal, which is the premise of the whole Genie protocol. A guessed cause
+ * plus a dead end is worse than a bare refusal, because an agent acts on it.
+ *
+ * So neither branch names a cause it has not checked, and both end on something
+ * a reader can actually do. The identity branch says what `agentinbox` says for
+ * the same condition, deliberately: one answer to "this terminal has no agent",
+ * not two that drift.
  */
 export function forceQuestionRefusal(d: AskDeliverability): string | undefined {
     if (!d.workspaceId) {
         return (
             'This terminal is not in a workspace, so an answer could not be delivered back to it. ' +
-            'Ask the user directly in your own terminal instead, or have Genie attach this ' +
-            'terminal to a workspace first.'
+            'A person has to attach it to one — through Genie’s Add Workspace flow, or by opening ' +
+            'this folder as a workspace — before questions from here can be answered.'
         );
     }
     if (!d.hasInboxIdentity) {
         return (
-            'This terminal has no AgentInbox identity, so there is nowhere to deliver an answer. ' +
-            'This happens when an agent was started by hand rather than launched by Genie. ' +
-            'Ask the user directly in your own terminal instead.'
+            'No agent is registered on this terminal in the AgentInbox, so there is nowhere to ' +
+            'deliver an answer. Register it with `registerAgent` (giving it a name and a purpose), ' +
+            'or have it started through Genie so it is created as a named agent — the same thing ' +
+            '`agentinbox` asks for when it refuses an unnamed terminal.'
         );
     }
     return undefined;

@@ -5,7 +5,6 @@ import {
     listWorkspaces,
     getDb,
     markWorkspaceAgentReadyByTerminal,
-    listWorkspaceAgents,
 } from '../db';
 import {
     lastActiveTerminalForWorkspace,
@@ -16,6 +15,7 @@ import {
 import { mobileEmit } from '../mobile/server';
 import { workspaceIdOfTerminal, workspaceIdOfSpec } from '../terminal/workspace-of-terminal';
 import { forceQuestion } from '../ask/force-question';
+import { resolveAskDeliverability } from '../ask/deliverability';
 import {
     describeWorkspaceForMcp,
     checkIssuesForMcp,
@@ -195,21 +195,22 @@ export function buildHostServerDeps(
         agentInboxMailLine: (terminalId) =>
             formatAgentInboxMailLine(agentInboxBroker.unreadForTerminal(terminalId)),
         // genie#321 — asked BEFORE a question is accepted. A caller with no
-        // workspace, or with no agent row for its terminal, has nowhere for an
-        // answer to land; accepting anyway is what discarded the user's answers.
+        // workspace, or with no agent to deliver to, has nowhere for an answer
+        // to land; accepting anyway is what discarded the user's answers.
+        //
+        // genie#502 — it used to ask whether a `workspace_agents` row NAMED this
+        // terminal, which is not an AgentInbox identity and is not what delivery
+        // consults. The workstation operator holds an identity and, by design,
+        // never holds such a row, so the one agent whose job is to escalate to
+        // the human was refused every time it tried. The lookup is now the same
+        // one `deliverHumanMessageToTerminal` resolves through, so the gate and
+        // the delivery it guards cannot disagree.
         askDeliverability: (terminalId: string) => {
             try {
-                const workspaceId = terminalId
-                    ? (getTerminalSpec(terminalId)?.workspace_id ?? null)
-                    : null;
-                return {
-                    workspaceId,
-                    hasInboxIdentity: workspaceId
-                        ? listWorkspaceAgents(workspaceId).some(
-                              (a: { terminal_spec_id: string | null }) => a.terminal_spec_id === terminalId,
-                          )
-                        : false,
-                };
+                return resolveAskDeliverability(terminalId, {
+                    workspaceOfTerminal: (id) => getTerminalSpec(id)?.workspace_id ?? null,
+                    inboxIdentityFor: (id) => agentInboxBroker.agentIdForTerminal(id),
+                });
             } catch {
                 // Fail OPEN: a probe that throws must not silence every question.
                 return { workspaceId: 'unknown', hasInboxIdentity: true };
