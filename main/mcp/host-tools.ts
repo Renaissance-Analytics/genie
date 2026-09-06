@@ -2715,7 +2715,7 @@ export async function runAgentForMcp(
  * the in-memory broker:
  *   - `list` — the caller's self info + discoverable peers (scope-filtered) + its
  *     channels.
- *   - `send {to?|channel?, text, interrupt?}` — DM a discoverable peer, or
+ *   - `send {to?|channel?, text, interrupt?, replyTo?}` — DM a discoverable peer, or
  *     broadcast on a channel (auto-joining it). `interrupt` nudges a DM target's
  *     terminal glow; it never injects into the pty.
  *   - `receive {cursor?, wait?, timeoutMs?}` — page the inbox; `wait` LONG-POLLS
@@ -2888,6 +2888,7 @@ export async function agentInboxForMcp(
                     toAgentId,
                     text: req.text,
                     interrupt: req.interrupt,
+                    ...(req.replyTo ? { replyTo: req.replyTo } : {}),
                     attachments,
                 });
                 return r.ok

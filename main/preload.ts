@@ -1,4 +1,7 @@
 import type { AgentTuiId } from './agents/registry';
+import type {
+    AgentPulseMarkerKind,
+} from './terminal/agent-pulse';
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { TailscaleStatus } from './tailscale';
 import type { AgentInboxScope } from './agentinbox/types';
@@ -1200,9 +1203,11 @@ const api = {
 
     /** AgentInbox — the local inter-agent messaging network's human panel. */
     agentPulse: {
-        /** Last-60s per-workspace byte buckets — fetched once when the workspace
-         *  menu opens to backfill each sparkline; live `on.agentPulse` pushes
-         *  advance it from there. */
+        /** Last-60s per-workspace byte buckets AND marker slots — fetched once
+         *  when the workspace menu opens to backfill each sparkline; live
+         *  `on.agentPulse` pushes advance both from there. The marker half is not
+         *  decoration: pushes have no persistence, so this is the only way a
+         *  freshly-opened window learns what happened in the last minute. */
         snapshot: () => ipcRenderer.invoke('agent-pulse:snapshot'),
     },
     /** PendingQuestions inbox — the top-bar question icon's grouped list + answers. */
@@ -1865,9 +1870,16 @@ const api = {
             return () => ipcRenderer.off('workspace:pulse', handler);
         },
         /** AgentPulse — per-workspace real-time terminal-activity. `active` drives
-         *  the rail-icon glow; `bytes` feeds the live 1-minute sparkline. */
+         *  the rail-icon glow; `bytes` feeds the live 1-minute sparkline, and
+         *  `markers` (absent when there are none) the inbox/automation glyphs
+         *  drawn over it. */
         agentPulse: (
-            cb: (payload: { workspaceId: string; active: boolean; bytes: number }) => void,
+            cb: (payload: {
+                workspaceId: string;
+                active: boolean;
+                bytes: number;
+                markers?: AgentPulseMarkerKind[];
+            }) => void,
         ) => {
             const handler = (_e: unknown, payload: Parameters<typeof cb>[0]) => cb(payload);
             ipcRenderer.on('agent-pulse', handler);

@@ -1609,6 +1609,10 @@ export interface AgentInboxRequest {
     text?: string;
     /** send (optional): also nudge a DM target's terminal glow (no pty injection). */
     interrupt?: boolean;
+    /** send (optional): the `id` of the message this one ANSWERS. Declaring it is
+     *  what makes a reply a reply — Genie never infers one from who has messaged
+     *  whom, so an answer sent without it reads as an ordinary message. */
+    replyTo?: string;
     /** receive (optional): page from this cursor (a prior receive's `cursor`). */
     cursor?: number;
     /** receive (optional): LONG-POLL until a message arrives / you leave / timeout. */

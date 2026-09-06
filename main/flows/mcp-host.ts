@@ -20,6 +20,7 @@ import { getAppGrant } from '../db';
 import { callerWorkspaceIdFor } from '../mcp/caller-workspace';
 import type { AppGrant } from '../apps/bridge-decision';
 import { handleManageFlows } from './mcp';
+import { agentPulse } from '../terminal/agent-pulse';
 
 function grantFor(appId: string): AppGrant | null {
     const row = getAppGrant(appId);
@@ -52,5 +53,10 @@ export async function manageFlowsForMcp(
         // The flow system holds the deps it was STARTED with. Building a second
         // set here would mean two answers to what a tool call can reach.
         run: (flowId) => runFlowByHand(flowId),
+        // The green `!` — an AGENT ran a flow by hand. Bound here rather than
+        // inside `runFlowByHand`, which a person's click in the Flow Manager also
+        // goes through; this marker is about agent behaviour, and marking in the
+        // shared runner would light the row for the user's own action.
+        markRan: (workspaceId) => agentPulse.mark(workspaceId, 'flow-run'),
     });
 }

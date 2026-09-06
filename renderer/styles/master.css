@@ -2257,6 +2257,79 @@ button.iw-feedback-note.as-link:hover {
     stroke-linejoin: round;
     stroke-linecap: round;
 }
+/* --- AgentPulse markers — the inbox/automation moments on the row -------- */
+/* DOM, not SVG, and deliberately. The sparkline beside these is a 100x100
+   viewBox with preserveAspectRatio:none so it stretches to any row width; a
+   glyph inside that same SVG would stretch with it and a diamond would become a
+   lozenge on a wide window. Positioning in percent keeps each shape's own
+   geometry while still landing on the sparkline's time axis. */
+.agent-pulse-markers {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    overflow: hidden;
+    border-radius: inherit;
+}
+/* One second of the minute. Translated back by half its own width so a marker
+   sits ON its moment rather than starting at it -- including the newest slot at
+   left:100%, which would otherwise render entirely outside the row. */
+.agent-pulse-markers .apm-slot {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1px;
+    transform: translateX(-50%);
+}
+.agent-pulse-markers .apm {
+    display: block;
+    width: 5px;
+    height: 5px;
+    font-style: normal;
+    line-height: 1;
+    opacity: 0.92;
+}
+/* A repeat inside one second draws ONE glyph (three diamonds are
+   indistinguishable at 5px) and says so by growing slightly. The count itself
+   lives in the title -- see the component: the collapse must stay legible
+   rather than silent. */
+.agent-pulse-markers .apm[data-count="1"] { opacity: 0.8; }
+.agent-pulse-markers .apm:not([data-count="1"]) {
+    transform: scale(1.35);
+}
+.agent-pulse-markers .apm-diamond {
+    background: var(--rose-500, #f43f5e);
+    transform: rotate(45deg);
+    border-radius: 1px;
+}
+.agent-pulse-markers .apm:not([data-count="1"]).apm-diamond {
+    transform: rotate(45deg) scale(1.35);
+}
+.agent-pulse-markers .apm-dot {
+    background: var(--emerald-500, #10b981);
+    border-radius: 50%;
+}
+.agent-pulse-markers .apm-triangle {
+    width: 0;
+    height: 0;
+    background: none;
+    border-left: 3px solid transparent;
+    border-right: 3px solid transparent;
+    border-bottom: 5px solid var(--amber-500, #f59e0b);
+}
+.agent-pulse-markers .apm-question,
+.agent-pulse-markers .apm-flow {
+    width: auto;
+    height: auto;
+    font: 700 9px / 1 ui-monospace, monospace;
+}
+.agent-pulse-markers .apm-question { color: var(--yellow-400, #facc15); }
+.agent-pulse-markers .apm-flow { color: var(--emerald-400, #34d399); }
+
 .agent-nudge-questions {
     position: absolute;
     inset: 0;

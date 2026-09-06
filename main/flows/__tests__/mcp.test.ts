@@ -5,7 +5,7 @@ import { handleManageFlows, type ManageFlowsDeps } from '../mcp';
 import { registerGenieKinds } from '../kinds';
 import { registerEventTriggerKind } from '../event-trigger';
 import { createFlowEventRegistry } from '../events';
-import { getFlowIn, listFlowsIn, upsertFlowIn } from '../store';
+import { getFlowIn, listFlowsIn, setFlowEnabledIn, upsertFlowIn } from '../store';
 import { PAUSES_WITHOUT_RESUME } from '../refusals';
 
 /**
@@ -389,5 +389,73 @@ describe('a pause step the palette no longer offers', () => {
         });
 
         expect(out.allowed, JSON.stringify(out.refusals)).toBe(true);
+    });
+});
+
+/**
+ * The green `!` on the workspace row: an AGENT ran a flow by hand.
+ *
+ * Marked HERE, at the MCP layer, and not inside the runner — a person running a
+ * flow from the Flow Manager goes through the same runner, and the marker is
+ * about agent behaviour. Marking in the shared runner would light the row for
+ * the user's own click.
+ *
+ * The arming gate is untouched by any of this. An agent still cannot run a
+ * disarmed flow, and the test below is what proves the marker does not sneak
+ * past that refusal.
+ */
+describe('a hand-run flow marks the workspace row', () => {
+    it('marks after the run actually STARTS', async () => {
+        seed('armed');
+        setFlowEnabledIn(db, 'armed', true);
+        const markRan = vi.fn();
+
+        const out = await call({ action: 'run', flowId: 'armed' }, { markRan });
+
+        expect(out.ok).toBe(true);
+        expect(markRan).toHaveBeenCalledWith('ws-1');
+    });
+
+    it('does NOT mark when the runner refuses to start it', async () => {
+        seed('armed');
+        setFlowEnabledIn(db, 'armed', true);
+        const markRan = vi.fn();
+
+        await call(
+            { action: 'run', flowId: 'armed' },
+            { markRan, run: vi.fn(async () => ({ ok: false as const, error: 'engine down' })) },
+        );
+
+        // Nothing ran, so nothing happened to draw.
+        expect(markRan).not.toHaveBeenCalled();
+    });
+
+    it('does NOT mark a DISARMED flow — the arming gate still refuses first', async () => {
+        seed('disarmed');
+        const markRan = vi.fn();
+        const run = vi.fn(async () => ({ ok: true as const }));
+
+        const out = await call({ action: 'run', flowId: 'disarmed' }, { markRan, run });
+
+        expect(out.error).toMatch(/not turned on/i);
+        expect(run).not.toHaveBeenCalled();
+        expect(markRan).not.toHaveBeenCalled();
+
+        // Positive control: arm the SAME flow and both fire, so the two absences
+        // above are the gate refusing and not a marker that never works.
+        setFlowEnabledIn(db, 'disarmed', true);
+        await call({ action: 'run', flowId: 'disarmed' }, { markRan, run });
+        expect(run).toHaveBeenCalled();
+        expect(markRan).toHaveBeenCalledWith('ws-1');
+    });
+
+    it('marks nothing for an agent with no workspace', async () => {
+        seed('armed');
+        setFlowEnabledIn(db, 'armed', true);
+        const markRan = vi.fn();
+
+        await call({ action: 'run', flowId: 'armed' }, { markRan, workspaceId: () => null });
+
+        expect(markRan).not.toHaveBeenCalled();
     });
 });

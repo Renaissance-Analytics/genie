@@ -106,7 +106,11 @@ import {
 import { resolveAlertSound, deliverAlertSound } from './notify-sound';
 import { demandWindowAttention, resolveAttentionWindow } from './attention-flash';
 import { workspaceDocHealth, repairWorkspaceDocs } from './workspace/create-agi';
-import { registerForceQuestionIpc, forceQuestion } from './ask/force-question';
+import {
+    registerForceQuestionIpc,
+    forceQuestion,
+    setQuestionMarkSink,
+} from './ask/force-question';
 import {
     registerIssueWatchIpc,
     resolveWorkspaceRepos,
@@ -153,6 +157,7 @@ import { harnessTransportRegistry } from './agentinbox/harness-transport';
 import { createHarnessTransportSink } from './agentinbox/transport-sink';
 import { agentShutdownReadiness } from './agents/shutdown-readiness';
 import { setPluginPanelOpenSink } from './plugins/registry';
+import { agentPulse } from './terminal/agent-pulse';
 import { announceAgentUpgrade, withWorkstationOperator } from './agents/upgrade-announcement';
 import {
     pendingDrainRestore,
@@ -2012,6 +2017,10 @@ app.whenReady().then(async () => {
     startSchedules();
     // ForceTheQuestion modal IPC (the agent-integration MCP raises it).
     registerForceQuestionIpc(forceQuestionIpcConfig());
+    // The yellow `?` on the workspace row — an agent here is waiting on a person.
+    // A sink rather than a direct import so `force-question.ts` stays free of the
+    // terminal layer, and so a headless host (no rows to draw on) installs none.
+    setQuestionMarkSink((workspaceId) => agentPulse.mark(workspaceId, 'question'));
     // Bring back the questions the LAST run was still waiting on. The queue used
     // to be in memory and nothing else, so every upgrade — and Genie upgrades
     // constantly — silently erased whatever the user had not answered yet: the

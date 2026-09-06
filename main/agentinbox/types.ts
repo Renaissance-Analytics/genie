@@ -217,6 +217,17 @@ export interface AgentInboxMessage {
     ts: number;
     /** DM only: an urgent nudge was requested (glows the recipient's terminal). */
     interrupt?: boolean;
+    /**
+     * The `id` of the message this one ANSWERS, when the sender said so.
+     *
+     * DECLARED, never inferred (owner, 2026-09-06). The obvious alternative was
+     * to call any outbound DM to someone who had messaged you a reply — the
+     * `pairKey` shape — and that was considered and rejected: an agent raising an
+     * unrelated matter with a peer it has spoken to before is byte-identical to a
+     * reply under that rule, so the marker it drives would assert a relationship
+     * nobody stated. ABSENT (not empty) when a message answers nothing.
+     */
+    replyTo?: string;
     /** Files riding this message. ABSENT (not `[]`) when there are none, so a
      *  plain message is byte-identical to what it was before attachments. */
     attachments?: AgentInboxAttachment[];
@@ -284,8 +295,26 @@ export interface AgentInboxEscalation {
 
 /** The broker's outbound event, mapped by presence.ts to the local broadcast +
  *  mobile push channels (and the terminal attention glow for `interrupt`). */
+/**
+ * One moment in an agent's inbox life, for the workspace-row activity markers.
+ *
+ * Reported by the broker and mapped to `agentPulse.mark` by presence.ts — the
+ * broker itself is PURE and knows nothing about pulses or rows. `workspaceId` is
+ * the workspace the moment BELONGS to, which for a delivery is the RECIPIENT'S:
+ * the row that should show a message arriving is the row that received one.
+ */
+export interface AgentInboxLifecycleMoment {
+    kind: 'delivered' | 'checked' | 'replied';
+    workspaceId: string;
+    /** The agent the moment happened to (recipient for `delivered`/`checked`,
+     *  the replier for `replied`). Carried for diagnosis, not for display. */
+    agentId: string;
+}
+
 export type AgentInboxBrokerEvent =
     | { type: 'presence'; agent: AgentInboxAgentInfo }
+    // An inbox moment worth a mark on the workspace row (genie#450 follow-on).
+    | { type: 'lifecycle'; moment: AgentInboxLifecycleMoment }
     | { type: 'offline'; agentId: string }
     | { type: 'message'; preview: AgentInboxMessagePreview }
     | { type: 'interrupt'; terminalId: string }

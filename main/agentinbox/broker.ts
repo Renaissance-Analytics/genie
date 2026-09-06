@@ -10,6 +10,7 @@ import {
     type AgentInboxDmThreadInfo,
     type AgentInboxEscalation,
     type AgentInboxJoinInput,
+    type AgentInboxLifecycleMoment,
     type AgentInboxMessage,
     type AgentInboxScope,
     type AgentInboxNotifyTarget,
@@ -820,6 +821,11 @@ export class AgentInboxBroker {
     private ackCursor(agent: AgentInboxAgent, cursor: number): void {
         if (cursor > agent.cursor) {
             agent.cursor = cursor;
+            // CHECKED — the cursor MOVED, so the agent consumed something new.
+            // Gated on the advance rather than on `receive` being called: an
+            // empty poll (and a parked long-poll) reads nothing, and a marker
+            // there would say "it looked at the message" when there was none.
+            this.emitLifecycle('checked', agent);
             // It looked. Whatever deadline was counting is moot -- and leaving it
             // armed would nudge an agent that is up to date.
             this.clearNudge(agent);
@@ -1233,6 +1239,24 @@ export class AgentInboxBroker {
         if (log.length > LOG_CAP) log.splice(0, log.length - LOG_CAP);
     }
 
+    /** Report one inbox moment for the workspace-row markers. Never throws into
+     *  a delivery: the emitter is host-installed and a marker is never worth
+     *  losing a message over. */
+    private emitLifecycle(
+        kind: AgentInboxLifecycleMoment['kind'],
+        agent: AgentInboxAgent,
+    ): void {
+        if (!agent.workspaceId) return;
+        try {
+            this.emit({
+                type: 'lifecycle',
+                moment: { kind, workspaceId: agent.workspaceId, agentId: agent.agentId },
+            });
+        } catch {
+            /* best-effort — a marker must never take a delivery down with it */
+        }
+    }
+
     private emitMessage(msg: AgentInboxMessage): void {
         this.emit({
             type: 'message',
@@ -1270,6 +1294,10 @@ export class AgentInboxBroker {
         toAgentId?: string;
         text: string;
         interrupt?: boolean;
+        /** The message this one ANSWERS. Declared by the sender; never inferred
+         *  from who has talked to whom. Drives the `replied` lifecycle moment,
+         *  and only when the sender is an AGENT. */
+        replyTo?: string;
         /** Files riding the message. The CALLER has already read + stored the
          *  bytes (the broker owns no fs — see the class doc); this is metadata. */
         attachments?: AgentInboxAttachment[];
@@ -1304,6 +1332,9 @@ export class AgentInboxBroker {
             // Absent rather than `[]` when nothing is attached, so a plain
             // message stays exactly the shape it has always been on the wire.
             ...(attachments.length ? { attachments } : {}),
+            ...(typeof input.replyTo === 'string' && input.replyTo.trim()
+                ? { replyTo: input.replyTo.trim() }
+                : {}),
         };
 
         // --- DM ---
@@ -1326,6 +1357,14 @@ export class AgentInboxBroker {
                 ...(input.interrupt ? { interrupt: true } : {}),
             };
             this.push(target, msg);
+            // DELIVERED — emitted HERE and not inside `push`, deliberately.
+            // `push` is also how `rehydrateMessages` re-queues yesterday's
+            // undelivered mail at boot, and a restart must not repaint a row of
+            // arrivals that already happened. This is the live path, and only it.
+            this.emitLifecycle('delivered', target);
+            // REPLIED — only when an AGENT declared what it was answering. A
+            // human's reply is not an agent behaviour and gets no marker.
+            if (sender && msg.replyTo) this.emitLifecycle('replied', sender);
             this.appendLog(this.dmLogs, pairKey(from, target.agentId), msg);
             this.store.append(msg);
             this.emitMessage(msg);
