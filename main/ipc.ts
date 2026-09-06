@@ -274,10 +274,15 @@ function toolchainManagerDeps(): ToolchainManagerDeps {
  * start a turn between opening the page and pressing Update.
  */
 async function readToolchainActivity(): Promise<ToolchainActivity> {
-    const busyAgents = agentPulse
-        .workingAgentTerminals()
+    const busyAgents = agentPulse.workingAgentTerminals().map((id) => {
+        const spec = getTerminalSpec(id);
         // A terminal id means nothing to a human; the warning has to say WHO.
-        .map((id) => getTerminalSpec(id)?.label || id);
+        // And the spec's PROVIDER is what says WHICH CLI that agent is running —
+        // it used to be dropped here, one line before the guard needed it, which
+        // is how a busy Claude agent came to block installing the Genie TUI
+        // (genie#448). `busyAgentOf` owns the provider → catalog-tool join.
+        return busyAgentOf(spec?.label || id, spec?.meta?.agent);
+    });
     // LIVE ptys, not specs: a spec outlives its pty (terminals are revivable),
     // and what aborts the Git installer is a RUNNING bash.exe.
     const openTerminals = liveTerminalCount();
@@ -325,7 +330,7 @@ import { devSiteManager } from './dev-server/site-manager';
 import type { EngineActionRequest } from './dev-server/services/service-manager';
 import type { ManageServiceRequest, ManageSiteRequest } from './mcp/protocol';
 import { devServerGenSites } from './dev-server/site-manager';
-import { toolchainUpdateRisk } from './dev-server/toolchain-update-risk';
+import { busyAgentOf, toolchainUpdateRisk } from './dev-server/toolchain-update-risk';
 import type { ToolchainActivity } from './dev-server/toolchain-update-risk';
 import type { DevSiteProgress } from './dev-server/site-manager';
 import { remoteGenUrl } from './sites/gen-url';
@@ -1199,23 +1204,6 @@ export function registerIpcHandlers(): void {
                 error: gap.installGap ?? `Genie has no installer for ${gap.label}.`,
             };
         }
-        // What this would walk into, read at the MOMENT of the click. An update
-        // replaces a binary other live things are running on: replacing an agent
-        // TUI (or Node) mid-turn fails on Windows and corrupts the turn
-        // elsewhere, and a Docker update restarts the engine under running
-        // containers. Refuse the first, and make the rest an informed choice.
-        const risk = toolchainUpdateRisk(tool as HostToolName, await readToolchainActivity());
-        if (risk.risk === 'blocked' || (risk.risk === 'warn' && !confirmed)) {
-            return {
-                ok: false,
-                results: [],
-                restartRequired: false,
-                skipped: [],
-                risk: risk.risk,
-                error: risk.reason,
-                affected: risk.affected,
-            };
-        }
         const ctx = { os: process.platform, arch: process.arch, genieRoot: toolchainRoot() };
         // Probe the default set PLUS the tool being acted on. `present` is what
         // decides install-vs-update below, and an agent CLI outside
@@ -1230,6 +1218,31 @@ export function registerIpcHandlers(): void {
             ...ctx,
             ...(wanted ? { wanted } : {}),
         });
+        const installed = insp.report.present.includes(tool as HostToolName);
+        // What this would walk into, read at the MOMENT of the click. An update
+        // replaces a binary other live things are running on: replacing an agent
+        // TUI (or Node) mid-turn fails on Windows and corrupts the turn
+        // elsewhere, and a Docker update restarts the engine under running
+        // containers. Refuse the first, and make the rest an informed choice.
+        //
+        // AFTER the probe, and that ordering is the point: an INSTALL replaces
+        // no running binary, so the guard has to know whether the tool is here
+        // before it can say anything true about the risk (genie#448). `present`
+        // is main's own probe, never the renderer's word for it.
+        const risk = toolchainUpdateRisk(tool as HostToolName, await readToolchainActivity(), {
+            installed,
+        });
+        if (risk.risk === 'blocked' || (risk.risk === 'warn' && !confirmed)) {
+            return {
+                ok: false,
+                results: [],
+                restartRequired: false,
+                skipped: [],
+                risk: risk.risk,
+                error: risk.reason,
+                affected: risk.affected,
+            };
+        }
         const perform = createToolchainInstallEffect(ctx, toolchainManagerDeps());
         const result = await runInstallPlan({
             steps: [planToolUpdate(tool as HostToolName, ctx.os, insp.pmChoice)],
