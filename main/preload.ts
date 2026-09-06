@@ -1379,6 +1379,15 @@ const api = {
         palette: (scope: unknown) => ipcRenderer.invoke('flows:palette', scope),
         /** Start a flow by hand. Resolves with the run result — refusals included. */
         run: (flowId: string) => ipcRenderer.invoke('flows:run', flowId),
+        /**
+         * Open (or focus) this flow's editor WINDOW. Never a modal — genie#505.
+         *
+         * `app:show-flow-editor`, not a `flows:` channel: it opens a
+         * BrowserWindow, and those are handled in `main/ipc.ts` beside every
+         * other window opener. `flows:*` has exactly one owner
+         * (`main/flows/ipc.ts`) and `flow-ipc-channels.test.ts` keeps it that way.
+         */
+        openWindow: (flowId: string) => ipcRenderer.invoke('app:show-flow-editor', flowId),
     },
 
     files: {

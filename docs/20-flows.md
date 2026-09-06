@@ -14,11 +14,17 @@ find out what happened last time.
 
 ## The canvas
 
-Press **+** in the Flow Manager. A new flow opens on the canvas with one box —
-**Manual**, meaning "when you run it" — and nothing else.
+Press **+** in the Flow Manager. A new flow opens in its own **window**, with one
+box — **Manual**, meaning "when you run it" — and nothing else. The window is
+yours to move, resize and put on a second screen; the Flow Manager stays where it
+was, and picks up your changes as you save them.
 
 Drag steps in from the palette on the left, and join them by dragging from one
 box's dot to another's. Clicking a box opens its settings on the right.
+
+Make the window narrow and those two side panels get out of the way rather than
+squeezing the drawing: **Steps** and **Configure** appear in the toolbar, and
+each one slides its panel over the canvas until you are done with it.
 
 There are two families of step.
 
@@ -120,7 +126,7 @@ its trigger does not move it.
 | **Scope** | Where it belongs — this machine, a workspace, or a Genie App. |
 | **Triggers** | Every trigger on the canvas, in words. Orange means that one cannot fire. |
 | **Enabled** | The switch arms and disarms it. Disarming also releases any filesystem watchers the flow was holding, so a disabled flow really stops rather than quietly still watching. |
-| **Edit / Delete** | Open the canvas, or remove it. Deleting takes its run history with it. |
+| **Edit / Delete** | Open the canvas in its own window, or remove it. Deleting takes its run history with it. |
 | **Last run** | The outcome, and when. |
 
 ## Outcomes
