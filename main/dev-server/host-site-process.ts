@@ -65,6 +65,17 @@ export interface HostSpawnPrimitives {
     signal: (pid: number, sig: NodeJS.Signals | 0) => boolean;
     /** Windows tree kill (no process groups there). */
     killTreeWin: (pid: number) => Promise<void>;
+    /**
+     * Which process is LISTENING on this loopback port, or null when nothing is
+     * (yet) — the only way to learn the pid of a server Genie launched through a
+     * shell (genie#391).
+     *
+     * OPTIONAL, and absent means "no lookup on this binding": the run registry
+     * then behaves exactly as it did before, tracking the spawn pid. A missing
+     * lookup must never be an error — it is one platform's capability, not a
+     * precondition for hosting a site.
+     */
+    portOwnerPid?: (port: number) => Promise<number | null>;
 }
 
 /** `taskkill` argv that ends a process AND its children, forcefully. */
@@ -87,9 +98,10 @@ export interface HostSpawnInvocation {
      * has no process groups, so we never detach there and kill the tree with
      * `taskkill /t` instead.
      *
-     * MEASURED (genie#216), because the cost of that is real — a non-detached child
-     * dies with Genie, so every update takes every host-native site down. Spawning a
-     * console app on win32 and counting `conhost.exe` in the resulting process tree:
+     * MEASURED (genie#216), because the cost of that was believed to be real — that
+     * a non-detached child dies with Genie, so every update takes every host-native
+     * site down. Spawning a console app on win32 and counting `conhost.exe` in the
+     * resulting process tree:
      *
      *   detached  windowsHide  shell   console allocated
      *   false     true         true    NO   ← what ships
@@ -102,8 +114,22 @@ export interface HostSpawnInvocation {
      * it. Detaching would therefore need the win32 spawn to stop going through the
      * shell — but the shell is what resolves the `.cmd`/`.bat` dev-server shims this
      * function exists for (see the header), so that is a change to which commands
-     * host-native hosting can run at all, not a flag. Until then a site is a child
-     * of Genie's tree and `lifecycle.onBoot` resumes it.
+     * host-native hosting can run at all, not a flag.
+     *
+     * CORRECTION (genie#391). This block used to close "until then a site is a child
+     * of Genie's tree and `lifecycle.onBoot` resumes it". Both halves are false on
+     * win32, and measurably so: a site's server is a GRANDCHILD (Genie → cmd.exe →
+     * caddy/php-cgi), Windows kills nothing on a parent's exit, and 151 orphaned
+     * caddy/php-cgi processes were counted on one workstation with dead parents,
+     * still serving, the oldest eleven days old. So the server does NOT die with
+     * Genie, and what `onBoot` did was not resume it but spawn a second one beside
+     * it. The conhost table above stands — it measured console allocation, and never
+     * measured lifetime.
+     *
+     * What follows from that correction is {@link HostSpawnPrimitives.portOwnerPid}:
+     * the pid this function's spawn returns is the SHELL's, so the run registry has
+     * to learn the server's from the port it binds, or it cannot re-attach a
+     * survivor and cannot stop one.
      */
     detached: boolean;
 }

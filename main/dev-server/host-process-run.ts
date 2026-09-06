@@ -31,13 +31,49 @@ const REGISTRY_FILE = 'host-runs.json';
 
 /** What the registry remembers about ONE host-native run, across restarts. */
 interface TrackedRun {
+    /**
+     * The pid `spawn` returned. On win32 this is the SHELL's — the command runs
+     * through cmd.exe so a `.cmd`/`.bat` dev-server shim resolves at all — and the
+     * shell's lifetime is not the server's. Kept because it is what `taskkill /t`
+     * must be pointed at while the shell is alive: that walks the tree and takes
+     * the server with it.
+     */
     pid: number;
+    /**
+     * The pid actually LISTENING on {@link port}, resolved right after the spawn
+     * (genie#391). This is the process whose liveness answers "is this site still
+     * serving", and the one a `stop` has to reach when the shell has already gone.
+     *
+     * Absent when nothing had bound the port before the resolve gave up, when the
+     * run has no port, or on a binding with no `portOwnerPid` lookup — in every one
+     * of those cases the registry falls back to {@link pid} and behaves exactly as
+     * it did before this field existed.
+     */
+    serverPid?: number;
     logPath: string;
     /** The loopback port this run is serving on — what `.gen` routes to. Absent on
      *  a record written before ports were tracked; such a run can still be stopped
      *  and read, it just cannot be re-ROUTED without a restart. */
     port?: number;
 }
+
+/**
+ * The pid whose liveness IS the run's liveness. See {@link TrackedRun.serverPid}:
+ * the spawn pid is only a proxy for it, and on win32 a short-lived one.
+ */
+const supervisedPid = (t: TrackedRun): number => t.serverPid ?? t.pid;
+
+/**
+ * How long a start looks for the port's owner before giving up, and how often.
+ *
+ * 2s in 80ms steps. The first attempt almost always wins for what actually leaked
+ * — Genie's own Caddy and `php-cgi` bind within milliseconds of exec — and the
+ * budget is bounded because a command that never binds must not hold up its own
+ * start report. A dev server slower than this keeps the pre-genie#391 behaviour
+ * rather than getting a wrong answer: `serverPid` simply stays unset.
+ */
+const OWNER_ATTEMPTS = 25;
+const OWNER_INTERVAL_MS = 80;
 
 export interface HostProcessRunDeps {
     /** Where each site's captured output is written. */
@@ -55,6 +91,9 @@ export interface HostProcessRunDeps {
     readRegistry?: (path: string) => string | null;
     /** Replace the persisted run registry, atomically. Default: real fs. */
     writeRegistry?: (path: string, text: string) => void;
+    /** Sleep between port-owner attempts. Injected so a test that exercises the
+     *  give-up path does not spend the real budget doing it. */
+    wait?: (ms: number) => Promise<void>;
 }
 
 /**
@@ -86,8 +125,65 @@ export function createHostProcessRun(deps: HostProcessRunDeps): HostProcessRun {
     const appendLog = deps.appendLog ?? ((path: string, text: string) => appendFileSync(path, text));
     const readRegistry = deps.readRegistry ?? realReadRegistry;
     const writeRegistry = deps.writeRegistry ?? realWriteRegistry;
+    const wait = deps.wait ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
     const registryPath = join(deps.logDir, REGISTRY_FILE);
     const tracked = loadRegistry(readRegistry, registryPath);
+
+    /**
+     * Who holds `port` — polled, because the spawn has only just returned and the
+     * server binds a moment later. Null when nothing answered inside the budget,
+     * which is not a failure: the caller keeps the spawn pid.
+     */
+    async function resolvePortOwner(port: number): Promise<number | null> {
+        const lookup = prims.portOwnerPid;
+        if (!lookup) return null;
+        for (let attempt = 0; attempt < OWNER_ATTEMPTS; attempt += 1) {
+            let owner: number | null = null;
+            try {
+                owner = await lookup(port);
+            } catch {
+                // A lookup that cannot answer is "not yet", never a failed start.
+                owner = null;
+            }
+            if (typeof owner === 'number' && Number.isInteger(owner) && owner > 0) return owner;
+            if (attempt < OWNER_ATTEMPTS - 1) await wait(OWNER_INTERVAL_MS);
+        }
+        return null;
+    }
+
+    /**
+     * Stop one tracked run, INCLUDING a server the shell can no longer reach.
+     *
+     * The first kill is the one that has always been here: on win32 `taskkill /t`
+     * on the spawn pid walks the tree and takes the server with it, on posix the
+     * `-pid` SIGTERM signals the group. The second exists because that is only true
+     * while the shell is alive — once it has exited, the tree kill reaches nothing
+     * and the server it launched is exactly the orphan genie#391 counted 151 of.
+     *
+     * Guarded on liveness, so an ordinary stop still issues ONE kill: the tree kill
+     * has already taken the server, `alive` says so, and nothing further is asked.
+     */
+    async function stopTracked(t: TrackedRun): Promise<void> {
+        try {
+            await stopHostSite(t.pid, prims);
+        } catch {
+            // best-effort — a dead process is already stopped.
+        }
+        const server = t.serverPid;
+        if (server === undefined || server === t.pid) return;
+        let survived = false;
+        try {
+            survived = hostSiteAlive(server, prims);
+        } catch {
+            survived = false;
+        }
+        if (!survived) return;
+        try {
+            await stopHostSite(server, prims);
+        } catch {
+            // best-effort, same as above.
+        }
+    }
 
     /** Persist the registry after every change. Best-effort: losing the FILE only
      *  costs the next process its re-attach, but throwing here would fail a start
@@ -121,7 +217,22 @@ export function createHostProcessRun(deps: HostProcessRunDeps): HostProcessRun {
                 const spec: HostSiteSpawnSpec = { command, cwd, env, logPath };
                 const pid = startHostSite(spec, prims);
                 tracked.set(siteId, { pid, logPath, ...(port ? { port } : {}) });
+                // Persisted BEFORE the port owner is resolved, so a Genie that dies
+                // during the resolve still records what the old code recorded.
                 save();
+                // …then learn which process actually bound the port, because on
+                // win32 the pid above is the shell's and the shell will not outlive
+                // this Genie (genie#391). Nothing to ask when the run has no port.
+                if (port) {
+                    const serverPid = await resolvePortOwner(port);
+                    const entry = tracked.get(siteId);
+                    // The run may have been stopped or replaced while we looked;
+                    // only write back to the one we actually started.
+                    if (serverPid !== null && entry && entry.pid === pid) {
+                        entry.serverPid = serverPid;
+                        save();
+                    }
+                }
                 return { ok: true, pid };
             } catch (e) {
                 return { ok: false, error: messageOf(e) };
@@ -130,11 +241,7 @@ export function createHostProcessRun(deps: HostProcessRunDeps): HostProcessRun {
         async stop(siteId) {
             const t = tracked.get(siteId);
             if (!t) return;
-            try {
-                await stopHostSite(t.pid, prims);
-            } catch {
-                // best-effort — a dead process is already stopped.
-            }
+            await stopTracked(t);
             tracked.delete(siteId);
             save();
         },
@@ -142,7 +249,7 @@ export function createHostProcessRun(deps: HostProcessRunDeps): HostProcessRun {
             const t = tracked.get(siteId);
             if (!t) return false;
             try {
-                return hostSiteAlive(t.pid, prims);
+                return hostSiteAlive(supervisedPid(t), prims);
             } catch {
                 return false;
             }
@@ -153,7 +260,11 @@ export function createHostProcessRun(deps: HostProcessRunDeps): HostProcessRun {
             for (const [siteId, t] of [...tracked]) {
                 let live = false;
                 try {
-                    live = hostSiteAlive(t.pid, prims);
+                    // The SERVER's liveness, not the shell's (genie#391). Asking the
+                    // shell is what dropped every record on win32 the moment Genie
+                    // restarted, so nothing was ever re-attached and the next start
+                    // spawned a duplicate beside a process still holding the port.
+                    live = hostSiteAlive(supervisedPid(t), prims);
                 } catch {
                     live = false;
                 }
@@ -216,6 +327,11 @@ function loadRegistry(
         out.set(siteId, {
             pid: entry.pid as number,
             logPath: entry.logPath,
+            // Absent in every record written before genie#391 — those keep working,
+            // they simply fall back to the spawn pid the way they always did.
+            ...(Number.isInteger(entry.serverPid) && (entry.serverPid as number) > 0
+                ? { serverPid: entry.serverPid as number }
+                : {}),
             ...(Number.isInteger(entry.port) ? { port: entry.port as number } : {}),
         });
     }
@@ -304,7 +420,86 @@ function realPrimitives(platform: NodeJS.Platform): HostSpawnPrimitives {
                 c.on('error', () => resolve());
             });
         },
+        async portOwnerPid(port) {
+            const [cmd, ...args] = portOwnerArgv(port, platform);
+            let out = '';
+            try {
+                out = await runCapturing(cmd, args);
+            } catch {
+                return null;
+            }
+            return parsePortOwner(out, port, platform);
+        },
     };
+}
+
+/**
+ * The command that names the process listening on a loopback port.
+ *
+ * `netstat -ano` on Windows rather than PowerShell's `Get-NetTCPConnection`: it is
+ * a single fast exe with no runtime to start, and it is present on every Windows
+ * this ships to. `lsof -t` on posix prints bare pids and nothing else.
+ *
+ * Exported for the parser's tests — the two have to agree about which tool's
+ * output is being read, and a parser tested against output no command produces is
+ * the weaker-question failure this repository keeps finding.
+ */
+export function portOwnerArgv(port: number, platform: NodeJS.Platform): string[] {
+    if (platform === 'win32') return ['netstat', '-ano', '-p', 'TCP'];
+    return ['lsof', '-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'];
+}
+
+/**
+ * PURE. The pid LISTENING on `port` in that command's output, or null.
+ *
+ * On win32 the whole table comes back and the LISTENING row for this exact port is
+ * picked here — matching on `:<port>` at the END of the local address, so port
+ * 5321 is never satisfied by 15321 or by a REMOTE address that happens to contain
+ * it. Only `LISTENING` rows count: an established connection TO the port names the
+ * client, which is emphatically not the server.
+ */
+export function parsePortOwner(
+    output: string,
+    port: number,
+    platform: NodeJS.Platform,
+): number | null {
+    if (platform !== 'win32') {
+        // `lsof -t`: bare pids, one per line. First is enough — a listening socket
+        // has one owner (pre-forked workers share it, and any of them answers the
+        // question "is this still up").
+        for (const line of output.split(/\r?\n/)) {
+            const pid = Number(line.trim());
+            if (Number.isInteger(pid) && pid > 0) return pid;
+        }
+        return null;
+    }
+    for (const line of output.split(/\r?\n/)) {
+        const cols = line.trim().split(/\s+/);
+        // Proto Local Foreign State PID — a LISTENING TCP row has exactly five.
+        if (cols.length < 5) continue;
+        const [proto, local, , state, pidText] = cols;
+        if (!/^TCP$/i.test(proto ?? '')) continue;
+        if ((state ?? '').toUpperCase() !== 'LISTENING') continue;
+        if (!(local ?? '').endsWith(`:${port}`)) continue;
+        const pid = Number(pidText);
+        if (Number.isInteger(pid) && pid > 0) return pid;
+    }
+    return null;
+}
+
+/** Run a command and return its stdout. Rejects on spawn failure; a non-zero exit
+ *  still resolves, because `netstat` and `lsof` both use it to mean "nothing
+ *  matched", which is a null answer rather than an error. */
+function runCapturing(cmd: string, args: string[]): Promise<string> {
+    return new Promise<string>((resolve, reject) => {
+        const child = spawn(cmd, args, { windowsHide: true });
+        let out = '';
+        child.stdout?.on('data', (chunk) => {
+            out += String(chunk);
+        });
+        child.on('error', reject);
+        child.on('close', () => resolve(out));
+    });
 }
 
 function realReadLogTail(path: string, tail: number): string {
