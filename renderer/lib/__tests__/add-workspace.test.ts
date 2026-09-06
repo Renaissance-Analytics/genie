@@ -180,7 +180,7 @@ describe('the Tynn link, and everything else that must never block', () => {
         );
 
         expect(plan).toMatchObject({
-            id: 'ws-1',
+            unlinkedId: 'ws-1',
             name: 'Acme Storefront',
             slug: 'acme-storefront',
             parentPath: 'D:/code',
@@ -191,16 +191,18 @@ describe('the Tynn link, and everything else that must never block', () => {
 
     /**
      * The Tynn project id becomes the workspace id when there is one — that is
-     * how every other surface finds the link. With no project, the caller's own
-     * id is used, which is the whole of what "Tynn is optional" costs.
+     * how every other surface finds the link. The plan does NOT decide that:
+     * it carries the link and a fallback id, and `createWorkspace` resolves the
+     * pair once (asserted in main/workspace/__tests__/add-workspace.test.ts).
+     * Resolving it in both places would be the same fact in two homes.
      */
-    it('uses the Tynn project id as the workspace id when a project is linked', () => {
+    it('carries the link and a fallback id, and resolves neither into the other', () => {
         const plan = addWorkspacePlan(
             addWorkspaceDraft({ source: 'tynn', project: TYNN_BARE }, ctx()),
             { id: 'generated-ulid' },
         );
 
-        expect(plan.id).toBe('proj-bare');
+        expect(plan.unlinkedId).toBe('generated-ulid');
         expect(plan.link).toMatchObject({
             projectId: 'proj-bare',
             projectName: 'Bare Project',

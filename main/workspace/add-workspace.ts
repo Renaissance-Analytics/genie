@@ -167,7 +167,9 @@ export async function createWorkspace(
     const projectId = plan.link?.projectId?.trim() ?? '';
     const register = deps.register ?? defaultRegister;
     return register({
-        id: plan.id,
+        // The linked project IS the identity. `unlinkedId` is consulted only
+        // when there is no project, so the two can never disagree.
+        id: projectId || plan.unlinkedId,
         backend: plan.link?.backend ?? 'tynn',
         project_id: projectId,
         project_name: plan.link?.projectName?.trim() || name,

@@ -478,7 +478,9 @@ export async function applyOpsProvision(
         try {
             const saved = await createWorkspace(
                 {
-                    id: t.projectId,
+                    // Every governed child HAS a project, so the link below is
+                    // what keys the workspace; this is never reached.
+                    unlinkedId: t.projectId,
                     name: t.name,
                     slug: t.slug,
                     parentPath,
