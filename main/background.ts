@@ -190,8 +190,10 @@ import {
     setDeferredAnswerSink,
     formatDeferredAnswer,
     rehydratePendingQuestions,
+    forceQuestionRefusal,
     type DeferredAnswerDelivery,
 } from './ask/force-question';
+import { resolveAskDeliverability } from './ask/deliverability';
 import { listAllProcesses } from './terminal/process-list';
 import { getTerminalSize, recordTerminalSize } from './terminal/size-tracker';
 import {
@@ -2022,17 +2024,29 @@ app.whenReady().then(async () => {
     // the inbox would spend the user's attention on an answer with nowhere to go.
     // Runs after setDeferredAnswerSink above, so a restored question can deliver.
     //
+    // It now runs the SAME function the ask gate does, rather than a second copy
+    // of an expression that agreed with it in prose only (genie#502). The copy
+    // asked whether a `workspace_agents` row named this terminal, so a row whose
+    // agent had since been re-bound to another terminal — or one that never had
+    // a row to begin with, like the workstation operator — was dropped here even
+    // though `deliverHumanMessageToTerminal` would have reached it. A drop is
+    // `forget(row.id)`: permanent, at boot, where nobody is watching.
+    //
     // Deliberately NOT wrapped in a try/catch. A throw here means "cannot tell",
     // and rehydrate keeps such a row for the next boot rather than deciding on a
     // failed lookup — swallowing it into `false` would delete a real pending
-    // question because a query happened to fail once.
-    rehydratePendingQuestions((terminalId) => {
-        const workspaceId = getTerminalSpec(terminalId)?.workspace_id ?? null;
-        return (
-            !!workspaceId &&
-            listWorkspaceAgents(workspaceId).some((a) => a.terminal_spec_id === terminalId)
-        );
-    });
+    // question because a query happened to fail once. (The ask gate's own catch
+    // stays there, where failing OPEN is the safe direction; it is not shared,
+    // because the two paths want opposite answers to "I could not tell".)
+    rehydratePendingQuestions(
+        (terminalId) =>
+            !forceQuestionRefusal(
+                resolveAskDeliverability(terminalId, {
+                    workspaceOfTerminal: (id) => getTerminalSpec(id)?.workspace_id ?? null,
+                    inboxIdentityFor: (id) => agentInboxBroker.agentIdForTerminal(id),
+                }),
+            ),
+    );
     // Wire the openFileForUser tool's renderer round-trip: resolve workspace +
     // path in main, then ask the master Floor to reuse/open an editor panel.
     registerOpenFile({

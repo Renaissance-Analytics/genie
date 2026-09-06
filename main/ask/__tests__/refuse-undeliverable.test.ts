@@ -15,12 +15,20 @@ import { forceQuestionRefusal } from '../force-question';
  * from the human and dropped (genie#321).
  *
  * Two callers hit this in one session:
- *   - the Genie OS agent, whose terminal has `workspace_id = NULL`, so every
- *     inbox-shaped surface already refuses it — `agentinbox` and
- *     `submitFeedback` both say so plainly. `ForceTheQuestion` was the one that
+ *   - the Genie OS agent, whose terminal had `workspace_id = NULL` at the time,
+ *     so every inbox-shaped surface already refused it — `agentinbox` and
+ *     `submitFeedback` both said so plainly. `ForceTheQuestion` was the one that
  *     did not, which is why it is the one that lost data.
  *   - a terminal a human started by hand and attached an agent to, which has a
  *     workspace but no agent identity to deliver to.
+ *
+ * ★ THE FIRST OF THOSE TWO IS NO LONGER TRUE, so do not read it as current. The
+ * operator has a real workspace row now (`__system__`, rooted at `~/.gosa`), and
+ * it holds a genuine AgentInbox identity — so it must be ACCEPTED here, not
+ * refused. It was refused anyway until genie#502, because the gate asked whether
+ * a `workspace_agents` row named its terminal, which is a row the operator is
+ * designed never to have. See `deliverability.test.ts`, which asserts the
+ * operator's own spec resolves as deliverable.
  *
  * From the user's side a dropped answer looks like the agent ignoring them.
  * A hard error at ASK time is strictly better: the agent finds out immediately,
