@@ -123,6 +123,13 @@ interface FakeHost {
     pushQuestionsChanged(payload: unknown): void;
     /** Host-side kill-switch toggle + `control:changed` push. */
     pushControl(locked: boolean): void;
+    /** Stop answering `/api/questions` — the GET hangs until released. Lets a
+     *  test put the read IN FLIGHT and change the world underneath it. */
+    holdQuestionReads(): void;
+    /** Answer every held `/api/questions` read (and stop holding new ones). */
+    releaseQuestionReads(): void;
+    /** Reads that have ARRIVED, held or not (`questionReads` counts completed). */
+    questionReadsStarted(): number;
     answerPosts(): { id: string; body: string }[];
     questionReads(): number;
     eventsSocketCount(): number;
@@ -134,6 +141,9 @@ function startFakeHost(): Promise<FakeHost> {
     let answerStatus = 200;
     let pending: HostQuestion[] = [];
     let reads = 0;
+    let readsStarted = 0;
+    let holdingReads = false;
+    const heldReads: Array<() => void> = [];
     const posts: { id: string; body: string }[] = [];
     const eventsSockets = new Set<WsServerSocket>();
     const wssEvents = new WebSocketServer({ noServer: true });
@@ -169,8 +179,13 @@ function startFakeHost(): Promise<FakeHost> {
             return;
         }
         if (url.pathname === '/api/questions' && req.method === 'GET') {
-            reads += 1;
-            json(res, 200, { questions: pending });
+            readsStarted += 1;
+            const respond = (): void => {
+                reads += 1;
+                json(res, 200, { questions: pending });
+            };
+            if (holdingReads) heldReads.push(respond);
+            else respond();
             return;
         }
         const answerMatch = /^\/api\/questions\/([^/]+)\/answer$/.exec(url.pathname);
@@ -230,6 +245,14 @@ function startFakeHost(): Promise<FakeHost> {
                     locked = l;
                     emit('control:changed', { locked: l });
                 },
+                holdQuestionReads: () => {
+                    holdingReads = true;
+                },
+                releaseQuestionReads: () => {
+                    holdingReads = false;
+                    while (heldReads.length) heldReads.shift()!();
+                },
+                questionReadsStarted: () => readsStarted,
                 answerPosts: () => posts,
                 questionReads: () => reads,
                 eventsSocketCount: () => eventsSockets.size,
@@ -387,11 +410,61 @@ describe('kill-switch — a locked host is not forwarded, and open modals retrac
 
         // A fresh host question arriving mid-lock must stay on the host, where
         // it can actually be answered.
+        const badgeBefore = sentTo('questions:changed').length;
         host.setQuestions([Q1, { id: 'hq-2', questions: [{ text: 'Deploy?' }] }]);
         host.pushQuestionChanged();
         await new Promise((r) => setTimeout(r, 80));
         expect(ask.raiseCount('hq-2')).toBe(0);
         expect(ask.open).toHaveLength(0);
+
+        // NOT interrupted is not the same as NOT TOLD. A view-only driver still
+        // watches the host work, and a question they cannot answer is still
+        // something they should be able to see arrive — so the badge nudge goes
+        // out even though the modal does not. Without this assertion "raises
+        // nothing" would also pass against a build that had gone silent about
+        // the host's questions altogether, which is a different product.
+        expect(sentTo('questions:changed').length).toBeGreaterThan(badgeBefore);
+    });
+
+    it('raises nothing when the lock engages while the questions read is IN FLIGHT', async () => {
+        // The check-then-act window. `syncForwardedQuestions` reads the lock,
+        // then awaits `/api/questions`, then raises — and the host takes control
+        // in between, which is exactly WHEN it takes control: the owner grabs the
+        // baton because they want to answer the question themselves.
+        //
+        // The retraction that runs on lock finds nothing open (the modal has not
+        // been raised yet), so it retracts nothing, and the read then resolves
+        // into a loop that raises an always-on-top modal, with a chime, for a
+        // driver who is now view-only and whose answer the host would 423.
+        await connect();
+        await vi.waitFor(() => expect(host.questionReads()).toBeGreaterThan(0));
+        ask.reset();
+
+        host.setQuestions([Q1]);
+        host.holdQuestionReads();
+        host.pushQuestionChanged();
+        // The read has ARRIVED at the host and is parked there — the sync is now
+        // committed past its lock check.
+        await vi.waitFor(() => expect(host.questionReadsStarted()).toBeGreaterThan(1));
+
+        host.pushControl(true);
+        await vi.waitFor(() =>
+            expect(sentTo('remote:control')).toContainEqual(
+                expect.objectContaining({ locked: true }),
+            ),
+        );
+
+        host.releaseQuestionReads();
+        await new Promise((r) => setTimeout(r, 80));
+
+        expect(ask.raiseCount('hq-1')).toBe(0);
+        expect(ask.open).toHaveLength(0);
+
+        // Positive control — the same question, same connection, raised the
+        // moment control comes back. Without this the assertion above would
+        // also pass against a harness that had simply stopped forwarding.
+        host.pushControl(false);
+        await vi.waitFor(() => expect(ask.raiseCount('hq-1')).toBe(1));
     });
 
     it('brings a still-pending question back when the host releases control', async () => {
