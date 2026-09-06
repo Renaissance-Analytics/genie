@@ -140,6 +140,69 @@ test('a project with NO repositories asks for nothing — no folder, no conversi
     await create('Create workspace', seed.barePath, seed.bareProjectId);
 });
 
+/**
+ * THE AGENTS AN IMPORT BRINGS (genie#459).
+ *
+ * The owner: *"If I import a project from tynn I need to be able to get an agent
+ * I've already created going, I should not have to create a new one."* The
+ * agents were never lost — `.agents/<slug>/AGENT.md` travels with the repo and
+ * `workspace_agents` does not — but nothing on screen said so, and the empty
+ * agent grid that followed offers exactly one thing: create a new agent, the act
+ * that discards the identity and the session.
+ *
+ * WHY E2E when the offer is unit-tested. The decision and the list are asserted
+ * directly (`renderer/lib/__tests__/imported-agents.test.ts`,
+ * `renderer/components/__tests__/imported-agents.test.ts`). What no unit test can
+ * answer is whether the modal STOPS for it, against a real clone of a repository
+ * that really carries the files — the same class of defect this spec already
+ * exists for: not a wrong rule, a component going somewhere else.
+ */
+test('an imported project offers the agents it brought, and adopting one leaves its file alone', async () => {
+    await addAnother();
+    await chooseProject(seed.agentsProjectId);
+
+    await page.getByRole('button', { name: 'Clone & add workspace' }).click();
+
+    // The step the import now ends on, and it counts what it found.
+    const offer = page.getByTestId('imported-agents');
+    await expect(offer).toBeVisible({ timeout: 60_000 });
+    await expect(offer).toContainText('2 agents');
+
+    const persona = path.join(seed.agentsPath, '.agents', 'relay', 'AGENT.md');
+    // The bytes AS THE CLONE LEFT THEM. git normalises line endings on checkout,
+    // so the committed text is not necessarily what is on disk — and the
+    // property under test is what ADOPTION does, for which this is the baseline.
+    const asCloned = fs.readFileSync(persona);
+    expect(
+        asCloned.toString('utf8').replace(/\r\n/g, '\n'),
+        'the baseline must be the author\'s own prompt, not an empty file any comparison would satisfy',
+    ).toBe(seed.handWrittenPersona);
+
+    // `skills/` holds no AGENT.md and is not an agent.
+    await expect(page.getByTestId('roster-ondisk-skills')).toHaveCount(0);
+
+    await page.getByTestId('roster-adopt-relay').click();
+
+    // REGISTERED, and startable — which is the whole request. The row moves out
+    // of the adoptable list and into the one with a Start button.
+    await expect(page.getByTestId('roster-start-relay')).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId('roster-adopt-relay')).toHaveCount(0);
+    // Still offered, not auto-adopted: the other file is untouched and waiting.
+    await expect(page.getByTestId('roster-adopt-scout')).toBeVisible();
+
+    expect(
+        fs.readFileSync(persona).equals(asCloned),
+        'adoption must never rewrite a persona — a re-render leaves a valid AGENT.md and deletes the author\'s prompt',
+    ).toBe(true);
+
+    // And the workspace still opens from here, carrying what it made.
+    await page.getByRole('button', { name: 'Open workspace' }).click();
+    const added = page.locator('[data-testid="workspace-added"]');
+    await expect(added).toBeVisible({ timeout: 60_000 });
+    await expect(added).toHaveAttribute('data-project', seed.agentsProjectId);
+    await expect(added).toHaveAttribute('data-path', seed.agentsPath);
+});
+
 test('the workspace it made for the empty project is a real one on disk', async () => {
     // A registered row pointing at nothing would satisfy every DOM assertion
     // above. Read from the spec process — Playwright drives Electron on THIS

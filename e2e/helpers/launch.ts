@@ -616,6 +616,9 @@ export interface TynnImportSeed {
     envelopePath: string;
     plainPath: string;
     barePath: string;
+    agentsProjectId: string;
+    agentsPath: string;
+    handWrittenPersona: string;
 }
 
 /**
