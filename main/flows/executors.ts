@@ -23,8 +23,28 @@
  *    kind nobody has considered is refused by construction rather than by
  *    whoever adds it remembering to.
  *
- * `NodeKindDefinition` also carries an optional `executor`, and `runFlow` never
- * consults it (verified). So registering a kind cannot widen the door either.
+ * ## Registering a kind cannot widen the door — but the reason CHANGED at 0.66.0
+ *
+ * This used to read: *"`NodeKindDefinition` also carries an optional `executor`,
+ * and `runFlow` never consults it (verified)."* **That was true through 0.65.2
+ * and is false now.** fancy-flow 0.66.0 gave `branch`, `transform`, `merge` and
+ * `for_each` default executors on the kind, and taught `pickExecutor` to fall
+ * back to one:
+ *
+ *     for (const id of executorLookupIds(node)) if (executors[id]) return executors[id];
+ *     return getNodeKind(node.type ?? '')?.executor;      // ← new in 0.66.0
+ *
+ * The conclusion survives, on a different footing. `executorLookupIds` ends in
+ * `"*"`, and the registry below is wildcard-only, so the door is hit for EVERY
+ * node and the fallback is unreachable. That is now the whole of what keeps a
+ * registered kind from running its own code — which makes the wildcard
+ * load-bearing rather than merely tidy, and is why removing it would not fail
+ * loudly. Genie's executors are stricter than the new defaults, not equivalent
+ * to them: `for_each` is refused outright where the default succeeds, and an
+ * unresolved path throws where the default yields nothing. So a silent handover
+ * would keep the flows running and change what they mean.
+ *
+ * `executors.test.ts` pins it by behaviour rather than by this paragraph.
  *
  * ## The rule that lives here
  *

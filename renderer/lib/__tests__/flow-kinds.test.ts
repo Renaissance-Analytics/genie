@@ -5,7 +5,8 @@ import { getNodeKind, listNodeKinds } from '@particle-academy/fancy-flow/engine'
 // is what the CANVAS uses, and "is it in the registry" is a weaker question
 // than "will the canvas draw it as a Fancy node".
 import { buildNodeTypes } from '@particle-academy/fancy-flow/registry';
-import { registerFlowKinds, type FlowNodeDefinitionView } from '../flow-kinds';
+import { paletteKindFilter, registerFlowKinds, type FlowNodeDefinitionView } from '../flow-kinds';
+import { PAUSES_WITHOUT_RESUME } from '../../../main/flows/pauses';
 
 /**
  * Putting Genie's steps on the canvas.
@@ -101,5 +102,76 @@ describe('registering the palette a window may author with', () => {
         const before = listNodeKinds().length;
         register([]);
         expect(listNodeKinds().length).toBe(before);
+    });
+});
+
+/**
+ * What the palette does NOT offer.
+ *
+ * fancy-flow's three human-pause kinds park a run by aborting with a structured
+ * token that a host resumes from by replaying with `resumeOutputs`. Genie
+ * decodes the token and does not yet resume, so a flow containing one can be
+ * drawn, armed, and then hang for good with nothing saying why.
+ *
+ * Until 0.66.0 there was nothing to be done about it here: `<FlowEditor>`
+ * narrowed its palette by CATEGORY and not by kind, so a host could not offer a
+ * subset, and the only workaround was re-categorising Genie's own nodes until a
+ * category filter happened to exclude fancy's — distorting the taxonomy to hide
+ * a gap. That was filed upstream instead, and 0.66.0 answers it with
+ * `kindFilter`.
+ *
+ * So the trap is now closed at the palette. **The refusals stay**, and these
+ * tests are not their replacement: a filter is presentation and cannot see a
+ * graph that arrives by another door — hand-authored, imported, or written by an
+ * agent through `manageFlows`. See `main/flows/__tests__/authority.test.ts` and
+ * `mcp.test.ts` for the doors themselves.
+ */
+describe('the palette hides the steps Genie cannot resume', () => {
+    it.each([...PAUSES_WITHOUT_RESUME])('hides %s', (name) => {
+        const kind = getNodeKind(name);
+        // A positive control on the INPUT. "The filter hides it" passes just as
+        // well against a kind that is not registered at all, so a rename
+        // upstream has to fail HERE — where it means "the list is stale" —
+        // rather than silently downgrading every assertion below to a tautology.
+        expect(kind, `${name} is not a registered kind any more`).not.toBeNull();
+        expect(paletteKindFilter({ kind: kind! })).toBe(false);
+    });
+
+    it('keeps the logic steps sitting beside them', () => {
+        // Without this, a filter that hid EVERYTHING would pass the above.
+        for (const name of [
+            '@particle-academy/branch',
+            '@particle-academy/merge',
+            '@particle-academy/output',
+        ]) {
+            expect(paletteKindFilter({ kind: getNodeKind(name)! })).toBe(true);
+        }
+    });
+
+    it('keeps Genie’s own steps', () => {
+        register([def('@genie/testPalette')]);
+
+        expect(paletteKindFilter({ kind: getNodeKind('@genie/testPalette')! })).toBe(true);
+    });
+
+    it('hides EXACTLY what the refusals refuse, over the whole real registry', () => {
+        // The point of the test, and the reason it sweeps the registry rather
+        // than naming three kinds: the palette and the refusals must be driven
+        // by ONE list. Add a fourth pause kind to `PAUSES_WITHOUT_RESUME` and
+        // the palette hides it with no second edit; write a second list here and
+        // the two drift, which is exactly how two disagreeing copies of
+        // `HOST_SOURCED_SETTINGS_KEYS` shipped in this repo.
+        //
+        // `k` is annotated because the ROOT tsconfig resolves with
+        // `moduleResolution: "node"` and cannot read this package's `exports`
+        // map, so `listNodeKinds()` degrades to `any` there and the callbacks
+        // become implicit-any errors. The renderer's own lane infers it fine;
+        // this just keeps the root lane's count honest.
+        const hidden = listNodeKinds()
+            .filter((k: { name: string }) => !paletteKindFilter({ kind: k }))
+            .map((k: { name: string }) => k.name)
+            .sort();
+
+        expect(hidden).toEqual([...PAUSES_WITHOUT_RESUME].sort());
     });
 });

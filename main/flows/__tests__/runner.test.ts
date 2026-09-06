@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { runStoredFlow, type FlowRunnerDeps } from '../runner';
 import type { AppGrant } from '../../apps/bridge-decision';
 import type { FlowRow } from '../store';
+import { PAUSES_WITHOUT_RESUME } from '../pauses';
 
 /**
  * Load, judge, then run — and never in a different order.
@@ -193,5 +194,48 @@ describe('the event feed', () => {
         );
 
         expect(events).toEqual([]);
+    });
+});
+
+/**
+ * The third door: a stored flow that already contains a pause step.
+ *
+ * The palette stopped offering these when fancy-flow 0.66.0's `kindFilter`
+ * landed, but a flow written before that, imported, or authored by an agent is
+ * still sitting in the database — and this is where it would finally run. A
+ * refusal at admission and at save that let the RUN through would be the worst
+ * of the three to lose: it is the one where the hang actually happens.
+ */
+describe('a stored flow with a step that would park a run', () => {
+    const withPause = (kind: string) =>
+        flow({
+            graph: {
+                nodes: [
+                    {
+                        id: 't',
+                        type: '@particle-academy/manual_trigger',
+                        data: { kind: '@particle-academy/manual_trigger', config: {} },
+                    },
+                    { id: 'h', type: kind, data: { kind, config: {} } },
+                ],
+                edges: [{ id: 'e', source: 't', target: 'h' }],
+            } as never,
+        });
+
+    it.each([...PAUSES_WITHOUT_RESUME])('is refused before anything runs (%s)', async (kind) => {
+        const d = deps({ loadFlow: () => withPause(kind) });
+        const out = await runStoredFlow('f1', MANUAL, d);
+
+        expect(out.ok).toBe(false);
+        expect(out.refusals?.[0]?.nodeId).toBe('h');
+        expect(out.refusals?.[0]?.reason).toMatch(/cannot resume a paused flow/);
+        // The point: it never started, so there is no half-done automation and
+        // nothing waiting on an answer that will never come.
+        expect(d.dispatch).not.toHaveBeenCalled();
+    });
+
+    it('CONTROL: the same runner still runs the flow beside it', async () => {
+        // Without this, a runner that refused everything would pass the above.
+        expect((await runStoredFlow('f1', MANUAL, deps())).ok).toBe(true);
     });
 });

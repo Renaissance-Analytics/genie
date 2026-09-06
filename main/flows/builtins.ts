@@ -46,6 +46,9 @@ import {
     evaluateExpression,
     truthy,
 } from '@particle-academy/fancy-flow/engine';
+// The steps that would park a run, and the sentence that says so. They live in
+// their own LEAF module because the palette reads them too — see `pauses.ts`.
+import { PAUSES_WITHOUT_RESUME, PAUSE_UNSUPPORTED } from './pauses';
 
 /** The ctx `runFlow` hands an executor, narrowed to what Genie reads. */
 export interface BuiltinCtx {
@@ -408,43 +411,6 @@ const trigger: BuiltinExecutor = (ctx) => {
     return { ...cfg, ...ctx.inputs };
 };
 
-/* ===== the ones that would park a run Genie cannot resume ================= */
-
-/**
- * fancy-flow's human nodes, and why Genie refuses them TODAY.
- *
- * They pause by aborting with a structured token (`fancy-flow:pause:{…}`), which
- * the host is meant to decode, ask a person, and then resume from by replaying
- * the run with `resumeOutputs` — republishing every node that already ran rather
- * than running it again. Genie decodes the token. **It does not yet resume.**
- *
- * So a flow containing one can be drawn, armed, and then hang forever, with
- * nothing anywhere saying the step it waits on can never complete. That is worse
- * than a missing feature: it looks like it works. Until the resume exists, these
- * are refused — loudly, at admission (so the canvas says it while the author is
- * still drawing), at save, and at run.
- *
- * They remain VISIBLE in the palette, and that is not a decision Genie gets to
- * make: `<FlowEditor>` narrows its palette by node CATEGORY and not by kind, so
- * a host cannot offer a subset. Filed upstream. The available workaround —
- * re-categorising Genie's own nodes so a category filter could exclude fancy's —
- * would distort the taxonomy to hide a gap, which is the shape of thing this
- * codebase does not do.
- *
- * `@genie/ForceTheQuestion` is deliberately NOT in here. It asks and returns
- * immediately; the answer arrives later through AgentInbox. It never parks a
- * run, so it is the one way a flow can involve a person today.
- */
-export const PAUSES_WITHOUT_RESUME: ReadonlySet<string> = new Set([
-    '@particle-academy/human_approval',
-    '@particle-academy/user_input',
-    '@particle-academy/rich_user_input',
-]);
-
-/** The one sentence, shared by admission and the door so they cannot diverge. */
-export const PAUSE_UNSUPPORTED =
-    'it waits for a person, and Genie cannot resume a paused flow yet — so this step would stop the run for good rather than continuing after an answer. Ask with the “Force the question” step instead, which returns straight away.';
-
 /* ===== the ones Genie refuses ============================================ */
 
 /**
@@ -473,6 +439,26 @@ const REFUSALS: Readonly<Record<string, string>> = {
         'Genie runs a graph once through, so it cannot yet repeat the steps after this one per item. Fan out with a Run Agent step, or handle the list in one step.',
     webhook_trigger:
         'Genie has nowhere for an inbound request to land yet, so this flow will only run when started by hand or by another trigger.',
+    // Arrived in the palette with fancy-flow 0.66.0, in the `io` category right
+    // beside Genie's own steps. They drive a pty through the package's new
+    // `TerminalHost` capability, and nothing calls `registerTerminalHost` here —
+    // so today they would fail whatever this table said.
+    //
+    // Worth stating plainly, because the gap is small: 0.66.0 also ships
+    // `@particle-academy/fancy-flow/terminal/fancy-term-host`, an adapter whose
+    // own docs describe its intended consumer as "a desktop app that has already
+    // wired `fancy-term-host` and holds a live backend", verified against
+    // `fancy-term-host@0.5.0` — which is exactly the package and major Genie
+    // pins for its terminals. Wiring it is a decision about whose terminals a
+    // flow gets to drive and who sees them, and nobody has made it. So these say
+    // "not yet", not "never", and point at the step that works today.
+    terminal_run:
+        'Genie has not wired a terminal for flows to drive yet, so this step has nothing to run in. Use the Manage Terminals step, which works in a real Genie terminal you can watch and take over.',
+    terminal_send: 'it types into a terminal a flow cannot open yet. See “Run in terminal” — the same reason.',
+    terminal_await: 'it waits on a terminal a flow cannot open yet. See “Run in terminal” — the same reason.',
+    // `terminal_lane` is deliberately absent: it is a `layout` kind, and the
+    // engine skips that whole category before an executor is chosen, so a
+    // refusal here could never fire. Pinned by a test rather than trusted.
 };
 
 /* ===== the table ========================================================= */
@@ -496,7 +482,7 @@ const IMPLEMENTED: Readonly<Record<string, BuiltinExecutor>> = {
     '@particle-academy/wait': wait,
     '@particle-academy/log': log,
     '@particle-academy/output': output,
-    // The human-pause kinds are deliberately absent — see PAUSES_WITHOUT_RESUME.
+    // The human-pause kinds are deliberately absent — see `pauses.ts`.
 };
 
 /** The executor for a fancy builtin, or null when it is not one Genie runs. */

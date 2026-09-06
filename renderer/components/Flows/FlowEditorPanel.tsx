@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { FlowEditor } from '@particle-academy/fancy-flow';
 import '@particle-academy/fancy-flow/styles.css';
-import { registerFlowKinds } from '../../lib/flow-kinds';
+import { paletteKindFilter, registerFlowKinds } from '../../lib/flow-kinds';
 import type { FlowAdmissionView, FlowRunOutcomeView, FlowScope } from '../../lib/genie';
 
 /**
@@ -72,10 +72,14 @@ export default function FlowEditorPanel({ flowId, scope }: Props) {
     /**
      * Register the steps this app may author with, then let the canvas mount.
      *
-     * The set registered IS the palette: fancy-flow narrows a palette by
-     * category, not by kind, and a GApp window is its own renderer process
-     * acting for one app — so registering only what the grant covers means the
-     * canvas cannot offer a step certain to be refused at run time.
+     * The set registered IS the palette, for Genie's own steps: a GApp window is
+     * its own renderer process acting for one app, so registering only what the
+     * grant covers means the canvas cannot offer a Genie step certain to be
+     * refused at run time.
+     *
+     * Fancy's own builtins are not Genie's to withhold — the package registers
+     * them itself — so the one that must not be offered is hidden at render
+     * time instead, by `kindFilter` on the editor below.
      */
     useEffect(() => {
         let undo: (() => void) | null = null;
@@ -254,6 +258,13 @@ export default function FlowEditorPanel({ flowId, scope }: Props) {
                     // No `executors` prop, and the built-in Run is off — see the
                     // note at the top. Running belongs to the main process.
                     builtins={{ run: false }}
+                    // Hides the steps that would park a run Genie cannot
+                    // resume. It removes the TRAP — you cannot drag on a node
+                    // that will hang. It is NOT the enforcement: the refusals at
+                    // admission, save and run stay, because a graph can arrive
+                    // hand-authored, imported, or from an agent, and this filter
+                    // never sees one that did.
+                    kindFilter={paletteKindFilter}
                     actions={[
                         {
                             id: 'genie-run',

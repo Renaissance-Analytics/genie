@@ -905,5 +905,50 @@ test('the canvas offers Genie’s OWN steps, not just fancy-flow’s builtins', 
 
     await page.locator('.flowmgr-canvas-close').click();
     await page.keyboard.press('Escape');
+    await expect(flowsRoot()).not.toHaveClass(/open/);
+});
+
+test('the palette does not offer a step that would hang the run — not even via search', async () => {
+    // The other half of the palette story, and the half only an E2E can answer.
+    //
+    // Three of fancy-flow's kinds park a run by aborting with a resume token
+    // Genie cannot yet act on, so a flow containing one can be drawn, armed, and
+    // then hang for good with nothing saying why. Genie refuses them at
+    // admission, at save and at run — all three covered by unit tests — but
+    // until fancy-flow 0.66.0 there was no way to stop somebody DRAWING one.
+    // `kindFilter` is that way, and whether the prop is actually wired to the
+    // editor is not a question `main/` can answer about itself.
+    await setFlowsRunning([]);
+    await openFlows();
+    await flowRow('Tidy the workspace').getByRole('button', { name: /Edit/ }).click();
+
+    const canvas = page.locator('[role="dialog"] .flowmgr-canvas-body');
+    await expect(canvas.locator('.react-flow')).toBeVisible();
+    const palette = canvas.locator('.ff-palette');
+    const rows = palette.locator('.ff-palette__row');
+
+    // POSITIVE CONTROL, first: an empty or unrendered palette would satisfy
+    // every absence assertion below without the filter existing at all.
+    await expect(rows.filter({ hasText: 'Branch' }).first()).toBeVisible();
+
+    for (const label of ['Human Approval', 'Rich User Input', 'User Input']) {
+        await expect(rows.filter({ hasText: label })).toHaveCount(0);
+    }
+
+    // `kindFilter` runs BEFORE the palette's search box — it filters the full
+    // list, and the query narrows what is left. A filter applied the other way
+    // round would look identical until somebody typed the name, so this is the
+    // assertion that tells the two apart.
+    const search = palette.getByPlaceholder(/Search nodes/i);
+    await search.fill('human approval');
+    await expect(rows.filter({ hasText: /Human Approval/i })).toHaveCount(0);
+
+    // ...and the search box itself still works, so the count above is a hidden
+    // kind rather than a query that matches nothing.
+    await search.fill('branch');
+    await expect(rows.filter({ hasText: 'Branch' }).first()).toBeVisible();
+
+    await page.locator('.flowmgr-canvas-close').click();
+    await page.keyboard.press('Escape');
     await expect(flowsRoot()).not.toHaveClass(/open/);
 });
