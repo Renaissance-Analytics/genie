@@ -1,6 +1,7 @@
 import { broadcastLocal } from '../remote';
 import { mobileEmit } from '../mobile/server';
 import { broadcastTerminalAttention } from '../terminal/ipc';
+import { agentPulse } from '../terminal/agent-pulse';
 import { agentInboxBroker } from './broker';
 import type { AgentInboxBrokerEvent } from './types';
 
@@ -14,6 +15,12 @@ import type { AgentInboxBrokerEvent } from './types';
  *   - presence  → `agentInbox:presence` carrying the full {@link AgentInboxAgentInfo}.
  *   - offline   → `agentInbox:presence` carrying `{ agentId, status:'offline', left }`.
  *   - message   → `agentInbox:message` carrying a preview (never the full stream).
+ *   - lifecycle → an AgentPulse marker on the workspace row (delivered / checked
+ *                 / replied). NOT its own broadcast: it rides the `agent-pulse`
+ *                 event, which is already in PASSTHROUGH_EVENTS, so a remote
+ *                 window shows the HOST's inbox activity for free. A second
+ *                 channel would need its own passthrough entry and its own
+ *                 mobileEmit — two things to keep in step for no gain.
  *   - interrupt → the target terminal's attention glow (an `interrupt` DM is the
  *                 only sanctioned nudge; it never writes into the pty).
  *
@@ -35,6 +42,11 @@ export function installAgentInboxPresence(): void {
             case 'message':
                 broadcastLocal('agentinbox:message', ev.preview);
                 mobileEmit('agentinbox:message', ev.preview);
+                break;
+            case 'lifecycle':
+                // The pulse fans this out itself (broadcastLocal + mobileEmit on
+                // `agent-pulse`), so there is deliberately no broadcast here.
+                agentPulse.mark(ev.moment.workspaceId, ev.moment.kind);
                 break;
             case 'interrupt':
                 // Nudge only — glow the recipient's terminal so it's noticed; never

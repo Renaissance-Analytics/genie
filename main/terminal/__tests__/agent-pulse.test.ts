@@ -5,6 +5,8 @@ import {
     AGENT_WORK_WINDOW_MS,
     BUCKET_COUNT,
     COALESCE_MS,
+    BUCKET_MS,
+    type AgentPulseMarkerKind,
 } from '../agent-pulse';
 
 /**
@@ -206,5 +208,128 @@ describe('AgentPulse — mid-turn agents glow independent of byte output', () =>
         }
         expect(ap.isActive('ws1')).toBe(true);
         expect(events.some((e) => !e.active)).toBe(false);
+    });
+});
+
+/**
+ * INBOX-LIFECYCLE MARKERS (genie#450 follow-on).
+ *
+ * The sparkline draws pty BYTES. Every moment these markers describe — a message
+ * delivered, an inbox read, a reply, a question raised, a flow run by hand —
+ * happens with ZERO bytes: they are broker events and MCP calls, not terminal
+ * output. So the marker layer is a second, independent signal on the same 60×1s
+ * cadence, and the tests below pin the two properties that follow from that:
+ *
+ *   1. a marker emits and survives in the ring even when no byte ever arrives; and
+ *   2. nothing is silently dropped when several land in one second — the bucket
+ *      COUNTS per kind, so a collapsed glyph can still say how many it stands for.
+ */
+describe('AgentPulse inbox-lifecycle markers', () => {
+    let clock = 0;
+    const now = () => clock;
+    let ap: AgentPulse;
+    let events: {
+        workspaceId: string;
+        active: boolean;
+        bytes: number;
+        markers?: AgentPulseMarkerKind[];
+    }[];
+
+    beforeEach(() => {
+        vi.useFakeTimers();
+        clock = 1_000_000;
+        ap = new AgentPulse(now);
+        events = [];
+        ap.setEmitter((e) => events.push(e));
+    });
+    afterEach(() => {
+        ap._reset();
+        vi.useRealTimers();
+    });
+
+    /** The newest cadence slot — index 59, "the current second". */
+    const newest = <T,>(ring: T[]): T => ring[ring.length - 1]!;
+
+    it('emits a marker on a workspace with NO byte activity at all', () => {
+        ap.mark('ws1', 'delivered');
+        expect(events).toEqual([
+            { workspaceId: 'ws1', active: false, bytes: 0, markers: ['delivered'] },
+        ]);
+    });
+
+    it('lands the marker in the CURRENT cadence slot of the snapshot ring', () => {
+        ap.mark('ws1', 'delivered');
+        const { markers } = ap.snapshotAll();
+        expect(markers.ws1).toHaveLength(BUCKET_COUNT);
+        expect(newest(markers.ws1!)).toEqual({ delivered: 1 });
+    });
+
+    it('keeps a byte-free workspace OUT of the byte ring, so the two signals stay independent', () => {
+        ap.mark('ws1', 'question');
+        const { pulses } = ap.snapshotAll();
+        // The pulse ring exists but is flat — this is the case the renderer must
+        // still draw, and the reason the sparkline's `max <= 0` early-out cannot
+        // be allowed to suppress a slot that has markers.
+        expect(pulses.ws1?.every((v) => v === 0)).toBe(true);
+    });
+
+    it('COUNTS repeats of one kind in the same second rather than overwriting', () => {
+        ap.mark('ws1', 'delivered');
+        ap.mark('ws1', 'delivered');
+        ap.mark('ws1', 'delivered');
+        expect(newest(ap.snapshotAll().markers.ws1!)).toEqual({ delivered: 3 });
+    });
+
+    it('holds several KINDS in one second side by side', () => {
+        ap.mark('ws1', 'delivered');
+        ap.mark('ws1', 'checked');
+        ap.mark('ws1', 'replied');
+        expect(newest(ap.snapshotAll().markers.ws1!)).toEqual({
+            delivered: 1,
+            checked: 1,
+            replied: 1,
+        });
+    });
+
+    it('separates markers into their own second as the clock advances', () => {
+        ap.mark('ws1', 'delivered');
+        clock += 2 * BUCKET_MS;
+        ap.mark('ws1', 'checked');
+        const ring = ap.snapshotAll().markers.ws1!;
+        expect(newest(ring)).toEqual({ checked: 1 });
+        expect(ring[ring.length - 3]).toEqual({ delivered: 1 });
+    });
+
+    it('prunes a marker out of the ring once it leaves the 60s window', () => {
+        ap.mark('ws1', 'delivered');
+        clock += (BUCKET_COUNT + 5) * BUCKET_MS;
+        ap.mark('ws1', 'checked');
+        const ring = ap.snapshotAll().markers.ws1!;
+        expect(ring.filter(Boolean)).toEqual([{ checked: 1 }]);
+    });
+
+    it('OMITS `markers` from a byte-only event, so the wire shape is unchanged', () => {
+        // Positive control for the omission: the marker event above proves the
+        // field can be present, so an absent one here is a real distinction and
+        // not a field that never populates.
+        ap.note('ws1', 100);
+        expect(events).toEqual([{ workspaceId: 'ws1', active: true, bytes: 100 }]);
+        expect('markers' in events[0]!).toBe(false);
+    });
+
+    it('carries every marker since the last emit, in order, when they coalesce', () => {
+        ap.mark('ws1', 'delivered');
+        events.length = 0;
+        // Inside the coalesce window: these ride one trailing emit rather than
+        // three, and NONE of them may be dropped on the way.
+        ap.mark('ws1', 'checked');
+        ap.mark('ws1', 'replied');
+        vi.advanceTimersByTime(COALESCE_MS + 10);
+        const carried = events.flatMap((e) => e.markers ?? []);
+        expect(carried).toEqual(['checked', 'replied']);
+    });
+
+    it('reports an unknown workspace as having no markers rather than throwing', () => {
+        expect(ap.snapshotAll().markers.nope).toBeUndefined();
     });
 });

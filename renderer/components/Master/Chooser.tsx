@@ -7,6 +7,8 @@ import {
     clampPopoverToViewport,
 } from '../../lib/anchored-popover';
 import { pickPath } from '../FilePickerModal';
+import { AgentPulse } from './AgentPulse';
+import type { AgentPulseMarkerBucket } from '../../../main/terminal/agent-pulse';
 import { Input, Select } from '@particle-academy/react-fancy';
 import {
     IconAlert,
@@ -676,6 +678,11 @@ export default function Chooser({
     // rings go quiet (no idle polling — it restarts on the next pulse).
     const [activeWs, setActiveWs] = useState<Set<string>>(() => new Set());
     const pulseRings = useRef<Map<string, number[]>>(new Map());
+    /** The MARKER ring, shifted in lockstep with `pulseRings` above. A parallel
+     *  map rather than a field on the byte ring because the two are independent
+     *  signals: a workspace routinely has markers and no bytes (every inbox
+     *  moment produces none), and less often bytes and no markers. */
+    const markerRings = useRef<Map<string, (AgentPulseMarkerBucket | null)[]>>(new Map());
     const [, setPulseTick] = useState(0);
     const pulseTimer = useRef<ReturnType<typeof setInterval> | null>(null);
     useEffect(() => {
@@ -695,6 +702,17 @@ export default function Chooser({
                     ring.push(0);
                     if (!anyData && ring.some((v) => v > 0)) anyData = true;
                 }
+                // Markers age on the SAME tick, and count toward `anyData`.
+                // Without that second half the timer would self-suspend on a
+                // workspace whose only activity is markers -- every inbox moment
+                // produces zero bytes -- and the glyphs would then sit frozen
+                // where they were last shifted, drifting further from the second
+                // they actually happened with every tick that did not run.
+                for (const ring of markerRings.current.values()) {
+                    ring.shift();
+                    ring.push(null);
+                    if (!anyData && ring.some((slot) => !!slot)) anyData = true;
+                }
                 bump();
                 if (!anyData) stopTimer();
             }, 1000);
@@ -703,19 +721,27 @@ export default function Chooser({
         let cancelled = false;
         void api()
             .agentPulse.snapshot()
-            .then(({ pulses }) => {
+            .then(({ pulses, markers }) => {
                 if (cancelled) return;
                 let any = false;
                 for (const [wsId, arr] of Object.entries(pulses)) {
                     pulseRings.current.set(wsId, arr.slice(-60));
                     if (arr.some((v) => v > 0)) any = true;
                 }
+                // The marker backfill. A push reaches only windows that were
+                // already open and nothing replays one, so without this a window
+                // opened a moment after a delivery shows a minute that looks
+                // empty and was not (the genie#493 shape, from the other side).
+                for (const [wsId, arr] of Object.entries(markers ?? {})) {
+                    markerRings.current.set(wsId, arr.slice(-60));
+                    if (arr.some((slot) => !!slot)) any = true;
+                }
                 bump();
                 if (any) ensureTimer();
             })
             .catch(() => {});
 
-        const off = api().on.agentPulse(({ workspaceId, active, bytes }) => {
+        const off = api().on.agentPulse(({ workspaceId, active, bytes, markers }) => {
             if (!workspaceId) return;
             setActiveWs((prev) => {
                 if (active === prev.has(workspaceId)) return prev;
@@ -731,6 +757,22 @@ export default function Chooser({
                     pulseRings.current.set(workspaceId, ring);
                 }
                 ring[ring.length - 1] += bytes;
+                bump();
+                ensureTimer();
+            }
+            if (markers?.length) {
+                let ring = markerRings.current.get(workspaceId);
+                if (!ring) {
+                    ring = new Array<AgentPulseMarkerBucket | null>(60).fill(null);
+                    markerRings.current.set(workspaceId, ring);
+                }
+                // Into the NEWEST slot, exactly as bytes go, so a marker sits at
+                // the second it arrived. COUNTED rather than flagged: two
+                // deliveries in one second draw one diamond, and the count is
+                // what stops the second being lost rather than merely undrawn.
+                const slot = { ...(ring[ring.length - 1] ?? {}) };
+                for (const kind of markers) slot[kind] = (slot[kind] ?? 0) + 1;
+                ring[ring.length - 1] = slot;
                 bump();
                 ensureTimer();
             }
@@ -1319,8 +1361,9 @@ export default function Chooser({
                                     {pendingNudgeWorkspaceIds.has(ws.id) ? (
                                         <AgentNudgeQuestions />
                                     ) : collapsed ? (
-                                        <AgentPulseSparkline
+                                        <AgentPulse
                                             ring={pulseRings.current.get(ws.id)}
+                                            markers={markerRings.current.get(ws.id)}
                                             active={activeWs.has(ws.id)}
                                         />
                                     ) : null}
@@ -2952,36 +2995,6 @@ function WorkspaceRuntimePill({
                 overlayRoot,
             )}
         </>
-    );
-}
-
-function AgentPulseSparkline({ ring, active }: { ring?: number[]; active: boolean }) {
-    if (!ring || ring.length === 0) return null;
-    const max = Math.max(...ring);
-    if (max <= 0) return null;
-
-    const w = 100;
-    const h = 100;
-    const n = ring.length;
-    const step = n > 1 ? w / (n - 1) : w;
-    const pts = ring.map((v, i) => {
-        const x = i * step;
-        const y = h - (v / max) * (h - 6) - 3;
-        return `${x.toFixed(2)},${y.toFixed(2)}`;
-    });
-    const line = pts.join(' ');
-    const area = `0,${h} ${line} ${w},${h}`;
-
-    return (
-        <svg
-            className={`agent-pulse-spark${active ? ' active' : ''}`}
-            viewBox={`0 0 ${w} ${h}`}
-            preserveAspectRatio="none"
-            aria-hidden="true"
-        >
-            <polygon className="aps-fill" points={area} />
-            <polyline className="aps-line" points={line} />
-        </svg>
     );
 }
 

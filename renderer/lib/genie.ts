@@ -8,6 +8,10 @@ import type { BoardRead, ReviewOutcome } from './artboard-model';
 
 import { makeRemoteBridge } from './remote-bridge';
 import type { TynnHealth } from '../../main/mcp/tynn-health';
+import type {
+    AgentPulseMarkerBucket,
+    AgentPulseMarkerKind,
+} from '../../main/terminal/agent-pulse';
 import type { AddWorkspacePlan } from '../../main/workspace/add-workspace-types';
 import type { DrainSnapshot } from '../../main/agents/drain';
 import type { AgentTuiId, TuiDef } from '../../main/agents/registry';
@@ -4027,9 +4031,14 @@ export interface GenieApi {
      * `on.agentInboxPresence` / `on.agentInboxMessage`.
      */
     agentPulse: {
-        /** Last-60s per-workspace byte buckets (index 0 = 59s ago … 59 = now),
-         *  fetched once when the workspace menu opens to backfill each sparkline. */
-        snapshot: () => Promise<{ pulses: Record<string, number[]> }>;
+        /** Last-60s per-workspace byte buckets AND marker slots (index 0 = 59s
+         *  ago … 59 = now), fetched once when the workspace menu opens. Both
+         *  halves matter: an `agent-pulse` push has no persistence, so a marker
+         *  that landed before this window opened exists only here. */
+        snapshot: () => Promise<{
+            pulses: Record<string, number[]>;
+            markers: Record<string, (AgentPulseMarkerBucket | null)[]>;
+        }>;
     };
     /** PendingQuestions inbox — the top-bar question icon's grouped list + answers. */
     questions: {
@@ -4572,7 +4581,14 @@ export interface GenieApi {
          *  the rail-icon glow; `bytes` (since the last emit) feeds the live
          *  1-minute sparkline. */
         agentPulse: (
-            cb: (payload: { workspaceId: string; active: boolean; bytes: number }) => void,
+            cb: (payload: {
+                workspaceId: string;
+                active: boolean;
+                bytes: number;
+                /** Inbox/automation moments since the last emit, in order.
+                 *  ABSENT on a byte-only tick. */
+                markers?: AgentPulseMarkerKind[];
+            }) => void,
         ) => () => void;
         /** A Flow started or finished. `busy` drives the header button's
          *  animation, `running` the per-row live state, and `finished` carries

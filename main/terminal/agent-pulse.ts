@@ -41,12 +41,62 @@ export const BUCKET_MS = 1000;
 /** Max cadence of the live `agent-pulse` push per workspace during activity. */
 export const COALESCE_MS = 250;
 
+/**
+ * The inbox/automation moments a workspace row can show, beside the byte trace.
+ *
+ * These are NOT terminal output. Every one of them happens with zero pty bytes —
+ * a delivery is a broker event, a read and a reply are MCP calls, a raised
+ * question and a hand-run flow are main-process calls — which is exactly why they
+ * need their own signal rather than a shade of the sparkline. An idle agent that
+ * receives a message, reads it and answers moves not one byte, and that is the
+ * case the markers exist to make visible.
+ *
+ * Kept as a string union with a companion order list rather than an enum so a
+ * sixth kind costs one entry here and one row in the renderer's glyph table —
+ * more are expected (owner, 2026-09-06).
+ */
+export type AgentPulseMarkerKind =
+    | 'delivered'
+    | 'checked'
+    | 'replied'
+    | 'question'
+    | 'flow-run';
+
+/** Every kind, in the order a slot stacks them. Exported so the renderer's glyph
+ *  table and this model cannot disagree about what exists. */
+export const AGENT_PULSE_MARKER_KINDS: readonly AgentPulseMarkerKind[] = [
+    'delivered',
+    'checked',
+    'replied',
+    'question',
+    'flow-run',
+];
+
+/**
+ * One cadence slot's markers: kind -> how many landed in that second.
+ *
+ * A COUNT, not a flag, and that is the whole reason this is a map. Two deliveries
+ * in one second draw one diamond because a 1s slot is a few pixels wide — so the
+ * count is what stops the second one being lost rather than merely undrawn. The
+ * renderer reads it into the glyph's title; the data never quietly rounds to one.
+ */
+export type AgentPulseMarkerBucket = Partial<Record<AgentPulseMarkerKind, number>>;
+
 export interface AgentPulseEvent {
     workspaceId: string;
     /** Whether the workspace currently reads as active (drives the rail glow). */
     active: boolean;
     /** Bytes accumulated since the previous emit (for the live sparkline tick). */
     bytes: number;
+    /**
+     * Marker kinds recorded since the previous emit, in the order they happened.
+     *
+     * ABSENT (not `[]`) when there are none, so a byte-only event stays byte-
+     * identical to what it has always been on the wire — the same rule
+     * `AgentInboxMessage.attachments` follows, and the reason a window that never
+     * learns about markers is unaffected by them.
+     */
+    markers?: AgentPulseMarkerKind[];
 }
 
 interface WsState {
@@ -59,8 +109,12 @@ interface WsState {
     workingAgents: Set<string>;
     /** Per-agent backstop decay timer (id → timer) — cleared/re-armed by turn signals. */
     workBackstop: Map<string, ReturnType<typeof setTimeout>>;
+    /** absolute-second -> markers in that second, pruned to the same window. */
+    markers: Map<number, AgentPulseMarkerBucket>;
     /** Bytes accrued since the last coalesced emit. */
     pendingBytes: number;
+    /** Markers accrued since the last coalesced emit, in order. */
+    pendingMarkers: AgentPulseMarkerKind[];
     lastEmitTs: number;
     idleTimer: ReturnType<typeof setTimeout> | null;
     coalesceTimer: ReturnType<typeof setTimeout> | null;
@@ -84,11 +138,13 @@ export class AgentPulse {
         if (!s) {
             s = {
                 buckets: new Map(),
+                markers: new Map(),
                 lastByteTs: 0,
                 byteActive: false,
                 workingAgents: new Set(),
                 workBackstop: new Map(),
                 pendingBytes: 0,
+                pendingMarkers: [],
                 lastEmitTs: 0,
                 idleTimer: null,
                 coalesceTimer: null,
@@ -109,11 +165,15 @@ export class AgentPulse {
         }
     }
 
-    /** Drop bucket entries older than the 60s window. */
+    /** Drop bucket entries older than the 60s window — bytes AND markers, on the
+     *  one cutoff, so the two rings can never describe different minutes. */
     private prune(s: WsState, sec: number): void {
         const cutoff = sec - BUCKET_COUNT + 1;
         for (const k of s.buckets.keys()) {
             if (k < cutoff) s.buckets.delete(k);
+        }
+        for (const k of s.markers.keys()) {
+            if (k < cutoff) s.markers.delete(k);
         }
     }
 
@@ -155,6 +215,44 @@ export class AgentPulse {
         if (s.idleTimer) clearTimeout(s.idleTimer);
         s.idleTimer = setTimeout(() => this.checkIdle(workspaceId), ACTIVE_WINDOW_MS);
         this.unref(s.idleTimer);
+    }
+
+    /**
+     * Record one inbox/automation moment for a workspace.
+     *
+     * Deliberately does NOT touch `byteActive`, `workingAgents` or the glow. A
+     * marker says something HAPPENED at a point in time; it does not claim the
+     * workspace is busy, and a delivery to a sleeping agent must not light the
+     * rail as though work had started. The two signals stay independent, which is
+     * also what lets the renderer draw markers over a flat sparkline.
+     *
+     * Coalesced on exactly the byte path's cadence (owner: "these markers follow
+     * the same timed cadence the pulse uses"), and because `pendingMarkers` is a
+     * LIST rather than a flag, a burst that rides one trailing emit still carries
+     * every marker in it — coalescing changes how many events are sent, never how
+     * many markers survive.
+     */
+    mark(workspaceId: string, kind: AgentPulseMarkerKind): void {
+        if (!workspaceId || !kind) return;
+        const t = this.now();
+        const sec = Math.floor(t / BUCKET_MS);
+        const s = this.state(workspaceId);
+
+        const bucket = s.markers.get(sec) ?? {};
+        bucket[kind] = (bucket[kind] ?? 0) + 1;
+        s.markers.set(sec, bucket);
+        this.prune(s, sec);
+        s.pendingMarkers.push(kind);
+
+        if (t - s.lastEmitTs >= COALESCE_MS) {
+            this.flush(workspaceId, s, t);
+        } else if (!s.coalesceTimer) {
+            s.coalesceTimer = setTimeout(() => {
+                s.coalesceTimer = null;
+                this.flush(workspaceId, s, this.now());
+            }, COALESCE_MS);
+            this.unref(s.coalesceTimer);
+        }
     }
 
     /**
@@ -208,8 +306,15 @@ export class AgentPulse {
         }
         const bytes = s.pendingBytes;
         s.pendingBytes = 0;
+        const markers = s.pendingMarkers;
+        s.pendingMarkers = [];
         s.lastEmitTs = t;
-        this.emit({ workspaceId, active: this.combinedActive(s), bytes });
+        this.emit({
+            workspaceId,
+            active: this.combinedActive(s),
+            bytes,
+            ...(markers.length ? { markers } : {}),
+        });
     }
 
     /** Byte idle-timer callback: drop byteActive after the window. The glow only
@@ -250,17 +355,51 @@ export class AgentPulse {
      * to backfill each sparkline; live pushes advance it from there.
      */
     snapshot(): Record<string, number[]> {
+        return this.snapshotAll().pulses;
+    }
+
+    /**
+     * Both rings, aligned to ONE reading of the clock.
+     *
+     * One method rather than two because the alignment is the point: byte slot 59
+     * and marker slot 59 have to be the same second, and two calls straddling a
+     * tick would put a marker one slot away from the output that caused it. The
+     * boot backfill needs both anyway — a marker that landed before a window
+     * opened is otherwise invisible forever, since `broadcastLocal` has no
+     * persistence and nothing replays a push (genie#493 is that same shape).
+     *
+     * A workspace with no markers at all is ABSENT from `markers`, so a caller
+     * that asks about an unknown workspace gets `undefined` rather than a
+     * fabricated empty minute.
+     */
+    snapshotAll(): {
+        pulses: Record<string, number[]>;
+        markers: Record<string, (AgentPulseMarkerBucket | null)[]>;
+    } {
         const nowSec = Math.floor(this.now() / BUCKET_MS);
-        const out: Record<string, number[]> = {};
+        const pulses: Record<string, number[]> = {};
+        const markers: Record<string, (AgentPulseMarkerBucket | null)[]> = {};
         for (const [wsId, s] of this.ws) {
             const arr = new Array<number>(BUCKET_COUNT).fill(0);
             for (const [sec, bytes] of s.buckets) {
                 const idx = BUCKET_COUNT - 1 - (nowSec - sec);
                 if (idx >= 0 && idx < BUCKET_COUNT) arr[idx] = bytes;
             }
-            out[wsId] = arr;
+            pulses[wsId] = arr;
+
+            if (s.markers.size === 0) continue;
+            const mArr = new Array<AgentPulseMarkerBucket | null>(BUCKET_COUNT).fill(null);
+            let any = false;
+            for (const [sec, bucket] of s.markers) {
+                const idx = BUCKET_COUNT - 1 - (nowSec - sec);
+                if (idx >= 0 && idx < BUCKET_COUNT) {
+                    mArr[idx] = { ...bucket };
+                    any = true;
+                }
+            }
+            if (any) markers[wsId] = mArr;
         }
-        return out;
+        return { pulses, markers };
     }
 
     /** Test/diagnostic reset. */

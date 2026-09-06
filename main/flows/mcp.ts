@@ -66,6 +66,16 @@ export interface ManageFlowsDeps {
     loadGrant: (appId: string) => AppGrant | null;
     /** Start a flow by hand. Bound to the runner in production. */
     run: (flowId: string) => Promise<{ ok: boolean; error?: string }>;
+    /**
+     * An AGENT started a flow by hand — draws the green `!` on the workspace row.
+     *
+     * Here rather than inside `run` on purpose: a PERSON running a flow from the
+     * Flow Manager goes through the same runner, and this marker is about agent
+     * behaviour. Marking in the shared runner would light the row for the user's
+     * own click. Optional, so nothing that constructs these deps for a test or a
+     * headless host has to care.
+     */
+    markRan?: (workspaceId: string) => void;
 }
 
 export interface ManageFlowsResult {
@@ -252,6 +262,13 @@ export async function handleManageFlows(
         }
 
         const result = await deps.run(flow.id);
+        // Marked on the run actually STARTING. A refusal from the runner means
+        // nothing ran, and a marker for it would put a moment on the timeline
+        // that never happened.
+        if (result.ok) {
+            const ws = deps.workspaceId();
+            if (ws) deps.markRan?.(ws);
+        }
         return { ok: result.ok, ...(result.error ? { error: result.error } : {}) };
     }
 

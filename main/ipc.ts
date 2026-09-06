@@ -2036,7 +2036,12 @@ export function registerIpcHandlers(): void {
     // AgentPulse — the last-60s per-workspace byte buckets, fetched once when the
     // workspace menu opens to backfill each sparkline; live `agent-pulse` pushes
     // advance it from there.
-    ipcMain.handle('agent-pulse:snapshot', () => ({ pulses: agentPulse.snapshot() }));
+    // BOTH rings, from one reading of the clock (see `snapshotAll`). The marker
+    // backfill is not optional decoration: `broadcastLocal` has no persistence,
+    // so a marker pushed while no window was open reaches nobody and nothing
+    // replays it — the snapshot is the only way a freshly-opened window learns
+    // that anything happened in the last minute.
+    ipcMain.handle('agent-pulse:snapshot', () => agentPulse.snapshotAll());
 
     ipcMain.handle('agentinbox:directory', () => ({ agents: agentInboxBroker.directory() }));
     // Every DM thread (human↔agent AND agent↔agent) so the panel can view the

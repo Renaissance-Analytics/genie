@@ -1130,6 +1130,35 @@ function createAskWindow(): BrowserWindow {
  * path funnel through, so the FIFO queue + single-window invariant hold across
  * both. On a window-open failure the item is dropped and resolved cancelled.
  */
+/**
+ * Which workspace row shows the yellow `?` for a raised question — or null.
+ *
+ * PURE, and exported, because `enqueue` cannot run without a real BrowserWindow
+ * and the rule has a branch worth proving. Same pattern as `tailscale-panel.ts`:
+ * the decision lives where it can be tested, the caller applies it.
+ *
+ * A FORWARDED question is refused deliberately. It was raised by an agent on the
+ * HOST, whose own `agent-pulse` already reaches this window through
+ * PASSTHROUGH_EVENTS — so marking it here as well would draw the same question
+ * twice, once from the host and once from a local re-derivation of it. Host
+ * events belong to the host (genie#473 is the same lesson from the other side).
+ */
+export function questionMarkWorkspace(item: {
+    workspaceId?: string;
+    forward?: unknown;
+}): string | null {
+    if (item.forward) return null;
+    const ws = (item.workspaceId ?? '').trim();
+    return ws ? ws : null;
+}
+
+/** Sink for the raised-question marker. Installed at boot; absent in tests and
+ *  on a headless host, where there is no row to draw on. */
+let questionMarkSink: ((workspaceId: string) => void) | null = null;
+export function setQuestionMarkSink(fn: ((workspaceId: string) => void) | null): void {
+    questionMarkSink = fn;
+}
+
 function enqueue(item: QueueItem): ForceQuestionResult | undefined {
     // Stamp the ARRIVAL here — the single choke point every question funnels
     // through — so the inbox reports when it came in, not when it was read. A
@@ -1140,6 +1169,17 @@ function enqueue(item: QueueItem): ForceQuestionResult | undefined {
     // waiters but never preempts the shown head (the window reuses each in turn).
     const startsQueue = queue.length === 0;
     insertByPriority(queue, item);
+    // The workspace row says an agent here is waiting on a person. Raised at the
+    // single choke point every question funnels through, so the DND path, the
+    // unshowable path and the ordinary modal all mark once and identically.
+    const markWs = questionMarkWorkspace(item);
+    if (markWs) {
+        try {
+            questionMarkSink?.(markWs);
+        } catch {
+            /* best-effort — a marker must never take a question down with it */
+        }
+    }
     // A new pending question — tell the mobile/remote push channel (question:changed).
     notifyQuestionsChanged();
 
