@@ -87,8 +87,17 @@ export default function FlowManagerFlyout({
     const [confirming, setConfirming] = useState<FlowSummaryView | null>(null);
     /** The host this window drives, for the "whose Flows are these" note. */
     const [hostName, setHostName] = useState<string | undefined>(undefined);
-    /** Open on a Flow to edit it, on `null` to create one, closed otherwise. */
-    const [editing, setEditing] = useState<{ flow: FlowSummaryView | null } | null>(null);
+    /**
+     * The flow whose canvas is open, or null.
+     *
+     * Just what the canvas needs — an id, a name for the dialog, and the scope
+     * that drives its palette. Holding a whole summary row meant a newly created
+     * flow had to be found again in a refetched list before the editor could
+     * open, which is a round trip and a lookup that can miss.
+     */
+    const [editing, setEditing] = useState<
+        { id: string; title: string; scope: FlowSummaryView['scope'] } | null
+    >(null);
     /** The Flow awaiting an explicit "yes, delete it". */
     const [deleting, setDeleting] = useState<FlowSummaryView | null>(null);
     /** Said out loud when a save turned an armed Flow off, or one was deleted. */
@@ -214,15 +223,14 @@ export default function FlowManagerFlyout({
      */
     const create = async () => {
         try {
-            const flow = await api().flows.create({ kind: 'system' } as never);
+            // `{ scope }`, not the scope itself — main reads `input.scope`, and
+            // passing the bare object made `parseFlowScope` see `undefined`,
+            // return null, and the handler hand back no flow at all. Nothing
+            // threw; the canvas simply never opened.
+            const flow = await api().flows.create({ scope: { kind: 'system' } });
             await reload();
-            if (flow) {
-                setEditing({
-                    flow: (await api().flows.list({ kind: 'system' })).find(
-                        (f) => f.id === flow.id,
-                    ) ?? null,
-                });
-            }
+            if (flow) setEditing({ id: flow.id, title: flow.title, scope: flow.scope });
+            else setError('Genie could not create a flow.');
         } catch (e) {
             setError(e instanceof Error ? e.message : String(e));
         }
@@ -371,7 +379,13 @@ export default function FlowManagerFlyout({
                                         onToggle={() => toggle(flow)}
                                         onRun={() => void runNow(flow)}
                                         onExpand={() => void showHistory(flow)}
-                                        onEdit={() => setEditing({ flow })}
+                                        onEdit={() =>
+                                            setEditing({
+                                                id: flow.id,
+                                                title: flow.title,
+                                                scope: flow.scope,
+                                            })
+                                        }
                                         onDelete={() => setDeleting(flow)}
                                     />
                                 ))}
@@ -388,9 +402,9 @@ export default function FlowManagerFlyout({
             with `z-index: 60`, so it opens a stacking context that would scope
             `.prompt-scrim`'s z-index 100 INSIDE it, quietly breaking the layer
             ladder documented at the top of master.css. */}
-        {editing?.flow && (
+        {editing && (
             <FlowCanvasModal
-                flow={editing.flow}
+                flow={editing}
                 onClose={() => {
                     setEditing(null);
                     void reload();
@@ -539,7 +553,13 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
  * to the aside and its scrim, and it is `position: fixed` with a z-index, so it
  * opens a stacking context that would scope this modal's layer inside it.
  */
-function FlowCanvasModal({ flow, onClose }: { flow: FlowSummaryView; onClose: () => void }) {
+function FlowCanvasModal({
+    flow,
+    onClose,
+}: {
+    flow: { id: string; title: string; scope: FlowSummaryView['scope'] };
+    onClose: () => void;
+}) {
     return (
         <div className="prompt-scrim" onClick={onClose}>
             <div
