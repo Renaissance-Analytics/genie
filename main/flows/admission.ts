@@ -34,6 +34,7 @@
 import { decideAppCall } from '../apps/bridge-decision';
 import { capabilityForTool } from '../apps/capabilities';
 import { isGenieNodeKind, toolForNodeKind } from './nodes';
+import { PAUSES_WITHOUT_RESUME, PAUSE_UNSUPPORTED } from './builtins';
 import { describeAuthority, type FlowAuthority } from './authority';
 
 /**
@@ -162,6 +163,23 @@ export function decideFlowAdmission(
         // Not a Genie node: a Fancy builtin, an annotation, or unreadable. None of
         // them can reach Genie, so none of them is admission's business.
         if (!kind) continue;
+
+        const nodeIdEarly = asString(raw.id) ?? '';
+        const labelEarly = asString(raw.data?.label);
+
+        // A step that would park a run Genie cannot resume. Refused HERE rather
+        // than only at execution, because this is what the canvas checks while
+        // an author draws — the one moment the refusal is cheap to act on. A
+        // flow that could be drawn, armed, and then hang forever with nothing
+        // saying why is worse than a missing feature: it looks like it works.
+        if (PAUSES_WITHOUT_RESUME.has(kind)) {
+            refusals.push({
+                nodeId: nodeIdEarly,
+                ...(labelEarly ? { label: labelEarly } : {}),
+                reason: `Genie does not run this step — ${PAUSE_UNSUPPORTED}`,
+            });
+            continue;
+        }
         const tool = toolForNodeKind(kind);
         const nodeId = asString(raw.id) ?? '';
         const label = asString(raw.data?.label);

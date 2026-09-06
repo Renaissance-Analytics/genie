@@ -15,13 +15,19 @@
  *
  * ## Two rules that are not conveniences
  *
- * **An agent may never ARM a flow.** Arming hands a flow standing permission to
- * act unattended. An agent that can arm its own flow can grant itself standing
- * permission nobody agreed to, at 3am, in a terminal nobody is watching — which
- * is the exact shape of the thing arming exists to gate. `enable` refuses and
- * names the surface that asks a person. `disable` is allowed: the machine doing
- * LESS needs no permission, and refusing it would mean an agent that noticed its
- * own flow misbehaving could not stop it.
+ * **An agent may never ARM a flow, and may not RUN an unarmed one.** Arming
+ * hands a flow standing permission to act unattended. An agent that could arm
+ * its own flow would grant itself standing permission nobody agreed to, at 3am,
+ * in a terminal nobody is watching — the exact shape of the thing arming exists
+ * to gate.
+ *
+ * The second half matters just as much, and is easy to miss: a person may run a
+ * DISARMED flow by hand, because they are present and the attendance IS the
+ * consent. An agent is not present in that sense, so letting it run one would
+ * put a door beside the gate — author a flow, ask nobody, run it whenever you
+ * like. `disable` is allowed either way: the machine doing LESS needs no
+ * permission, and refusing it would mean an agent that noticed its own flow
+ * misbehaving could not stop it.
  *
  * **An agent may not give a flow machine-wide scope.** Widening from "this
  * workspace" to "everywhere" is the same escalation as arming, one step earlier.
@@ -228,6 +234,23 @@ export async function handleManageFlows(
     if (action === 'run') {
         const flow = visible(deps, flowId, scope);
         if (!flow) return { error: `This agent cannot see a flow called “${flowId}”.` };
+
+        // "By hand" means BY A HUMAN.
+        //
+        // A person may run a DISARMED flow — that is how one is tried before
+        // arming it, and it is safe because they are present, and the
+        // attendance IS the consent. An agent is not present in that sense. If
+        // it could run a disarmed flow, the arming gate would have a door
+        // beside it: author a flow, ask nobody, run it whenever you like.
+        if (!flow.enabled) {
+            return {
+                error:
+                    `“${flow.title}” is not turned on. An agent can only run a flow the user has ` +
+                    `armed — ask them with ForceTheQuestion, or have them run it once themselves ` +
+                    `from the Flow Manager, which is how a flow is tried before it is armed.`,
+            };
+        }
+
         const result = await deps.run(flow.id);
         return { ok: result.ok, ...(result.error ? { error: result.error } : {}) };
     }

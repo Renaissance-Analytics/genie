@@ -476,15 +476,14 @@ function ArmConfirm({
                             It will be able to use: {flow.consequence.join(', ')}.
                         </p>
                     )}
-                    <p>
-                        It will run on its own whenever its trigger fires
-                        {flow.scope?.kind === 'workspace'
-                            ? ` in ${flow.scopeLabel}`
-                            : flow.scope?.kind === 'system'
-                              ? ' anywhere on this machine'
-                              : ''}
-                        , without asking again. You can turn it off at any time.
-                    </p>
+                    {/* WHAT THE SCOPE GRANTS, in words, at the moment of arming.
+                        "System" is a value in a dropdown; what it MEANS is that
+                        the flow acts as the workstation operator, in every
+                        workspace, with nobody watching. A user who has read the
+                        graph still has not agreed to that, because the scope is
+                        not visible IN the graph — so it is said here or it is
+                        not said at all. */}
+                    <p>{describeArming(flow)}</p>
                 </div>
                 <div className="prompt-actions">
                     <button
@@ -879,6 +878,43 @@ function canEverFire(flow: FlowSummaryView): boolean {
         if (t.kind === 'event') return !!t.event && t.known !== false;
         return false;
     });
+}
+
+/**
+ * What arming this flow lets it reach, said plainly.
+ *
+ * The consent has to name the SCOPE and what the scope confers, not just where
+ * the flow lives. A confirmation that says "anywhere on this machine" describes
+ * a location; the thing being agreed to is an authority — acting as the
+ * workstation operator, unattended, until somebody turns it off.
+ */
+function describeArming(flow: FlowSummaryView): string {
+    const ending = ' It keeps doing that until you turn it off.';
+
+    if (flow.scope?.kind === 'workspace') {
+        return (
+            `It will run on its own whenever its trigger fires, without asking again — ` +
+            `acting only inside ${flow.scopeLabel}, and never on another project's files.` +
+            ending
+        );
+    }
+    if (flow.scope?.kind === 'gapp') {
+        return (
+            `It will run on its own whenever its trigger fires, without asking again — ` +
+            `as “${flow.scopeLabel}”, limited to exactly what you granted that app when you ` +
+            `installed it. It can never do more than the app itself can.` + ending
+        );
+    }
+    if (flow.scope?.kind === 'system') {
+        return (
+            `It will run on its own whenever its trigger fires, without asking again — ` +
+            `as YOU, on the whole machine. That means every workspace, not just this one, ` +
+            `with the same reach the workstation operator has.` + ending
+        );
+    }
+    // An unreadable scope. Genie will refuse to run it anyway, and saying so is
+    // better than a sentence that implies somewhere specific.
+    return 'Genie cannot read where this flow belongs, so it will not run until that is fixed.';
 }
 
 function whyItCannotFire(flow: FlowSummaryView): string {

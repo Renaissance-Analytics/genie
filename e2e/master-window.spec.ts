@@ -770,6 +770,12 @@ test('turning a flow off is one click; turning it back on states what it will do
     await expect(armDialog).toContainText('It will be able to use');
     await expect(armDialog).toContainText('Issues and security alerts');
     await expect(armDialog).toContainText('without asking again');
+    // The consent must name what the SCOPE confers, not just where the flow
+    // lives. "This machine" is a location; acting as the user across every
+    // workspace is the thing being agreed to, and it is not visible in the
+    // graph — so it is said here or it is not said at all.
+    await expect(armDialog).toContainText('as YOU, on the whole machine');
+    await expect(armDialog).toContainText('every workspace');
 
     // Cancel leaves it OFF. A confirmation that arms anyway is worse than none:
     // it teaches the user the dialog is decoration.

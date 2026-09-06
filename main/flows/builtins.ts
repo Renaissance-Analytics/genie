@@ -44,7 +44,6 @@
 import {
     UnresolvedPathError,
     evaluateExpression,
-    pauseForHuman,
     truthy,
 } from '@particle-academy/fancy-flow/engine';
 
@@ -409,26 +408,42 @@ const trigger: BuiltinExecutor = (ctx) => {
     return { ...cfg, ...ctx.inputs };
 };
 
-/* ===== the ones that stop for a person =================================== */
+/* ===== the ones that would park a run Genie cannot resume ================= */
 
 /**
- * Park the run and ask.
+ * fancy-flow's human nodes, and why Genie refuses them TODAY.
  *
- * `pauseForHuman` aborts with a structured token (`fancy-flow:pause:{…}`) rather
- * than throwing an ordinary error, so the runner can tell "this is waiting for
- * you" from "this broke" — and can resume it later by replaying every node that
- * already ran through `resumeOutputs`, which republishes them instead of running
- * them a second time.
+ * They pause by aborting with a structured token (`fancy-flow:pause:{…}`), which
+ * the host is meant to decode, ask a person, and then resume from by replaying
+ * the run with `resumeOutputs` — republishing every node that already ran rather
+ * than running it again. Genie decodes the token. **It does not yet resume.**
+ *
+ * So a flow containing one can be drawn, armed, and then hang forever, with
+ * nothing anywhere saying the step it waits on can never complete. That is worse
+ * than a missing feature: it looks like it works. Until the resume exists, these
+ * are refused — loudly, at admission (so the canvas says it while the author is
+ * still drawing), at save, and at run.
+ *
+ * They remain VISIBLE in the palette, and that is not a decision Genie gets to
+ * make: `<FlowEditor>` narrows its palette by node CATEGORY and not by kind, so
+ * a host cannot offer a subset. Filed upstream. The available workaround —
+ * re-categorising Genie's own nodes so a category filter could exclude fancy's —
+ * would distort the taxonomy to hide a gap, which is the shape of thing this
+ * codebase does not do.
+ *
+ * `@genie/ForceTheQuestion` is deliberately NOT in here. It asks and returns
+ * immediately; the answer arrives later through AgentInbox. It never parks a
+ * run, so it is the one way a flow can involve a person today.
  */
-const humanPause =
-    (awaiting: 'approval' | 'input'): BuiltinExecutor =>
-    (ctx) =>
-        pauseForHuman(ctx as never, awaiting, {
-            title: str(config(ctx).title, awaiting === 'approval' ? 'Approve this step' : 'Genie needs your input'),
-            description: str(config(ctx).description),
-            fields: config(ctx).fields,
-            value: soleInput(ctx.inputs),
-        });
+export const PAUSES_WITHOUT_RESUME: ReadonlySet<string> = new Set([
+    '@particle-academy/human_approval',
+    '@particle-academy/user_input',
+    '@particle-academy/rich_user_input',
+]);
+
+/** The one sentence, shared by admission and the door so they cannot diverge. */
+export const PAUSE_UNSUPPORTED =
+    'it waits for a person, and Genie cannot resume a paused flow yet — so this step would stop the run for good rather than continuing after an answer. Ask with the “Force the question” step instead, which returns straight away.';
 
 /* ===== the ones Genie refuses ============================================ */
 
@@ -481,9 +496,7 @@ const IMPLEMENTED: Readonly<Record<string, BuiltinExecutor>> = {
     '@particle-academy/wait': wait,
     '@particle-academy/log': log,
     '@particle-academy/output': output,
-    '@particle-academy/human_approval': humanPause('approval'),
-    '@particle-academy/user_input': humanPause('input'),
-    '@particle-academy/rich_user_input': humanPause('input'),
+    // The human-pause kinds are deliberately absent — see PAUSES_WITHOUT_RESUME.
 };
 
 /** The executor for a fancy builtin, or null when it is not one Genie runs. */
@@ -493,6 +506,7 @@ export function builtinExecutor(canonicalKind: string): BuiltinExecutor | null {
 
 /** Why Genie refuses this kind, or null when it has no stated reason. */
 export function refusalFor(canonicalKind: string): string | null {
+    if (PAUSES_WITHOUT_RESUME.has(canonicalKind)) return PAUSE_UNSUPPORTED;
     const bare = canonicalKind.replace(/^@[^/]+\//, '');
     return REFUSALS[bare] ?? null;
 }

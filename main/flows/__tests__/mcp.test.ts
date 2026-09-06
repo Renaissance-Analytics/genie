@@ -253,13 +253,40 @@ describe('an agent may NEVER arm a flow', () => {
 });
 
 describe('running one by hand', () => {
-    it('runs a flow in its workspace', async () => {
-        seed('f1');
+    /**
+     * "By hand" means BY A HUMAN.
+     *
+     * A disarmed flow can be run by hand — that is how you try one before
+     * arming it, and it is safe because a person pressing Run is present, and
+     * the attendance IS the consent. An agent calling `run` is not that. If it
+     * could run a disarmed flow, the whole arming gate would have a door beside
+     * it: author a flow, never ask anyone, run it whenever you like.
+     *
+     * So an agent may only run a flow a person has already armed.
+     */
+    it('runs a flow its workspace has ARMED', async () => {
+        upsertFlowIn(db, {
+            id: 'f1',
+            title: 'f1',
+            scope: { kind: 'workspace', workspaceId: 'ws-1' },
+            graph: { nodes: [], edges: [] },
+            enabled: true,
+        });
         const run = vi.fn(async () => ({ ok: true as const }));
 
         await call({ action: 'run', flowId: 'f1' }, { run });
 
         expect(run).toHaveBeenCalledWith('f1');
+    });
+
+    it('REFUSES a disarmed flow — that is the arming gate, from the side', async () => {
+        seed('off');
+        const run = vi.fn(async () => ({ ok: true as const }));
+
+        const out = await call({ action: 'run', flowId: 'off' }, { run });
+
+        expect(out.error).toMatch(/not turned on|armed|ForceTheQuestion/i);
+        expect(run).not.toHaveBeenCalled();
     });
 
     it('refuses to run one it cannot see', async () => {

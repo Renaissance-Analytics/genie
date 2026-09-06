@@ -211,3 +211,52 @@ describe('graphs that cannot be judged', () => {
         expect(decideFlowAdmission(graph(node('a', '@genie/manageSite')), null).allowed).toBe(false);
     });
 });
+
+describe('a step that would park a run Genie cannot resume', () => {
+    const system = authorityForScope({ kind: 'system' }, () => null);
+
+    /**
+     * fancy-flow's human nodes pause by aborting with a structured token, and
+     * the host resumes by replaying the run with `resumeOutputs`. Genie decodes
+     * the token and does not yet resume — so today these stop a run for good.
+     *
+     * A flow you can draw, arm, and then watch hang forever with no indication
+     * that the step it waits on can never complete is a TRAP, and a worse one
+     * than a missing feature: it looks like it works. So they are refused, and
+     * refused HERE — at admission — because that is what the canvas checks
+     * continuously while an author draws, which is the only moment the refusal
+     * is cheap to act on.
+     *
+     * They stay in the palette because `<FlowEditor>` narrows by node CATEGORY
+     * and not by kind, so a host cannot remove one. Filed upstream. Genie will
+     * not fake it by re-categorising its own nodes to dodge a category filter.
+     */
+    it.each([
+        ['@particle-academy/human_approval'],
+        ['@particle-academy/user_input'],
+        ['@particle-academy/rich_user_input'],
+    ])('refuses %s, and says why', (kind) => {
+        const decision = decideFlowAdmission(graph(node('h', kind)), system);
+
+        expect(decision.allowed).toBe(false);
+        expect(decision.refusals[0]?.nodeId).toBe('h');
+        expect(decision.refusals[0]?.reason).toMatch(/cannot resume|waiting|pause/i);
+    });
+
+    it('still admits the logic steps beside them (control)', () => {
+        // Without this, a rule that refused EVERYTHING would pass the above.
+        expect(decideFlowAdmission(graph(node('b', '@particle-academy/branch')), system).allowed).toBe(
+            true,
+        );
+    });
+
+    it('still admits Genie’s own way of asking, which returns instead of parking', () => {
+        // `ForceTheQuestion` asks and comes back immediately; the answer arrives
+        // later through AgentInbox. It does not park a run, so it is not part of
+        // this refusal — and a rule that swept it up would remove the one way a
+        // flow can involve a person at all.
+        expect(
+            decideFlowAdmission(graph(node('q', '@genie/ForceTheQuestion')), system).allowed,
+        ).toBe(true);
+    });
+});
