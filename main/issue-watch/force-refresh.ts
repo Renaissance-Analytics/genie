@@ -60,6 +60,60 @@ export interface ForceRefreshDeps {
  *  would invent a wait that does not exist. */
 const NO_WAIT = { seconds: 0, nextAllowedAt: null, label: 'now' };
 
+/**
+ * Tynn answered, but not with a success — the status IS the diagnosis.
+ *
+ * A class rather than a formatted message, because the status is DATA. The
+ * previous shape put it in an `Error` string and the only way to read it back
+ * was to re-parse that string, which meant the string had to travel; and the
+ * string also carried the endpoint, which is the half a remote reader must not
+ * have (CodeQL `js/stack-trace-exposure`, alert #11).
+ */
+export class TynnRefreshHttpError extends Error {
+    constructor(readonly status: number) {
+        // The message stays useful in a host-side log and never leaves the
+        // desktop — {@link describeRefreshFailure} builds what travels.
+        super(`Tynn refused the IssueWatch refresh with HTTP ${status}`);
+        this.name = 'TynnRefreshHttpError';
+    }
+}
+
+/**
+ * PURE. What a caller — local or REMOTE — is told about a failed refresh.
+ *
+ * ## Why this exists rather than a strip at the HTTP boundary
+ *
+ * `error` reaches a paired remote device through
+ * `/api/desktop/issue-watch/force-refresh`, and it used to be
+ * `e instanceof Error ? e.message : String(e)` — a Tynn fetch error's own text,
+ * which carries the internal hostname on a DNS failure and the endpoint on a
+ * status failure.
+ *
+ * Blanking it at the wire was the other option and is worse twice over. `error`
+ * is CONSUMED — `refreshControlState` renders it as the sentence under the
+ * Refresh button — so blanking trades a security warning for a vaguer UI. And it
+ * would fix only the route CodeQL flagged, leaving the IPC path and every future
+ * route to carry the raw text, which is how the alert came to exist.
+ *
+ * Classifying at the source loses nothing a reader acts on. Exactly two things
+ * reach that catch — a transport failure and a non-OK status — and "could not
+ * reach Tynn" versus "Tynn answered 503" is the whole of the difference anyone
+ * does anything with. It is also what the rest of this file already does: the
+ * `unavailable` branch's `error` is a fixed sentence, not exception text.
+ *
+ * The status number travels because it is actionable (503 is "wait", 401 is
+ * "sign in") and is re-formatted from an integer rather than passed through, so
+ * no attacker-influenced text can ride along inside it.
+ */
+export function describeRefreshFailure(e: unknown): string {
+    const status =
+        e instanceof TynnRefreshHttpError && Number.isInteger(e.status) ? e.status : null;
+    if (status !== null && status >= 100 && status <= 599) {
+        return `Tynn answered ${status}, so the refresh did not happen. Its own log will say why.`;
+    }
+    return 'Genie could not reach Tynn, so the refresh did not happen. Check the connection and try again.';
+}
+
 export async function forceRefreshWorkspace(
     workspaceId: string,
     deps: ForceRefreshDeps,
@@ -86,10 +140,14 @@ export async function forceRefreshWorkspace(
     try {
         answer = await deps.requestRefresh(projectId);
     } catch (e) {
+        // The raw reason is kept where it is useful and cannot travel: this is
+        // the desktop's own log. `describeRefreshFailure` builds what a caller —
+        // including a paired remote device — is told.
+        console.warn('[issue-watch] force refresh failed:', e);
         return {
             refreshed: false,
             reason: 'failed',
-            error: e instanceof Error ? e.message : String(e),
+            error: describeRefreshFailure(e),
             cooldown: { ...NO_WAIT },
         };
     }
@@ -152,9 +210,12 @@ export async function requestIssueWatchRefresh(workspaceId: string): Promise<For
             // non-2xx for a request it could not serve at all, which is the
             // distinction the caller needs.
             if (!res.ok) {
-                throw new Error(
-                    `Tynn POST /api/v1/user/issue-watch/refresh -> ${res.status} ${res.statusText}`.trim(),
+                // The endpoint and status text stay on THIS machine; only the
+                // status number travels (see `describeRefreshFailure`).
+                console.warn(
+                    `[issue-watch] Tynn POST /api/v1/user/issue-watch/refresh -> ${res.status} ${res.statusText}`.trim(),
                 );
+                throw new TynnRefreshHttpError(res.status);
             }
             return (await res.json()) as TynnRefreshResponse;
         },
