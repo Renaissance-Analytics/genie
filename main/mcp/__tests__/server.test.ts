@@ -370,6 +370,66 @@ describe('mcp server', () => {
         expect(seen).toEqual(['t-a']); // explicit arg wins over last-active
     });
 
+    /**
+     * genie#334 — the PROMPT path, over the real socket.
+     *
+     * The refusal above is right, and its actionable error was gated on
+     * `msg.method === 'tools/call'`. A `prompts/get` fell past it to
+     * `terminalId: ''`, `describeWorkspace('')` returned null, and the null was
+     * reported as "your terminal is not in a workspace" — a claim about the
+     * workspace that nothing had checked, on the first thing a fresh agent is
+     * told to run. Reproduced twice in one session in the field; the identical
+     * call as a TOOL succeeded seconds later.
+     */
+    it('tells a prompt WHICH TERMINAL is missing, instead of blaming the workspace', async () => {
+        const dir = tmpUserDir();
+        const asked: string[] = [];
+        await startMcpServer({
+            ...deps(dir, 0, { ids: ['t-a', 't-b'], lastActive: 't-b' }, () => {}),
+            describeWorkspace: async (id: string) => {
+                asked.push(id);
+                return null;
+            },
+        });
+        const token = workspaceEndpointUrl('ws-1')!.split('/').pop()!;
+        const res = await rpc(mcpServerPort()!, token, {
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'prompts/get',
+            params: { name: 'connectToGenie' },
+        });
+
+        expect(res.body).toContain('GENIE_TERMINAL_ID');
+        expect(res.body).not.toContain("Couldn't resolve this terminal to a Genie workspace");
+        // And it never went looking with an empty id — that lookup is what
+        // manufactured the "no workspace" answer.
+        expect(asked).toEqual([]);
+    });
+
+    it('resolves a prompt that DOES name its terminal, so the argument is not decorative', async () => {
+        // The declared `terminalId` argument is the client's only way to say
+        // which terminal is asking: a prompt carries no environment. This is the
+        // half that makes the message above actionable rather than a dead end.
+        const dir = tmpUserDir();
+        const asked: string[] = [];
+        await startMcpServer({
+            ...deps(dir, 0, { ids: ['t-a', 't-b'], lastActive: 't-b' }, () => {}),
+            describeWorkspace: async (id: string) => {
+                asked.push(id);
+                return null;
+            },
+        });
+        const token = workspaceEndpointUrl('ws-1')!.split('/').pop()!;
+        await rpc(mcpServerPort()!, token, {
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'prompts/get',
+            params: { name: 'connectToGenie', arguments: { terminalId: 't-a' } },
+        });
+
+        expect(asked).toEqual(['t-a']);
+    });
+
     it('still resolves a legacy per-terminal token directly', async () => {
         const dir = tmpUserDir();
         const seen: string[] = [];

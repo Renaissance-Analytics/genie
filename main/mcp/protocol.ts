@@ -1985,8 +1985,27 @@ const CONNECT_TO_GENIE_PROMPT = {
     title: 'Connect to Genie',
     description:
         'Orient in this Genie workspace: a map of the .agi envelope + every repo (paths, GitHub refs, orientation files) and a numbered plan for learning the project. Run this on first boot of a fresh/converted workspace.',
-    // No required arguments; terminal is resolved from the connection.
-    arguments: [],
+    /**
+     * `terminalId`, OPTIONAL — the same argument the tool takes (genie#334).
+     *
+     * The comment here used to read "No required arguments; terminal is resolved
+     * from the connection", and that is true only when the connection can be
+     * resolved to ONE terminal. A workspace token with several terminals is
+     * refused rather than guessed (genie#17), and a prompt carries no
+     * environment — so the client had no way to say which terminal it meant, and
+     * the user was told their terminal was outside a workspace instead.
+     *
+     * Optional, not required: the single-terminal case resolves from the token
+     * and must not start demanding an argument nobody needed before.
+     */
+    arguments: [
+        {
+            name: 'terminalId',
+            description:
+                'Which terminal is asking. Its value is in your GENIE_TERMINAL_ID environment variable. Only needed when this workspace has more than one terminal — Genie will not guess.',
+            required: false,
+        },
+    ],
 };
 
 const MANAGE_PROCESS_TOOL = {
@@ -3454,6 +3473,37 @@ export interface PromptMessage {
  * invokes the prompt; we return an assistant-authored orientation (the same map
  * + plan formatWorkspaceMap produces) so the agent receives it as context.
  */
+/**
+ * The prompt's answer when no TERMINAL could be resolved — a different failure
+ * from "this terminal is in no workspace", and it used to be reported as that
+ * one (genie#334).
+ *
+ * Genie refuses to guess which terminal a caller means when a workspace token
+ * has several (genie#17), and a prompt carries no environment to read
+ * `GENIE_TERMINAL_ID` from. So this is the ordinary multi-terminal case, not a
+ * broken workspace — and the old text sent people looking for a workspace
+ * problem that did not exist, twice in one session, on the FIRST thing a fresh
+ * agent is told to run.
+ *
+ * Says the same thing the tool path says for the same condition, deliberately:
+ * one answer to "which terminal?", not two that drift.
+ */
+export function promptNeedsTerminalMessages(): PromptMessage[] {
+    return [
+        {
+            role: 'assistant',
+            content: {
+                type: 'text',
+                text:
+                    'This prompt did not receive a terminal id, and this workspace has more than one ' +
+                    'terminal — so Genie will not guess which one is asking. Pass `terminalId` (its ' +
+                    'value is in your GENIE_TERMINAL_ID environment variable), or call `connectToGenie` ' +
+                    'as a TOOL with that argument, which reaches the same orientation.',
+            },
+        },
+    ];
+}
+
 export function workspacePromptMessages(map: WorkspaceMap | null): PromptMessage[] {
     if (!map) {
         return [
@@ -3796,6 +3846,17 @@ export async function handleMcpMessage(
             const name = (msg.params as { name?: string } | undefined)?.name;
             if (!isConnectToGenieName(name)) {
                 return err(msg.id, -32602, `Unknown prompt: ${String(name)}`);
+            }
+            // No terminal RESOLVED is not the same as no workspace (genie#334).
+            // `server.ts` leaves this empty when a workspace token has several
+            // terminals and none was named — asking `describeWorkspace('')` then
+            // manufactures a null, and the null is reported as a fact about the
+            // workspace. So it is not asked.
+            if (!ctx.terminalId) {
+                return ok(msg.id, {
+                    description: CONNECT_TO_GENIE_PROMPT.description,
+                    messages: promptNeedsTerminalMessages(),
+                });
             }
             const map = await ctx.describeWorkspace(ctx.terminalId);
             return ok(msg.id, {
