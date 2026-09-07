@@ -195,17 +195,28 @@ describe('the Tynn contract manifest tracks the client that uses it', () => {
  * green, the contract stops being checked, and the failure mode is once again
  * "find out from a user". So the wiring is asserted like any other behaviour.
  */
+/**
+ * A YAML source with its comments removed, so a commented-out step cannot
+ * satisfy an assertion about what the job actually runs.
+ */
+function withoutYamlComments(source: string): string {
+    // Split on the LINE ENDING, not on `\n`. A CRLF file split on `\n` leaves a
+    // `\r` at the end of every line, and `\r` is a line terminator in
+    // JavaScript — so `.` cannot cross it, `.*$` never reaches the end, and not
+    // one comment gets removed.
+    return source
+        .split(/\r?\n/)
+        .map((line) => line.replace(/(^|\s)#.*$/, ''))
+        .join('\n');
+}
+
 describe('the live half is wired to actually run', () => {
     const LIVE_TEST = 'main/backend/__tests__/tynn-contract.live.test.ts';
     const WORKFLOW = '.github/workflows/tynn-contract.yml';
 
-    /** The workflow with YAML comments removed, so a commented-out step cannot
-     *  satisfy an assertion about what the job runs. */
-    const workflow = fs
-        .readFileSync(path.join(REPO, WORKFLOW), 'utf8')
-        .split('\n')
-        .map((line) => line.replace(/(^|\s)#.*$/, ''))
-        .join('\n');
+    const workflow = withoutYamlComments(
+        fs.readFileSync(path.join(REPO, WORKFLOW), 'utf8'),
+    );
 
     const pkg = JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8')) as {
         scripts: Record<string, string>;
@@ -234,5 +245,57 @@ describe('the live half is wired to actually run', () => {
         // `continue-on-error` on this job would turn every retirement into a
         // green tick — the exact defect the whole check exists to prevent.
         expect(workflow).not.toMatch(/continue-on-error/);
+    });
+});
+
+/**
+ * The comment stripper, which the guard above is only as good as.
+ *
+ * It was written against `\n` and read a file that is `\r\n` on every Windows
+ * checkout. `.` does not match `\r` — `\r` is a line terminator in JavaScript —
+ * so `.*$` could never reach the end of a CRLF line and NO comment was ever
+ * removed. The workflow says, in a comment, that it is *"Deliberately NOT
+ * `continue-on-error`"*; the guard read that sentence as the setting and failed.
+ *
+ * Red on every Windows machine, green on CI's Linux runners, for a repository
+ * whose owner works on Windows. A guard that fires on its own documentation is
+ * worse than none: it teaches people that a red suite means nothing.
+ */
+describe('stripping YAML comments', () => {
+    const yaml = (nl: string): string =>
+        [
+            'jobs:',
+            '  contract:',
+            '    # Deliberately NOT `continue-on-error`. Failing is the point.',
+            '    steps:',
+            '      - run: npm run test:contract',
+        ].join(nl);
+
+    it('removes a comment whichever way the file ends its lines', () => {
+        for (const [name, nl] of [['LF', '\n'], ['CRLF', '\r\n']] as const) {
+            expect({ name, out: withoutYamlComments(yaml(nl)) }).toEqual({
+                name,
+                out: expect.not.stringContaining('continue-on-error'),
+            });
+        }
+    });
+
+    it('leaves the settings themselves alone', () => {
+        // POSITIVE CONTROL. Stripping is not the goal — catching a real
+        // `continue-on-error` is, and a stripper that emptied the file would
+        // pass the test above while making the guard permanently blind.
+        for (const nl of ['\n', '\r\n']) {
+            const out = withoutYamlComments(
+                ['jobs:', '  contract:', '    continue-on-error: true'].join(nl),
+            );
+            expect(out).toContain('continue-on-error: true');
+            expect(out).toMatch(/run:|jobs:/);
+        }
+    });
+
+    it('takes a trailing comment without taking the setting before it', () => {
+        const out = withoutYamlComments('    timeout-minutes: 10 # be generous\r\n');
+        expect(out).toContain('timeout-minutes: 10');
+        expect(out).not.toContain('be generous');
     });
 });
