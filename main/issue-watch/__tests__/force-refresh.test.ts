@@ -18,7 +18,7 @@ import { describe, expect, it, vi } from 'vitest';
  *   - unreachable: reported as a failure, never as a refresh that happened.
  */
 
-import { forceRefreshWorkspace, type TynnRefreshResponse } from '../force-refresh';
+import { forceRefreshWorkspace, TynnRefreshHttpError, type TynnRefreshResponse } from '../force-refresh';
 
 const LINKED = {
     id: 'ws-local',
@@ -126,13 +126,17 @@ describe('forceRefreshWorkspace', () => {
         const result = await forceRefreshWorkspace('ws-local', {
             workspaceRow: () => LINKED,
             requestRefresh: async () => {
-                throw new Error('Tynn POST /api/v1/user/issue-watch/refresh → 503');
+                // The status is DATA now, not a formatted message the result had
+                // to re-parse — and the endpoint that message used to carry is
+                // what reached a remote device (CodeQL alert #11).
+                throw new TynnRefreshHttpError(503);
             },
             applyDelta,
         });
 
         expect(result.refreshed).toBe(false);
         expect(result.reason).toBe('failed');
+        // Unchanged: the status still reaches the caller. Only its route here did.
         expect(result.error).toContain('503');
         // Nothing came back, so nothing may be written over the feed — a
         // fabricated empty snapshot would wipe real issues from the panel.
