@@ -1,5 +1,10 @@
 import { test, expect, type ElectronApplication, type Page } from '@playwright/test';
 import { launchGenieE2E } from './helpers/launch';
+import {
+    describeHoverCapture,
+    hoverCaptureBound,
+    hoverWasCaptured,
+} from './helpers/pulse-hover';
 
 /**
  * E2E test for the AgentPulse sparkline surviving a row HOVER (genie#197).
@@ -167,6 +172,14 @@ async function headBackgroundAlpha(): Promise<number> {
 interface Shots {
     /** collapsed, not hovered */
     cU: string;
+    /** collapsed, not hovered — a SECOND time.
+     *
+     *  The jitter baseline (genie#518). `cU` and `cU2` differ by nothing except
+     *  the passage of time: same row, same state, both unhovered. So whatever
+     *  they differ by is what re-photographing this row costs on this machine,
+     *  at this DPI, with the ring shifting underneath — the noise the hovered
+     *  comparison has to be judged against instead of against a guessed number. */
+    cU2: string;
     /** collapsed, hovered */
     cH: string;
     /** expanded, not hovered */
@@ -223,12 +236,44 @@ async function takeShots(): Promise<Shots> {
     };
 
     const cU = await shotIn(true, false);
+    // Immediately after cU and in the identical state: the pair whose difference
+    // IS the noise floor. Taken here rather than at the end so the two frames
+    // are as close together as cU and cH are.
+    const cU2 = await shotIn(true, false);
     const eU = await shotIn(false, false);
     const cH = await shotIn(true, true);
     const eH = await shotIn(false, true);
 
     await setCollapsed(true);
-    return { cU, cH, eU, eH };
+    return { cU, cU2, cH, eU, eH };
+}
+
+/** How many times to re-photograph before calling a missed hover a failure. */
+const HOVER_CAPTURE_ATTEMPTS = 4;
+
+/**
+ * Shots whose photographs PROVE the row was hovered — retaken until they do.
+ *
+ * A hover that goes stale between `hover()` and `screenshot()` is a MEASUREMENT
+ * failure: the picture is of an unhovered row, and it says nothing at all about
+ * whether the row restyles on hover. Before genie#518 that outcome failed the
+ * run and was read as a product regression. Re-photographing is the honest
+ * response, and it is bounded — if the hover never lands in four attempts, that
+ * is a finding rather than noise, and the numbers say which finding it is.
+ */
+async function takeHoverProvenShots(): Promise<Shots & { jitter: number; hovered: number }> {
+    let shots = await takeShots();
+    let jitter = await differingPixels(shots.cU, shots.cU2);
+    let hovered = await differingPixels(shots.cU, shots.cH);
+
+    for (let attempt = 2; attempt <= HOVER_CAPTURE_ATTEMPTS; attempt++) {
+        if (hoverWasCaptured({ jitter, hovered })) break;
+        shots = await takeShots();
+        jitter = await differingPixels(shots.cU, shots.cU2);
+        hovered = await differingPixels(shots.cU, shots.cH);
+    }
+
+    return { ...shots, jitter, hovered };
 }
 
 test.beforeAll(async () => {
@@ -298,15 +343,23 @@ test('the sparkline is painted by the hovered element itself, not behind it', as
 
 test('the sparkline is visible, and the hover really reaches the photographs', async () => {
     // Both guards for everything below, and neither involves the fix.
-    const { cU, cH, eU } = await takeShots();
+    const { cU, eU, jitter, hovered } = await takeHoverProvenShots();
 
     // The metric can see the sparkline at all: collapsed vs expanded, no hover.
-    expect(await differingPixels(cU, eU)).toBeGreaterThan(100);
+    // Judged against the SAME measured noise floor, for the same reason as
+    // below: the sparkline is documented at ~7,500 differing pixels, so a bare
+    // `> 100` here would also pass on jitter alone.
+    expect(await differingPixels(cU, eU)).toBeGreaterThan(hoverCaptureBound(jitter));
 
     // The hover is genuinely in the photograph: the opaque fill repaints the
-    // whole row, so this is thousands of pixels. Without it, a hover that never
-    // landed would look exactly like a sparkline that survived one.
-    expect(await differingPixels(cU, cH)).toBeGreaterThan(100);
+    // whole row. Bounded by what re-photographing the SAME unhovered row costs
+    // on this run rather than by a fixed number — genie#518, where `> 100` sat
+    // three pixels above the missed-hover noise (97) instead of between that and
+    // the repaint it was looking for, and so was both marginal against a stale
+    // hover and vacuous against a row that stopped restyling.
+    expect(hovered, describeHoverCapture({ jitter, hovered })).toBeGreaterThan(
+        hoverCaptureBound(jitter),
+    );
 });
 
 // STILL BROKEN — genie#197 is NOT fixed, and this is the evidence.
@@ -335,10 +388,17 @@ test('the sparkline is visible, and the hover really reaches the photographs', a
 // step is a real compositor inspection (DevTools layer panel on a running app),
 // not another CSS guess.
 test.fixme('the sparkline survives the hover — genie#197', async () => {
-    const { cU, cH, eU, eH } = await takeShots();
+    // `hoverProof` is the HOVER-CAPTURE measurement (unhovered vs hovered row);
+    // `hovered` below is a different quantity entirely -- the sparkline's own
+    // contribution while the row is hovered. Named apart because confusing them
+    // is what this test exists to detect.
+    const { cU, cH, eU, eH, jitter, hovered: hoverProof } = await takeHoverProvenShots();
 
     // Proof the comparison is being made under the conditions it claims.
-    expect(await differingPixels(cU, cH)).toBeGreaterThan(100);
+    expect(
+        hoverProof,
+        describeHoverCapture({ jitter, hovered: hoverProof }),
+    ).toBeGreaterThan(hoverCaptureBound(jitter));
 
     const idle = await differingPixels(cU, eU);
     const hovered = await differingPixels(cH, eH);
