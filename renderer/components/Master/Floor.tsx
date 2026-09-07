@@ -37,7 +37,10 @@ export interface FloorState {
     focusId: string | null;
     attentionIds: Set<string>;
     pendingNudges?: Record<string, AgentInboxIncomingNotice>;
-    onSendPendingNudge?: (id: string) => void;
+    onSendPendingNudge?: (
+        id: string,
+        options?: { clearInput?: boolean },
+    ) => Promise<boolean> | void;
     onAttentionClear?: (id: string) => void;
     recoverGen?: Record<string, number>;
     maximizedId: string | null;

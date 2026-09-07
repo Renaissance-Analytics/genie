@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { ShellProfile } from '@particle-academy/fancy-term';
 import Terminal from '../Terminal/Terminal';
+import PendingNudgeNotice from './PendingNudgeNotice';
 import { IconMaximize, IconMinimize, IconPause, IconX } from './icons';
 import {
     api,
@@ -32,7 +33,12 @@ interface Props {
     /** Agent-integration MCP: pulse the panel border (imDone) until focused. */
     attention?: boolean;
     pendingNudge?: AgentInboxIncomingNotice;
-    onSendPendingNudge?: (id: string) => void;
+    /** Release the parked notice. Resolves to whether it landed, so the banner
+     *  can offer the kill-line when Genie still believes the box is occupied. */
+    onSendPendingNudge?: (
+        id: string,
+        options?: { clearInput?: boolean },
+    ) => Promise<boolean> | void;
     /** Clear the attention glow when the user focuses this panel's xterm. */
     onAttentionClear?: () => void;
     maximized?: boolean;
@@ -101,6 +107,14 @@ export default function TerminalPanel({
         onMarkActive();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
+
+    // A send was refused, so Genie still believes this box is occupied and only
+    // the person in front of it can settle that. Reset whenever the parked
+    // notice changes, so a fresh one is never met by the previous one's refusal.
+    const [nudgeNeedsClear, setNudgeNeedsClear] = useState(false);
+    useEffect(() => {
+        setNudgeNeedsClear(false);
+    }, [pendingNudge]);
 
     // null until detection resolves. The XTerm render WAITS for this:
     // fancy-term reshapes its DOM tree when showShellBar flips, which
@@ -252,15 +266,15 @@ export default function TerminalPanel({
             </div>
             <div className="term-host">
                 {pendingNudge && (
-                    <div className="terminal-nudge-notice" role="status" data-testid="agentinbox-incoming">
-                        <span>
-                            <strong>Nudge waiting</strong>
-                            <small>Your input is untouched. Clear or send it first.</small>
-                        </span>
-                        <button type="button" onClick={() => onSendPendingNudge?.(spec.id)}>
-                            Send nudge
-                        </button>
-                    </div>
+                    <PendingNudgeNotice
+                        terminalId={spec.id}
+                        needsClear={nudgeNeedsClear}
+                        onSend={(id, options) => {
+                            void Promise.resolve(onSendPendingNudge?.(id, options)).then(
+                                (sent) => setNudgeNeedsClear(sent === false),
+                            );
+                        }}
+                    />
                 )}
                 {shellOptions !== null && (
                     <Terminal

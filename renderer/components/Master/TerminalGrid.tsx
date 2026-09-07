@@ -65,7 +65,10 @@ interface Props {
     /** Agent-integration MCP: terminals pulsing for attention (imDone). */
     attentionIds: Set<string>;
     pendingNudges?: Record<string, AgentInboxIncomingNotice>;
-    onSendPendingNudge?: (id: string) => void;
+    onSendPendingNudge?: (
+        id: string,
+        options?: { clearInput?: boolean },
+    ) => Promise<boolean> | void;
     /** Clear a terminal's attention glow when its panel gains focus. */
     onAttentionClear?: (id: string) => void;
     /** Per-terminal recovery generation (genie#203). A bump remounts the panel
@@ -278,7 +281,10 @@ interface ResizableGridProps {
     focusId: string | null;
     attentionIds: Set<string>;
     pendingNudges: Record<string, AgentInboxIncomingNotice>;
-    onSendPendingNudge?: (id: string) => void;
+    onSendPendingNudge?: (
+        id: string,
+        options?: { clearInput?: boolean },
+    ) => Promise<boolean> | void;
     onAttentionClear?: (id: string) => void;
     recoverGen?: Record<string, number>;
     maximizedId: string | null;
@@ -736,7 +742,10 @@ interface PanelForProps {
     /** Agent-integration MCP: pulse this panel's border (imDone). */
     attention: boolean;
     pendingNudge?: AgentInboxIncomingNotice;
-    onSendPendingNudge?: (id: string) => void;
+    onSendPendingNudge?: (
+        id: string,
+        options?: { clearInput?: boolean },
+    ) => Promise<boolean> | void;
     /** Clear this panel's attention glow when it gains focus. */
     onAttentionClear?: () => void;
     maximized: boolean;

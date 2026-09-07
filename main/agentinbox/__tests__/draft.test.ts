@@ -247,3 +247,122 @@ describe('buildNudgeSequence', () => {
         }
     });
 });
+
+/**
+ * A key that cannot type is not a reason to stop nudging (genie#333).
+ *
+ * The owner watched "Send nudge" refuse over a visibly EMPTY input box, and keep
+ * refusing. One bare Escape does it: `isHumanKey` counts a lone `\x1b` as a
+ * human key, `noteDraft` drops confidence, and `planNudge` checks confidence
+ * BEFORE the empty-box shortcut — so an empty box is refused until someone
+ * happens to press Enter, Ctrl-C or Ctrl-U. Escape is how every dialog in a TUI
+ * is dismissed, so the gate jams during ordinary use.
+ *
+ * The flag was built for a `swap` plan that cut the draft out and pasted it back,
+ * which needed to know WHAT was in the box and WHERE the caret was. That plan is
+ * gone — `NudgePlan` is `submit | defer` — so only one question is left: could
+ * there be anything in the box at all? Keys that cannot put content into an
+ * empty box no longer answer "maybe".
+ *
+ * THE INVARIANT, and the only one this model owes anyone: while `confident`,
+ * `text === ''` implies the box is empty. `text` may over-state what is really
+ * there (a kill or a word-delete shrinks the box and not the model), and that
+ * only ever makes Genie more cautious.
+ */
+describe('noteDraft — keys that cannot type do not jam the gate', () => {
+    const after = (...chunks: string[]): Draft =>
+        chunks.reduce((s, c) => noteDraft(s, c), EMPTY_DRAFT);
+
+    it('a bare Escape leaves an empty box nudgeable — the live symptom', () => {
+        // Dismissing a `/mcp` dialog is one Escape, and it used to cost the
+        // terminal every nudge for the rest of the session.
+        expect(planNudge(after('\x1b'))).toEqual({ mode: 'submit' });
+    });
+
+    it('caret keys move through a box without changing what is in it', () => {
+        for (const key of [
+            '\x1b[C', '\x1b[D', '\x1b[H', '\x1b[F', // right, left, home, end
+            '\x1bOC', '\x1bOD', '\x1bOH', '\x1bOF', // the same in application mode
+            '\x1b[1~', '\x1b[4~', '\x1b[5~', '\x1b[6~', // home, end, page up/down
+            '\x1b[3~', // delete — it can only take characters out
+            '\x1b[1;5C', // ctrl-right: parameters do not change what the key does
+            '\x01', '\x05', // ctrl-a, ctrl-e
+        ]) {
+            expect({ key, plan: planNudge(after(key)) }).toEqual({
+                key,
+                plan: { mode: 'submit' },
+            });
+        }
+    });
+
+    it('a caret key still costs confidence once Genie believes there IS text', () => {
+        // POSITIVE CONTROL for the one real hole: after the caret moves, a
+        // backspace deletes a character Genie cannot identify, so the model
+        // would under-count and reach '' while the box still holds something.
+        expect(planNudge(after('ab', '\x1b[D', '\x7f', '\x7f'))).toEqual({ mode: 'defer' });
+        expect(after('ab', '\x1b[D').confident).toBe(false);
+    });
+
+    it('history recall still fails closed — it can put a whole command in the box', () => {
+        expect(planNudge(after('\x1b[A'))).toEqual({ mode: 'defer' });
+        expect(planNudge(after('\x1b[B'))).toEqual({ mode: 'defer' });
+        expect(planNudge(after('\x1bOA'))).toEqual({ mode: 'defer' });
+    });
+
+    it('completion still fails closed — it inserts text Genie never saw', () => {
+        expect(planNudge(after('\t'))).toEqual({ mode: 'defer' });
+        // Shift-Tab is CSI Z, which `isHumanKey` does not match at all — so it
+        // used to pass through as "the emulator answering a query" and left the
+        // model claiming an empty box while a completion had been cycled into it.
+        expect(planNudge(after('\x1b[Z'))).toEqual({ mode: 'defer' });
+    });
+
+    it('a key Genie cannot classify still fails closed', () => {
+        expect(planNudge(after('\x12'))).toEqual({ mode: 'defer' }); // ctrl-r, reverse search
+        expect(planNudge(after('\x19'))).toEqual({ mode: 'defer' }); // ctrl-y, yanks a kill back
+        expect(planNudge(after('\x1bd'))).toEqual({ mode: 'defer' }); // alt-<key>
+        expect(planNudge(after('\x1b[15~'))).toEqual({ mode: 'defer' }); // F5, bound to anything
+    });
+
+    it('typing is still typing — a real draft is never nudged over', () => {
+        // POSITIVE CONTROL. Everything above widens what counts as an empty box;
+        // this is the case that must not widen with it.
+        expect(planNudge(after('deploy the thing'))).toEqual({ mode: 'defer' });
+        expect(planNudge(after('\x1b', 'deploy the thing'))).toEqual({ mode: 'defer' });
+        expect(planNudge(after('deploy', '\x1b'))).toEqual({ mode: 'defer' });
+        expect(planNudge(after('\x16'))).toEqual({ mode: 'defer' }); // an image chip
+    });
+});
+
+/**
+ * The human's override.
+ *
+ * The model cannot see a TUI empty its own composer, and no amount of parsing
+ * will change that — Genie is reading the bytes going IN. So the person who can
+ * see the box gets to say so, and `clear-and-submit` is how they say it: a
+ * kill-line first, which is not a guess but the one byte that both empties the
+ * box and re-syncs the model ({@link CLEARS_LINE}).
+ */
+describe('buildNudgeSequence — clear-and-submit', () => {
+    const NOTICE = '[Genie] You just received a message from guardian as a DM.';
+
+    it('kills the line first, then types the notice and submits it', () => {
+        const w = buildNudgeSequence({ mode: 'clear-and-submit' }, NOTICE);
+        expect(w.map((x) => x.bytes)).toEqual(['\x15', NOTICE, '\r']);
+        expect(w[0]!.delayMs).toBe(0);
+        expect(w.slice(1).every((x) => x.delayMs > 0)).toBe(true);
+    });
+
+    it('is never what the automatic gate asks for', () => {
+        // POSITIVE CONTROL: clearing someone's box is a human's call. Nothing
+        // `planNudge` can return may destroy what is in there.
+        for (const draft of [
+            EMPTY_DRAFT,
+            d({ text: 'deploy the thing' }),
+            d({ text: '', confident: false }),
+            d({ text: '', image: true }),
+        ]) {
+            expect(planNudge(draft).mode).not.toBe('clear-and-submit');
+        }
+    });
+});
