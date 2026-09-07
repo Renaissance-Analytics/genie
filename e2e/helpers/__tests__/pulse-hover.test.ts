@@ -26,25 +26,33 @@ import {
 const MISSED = 97;
 
 /**
- * `differingPixels(cU, eU)` per platform, measured on CI.
+ * `differingPixels(cU, eU)` per platform, measured on CI with the corrected
+ * instrument (run 34078215365).
  *
- * Here because they are the reason every floor in this module is small. They
- * disagree by 14×, so no single absolute number describes "a visible change to
- * this row" everywhere — and a floor of 1,000 picked from the largest of them
- * took all three platforms red.
+ * ★ These replace an earlier table reading 564 / 7,808 / 7,838, which was used
+ * here to argue that the platforms disagree by 14×. They do not: that spread
+ * came from the contaminated capture sequence, and with it fixed all three sit
+ * within 3%. The floors are small because the real signal is ~564 EVERYWHERE,
+ * not because one platform is unusual.
  */
-const SIGNAL = { macos: 564, ubuntu: 7_808, windows: 7_838 };
+const SIGNAL = { macos: 564, ubuntu: 571, windows: 556 };
 
-/** The contaminated "noise" the first instrument produced, beside the signal it
- *  was measured against. Ubuntu and Windows both. */
-const CONTAMINATED = { jitter: 7_625, sparkline: SIGNAL.ubuntu };
+/** What the CORRECTED instrument measures for capture noise: nothing at all.
+ *  Two back-to-back photographs of the same unhovered row are identical. */
+const CLEAN_NOISE = 0;
+
+/** The contaminated readings the FIRST instrument produced — kept because they
+ *  are the evidence the plausibility gate exists for, and the shape it has to
+ *  refuse. Both are Ubuntu's; Windows measured 7,662 against 7,838. */
+const CONTAMINATED = { jitter: 7_625, sparkline: 7_808 };
 
 describe('no floor may exceed the smallest real signal', () => {
     it('holds for every floor in the module', () => {
         // ★ The assertion that would have caught the 1,000 floor before CI did.
-        // Any floor above 564 fails macOS on a perfectly healthy row.
+        // Any floor above ~556 fails a perfectly healthy row on every platform.
+        const smallest = Math.min(...Object.values(SIGNAL));
         for (const floor of [HOVER_FILL_FLOOR, SPARKLINE_FLOOR]) {
-            expect(floor).toBeLessThan(SIGNAL.macos);
+            expect(floor).toBeLessThan(smallest);
         }
     });
 
@@ -73,12 +81,27 @@ describe('an implausible noise sample is rejected, not used', () => {
         expect(
             noiseWasMeasurable({ jitter: MISSED, hovered: 0, sparkline: SIGNAL.macos }),
         ).toBe(true);
+        // And what the corrected instrument actually measures: nothing.
+        expect(
+            noiseWasMeasurable({ jitter: CLEAN_NOISE, hovered: 0, sparkline: SIGNAL.macos }),
+        ).toBe(true);
     });
 
-    it('scales across platforms instead of naming a per-platform constant', () => {
-        // The same fraction works at 564 and at 7,838, which is the whole reason
-        // it is expressed against the signal measured in the same run.
-        for (const sparkline of Object.values(SIGNAL)) {
+    it('still refuses a dead hover when the noise measures ZERO', () => {
+        // The healthy case on CI is noise 0, which collapses the ratio to the
+        // floor -- so the floor is what carries the guard in practice, and it
+        // must still refuse a row that has stopped restyling.
+        expect(hoverWasCaptured({ jitter: CLEAN_NOISE, hovered: CLEAN_NOISE })).toBe(false);
+        expect(hoverWasCaptured({ jitter: CLEAN_NOISE, hovered: 50 })).toBe(false);
+        // Positive control: the real hovered figure from CI passes comfortably.
+        expect(hoverWasCaptured({ jitter: CLEAN_NOISE, hovered: 7_994 })).toBe(true);
+    });
+
+    it('scales across magnitudes instead of naming a constant', () => {
+        // Expressed against the same-run signal, so it holds at 556 and at 7,838
+        // alike -- which is what makes it survive the platform table above
+        // turning out to have been wrong.
+        for (const sparkline of [...Object.values(SIGNAL), 7_808, 7_838]) {
             const ok = sparkline / NOISE_SIGNAL_DIVISOR;
             expect(noiseWasMeasurable({ jitter: ok, hovered: 0, sparkline })).toBe(true);
             expect(noiseWasMeasurable({ jitter: ok + 1, hovered: 0, sparkline })).toBe(false);
@@ -89,7 +112,7 @@ describe('an implausible noise sample is rejected, not used', () => {
         // With noise held to a quarter of the signal, the derived bound can never
         // exceed three quarters of it — so the Ubuntu failure (bound 76,250 vs
         // signal 7,808) is unreachable by construction, not by a second number.
-        for (const sparkline of Object.values(SIGNAL)) {
+        for (const sparkline of [...Object.values(SIGNAL), 7_808, 7_838]) {
             const worst = sparkline / NOISE_SIGNAL_DIVISOR;
             expect(hoverCaptureBound(worst)).toBeLessThan(sparkline);
         }
