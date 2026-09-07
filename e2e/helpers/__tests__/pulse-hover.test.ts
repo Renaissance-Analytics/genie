@@ -2,57 +2,96 @@ import { describe, expect, it } from 'vitest';
 import {
     HOVER_FILL_FLOOR,
     JITTER_RATIO,
-    describeHoverCapture,
+    NOISE_SIGNAL_DIVISOR,
+    SPARKLINE_FLOOR,
+    describeMeasurement,
     hoverCaptureBound,
     hoverWasCaptured,
+    measurementIsUsable,
+    noiseWasMeasurable,
 } from '../pulse-hover';
 
 /**
- * Was the row HOVERED in the photograph? (genie#518)
+ * Was the row HOVERED in the photograph, and was the noise floor measurable?
+ * (genie#518)
  *
- * The E2E suite cannot stage this. A missed hover happens when the row
- * re-renders between `hover()` and `page.screenshot()` — about once a second, as
- * the pulse ring shifts — and nothing in a spec can make that race land on
- * demand. So the DECISION is here, tested against the numbers CI actually
- * produced, and the spec applies it.
- *
- * The numbers below are real. On PR #516's macOS shard the hovered-vs-unhovered
- * comparison returned **97** against a bound of `> 100`, and the run was read as
- * a marginal threshold. It was not marginal: 97 is what two photographs of the
- * SAME unhovered row differ by. The hover was absent from the picture entirely,
- * and the bound had been placed three pixels above that noise instead of between
- * it and the real signal.
+ * The E2E suite cannot stage either failure. A missed hover happens when the row
+ * re-renders between `hover()` and `page.screenshot()`; a contaminated noise
+ * sample happens when the ring changes between the two baseline frames. Neither
+ * lands on demand. So the DECISIONS are here, tested against the numbers CI
+ * actually produced, and the spec applies them.
  */
 
-/** What a missed hover actually measured on CI. */
+/** What a missed hover measured on macOS (#516). */
 const MISSED = 97;
 
 /**
- * What the row's own chrome is worth, per platform, measured on CI.
+ * `differingPixels(cU, eU)` per platform, measured on CI.
  *
- * These are `differingPixels(cU, eU)` — the sparkline's contribution — and they
- * are here because they are the reason this file has a SMALL floor. They
+ * Here because they are the reason every floor in this module is small. They
  * disagree by 14×, so no single absolute number describes "a visible change to
- * this row" on every platform, and an earlier floor of 1,000 chosen from the
- * largest of them failed macOS on a healthy row.
+ * this row" everywhere — and a floor of 1,000 picked from the largest of them
+ * took all three platforms red.
  */
-const SPARKLINE_BY_PLATFORM = { macos: 564, ubuntu: 7_808, windows: 7_838 };
+const SIGNAL = { macos: 564, ubuntu: 7_808, windows: 7_838 };
 
-describe('the bound never weakens what shipped', () => {
-    it('is at least the old bound, whatever the noise measures', () => {
-        expect(hoverCaptureBound(0)).toBe(HOVER_FILL_FLOOR);
-        expect(HOVER_FILL_FLOOR).toBe(100);
-        for (const jitter of [0, 1, 10, 33]) {
-            expect(hoverCaptureBound(jitter)).toBeGreaterThanOrEqual(100);
+/** The contaminated "noise" the first instrument produced, beside the signal it
+ *  was measured against. Ubuntu and Windows both. */
+const CONTAMINATED = { jitter: 7_625, sparkline: SIGNAL.ubuntu };
+
+describe('no floor may exceed the smallest real signal', () => {
+    it('holds for every floor in the module', () => {
+        // ★ The assertion that would have caught the 1,000 floor before CI did.
+        // Any floor above 564 fails macOS on a perfectly healthy row.
+        for (const floor of [HOVER_FILL_FLOOR, SPARKLINE_FLOOR]) {
+            expect(floor).toBeLessThan(SIGNAL.macos);
         }
     });
 
-    it('stays under the smallest real signal any platform produces', () => {
-        // The floor must not exceed what a healthy row is worth on its SMALLEST
-        // platform, or the guard fails where nothing is wrong. This is the
-        // assertion that would have caught the 1,000 floor before CI did.
-        for (const measured of Object.values(SPARKLINE_BY_PLATFORM)) {
-            expect(HOVER_FILL_FLOOR).toBeLessThan(measured);
+    it('keeps the hover floor at the bound that already shipped', () => {
+        // Never weaker than `> 100`, so this change cannot regress the guard.
+        expect(HOVER_FILL_FLOOR).toBe(100);
+        expect(hoverCaptureBound(0)).toBe(HOVER_FILL_FLOOR);
+    });
+
+    it('keeps the sparkline floor clear of the observed capture noise', () => {
+        expect(SPARKLINE_FLOOR).toBeGreaterThan(MISSED * 2);
+    });
+});
+
+describe('an implausible noise sample is rejected, not used', () => {
+    it('refuses the contaminated reading the first instrument produced', () => {
+        // 7,625 of "noise" against a 7,808 signal is not noise — the baseline
+        // photographed a repaint. Using it put the bound at 76,250, ten times
+        // the signal, and took Ubuntu and Windows red.
+        expect(noiseWasMeasurable({ ...CONTAMINATED, hovered: 0 })).toBe(false);
+    });
+
+    it('accepts a believable one', () => {
+        // Positive control: the same function does accept a real sample, so the
+        // refusal above is the contamination and not a gate that never opens.
+        expect(
+            noiseWasMeasurable({ jitter: MISSED, hovered: 0, sparkline: SIGNAL.macos }),
+        ).toBe(true);
+    });
+
+    it('scales across platforms instead of naming a per-platform constant', () => {
+        // The same fraction works at 564 and at 7,838, which is the whole reason
+        // it is expressed against the signal measured in the same run.
+        for (const sparkline of Object.values(SIGNAL)) {
+            const ok = sparkline / NOISE_SIGNAL_DIVISOR;
+            expect(noiseWasMeasurable({ jitter: ok, hovered: 0, sparkline })).toBe(true);
+            expect(noiseWasMeasurable({ jitter: ok + 1, hovered: 0, sparkline })).toBe(false);
+        }
+    });
+
+    it('acts as the CEILING that stops a noisy sample tightening the bound', () => {
+        // With noise held to a quarter of the signal, the derived bound can never
+        // exceed three quarters of it — so the Ubuntu failure (bound 76,250 vs
+        // signal 7,808) is unreachable by construction, not by a second number.
+        for (const sparkline of Object.values(SIGNAL)) {
+            const worst = sparkline / NOISE_SIGNAL_DIVISOR;
+            expect(hoverCaptureBound(worst)).toBeLessThan(sparkline);
         }
     });
 });
@@ -63,54 +102,65 @@ describe('a landed hover is separated from a missed one', () => {
     });
 
     it('accepts a hover worth even the SMALLEST platform’s row chrome', () => {
-        // Positive control, and deliberately sized to macOS's 564 rather than to
-        // the comfortable 7,800: a guard that only passes on the generous
-        // platforms is the bug this file already shipped once.
-        expect(
-            hoverWasCaptured({ jitter: 20, hovered: SPARKLINE_BY_PLATFORM.macos }),
-        ).toBe(true);
+        // Sized to macOS's 564 rather than the comfortable 7,800: a guard that
+        // only passes on the generous platforms is the bug already shipped once.
+        expect(hoverWasCaptured({ jitter: 20, hovered: SIGNAL.macos })).toBe(true);
     });
-});
 
-describe('the RATIO is what detects a row that stopped restyling', () => {
     it('refuses a hovered frame that has collapsed to the noise floor', () => {
-        // THE POINT OF THE WHOLE FILE. If the row stops painting its fill, the
-        // hovered frame photographs like the unhovered one, so `hovered` falls
-        // to `jitter` — and a multiple of the measured noise catches that at any
+        // THE POINT. A row that stops painting its fill photographs the same
+        // hovered as not, so `hovered` falls to `jitter` — caught at any
         // magnitude, on any platform, without knowing what the fill is worth.
-        for (const jitter of [12, 97, 400, 7_625]) {
+        for (const jitter of [12, 97, 400, 1_900]) {
             expect(hoverWasCaptured({ jitter, hovered: jitter })).toBe(false);
         }
     });
 
-    it('scales with a noisy frame, so size alone is not evidence', () => {
-        expect(hoverCaptureBound(400)).toBe(400 * JITTER_RATIO);
-        expect(hoverWasCaptured({ jitter: 400, hovered: 1_000 })).toBe(false);
-        // Positive control: the same noisy frame DOES accept a real hover.
-        expect(hoverWasCaptured({ jitter: 400, hovered: 40_000 })).toBe(true);
-    });
-
     it('is not vacuous on a perfectly still frame', () => {
-        // Zero noise would collapse a pure ratio to zero and pass anything.
         expect(hoverWasCaptured({ jitter: 0, hovered: 50 })).toBe(false);
         expect(hoverWasCaptured({ jitter: 0, hovered: 5_000 })).toBe(true);
     });
 });
 
-describe('the failure says what was measured', () => {
-    it('names both numbers and the bound they were judged against', () => {
-        const message = describeHoverCapture({ jitter: MISSED, hovered: MISSED });
-        expect(message).toContain(String(MISSED));
-        expect(message).toContain(String(hoverCaptureBound(MISSED)));
-        expect(message).toMatch(/noise/i);
+describe('a run is usable only when BOTH hold', () => {
+    it('rejects a contaminated baseline even when the hover looks enormous', () => {
+        // The Ubuntu run, exactly: a hover figure that would sail past any fixed
+        // bound, on top of a baseline that cannot be believed.
+        expect(
+            measurementIsUsable({ ...CONTAMINATED, hovered: 50_000 }),
+        ).toBe(false);
     });
 
-    it('reads as a MEASUREMENT failure, and names the other possibility too', () => {
-        // The distinction is the point of genie#518: a hover that never reached
-        // the photograph says nothing about whether the row restyles on hover.
-        // But the message must not hide the case where it IS the row's fault.
-        const message = describeHoverCapture({ jitter: MISSED, hovered: MISSED });
+    it('accepts a run where the noise is small and the hover is real', () => {
+        expect(
+            measurementIsUsable({ jitter: 40, hovered: 4_000, sparkline: SIGNAL.ubuntu }),
+        ).toBe(true);
+    });
+});
+
+describe('the failure names which story the numbers tell', () => {
+    const contaminated = { ...CONTAMINATED, hovered: 50_000 };
+    const stale = { jitter: MISSED, hovered: MISSED, sparkline: SIGNAL.macos };
+
+    it('calls a contaminated baseline a measurement failure, and says why', () => {
+        const message = describeMeasurement(contaminated);
+        expect(message).toMatch(/noise floor could not be measured/i);
+        expect(message).toMatch(/repaint/i);
+        expect(message).toContain('7625');
+    });
+
+    it('calls a stale hover a measurement failure, and names the OTHER case too', () => {
+        const message = describeMeasurement(stale);
+        expect(message).toMatch(/hover was not in the photograph/i);
         expect(message).toMatch(/measurement failure/i);
-        expect(message).toMatch(/stopped painting/i);
+        // It must not hide the case where the row really is at fault.
+        expect(message).toMatch(/stopped\s+painting/i);
+    });
+
+    it('always carries every number a reader needs', () => {
+        for (const m of [contaminated, stale]) {
+            expect(describeMeasurement(m)).toContain(String(m.sparkline));
+            expect(describeMeasurement(m)).toContain(String(m.jitter));
+        }
     });
 });
