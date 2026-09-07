@@ -1,0 +1,48 @@
+name: Tynn contract
+
+# The one check that cannot be answered from inside this repository: do the Tynn
+# routes Genie calls still exist?
+#
+# genie#411 — Tynn retired `POST /api/v1/wishes`, every quick capture 404'd, and
+# BOTH repositories' suites stayed green: Tynn's tests know nothing about a
+# desktop client, Genie's knew nothing about which Tynn routes exist. A route
+# retirement is a change in another repo on another schedule, so nothing a
+# commit here triggers can catch it — which is why this runs on a CLOCK as well
+# as on a diff.
+on:
+  schedule:
+    # Daily, early UTC. A retirement is found within a day instead of by whoever
+    # presses the hotkey next.
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      # A PR that changes what Genie asks Tynn for, or what it claims to ask
+      # for, gets the probe run against it.
+      - 'main/backend/tynn-contract.ts'
+      - 'main/backend/tynn.ts'
+      - 'main/tynn/**'
+      - 'main/issue-watch/**'
+      - '.github/workflows/tynn-contract.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install
+        run: npm ci
+      # Deliberately NOT `continue-on-error`. An unreachable Tynn fails this
+      # job, because "we could not check" and "the contract is intact" are
+      # different facts and a green tick would report the second one.
+      - name: Probe the Tynn endpoints Genie depends on
+        run: npm run test:contract

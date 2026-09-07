@@ -28,6 +28,8 @@ npm run typecheck:main      # tsc --noEmit on main/
 npm run typecheck:renderer  # tsc --noEmit on renderer/
 npm run test                # vitest — main-process + renderer unit tests
 npm run test:watch
+npm run test:hosting        # the REAL bundled Caddy / php-cgi. Linux + Docker.
+npm run test:contract       # probes the real Tynn. Needs network. See below.
 npm run test:e2e            # Playwright + Electron. See the warning below.
 ```
 
@@ -428,6 +430,24 @@ proves the mock works.
 
 Note: `e2e/` is currently outside both tsconfigs, so specs are not typechecked by any
 script. Check them by hand until that's fixed.
+
+#### The Tynn contract lane
+
+Genie is half of a cross-repo integration, and no test inside either repo can see the seam:
+Tynn retired `POST /api/v1/wishes`, every quick capture 404'd, and **both** suites stayed
+green (genie#411). So the endpoints Genie calls are declared in
+`main/backend/tynn-contract.ts` and checked in two halves:
+
+- `npm test` parses Genie's own source and fails if that manifest has drifted from the
+  client. Offline, always.
+- `npm run test:contract` asks the real Tynn whether those routes still resolve. It probes
+  with `OPTIONS`, which Laravel answers from inside the router — no auth, no CSRF, no
+  controller, nothing written. CI runs it daily and on any PR touching a Tynn client.
+
+Adding a Tynn call? Declare it in the same commit. The offline half will tell you if you
+forget — that is what it is for. And note that the live half **fails** when Tynn is
+unreachable rather than skipping: "we could not check" and "the contract is intact" are
+different facts, and only one of them deserves a green tick.
 
 ### Shipping — implementation approval is not release approval
 

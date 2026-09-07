@@ -24,6 +24,7 @@
         "test:watch": "vitest",
         "test:coverage": "vitest run --coverage",
         "test:hosting": "vitest run --config vitest.hosting.config.ts",
+        "test:contract": "vitest run --config vitest.contract.config.ts",
         "build:e2e": "nextron build --no-pack",
         "pretest:e2e": "node scripts/electron-rebuild-e2e.mjs",
         "test:e2e": "npm run build:e2e && playwright test",
