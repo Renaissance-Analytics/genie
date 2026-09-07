@@ -685,3 +685,56 @@ describe('the guide teaches the address the code emits (genie#388)', () => {
         expect(list).toMatch(/queue|durable/i);
     });
 });
+
+/**
+ * AGENT-TO-AGENT MESSAGING HAS ONE CHANNEL, AND THE PROTOCOL HAS TO SAY SO.
+ *
+ * A harness may carry its own cross-session messaging — Claude Code has one —
+ * and reaching for it looks equivalent from inside the agent. It is not:
+ *
+ *  - Genie cannot see it, so the AgentPulse cannot mark it, an inbox notice
+ *    cannot glow, and the human has no record that two agents spoke.
+ *  - It is not durable. AgentInbox queues for an agent that is away and hands
+ *    the message over on its next `receive`; a harness channel to a session
+ *    that has ended is simply lost.
+ *  - It does not carry identity. AgentInbox addresses `{tui}:{name}`, which
+ *    survives a replaced terminal; a harness session id does not.
+ *
+ * The owner's instruction, verbatim: do not use Claude's cross-session
+ * messaging — use AgentInbox to message other agents. This pins it, because an
+ * unstated convention is one an agent reasonably breaks.
+ */
+describe('the protocol names AgentInbox as the only way to reach another agent', () => {
+    it('tells agents to use agentinbox, in the block seeded into every workspace', () => {
+        // POSITIVE CONTROL: the brief is the real one and non-empty, so a
+        // missing phrase below is an absence rather than an empty string.
+        expect(GENIE_AGENTS_BRIEF).toContain('connectToGenie');
+        expect(GENIE_AGENTS_BRIEF.length).toBeGreaterThan(200);
+
+        expect(GENIE_AGENTS_BRIEF).toMatch(/agentinbox/i);
+    });
+
+    it('refuses the harness channel by name, so the rule is not left to inference', () => {
+        // Naming the thing NOT to use is the point: "prefer agentinbox" leaves
+        // a harness channel looking like a reasonable second option.
+        expect(GENIE_AGENTS_BRIEF).toMatch(/cross-session/i);
+    });
+
+    it('KEEPS the harness channel for an agent’s OWN sub-agents', () => {
+        // The rule is about REACH, not about a mechanism being bad. An agent
+        // spawns helpers inside its own session; those are not peers, they are
+        // not in `agentinbox list`, and Genie has no business routing them.
+        //
+        // A blanket "never use cross-session messaging" would forbid that, and
+        // an agent obeying it would have no way to reach its own helpers at
+        // all. This asserts the EXCEPTION, so a later tightening that drops it
+        // fails here instead of quietly stranding every sub-agent.
+        expect(GENIE_AGENTS_BRIEF).toMatch(/sub-agents you spawned/i);
+        expect(GENIE_AGENTS_BRIEF).toMatch(/your own session/i);
+    });
+
+    it('says it in the MCP instructions too, which is what a fresh agent reads first', () => {
+        expect(GENIE_MCP_GUIDE).toContain('connectToGenie');
+        expect(GENIE_MCP_GUIDE).toMatch(/agentinbox/i);
+    });
+});

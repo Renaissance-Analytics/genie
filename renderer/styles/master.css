@@ -237,7 +237,7 @@
     z-index: 20;
 }
 .gleft.pinned {
-    width: 338px;
+    width: 300px;
 }
 
 /* The left column's own top strip — same height as the title bar, so the two

@@ -1009,6 +1009,16 @@ and still works.)
   question as structured markdown, and NAME THE ACTOR in every option — the
   modal is read by the USER, so bare "I"/"you" invert ("Agent: …" vs "You: …").
 
+**Reaching another agent in Genie → \`agentinbox\`, always.** Any agent you did
+not spawn yourself — another terminal, another workspace, any peer
+\`agentinbox list\` shows you — is reached only that way, never through your
+harness's own cross-session messaging. Genie cannot see a harness channel, so
+nothing marks it on that agent's pulse and the human has no record you spoke;
+and it is not durable, where AgentInbox queues for an agent that is away.
+**Sub-agents you spawned inside your own session are yours** — they are not in
+\`agentinbox list\`, and your harness's own messaging is the right way to reach
+them.
+
 **Everything else — hosting a site, background processes and cron, services,
 Genie Apps, driving terminals and other agents, workspaces, the knowledge graph
 — is in \`genieGuide\`.** Call it for the full usage of any of them; it reports
@@ -1043,6 +1053,17 @@ ONLY channel to the user.
   wired, and what is missing. The user can invoke it by name too.
 - **Never end a turn by printing "done" — call \`imDone\`.**
 - **Never ask a question in plaintext and wait — call \`ForceTheQuestion\`.**
+- **Messaging ANOTHER agent in Genie? → \`agentinbox\`, always.** Any agent you
+  did not spawn yourself — one in another terminal, another workspace, or any
+  peer \`agentinbox list\` shows you — is reached ONLY that way. Never your
+  harness's own cross-session messaging for those: Genie cannot see a harness
+  channel, so nothing marks it on that agent's pulse, no inbox notice glows, and
+  the human has no record the two of you spoke. Nor is it durable — AgentInbox
+  queues for an agent that is away, while a harness channel to an ended session
+  is simply lost.
+  **Sub-agents you spawned inside your own session are different**: they are
+  yours, they are not in \`agentinbox list\`, and your harness's own messaging is
+  the right way to reach them.
 - **For anything else, call \`genieGuide\`** — the full reference, and the
   running Genie version.
 
