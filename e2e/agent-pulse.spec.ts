@@ -172,13 +172,18 @@ async function headBackgroundAlpha(): Promise<number> {
 interface Shots {
     /** collapsed, not hovered */
     cU: string;
-    /** collapsed, not hovered — a SECOND time.
+    /** collapsed, not hovered — photographed a SECOND time, back to back.
      *
-     *  The jitter baseline (genie#518). `cU` and `cU2` differ by nothing except
-     *  the passage of time: same row, same state, both unhovered. So whatever
-     *  they differ by is what re-photographing this row costs on this machine,
-     *  at this DPI, with the ring shifting underneath — the noise the hovered
-     *  comparison has to be judged against instead of against a guessed number. */
+     *  The capture-noise baseline (genie#518). Taken immediately after `cU` with
+     *  NOTHING re-seeded and no state touched, so the only thing between the two
+     *  frames is the camera.
+     *
+     *  ★ The first version of this took the baseline through `shotIn` like the
+     *  others, which calls `freshPulses()` — and measured 7,625 on Ubuntu and
+     *  7,662 on Windows, as large as the sparkline itself. Fresh samples change
+     *  the ring, the polyline rescales to a new max, and nearly every pixel
+     *  moves. That is the CHART changing, not the camera shaking, and a bound
+     *  derived from it was ten times too strict. */
     cU2: string;
     /** collapsed, hovered */
     cH: string;
@@ -236,10 +241,11 @@ async function takeShots(): Promise<Shots> {
     };
 
     const cU = await shotIn(true, false);
-    // Immediately after cU and in the identical state: the pair whose difference
-    // IS the noise floor. Taken here rather than at the end so the two frames
-    // are as close together as cU and cH are.
-    const cU2 = await shotIn(true, false);
+    // Straight after cU: same state, same ring, nothing re-seeded and nothing
+    // clicked. `shoot` directly rather than `shotIn`, because `shotIn` would
+    // call freshPulses() and redraw the chart -- which is what made the first
+    // version of this baseline measure the chart instead of the camera.
+    const cU2 = await shoot(region);
     const eU = await shotIn(false, false);
     const cH = await shotIn(true, true);
     const eH = await shotIn(false, true);
@@ -346,17 +352,26 @@ test('the sparkline is visible, and the hover really reaches the photographs', a
     const { cU, eU, jitter, hovered } = await takeHoverProvenShots();
 
     // The metric can see the sparkline at all: collapsed vs expanded, no hover.
-    // Judged against the SAME measured noise floor, for the same reason as
-    // below: the sparkline is documented at ~7,500 differing pixels, so a bare
-    // `> 100` here would also pass on jitter alone.
-    expect(await differingPixels(cU, eU)).toBeGreaterThan(hoverCaptureBound(jitter));
+    //
+    // LEFT AS A FIXED BOUND, deliberately. Tying this one to the measured noise
+    // as well looked like the same improvement and is not: this comparison's
+    // magnitude is 564 on macOS against 7,808 on Ubuntu and 7,838 on Windows, so
+    // there is no single multiple that fits all three, and the attempt failed on
+    // every platform at once. Whether it can be made non-vacuous needs those
+    // three numbers reconciled first -- which is a separate question from the
+    // hover, and not one to answer while fixing a flake.
+    expect(await differingPixels(cU, eU)).toBeGreaterThan(100);
 
-    // The hover is genuinely in the photograph: the opaque fill repaints the
-    // whole row. Bounded by what re-photographing the SAME unhovered row costs
-    // on this run rather than by a fixed number — genie#518, where `> 100` sat
-    // three pixels above the missed-hover noise (97) instead of between that and
-    // the repaint it was looking for, and so was both marginal against a stale
-    // hover and vacuous against a row that stopped restyling.
+    // The hover is genuinely in the photograph.
+    //
+    // Bounded by a MULTIPLE of what re-photographing the same unhovered row
+    // costs on this run, not by a fixed number -- genie#518, where `> 100` sat
+    // three pixels above the missed-hover noise (97) and so was both marginal
+    // against a stale hover and vacuous against a row that had stopped
+    // restyling. The ratio is the half that does the work: a row which stops
+    // painting its fill photographs the same hovered as not, so `hovered` falls
+    // to `jitter` and any multiple above 1 refuses it -- on any platform,
+    // without anyone having to know what the fill is worth there.
     expect(hovered, describeHoverCapture({ jitter, hovered })).toBeGreaterThan(
         hoverCaptureBound(jitter),
     );

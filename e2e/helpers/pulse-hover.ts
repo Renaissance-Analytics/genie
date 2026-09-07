@@ -14,49 +14,82 @@
  * pixels". On PR #516's macOS shard it returned **97**, and that reads as a
  * threshold three pixels too tight. It is not.
  *
- * There are two populations here, roughly two orders of magnitude apart:
+ * There are two populations, far apart:
  *
- *   - the hover LANDED  — the row is repainted, and the comment's "thousands"
+ *   - the hover LANDED  — the row is repainted
  *   - the hover MISSED  — the two frames are the same row photographed twice,
- *                         differing only where the polyline shifted: ~97
+ *                         differing only by capture noise: ~97
  *
  * `> 100` was placed three pixels above the BOTTOM population instead of in the
- * gap between them. That makes it marginal against a missed hover and, worse,
- * VACUOUS against a real regression: if the row ever stopped restyling on hover,
- * polyline jitter alone would still clear 100 and the guard would pass.
+ * gap. That makes it marginal against a stale hover and, worse, VACUOUS against
+ * a real regression: if the row ever stopped restyling on hover, noise alone
+ * would still clear 100 and the guard would pass.
  *
- * ## What replaces it
+ * ## Why the bound is a RATIO, and why the floor is small
  *
- * The bound is derived from a measurement the suite takes on the same run: two
- * photographs of the SAME unhovered row. Their difference is the jitter floor —
- * platform, DPI, theme and timing all included, none of them guessed. A hovered
- * frame has to beat that by a wide ratio.
+ * ★ THE RATIO IS WHAT REMOVES THE VACUITY. THE FLOOR IS NOT.
  *
- * A ratio alone would collapse to nothing on a perfectly still frame, so there
- * is also a floor. {@link HOVER_FILL_FLOOR} is an order of magnitude above the
- * observed missed-hover noise (97) and well below the "thousands" the row's own
- * repaint is documented to produce — the spec's `test.fixme` records the
- * sparkline alone at ~7,500 differing pixels. It sits in the gap rather than at
- * either edge, which is the whole correction.
+ * If the row stops restyling on hover, the hovered frame collapses towards the
+ * unhovered one — towards the noise floor — so ANY bound expressed as a multiple
+ * of that floor catches it. An absolute number cannot: it has to be chosen, and
+ * choosing it needs a magnitude nobody has measured on every platform.
+ *
+ * A first version of this file set that floor to 1,000, reasoning from the
+ * `test.fixme`'s recorded "~7,500 differing pixels". **That figure is
+ * platform-specific and the assumption was wrong.** Measured on CI:
+ *
+ *   | platform | sparkline (`cU` vs `eU`) |
+ *   |----------|--------------------------|
+ *   | macOS    | **564**                  |
+ *   | Ubuntu   | 7,808                    |
+ *   | Windows  | 7,838                    |
+ *
+ * macOS renders the comparison region fourteen times smaller than the number the
+ * comment records, so a 1,000 floor failed there on a perfectly healthy row.
+ * That is the same fault this file exists to fix, committed one level up: a
+ * number chosen to match an assumption about the product.
+ *
+ * So the floor is {@link HOVER_FILL_FLOOR} = 100 — exactly the old bound, never
+ * weaker than what shipped — and all of the new strength comes from
+ * {@link JITTER_RATIO}, which needs no magnitude at all.
+ *
+ * ## The noise floor has to be measured WITHOUT re-seeding the ring
+ *
+ * The first version took its baseline from two shots that each re-seeded the
+ * pulse (`freshPulses()`), and measured 7,625 on Ubuntu and 7,662 on Windows —
+ * as large as the sparkline itself. Of course: fresh samples change the ring,
+ * the polyline rescales to a new max, and nearly every pixel moves. That is the
+ * CHART changing, not the camera shaking.
+ *
+ * The baseline is now two screenshots taken back to back in the same state, with
+ * nothing re-seeded in between. What they differ by is capture noise and nothing
+ * else, which is the only thing a hovered frame should be judged against.
  */
 
 /**
- * The smallest difference that can count as a row-wide repaint.
+ * The smallest difference that can count as a hover at all.
  *
- * Not a tuned number: an order of magnitude above the measured missed-hover
- * noise, and an order of magnitude below the repaint it is looking for. If a
- * genuine hover ever measures under this, the row has stopped painting an opaque
- * fill and the guard SHOULD fail — that is the regression this bound exists to
- * catch, and the old `> 100` could not.
+ * Deliberately the OLD bound, so this guard is never weaker than the one it
+ * replaces, and deliberately doing none of the real work — see the header. A
+ * larger floor has to be justified by a magnitude measured on every platform,
+ * and the platforms disagree by 14×.
  */
-export const HOVER_FILL_FLOOR = 1_000;
+export const HOVER_FILL_FLOOR = 100;
 
-/** How far above the frame's own jitter a hovered frame has to sit. */
-export const JITTER_RATIO = 10;
+/**
+ * How far above the frame's own capture noise a hovered frame must sit.
+ *
+ * This is the half that can detect a row which has stopped restyling: such a row
+ * photographs the same hovered as not, so its difference falls to the noise floor
+ * and any multiple above 1 refuses it. Three rather than ten because the
+ * baseline is now genuine capture noise — small, and worth leaving room around.
+ */
+export const JITTER_RATIO = 3;
 
 export interface HoverMeasurement {
-    /** Differing pixels between two photographs of the same UNHOVERED row —
-     *  the noise floor, measured rather than assumed. */
+    /** Differing pixels between two photographs of the same UNHOVERED row, taken
+     *  back to back with nothing re-seeded — capture noise, measured rather than
+     *  assumed, on this platform and at this DPI. */
     jitter: number;
     /** Differing pixels between the unhovered row and the hovered one. */
     hovered: number;
@@ -84,11 +117,11 @@ export function describeHoverCapture({ jitter, hovered }: HoverMeasurement): str
     return (
         `The hover was not in the photograph: the hovered frame differs from the ` +
         `unhovered one by ${hovered} pixels, and two photographs of the SAME ` +
-        `unhovered row already differ by ${jitter} (jitter, measured this run). ` +
-        `A row-wide hover repaint has to clear ${bound}. ` +
-        `A number close to the jitter means the hover went stale between hover() ` +
+        `unhovered row differ by ${jitter} (capture noise, measured this run). ` +
+        `A hover has to clear ${bound}. ` +
+        `A number close to the noise means the hover went stale between hover() ` +
         `and the screenshot — a MEASUREMENT failure, not evidence about whether ` +
-        `the row restyles. A number far above the jitter but still under the ` +
+        `the row restyles. A number well above the noise but still under the ` +
         `bound is the other story, and a real one: the row has stopped painting ` +
         `an opaque fill on hover.`
     );
