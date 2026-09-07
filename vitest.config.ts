@@ -47,7 +47,13 @@ export default defineConfig({
         // php-cgi / Docker and bind real ports, and need `npm run build:runtime`
         // first. They run in their OWN lane (`npm run test:hosting`, see
         // vitest.hosting.config.ts + the CI hosting job), NOT this fast unit run.
-        exclude: [...configDefaults.exclude, '**/*.real.test.ts'],
+        //
+        // `*.live.test.ts` are the Tynn CONTRACT probes — they ask the real Tynn
+        // whether the routes Genie calls still exist (genie#411). Excluded for a
+        // different reason: this suite must run offline, on a plane, in a
+        // container with no egress. Their lane is `npm run test:contract`
+        // (vitest.contract.config.ts), scheduled daily in CI.
+        exclude: [...configDefaults.exclude, '**/*.real.test.ts', '**/*.live.test.ts'],
         // Every file shares ONE fork (below), so a file that swaps a global
         // timer and doesn't restore it breaks whichever file runs next. This
         // guard fails the file that LEAKED instead of the innocent one that
