@@ -32,20 +32,28 @@
  * worth there. An absolute number cannot: it has to be chosen, and the platforms
  * disagree about magnitude by 14×.
  *
- * Measured on CI, `differingPixels(cU, eU)` — the sparkline's own contribution:
+ * Measured on CI with the CORRECTED instrument (run 34078215365), every run
+ * now printing its own figures:
  *
- *   | platform | signal    |
- *   |----------|-----------|
- *   | macOS    | **564**   |
- *   | Ubuntu   | 7,808     |
- *   | Windows  | 7,838     |
+ *   | platform | noise | hovered | sparkline |
+ *   |----------|-------|---------|-----------|
+ *   | macOS    | 0     | 7,994   | **564**   |
+ *   | Ubuntu   | 0     | 8,001   | 571       |
+ *   | Windows  | 0     | 8,010   | 556       |
  *
- * A first version of this file set the floor to 1,000, reasoning from the
- * `test.fixme`'s recorded "~7,500". **That figure is Linux/Windows-specific**,
- * and 1,000 failed macOS on a perfectly healthy row — a number chosen to match
- * an assumption about the product, which is the very fault this file exists to
- * remove. Every floor here is now checked against the SMALLEST platform signal
- * by a test, so that mistake cannot be made twice quietly.
+ * ★ THE PLATFORM SPREAD WAS AN ARTEFACT, NOT A PLATFORM PROPERTY. An earlier
+ * version of this comment recorded the sparkline at 564 on macOS against 7,808
+ * on Ubuntu and 7,838 on Windows, and reasoned about a 14× difference between
+ * operating systems. Those readings came from the contaminated capture sequence
+ * described below; with the instrument fixed all three sit within 3% of each
+ * other. The `~7,500` the `test.fixme` records is the same artefact.
+ *
+ * A first version of this file set the floor to 1,000, reasoning from that
+ * `~7,500`. The real signal is ~564 everywhere, so 1,000 fails a perfectly
+ * healthy row — a number chosen to match an assumption about the product, which
+ * is the very fault this file exists to remove. Every floor here is now checked
+ * against the smallest measured signal by a test, so that cannot be repeated
+ * quietly.
  *
  * ## The instrument had the same bug as the assertion
  *
@@ -82,10 +90,11 @@ export const HOVER_FILL_FLOOR = 100;
  * jitter would be circular once {@link noiseWasMeasurable} already bounds the
  * jitter as a fraction of THIS signal.
  *
- * 300 rather than the 1,000 that suggests itself from the `test.fixme`: three
- * times the observed capture noise (~97), and comfortably under the **564**
- * macOS actually produces. 1,000 is above that and fails a healthy row — this is
- * the number that took all three platforms red once already.
+ * 300 rather than the 1,000 that suggests itself from the `test.fixme`: well
+ * clear of the measured capture noise (0, and ~97 for the older instrument) and
+ * under the ~556-571 every platform actually produces. 1,000 is above that and
+ * fails a healthy row everywhere — it is the number that took all three
+ * platforms red once already.
  */
 export const SPARKLINE_FLOOR = 300;
 
@@ -103,9 +112,10 @@ export const JITTER_RATIO = 3;
  * disbelieved — `jitter * NOISE_SIGNAL_DIVISOR <= sparkline`.
  *
  * Expressed against the signal measured in the SAME run rather than as a fixed
- * number, so it scales from macOS's 564 to Windows' 7,838 without anyone
- * choosing a per-platform constant. The contaminated 7,625 on Ubuntu fails this
- * against 7,808 and would have been retaken instead of used.
+ * number, so no per-platform constant is ever needed — which matters more now
+ * that the platform spread turns out to have been an artefact. The contaminated
+ * 7,625 on Ubuntu fails this against its 7,808 and would have been retaken
+ * instead of used, which is the case it exists for.
  *
  * It doubles as the CEILING on the derived bound: with `jitter` held to a
  * quarter of the signal, `jitter * JITTER_RATIO` can never exceed three quarters
