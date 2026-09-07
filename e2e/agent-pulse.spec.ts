@@ -214,6 +214,45 @@ async function freshPulses(): Promise<void> {
     await expect(spark()).toBeVisible();
 }
 
+/**
+ * Wait until the sparkline's opacity transition has finished.
+ *
+ * ★ THE CAUSE OF EVERY CONTAMINATED NOISE READING IN genie#518.
+ *
+ * `master.css` gives `.agent-pulse-spark` `opacity: 0.55` with
+ * `transition: opacity 200ms ease-out`, rising to `0.9` while the workspace
+ * reads as active. Mid-transition, EVERY pixel of the sparkline is a different
+ * alpha — so two photographs taken a few milliseconds apart differ across the
+ * whole chart, and the "noise floor" comes back as large as the signal it was
+ * meant to be a fraction of. Windows measured 7,649 / 7,688 / 7,684 / 7,683 on
+ * four consecutive attempts against signals of ~7,800; macOS and Ubuntu, faster,
+ * usually caught the settled frame and measured 0. That is the whole of the
+ * "14x platform spread", and it was never geometry.
+ *
+ * POLLED, not slept: it reads the property that actually transitions and waits
+ * for two consecutive reads to agree, so it costs nothing on a settled frame and
+ * needs no hard-coded duration to drift out of step with the CSS.
+ *
+ * A no-op when the row is expanded -- there is no sparkline to settle.
+ */
+async function settleSparkline(): Promise<void> {
+    if ((await spark().count()) === 0) return;
+    let last = Number.NaN;
+    await expect
+        .poll(
+            async () => {
+                const now = await spark()
+                    .first()
+                    .evaluate((el) => parseFloat(getComputedStyle(el).opacity));
+                const settled = now === last;
+                last = now;
+                return settled;
+            },
+            { timeout: 5_000 },
+        )
+        .toBe(true);
+}
+
 async function takeShots(): Promise<Shots> {
     const hover = async () => {
         // hover(), not mouse.move() to the same point: on Windows the raw move
@@ -239,6 +278,9 @@ async function takeShots(): Promise<Shots> {
         await setCollapsed(collapsed);
         if (collapsed) await freshPulses();
         await (hovered ? hover() : unhover());
+        // The hover state change is what starts the sparkline's opacity
+        // transition, so this waits AFTER it rather than before.
+        await settleSparkline();
         return shoot(region);
     };
 
@@ -247,6 +289,12 @@ async function takeShots(): Promise<Shots> {
     // clicked. `shoot` directly rather than `shotIn`, because `shotIn` would
     // call freshPulses() and redraw the chart -- which is what made the first
     // version of this baseline measure the chart instead of the camera.
+    //
+    // Settled again first. `cU` waits for the transition too, but a frame that
+    // settled a millisecond before its shot can still be mid-flight when the
+    // next one is taken, and this pair is the one whose difference is supposed
+    // to be nothing at all.
+    await settleSparkline();
     const cU2 = await shoot(region);
     const eU = await shotIn(false, false);
     const cH = await shotIn(true, true);

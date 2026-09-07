@@ -44,9 +44,19 @@
  * ★ THE PLATFORM SPREAD WAS AN ARTEFACT, NOT A PLATFORM PROPERTY. An earlier
  * version of this comment recorded the sparkline at 564 on macOS against 7,808
  * on Ubuntu and 7,838 on Windows, and reasoned about a 14× difference between
- * operating systems. Those readings came from the contaminated capture sequence
- * described below; with the instrument fixed all three sit within 3% of each
- * other. The `~7,500` the `test.fixme` records is the same artefact.
+ * operating systems. There is no such difference; with the instrument fixed all
+ * three sit within 3% of each other, and the `~7,500` the `test.fixme` records
+ * is the same artefact.
+ *
+ * The MECHANISM, which took three CI rounds to see: `.agent-pulse-spark` carries
+ * `transition: opacity 200ms ease-out` between 0.55 and 0.9. Photographed
+ * mid-transition, every pixel of the chart is a different alpha — so any two
+ * frames spanning it differ across the whole sparkline, which is thousands of
+ * pixels and is exactly the magnitude that kept appearing. Fast runners usually
+ * caught the settled frame and measured 0; Windows, slower, measured ~7,650 four
+ * times in a row. `settleSparkline()` in the spec now waits the transition out
+ * by polling the opacity itself, so the reading is of the row rather than of an
+ * animation in flight.
  *
  * A first version of this file set the floor to 1,000, reasoning from that
  * `~7,500`. The real signal is ~564 everywhere, so 1,000 fails a perfectly
