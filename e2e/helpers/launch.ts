@@ -1,6 +1,7 @@
 import { _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import path from 'node:path';
 import os from 'node:os';
+import fs from 'node:fs';
 import {
     awaitInstanceExit,
     awaitPidExit,
@@ -185,6 +186,97 @@ export async function closeGenieE2E(app: ElectronApplication | undefined): Promi
     if (id) {
         await awaitPidExit(id.pid, id.image);
         clearInstanceRecord(instanceRecordPath(), id.pid);
+    }
+}
+
+/** The two things {@link warmElectronRuntime} needs, injected so it is testable
+ *  without launching Electron — which this repository does not do off CI. */
+export interface WarmupEffects {
+    launch: (options: Parameters<typeof electron.launch>[0]) => Promise<{
+        firstWindow: (opts?: { timeout?: number }) => Promise<unknown>;
+        close: () => Promise<void>;
+    }>;
+    /** How long to give `close()` before giving up on it. Injected so the bound
+     *  itself is testable in milliseconds rather than by waiting out 20s. */
+    closeTimeoutMs?: number;
+}
+
+export interface WarmupResult {
+    ok: boolean;
+    /** How long the cold boot took. The number this change is judged on. */
+    ms: number;
+    error?: string;
+}
+
+/**
+ * Pay the run's FIRST Electron boot before any test is timing one (genie#369).
+ *
+ * `agent-access.spec.ts` sorts first, so it stands in front of the cold start
+ * every run, and `launchGenieE2E` waits for `firstWindow()` on Playwright's 30s
+ * default. Measured across every Windows launch-timeout log on that issue, the
+ * first launch of a run costs 13-15s on a healthy runner and 34-35s on a slow
+ * one, while the SECOND launch moments later costs ~5s. So 8-30 seconds of that
+ * first number is a one-time cost, and in both timeout runs nothing had launched
+ * before it — contention cannot explain a failure with nothing to contend with.
+ *
+ * Called from `globalSetup`, this moves that cost outside every test's budget,
+ * so the 30s measures the app instead of a machine warming up. Deliberately NOT
+ * a bigger timeout: same shape as the genie#425 wait-for-exit — take the
+ * variable cost out of the timed window rather than widen the window.
+ *
+ * ## Three things it must not do
+ *
+ * **Touch the suite's profile.** A real boot writes to its `--user-data-dir`,
+ * so warming up into {@link E2E_USERDATA} would change what the specs then find
+ * — and that damage would present as a flaky test, not as this function. It
+ * gets a private throwaway profile, as `launchTunnelE2E` already does.
+ *
+ * **Fail the run.** This is an optimisation. A runner that cannot spare the boot
+ * should get a slow suite, not a red one; turning a performance fix into a new
+ * way for a shard to die is a worse trade than the bug.
+ *
+ * **Leak a process.** A warm-up that threw at `firstWindow` and left Electron
+ * running would hand the first spec a live app to wait behind — manufacturing
+ * the exact launch failure this exists to remove, before any test has run.
+ */
+export async function warmElectronRuntime(
+    effects: WarmupEffects = { launch: (o) => electron.launch(o) as never },
+): Promise<WarmupResult> {
+    const started = Date.now();
+    const userData = path.join(os.tmpdir(), `genie-e2e-warmup-${process.pid}-${started}`);
+    let app: Awaited<ReturnType<WarmupEffects['launch']>> | undefined;
+    try {
+        app = await effects.launch({
+            args: [MAIN_ENTRY, `--user-data-dir=${userData}`],
+            env: {
+                ...process.env,
+                NODE_ENV: 'production',
+                GENIE_E2E: '1',
+                GENIE_E2E_PAGE: HARNESS_ROUTE.issuewatch,
+                GENIE_E2E_HOSTING: '',
+            },
+        });
+        // Generous, and not a test budget: absorbing this is the entire point,
+        // so aborting early would leave the cost for the first spec — the thing
+        // being fixed.
+        await app.firstWindow({ timeout: 120_000 });
+        return { ok: true, ms: Date.now() - started };
+    } catch (e) {
+        return { ok: false, ms: Date.now() - started, error: String(e) };
+    } finally {
+        // BOUNDED, not merely caught. `.catch()` handles a rejection; a `close()`
+        // that never settles is not a rejection, and `await` on one waits forever
+        // whatever is chained to it (genie#490). Here that would hang
+        // `globalSetup` — stalling the entire run before a single test had
+        // started, with nothing on screen to say why.
+        if (app) {
+            await withTeardownBound(app.close(), effects.closeTimeoutMs ?? 20_000, 'warm-up close');
+        }
+        try {
+            fs.rmSync(userData, { recursive: true, force: true });
+        } catch {
+            /* a leftover temp profile is untidy, not broken */
+        }
     }
 }
 
