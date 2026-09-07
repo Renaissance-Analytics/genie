@@ -253,15 +253,35 @@ export class AgentInboxBroker {
         this.pendingNudgeSink = fn;
     }
 
-    sendPendingNudge(terminalId: string): { ok: boolean; reason?: 'none' | 'input-not-empty' | 'delivery-failed' } {
+    /**
+     * Release a parked notice into a terminal, at a person's request.
+     *
+     * `clearInput` is that person answering the one question Genie cannot:
+     * whether the box is actually empty. The model is built from the bytes going
+     * IN, so it cannot see a TUI empty its own composer — after that, `text` is
+     * stale, {@link planNudge} says defer forever, and this button was inert
+     * with nothing the human could do about it (genie#333). Killing the line
+     * first settles it, and costs only what the person just agreed to lose.
+     *
+     * Deliberately OPT-IN rather than a quieter `sendPendingNudge`: without the
+     * flag this still refuses a box Genie believes is occupied, exactly as
+     * before, so nothing reaches for the kill-line on its own.
+     */
+    sendPendingNudge(
+        terminalId: string,
+        options: { clearInput?: boolean } = {},
+    ): { ok: boolean; reason?: 'none' | 'input-not-empty' | 'delivery-failed' } {
         const pending = this.pendingNudges.get(terminalId);
         const target = this.agentForTerminal(terminalId);
         if (!pending || !target || !this.wakeSink) return { ok: false, reason: 'none' };
-        if (planNudge(target.draft).mode !== 'submit') {
+        const plan: NudgePlan = options.clearInput
+            ? { mode: 'clear-and-submit' }
+            : planNudge(target.draft);
+        if (plan.mode === 'defer') {
             return { ok: false, reason: 'input-not-empty' };
         }
         try {
-            if (this.wakeSink({ terminalId, text: pending.text, plan: { mode: 'submit' } }) === false) {
+            if (this.wakeSink({ terminalId, text: pending.text, plan }) === false) {
                 return { ok: false, reason: 'delivery-failed' };
             }
         } catch {
@@ -269,6 +289,10 @@ export class AgentInboxBroker {
         }
         this.pendingNudges.delete(terminalId);
         target.lastWokenAt = this.now();
+        // Genie's own writes never come back through `noteUserInput`, so this is
+        // the only thing that tells the model what just happened to the box. The
+        // notice was submitted, so it is empty either way.
+        target.draft = EMPTY_DRAFT;
         this.pendingNudgeSink?.({ terminalId, pending: false });
         return { ok: true };
     }

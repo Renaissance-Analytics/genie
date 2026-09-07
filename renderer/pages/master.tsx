@@ -688,14 +688,25 @@ function MasterInner() {
             .map((notice) => notice.workspaceId)
             .filter((id): id is string => !!id),
     );
-    const sendPendingNudge = async (terminalId: string) => {
-        const result = await api().agentInbox.sendPendingNudge(terminalId);
-        if (result.ok) return;
-        setToast(
-            result.reason === 'input-not-empty'
-                ? 'Clear or send your terminal input first, then click Send nudge again.'
-                : 'The nudge could not be sent. The notice is still queued.',
-        );
+    /**
+     * Release a parked notice, and report whether it landed so the banner can
+     * follow up. `clearInput` is the person saying the box is theirs to clear.
+     *
+     * A refusal no longer just raises a toast telling someone to do something
+     * they may already have done: the banner takes the answer and offers the
+     * kill-line, which is the only way past a draft the TUI cleared behind
+     * Genie's back (genie#333).
+     */
+    const sendPendingNudge = async (
+        terminalId: string,
+        options?: { clearInput?: boolean },
+    ): Promise<boolean> => {
+        const result = await api().agentInbox.sendPendingNudge(terminalId, options);
+        if (result.ok) return true;
+        if (result.reason !== 'input-not-empty') {
+            setToast('The nudge could not be sent. The notice is still queued.');
+        }
+        return false;
     };
 
     // Host-loss recovery (genie#203). When the shared pty-host dies mid-session,
@@ -2393,7 +2404,7 @@ function MasterInner() {
                         focusId={focusId}
                         attentionIds={attentionIds}
                         pendingNudges={incoming}
-                        onSendPendingNudge={(id) => void sendPendingNudge(id)}
+                        onSendPendingNudge={(id, options) => sendPendingNudge(id, options)}
                         onAttentionClear={clearAttention}
                         recoverGen={recoverGenById}
                         maximizedId={maximizedId}

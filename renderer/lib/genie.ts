@@ -4079,8 +4079,13 @@ export interface GenieApi {
             text: string;
             attachments?: Array<{ filename: string; base64: string }>;
         }) => Promise<{ ok: boolean; error?: string }>;
+        /** Release a parked notice into a terminal. `clearInput` is the PERSON
+         *  saying the box is theirs to clear: it kills the line before typing,
+         *  which is the only way past a draft Genie models as occupied when the
+         *  TUI has already emptied it (genie#333). */
         sendPendingNudge: (
             terminalId: string,
+            options?: { clearInput?: boolean },
         ) => Promise<{ ok: boolean; reason?: 'none' | 'input-not-empty' | 'delivery-failed' }>;
         /** An attachment's BYTES, so the panel can save it client-side (a remote
          *  human gets the file on their machine, not the host's). Reads Genie's own
