@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { engineSpecFor, isServiceEngine, resolveEngineVersion } from './catalog';
 import type { ServiceEngine } from './catalog';
+import { normalizePostgresExtensions } from './extensions';
 
 /**
  * PURE. The persisted per-workspace SERVICE model (Tynn #234, P3).
@@ -73,6 +74,21 @@ export interface DevServiceConfig {
     port?: number;
     /** `custom` only: extra environment for the container. */
     env?: Record<string, string>;
+    /**
+     * Postgres extensions this workspace declares (genie#526).
+     *
+     * Installed at PROVISION time as the engine superuser Genie already holds,
+     * in the workspace's own database — so an agent never needs the credential
+     * and `dedicated` is not the thing that unlocks it (it never was; flipping
+     * it changed the container and nothing about the privilege).
+     *
+     * Declared rather than imperative on purpose: provisioning runs on every
+     * acquire, so a declared extension is reinstalled after an engine is
+     * recreated. A one-shot `CREATE EXTENSION` would silently not survive that.
+     *
+     * Whitelisted — see `extensions.ts` for the set and the rule for joining it.
+     */
+    extensions?: string[];
     /** Strict opt-in — nothing runs until this is true. */
     enabled: boolean;
 }
@@ -166,6 +182,10 @@ export function mergeDevServiceConfig(
             ...(combined.image ? { image: combined.image } : {}),
             ...(combined.port ? { port: combined.port } : {}),
             ...(combined.env ? { env: combined.env } : {}),
+            // A patch that says nothing about extensions KEEPS the declared set —
+            // otherwise `start`, `dedicated` or `active` would quietly drop it and
+            // the next acquire would provision without it (genie#526).
+            ...(combined.extensions?.length ? { extensions: combined.extensions } : {}),
         },
         newPassword,
     );
@@ -191,6 +211,23 @@ export function sanitizeDevServicePatch(
 
     if (typeof patch.dedicated === 'boolean') out.dedicated = patch.dedicated;
     if (typeof patch.active === 'boolean') out.active = patch.active;
+
+    // Declared Postgres extensions (genie#526). Whitelisted here as well as at
+    // the tool boundary, because this is the function that decides what gets
+    // STORED — and what is stored is what provisioning runs as superuser on
+    // every acquire. A name that does not survive normalisation is dropped
+    // rather than persisted, so a config edited by hand cannot smuggle one in.
+    if (patch.extensions !== undefined) {
+        const normalized = normalizePostgresExtensions(
+            Array.isArray(patch.extensions) ? patch.extensions : undefined,
+        );
+        if (normalized.ok && normalized.extensions.length > 0) {
+            out.extensions = normalized.extensions;
+        } else if (Array.isArray(patch.extensions) && patch.extensions.length === 0) {
+            // An explicit empty list is a real instruction: "install none".
+            out.extensions = [];
+        }
+    }
     // A caller-supplied image has no multi-tenant story — it cannot be shared.
     if (out.engine && engineSpecFor(out.engine).alwaysDedicated) out.dedicated = true;
 

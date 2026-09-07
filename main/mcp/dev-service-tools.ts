@@ -18,6 +18,10 @@ import {
     setActiveService,
     switchActiveWarning,
 } from '../dev-server/services/services-config';
+import {
+    normalizePostgresExtension,
+    normalizePostgresExtensions,
+} from '../dev-server/services/extensions';
 import { devServiceManager } from '../dev-server/services/service-manager';
 import { terminalServiceEnv } from '../dev-server/services/env-wiring';
 import {
@@ -395,10 +399,23 @@ export async function runManageService(
                     );
                 }
 
+                // Refused BEFORE anything is defined (genie#526): a service
+                // created and then rejected for its extension list would leave a
+                // half-made service behind and make the caller clean up after a
+                // validation error.
+                const declared = normalizePostgresExtensions(req.extensions);
+                if (!declared.ok) return fail(declared.error);
+                if (declared.extensions.length > 0 && req.engine !== 'postgres') {
+                    return fail(
+                        `\`extensions\` is a Postgres thing — ${req.engine} has none to install.`,
+                    );
+                }
+
                 const serviceId = setWorkspaceDevService(ws.id, {
                     engine: req.engine,
                     version,
                     ...(req.dedicated === undefined ? {} : { dedicated: req.dedicated }),
+                    ...(declared.extensions.length > 0 ? { extensions: declared.extensions } : {}),
                     ...(req.image ? { image: req.image } : {}),
                     ...(req.port ? { port: req.port } : {}),
                     ...(req.env ? { env: req.env } : {}),
@@ -520,6 +537,52 @@ export async function runManageService(
                     // volume, so the newly-active one starts empty. Said plainly
                     // rather than discovered from an application with no rows.
                     ...(status.error ? { error: status.error } : warning ? { note: warning } : {}),
+                    services: services(),
+                    affectedId: target.serviceId,
+                    runtime,
+                };
+            }
+
+            case 'extension': {
+                // Declared, not fired-and-forgotten. Recording it on the config
+                // and re-acquiring means provisioning installs it — and installs
+                // it AGAIN on every future acquire, so it survives the engine
+                // being recreated. A bare `CREATE EXTENSION` here would work once
+                // and disappear the next time the container was rebuilt, which is
+                // the same late-truth failure this issue is about (genie#526).
+                const target = targetService();
+                if ('error' in target) return fail(target.error);
+                if (target.config.engine !== 'postgres') {
+                    return fail(
+                        `\`extension\` is a Postgres thing — this service is ${target.config.engine}.`,
+                    );
+                }
+                const name = normalizePostgresExtension(String(req.name ?? '').trim());
+                if (!name.ok) return fail(name.error);
+
+                const already = target.config.extensions ?? [];
+                const extensions = already.includes(name.extension)
+                    ? already
+                    : [...already, name.extension];
+                setWorkspaceDevService(ws.id, {
+                    engine: target.config.engine,
+                    version: target.config.version,
+                    extensions,
+                });
+                // Re-acquire so provisioning runs now. Idempotent throughout: the
+                // role/database steps converge and `CREATE EXTENSION IF NOT
+                // EXISTS` is a no-op when it is already there.
+                const status = await manager.acquire(ws.id, target.serviceId);
+                return {
+                    ok: status.state !== 'failed',
+                    ...(status.error ? { error: status.error } : {}),
+                    ...(status.state === 'failed'
+                        ? {}
+                        : {
+                              note:
+                                  `"${name.extension}" is installed in this workspace's database and recorded on the ` +
+                                  `service, so it is reinstalled if the engine is ever recreated.`,
+                          }),
                     services: services(),
                     affectedId: target.serviceId,
                     runtime,

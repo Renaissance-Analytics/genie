@@ -1158,6 +1158,10 @@ export interface ManageServiceRequest {
         | 'remove'
         | 'connection'
         | 'dedicated'
+        /** Declare a Postgres EXTENSION on this service and install it now
+         *  (genie#526). Recorded on the config, so it is reinstalled on every
+         *  acquire rather than being lost when the engine is recreated. */
+        | 'extension'
         /** Make THIS version the one this workspace's apps connect to, when the
          *  workspace holds more than one major of the same engine (#242 P3). */
         | 'active'
@@ -1178,6 +1182,17 @@ export interface ManageServiceRequest {
     port?: number;
     /** add, `custom` engine only: extra environment for the container. */
     env?: Record<string, string>;
+    /**
+     * add / dedicated: Postgres extensions this service should have
+     * (genie#526). Installed at provision time as the engine superuser Genie
+     * holds, in this workspace's own database — so `ready` means they are
+     * installed, and they survive the engine being recreated.
+     *
+     * Whitelisted; a name outside the set is refused and the refusal lists it.
+     */
+    extensions?: string[];
+    /** extension: the single extension to add to {@link extensions}. */
+    name?: string;
     /** add: leave it defined but not started. Default true (start it). */
     enabled?: boolean;
     /** remove: also delete the engine's data volume. Only honoured when no
@@ -2309,7 +2324,7 @@ const MANAGE_SITE_TOOL = {
 const MANAGE_SERVICE_TOOL = {
     name: 'manageService',
     description:
-        "Give this workspace a backing SERVICE — Postgres, MySQL, Redis, Meilisearch, MinIO (S3), Mailpit, WebSockets (bundled Sockudo), or any image — and get back how to connect to it. These are the same engines a hosted site runs against, so a site served by `manageSite` is backed the way production is. THE MODEL, because it changes what you should expect: an engine is WORKSTATION-hosted and SHARED per (engine, major version) across every workspace that asks for it, and each workspace gets its OWN database + role + credentials on it. Ten workspaces on Postgres 16 run ONE postgres container, not ten; a workspace's role cannot reach another workspace's database. The engine starts when the first workspace acquires it and stops when the last one releases it. A workspace that genuinely needs hard isolation (a custom config, an extension, destructive testing) flips `dedicated` and gets its own container — note that shared and dedicated have SEPARATE data volumes, so flipping does not move data. Actions: `catalog` (every engine on offer, its versions, and how strongly each isolates); `inventory` (MACHINE-level — every engine on this WORKSTATION you can act on: whether its image is on disk, whether a container exists and is up, and HOW MANY workspaces hold it right now. Read this BEFORE stopping or removing anything: `installed`, `state` and `holders` are three independent facts, and stopping a shared engine stops it for every workspace holding it — `sharedWithOthers` tells you whether any of those holders is someone other than you, which `holders: 1` on its own does not. You are told counts, never other workspaces' names, and another workspace's dedicated engine is not listed at all: nothing there is yours to touch); `list` (this workspace's services + live state); `add` (`engine` plus optional `version` — defines it, starts the engine, creates this workspace's database/role/credentials, and attaches the engine to this workspace's network); `start` / `stop` / `status` (by `id` from a prior list); `logs` (the engine's log tail); `connection` (the connection surface + the exact env keys injected into this workspace's sites); `dedicated` (flip one service between shared and its own container); `remove` (release it, and with `purge` drop the engine's data volume — REFUSED whenever another workspace has a database in that volume, whether or not it is open right now, because a shared engine keeps every workspace's data in ONE volume; the refusal names what it protected, and the way past it is to remove those services first or flip this one to `dedicated` and purge its own volume). READ THE RESULT: `endpoints` carries TWO surfaces and they are not interchangeable — `host`+`port` is how a CONTAINER on this workspace's network dials the engine (its container name, its real port), `localAddress` is how a program on THIS MACHINE dials it (loopback, published port). A connection string built from the second and used inside a container fails every time. A service is BACKEND: it is never given a browser-facing name and never published to the browser, so do not try to expose one through `manageSite`. `envKeys` are already injected into this workspace's hosted sites (`manageSite`), and into their BUILD steps too, so an app served there needs no `.env` edit. MinIO gives each workspace its OWN IAM user, admitted by policy to its own bucket and no other — so `AWS_ACCESS_KEY_ID` is the workspace, never the engine root. Meilisearch, Mailpit and WebSockets are NAMESPACE-isolated, not credential-isolated: workspaces share the master key/secret and are separated by index prefix / inbox / socket app (each workspace gets its own app whose secret is derived from the shared master, so a site can broadcast but never forge another workspace's app). The WebSockets engine injects canonical `GENIE_WS_*` env plus `REVERB_*` aliases, which is what a Laravel app's broadcasting config reads. `custom` takes `image` + `port` + `env` and is always dedicated. WebSockets run natively on the Genie Host without Docker. Other engines require Docker or Podman and return the install hint when neither is usable. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; required when the workspace has more than one terminal.",
+        "Give this workspace a backing SERVICE — Postgres, MySQL, Redis, Meilisearch, MinIO (S3), Mailpit, WebSockets (bundled Sockudo), or any image — and get back how to connect to it. These are the same engines a hosted site runs against, so a site served by `manageSite` is backed the way production is. THE MODEL, because it changes what you should expect: an engine is WORKSTATION-hosted and SHARED per (engine, major version) across every workspace that asks for it, and each workspace gets its OWN database + role + credentials on it. Ten workspaces on Postgres 16 run ONE postgres container, not ten; a workspace's role cannot reach another workspace's database. The engine starts when the first workspace acquires it and stops when the last one releases it. A workspace that genuinely needs hard isolation (a custom config, destructive testing) flips `dedicated` and gets its own container — note that shared and dedicated have SEPARATE data volumes, so flipping does not move data. A POSTGRES EXTENSION is NOT a reason to flip it: `dedicated` changes the container and nothing about the privilege, and installing one needs the engine superuser, which Genie holds and never hands out. Ask for the extension instead — `add`/`dedicated` take `extensions: [\"vector\"]`, or `extension` adds one to a service that already exists. Actions: `catalog` (every engine on offer, its versions, and how strongly each isolates); `inventory` (MACHINE-level — every engine on this WORKSTATION you can act on: whether its image is on disk, whether a container exists and is up, and HOW MANY workspaces hold it right now. Read this BEFORE stopping or removing anything: `installed`, `state` and `holders` are three independent facts, and stopping a shared engine stops it for every workspace holding it — `sharedWithOthers` tells you whether any of those holders is someone other than you, which `holders: 1` on its own does not. You are told counts, never other workspaces' names, and another workspace's dedicated engine is not listed at all: nothing there is yours to touch); `list` (this workspace's services + live state); `add` (`engine` plus optional `version` — defines it, starts the engine, creates this workspace's database/role/credentials, and attaches the engine to this workspace's network); `start` / `stop` / `status` (by `id` from a prior list); `logs` (the engine's log tail); `connection` (the connection surface + the exact env keys injected into this workspace's sites); `dedicated` (flip one service between shared and its own container); `extension` (Postgres: declare an extension by `name` on a service and install it now — Genie runs `CREATE EXTENSION` with the superuser it holds, in YOUR database, and records it so it comes back if the engine is ever recreated. Whitelisted: vector, postgis, uuid-ossp, pg_trgm, citext, hstore, pgcrypto, unaccent, btree_gin, btree_gist); `remove` (release it, and with `purge` drop the engine's data volume — REFUSED whenever another workspace has a database in that volume, whether or not it is open right now, because a shared engine keeps every workspace's data in ONE volume; the refusal names what it protected, and the way past it is to remove those services first or flip this one to `dedicated` and purge its own volume). READ THE RESULT: `endpoints` carries TWO surfaces and they are not interchangeable — `host`+`port` is how a CONTAINER on this workspace's network dials the engine (its container name, its real port), `localAddress` is how a program on THIS MACHINE dials it (loopback, published port). A connection string built from the second and used inside a container fails every time. A service is BACKEND: it is never given a browser-facing name and never published to the browser, so do not try to expose one through `manageSite`. `envKeys` are already injected into this workspace's hosted sites (`manageSite`), and into their BUILD steps too, so an app served there needs no `.env` edit. MinIO gives each workspace its OWN IAM user, admitted by policy to its own bucket and no other — so `AWS_ACCESS_KEY_ID` is the workspace, never the engine root. Meilisearch, Mailpit and WebSockets are NAMESPACE-isolated, not credential-isolated: workspaces share the master key/secret and are separated by index prefix / inbox / socket app (each workspace gets its own app whose secret is derived from the shared master, so a site can broadcast but never forge another workspace's app). The WebSockets engine injects canonical `GENIE_WS_*` env plus `REVERB_*` aliases, which is what a Laravel app's broadcasting config reads. `custom` takes `image` + `port` + `env` and is always dedicated. WebSockets run natively on the Genie Host without Docker. Other engines require Docker or Podman and return the install hint when neither is usable. Pass `terminalId` (your GENIE_TERMINAL_ID) for exact workspace resolution; required when the workspace has more than one terminal.",
     inputSchema: {
         type: 'object',
         properties: {
@@ -2327,6 +2342,7 @@ const MANAGE_SERVICE_TOOL = {
                     'remove',
                     'connection',
                     'dedicated',
+                    'extension',
                     'inventory',
                 ],
                 description: 'What to do.',
@@ -2373,6 +2389,17 @@ const MANAGE_SERVICE_TOOL = {
                 type: 'object',
                 additionalProperties: { type: 'string' },
                 description: 'add, `custom` engine only: environment for the container.',
+            },
+            extensions: {
+                type: 'array',
+                items: { type: 'string' },
+                description:
+                    'add / dedicated (optional, Postgres): extensions this service should have, e.g. ["vector"]. Genie installs them with the superuser it already holds, in THIS workspace\'s database — you never need the credential, and `dedicated` is not required. Installed during provisioning, so a `ready` service has them, and reinstalled if the engine is ever recreated. Whitelisted: vector, postgis, uuid-ossp, pg_trgm, citext, hstore, pgcrypto, unaccent, btree_gin, btree_gist.',
+            },
+            name: {
+                type: 'string',
+                description:
+                    'extension: the extension to add, e.g. "vector". Adds it to this service\'s declared set and installs it now.',
             },
             enabled: {
                 type: 'boolean',

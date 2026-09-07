@@ -108,6 +108,26 @@ function assertDnsName(value: string): string {
     return value;
 }
 
+/**
+ * An extension name, independently of the whitelist that produced it.
+ *
+ * The name becomes a quoted SQL identifier in a statement run as SUPERUSER, so
+ * it is asserted here as well as validated at the boundary — the same
+ * belt-and-braces this file already applies to every derived identifier, and for
+ * a stronger reason.
+ */
+const EXTENSION_NAME = /^[a-z][a-z0-9_-]{0,62}$/;
+
+function assertExtensionName(value: string): string {
+    if (!EXTENSION_NAME.test(value)) {
+        throw new Error(
+            `dev-server: refusing to provision the extension ${JSON.stringify(value)} — ` +
+                'it is not a bare extension identifier',
+        );
+    }
+    return value;
+}
+
 function assertPassword(value: string, whose: string): string {
     if (!GENERATED_PASSWORD.test(value)) {
         throw new Error(
@@ -124,11 +144,62 @@ function assertPassword(value: string, whose: string): string {
  *  A URI rather than `-U postgres` over the unix socket, deliberately: it makes
  *  no assumption about what the image wrote into `pg_hba.conf`, and the
  *  password is base64url so it needs no URL-escaping. */
-function postgresAdminUri(admin: EngineAdmin): string {
-    return `postgresql://${admin.user}:${admin.password}@127.0.0.1:5432/postgres`;
+function postgresAdminUri(admin: EngineAdmin, database = 'postgres'): string {
+    return `postgresql://${admin.user}:${admin.password}@127.0.0.1:5432/${database}`;
 }
 
-function postgresSteps(admin: EngineAdmin, slice: WorkspaceSlice): ProvisionStep[] {
+/**
+ * `CREATE EXTENSION` steps for what this service DECLARED (genie#526).
+ *
+ * Three things decide the shape:
+ *
+ *  - **As the admin.** `CREATE EXTENSION` requires superuser, which is the whole
+ *    reason the old path failed identically on shared and dedicated. Genie
+ *    already holds that credential ({@link EngineAdmin}), so it runs the
+ *    statement and the workspace role gains nothing.
+ *  - **In the WORKSPACE's database**, not `postgres`. An extension lives in one
+ *    database; installing it into the maintenance database would report success
+ *    while the workspace's app still could not use it.
+ *  - **One step per extension**, so `runProvisionSteps` names the one that
+ *    failed rather than reporting a batch.
+ *
+ * `IF NOT EXISTS` because provisioning runs on every acquire — and that is also
+ * what makes a declared extension survive an engine being recreated, which an
+ * imperative one-shot would not.
+ *
+ * The name is whitelist-validated at the boundary (`extensions.ts`) and asserted
+ * again here, for the same reason every other identifier in this file is.
+ */
+function postgresExtensionSteps(
+    admin: EngineAdmin,
+    slice: WorkspaceSlice,
+    extensions: readonly string[],
+): ProvisionStep[] {
+    if (extensions.length === 0) return [];
+    const database = assertIdentifier(slice.identifier);
+    const uri = postgresAdminUri(admin, database);
+    return extensions.map((extension) => {
+        const name = assertExtensionName(extension);
+        return {
+            label: `extension ${name}`,
+            argv: [
+                'psql',
+                uri,
+                '-v',
+                'ON_ERROR_STOP=1',
+                '-q',
+                '-tAc',
+                `CREATE EXTENSION IF NOT EXISTS "${name}"`,
+            ],
+        };
+    });
+}
+
+function postgresSteps(
+    admin: EngineAdmin,
+    slice: WorkspaceSlice,
+    extensions: readonly string[] = [],
+): ProvisionStep[] {
     const name = assertIdentifier(slice.identifier);
     const password = assertPassword(slice.password, 'workspace');
     // The admin credential goes into a URI, where a stray `@` or `/` would
@@ -181,6 +252,9 @@ END $$;`,
                     `ALTER DATABASE "${name}" OWNER TO "${name}";`,
             ),
         },
+        // LAST, because there has to be a database to install into — and after
+        // the grants, so the workspace role already owns what the extension adds.
+        ...postgresExtensionSteps(admin, slice, extensions),
     ];
 }
 
@@ -393,11 +467,13 @@ export function provisionSteps(
     engine: ServiceEngine,
     admin: EngineAdmin,
     slice: WorkspaceSlice,
-    options: { dedicated?: boolean } = {},
+    options: { dedicated?: boolean; extensions?: readonly string[] } = {},
 ): ProvisionStep[] {
     switch (engineSpecFor(engine).provision) {
         case 'sql-database-role':
-            return engine === 'mysql' ? mysqlSteps(admin, slice) : postgresSteps(admin, slice);
+            return engine === 'mysql'
+                ? mysqlSteps(admin, slice)
+                : postgresSteps(admin, slice, options.extensions ?? []);
         case 'redis-acl':
             return redisSteps(admin, slice, options);
         case 's3-scoped-user':

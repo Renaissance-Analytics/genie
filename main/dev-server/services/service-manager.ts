@@ -883,7 +883,15 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
             const provisioned = await runProvisionSteps(
                 runtime,
                 containerId,
-                provisionSteps(config.engine, admin, slice, { dedicated }),
+                // The declared extensions ride along (genie#526): provisioning is
+                // the only place that holds the superuser, and running here means
+                // a failure fails the ACQUIRE — so a service that reports ready
+                // has them, rather than reporting ready and failing later at the
+                // first `CREATE EXTENSION`.
+                provisionSteps(config.engine, admin, slice, {
+                    dedicated,
+                    ...(config.extensions?.length ? { extensions: config.extensions } : {}),
+                }),
             );
             if (!provisioned.ok) {
                 return failed(
