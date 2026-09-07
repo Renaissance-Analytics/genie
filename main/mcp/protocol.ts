@@ -645,7 +645,25 @@ export interface McpContext {
     submitFeedback?: (
         terminalId: string,
         message: string,
-    ) => Promise<{ ok: boolean; id?: string; error?: string }>;
+    ) => Promise<{
+        ok: boolean;
+        id?: string;
+        error?: string;
+        /**
+         * WHICH project it landed in (genie#335). Optional, because a host that
+         * predates this simply does not report one and the confirmation stays
+         * vague rather than naming `undefined`.
+         *
+         * It matters because the destination is not the subject: this tool is
+         * for feedback about GENIE, and it files into the WORKSPACE's Tynn
+         * project — so a Genie defect raised from a client envelope lands in the
+         * client's queue, where Genie never sees it and its owner triages
+         * somebody else's bug. Where it SHOULD go is an open decision. Naming
+         * where it went is what turns a silent misfile into an obvious one, and
+         * needs no decision at all.
+         */
+        project?: string;
+    }>;
     /**
      * The namespaced tool descriptors contributed by ENABLED plugins (the
      * Plugin System seam, §5.1). Concatenated into `tools/list` AFTER the core
@@ -4638,7 +4656,7 @@ ${body}` }],
                         {
                             type: 'text',
                             text: result.ok
-                                ? 'Feedback filed in Tynn. A human will see it in the project feedback list — you do not need to repeat it in the terminal.'
+                                ? `Feedback filed in Tynn${result.project ? ` — project “${result.project}”` : ''}. A human will see it in that project's feedback list — you do not need to repeat it in the terminal.`
                                 : `Could not file feedback: ${result.error ?? 'unknown error'}`,
                         },
                     ],
