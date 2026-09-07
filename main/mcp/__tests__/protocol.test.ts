@@ -270,6 +270,70 @@ describe('handleMcpMessage', () => {
         expect(messages[0].content.text).toContain("Couldn't resolve this terminal");
     });
 
+    /**
+     * genie#334 — the prompt path told the user their terminal was outside a
+     * workspace, while the identical call as a TOOL succeeded seconds later.
+     *
+     * `server.ts` resolves a terminal from the token, or from an explicit
+     * `arguments.terminalId`, and REFUSES to guess when a workspace token has
+     * several terminals (genie#17). Its actionable "pass `terminalId`" error was
+     * gated on `msg.method === 'tools/call'`, so a `prompts/get` fell through to
+     * `terminalId: ''` and got the workspace message instead — a claim about the
+     * workspace that nothing had checked, on the FIRST thing a fresh agent is
+     * told to run.
+     */
+    describe('an unresolved terminal is not reported as a missing workspace (genie#334)', () => {
+        it('says the terminal id is missing, and names where to get it', async () => {
+            const describeWorkspace = vi.fn().mockResolvedValue(null);
+            const res = await handleMcpMessage(
+                { jsonrpc: '2.0', id: 25, method: 'prompts/get', params: { name: 'connectToGenie' } },
+                ctx({ terminalId: '', describeWorkspace }),
+            );
+            const text = (res?.result as { messages: Array<{ content: { text: string } }> })
+                .messages[0].content.text;
+
+            expect(text).toContain('terminalId');
+            expect(text).toContain('GENIE_TERMINAL_ID');
+            // The false half: it must NOT say the terminal is outside a workspace.
+            expect(text).not.toContain("Couldn't resolve this terminal to a Genie workspace");
+            // And it must not have gone looking with an empty id, which is how a
+            // "no workspace" answer got manufactured in the first place.
+            expect(describeWorkspace).not.toHaveBeenCalled();
+        });
+
+        it('POSITIVE CONTROL: a resolved terminal with no workspace still says so', async () => {
+            // The original message is correct for the state it was written for,
+            // and must survive: "it stopped blaming the workspace" passes just as
+            // well against a path that lost the workspace answer entirely.
+            const res = await handleMcpMessage(
+                { jsonrpc: '2.0', id: 26, method: 'prompts/get', params: { name: 'connectToGenie' } },
+                ctx({ terminalId: 'term-1', describeWorkspace: vi.fn().mockResolvedValue(null) }),
+            );
+            const text = (res?.result as { messages: Array<{ content: { text: string } }> })
+                .messages[0].content.text;
+
+            expect(text).toContain("Couldn't resolve this terminal to a Genie workspace");
+        });
+
+        it('accepts a terminalId ARGUMENT, which is how a prompt picker can pass one', async () => {
+            // A prompt carries no environment, so the only way the client can
+            // supply the id is as an argument — and it can only offer one it has
+            // been told about, which is why the declaration matters.
+            const list = await handleMcpMessage(
+                { jsonrpc: '2.0', id: 27, method: 'prompts/list' },
+                ctx(),
+            );
+            const prompt = (
+                list?.result as {
+                    prompts: Array<{ name: string; arguments?: Array<{ name: string; required?: boolean }> }>;
+                }
+            ).prompts[0]!;
+            const arg = prompt.arguments?.find((a) => a.name === 'terminalId');
+            expect(arg).toBeDefined();
+            expect(arg?.required).not.toBe(true);
+        });
+    });
+
     it('prompts/get errors on an unknown prompt name', async () => {
         const res = await handleMcpMessage(
             { jsonrpc: '2.0', id: 24, method: 'prompts/get', params: { name: 'nope' } },
