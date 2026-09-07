@@ -7347,50 +7347,116 @@ body.gutter-dragging .grid-gutter {
     font-size: 11.5px;
 }
 
-/* ===== the canvas modal ================================================= */
+/* ===== the Flow editor window =========================================== */
 
 /*
- * A graph editor is a WORKSPACE, and `.prompt-card` is a prompt.
+ * The whole client area is the canvas.
  *
- * `FlowCanvasModal` renders `prompt-card flowmgr-canvas` to borrow the card's
- * CHROME -- surface, border, radius, shadow -- and must replace its SIZING
- * outright. `.prompt-card` is `width: 380px`, which is narrower than the editor
- * can be: fancy-flow lays `.ff-editor` out as
- * `grid-template-columns: 216px 1fr 300px`, so below ~516px of content width the
- * `1fr` canvas column collapses and the palette becomes one scrolling list with
- * a sliver of graph beside it. The class shipped here with no rules at all, and
- * that is exactly what it looked like.
- *
- * These rules must stay BELOW `.prompt-card` in this file. Both are single-class
- * selectors, so specificity ties and source order is the only thing deciding
- * which width wins. Pinned by `flow-canvas-modal-size.test.ts`.
+ * `100vh` rather than `height: 100%`, for the same reason the Knowledge Graph
+ * window uses it: Next wraps the page in `#__next`, which has no height of its
+ * own, so a percentage chain from `body` breaks at that div and the editor falls
+ * back to fancy-flow's fixed 720px.
  */
-.flowmgr-canvas {
-    /* Percentages resolve against `.prompt-scrim`, which is already inset below
-       the titlebar -- so this reads "the window, less a margin", capped so the
-       editor does not sprawl on a large display. `min()` rather than a width
-       plus a `min-width`: a min-width large enough to matter would simply
-       overflow a small window, which is the failure it was meant to prevent. */
-    width: min(1600px, calc(100% - 48px));
-    height: min(920px, calc(100% - 48px));
-    /* `.prompt-card` caps at `calc(100vw - 32px)`; the width above is the cap. */
-    max-width: none;
-    padding: 14px 14px 12px;
-}
-
-/* The editor takes everything under the title row.
-
-   `min-height: 0` is the load-bearing line: a flex child will not shrink below
-   its content unless told it may, and without it the body keeps the editor's
-   natural height and the CARD scrolls -- which reads as a different bug. */
-.flowmgr-canvas-body {
-    flex: 1;
-    min-height: 0;
+.flowwin {
     display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+    padding: 8px;
 }
-.flowmgr-canvas-body > * {
+.flowwin-body {
+    display: flex;
+    flex: 1;
+    /* A flex child will not shrink below its content unless told it may.
+       Without this the editor keeps its natural height and the WINDOW scrolls,
+       which is the clipping this window exists to end. */
+    min-height: 0;
+}
+.flowwin-body > * {
     flex: 1;
     min-width: 0;
+}
+
+/* ===== the graph editor's panes ========================================= */
+
+/*
+ * The canvas is not the element that yields.
+ *
+ * fancy-flow lays `.ff-editor` out as `grid-template-columns: 216px 1fr 300px`
+ * -- two FIXED columns with the canvas as the `1fr` between them -- so the
+ * canvas is the only thing that can give, and it gives all the way to nothing.
+ * `FlowEditorPanel` names the columns inline from a MEASURED width instead
+ * (`renderer/lib/flow-editor-layout.ts`), listing only the panes that are
+ * docked; what is left over is here.
+ *
+ * `.floweditor-shell` is the box the panel measures, and the box an undocked
+ * pane floats inside when the user asks for it back.
+ */
+.floweditor-shell {
+    display: flex;
+    min-width: 0;
+    /* Load-bearing: a flex child will not shrink below its content unless told
+       it may, and without it the editor keeps its natural height and whatever
+       contains it scrolls instead. */
+    min-height: 0;
+}
+.floweditor-shell .ff-editor {
+    flex: 1;
+    min-width: 0;
+    /* The containing block for an overlaid pane. Without it the pane escapes to
+       the window and lands somewhere unrelated to the editor. */
+    position: relative;
+}
+
+/*
+ * fancy-flow hides its own panes by VIEWPORT width:
+ *
+ *     @media (max-width: 1024px) { .ff-editor__panel-wrap { display: none } }
+ *     @media (max-width:  720px) { .ff-editor__palette    { display: none } }
+ *
+ * Both are the wrong axis for Genie. The editor is never the viewport -- it is a
+ * tab in a GApp window, or the body of its own window with chrome around it --
+ * and `display: none` from a stylesheet outranks a host that asked for the pane,
+ * so the toggle bringing a pane back would appear dead at exactly the widths it
+ * exists for. Genie decides from the container instead; these put the decision
+ * back in its hands.
+ *
+ * Raised upstream as Particle-Academy/fancy-flow#16. Pinned by
+ * `flow-editor-responsive-css.test.ts`, whose positive control fails if
+ * fancy-flow ever drops the rules -- at which point these two blocks, and the
+ * inline `gridTemplateColumns` in `FlowEditorPanel`, should go with them.
+ */
+@media (max-width: 1024px) {
+    .floweditor-shell .ff-editor__panel-wrap {
+        display: flex;
+    }
+}
+@media (max-width: 720px) {
+    .floweditor-shell .ff-editor__palette {
+        display: flex;
+    }
+}
+
+/* An undocked pane floats OVER the canvas rather than taking a column from it:
+   `grid-template-columns` names only the docked panes, so a pane left in flow
+   would wrap onto a second grid row instead. */
+.floweditor-shell[data-overlay='palette'] .ff-editor__palette,
+.floweditor-shell[data-overlay='panel'] .ff-editor__panel-wrap {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    z-index: 4;
+    box-shadow: var(--shadow-lg, 0 12px 32px rgba(0, 0, 0, 0.45));
+}
+.floweditor-shell[data-overlay='palette'] .ff-editor__palette {
+    left: 0;
+    width: 216px;
+    max-width: 78%;
+}
+.floweditor-shell[data-overlay='panel'] .ff-editor__panel-wrap {
+    right: 0;
+    width: 300px;
+    max-width: 88%;
 }
 
 /* ===== the Flow editor ================================================= */

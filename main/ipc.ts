@@ -347,6 +347,7 @@ import {
     hideCaptureWindow,
     showSettingsWindow,
     showDocsWindow,
+    showFlowEditorWindow,
     showKnowledgeWindow,
     showMainWindow,
     showStageWindow,
@@ -2245,6 +2246,12 @@ export function registerIpcHandlers(): void {
     // opened after the last push asks `flows:list`, which carries the current
     // outcome on each row: broadcasts have no persistence and nothing replays
     // them.
+    //
+    // Opening the EDITOR is not one of them and is deliberately not on this
+    // namespace: it is a BrowserWindow, so it is `app:show-flow-editor` beside
+    // the other window openers below. `flows:*` belongs to one module —
+    // `flow-ipc-channels.test.ts` holds that line — and a window opener
+    // registered here under that prefix would break it for no reason.
 
     // --- Backend projects (fans out across signed-in backends) ----------
     /**
@@ -2483,6 +2490,20 @@ export function registerIpcHandlers(): void {
     });
     ipcMain.handle('app:show-docs', () => {
         showDocsWindow();
+        return { ok: true };
+    });
+    /**
+     * The Flow editor's window (genie#505).
+     *
+     * `app:show-*` rather than `flows:*` because it opens a BrowserWindow, and
+     * every window Genie opens is opened from this file against `background.ts`.
+     * The `flows:*` namespace is owned by `main/flows/ipc.ts` alone.
+     */
+    ipcMain.handle('app:show-flow-editor', (e, flowId: string) => {
+        // A host window's child inherits ITS connection, exactly as Settings
+        // does — never this client's. `connKeyForWindow` answers null for a
+        // local caller, which is the local window unchanged.
+        showFlowEditorWindow(String(flowId), connKeyForWindow(e.sender.id));
         return { ok: true };
     });
     ipcMain.handle('app:show-main', () => {

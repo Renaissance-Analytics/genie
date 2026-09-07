@@ -484,6 +484,17 @@ let settingsRestricted = false;
 let settingsConnKey: string | null = null;
 let docsWindow: BrowserWindow | null = null;
 let knowledgeWindow: BrowserWindow | null = null;
+/**
+ * The open Flow editor windows, keyed by host + flow.
+ *
+ * A Map rather than one handle, because the alternative is a graph mid-edit
+ * being destroyed. Settings recreates its single window when the URL params
+ * change and loses a toggle nobody had committed; doing that here would throw
+ * away an unsaved canvas the moment somebody opened a second flow. Keyed by the
+ * CONNECTION too, so a host window's editor and a local one for the same flow id
+ * are not mistaken for each other.
+ */
+const flowEditorWindows = new Map<string, BrowserWindow>();
 let masterWindow: BrowserWindow | null = null;
 // The external-browser host reconcile (story #238): brings up the host CA +
 // hosts-file + Caddy :443 for browser-exposed host-native sites. Created once at
@@ -819,6 +830,38 @@ export function showKnowledgeWindow(): void {
     knowledgeWindow.focus();
 }
 
+/**
+ * Open (or focus) the Flow editor for one flow.
+ *
+ * A node graph is not a prompt. It is panned, zoomed and dragged, with a palette
+ * down one side and an inspector down the other, and it used to live in
+ * `.prompt-card` — Genie's ordinary modal, widened twice and still clipping at
+ * the bottom of the viewport (genie#505). A third widening would have been the
+ * third round of the same fix, so the editor gets what Settings, Docs and the
+ * Knowledge Graph already have: a window.
+ *
+ * `connKey` is the caller's bound host, inherited exactly as Settings inherits
+ * it. See {@link createFlowEditorWindow} for what that does and does NOT buy
+ * today.
+ */
+export function showFlowEditorWindow(flowId: string, connKey: string | null = null): void {
+    const key = `${connKey ?? 'local'}::${flowId}`;
+    const open = flowEditorWindows.get(key);
+    if (open && !open.isDestroyed()) {
+        open.show();
+        open.focus();
+        return;
+    }
+    const win = createFlowEditorWindow(flowId, connKey);
+    flowEditorWindows.set(key, win);
+    win.on('closed', () => {
+        // Only if it is still OURS: a window recreated under the same key while
+        // this one was closing must not be dropped by its predecessor.
+        if (flowEditorWindows.get(key) === win) flowEditorWindows.delete(key);
+    });
+    win.once('ready-to-show', () => win.focus());
+}
+
 export function showCaptureWindow(): void {
     if (!captureWindow || captureWindow.isDestroyed()) {
         captureWindow = createCaptureWindow();
@@ -941,6 +984,80 @@ function createDocsWindow(): BrowserWindow {
         win.loadFile(path.join(__dirname, 'docs.html'));
     }
 
+    win.once('ready-to-show', () => win.show());
+    return win;
+}
+
+/**
+ * The Flow editor's window.
+ *
+ * Shaped like {@link createSettingsWindow}, deliberately — same frame, same
+ * backgroundColor, same deferred show, same connection inheritance — because a
+ * second way of making a Genie window is a second set of things to get wrong.
+ * What differs is the minimum: 640px is BELOW the width at which both side panes
+ * fit, so the editor's narrow layout (palette and inspector as overlays over the
+ * canvas — `renderer/lib/flow-editor-layout.ts`) is reachable rather than
+ * theoretical.
+ *
+ * ## The host binding, and what it does not buy yet
+ *
+ * A window opened from a bound HOST window inherits its connection, so `api()`
+ * here routes to the same machine the opener drives. That is not decoration:
+ * genie#473 nearly shipped a panel listing the CLIENT's files under a host's
+ * name, and the way that is prevented is by never letting a child window's
+ * bridge disagree with its opener's.
+ *
+ * It does NOT make this the host's Flow editor. `flows.*` is not routed over the
+ * remote bridge (genie#415) — `makeRemoteBridge` overrides no flow call, so they
+ * fall through to local IPC — so a host window's Flow Manager already lists THIS
+ * workstation's flows and says so. The editor inherits both halves: the local
+ * flows, and the sentence naming the machine they belong to
+ * (`describeFlowSource`, rendered by the page). When flows do reach the bridge,
+ * the binding is already here and the sentence goes away on its own.
+ */
+function createFlowEditorWindow(flowId: string, connKey: string | null = null): BrowserWindow {
+    const win = new BrowserWindow({
+        width: 1280,
+        height: 860,
+        // Below the 1036px at which both panes dock — see the note above.
+        minWidth: 640,
+        minHeight: 480,
+        show: false,
+        frame: true,
+        // A fallback only: the page sets `document.title` to the flow's name once
+        // it loads, which is what the taskbar shows when several are open.
+        title: 'Flow Editor',
+        backgroundColor: '#0a0a0c',
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            contextIsolation: true,
+            nodeIntegration: false,
+            sandbox: false,
+        },
+    });
+
+    const wcId = win.webContents.id;
+    let search = `flow=${encodeURIComponent(flowId)}`;
+    if (connKey) {
+        bindWindowToConnection(wcId, connKey);
+        // `?host=` is what `isRemoteWindow()` reads, and it must never be set
+        // without the binding above: the renderer seeds its bridge from the URL
+        // synchronously, so a host-looking window with no binding would route
+        // every call at a connection main does not have for it (genie#50).
+        search += `&host=${encodeURIComponent(connKey)}`;
+        // Drop only THIS window's binding — never tear down the shared host
+        // connection, which the window that opened us still drives.
+        win.on('closed', () => unbindWindow(wcId));
+    }
+
+    if (isDev) {
+        win.loadURL(`http://localhost:8888/flow-editor?${search}`);
+    } else {
+        win.loadFile(path.join(__dirname, 'flow-editor.html'), { search });
+    }
+
+    // Deferred, like the others: a graph editor takes a moment to register its
+    // node kinds, and showing early is several frames of empty dark rectangle.
     win.once('ready-to-show', () => win.show());
     return win;
 }

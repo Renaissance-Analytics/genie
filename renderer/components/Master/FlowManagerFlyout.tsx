@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Action, Badge, Button, Switch, Text } from '@particle-academy/react-fancy';
 import { IconAlert, IconChevronDown, IconFlow, IconPlus, IconTrash, IconX } from './icons';
-import FlowEditorPanel from '../Flows/FlowEditorPanel';
 import {
     api,
     hasGenieBridge,
@@ -45,7 +44,14 @@ import {
  *
  * ## The canvas, and why the list is not one
  *
- * Editing opens `<FlowEditor>` — the real one. The LIST does not: it uses
+ * Editing opens `<FlowEditor>` — the real one — in a WINDOW of its own
+ * (genie#505). It used to open in a card over this one, and a card is not a
+ * place to pan and zoom a graph with a palette down one side and an inspector
+ * down the other. This surface therefore owns no editor state at all: it asks
+ * main to open the window and hears about the result on `flows:changed` like any
+ * other change.
+ *
+ * The LIST does not open an editor: it uses
  * `<FlowViewer variant="list">`, which is read-only by construction rather than
  * by a prop, because a viewer that can be switched into an editor is a viewer
  * somebody eventually switches into an editor by accident. Passing the last
@@ -87,17 +93,6 @@ export default function FlowManagerFlyout({
     const [confirming, setConfirming] = useState<FlowSummaryView | null>(null);
     /** The host this window drives, for the "whose Flows are these" note. */
     const [hostName, setHostName] = useState<string | undefined>(undefined);
-    /**
-     * The flow whose canvas is open, or null.
-     *
-     * Just what the canvas needs — an id, a name for the dialog, and the scope
-     * that drives its palette. Holding a whole summary row meant a newly created
-     * flow had to be found again in a refetched list before the editor could
-     * open, which is a round trip and a lookup that can miss.
-     */
-    const [editing, setEditing] = useState<
-        { id: string; title: string; scope: FlowSummaryView['scope'] } | null
-    >(null);
     /** The Flow awaiting an explicit "yes, delete it". */
     const [deleting, setDeleting] = useState<FlowSummaryView | null>(null);
     /** Said out loud when a save turned an armed Flow off, or one was deleted. */
@@ -183,17 +178,17 @@ export default function FlowManagerFlyout({
     useEffect(() => {
         if (!open) return;
         const onKey = (e: KeyboardEvent) => {
-            // The editor and the confirmations own Escape while they are up:
-            // closing the whole flyout out from under a half-written Flow
-            // would throw the work away without asking.
-            if (e.key === 'Escape' && !editing && !confirming && !deleting) {
+            // The confirmations own Escape while they are up. The EDITOR no
+            // longer needs to: it is a separate window with its own key
+            // handling, so a keystroke there never reaches this one.
+            if (e.key === 'Escape' && !confirming && !deleting) {
                 e.preventDefault();
                 onClose();
             }
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
-    }, [open, onClose, editing, confirming, deleting]);
+    }, [open, onClose, confirming, deleting]);
 
     /**
      * Arming asks first; disarming never does.
@@ -215,11 +210,14 @@ export default function FlowManagerFlyout({
     };
 
     /**
-     * Mint a flow and open its canvas.
+     * Mint a flow and open its canvas — in its OWN WINDOW (genie#505).
      *
      * System-scoped, because that is what "new flow" means from the machine's
      * own manager. It arrives DISARMED — creating and arming are different
      * decisions, and this surface never turns one on as a side effect.
+     *
+     * The list does not need refreshing when that window saves: `flows:save`
+     * pushes `flows:changed`, which this flyout already subscribes to.
      */
     const create = async () => {
         try {
@@ -229,7 +227,7 @@ export default function FlowManagerFlyout({
             // threw; the canvas simply never opened.
             const flow = await api().flows.create({ scope: { kind: 'system' } });
             await reload();
-            if (flow) setEditing({ id: flow.id, title: flow.title, scope: flow.scope });
+            if (flow) await api().flows.openWindow(flow.id);
             else setError('Genie could not create a flow.');
         } catch (e) {
             setError(e instanceof Error ? e.message : String(e));
@@ -379,13 +377,7 @@ export default function FlowManagerFlyout({
                                         onToggle={() => toggle(flow)}
                                         onRun={() => void runNow(flow)}
                                         onExpand={() => void showHistory(flow)}
-                                        onEdit={() =>
-                                            setEditing({
-                                                id: flow.id,
-                                                title: flow.title,
-                                                scope: flow.scope,
-                                            })
-                                        }
+                                        onEdit={() => void api().flows.openWindow(flow.id)}
                                         onDelete={() => setDeleting(flow)}
                                     />
                                 ))}
@@ -402,15 +394,6 @@ export default function FlowManagerFlyout({
             with `z-index: 60`, so it opens a stacking context that would scope
             `.prompt-scrim`'s z-index 100 INSIDE it, quietly breaking the layer
             ladder documented at the top of master.css. */}
-        {editing && (
-            <FlowCanvasModal
-                flow={editing}
-                onClose={() => {
-                    setEditing(null);
-                    void reload();
-                }}
-            />
-        )}
         {deleting && (
             <DeleteConfirm
                 flow={deleting}
@@ -538,57 +521,6 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
             <Button size="sm" className="flowmgr-empty-new" onClick={onCreate}>
                 <IconPlus size={12} /> New flow
             </Button>
-        </div>
-    );
-}
-
-/**
- * The canvas, full size, over the master window.
- *
- * A flyout column cannot hold a pan-zoom graph editor with a palette and a
- * config panel — so the MANAGER stays in the flyout and the EDITOR opens over
- * it. Rendered outside `.docs-flyout-root` for the same two reasons the other
- * modals here are: that root sets `pointer-events: none` and hands it back only
- * to the aside and its scrim, and it is `position: fixed` with a z-index, so it
- * opens a stacking context that would scope this modal's layer inside it.
- */
-function FlowCanvasModal({
-    flow,
-    onClose,
-}: {
-    flow: { id: string; title: string; scope: FlowSummaryView['scope'] };
-    onClose: () => void;
-}) {
-    return (
-        <div className="prompt-scrim" onClick={onClose}>
-            <div
-                className="prompt-card flowmgr-canvas"
-                role="dialog"
-                aria-label={`Edit ${flow.title}`}
-                aria-modal="true"
-                onClick={(e) => e.stopPropagation()}
-            >
-                <div className="prompt-title">
-                    <IconFlow size={15} />
-                    {flow.title}
-                    <span className="grow" />
-                    {/* Its own class, so a spec can reach THIS close button.
-                        `[role="dialog"] .gicon[aria-label="Close"]` matches
-                        every open dialog in the master window, and there are
-                        three. */}
-                    <button
-                        type="button"
-                        className="gicon flowmgr-canvas-close"
-                        onClick={onClose}
-                        aria-label="Close the canvas"
-                    >
-                        <IconX />
-                    </button>
-                </div>
-                <div className="flowmgr-canvas-body">
-                    <FlowEditorPanel flowId={flow.id} scope={flow.scope ?? { kind: 'system' }} />
-                </div>
-            </div>
         </div>
     );
 }

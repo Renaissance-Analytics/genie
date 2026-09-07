@@ -3898,6 +3898,17 @@ export interface GenieApi {
         }>;
         /** Start a flow by hand. Resolves with the result — refusals included. */
         run: (flowId: string) => Promise<FlowRunOutcomeView>;
+        /**
+         * Open (or focus) this flow's editor in its own WINDOW.
+         *
+         * A node graph is panned, zoomed and dragged, with a palette down one
+         * side and an inspector down the other. It used to open in
+         * `.prompt-card` — Genie's ordinary modal, widened twice and still
+         * clipping (genie#505) — and now gets what Settings and the Knowledge
+         * Graph have. Focuses an already-open editor for the same flow rather
+         * than stacking a second one over an unsaved graph.
+         */
+        openWindow: (flowId: string) => Promise<{ ok: boolean }>;
     };
     process: {
         /** Start a background Process service runner. */

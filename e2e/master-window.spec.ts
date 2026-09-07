@@ -602,6 +602,29 @@ const flowsPanel = () => page.locator('[role="dialog"][aria-label="Flows"]');
 const flowRow = (title: string) => flowsPanel().locator('.flowmgr-row', { hasText: title });
 
 /**
+ * Open a flow's editor and hand back ITS WINDOW.
+ *
+ * The editor is a real `BrowserWindow` now, not a card over this one
+ * (genie#505), so it is a second Playwright `Page` — subscribed to BEFORE the
+ * click, because `waitForEvent` started afterwards can miss a window that opened
+ * in between.
+ *
+ * `open` is the click that causes it, rather than a flow title, because two
+ * different things open the same window: Edit on a row, and New Flow.
+ */
+async function openFlowEditor(open: () => Promise<void>): Promise<Page> {
+    const appeared = app.waitForEvent('window');
+    await open();
+    const win = await appeared;
+    await win.waitForLoadState('domcontentloaded');
+    // React Flow's own root. The window being there proves nothing — an editor
+    // that failed to register its node kinds renders a "Loading…" line in a
+    // perfectly good window.
+    await expect(win.locator('.react-flow')).toBeVisible({ timeout: 20_000 });
+    return win;
+}
+
+/**
  * What is animating on the Flows icon, split by KIND.
  *
  * `getAnimations()` returns CSS **transitions** as well as CSS animations, and
@@ -856,18 +879,16 @@ test('a flow made in the manager arrives switched off, and opens on a canvas', a
     await setFlowsRunning([]);
     await openFlows();
 
-    await flowsPanel().locator('.flowmgr-new').click();
+    // The canvas, in its own window, not a form and not a card.
+    const editor = await openFlowEditor(() => flowsPanel().locator('.flowmgr-new').click());
 
-    // The canvas, not a form. `.react-flow` is React Flow's own root, so this
-    // fails if the editor silently fell back to anything else.
-    const canvas = page.locator('[role="dialog"] .flowmgr-canvas-body');
-    await expect(canvas).toBeVisible();
-    await expect(canvas.locator('.react-flow')).toBeVisible();
+    await editor.getByLabel('Flow name').fill(AUTHORED);
+    await editor.getByRole('button', { name: 'Save' }).click();
+    await editor.close();
 
-    await canvas.getByLabel('Flow name').fill(AUTHORED);
-    await canvas.getByRole('button', { name: 'Save' }).click();
-    await page.locator('.flowmgr-canvas-close').click();
-
+    // The list catches up on its own: `flows:save` pushes `flows:changed`, and
+    // the flyout subscribes to it. Nothing here tells it to reload, so a broken
+    // push shows up as this row never arriving.
     const row = flowRow(AUTHORED);
     await expect(row).toBeVisible();
     await expect(row).toContainText('This machine');
@@ -886,52 +907,148 @@ test('a flow made in the manager arrives switched off, and opens on a canvas', a
     await expect(flowsRoot()).not.toHaveClass(/open/);
 });
 
-test('the canvas modal is a WORKSPACE, not a 380px prompt card', async () => {
-    // The bug this is the standing answer to, and the reason the spec beside it
-    // did not catch it: `FlowCanvasModal` renders `prompt-card flowmgr-canvas`,
-    // and `.flowmgr-canvas` had no rules in `master.css` at all. The editor
-    // inherited `.prompt-card { width: 380px }`, and fancy-flow's
-    // `grid-template-columns: 216px 1fr 300px` collapsed the canvas column to
-    // nothing -- a scrolling one-column node list with a sliver of graph.
+/**
+ * Resize the editor's own BrowserWindow, from MAIN, and report the client width
+ * the renderer ended up with.
+ *
+ * From main because a renderer cannot resize a window it did not open. Reported
+ * back because a window manager is allowed to refuse: a runner whose screen is
+ * narrower than the size asked for gives a smaller window than requested, and a
+ * measurement that assumed otherwise would fail for a reason that has nothing to
+ * do with Genie.
+ */
+async function resizeFlowEditor(editor: Page, width: number, height: number): Promise<number> {
+    await app.evaluate(
+        ({ BrowserWindow }, size) => {
+            const w = BrowserWindow.getAllWindows().find((b) =>
+                b.webContents.getURL().includes('flow-editor'),
+            );
+            if (!w) throw new Error('the flow editor window is not among the open windows');
+            w.setSize(size.width, size.height);
+        },
+        { width, height },
+    );
+    // Settle on the width the window ACTUALLY got, rather than the one asked
+    // for: the resize, the paint and the ResizeObserver are three separate
+    // ticks, and a window manager may land somewhere else entirely. Bounded and
+    // never throwing — a resize that does not take is something the CALLER
+    // decides what to do about, from the number it gets back.
+    let last = -1;
+    for (let i = 0; i < 20; i += 1) {
+        const now = await editor.evaluate(() => window.innerWidth);
+        if (now === last) return now;
+        last = now;
+        await editor.waitForTimeout(100);
+    }
+    return last;
+}
+
+test('the canvas gets the whole window, with both panes docked beside it', async () => {
+    // The bug this is the standing answer to, twice over. The editor used to
+    // render as `prompt-card flowmgr-canvas` — Genie's ordinary modal, widened
+    // once because it inherited `.prompt-card { width: 380px }` and again
+    // because the first widening was still not enough. The owner's screenshot is
+    // the second attempt, clipping off the bottom of the viewport.
     //
-    // `expect(canvas.locator('.react-flow')).toBeVisible()` passes against
-    // exactly that. An element can be present, visible and 100px wide. So this
-    // MEASURES.
+    // `expect(locator('.react-flow')).toBeVisible()` passes against every one of
+    // those. An element can be present, visible and 100px wide. So this
+    // MEASURES, and it measures the thing that actually goes to zero: fancy-flow
+    // gives the palette 216px and the config panel 300px from a fixed grid, and
+    // the canvas is the `1fr` between them.
     await setFlowsRunning([]);
     await openFlows();
-    await flowRow('Tidy the workspace').getByRole('button', { name: /Edit/ }).click();
-
-    const dialog = page.locator('[role="dialog"].flowmgr-canvas');
-    await expect(dialog).toBeVisible();
+    const editor = await openFlowEditor(() =>
+        flowRow('Tidy the workspace').getByRole('button', { name: /Edit/ }).click(),
+    );
 
     // `page.viewportSize()` is null for an Electron window — there is no
     // emulated viewport — so the window is measured from inside the page.
-    const win = await page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }));
-    const card = await dialog.boundingBox();
-    if (!card) throw new Error('no bounding box for the canvas modal');
+    const inner = await resizeFlowEditor(editor, 1280, 860);
 
-    // Not "wider than 380": a regression that shipped 420px would be just as
-    // broken. 600 is chosen against the thing that actually constrains it —
-    // fancy-flow gives the palette 216px and the config panel 300px from a fixed
-    // grid, so below ~516px of content the canvas column has nothing left.
-    expect(card.width, `canvas modal is ${card.width}px in a ${win.w}px window`).toBeGreaterThan(
-        600,
-    );
-    expect(card.height, `canvas modal is ${card.height}px in a ${win.h}px window`).toBeGreaterThan(
-        400,
+    // The GitHub Windows runner's screen is 1024x768, and a window manager may
+    // refuse to make a window wider than the screen. This test is about what the
+    // editor does WITH the room, so a runner that cannot give it the room has
+    // nothing to say here — and says so, rather than passing on a narrow window
+    // where every assertion below would be about the wrong layout. The docked
+    // case still runs on the Linux (1280x1024) and macOS shards, and the NARROW
+    // case in the test below runs everywhere.
+    test.skip(
+        inner < 1100,
+        `this runner's screen gives the editor only ${inner}px — not enough to dock both panes`,
     );
 
-    // The part that matters to a person: the GRAPH has room. It is the `1fr`
-    // between those two fixed columns, so it is what goes to zero first — which
-    // makes it the thing worth measuring rather than the card around it.
-    const graph = dialog.locator('.react-flow');
-    await expect(graph).toBeVisible();
-    const graphBox = await graph.boundingBox();
+    const graphBox = await editor.locator('.react-flow').boundingBox();
     if (!graphBox) throw new Error('no bounding box for the graph canvas');
-    expect(graphBox.width, `graph canvas is only ${graphBox.width}px wide`).toBeGreaterThan(400);
-    expect(graphBox.height).toBeGreaterThan(300);
 
-    await page.locator('.flowmgr-canvas-close').click();
+    // The canvas keeps its minimum (520px, `FLOW_CANVAS_MIN_WIDTH`) with BOTH
+    // panes docked beside it — asserted a little under, because a scrollbar and
+    // the window's own padding come out of the same width.
+    expect(graphBox.width, `graph canvas is only ${graphBox.width}px wide`).toBeGreaterThan(500);
+    expect(graphBox.height).toBeGreaterThan(400);
+
+    // ...and both panes are actually there at this width. Without this the
+    // canvas could be huge because the editor rendered nothing beside it, which
+    // is the failure mode fancy-flow's own media queries produce.
+    await expect(editor.locator('.ff-editor__palette')).toBeVisible();
+    await expect(editor.locator('.ff-editor__panel-wrap')).toBeVisible();
+    // Nothing is floating: the overlay rules key off this attribute, and its
+    // absence is what says both panes are in the grid.
+    await expect(editor.locator('.floweditor-shell')).not.toHaveAttribute('data-overlay', /.*/);
+
+    await editor.close();
+    await page.keyboard.press('Escape');
+    await expect(flowsRoot()).not.toHaveClass(/open/);
+});
+
+test('a narrow editor gives the panes up rather than the canvas, and hands them back', async () => {
+    // The responsive half, and the one that runs on every shard: making a window
+    // SMALLER always works, whatever the runner's screen.
+    //
+    // fancy-flow's own answer to a narrow editor is `display: none` on the panes
+    // — the wrong axis (it measures the viewport, and the editor is never the
+    // viewport) and one-way, with nothing offering to bring a pane back. A
+    // canvas you cannot add a step to is not a smaller editor, it is a broken
+    // one, so this asserts the way BACK as hard as it asserts the collapse.
+    await setFlowsRunning([]);
+    await openFlows();
+    const editor = await openFlowEditor(() =>
+        flowRow('Tidy the workspace').getByRole('button', { name: /Edit/ }).click(),
+    );
+
+    const inner = await resizeFlowEditor(editor, 820, 700);
+    // 820 is comfortably inside every runner's screen and inside the window's
+    // own 640px minimum, so a failure here is Genie's, not the environment's.
+    expect(inner, `the editor window would not narrow — it is ${inner}px`).toBeLessThan(1000);
+
+    // Below 1036px of container the config panel leaves the grid; the palette
+    // stays, because a canvas with no palette cannot be added to at all.
+    await expect(editor.locator('.ff-editor__panel-wrap')).toHaveCount(0);
+    // POSITIVE CONTROL: the editor did not simply stop rendering. An editor that
+    // failed to mount satisfies the absence above perfectly.
+    await expect(editor.locator('.ff-editor__palette')).toBeVisible();
+    await expect(editor.locator('.react-flow')).toBeVisible();
+
+    // And it comes BACK. The toolbar grows a toggle for exactly the panes that
+    // are not docked; `data-action` is fancy-flow's own stable handle for one.
+    await editor.locator('[data-action="genie-pane-panel"]').click();
+    await expect(editor.locator('.ff-editor__panel-wrap')).toBeVisible();
+
+    // Floating, not docked: it is OVER the canvas, which keeps its width. This
+    // is the assertion that tells an overlay from a third column — a panel that
+    // took a column would have shrunk the graph by 300px.
+    const withPanel = await editor.locator('.react-flow').boundingBox();
+    if (!withPanel) throw new Error('no bounding box for the narrowed graph canvas');
+    expect(
+        withPanel.width,
+        `graph canvas collapsed to ${withPanel.width}px with the panel open`,
+    ).toBeGreaterThan(400);
+
+    // The same toggle puts it away again — a one-way reveal is the bug wearing a
+    // different hat.
+    await editor.locator('[data-action="genie-pane-panel"]').click();
+    await expect(editor.locator('.ff-editor__panel-wrap')).toHaveCount(0);
+
+    await editor.close();
     await page.keyboard.press('Escape');
     await expect(flowsRoot()).not.toHaveClass(/open/);
 });
@@ -947,17 +1064,16 @@ test('the canvas offers Genie’s OWN steps, not just fancy-flow’s builtins', 
     // can only prove main COMPUTED the list.
     await setFlowsRunning([]);
     await openFlows();
-    await flowRow('Tidy the workspace').getByRole('button', { name: /Edit/ }).click();
-
-    const canvas = page.locator('[role="dialog"] .flowmgr-canvas-body');
-    await expect(canvas.locator('.react-flow')).toBeVisible();
+    const editor = await openFlowEditor(() =>
+        flowRow('Tidy the workspace').getByRole('button', { name: /Edit/ }).click(),
+    );
 
     // Both halves. Fancy's kit alone would pass a check for "Branch", and a
     // palette showing only Genie's would mean the builtins went missing.
-    await expect(canvas.getByText('Terminals', { exact: false }).first()).toBeVisible();
-    await expect(canvas.getByText('Branch', { exact: false }).first()).toBeVisible();
+    await expect(editor.getByText('Terminals', { exact: false }).first()).toBeVisible();
+    await expect(editor.getByText('Branch', { exact: false }).first()).toBeVisible();
 
-    await page.locator('.flowmgr-canvas-close').click();
+    await editor.close();
     await page.keyboard.press('Escape');
     await expect(flowsRoot()).not.toHaveClass(/open/);
 });
@@ -974,11 +1090,11 @@ test('the palette offers no step Genie would refuse — not even via search', as
     // actually saw.
     await setFlowsRunning([]);
     await openFlows();
-    await flowRow('Tidy the workspace').getByRole('button', { name: /Edit/ }).click();
+    const editor = await openFlowEditor(() =>
+        flowRow('Tidy the workspace').getByRole('button', { name: /Edit/ }).click(),
+    );
 
-    const canvas = page.locator('[role="dialog"] .flowmgr-canvas-body');
-    await expect(canvas.locator('.react-flow')).toBeVisible();
-    const palette = canvas.locator('.ff-palette');
+    const palette = editor.locator('.ff-palette');
     // The LABEL element, not the row. A row renders `label` and `description`
     // together, and Playwright's `hasText` is a case-insensitive substring over
     // the whole thing -- so `hasText: 'Memory Store'` matched Genie's own
@@ -1027,7 +1143,7 @@ test('the palette offers no step Genie would refuse — not even via search', as
     await search.fill('branch');
     await expect(labels.filter({ hasText: 'Branch' }).first()).toBeVisible();
 
-    await page.locator('.flowmgr-canvas-close').click();
+    await editor.close();
     await page.keyboard.press('Escape');
     await expect(flowsRoot()).not.toHaveClass(/open/);
 });

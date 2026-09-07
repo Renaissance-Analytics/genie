@@ -2,7 +2,18 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { FlowEditor } from '@particle-academy/fancy-flow';
 import '@particle-academy/fancy-flow/styles.css';
 import { paletteKindFilter, registerFlowKinds } from '../../lib/flow-kinds';
-import type { FlowAdmissionView, FlowRunOutcomeView, FlowScope } from '../../lib/genie';
+import {
+    flowEditorPanes,
+    flowPaneLabel,
+    flowPaneToggles,
+    type FlowPaneName,
+} from '../../lib/flow-editor-layout';
+import {
+    api,
+    type FlowAdmissionView,
+    type FlowRunOutcomeView,
+    type FlowScope,
+} from '../../lib/genie';
 
 /**
  * Authoring a Genie App's workflow.
@@ -40,6 +51,29 @@ import type { FlowAdmissionView, FlowRunOutcomeView, FlowScope } from '../../lib
  * its node-type map on mount, so a canvas that mounted first would draw every
  * Genie node as a bare default box and keep doing so until something forced it
  * to rebuild — which looks like a rendering bug and is really a race.
+ *
+ * ## It measures ITSELF, and never learns where it is
+ *
+ * Two surfaces render this: the Flow editor WINDOW (`pages/flow-editor.tsx`) and
+ * a GApp window's Flows tab. Neither tells it which it is, and it must not ask —
+ * the layout question is "how wide am I", and the answer is the same wherever
+ * that width came from. So a `ResizeObserver` on its own shell feeds
+ * `flow-editor-layout.ts`, which decides which side panes fit; the ones that do
+ * not become overlays with a toolbar toggle each.
+ *
+ * That is also why fancy-flow's own responsive rules are overruled rather than
+ * used: they are viewport media queries, and this component is never the
+ * viewport. See `renderer/styles/master.css`, `the graph editor's panes`.
+ *
+ * ## Every call goes through `api()`
+ *
+ * Not `window.genie` directly, which is what this used to do. The difference is
+ * invisible today — `makeRemoteBridge` overrides no flow call, so both resolve
+ * to local IPC — and stops being invisible the moment flows reach the remote
+ * bridge (genie#415): the editor's own chrome asks through `api()`, and a panel
+ * still asking `window.genie` would then be editing the CLIENT's flow inside a
+ * window titled after the HOST. That is genie#473 exactly, and it costs one
+ * accessor to never have.
  */
 
 interface Props {
@@ -68,6 +102,20 @@ export default function FlowEditorPanel({ flowId, scope }: Props) {
     const [error, setError] = useState<string | null>(null);
     const [kindsReady, setKindsReady] = useState(false);
     const checkTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    /**
+     * The editor's own width, and which side pane the user has floated over the
+     * canvas.
+     *
+     * The panel measures ITSELF rather than reading the window: it is a tab in a
+     * GApp window in one caller and the body of its own window in another, and
+     * asking the viewport would be answering about a width it never had. That is
+     * also the bug in fancy-flow's own media queries — see
+     * `renderer/lib/flow-editor-layout.ts`, which holds the decision this
+     * measurement feeds.
+     */
+    const shellRef = useRef<HTMLDivElement | null>(null);
+    const [shellWidth, setShellWidth] = useState(0);
+    const [openPane, setOpenPane] = useState<FlowPaneName | null>(null);
 
     /**
      * Register the steps this app may author with, then let the canvas mount.
@@ -85,7 +133,7 @@ export default function FlowEditorPanel({ flowId, scope }: Props) {
         let undo: (() => void) | null = null;
         let live = true;
 
-        void window.genie.flows
+        void api().flows
             .palette(scope)
             .then((palette) => {
                 if (!live) return;
@@ -110,7 +158,7 @@ export default function FlowEditorPanel({ flowId, scope }: Props) {
 
     useEffect(() => {
         let live = true;
-        void window.genie.flows.get(flowId).then((flow) => {
+        void api().flows.get(flowId).then((flow) => {
             if (!live) return;
             if (!flow) {
                 setError('That flow no longer exists.');
@@ -140,7 +188,7 @@ export default function FlowEditorPanel({ flowId, scope }: Props) {
         (next: unknown) => {
             if (checkTimer.current) clearTimeout(checkTimer.current);
             checkTimer.current = setTimeout(() => {
-                void window.genie.flows.check(scope, next).then(setAdmission);
+                void api().flows.check(scope, next).then(setAdmission);
             }, CHECK_DELAY_MS);
         },
         [scope],
@@ -164,7 +212,7 @@ export default function FlowEditorPanel({ flowId, scope }: Props) {
         if (!graph) return;
         setBusy(true);
         try {
-            await window.genie.flows.save({ id: flowId, title, scope, graph });
+            await api().flows.save({ id: flowId, title, scope, graph });
             setError(null);
         } catch (e) {
             setError(e instanceof Error ? e.message : 'Could not save this flow.');
@@ -178,9 +226,9 @@ export default function FlowEditorPanel({ flowId, scope }: Props) {
         setBusy(true);
         try {
             if (graph) {
-                await window.genie.flows.save({ id: flowId, title, scope, graph });
+                await api().flows.save({ id: flowId, title, scope, graph });
             }
-            setRun(await window.genie.flows.run(flowId));
+            setRun(await api().flows.run(flowId));
         } catch (e) {
             setRun({ ok: false, error: e instanceof Error ? e.message : 'The run failed.' });
         } finally {
@@ -188,11 +236,30 @@ export default function FlowEditorPanel({ flowId, scope }: Props) {
         }
     }, [enabled, flowId, graph, scope, title]);
 
+    const ready = !!graph && kindsReady;
+
+    // Re-observe when the editor actually mounts: the shell does not exist while
+    // the palette is still loading, so an observer attached on the first render
+    // would be watching nothing for the whole of it.
+    useEffect(() => {
+        const el = shellRef.current;
+        if (!ready || !el || typeof ResizeObserver === 'undefined') return;
+        setShellWidth(Math.round(el.getBoundingClientRect().width));
+        const ro = new ResizeObserver((entries) => {
+            const w = entries[0]?.contentRect.width;
+            if (typeof w === 'number') setShellWidth(Math.round(w));
+        });
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, [ready]);
+
     if (!graph || !kindsReady) {
         return <div className="p-4 text-sm opacity-70">{error ?? 'Loading…'}</div>;
     }
 
     const refusals = admission?.refusals ?? [];
+    const panes = flowEditorPanes(shellWidth, openPane);
+    const toggles = flowPaneToggles(shellWidth);
 
     return (
         <div className="flex h-full flex-col gap-2 p-2">
@@ -251,7 +318,17 @@ export default function FlowEditorPanel({ flowId, scope }: Props) {
                 </div>
             ) : null}
 
-            <div className="min-h-0 flex-1">
+            {/*
+              The shell is what gets MEASURED, and what an overlaid pane is
+              positioned against. `data-overlay` is the one thing the stylesheet
+              needs to know: which pane, if any, is currently floating over the
+              canvas rather than sitting in the grid.
+            */}
+            <div
+                ref={shellRef}
+                className="floweditor-shell min-h-0 flex-1"
+                data-overlay={panes.overlay ?? undefined}
+            >
                 <FlowEditor
                     value={graph as never}
                     onChange={onChange as never}
@@ -262,10 +339,20 @@ export default function FlowEditorPanel({ flowId, scope }: Props) {
                     // typed `number`, so the percentage has to arrive via
                     // `style`, which is spread last and therefore wins.
                     //
-                    // Both callers give it a real height: the canvas modal
-                    // through `.flowmgr-canvas-body`, and the GApp Flows tab
-                    // through its own `flex: 1; min-height: 0` column.
-                    style={{ height: '100%' }}
+                    // Every caller gives it a real height: the editor window's
+                    // body, and the GApp Flows tab, through their own
+                    // `flex: 1; min-height: 0` column.
+                    //
+                    // `gridTemplateColumns` names only the panes that are
+                    // DOCKED. It has to arrive inline for the same reason the
+                    // height does — `.ff-editor`'s own rule is a fixed
+                    // `216px 1fr 300px` whatever `showPalette`/`showPanel` say,
+                    // so turning a pane off without this leaves the canvas in a
+                    // 216px column and an empty 300px one beside it. Raised
+                    // upstream as Particle-Academy/fancy-flow#16.
+                    style={{ height: '100%', gridTemplateColumns: panes.columns }}
+                    showPalette={panes.showPalette}
+                    showPanel={panes.showPanel}
                     // No `executors` prop, and the built-in Run is off — see the
                     // note at the top. Running belongs to the main process.
                     builtins={{ run: false }}
@@ -286,6 +373,25 @@ export default function FlowEditorPanel({ flowId, scope }: Props) {
                             disabled: () => busy || admission?.allowed === false,
                             onSelect: () => void runNow(),
                         },
+                        // The way BACK to a pane the width pushed out of the
+                        // grid. Without these, a narrow editor is not responsive
+                        // — it is amputated: no palette means no way to add a
+                        // step at all, which is what fancy-flow's own media
+                        // queries leave behind.
+                        ...toggles.map((pane) => ({
+                            id: `genie-pane-${pane}`,
+                            label: flowPaneLabel(pane),
+                            title:
+                                pane === 'palette'
+                                    ? 'Show the steps palette over the canvas'
+                                    : 'Show the selected step’s settings over the canvas',
+                            placement: 'start' as const,
+                            // Toggling one CLOSES the other: the canvas is
+                            // underneath, and two overlays at this width would
+                            // cover the thing they exist to edit.
+                            onSelect: () =>
+                                setOpenPane((current) => (current === pane ? null : pane)),
+                        })),
                     ]}
                     showFeed={false}
                 />
