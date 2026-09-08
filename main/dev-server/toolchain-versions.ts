@@ -483,13 +483,27 @@ export function addableRecipes(
  * not arrive, and `manageService` promises agents that "an app served there needs
  * no `.env` edit".
  *
- * This is PHP's own compiled-in default, so stating it changes nothing an app
- * expects. What it changes is that it is STATED. PHP's shipped
- * `php.ini-production` and `php.ini-development` both say `GPCS` — which is where
- * every distro package, Herd and MAMP get theirs — so leaving the key unset means
- * the answer is decided by whichever ini happens to win, and this tree has already
- * lost that argument once (genie#206: PATH resolved `php` to Herd's shim, and its
- * ini came along with it).
+ * ## Why THIS value and not another
+ *
+ * `EGPCS` is PHP's own compiled-in default, so stating it changes nothing an app
+ * expects — it removes a coin toss rather than introducing a behaviour. PHP's
+ * shipped `php.ini-production` and `php.ini-development` both say `GPCS`, which is
+ * where every distro package, Herd and MAMP get theirs, so leaving the key unset
+ * means the answer is decided by whichever ini happens to win. This tree has
+ * already lost that argument once (genie#206: PATH resolved `php` to Herd's shim,
+ * and its ini came along with it).
+ *
+ * The letters that are not in question are `G`, `P`, `C` and `S`: dropping any of
+ * them would empty `$_GET`/`$_POST`/`$_COOKIE`/`$_SERVER` and break every site
+ * Genie serves. So the only real question is whether adding `E` COSTS anything,
+ * and there is exactly one candidate — `$_REQUEST`. When `request_order` is EMPTY,
+ * PHP falls back to this setting to build it, so the fear is that `E` puts the
+ * workspace's database password somewhere app code reads as user input
+ * (`$_REQUEST['PATH']`). It does not: PHP's `$_REQUEST` builder reads only the
+ * `G`, `P` and `C` letters and ignores `E` and `S`. That is asserted against a
+ * real `php-cgi` in `service-env-reaches-php.real.test.ts`, with `request_order`
+ * pinned empty so the fallback is genuinely in play — rather than taken on trust
+ * from a reading of the source.
  *
  * Named once and used twice: here, in the ini Genie writes for the PHP it
  * installs, and on the FastCGI worker's command line in `serve-config.ts` — which

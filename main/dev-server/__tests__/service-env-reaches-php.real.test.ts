@@ -97,16 +97,20 @@ echo json_encode([
   'server' => $_SERVER[${JSON.stringify(KEY)}] ?? '(absent)',
   // phpdotenv's PutenvAdapter.
   'getenv' => getenv(${JSON.stringify(KEY)}) === false ? '(absent)' : getenv(${JSON.stringify(KEY)}),
+  // The one place adding \`E\` could do HARM rather than good — see the test below.
+  'request' => $_REQUEST[${JSON.stringify(KEY)}] ?? '(absent)',
   'variables_order' => ini_get('variables_order'),
+  'request_order' => ini_get('request_order'),
 ]);`,
     );
 }
 
 /** The php.ini every distro package, Herd and MAMP ship — PHP's own
- *  `php.ini-production` line, with `E` absent. */
-function distroIni(dir: string): string {
+ *  `php.ini-production` line, with `E` absent. `extra` adds lines for a test that
+ *  needs to pin a second setting rather than inherit whatever the runner has. */
+function distroIni(dir: string, extra = ''): string {
     const ini = path.join(dir, 'php.ini');
-    writeFileSync(ini, 'variables_order = "GPCS"\n');
+    writeFileSync(ini, `variables_order = "GPCS"\n${extra}`);
     return ini;
 }
 
@@ -136,14 +140,17 @@ async function askPhp(
 }
 
 /** A fixture repo + the worker environment Genie composes for it. */
-function fixture(label: string): { dir: string; root: string; env: NodeJS.ProcessEnv; ini: string } {
+function fixture(
+    label: string,
+    extraIni = '',
+): { dir: string; root: string; env: NodeJS.ProcessEnv; ini: string } {
     const dir = mkdtempSync(path.join(tmpdir(), `genie-real-svcenv-${label}-`));
     dirs.push(dir);
     const root = path.join(dir, 'public');
     mkdirSync(root);
     reportsEnv(root);
     mkdirSync(path.join(dir, 'genie-uploads'), { recursive: true });
-    const ini = distroIni(dir);
+    const ini = distroIni(dir, extraIni);
     // PHPRC pins WHICH php.ini this worker loads, so the measurement is about
     // Genie's configuration and not the runner's packaging. `[KEY]` is the service
     // env — set on the worker's PROCESS environment, exactly as hostSpawn does.
@@ -168,6 +175,53 @@ describe('REAL service env — a Genie-hosted PHP app can READ the values (genie
 
         expect(seen.env, '$_ENV must carry the service value the worker was started with').toBe(
             VALUE,
+        );
+    });
+
+    /**
+     * WHY `EGPCS` AND NOT SOMETHING ELSE — the half of the decision that is about
+     * harm rather than benefit.
+     *
+     * `variables_order` is a global default for every site Genie serves, and `E` is
+     * the letter with a bad reputation: when `request_order` is EMPTY, PHP falls
+     * back to `variables_order` to build `$_REQUEST`, so the obvious fear is that
+     * turning `E` on quietly puts the workspace's database password into
+     * `$_REQUEST` — where ordinary app code (`$_REQUEST['PATH']`) would find it, and
+     * where a value that looks user-supplied is not.
+     *
+     * PHP's `$_REQUEST` builder only ever reads the `G`, `P` and `C` letters and
+     * ignores `E` and `S` entirely, so the fear is unfounded — but "I read that in
+     * the source" is not evidence, and this is the assertion that makes it one.
+     *
+     * `request_order` is pinned EMPTY in this fixture's ini rather than inherited,
+     * because empty is the only setting under which `$_REQUEST` falls back to
+     * `variables_order`. A runner that happened to set `request_order = "GP"` would
+     * make this test pass without ever exercising the letter it is about.
+     */
+    it.skipIf(!phpCgiExe)('does NOT leak the service env into $_REQUEST', async () => {
+        const { dir, root, env } = fixture('request', 'request_order =\n');
+
+        const seen = await askPhp(
+            dir,
+            root,
+            (fcgiPort) => phpFastcgiWorkerCommand(phpCgiExe, fcgiPort, uploadsIn(dir)),
+            env,
+        );
+
+        // The precondition: with `request_order` unset, `$_REQUEST` is built from
+        // `variables_order` — the very setting this fix changes. Without this the
+        // test below could pass because the runner set `request_order = "GP"` and
+        // proved nothing about the letter we added.
+        expect(seen.request_order, '$_REQUEST must be falling back to variables_order here').toBe(
+            '',
+        );
+        expect(seen.variables_order, 'and it must be the value the fix states').toBe('EGPCS');
+        // POSITIVE CONTROL for the reader: the same request DOES see the value on the
+        // surfaces it is meant to, so an absent `$_REQUEST` here is `E` being ignored
+        // rather than the env never having arrived.
+        expect(seen.env).toBe(VALUE);
+        expect(seen.request, 'E must not put environment variables into $_REQUEST').toBe(
+            '(absent)',
         );
     });
 

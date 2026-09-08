@@ -324,11 +324,14 @@ describe('php.ini — Genie owns the CONFIG, not just the binaries', () => {
      * states it on its command line as well, because Genie installs PHP on Windows
      * only and the worker must be right on a machine whose PHP it did not install.
      */
-    it('states variables_order so $_ENV is populated — genie#539', () => {
+    it('states variables_order = "EGPCS" so $_ENV is populated — genie#539', () => {
+        // THE EXACT VALUE, not "it mentions E". This is a global default for every
+        // site Genie serves, so which letters and in which order IS the decision, and
+        // a test that accepts any string containing an E would let `EG` through —
+        // which would silently empty `$_COOKIE` and `$_SERVER`. See
+        // PHP_VARIABLES_ORDER for why this value and not another.
         const ini = phpIniContents('C:\\g\\toolchain\\php\\8.4.24', 'win32');
-        const line = /^\s*variables_order\s*=\s*"?([EGPCS]+)"?\s*$/m.exec(ini);
-        expect(line, 'the ini must STATE variables_order, not rely on a default').not.toBeNull();
-        expect(line![1], 'E is the whole point: without it $_ENV is never populated').toContain('E');
+        expect(ini).toMatch(/^variables_order = "EGPCS"$/m);
     });
 });
 
