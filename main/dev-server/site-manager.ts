@@ -457,6 +457,23 @@ export interface DevSiteManagerDeps {
      * Injectable so the serve orchestration is unit-tested without touching disk.
      */
     writeServeConfig?: (siteId: string, content: string) => string;
+    /**
+     * CREATE (if absent) and return the directory this site's php-cgi worker spools
+     * multipart uploads into, so the worker can be TOLD one instead of inheriting
+     * Genie's own temp directory — which is genie#534: every upload died at PHP
+     * request startup, before Laravel, with nothing able to report it.
+     *
+     * Genie-owned and per-site, not inside the repo: it must survive a site or
+     * engine rebuild and must not appear in the user's `git status`. Throwing is the
+     * right answer when it cannot be created — a php site that cannot spool an
+     * upload must fail visibly, never come up looking healthy.
+     *
+     * Injectable so the serve orchestration stays unit-tested without touching disk.
+     * Absent ⇒ the php serve mode is unavailable, exactly as an absent
+     * {@link DevSiteManagerDeps.resolveEngine} makes it unavailable: the fallback IS
+     * the bug, so there is none.
+     */
+    prepareUploadTmpDir?: (siteId: string) => string;
     /** Fired whenever the live set changes, so the UX and other agents follow. */
     onChanged?: () => void;
     /**
@@ -1485,6 +1502,27 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                 ...(hostServe.version ? { version: hostServe.version } : {}),
             });
             if (!engine.ok) return { ok: false, error: engine.error };
+            // WHERE an upload is spooled (genie#534), resolved on the same terms and
+            // for the same reason: a worker left to inherit Genie's temp directory
+            // fails EVERY multipart request at PHP request startup, before Laravel
+            // exists to report it. There is no fallback to "unset" — that is the bug
+            // — so an absent seam or a failed mkdir stops the start here, still
+            // having taken no port and written no config.
+            if (!deps.prepareUploadTmpDir) {
+                return {
+                    ok: false,
+                    error: 'PHP serving is not available in this build (Genie cannot provide the upload directory the FastCGI worker needs).',
+                };
+            }
+            let uploadTmpDir: string;
+            try {
+                uploadTmpDir = deps.prepareUploadTmpDir(siteId);
+            } catch (e) {
+                return {
+                    ok: false,
+                    error: `Could not create the PHP upload directory for this site, so every file upload would fail before the app saw it: ${messageOf(e)}`,
+                };
+            }
             // A SECOND guaranteed-free port for the FastCGI worker — never the site
             // port or one a live site holds.
             const fcgiPort = await allocateFreePort(new Set([...livePortSet(), sitePort]));
@@ -1493,7 +1531,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             return {
                 ok: true,
                 command: caddyServeArgv(deps.caddyBin, configPath),
-                worker: phpFastcgiWorkerCommand(engine.exe, fcgiPort),
+                worker: phpFastcgiWorkerCommand(engine.exe, fcgiPort, uploadTmpDir),
                 workerRuns: `PHP ${engine.version} (${engine.exe})`,
                 // Travels out so the live entry remembers WHICH port the backend
                 // holds — readiness has to stay answerable after this start
