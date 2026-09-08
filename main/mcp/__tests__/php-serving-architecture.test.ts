@@ -263,6 +263,40 @@ describe('create — which architecture a PHP repo gets, and whether it is spoke
         expect(notesOf(res)).toMatch(/`hostPort`/);
     });
 
+    it('does NOT cry decline at a caller who asked for the mode Genie detected anyway', async () => {
+        // `hostServe: {mode:'php'}` on a Laravel repo is the same answer detection
+        // would have given. Telling that caller Genie "declined" it is noise, and
+        // noise in `notes` is how the notes that matter stop being read.
+        const ws = workspace(LARAVEL);
+
+        const res = await runManageSite(ws, {
+            action: 'create',
+            name: 'web',
+            repo: 'app',
+            hostServe: { mode: 'php', root: 'public' },
+        });
+
+        expect(store.sites[SITE_ID]?.hostServe).toEqual({ mode: 'php', root: 'public' });
+        expect(notesOf(res)).not.toMatch(/DECLINED/i);
+    });
+
+    it('DOES say so when the caller picks a DIFFERENT mode from the detected one', async () => {
+        // Positive control for the case above: serving a Laravel repo's `public/` as
+        // a static directory would hand out `index.php` as a file, and that is
+        // precisely the substitution worth a sentence.
+        const ws = workspace(LARAVEL);
+
+        const res = await runManageSite(ws, {
+            action: 'create',
+            name: 'web',
+            repo: 'app',
+            hostServe: { mode: 'static', root: 'public' },
+        });
+
+        expect(notesOf(res)).toMatch(/DECLINED/i);
+        expect(notesOf(res)).toMatch(/FastCGI/i);
+    });
+
     it('warns that the `artisan serve` FALLBACK is single-threaded when it takes it', async () => {
         // A PHP repo with no front controller genuinely has nowhere else to go, and
         // the fallback stays. What must not stay is the silence: this is the server

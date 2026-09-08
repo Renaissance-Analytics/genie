@@ -413,6 +413,10 @@ export function servingArchitectureNotes(input: {
     declined: { mode: string; root: string } | null;
     /** Which request field did that — see {@link declinedByField}. */
     declinedBy: string | null;
+    /** The mode the caller's own `hostServe` asks for, when they passed one. A
+     *  caller who asked for the mode Genie detected anyway has been told nothing
+     *  by a note saying it was declined — they chose it. */
+    chosenMode?: string | undefined;
     /** The stack of the dev server being taken instead, when one is. */
     fallbackStack?: string | undefined;
 }): string[] {
@@ -424,7 +428,7 @@ export function servingArchitectureNotes(input: {
                 : `Detected ${serveModeLabel(input.detected)} — serving it with Genie's static file server + SPA fallback. Pass a \`command\` to run a dev server instead, or \`hostServe\` to override.`,
         );
     }
-    if (input.declined && input.declinedBy) {
+    if (input.declined && input.declinedBy && input.declined.mode !== input.chosenMode) {
         notes.push(
             `Genie DECLINED to serve this repo as ${serveModeLabel(input.declined)}: your ${input.declinedBy} names the server, so that is what \`.gen\` gets. This is a different serving architecture from the one a bare \`create\` would have chosen — drop ${input.declinedBy} to take the detected mode.`,
         );
@@ -744,6 +748,7 @@ export async function runManageSite(
                         detected: detectedServe,
                         declined,
                         declinedBy: declinedByField(req),
+                        chosenMode: narrowHostServe(req.hostServe ?? undefined)?.mode,
                         fallbackStack: command && !hostServe ? stack : undefined,
                     }),
                 ];
