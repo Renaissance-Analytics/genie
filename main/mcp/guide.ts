@@ -104,7 +104,11 @@ fires whether or not anyone has Genie open, and survives restarts. Actions
   (cron: \`min hour day month weekday\`, e.g. \`0 3 * * *\` = daily 03:00) to make
   it a scheduled task; set \`scheduleKind: 'agent-nudge'\` (with \`prompt\` +
   \`nudgeTerminalId\`/\`nudgeAgentId\`) to deliver a prompt to an agent through
-  AgentInbox on each fire instead of running a command.
+  AgentInbox on each fire instead of running a command. **This is how you notify
+  an agent on a schedule** — the notice arrives from the TASK (\`Cron: <task
+  label>\`), so the recipient tells it apart from a peer's DM and from a Genie
+  announcement at a glance. A cron that shells out to \`agentinbox send\` instead
+  arrives as the agent that ran it, which reads as mail it sent itself.
 - \`start\` / \`stop\` / \`restart\` — a service, by \`id\` (from a \`list\`).
 - \`enable\` / \`disable\` — suspend/resume a task without deleting it.
 - \`delete\`; \`run-now\` — fire a scheduled task immediately without disturbing

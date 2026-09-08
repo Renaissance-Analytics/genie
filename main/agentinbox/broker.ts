@@ -3,7 +3,11 @@ import {
     canAccessMessageAttachment,
     normalizePurpose,
     previewText,
+    machineSenderId,
+    machineSenderLabel,
     AGENTINBOX_HUMAN,
+    AGENTINBOX_SYSTEM,
+    AGENTINBOX_SYSTEM_LABEL,
     type AgentInboxAgentInfo,
     type AgentInboxAttachment,
     type AgentInboxBrokerEvent,
@@ -11,6 +15,7 @@ import {
     type AgentInboxEscalation,
     type AgentInboxJoinInput,
     type AgentInboxLifecycleMoment,
+    type AgentInboxMachineSource,
     type AgentInboxMessage,
     type AgentInboxScope,
     type AgentInboxNotifyTarget,
@@ -750,10 +755,41 @@ export class AgentInboxBroker {
         text: string,
         kind: 'dm' | 'ftq-answer' = 'dm',
     ): HumanDeliveryOutcome {
+        return this.deliverToTerminal(terminalId, text, { human: true }, kind);
+    }
+
+    /**
+     * The same terminal-addressed delivery for a MACHINE origin — a scheduled job,
+     * a watched process (genie#543).
+     *
+     * The wake path is byte-for-byte the human one (durable DM + `interrupt`, so
+     * the idle gate can never inject into a live turn); ONLY the sender changes.
+     * It has to: a scheduled task used to reach its agent through
+     * {@link deliverHumanMessageToTerminal}, which posts as the human — so a cron
+     * an agent set up for itself arrived labelled "You", filed in the human panel's
+     * DM history as a message no person ever sent.
+     */
+    deliverMachineMessageToTerminal(
+        terminalId: string,
+        text: string,
+        source: AgentInboxMachineSource,
+    ): boolean {
+        return this.deliverToTerminal(terminalId, text, { source }, 'dm').ok;
+    }
+
+    /** Resolve a terminal to its agent and post a DM to it. `sender` is whatever
+     *  {@link send} needs to decide whose name it arrives under — the one place
+     *  that mapping lives, so a new origin cannot drift from the wake behaviour. */
+    private deliverToTerminal(
+        terminalId: string,
+        text: string,
+        sender: { human: true } | { source: AgentInboxMachineSource },
+        kind: 'dm' | 'ftq-answer',
+    ): HumanDeliveryOutcome {
         const target = this.agentForTerminal(terminalId);
         if (!target) return { ok: false, reason: 'no-agent' };
         if (kind === 'ftq-answer') this.ftqAnswerTerminals.add(terminalId);
-        const r = this.send({ human: true, toAgentId: target.agentId, text, interrupt: true });
+        const r = this.send({ ...sender, toAgentId: target.agentId, text, interrupt: true });
         if (r.ok) return { ok: true };
         return { ok: false, reason: 'refused', ...(r.error ? { error: r.error } : {}) };
     }
@@ -1315,6 +1351,12 @@ export class AgentInboxBroker {
         fromAgentId?: string;
         human?: boolean;
         system?: boolean;
+        /**
+         * A MACHINE origin that is not Genie's own lifecycle announcement — a
+         * scheduled job, a watched process (genie#543). Unlike the other three
+         * senders it carries an identity, so the notice names WHICH job.
+         */
+        source?: AgentInboxMachineSource;
         toAgentId?: string;
         text: string;
         interrupt?: boolean;
@@ -1333,8 +1375,22 @@ export class AgentInboxBroker {
         let fromLabel: string;
         let sender: AgentInboxAgent | null = null;
         if (input.system) {
-            from = 'genie:system';
-            fromLabel = 'Genie (no reply)';
+            from = AGENTINBOX_SYSTEM;
+            fromLabel = AGENTINBOX_SYSTEM_LABEL;
+        } else if (input.source) {
+            // A job that cannot say WHICH job it is delivers exactly the
+            // uselessness genie#543 is about, so it is refused rather than
+            // flattened into a generic machine sender.
+            const id = String(input.source.id ?? '').trim();
+            if (!id) {
+                return {
+                    ok: false,
+                    error: 'A machine notice needs the `id` of the job it is from.',
+                };
+            }
+            const source: AgentInboxMachineSource = { ...input.source, id };
+            from = machineSenderId(source);
+            fromLabel = machineSenderLabel(source);
         } else if (input.human) {
             from = AGENTINBOX_HUMAN;
             fromLabel = 'You';

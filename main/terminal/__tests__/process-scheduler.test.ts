@@ -15,6 +15,14 @@ const created: string[] = [];
 const killed: string[] = [];
 /** Nudges the broker was asked to deliver: [terminalId, text]. */
 const nudged: Array<[string, string]> = [];
+/** The SOURCE each nudge was posted under (genie#543). */
+const nudgeSources: Array<Record<string, unknown>> = [];
+/**
+ * Nudges that went out on the HUMAN path. Must stay empty: a scheduled fire is
+ * not the human typing, and borrowing that identity is exactly what #543
+ * reports — the notice arrived labelled "You".
+ */
+const humanNudged: Array<[string, string]> = [];
 let deliverReturns = true;
 
 type Spec = {
@@ -69,8 +77,17 @@ vi.mock('../../db', () => ({
 vi.mock('../genie-adapter', () => ({ dbSettingsProvider: () => ({}) }));
 vi.mock('../../agentinbox/broker', () => ({
     agentInboxBroker: {
-        deliverHumanMessageToTerminal: (terminalId: string, text: string) => {
+        deliverMachineMessageToTerminal: (
+            terminalId: string,
+            text: string,
+            source: Record<string, unknown>,
+        ) => {
             nudged.push([terminalId, text]);
+            nudgeSources.push(source);
+            return deliverReturns;
+        },
+        deliverHumanMessageToTerminal: (terminalId: string, text: string) => {
+            humanNudged.push([terminalId, text]);
             return deliverReturns;
         },
         getInfo: (agentId: string) =>
@@ -102,6 +119,8 @@ beforeEach(() => {
     created.length = 0;
     killed.length = 0;
     nudged.length = 0;
+    nudgeSources.length = 0;
+    humanNudged.length = 0;
     deliverReturns = true;
     specs.clear();
     vi.useFakeTimers();
@@ -272,6 +291,24 @@ describe('agent-nudge kind', () => {
         expect(nudged).toEqual([['term-7', 'Sweep the IssueWatch feed and report.']]);
         expect(specs.get('n1')!.meta.last_run_status).toBe('ok');
         expect(specs.get('n1')!.meta.last_run_at).toBe(local(2026, 7, 25, 9, 0).getTime());
+    });
+
+    it('posts the nudge under the TASK as its source, never as the human (genie#543)', () => {
+        // The agent reads the sender to decide what a notice is. A fire from
+        // "issuewatch-sweep" must say so and name itself, so two scheduled tasks
+        // nudging the same agent are tellable apart from the envelope alone.
+        seedTask('n5', {
+            schedule: '0 9 * * *',
+            schedule_kind: 'agent-nudge',
+            nudge_target_terminal_id: 'term-7',
+            nudge_prompt: 'Sweep the IssueWatch feed and report.',
+        });
+        specs.get('n5')!.label = 'issuewatch-sweep';
+        armSchedule('n5');
+        vi.advanceTimersByTime(23 * 60 * 60_000);
+
+        expect(nudgeSources).toEqual([{ kind: 'cron', id: 'n5', label: 'issuewatch-sweep' }]);
+        expect(humanNudged).toEqual([]);
     });
 
     it('resolves an agent id to its terminal', () => {

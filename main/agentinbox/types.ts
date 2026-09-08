@@ -58,6 +58,108 @@ export type AgentInboxKind = 'dm' | 'channel';
 export const AGENTINBOX_HUMAN = 'human';
 
 /**
+ * Genie's OWN announcement channel — the upgrade notice, the drain, the shutdown
+ * readiness barrier. Not a person, not an agent, and deliberately narrow: it is
+ * the app talking about its own lifecycle, and nothing else may borrow it.
+ */
+export const AGENTINBOX_SYSTEM = 'genie:system';
+export const AGENTINBOX_SYSTEM_LABEL = 'Genie (no reply)';
+
+/**
+ * MACHINE ORIGINS (genie#543).
+ *
+ * An inbox notice is an INTERRUPT: it glows a terminal and can nudge a pty, so
+ * the first thing an agent reads is the sender. `send` used to resolve exactly
+ * three — {@link AGENTINBOX_SYSTEM}, the human, the sending agent — which meant
+ * every machine-originated notice had to borrow one of them. A scheduled task
+ * nudging an agent borrowed the HUMAN, so a cron an agent set up for itself
+ * arrived labelled "You"; an agent scheduling a shell that called `agentinbox
+ * send` got its OWN identity back, the reported *"looks like they are sending
+ * themselves a msg"*.
+ *
+ * The fix is a sender that names the KIND **and the JOB**. Kind alone
+ * (`genie:cron`) would still leave an agent unable to tell two crons apart,
+ * which is most of what makes the sender worth reading.
+ *
+ * ## Why the identity lives in `from`, and not in a new envelope field
+ *
+ * `from` is the one sender fact that is PERSISTED (`whisper_messages.from_id`),
+ * so a namespaced id survives a restart with no migration — whereas a fresh
+ * `source` object would need a column to avoid quietly vanishing on reload, the
+ * way `replyTo` already does. It is also where every existing consumer already
+ * looks: `from === 'human'` and `from === 'genie:system'` are the same shape.
+ * {@link readMachineSender} is the single place that reads it back, so nobody
+ * string-matches a display label.
+ *
+ * ## Machine sources are NOT replyable, and that is enforced, not labelled
+ *
+ * "(no reply)" has never been a rule — `send` requires a REGISTERED agent to
+ * address, and no machine origin has one, so a reply is refused by the same code
+ * that refuses a DM to a departed peer. A job that fails and wants an instruction
+ * back would need a mailbox and something reading it: a capability to build, not
+ * a word to change here.
+ */
+export type AgentInboxMachineKind = 'system' | 'cron' | 'process';
+
+/**
+ * A machine sender a caller can CONSTRUCT: a scheduled job or a watched process,
+ * identified by the id of the thing that produced the notice (a `terminal_specs`
+ * row id, for both kinds today).
+ *
+ * `system` is deliberately absent: it carries no job identity and is reached with
+ * `send({ system: true })`. Two ways to send one announcement is how two answers
+ * to the same question start to drift apart.
+ */
+export interface AgentInboxMachineSource {
+    kind: Exclude<AgentInboxMachineKind, 'system'>;
+    /** The job's stable id — what makes two same-named jobs tellable apart. */
+    id: string;
+    /** The job's display name. Falls back to {@link AgentInboxMachineSource.id}. */
+    label?: string;
+}
+
+/** Display prefixes, per kind. The map is also the set of kinds
+ *  {@link readMachineSender} will recognise, so the two cannot disagree. */
+const MACHINE_KIND_LABELS: Record<AgentInboxMachineSource['kind'], string> = {
+    cron: 'Cron',
+    process: 'Process',
+};
+
+/** The `from` a machine notice is delivered under — `genie:<kind>:<job id>`. */
+export function machineSenderId(source: AgentInboxMachineSource): string {
+    return `genie:${source.kind}:${source.id}`;
+}
+
+/** The `fromLabel` a machine notice is delivered under — `Cron: nightly-backup`. */
+export function machineSenderLabel(source: AgentInboxMachineSource): string {
+    return `${MACHINE_KIND_LABELS[source.kind]}: ${source.label?.trim() || source.id}`;
+}
+
+/**
+ * Read a machine origin back off a delivered message's `from` — the ONE answer to
+ * "what sent this, and does it need me". Null for a person or an agent, so the
+ * test is `readMachineSender(msg.from) !== null` rather than a label comparison.
+ *
+ * An unrecognised `genie:<something>:<id>` reads as null on purpose: a kind this
+ * build has no behaviour for is not a source it can act on, and guessing would be
+ * worse than treating it as ordinary mail.
+ */
+export function readMachineSender(
+    from: string,
+): { kind: AgentInboxMachineKind; id: string | null } | null {
+    const raw = String(from ?? '');
+    if (raw === AGENTINBOX_SYSTEM) return { kind: 'system', id: null };
+    if (!raw.startsWith('genie:')) return null;
+    const rest = raw.slice('genie:'.length);
+    const sep = rest.indexOf(':');
+    if (sep <= 0) return null;
+    const kind = rest.slice(0, sep);
+    const id = rest.slice(sep + 1);
+    if (!id || !Object.prototype.hasOwnProperty.call(MACHINE_KIND_LABELS, kind)) return null;
+    return { kind: kind as AgentInboxMachineKind, id };
+}
+
+/**
  * Where a just-delivered message landed — passed to the broker's server-push
  * sink so the host can route an MCP `notifications/message` to the recipient's
  * GET SSE stream (per-agent via its terminal, falling back to the whole

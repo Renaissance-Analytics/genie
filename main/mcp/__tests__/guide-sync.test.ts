@@ -297,6 +297,20 @@ describe('the guide documents manageProcess scheduled tasks (cron)', () => {
         // long-running processes, so agents never learned the scheduler exists.
         expect(GENIE_MCP_GUIDE).toMatch(/schedule|cron/i);
     });
+
+    it('tells agents an `agent-nudge` fire arrives under the TASK, not as them (genie#543)', () => {
+        // The half of #543 code cannot fix: an agent that schedules a SHELL which
+        // calls `agentinbox send` is sending as itself, and the broker has no way
+        // to know that shell was started by a cron. The way out is `agent-nudge`,
+        // which now carries the task's own source — and an agent only reaches for
+        // it if the guide says what it buys.
+        const start = GENIE_MCP_GUIDE.indexOf('### manageProcess');
+        const end = GENIE_MCP_GUIDE.indexOf('### manageSite', start);
+        const section = GENIE_MCP_GUIDE.slice(start, end);
+        expect(start).toBeGreaterThan(-1);
+        expect(section).toMatch(/agent-nudge/);
+        expect(section).toMatch(/Cron: /);
+    });
 });
 
 /**
