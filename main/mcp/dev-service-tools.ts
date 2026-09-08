@@ -24,10 +24,7 @@ import {
 } from '../dev-server/services/extensions';
 import { devServiceManager } from '../dev-server/services/service-manager';
 import { terminalServiceEnv } from '../dev-server/services/env-wiring';
-import {
-    staleServiceTerminals,
-    staleTerminalNote,
-} from '../dev-server/services/stale-terminal-env';
+import { terminalEnvNotes } from '../dev-server/services/stale-terminal-env';
 import { isTerminalLive } from '../terminal/ipc';
 import { workspaceIdOfSpec } from '../terminal/workspace-of-terminal';
 import { runtimeInfo } from './dev-site-tools';
@@ -96,33 +93,43 @@ function toInfo(row: DevServiceRow): DevServiceInfo {
 }
 
 /**
- * The open terminals in a workspace that are still dialling the OLD service
- * address, said in the one place somebody is already asking (genie#222).
+ * What has DRIFTED in a workspace's open terminals, said in the one place
+ * somebody is already asking (genie#222, genie#540).
  *
- * A managed engine's published host port moves when its container is recreated,
- * and a pty's environment cannot be rewritten after it starts — so every
- * terminal that was already open keeps the `PG*` / `MYSQL_*` it was spawned
- * with. The issue's residual is not that this happens (it is a property of
- * ptys), it is that Genie held both values and said NOTHING: `onPortMoved`
- * wrote to `console.warn`, which no user and no agent reads.
+ * A pty's environment is a snapshot taken at spawn and cannot be rewritten
+ * afterwards, so two things go wrong and they do not mean the same thing:
+ *
+ *   - A managed engine's published host port MOVES when its container is
+ *     recreated, and every terminal already open keeps dialling the old one
+ *     (#222). It is holding a value that is now WRONG.
+ *   - A service PROVISIONED after a terminal spawned never reaches it at all
+ *     (#540). Nothing it holds is wrong; it is MISSING a service.
+ *
+ * Neither is fixable — both are properties of ptys. The defect in both cases is
+ * that Genie held both sides and said nothing: `onPortMoved` wrote to
+ * `console.warn`, which no user and no agent reads.
  *
  * The live side is narrowed through `terminalServiceEnv` so it is compared in
- * exactly the form a terminal is handed, not the fuller set a site gets.
+ * exactly the form a terminal is handed, not the fuller set a site gets. The
+ * comparison and both sentences are pure and live in `stale-terminal-env.ts`;
+ * this function is only the I/O — which manager, and which terminals are open.
  *
- * Returns null when nothing is stale — the overwhelmingly common case, and a
- * note that fires every time is a note nobody reads.
+ * Returns an EMPTY object when there is nothing to say, so a caller spreads it
+ * and adds nothing. That is the overwhelmingly common case for the stale half,
+ * and a note that fires every time is a note nobody reads.
  */
-function staleTerminalNoteFor(workspaceId: string): string | null {
+function terminalEnvNotesFor(workspaceId: string): {
+    note?: string;
+    terminalsMissingEnv?: string;
+} {
     const manager = devServiceManager();
-    if (!manager) return null;
+    if (!manager) return {};
     const open = listTerminalSpecs()
         .filter((spec) => workspaceIdOfSpec(spec) === workspaceId)
         .map((spec) => spec.id)
         .filter((id) => isTerminalLive(id));
-    if (open.length === 0) return null;
-    return staleTerminalNote(
-        staleServiceTerminals(terminalServiceEnv(manager.hostEnvFor(workspaceId)), open),
-    );
+    if (open.length === 0) return {};
+    return terminalEnvNotes(terminalServiceEnv(manager.hostEnvFor(workspaceId)), open);
 }
 
 /**
@@ -371,14 +378,14 @@ export async function runManageService(
                 // address nothing is listening on is worse than no answer.
                 await manager.refresh().catch(() => {});
                 // …and, having re-read them, say which open terminals were handed
-                // an EARLIER answer and cannot pick this one up (genie#222).
-                const stale = staleTerminalNoteFor(ws.id);
+                // an EARLIER answer and cannot pick this one up (genie#222), and
+                // which never received a service at all (genie#540).
                 return {
                     ok: true,
                     services: services(),
                     runtime,
                     ...(req.id ? { affectedId: req.id } : {}),
-                    ...(stale ? { note: stale } : {}),
+                    ...terminalEnvNotesFor(ws.id),
                 };
             }
 
@@ -442,6 +449,13 @@ export async function runManageService(
                     services: services(),
                     affectedId: serviceId,
                     runtime,
+                    // THE MOMENT IT BECOMES TRUE (genie#540). `add` is the only
+                    // action that can create a service which never existed, and
+                    // the instant it does, every terminal already open is
+                    // missing it. Saying so here is the difference between an
+                    // agent learning it now and learning it after the shell it
+                    // is sitting in cannot reach the thing it just asked for.
+                    ...terminalEnvNotesFor(ws.id),
                 };
             }
 
@@ -499,7 +513,6 @@ export async function runManageService(
                 await manager.refresh().catch(() => {});
                 const target = targetService();
                 if ('error' in target) return fail(target.error);
-                const stale = staleTerminalNoteFor(ws.id);
                 return {
                     ok: true,
                     services: services(),
@@ -509,9 +522,10 @@ export async function runManageService(
                     // config without guessing at key names.
                     env: manager.envFor(ws.id),
                     runtime,
-                    // …and, when it differs, WHICH open terminals were handed an
-                    // earlier answer to this same question (genie#222).
-                    ...(stale ? { note: stale } : {}),
+                    // …and WHICH open terminals were handed an earlier answer to
+                    // this same question (genie#222), or never received one at
+                    // all (genie#540).
+                    ...terminalEnvNotesFor(ws.id),
                 };
             }
 

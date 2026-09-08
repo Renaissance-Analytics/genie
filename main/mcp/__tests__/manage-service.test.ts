@@ -344,3 +344,49 @@ describe('manageServiceSummary — a note is not optional reading', () => {
         expect(text).toContain('postgres 17');
     });
 });
+
+/**
+ * AN OBSERVATION, NOT A CONSEQUENCE (genie#540).
+ *
+ * `note` LEADS the headline, because it exists for something that did not
+ * happen and the caller has to know. A terminal that predates a service is a
+ * different kind of fact: standing, informational, and true of most workspaces
+ * most of the time. Put it in `note` and it would displace the headline on
+ * every `list` — the informational case shouting while the real one blends in —
+ * so it rides its own field and lands AFTER the answer the caller asked for.
+ */
+describe('manageServiceSummary — an incomplete terminal is said, not shouted', () => {
+    const missing =
+        'One open terminal predates a service this workspace publishes: t1 (Mailpit).';
+
+    it('carries the sentence, but after the headline rather than in front of it', () => {
+        const text = manageServiceSummary({
+            ok: true,
+            services: [],
+            terminalsMissingEnv: missing,
+        });
+        expect(text).toContain('Mailpit');
+        expect(text.startsWith(missing)).toBe(false);
+        // POSITIVE CONTROL for the assertion above: the headline is still the
+        // thing that leads, so "does not start with it" is not passing because
+        // the summary is empty.
+        expect(text.startsWith('0 services in this workspace')).toBe(true);
+    });
+
+    it('lets a real note keep the lead when a terminal is BOTH stale and incomplete', () => {
+        const text = manageServiceSummary({
+            ok: true,
+            services: [],
+            note: 'One open terminal was spawned before this address: t1 (PGPORT).',
+            terminalsMissingEnv: missing,
+        });
+        expect(text.startsWith('One open terminal was spawned')).toBe(true);
+        expect(text).toContain('Mailpit');
+    });
+
+    it('says nothing extra when no terminal is missing anything', () => {
+        expect(manageServiceSummary({ ok: true, services: [] })).toBe(
+            '0 services in this workspace, 0 running.',
+        );
+    });
+});

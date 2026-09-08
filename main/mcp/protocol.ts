@@ -1294,6 +1294,18 @@ export interface ManageServiceResult {
      *  — e.g. switching the active engine version leaves the old version's data
      *  behind, so the newly-active one starts empty (#242 P3). */
     note?: string;
+    /**
+     * Open terminals that never received a service this workspace publishes,
+     * because it was provisioned after they spawned (genie#540).
+     *
+     * SEPARATE from `note` on purpose. A note is a consequence and LEADS the
+     * headline; this is a standing observation, true of most workspaces most of
+     * the time, and nothing it describes is wrong — so it rides behind the
+     * answer the caller asked for instead of displacing it. Conflated, the
+     * informational case would shout on every `list` and the real one (a
+     * terminal dialling an address that MOVED) would blend into it.
+     */
+    terminalsMissingEnv?: string;
     /** Which container runtime is driving, or why none is. */
     runtime?: { kind: string; version?: string; installHint?: string };
 }
@@ -3319,6 +3331,17 @@ export function manageServiceSummary(result: ManageServiceResult): string {
     if (!result.ok) {
         const hint = result.runtime?.installHint;
         return `manageService failed: ${result.error ?? 'unknown error'}${hint ? ` ${hint}` : ''}`;
+    }
+    // An incomplete terminal is an OBSERVATION rather than a consequence, so it
+    // TRAILS: behind the headline, and behind a `note` when there is one.
+    // Leading with a sentence that is true of most workspaces most of the time
+    // would displace the answer somebody actually asked for (genie#540).
+    const missing = result.terminalsMissingEnv?.trim();
+    if (missing) {
+        return `${manageServiceSummary({
+            ...result,
+            terminalsMissingEnv: undefined,
+        })} ${missing}`.trim();
     }
     // A `note` is a consequence the caller must know about even though nothing
     // FAILED — a declined purge, a switched version whose data did not follow.
