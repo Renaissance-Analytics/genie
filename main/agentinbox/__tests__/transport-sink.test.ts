@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AgentInboxBroker } from '../broker';
-import { HarnessTransportRegistry } from '../harness-transport';
+import { HarnessTransportRegistry, PULL_LIVENESS_GRACE_MS } from '../harness-transport';
 import { createHarnessTransportSink } from '../transport-sink';
 import type { AgentInboxJoinInput } from '../types';
 
@@ -151,7 +151,15 @@ describe('the unread-mail backstop respects a live harness transport', () => {
         vi.useFakeTimers();
         vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
         const { broker, registry, pty } = wired();
-        if (bind) registry.bindPull('B', 'claude-channel');
+        if (bind) {
+            registry.bindPull('B', 'claude-channel');
+            // Parked on its long-poll, which is what a live bridge is doing for
+            // the whole of this scenario. Without it the binding would be
+            // trusted only for as long as `PULL_LIVENESS_GRACE_MS` (genie#528),
+            // and this test would pass or fail on whether that constant happens
+            // to exceed the 50s below — a coupling nothing here declares.
+            registry.notePullPollOpen('B');
+        }
 
         broker.send({ fromAgentId: 'A', toAgentId: 'B', text: 'unread mail' });
         // The agent finishes a turn without having read it — which is what arms
@@ -175,6 +183,59 @@ describe('the unread-mail backstop respects a live harness transport', () => {
 
     it('an agent with a bound channel is never woken at its prompt', () => {
         const pty = runToBackstop(true);
+
+        expect(pty).not.toHaveBeenCalled();
+    });
+});
+
+/**
+ * The keyboard comes BACK when a channel stops proving it is alive — genie#528.
+ *
+ * `unbindPull` is called on pty exit and on terminal kill, which covers the
+ * common case. It cannot cover the one that matters here: the Claude Channel
+ * bridge is spawned by Claude Code, not by Genie, so it can stop while its pty
+ * runs on — a 401/403 sets `process.exitCode` and its supervisor returns, and a
+ * closed stdin ends its loop. Genie is told neither.
+ *
+ * So the binding has to expire on evidence instead. These two tests are the
+ * whole contract, and they pull in opposite directions on purpose: a channel
+ * that has gone quiet must give the keyboard back, and a channel merely PARKED
+ * on its long-poll — silent for minutes at a time, by design — must not.
+ */
+describe('a pull binding that stops proving itself gives the PTY back (genie#528)', () => {
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it('delivers over the PTY once the channel has gone quiet', () => {
+        // Nothing releases this binding: no pty exited, no terminal was killed.
+        // Before the fix it stayed attached forever and this message reached
+        // NOBODY — swallowed by a pull binding with the fallback held shut.
+        vi.useFakeTimers();
+        const { broker, registry, pty } = wired();
+        registry.bindPull('B', 'claude-channel');
+        registry.notePullPollOpen('B');
+        registry.notePullPollClosed('B'); // its last poll returned; none followed
+
+        vi.advanceTimersByTime(PULL_LIVENESS_GRACE_MS + 1);
+        broker.send({ fromAgentId: 'A', toAgentId: 'B', text: 'this must still land' });
+
+        expect(pty).toHaveBeenCalledTimes(1);
+        expect(pty.mock.calls[0]![0]).toMatchObject({ terminalId: 't-B' });
+    });
+
+    it('POSITIVE CONTROL: a channel parked on its long-poll keeps the keyboard shut', () => {
+        // The failure this fix must not cause. A healthy bridge holds a 240s
+        // `receive` open and says nothing at all while it waits; if that read as
+        // death, Genie would type into a perfectly good channel every few
+        // minutes — a rare bug traded for a routine one.
+        vi.useFakeTimers();
+        const { broker, registry, pty } = wired();
+        registry.bindPull('B', 'claude-channel');
+        registry.notePullPollOpen('B');
+
+        vi.advanceTimersByTime(PULL_LIVENESS_GRACE_MS * 10);
+        broker.send({ fromAgentId: 'A', toAgentId: 'B', text: 'the channel has this' });
 
         expect(pty).not.toHaveBeenCalled();
     });
