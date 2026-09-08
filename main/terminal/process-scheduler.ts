@@ -356,12 +356,18 @@ function run(specId: string, trigger: 'schedule' | 'manual'): void {
 
 /**
  * `agent-nudge` fire: hand the prompt to an agent through AgentInbox. Reuses
- * {@link agentInboxBroker.deliverHumanMessageToTerminal}, which appends the text
+ * {@link agentInboxBroker.deliverMachineMessageToTerminal}, which appends the text
  * to the agent's durable inbox AND wakes the terminal through the same fail-safe
  * idle gate as wake-on-DM (main/agentinbox/wake.ts) — so a nudge can never be
  * injected into a live turn; a busy agent simply reads it at its next pull.
  * Returns false when there's nothing to deliver to (no prompt, no resolvable
  * terminal, or the terminal has no registered agent identity).
+ *
+ * THE NUDGE ARRIVES AS THE TASK (genie#543). It used to go out on the HUMAN path,
+ * so a schedule an agent set up for itself arrived labelled "You" — and an agent
+ * reads the sender first to decide whether a notice needs it. Naming the task,
+ * not just the kind, is what lets two schedules nudging the same agent be told
+ * apart from the envelope alone.
  */
 function deliverNudge(spec: SpecLike): boolean {
     const prompt = typeof spec.meta?.nudge_prompt === 'string' ? spec.meta.nudge_prompt.trim() : '';
@@ -372,7 +378,14 @@ function deliverNudge(spec: SpecLike): boolean {
     }
     if (!terminalId) return false;
     try {
-        return agentInboxBroker.deliverHumanMessageToTerminal(terminalId, prompt);
+        return agentInboxBroker.deliverMachineMessageToTerminal(terminalId, prompt, {
+            kind: 'cron',
+            id: spec.id,
+            // The spec's own label — what the user named the task, and what the
+            // Processes list shows it as. Absent rather than empty, so the
+            // sender falls back to the id instead of reading "Cron: ".
+            ...(spec.label?.trim() ? { label: spec.label.trim() } : {}),
+        });
     } catch {
         return false;
     }

@@ -2098,7 +2098,7 @@ const MANAGE_PROCESS_TOOL = {
                 type: 'string',
                 enum: ['command', 'agent-nudge'],
                 description:
-                    'create + `schedule` (optional): "command" (default) runs `command` on each fire; "agent-nudge" delivers `prompt` to an agent through AgentInbox instead.',
+                    'create + `schedule` (optional): "command" (default) runs `command` on each fire; "agent-nudge" delivers `prompt` to an agent through AgentInbox instead — arriving from the TASK (`Cron: <task label>`), so the recipient can tell it from a peer\'s DM. Prefer it over a `command` that shells out to `agentinbox send`, which arrives as the agent that ran it.',
             },
             prompt: {
                 type: 'string',
