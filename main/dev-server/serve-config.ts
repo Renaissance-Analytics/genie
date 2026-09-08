@@ -144,9 +144,10 @@ export function serveCaddyfile(opts: { sitePort: number; serve: SiteServe }): st
 }
 
 /**
- * The PHP FastCGI worker command: `<php-cgi> -b 127.0.0.1:<port>` runs php-cgi as
- * a FastCGI server. `php-cgi` ships with PHP on every OS (unlike `php-fpm`, which
- * is Unix-only), so this is the portable worker Caddy's `php_fastcgi` connects to.
+ * The PHP FastCGI worker command: `<php-cgi> -d upload_tmp_dir=<dir> -b
+ * 127.0.0.1:<port>` runs php-cgi as a FastCGI server. `php-cgi` ships with PHP on
+ * every OS (unlike `php-fpm`, which is Unix-only), so this is the portable worker
+ * Caddy's `php_fastcgi` connects to.
  *
  * `phpCgiExe` is an ABSOLUTE path, resolved from the site's toolchain version
  * (`engine-resolve.ts`) — never a bare name. A bare `php-cgi` is genie#206
@@ -156,8 +157,37 @@ export function serveCaddyfile(opts: { sitePort: number; serve: SiteServe }): st
  * the start reported success, and the site said "Serving." while every request
  * 502'd. So a name with no directory in it is refused HERE too, where any future
  * caller must walk past it.
+ *
+ * WHERE AN UPLOAD IS SPOOLED IS ALSO GENIE'S TO SAY (genie#534). Every multipart
+ * request to a Genie-hosted PHP site died with
+ *
+ *     PHP Request Startup: File upload error - unable to create a temporary file
+ *
+ * before Laravel saw the request — so no route, middleware or exception handler
+ * could catch or report it, and from the UI it was simply a dead upload with no
+ * error. `upload_tmp_dir` was set nowhere and the worker is spawned with
+ * `{ ...process.env }`, so PHP fell back to whatever temp directory GENIE'S OWN
+ * process happened to have: a different one when the host service runs under
+ * another identity, and not necessarily one the serving user can write.
+ *
+ * Genie generates the Caddyfile and spawns this worker, so uploads working is part
+ * of serving PHP — not something each app is expected to configure, and certainly
+ * not a `php.ini` a user hand-edits for a site Genie serves (an edit the next
+ * engine rebuild would drop anyway). The directory is therefore STATED on the
+ * command line, and the caller must have created it first.
+ *
+ * It is REQUIRED, not optional, for the same reason `phpCgiExe` is: an argument
+ * that may be omitted is one a caller omits, and the omission's behaviour is the
+ * bug. The `-d` value is guarded like {@link quoteRoot} guards a docroot — a bare
+ * name would be resolved by PHP against the worker's cwd (the user's repo), and a
+ * quote or newline would end the define early, on win32 inside a re-joined cmd.exe
+ * command line.
  */
-export function phpFastcgiWorkerCommand(phpCgiExe: string, fcgiPort: number): string[] {
+export function phpFastcgiWorkerCommand(
+    phpCgiExe: string,
+    fcgiPort: number,
+    uploadTmpDir: string,
+): string[] {
     if (typeof phpCgiExe !== 'string' || phpCgiExe.length === 0) {
         throw new Error('serve-config: missing php-cgi executable');
     }
@@ -166,8 +196,21 @@ export function phpFastcgiWorkerCommand(phpCgiExe: string, fcgiPort: number): st
             `serve-config: refusing a bare php-cgi name ${JSON.stringify(phpCgiExe)} — the FastCGI worker must be a resolved path (genie#207)`,
         );
     }
+    if (typeof uploadTmpDir !== 'string' || uploadTmpDir.length === 0) {
+        throw new Error('serve-config: missing upload_tmp_dir for the php-cgi worker (genie#534)');
+    }
+    if (!/[\\/]/.test(uploadTmpDir)) {
+        throw new Error(
+            `serve-config: refusing a bare upload_tmp_dir ${JSON.stringify(uploadTmpDir)} — PHP resolves it against the worker's cwd (genie#534)`,
+        );
+    }
+    if (/["\n\r]/.test(uploadTmpDir)) {
+        throw new Error(
+            `serve-config: refusing an injectable upload_tmp_dir ${JSON.stringify(uploadTmpDir)}`,
+        );
+    }
     assertPort(fcgiPort, 'fcgi port');
-    return [phpCgiExe, '-b', `127.0.0.1:${fcgiPort}`];
+    return [phpCgiExe, '-d', `upload_tmp_dir=${uploadTmpDir}`, '-b', `127.0.0.1:${fcgiPort}`];
 }
 
 /**

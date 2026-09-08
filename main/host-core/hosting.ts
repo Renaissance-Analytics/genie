@@ -124,6 +124,15 @@ export interface HostingPorts {
      *  seam the shell owns (desktop writes under its data dir). Absent ⇒ generated
      *  serve modes are unavailable. */
     writeServeConfig?: (siteId: string, content: string) => string;
+    /** Create (if absent) and return the per-site directory a php site's FastCGI
+     *  worker spools uploads into — the fs seam the shell owns, beside
+     *  {@link HostingPorts.writeServeConfig}. Genie TELLS the worker this rather than
+     *  letting it inherit one, because an inherited temp dir is genie#534: every
+     *  multipart upload failed at PHP request startup, before the app could report
+     *  it. Throwing is correct when it cannot be created. Absent ⇒ the php serve mode
+     *  is unavailable with a clear status — never a silent return to the broken
+     *  behaviour. */
+    prepareUploadTmpDir?: (siteId: string) => string;
     /** The persisted `toolchain_defaults` blob — which version of each language is
      *  this machine's DEFAULT, the choice a site follows unless it pins one
      *  (genie#207). Read through a port because the store is the shell's (desktop:
@@ -320,6 +329,10 @@ export function buildHostingDeps(ports: HostingPorts): HostingDeps {
         // serve mode off with a clear status.
         ...(ports.caddyBin ? { caddyBin: ports.caddyBin } : {}),
         ...(ports.writeServeConfig ? { writeServeConfig: ports.writeServeConfig } : {}),
+        // …and, for php, WHERE that site's worker spools an upload (genie#534). A
+        // host that has not wired it yet serves php not at all rather than serving it
+        // with uploads silently broken, which is what the absent seam used to mean.
+        ...(ports.prepareUploadTmpDir ? { prepareUploadTmpDir: ports.prepareUploadTmpDir } : {}),
         // WHICH runtime a Genie-served site spawns (genie#207): the site's pin, else
         // the machine default, resolved to the absolute executable inside the
         // toolchain install Genie owns. Always wired — the alternative is the bare

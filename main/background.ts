@@ -1618,6 +1618,36 @@ app.whenReady().then(async () => {
         return file;
     }
 
+    // Where a php site's FastCGI worker spools an upload — the fs seam behind
+    // `prepareUploadTmpDir`, and the fix for genie#534.
+    //
+    // The worker used to be told nothing, and it is spawned with `{ ...process.env }`,
+    // so PHP fell back to whatever temp directory GENIE'S OWN process had. When that
+    // is not writable by the serving identity — or simply is not there — every
+    // multipart request dies at PHP request startup with "File upload error - unable
+    // to create a temporary file", BEFORE Laravel, where nothing app-side can catch
+    // or report it. The user just sees an upload that does nothing.
+    //
+    // PER-SITE, and under the Genie data dir beside `host-site-configs`, for three
+    // reasons: it is Genie's to own (Genie writes the config and spawns the worker,
+    // so uploads working is part of serving PHP); it is OUTSIDE the repo and outside
+    // any toolchain install, so it survives a site rebuild, an engine rebuild and a
+    // Genie update, unlike the `php.ini` edit this issue exists to make unnecessary;
+    // and one site's half-spooled uploads are not visible to another site's worker.
+    // `siteId` is a devSiteIdFor hash — guarded anyway, same as the config writer.
+    //
+    // It THROWS rather than degrading. A php site whose upload directory cannot be
+    // created must fail visibly at start; coming up without one is exactly the state
+    // this fixes, and it looks perfectly healthy until somebody tries to upload.
+    function prepareHostSiteUploadDir(siteId: string): string {
+        if (!/^[A-Za-z0-9_-]+$/.test(siteId)) {
+            throw new Error(`unsafe site id ${JSON.stringify(siteId)}`);
+        }
+        const dir = path.join(app.getPath('userData'), 'host-site-uploads', siteId);
+        fs.mkdirSync(dir, { recursive: true });
+        return dir;
+    }
+
     // The ONE bundled-Caddy resolution, shared by the `.gen` front door and the
     // `hostServe` (static / php) site server — the two roles Genie's Caddy plays.
     // It resolves to the per-user COPY, outside the install dir: run from
@@ -1691,6 +1721,9 @@ app.whenReady().then(async () => {
         // process, so an update that killed it took the site down, not just its route.
         caddyBin: hostCaddyBin,
         writeServeConfig: (siteId, content) => writeHostServeConfig(siteId, content),
+        // …and the per-site directory that site's php-cgi worker spools uploads into,
+        // so it is TOLD one instead of inheriting Genie's (genie#534).
+        prepareUploadTmpDir: (siteId) => prepareHostSiteUploadDir(siteId),
         // Which php/node version this machine defaults to (Settings → Toolchain).
         // A Genie-served site follows it unless it pins one, and the spawn resolves
         // THAT install's real executable instead of asking PATH (genie#207).
