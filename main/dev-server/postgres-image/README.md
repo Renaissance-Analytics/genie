@@ -146,13 +146,16 @@ exact `docker pull` command rather than pulling silently.
 
 An engine container is adopted by NAME, not by image, so a `postgres-17` that
 Genie started before this image existed keeps running the old one until somebody
-says otherwise. `manageService`'s `recreate` action is that somebody: it replaces
+says otherwise. **Settings → Dev Server → Recreate** is that somebody: it replaces
 the container on the pinned image and keeps the named volume, so the data and
 every workspace's database survive.
 
-Recreation is never automatic. It restarts an engine other workspaces may be
-holding, and `inventory` reports `staleImage` so the choice is visible before it
-is made.
+Recreation is never automatic, and it is the **workstation operator's** action,
+not an agent's — it restarts an engine every other workspace on it is holding,
+which is not a decision one workspace makes for the rest. An agent reading
+`manageService inventory` is told the same fact (`staleImage`, `runningImage`) so
+it can SAY why an advertised extension will not install, rather than work around
+it or report a bug in the feature.
 
 > **A stale volume can misbehave.** The engine Genie ran before pgvector was
 > `-alpine` (musl); this image, like pgvector's, is Debian (glibc). Re-opening an
