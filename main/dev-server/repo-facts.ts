@@ -189,6 +189,62 @@ export function detectPhpServe(repoDir: string): { mode: 'php'; root: string } |
     return null;
 }
 
+/**
+ * A site still running GENIE'S OWN `php artisan serve` fallback on a repo Genie
+ * can now SERVE — and the serve mode to move it to. Null when there is nothing of
+ * Genie's to re-decide (genie#538).
+ *
+ * ## Why a create-time decision has to be re-asked
+ *
+ * The reported site sat at `running / ready:false` indefinitely: `artisan serve`
+ * creates ONE worker, so a single 15–40s endpoint polled every 15s saturated it
+ * permanently, Genie's own readiness probe included. It should never have been
+ * there — the fallback in `serve-recipe.ts` says it is reachable "only by a PHP
+ * repo with no front controller to serve", and the reporting repo had both
+ * markers.
+ *
+ * It got there because the choice is made ONCE, at `create`, and never looked at
+ * again. A site defined before {@link detectPhpServe} existed (genie#274,
+ * 2026-08-26), or before the repo had a `public/index.php`, keeps the fallback
+ * argv for the rest of its life — no restart, no upgrade and no repo change
+ * revisits it, and nothing ever says which architecture is in force. That is the
+ * epic's shape (genie#540): an authoritative fact on one side, an execution
+ * context frozen at start time on the other.
+ *
+ * ## Why re-deciding is not the substitution this issue is about
+ *
+ * The command in question is one GENIE wrote, on a rule Genie still applies to
+ * every new site. Taking it again is the default catching up, not a choice made
+ * behind the caller's back — and the caller is told, in the same result. What must
+ * never be touched is a command the USER supplied, which is what `stack` gates:
+ * `create` writes `stack` on exactly one path, the detected dev-server branch, and
+ * never for a caller's own `command`.
+ *
+ * The other three guards, each a real case:
+ *   - `hostServe` already set → the site is already served; nothing to decide.
+ *   - `hostPort` → Genie runs NO process for that site, so re-deciding would
+ *     hijack `.gen` away from the dev server the caller pointed it at.
+ *   - the argv must still BE the fallback. A site whose stored command has moved
+ *     on (octane, a wrapper script) is not Genie's to re-take, even with a
+ *     `stack: 'php'` left behind by detection.
+ */
+export function outdatedPhpDevServer(
+    config: {
+        stack?: string | undefined;
+        command?: readonly string[] | undefined;
+        hostServe?: unknown;
+        hostPort?: number | undefined;
+    },
+    repoDir: string,
+): { mode: 'php'; root: string } | null {
+    if (config.hostServe || config.hostPort) return null;
+    if (config.stack !== 'php') return null;
+    const argv = config.command ?? [];
+    const isArtisanServe = argv.some((a) => /(^|[\\/])artisan$/i.test(a)) && argv.includes('serve');
+    if (!isArtisanServe) return null;
+    return detectPhpServe(repoDir);
+}
+
 /** Every way a repo on disk could be built and served in production, best-offer
  *  first, plus the one to take. The single call the MCP tool and the UX make. */
 export function describeRepoRun(

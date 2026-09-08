@@ -35,6 +35,17 @@ import { allocateFreePort, waitForHttp } from '../port-probe';
  *
  * The fix is therefore to STATE it on the worker's command line, exactly as
  * genie#534 stated `upload_tmp_dir`: a define no ini can be missing.
+ *
+ * ## What this lane established, and what it ruled OUT
+ *
+ * genie#539 names a second gap — Caddy forwarding four CGI variables, so "no
+ * service env reaches `$_SERVER` per request". Measured here on the first run, that
+ * is **wrong**: `$_SERVER` and `getenv()` both carried the value with no change to
+ * anything, because PHP's CGI SAPI imports the process environment as part of the
+ * server variables. Only `$_ENV` was empty. The third test pins all three, so the
+ * narrowing cannot quietly stop being true — and so nobody widens the fix into the
+ * Caddyfile, where every service credential would then sit on disk in cleartext to
+ * duplicate a value that already arrives.
  */
 
 const caddyBin = path.resolve(
@@ -186,21 +197,34 @@ describe('REAL service env — a Genie-hosted PHP app can READ the values (genie
     });
 
     /**
-     * MEASUREMENT, not a claim.
+     * WHAT THE OTHER TWO SURFACES DO — measured on this lane, then pinned here.
      *
-     * genie#539 states two independent gaps — `variables_order` omitting `E`, and
-     * Caddy forwarding only four CGI variables so "no service env reaches `$_SERVER`
-     * per request". The second one has never been measured; PHP's CGI SAPI is
-     * documented to consider the process environment "a part of the server
-     * variables", which would make the Caddy half of the report wrong. `getenv()` is
-     * likewise ASSUMED to work in the report ("getenv() should still work, which is
-     * likely why this survived").
+     * genie#539 states two independent gaps. The first is real and the two tests
+     * above are it. **The second one is not**, and this is where that was settled:
+     * the issue says Caddy forwards only four CGI variables so "no service env
+     * reaches `$_SERVER` per request", and the first run of this file on CI answered
      *
-     * Both are answerable only by a real worker, so this asks and pins the answer
-     * rather than guessing. It runs BOTH configurations so the difference the fix
-     * makes is visible on every surface, not just the one it targets.
+     *     with the fix   : {"env":"(absent)","server":"<the value>","getenv":"<the value>","variables_order":"GPCS"}
+     *     without the fix: {"env":"(absent)","server":"<the value>","getenv":"<the value>","variables_order":"GPCS"}
+     *
+     * `$_SERVER` carries it with no Caddy change at all, because PHP's CGI SAPI
+     * treats the process environment as part of the server variables and imports it
+     * per request regardless of `E`. `getenv()` carries it too, as the report
+     * assumed. So the impact is NARROWER than the issue describes: an app reading
+     * `$_SERVER` or `getenv()` — which covers Laravel, whose phpdotenv reads both —
+     * was never affected, and only `$_ENV` was.
+     *
+     * `$_ENV` still has to be fixed. It is a first-class surface (`$_ENV['DB_HOST']`
+     * is ordinary PHP), Symfony's env-var resolution reads it FIRST, and the point of
+     * genie#539 is that Genie should not be leaving the answer to whichever php.ini
+     * wins. But it must be fixed for the right reason, and forwarding every service
+     * value through the Caddyfile — the issue's implied remedy — would have written
+     * credentials to a config file on disk to duplicate something already arriving.
+     *
+     * Both configurations run here so the fix is shown to COST nothing that already
+     * worked, which is the failure mode a narrower fix invites.
      */
-    it.skipIf(!phpCgiExe)('records what $_SERVER and getenv() do — before and after', async () => {
+    it.skipIf(!phpCgiExe)('leaves $_SERVER and getenv() exactly as they were', async () => {
         const fixed = fixture('measure-fixed');
         const before = fixture('measure-before');
 
@@ -223,29 +247,36 @@ describe('REAL service env — a Genie-hosted PHP app can READ the values (genie
             before.env,
         );
 
-        // Printed so the CI log carries the evidence the issue is missing. The
-        // assertions below pin it; this is what makes a change in the answer
-        // readable rather than merely red.
+        // Printed so the CI log carries the evidence, not just a colour. This is the
+        // measurement the issue is missing, and it is what makes a CHANGE in the
+        // answer readable to whoever reads the shard next.
         console.log('[genie#539] with the fix   :', JSON.stringify(withFix));
         console.log('[genie#539] without the fix:', JSON.stringify(withoutFix));
 
-        // `getenv()` is the report's stated survivor — the reason a value works from
-        // a terminal. It must hold in BOTH configurations, or the report's account of
-        // why this went unnoticed is wrong.
-        expect(withoutFix.getenv, 'getenv() is the rescue the report assumes').toBe(VALUE);
+        // THE NARROWING, pinned. `$_SERVER` carries the value with no Caddy change,
+        // and did so before the fix — so genie#539's second gap is not a gap. If this
+        // ever flips, the reason to leave `serve-config.ts`'s CGI block alone has gone
+        // with it and somebody has to know.
+        expect(withoutFix.server, '$_SERVER already carried it — genie#539 gap 2 is not real').toBe(
+            VALUE,
+        );
+        // `getenv()` is the report's stated survivor, and it holds.
+        expect(withoutFix.getenv, 'getenv() is the rescue the report assumed').toBe(VALUE);
+
+        // The fix must not COST a surface that already worked — the failure mode a
+        // narrow ini change invites.
+        expect(withFix.server).toBe(VALUE);
         expect(withFix.getenv).toBe(VALUE);
 
-        // The fix must not COST any surface that already worked.
-        for (const key of ['env', 'server', 'getenv'] as const) {
-            if (withoutFix[key] === VALUE) {
-                expect(withFix[key], `the fix must not lose $${key}`).toBe(VALUE);
-            }
-        }
-
-        // And the surface the fix targets must move from absent to present — the
-        // red→green transition, asserted as a DIFFERENCE so it cannot pass on a
-        // configuration where the value was there all along.
+        // And the surface it targets moves from absent to present. Asserted as a
+        // DIFFERENCE, so it cannot pass on a configuration where the value was there
+        // all along.
         expect(withoutFix.env).toBe('(absent)');
         expect(withFix.env).toBe(VALUE);
+
+        // The define took effect at all: `variables_order` is a PERDIR setting, so
+        // that `-d` reaches it is a fact about php-cgi, not an assumption.
+        expect(withoutFix.variables_order).toBe('GPCS');
+        expect(withFix.variables_order).toBe('EGPCS');
     });
 });

@@ -18,6 +18,7 @@
  */
 
 import { HOST_CADDY_HTTPS_PORT } from './host-caddyfile';
+import { PHP_VARIABLES_ORDER } from './toolchain-versions';
 
 /** What a generated-config site serves. Reverse-proxy sites are NOT here — they
  *  need no config. */
@@ -144,10 +145,10 @@ export function serveCaddyfile(opts: { sitePort: number; serve: SiteServe }): st
 }
 
 /**
- * The PHP FastCGI worker command: `<php-cgi> -d upload_tmp_dir=<dir> -b
- * 127.0.0.1:<port>` runs php-cgi as a FastCGI server. `php-cgi` ships with PHP on
- * every OS (unlike `php-fpm`, which is Unix-only), so this is the portable worker
- * Caddy's `php_fastcgi` connects to.
+ * The PHP FastCGI worker command: `<php-cgi> -d upload_tmp_dir=<dir> -d
+ * variables_order=EGPCS -b 127.0.0.1:<port>` runs php-cgi as a FastCGI server.
+ * `php-cgi` ships with PHP on every OS (unlike `php-fpm`, which is Unix-only), so
+ * this is the portable worker Caddy's `php_fastcgi` connects to.
  *
  * `phpCgiExe` is an ABSOLUTE path, resolved from the site's toolchain version
  * (`engine-resolve.ts`) — never a bare name. A bare `php-cgi` is genie#206
@@ -182,6 +183,34 @@ export function serveCaddyfile(opts: { sitePort: number; serve: SiteServe }): st
  * name would be resolved by PHP against the worker's cwd (the user's repo), and a
  * quote or newline would end the define early, on win32 inside a re-joined cmd.exe
  * command line.
+ *
+ * WHETHER THE APP CAN READ THE SERVICE ENV IS GENIE'S TO SAY TOO (genie#539). The
+ * worker is spawned with the full service environment — that half was never in
+ * doubt — but whether the APPLICATION sees it is decided by `variables_order`, and
+ * Genie was saying nothing. PHP's own `php.ini-production` and
+ * `php.ini-development` both ship `GPCS`, so every distro package, Herd and MAMP
+ * omit `E` and never populate `$_ENV` from the process environment.
+ *
+ * MEASURED, on the real hosting lane, so the fix is the size of the fault:
+ * `$_SERVER` and `getenv()` DO carry the value under `GPCS` — PHP's CGI SAPI
+ * imports the process environment as part of the server variables — so genie#539's
+ * second claim, that Caddy's four forwarded CGI variables starve `$_SERVER`, is not
+ * true and this file's `php_fastcgi` block is left alone. Widening it would have
+ * put every service credential in a Caddyfile on disk to duplicate a value that
+ * already arrives. `$_ENV` alone was empty, and `$_ENV` is ordinary PHP
+ * (`$_ENV['DB_HOST']`), the first thing Symfony's env resolution reads, and one of
+ * the three adapters Laravel's phpdotenv consults.
+ *
+ * Genie's own generated ini ({@link phpIniContents}) named the key nowhere either
+ * and rode on PHP's compiled-in `EGPCS`, so it worked BY LUCK — and only on
+ * Windows, the one platform Genie installs PHP on. Stating it here is what makes
+ * the answer independent of whose ini wins, which matters in a tree that has
+ * already lost this argument once: on the genie#206 machine PATH resolved `php` to
+ * Herd's shim, and "running with Herd's config" and "resolving to Herd's binary"
+ * turned out to be one fault.
+ *
+ * `EGPCS` is PHP's own documented default, not a Genie invention: this states the
+ * value the language already intends, so nothing an app expects changes.
  */
 export function phpFastcgiWorkerCommand(
     phpCgiExe: string,
@@ -210,7 +239,15 @@ export function phpFastcgiWorkerCommand(
         );
     }
     assertPort(fcgiPort, 'fcgi port');
-    return [phpCgiExe, '-d', `upload_tmp_dir=${uploadTmpDir}`, '-b', `127.0.0.1:${fcgiPort}`];
+    return [
+        phpCgiExe,
+        '-d',
+        `upload_tmp_dir=${uploadTmpDir}`,
+        '-d',
+        `variables_order=${PHP_VARIABLES_ORDER}`,
+        '-b',
+        `127.0.0.1:${fcgiPort}`,
+    ];
 }
 
 /**

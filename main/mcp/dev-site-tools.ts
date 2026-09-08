@@ -11,7 +11,12 @@ import {
     devSiteReconfigureNeedsRestart,
     slugLabel,
 } from '../dev-server/sites-config';
-import { describeRepoRun, detectPhpServe, detectStaticServe } from '../dev-server/repo-facts';
+import {
+    describeRepoRun,
+    detectPhpServe,
+    detectStaticServe,
+    outdatedPhpDevServer,
+} from '../dev-server/repo-facts';
 import { applySetEnv } from '../env-store';
 import { devSiteManager, stopNotes } from '../dev-server/site-manager';
 import { resolveContainerRuntime } from '../dev-server';
@@ -343,6 +348,96 @@ export function siteAdvisoryNotes(req: Pick<ManageSiteRequest, 'image' | 'build'
 }
 
 /**
+ * A STORED site's repo directory on the host — `repos/<repo>`, or the workspace
+ * root for a site with no repo.
+ *
+ * Separate from `create`'s `resolveRepoDir`, which validates a caller's `repo`
+ * against the envelope and refuses an unknown one. A stored `repo` has already
+ * been through `sanitizeDevSitePatch`, and a site whose repo folder has since been
+ * renamed must still be startable — so this resolves without refusing. The same
+ * `..`/separator guard applies anyway, because the value becomes a path.
+ */
+function siteRepoDir(workspacePath: string, repo: string | undefined): string {
+    const name = (repo ?? '').trim();
+    if (!name || name === '.' || name === '..' || !/^[A-Za-z0-9._-]+$/.test(name)) {
+        return workspacePath;
+    }
+    return path.join(workspacePath, 'repos', name);
+}
+
+/** Which field of the request took the serving decision out of Genie's hands —
+ *  the five that name a SERVER, in the order `create` reads them. */
+function declinedByField(req: ManageSiteRequest): string | null {
+    if (req.hostServe) return '`hostServe`';
+    if (req.command?.length) return '`command`';
+    if (req.serve?.length) return '`serve`';
+    if (req.image) return '`image`';
+    if (req.hostPort) return '`hostPort`';
+    return null;
+}
+
+/** How Genie's own detectors name a mode, in a sentence a caller reads. */
+function serveModeLabel(serve: { mode: string; root: string }): string {
+    return serve.mode === 'php'
+        ? `a PHP app (\`${serve.root}/\` over FastCGI)`
+        : `a built static site (\`${serve.root}/\`)`;
+}
+
+/**
+ * WHICH SERVING ARCHITECTURE A SITE GOT, said out loud (genie#538).
+ *
+ * The report's own words: "when Genie declines a detected serve mode because the
+ * caller specified something, it should say so. A silent architectural downgrade
+ * is the reason this took a bug report to find." Three things were silent, and
+ * this says all three:
+ *
+ *  1. **The detected mode was mislabelled.** The one note that did fire was
+ *     written for {@link detectStaticServe} and fired for a PHP detection too, so
+ *     a Laravel site was told Genie had "detected a built static site (public/)" —
+ *     the wrong architecture named, in the single sentence meant to make the
+ *     choice visible.
+ *  2. **A decline said nothing at all.** An agent that passes `hostPort` to get a
+ *     stable port has just changed how the app is served, and heard nothing.
+ *  3. **The fallback said nothing about its cost.** `php artisan serve` creates
+ *     ONE worker: the reported site had a 15–40s endpoint polled every 15s, and
+ *     that permanently saturated it — Genie's readiness probe included, which is
+ *     why `ready:false` never cleared. It also holds an `artisan serve` parent
+ *     PLUS its `php -S` child, where FastCGI is no process of Genie's at all.
+ *
+ * Pure, and tested without the DB or the manager.
+ */
+export function servingArchitectureNotes(input: {
+    /** The mode Genie detected and is USING. */
+    detected: { mode: string; root: string } | null;
+    /** The mode Genie would have used, had the caller not named a server. */
+    declined: { mode: string; root: string } | null;
+    /** Which request field did that — see {@link declinedByField}. */
+    declinedBy: string | null;
+    /** The stack of the dev server being taken instead, when one is. */
+    fallbackStack?: string | undefined;
+}): string[] {
+    const notes: string[] = [];
+    if (input.detected) {
+        notes.push(
+            input.detected.mode === 'php'
+                ? `Detected ${serveModeLabel(input.detected)} — Genie serves it with its own web server and a FastCGI worker, so the site runs NO dev server of its own. Pass a \`command\` to run one instead, or \`hostServe\` to override.`
+                : `Detected ${serveModeLabel(input.detected)} — serving it with Genie's static file server + SPA fallback. Pass a \`command\` to run a dev server instead, or \`hostServe\` to override.`,
+        );
+    }
+    if (input.declined && input.declinedBy) {
+        notes.push(
+            `Genie DECLINED to serve this repo as ${serveModeLabel(input.declined)}: your ${input.declinedBy} names the server, so that is what \`.gen\` gets. This is a different serving architecture from the one a bare \`create\` would have chosen — drop ${input.declinedBy} to take the detected mode.`,
+        );
+    }
+    if (input.fallbackStack === 'php') {
+        notes.push(
+            'FALLBACK: this PHP repo has no `public/index.php`, so Genie could not serve it and started `php artisan serve` instead. That server creates ONE worker — a single slow endpoint saturates it permanently, Genie\'s own readiness probe included (genie#538) — and it holds a `php -S` child, so the site is two long-lived processes. Give the repo a front controller at `public/index.php` and restart, and Genie will serve it over FastCGI with no process at all.',
+        );
+    }
+    return notes;
+}
+
+/**
  * Route a site's `env` to the repo's `.env`, NOT the tracked `project.json` (genie
  * #168). `project.json` is committed + pushed, so a secret in `sites.<id>.env`
  * leaks; env — secret or not, and per-dev — belongs in the repo's `.env`, which the
@@ -482,18 +577,47 @@ export async function runManageSite(
                 // the command/port requirements below.
                 const hostPort = req.hostPort;
                 // GENIE-served host-native site (static / php): an explicit serve MODE,
-                // OR — when nothing else is specified — a DETECTED built static site
-                // (dist/build/out + index.html, no dev server). Genie owns the web
-                // server AND the port, so there is nothing to detect or require below.
-                const nothingElseSpecified =
-                    !command && !serve && !req.image && !hostPort && !req.hostServe;
+                // OR — when the caller said nothing about HOW to serve — a detected
+                // PHP app or built static site. Genie owns the web server AND the
+                // port, so there is nothing to detect or require below.
+                //
+                // WHAT BELONGS IN THIS LIST (genie#538). Every entry names a SERVER:
+                // `command`/`serve` is one Genie should run, `image` one it should
+                // run in, `hostServe` one it should be, and `hostPort` one that is
+                // ALREADY RUNNING and must be proxied. Detecting past any of them
+                // would serve something other than what the caller asked for —
+                // `hostPort` included, and that is why it stays: a repo can be a
+                // Laravel app AND have a Vite dev server on 5273, and Genie must not
+                // answer `.gen` from `public/` when it was pointed at that port.
+                //
+                // What is NOT here is `port`, which says only where to bind. genie#538
+                // reads this list as the cause of the reported downgrade; it is not
+                // (a `hostPort` site spawns nothing, so it cannot reach `artisan
+                // serve`) — but the reading was easy to arrive at because the old
+                // name, `nothingElseSpecified`, answered "did the caller pass
+                // anything?" while the use needs "did the caller choose a server?".
+                // The name now says which question it is.
+                const callerChoseTheServer =
+                    Boolean(command) ||
+                    Boolean(serve) ||
+                    Boolean(req.image) ||
+                    Boolean(hostPort) ||
+                    Boolean(req.hostServe);
                 // A PHP app is SERVED, never run: `public/` over FastCGI, the shape
                 // every host uses. Checked before the static case because a Laravel
                 // repo can also carry a built `public/build`, and `artisan serve`
                 // must not be the answer for either — it is a development
                 // convenience that leaves two long-lived processes per site with
                 // nothing to do but leak.
-                const detectedServe = nothingElseSpecified
+                const detectedServe = callerChoseTheServer
+                    ? null
+                    : (detectPhpServe(repo.dir) ?? detectStaticServe(repo.dir));
+                // What Genie WOULD have served, when the caller's own choice means it
+                // will not. A silent architectural substitution is what made genie#538
+                // cost a bug report, so the decline is stated below whichever way it
+                // goes — and it is computed from the SAME detectors, so the note can
+                // never describe a mode the unspecified call would not have taken.
+                const declined = callerChoseTheServer
                     ? (detectPhpServe(repo.dir) ?? detectStaticServe(repo.dir))
                     : null;
                 const hostServe = req.hostServe ?? detectedServe ?? undefined;
@@ -613,11 +737,15 @@ export async function runManageSite(
                 const notes = [
                     ...siteAdvisoryNotes(req),
                     ...routeSiteEnvToDotEnv(ws.path, req.repo, req.env),
-                    ...(detectedServe && !req.hostServe
-                        ? [
-                              `Detected a built static site (${detectedServe.root}/) — serving it with Genie's static file server + SPA fallback. Pass a \`command\` to run a dev server instead, or \`hostServe\` to override.`,
-                          ]
-                        : []),
+                    // WHICH ARCHITECTURE THIS SITE GOT, always (genie#538): the mode
+                    // Genie detected and took, the one it declined and why, or the
+                    // single-threaded fallback and what it costs.
+                    ...servingArchitectureNotes({
+                        detected: detectedServe,
+                        declined,
+                        declinedBy: declinedByField(req),
+                        fallbackStack: command && !hostServe ? stack : undefined,
+                    }),
                 ];
                 if (req.enabled === false) {
                     return {
@@ -783,6 +911,34 @@ export async function runManageSite(
                 if (!target.config.enabled) {
                     setWorkspaceDevSite(ws.id, { siteId: target.siteId, enabled: true });
                 }
+                // GENIE RE-DECIDES ITS OWN CHOICE (genie#538). A PHP site created
+                // before `detectPhpServe` existed — or before the repo had a front
+                // controller — is still running the single-threaded `artisan serve`
+                // fallback that Genie itself wrote, and nothing has ever re-asked.
+                // The reported site was in exactly that state and STAYED there
+                // through the restarts its operator kept trying, which is why the
+                // correction has to land on the action they were already taking.
+                //
+                // `outdatedPhpDevServer` decides; it returns null for a command the
+                // user supplied, for an external `hostPort` site, and for a repo
+                // Genie still cannot serve. See its doc comment for each guard.
+                const upgrade = outdatedPhpDevServer(
+                    target.config,
+                    siteRepoDir(ws.path, target.config.repo),
+                );
+                const upgradeNotes: string[] = [];
+                if (upgrade) {
+                    setWorkspaceDevSite(ws.id, {
+                        siteId: target.siteId,
+                        hostServe: upgrade,
+                        runMode: 'host',
+                    });
+                    upgradeNotes.push(
+                        "This site was still running Genie's `php artisan serve` FALLBACK — chosen when it was created, because the repo had no front controller to serve then (or because the site predates Genie serving PHP at all). It has one now, so Genie is serving " +
+                            `\`${upgrade.root}/\`` +
+                            ' over FastCGI from this start on: the shape every host uses, with no dev server process of its own. The fallback creates ONE worker, so a single slow endpoint saturates it permanently — Genie\'s own readiness probe included, which is how a site sits at `ready:false` for good (genie#538). To go back to a dev server, set the site\'s `command` and clear `hostServe`.',
+                    );
+                }
                 // Bounded (genie#194) — see `settleWithin`. The site manager keeps
                 // starting it; this call just stops holding the transport open.
                 const status = await settleWithin(
@@ -804,12 +960,16 @@ export async function runManageSite(
                     runtime,
                     // The manager's own notes ride along on a SETTLED action too
                     // — they carry what a "restart" did not do (genie#226), and
-                    // dropping them here is how that stayed invisible.
-                    ...(status
-                        ? status.notes?.length
-                            ? { notes: status.notes }
-                            : {}
-                        : { notes: [pendingNote(req.action, target.siteId)] }),
+                    // dropping them here is how that stayed invisible. The
+                    // architecture change above goes FIRST: it is the one thing in
+                    // this result the caller did not ask for.
+                    ...(() => {
+                        const notes = [
+                            ...upgradeNotes,
+                            ...(status ? (status.notes ?? []) : [pendingNote(req.action, target.siteId)]),
+                        ];
+                        return notes.length ? { notes } : {};
+                    })(),
                 };
             }
 

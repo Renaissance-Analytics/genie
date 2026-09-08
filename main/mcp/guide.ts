@@ -142,12 +142,18 @@ install rather than quietly serving on a different runtime.
 
 **Running the repo's OWN dev server is the FALLBACK** — for a stack Genie cannot
 serve yet, or when you specifically want HMR against live source. It is what a
-bare \`create {name}\` still infers (host-native, story #238: a HOST process
-against LIVE source, no container, no build — PHP/Laravel → \`php artisan serve\`;
-Node → \`npm run dev\`; Django → \`manage.py runserver\`; Go → \`go run .\`), so say
-what you want rather than taking the inference by accident. Override with an
-explicit \`command\` + \`port\`, or \`hostPort\` to point \`.gen\` at a dev server you
-ALREADY run (e.g. one started with \`manageProcess\`).
+bare \`create {name}\` infers for a stack with no served shape (host-native, story
+#238: a HOST process against LIVE source, no container, no build — Node →
+\`npm run dev\`; Django → \`manage.py runserver\`; Go → \`go run .\`), so say what you
+want rather than taking the inference by accident. A PHP repo does NOT land here:
+\`composer.json\` plus \`public/index.php\` is SERVED over FastCGI, and only a PHP
+repo without that front controller falls back to \`php artisan serve\` — which is
+SINGLE-THREADED, so one slow endpoint saturates it permanently and the site sits
+at \`ready:false\` for good (genie#538). Override with an explicit \`command\` +
+\`port\`, or \`hostPort\` to point \`.gen\` at a dev server you ALREADY run (e.g. one
+started with \`manageProcess\`) — each of those NAMES A SERVER, so it changes the
+serving architecture rather than just the binding, and the result's \`notes\` say
+which mode Genie took and which it declined.
 Docker is only for the SERVICES behind it.
 
 **There is NO production build+serve here, and asking for one is REFUSED**
