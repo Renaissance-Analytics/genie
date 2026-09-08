@@ -40,7 +40,25 @@ interface BoundHarnessTransport {
     kind: WorkspaceAgentTransport;
     mode: HarnessDeliveryMode;
     send: ((payload: HarnessTransportPayload) => Promise<void> | void) | null;
+    /** PULL only: long-polls parked on this agent's inbox right now. */
+    openPolls: number;
+    /** PULL only: when this binding last proved it still had a holder. */
+    provenAt: number;
 }
+
+/**
+ * How long a PULL binding stays trusted after its last proof of life.
+ *
+ * This is a bound on the GAP BETWEEN polls, not on the poll itself — a parked
+ * `receive` is proof for as long as it is parked, however long that is. The
+ * bridge re-polls the instant one returns, so the real gap is a few
+ * milliseconds; the longest legitimate one is its own reconnect backoff, capped
+ * at `RETRY_MAX_MS` (5s) in `mcp/agent-config.ts`. A minute is an order of
+ * magnitude beyond that, which is the direction to err: reading a live channel
+ * as dead costs a duplicate line, and reading a dead one as live costs the
+ * message.
+ */
+export const PULL_LIVENESS_GRACE_MS = 60_000;
 
 /**
  * Live harness connections only. Durable queueing remains AgentInbox's job;
@@ -49,12 +67,28 @@ interface BoundHarnessTransport {
 export class HarnessTransportRegistry {
     private readonly sessions = new Map<string, BoundHarnessTransport>();
 
+    /**
+     * Injectable so the liveness deadline can be tested without real time.
+     *
+     * The default READS `Date.now` per call rather than capturing it: a bound
+     * reference taken at construction outlives any later replacement of the
+     * global clock, which would leave the singleton — built at module load —
+     * measuring against a clock no test can move.
+     */
+    constructor(private readonly now: () => number = () => Date.now()) {}
+
     bind(
         agentId: string,
         kind: WorkspaceAgentTransport,
         send: NonNullable<BoundHarnessTransport['send']>,
     ): void {
-        this.sessions.set(agentId, { kind, mode: 'push', send });
+        this.sessions.set(agentId, {
+            kind,
+            mode: 'push',
+            send,
+            openPolls: 0,
+            provenAt: this.now(),
+        });
     }
 
     /**
@@ -63,9 +97,80 @@ export class HarnessTransportRegistry {
      * There is no sender to keep, so the binding carries only the fact of the
      * connection. That fact is what stops AgentInbox reaching for the keyboard:
      * an agent whose channel is live already has the message coming.
+     *
+     * The handshake itself counts as proof: `registerTransport` is the bridge
+     * speaking to us, and it lands here BEFORE the first `receive` is parked.
      */
     bindPull(agentId: string, kind: WorkspaceAgentTransport): void {
-        this.sessions.set(agentId, { kind, mode: 'pull', send: null });
+        this.sessions.set(agentId, {
+            kind,
+            mode: 'pull',
+            send: null,
+            openPolls: 0,
+            provenAt: this.now(),
+        });
+    }
+
+    /**
+     * A long-poll has been PARKED on this agent's inbox — the Claude Channel
+     * bridge holding an HTTP request open against us.
+     *
+     * This is the proof genie#528 was missing. The bridge is spawned by Claude
+     * Code rather than by Genie, so Genie cannot watch the process; what it can
+     * see is that something is still asking for this agent's mail.
+     *
+     * A no-op unless a PULL binding exists. It must never MINT one: a `receive`
+     * from an agent with no channel is just an agent reading its own inbox, and
+     * treating that as a transport would suppress the very PTY fallback that
+     * agent depends on.
+     */
+    notePullPollOpen(agentId: string): void {
+        const session = this.sessions.get(agentId);
+        if (session?.mode !== 'pull') return;
+        session.openPolls += 1;
+        session.provenAt = this.now();
+    }
+
+    /**
+     * That long-poll has returned — with mail, or empty at its timeout.
+     *
+     * Stamped as proof as well as decremented, because the bridge re-polls
+     * immediately: without it, the 240s the poll spent parked would already
+     * exceed the grace and a healthy channel would flicker dead between every
+     * pair of polls.
+     *
+     * The honest limit of that: a bridge KILLED while parked leaves its poll
+     * open until our own timer settles it, so it is detected a poll-length later
+     * than one that stopped between polls. Both real triggers — a fatal 401/403,
+     * and Claude Code closing stdin — stop the bridge with its last poll already
+     * returned, which is the case this measures tightly.
+     */
+    notePullPollClosed(agentId: string): void {
+        const session = this.sessions.get(agentId);
+        if (session?.mode !== 'pull') return;
+        session.openPolls = Math.max(0, session.openPolls - 1);
+        session.provenAt = this.now();
+    }
+
+    /**
+     * The binding behind an agent, or undefined when there is none Genie is
+     * entitled to believe in.
+     *
+     * PUSH bindings are returned unconditionally: Codex owns its own lifecycle
+     * and a send that throws unbinds it, so it is silent between turns by design
+     * and has nothing to prove liveness with. Only a PULL binding faces the
+     * deadline, and only because nothing ever calls into one — it cannot fail
+     * its way out the way a push adapter does.
+     *
+     * Deliberately does NOT delete what it judges stale. Reporting dead is the
+     * whole requirement, and leaving the row lets a bridge that was merely slow
+     * recover on its next poll instead of needing a fresh handshake.
+     */
+    private live(agentId: string): BoundHarnessTransport | undefined {
+        const session = this.sessions.get(agentId);
+        if (!session || session.mode !== 'pull') return session;
+        if (session.openPolls > 0) return session;
+        return this.now() - session.provenAt <= PULL_LIVENESS_GRACE_MS ? session : undefined;
     }
 
     unbind(agentId: string): void {
@@ -88,11 +193,11 @@ export class HarnessTransportRegistry {
 
     /** Which way mail reaches this agent's harness, or null if none is live. */
     deliveryModeFor(agentId: string): HarnessDeliveryMode | null {
-        return this.sessions.get(agentId)?.mode ?? null;
+        return this.live(agentId)?.mode ?? null;
     }
 
     isVerified(agentId: string, kind?: WorkspaceAgentTransport): boolean {
-        const session = this.sessions.get(agentId);
+        const session = this.live(agentId);
         return !!session && (kind === undefined || session.kind === kind);
     }
 
@@ -102,14 +207,17 @@ export class HarnessTransportRegistry {
     }
 
     kindFor(agentId: string): WorkspaceAgentTransport | null {
-        return this.sessions.get(agentId)?.kind ?? null;
+        return this.live(agentId)?.kind ?? null;
     }
 
     deliver(
         agentId: string,
         payload: HarnessTransportPayload,
     ): HarnessTransportDelivery | Promise<HarnessTransportDelivery> {
-        const session = this.sessions.get(agentId);
+        // The SAME liveness the sink reads. A stale pull binding must not answer
+        // "there is nothing to push to" — that reply means "attached, hold the
+        // keyboard", which is exactly the suppression genie#528 is about.
+        const session = this.live(agentId);
         if (!session) {
             return { ok: false, queued: true, error: 'Harness transport is not verified.' };
         }

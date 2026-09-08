@@ -2900,13 +2900,33 @@ export async function agentInboxForMcp(
                     : { ok: false, error: r.error };
             }
             case 'receive': {
-                const { messages, cursor } = await agentInboxBroker.receive(agentId, {
-                    cursor: req.cursor,
-                    wait: req.wait,
-                    timeoutMs: req.timeoutMs,
-                    acknowledge: req.acknowledge,
-                });
-                return { ok: true, messages, cursor };
+                // A PARKED long-poll is the Claude Channel's proof of life
+                // (genie#528). The bridge is spawned by Claude Code, not by
+                // Genie, so there is no process to watch — but while it holds a
+                // waiting `receive` open, something is demonstrably still asking
+                // for this agent's mail. Without that, a binding minted by
+                // `registerTransport` was trusted forever, and a bridge that
+                // died with its pty still running swallowed every message with
+                // the PTY fallback held shut behind it.
+                //
+                // Only a WAITING receive counts. A non-waiting one returns
+                // instantly and is an agent reading its own inbox by hand, which
+                // is no evidence at all about the bridge — counting it would let
+                // an agent keep a dead channel's binding alive, which is the
+                // expensive direction to be wrong in.
+                const parked = req.wait === true;
+                if (parked) harnessTransportRegistry.notePullPollOpen(agentId);
+                try {
+                    const { messages, cursor } = await agentInboxBroker.receive(agentId, {
+                        cursor: req.cursor,
+                        wait: req.wait,
+                        timeoutMs: req.timeoutMs,
+                        acknowledge: req.acknowledge,
+                    });
+                    return { ok: true, messages, cursor };
+                } finally {
+                    if (parked) harnessTransportRegistry.notePullPollClosed(agentId);
+                }
             }
             case 'acknowledge': {
                 if (typeof req.cursor !== 'number' || !agentInboxBroker.acknowledge(agentId, req.cursor)) {
