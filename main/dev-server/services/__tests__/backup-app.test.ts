@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { backupApp, dumpTargetsFor } from '../backup-app';
+import { engineSpecFor } from '../catalog';
 import type { BackupSettings } from '../backup';
 import type { BackupResult } from '../backup-runner';
 import type { DevServices } from '../services-config';
@@ -44,7 +45,9 @@ describe('dumpTargetsFor', () => {
             version: '17',
             host: 'genie-svc-postgres-17',
             port: 5432,
-            image: 'pgvector/pgvector:pg17',
+            // Derived: this target's image comes from the CATALOG, so a literal
+            // spelled here could drift from it and still pass.
+            image: engineSpecFor('postgres').image('17'),
         });
         expect(target?.slice.identifier).toMatch(/^ws_/);
         expect(target?.slice.password).toBe(PG.password);

@@ -1217,9 +1217,10 @@ export function registerIpcHandlers(): void {
     // every workspace on the same (engine, major), so no workspace can answer
     // for it. Also a pure read; nothing here pulls or starts anything.
     ipcMain.handle('dev:workstation', () => workstationDevServerInfo());
-    // … and the one WRITE that belongs at this level: start / stop / logs for a
-    // shared engine. Routed through the service manager so the reference count
-    // follows the container rather than being quietly invalidated behind it.
+    // … and the one WRITE that belongs at this level: start / stop / logs /
+    // install / recreate for a shared engine. Routed through the service manager
+    // so the reference count follows the container rather than being quietly
+    // invalidated behind it.
     ipcMain.handle('dev:engine', (_e, req: EngineActionRequest) =>
         workstationEngineAction(req ?? { recordKey: '', action: 'logs' }),
     );

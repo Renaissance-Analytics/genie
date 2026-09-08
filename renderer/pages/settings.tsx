@@ -101,6 +101,7 @@ import {
     engineGroupOf,
     engineInstalledNote,
     runtimeDiagnostics,
+    recreateEngineWarning,
     stopEngineWarning,
     toolUpdateCount,
     toolUpdateRows,
@@ -5320,6 +5321,10 @@ export function DevServerSection({
     const [logs, setLogs] = useState<{ recordKey: string; text: string } | null>(null);
     /** A stop that would hit other workspaces, held until it is confirmed. */
     const [confirmStop, setConfirmStop] = useState<DevEngineInfo | null>(null);
+    // Recreating ALWAYS confirms — unlike stop, which only warns when somebody
+    // is on it. There is no version of this that is not a restart, and the
+    // question it has to answer first is whether the data survives.
+    const [confirmRecreate, setConfirmRecreate] = useState<DevEngineInfo | null>(null);
 
     const refresh = useCallback(() => {
         void api()
@@ -5344,7 +5349,10 @@ export function DevServerSection({
     const runtime = info ? runtimeDiagnostics(info) : null;
     const groups = engineGroups(info?.engines ?? []);
 
-    const act = async (engine: DevEngineInfo, action: 'start' | 'stop' | 'logs' | 'install') => {
+    const act = async (
+        engine: DevEngineInfo,
+        action: 'start' | 'stop' | 'logs' | 'install' | 'recreate',
+    ) => {
         setBusy(engine.recordKey);
         setError(null);
         setDone(null);
@@ -5541,6 +5549,7 @@ export function DevServerSection({
                                 onStop={stop}
                                 onToggleLog={toggleLog}
                                 onInstall={(e) => void act(e, 'install')}
+                                onRecreate={setConfirmRecreate}
                             />
                         </Tabs.Panel>
                         <Tabs.Panel value="installed">
@@ -5554,6 +5563,7 @@ export function DevServerSection({
                                 onStop={stop}
                                 onToggleLog={toggleLog}
                                 onInstall={(e) => void act(e, 'install')}
+                                onRecreate={setConfirmRecreate}
                             />
                         </Tabs.Panel>
                         <Tabs.Panel value="available">
@@ -5567,6 +5577,7 @@ export function DevServerSection({
                                 onStop={stop}
                                 onToggleLog={toggleLog}
                                 onInstall={(e) => void act(e, 'install')}
+                                onRecreate={setConfirmRecreate}
                             />
                         </Tabs.Panel>
                     </Tabs.Panels>
@@ -5625,6 +5636,44 @@ export function DevServerSection({
                     </div>
                 </Modal>
             )}
+
+            {/* RECREATE. The engine is running an image Genie no longer pins —
+                a container is adopted by NAME, never by image, so it would keep
+                the old one forever and an extension Genie advertises would keep
+                failing to install. Deliberate and announced: it is never done
+                for you, and the sentence names who gets restarted. */}
+            {confirmRecreate && (
+                <Modal open onClose={() => setConfirmRecreate(null)} size="sm">
+                    <div className="ws-confirm">
+                        <Heading as="h3" size="xs">
+                            Recreate {confirmRecreate.label} {confirmRecreate.version}?
+                        </Heading>
+                        <Callout color="amber" icon={<Icon name="triangle-alert" size="sm" />}>
+                            {recreateEngineWarning(confirmRecreate)}
+                        </Callout>
+                        <Text size="xs" className="text-zinc-500">
+                            Running {confirmRecreate.runningImage ?? 'an older image'} — this
+                            replaces it with {confirmRecreate.image}.
+                        </Text>
+                        <div className="ws-confirm-actions">
+                            <Action variant="ghost" onClick={() => setConfirmRecreate(null)}>
+                                Cancel
+                            </Action>
+                            <Action
+                                color="amber"
+                                icon="refresh-cw"
+                                onClick={() => {
+                                    const engine = confirmRecreate;
+                                    setConfirmRecreate(null);
+                                    void act(engine, 'recreate');
+                                }}
+                            >
+                                Recreate it
+                            </Action>
+                        </div>
+                    </div>
+                </Modal>
+            )}
         </>
     );
 }
@@ -5640,6 +5689,7 @@ function EngineList({
     onStop,
     onToggleLog,
     onInstall,
+    onRecreate,
 }: {
     engines: DevEngineInfo[];
     empty: string;
@@ -5650,6 +5700,7 @@ function EngineList({
     onStop: (engine: DevEngineInfo) => void;
     onToggleLog: (engine: DevEngineInfo) => void;
     onInstall: (engine: DevEngineInfo) => void;
+    onRecreate: (engine: DevEngineInfo) => void;
 }) {
     if (engines.length === 0) {
         return (
@@ -5671,6 +5722,7 @@ function EngineList({
                     onStop={onStop}
                     onToggleLog={onToggleLog}
                     onInstall={onInstall}
+                    onRecreate={onRecreate}
                 />
             ))}
         </div>
@@ -5696,6 +5748,7 @@ function EngineRow({
     onStop,
     onToggleLog,
     onInstall,
+    onRecreate,
 }: {
     engine: DevEngineInfo;
     hasRuntime: boolean;
@@ -5705,6 +5758,7 @@ function EngineRow({
     onStop: (engine: DevEngineInfo) => void;
     onToggleLog: (engine: DevEngineInfo) => void;
     onInstall: (engine: DevEngineInfo) => void;
+    onRecreate: (engine: DevEngineInfo) => void;
 }) {
     const actions = engineActionAvailability(engine, hasRuntime);
     const usage = engineUsageNote(engine);
@@ -5725,6 +5779,11 @@ function EngineRow({
                 {engine.installed && engine.state !== 'running' && (
                     <Badge color="zinc">Downloaded</Badge>
                 )}
+                {/* The engine is not running what Genie pins. Said on the ROW,
+                    not only in the confirm: without it the only visible symptom
+                    is an extension that will not install, which reads as a bug
+                    in the feature rather than an engine that needs replacing. */}
+                {engine.staleImage && <Badge color="amber">Old image</Badge>}
                 <div className="ws-engine-actions">
                     {/* Pre-download another major (#242 P3). Offered with NO
                         consumer on purpose: holding 17 ready while 16 serves is
@@ -5740,6 +5799,17 @@ function EngineRow({
                             {/* A pull is hundreds of megabytes — a button that just
                                 goes quiet for a minute reads as broken. */}
                             {busy ? 'Downloading…' : 'Install'}
+                        </Action>
+                    )}
+                    {actions.canRecreate && (
+                        <Action
+                            size="sm"
+                            variant="ghost"
+                            icon="refresh-cw"
+                            disabled={busy}
+                            onClick={() => onRecreate(engine)}
+                        >
+                            {busy ? 'Recreating…' : 'Recreate'}
                         </Action>
                     )}
                     {actions.canStart && (
@@ -5793,6 +5863,12 @@ function EngineRow({
             <Text size="xs" className="text-zinc-500">
                 {isolationNote(engine.provision)}
             </Text>
+            {engine.staleImage && (
+                <Text size="xs" className="text-zinc-500">
+                    Running {engine.runningImage} — an engine container keeps the image it was
+                    built from. Recreate it to move onto {engine.image}; the data volume is kept.
+                </Text>
+            )}
 
             {log !== null && (
                 <div className="ws-engine-log">

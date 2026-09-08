@@ -131,23 +131,56 @@ export interface EngineSpec {
 
 // --- the engines ------------------------------------------------------------
 
+/**
+ * Genie's OWN Postgres image — `main/dev-server/postgres-image/`.
+ *
+ * ## Why Genie publishes one instead of pinning a stock image
+ *
+ * `extensions.ts` whitelists both `vector` and `postgis`, and `manageService`'s
+ * tool description advertises both. No stock image carries both:
+ * `pgvector/pgvector` has no PostGIS, `postgis/postgis` has no pgvector. So a
+ * workspace wanting both had no image at all, and `CREATE EXTENSION postgis`
+ * answered `could not open extension control file` — a capability promised and
+ * not delivered. This image is stock PostgreSQL of the same major PLUS pgvector,
+ * PLUS PostGIS, PLUS the standard contrib set (hstore, pg_trgm, uuid-ossp,
+ * citext, …): every name on the whitelist, installable.
+ *
+ * It is built ON `pgvector/pgvector:pgN`, which is what Genie pinned before,
+ * so `psql`/`pg_isready`, the PGDATA layout, the admin env and the official
+ * entrypoint are inherited unchanged and it stays a drop-in for provisioning
+ * and readiness. `postgres-image.real.test.ts` asserts that rather than
+ * trusting it, and installs every whitelisted extension against a real engine.
+ *
+ * ## The tag
+ *
+ * `pg<postgres major>-<image major>`. Two majors because two things move
+ * independently: the Postgres major is the user's choice and part of the engine
+ * KEY, while the image major is Genie's own — a security rebuild or an added
+ * extension republishes `pg17-1` and reaches every workspace on its next pull,
+ * and a breaking change (a PostGIS major, a base change) becomes `pg17-2` and
+ * leaves running workspaces alone. Never `:latest`: a workspace's engine must
+ * not change under it on a restart.
+ *
+ * Bumping {@link GENIE_POSTGRES_IMAGE_MAJOR} is how a new image major is
+ * adopted, and it is the only line that has to change.
+ */
+export const GENIE_POSTGRES_IMAGE = 'ghcr.io/renaissance-analytics/genie-postgres';
+
+/** The image major {@link GENIE_POSTGRES_IMAGE} is pinned to. See above. */
+export const GENIE_POSTGRES_IMAGE_MAJOR = '1';
+
 const POSTGRES: EngineSpec = {
     engine: 'postgres',
     runtime: 'container',
     label: 'Postgres',
     summary: 'PostgreSQL. Each workspace gets its own database + login role on the shared engine.',
     versions: ['17', '16', '15', '14'],
-    // pgvector/pgvector: stock PostgreSQL of the SAME major with the `vector`
-    // extension preinstalled (plus the standard contrib set — hstore, pg_trgm,
-    // uuid-ossp, citext, …), so `CREATE EXTENSION vector` (and the rest) just
-    // works — extensions, especially pgvector, must be enable-able. Debian-based
-    // (larger than the old `-alpine`) but still ships `psql`/`pg_isready` and keeps
-    // the same PGDATA layout + env, so it is a drop-in for provisioning/readiness.
-    // pgvector publishes pg14–pg17. NOTE: re-opening an EXISTING alpine (musl) data
-    // volume with this debian (glibc) image can hit text-index collation
-    // differences — fine for regenerable dev data; recreate the engine if a stale
-    // volume misbehaves.
-    image: (version) => `pgvector/pgvector:pg${version}`,
+    // Genie's own image — see GENIE_POSTGRES_IMAGE above for what is in it and
+    // why it is not a stock one. Debian-based (larger than the old `-alpine`).
+    // NOTE: re-opening an EXISTING alpine (musl) data volume with this debian
+    // (glibc) image can hit text-index collation differences — fine for
+    // regenerable dev data; recreate the engine if a stale volume misbehaves.
+    image: (version) => `${GENIE_POSTGRES_IMAGE}:pg${version}-${GENIE_POSTGRES_IMAGE_MAJOR}`,
     ports: [{ name: 'postgres', container: 5432, kind: 'tcp', primary: true }],
     // PGDATA is a SUBDIRECTORY of the mount, not the mount itself: some volume
     // drivers leave a `lost+found` in the root, and initdb refuses to

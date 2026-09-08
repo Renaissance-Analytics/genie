@@ -7,6 +7,7 @@ import {
     engineStatusLabel,
     engineStatusTone,
     engineUsageNote,
+    recreateEngineWarning,
     runtimeDiagnostics,
     stopEngineWarning,
     toolLabel,
@@ -442,6 +443,115 @@ describe('engineActionAvailability — install another version', () => {
         expect(
             engineActionAvailability(engine({ installed: false, configured: 1 }), true).canInstall,
         ).toBe(true);
+    });
+});
+
+/**
+ * RECREATE — the operator's cure for an engine stuck on an old image.
+ *
+ * A container is adopted by NAME, never by image, so an engine started before
+ * Genie changed a pin keeps running the old one for as long as it lives. The
+ * inventory says so (`staleImage`); this decides whether the button that fixes
+ * it is offered, and the rule is deliberately narrow — recreating restarts the
+ * engine for every workspace holding it, so it is offered only where there IS
+ * something to recreate and something stale about it.
+ */
+describe('recreateEngineWarning — what a recreate costs the people on it', () => {
+    it('names how many workspaces get restarted, and who', () => {
+        // Recreating a SHARED engine is a restart for everyone holding it. A
+        // button that does that quietly is the same hazard `stopEngineWarning`
+        // exists for, so the sentence names the population before the click.
+        const note = recreateEngineWarning(
+            engine({
+                state: 'running',
+                holders: 3,
+                workspaces: ['acme', 'beta', 'gamma'],
+                staleImage: true,
+            }),
+        );
+        expect(note).toContain('3 workspaces');
+        expect(note).toContain('acme');
+        expect(note).toContain('gamma');
+    });
+
+    it('says the data survives, because that is the question a person actually has', () => {
+        const note = recreateEngineWarning(
+            engine({ state: 'running', holders: 1, workspaces: ['acme'], staleImage: true }),
+        );
+        // The volume is named and outlives the container. Not saying so leaves
+        // "recreate" reading like "delete and start over".
+        expect(note.toLowerCase()).toMatch(/data|database|volume/);
+    });
+
+    it('still warns when nothing holds it — the container is replaced either way', () => {
+        // A positive control against a warning that only ever fires on holders:
+        // this action removes and rebuilds the container regardless, so there is
+        // always something to say.
+        expect(
+            recreateEngineWarning(
+                engine({ state: 'stopped', holders: 0, workspaces: [], staleImage: true }),
+            ),
+        ).toBeTruthy();
+    });
+});
+
+describe('engineActionAvailability — recreate onto the pinned image', () => {
+    it('offers Recreate for a RUNNING engine on an image other than the pinned one', () => {
+        expect(
+            engineActionAvailability(
+                engine({ state: 'running', installed: true, staleImage: true }),
+                true,
+            ).canRecreate,
+        ).toBe(true);
+    });
+
+    it('offers it for a STOPPED container too — the stale image outlives the process', () => {
+        // Stopping does not change what a container was created from, and the
+        // next start adopts it exactly as it is.
+        expect(
+            engineActionAvailability(
+                engine({ state: 'stopped', installed: true, staleImage: true }),
+                true,
+            ).canRecreate,
+        ).toBe(true);
+    });
+
+    it('does not offer it for an engine already on the pinned image', () => {
+        // The positive control for the two above: a rule that returned `true`
+        // whenever a container existed would pass both of them.
+        expect(
+            engineActionAvailability(
+                engine({ state: 'running', installed: true, staleImage: false }),
+                true,
+            ).canRecreate,
+        ).toBe(false);
+    });
+
+    it('does not offer it when the runtime never said what the container runs', () => {
+        // `staleImage` absent means UNKNOWN. Offering a restart-for-everyone on
+        // a guess is exactly the surprise this action exists to avoid.
+        expect(
+            engineActionAvailability(engine({ state: 'running', installed: true }), true)
+                .canRecreate,
+        ).toBe(false);
+    });
+
+    it('does not offer it when there is no container at all', () => {
+        // Nothing to replace: the next acquire builds it on the pinned image
+        // anyway, which is what `absent` means.
+        expect(
+            engineActionAvailability(engine({ state: 'absent', staleImage: true }), true)
+                .canRecreate,
+        ).toBe(false);
+    });
+
+    it('does not offer it without a container runtime', () => {
+        expect(
+            engineActionAvailability(
+                engine({ state: 'running', installed: true, staleImage: true }),
+                false,
+            ).canRecreate,
+        ).toBe(false);
     });
 });
 

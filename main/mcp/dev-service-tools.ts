@@ -181,6 +181,11 @@ function toEngineInfo(row: EngineInventoryRow, view: InventoryView): DevServiceE
         configured: row.configured,
         sharedWithOthers: row.workspaceIds.some((id) => id !== view.workspaceId),
         ...(view.wholeWorkstation ? { workspaces: row.workspaces } : {}),
+        // Not narrowed by view: an image ref is Genie's own pin, not another
+        // workspace's identity, and a reader that cannot see this has no way to
+        // explain why an advertised extension still will not install.
+        ...(row.runningImage ? { runningImage: row.runningImage } : {}),
+        ...(row.staleImage === undefined ? {} : { staleImage: row.staleImage }),
     };
 }
 

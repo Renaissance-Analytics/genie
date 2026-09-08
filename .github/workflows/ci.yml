@@ -51,7 +51,13 @@ jobs:
     # 20, not 15: apt now regularly waits on the runner's own
     # unattended-upgrades holding the dpkg lock, and the real hosting tests need
     # room after it.
-    timeout-minutes: 20
+    #
+    # 30, not 20, since `postgres-image.real.test.ts`: that one BUILDS the Genie
+    # Postgres image (pull the pgvector base, apt-install PostGIS) before it can
+    # run a database and install every whitelisted extension into it. A few
+    # minutes, and worth them — it is the only place in this repository that
+    # proves the extensions Genie advertises are the extensions the image ships.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v6

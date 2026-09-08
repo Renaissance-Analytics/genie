@@ -33,13 +33,27 @@
  * needs no `shared_preload_libraries` (which would require a restart of an
  * engine other workspaces are using).
  *
- * ## Availability is a separate question from permission
+ * ## Availability used to be a separate question. It is not any more.
  *
- * A name here means "Genie will try". Whether the IMAGE ships it is up to the
- * image — `postgis` in particular is not in the stock `postgres` image, and the
- * install will fail with Postgres's own "could not open extension control file",
- * which is a clear and correct answer. Refusing to list it would instead answer
- * a question nobody asked.
+ * This list once carried a name the image could not deliver. `postgis` was
+ * whitelisted, advertised in `manageService`'s own tool description, and
+ * answered `could not open extension control file` — because no STOCK image
+ * carried both it and `vector`: `pgvector/pgvector` has no PostGIS,
+ * `postgis/postgis` has no pgvector, so a workspace wanting both had no image at
+ * all. The note that used to stand here called that failure "a clear and correct
+ * answer". It was neither. A capability was promised in three places and
+ * delivered in none.
+ *
+ * Genie now publishes its own Postgres carrying every name below —
+ * `main/dev-server/postgres-image/`, pinned by `GENIE_POSTGRES_IMAGE` in
+ * `catalog.ts`. So this list and the image are ONE decision, and two tests keep
+ * them one: `dev-server/__tests__/postgres-image.test.ts` fails in the fast lane
+ * if a name added here is not also smoke-tested by the publish workflow, and
+ * `__tests__/postgres-image.real.test.ts` installs every name below into a real
+ * engine built from that Dockerfile.
+ *
+ * **Adding a name here is therefore also a change to the image.** If the image
+ * cannot carry it, it does not belong on this list.
  */
 
 /**
@@ -49,10 +63,10 @@
  * database:
  *
  *   - `vector`     pgvector. THE driver for this issue — the reporting workspace
- *                  was building a PgVectorStore. Ships in the postgres images
- *                  Genie pins (0.8.6 was reported available and uninstallable).
- *   - `postgis`    Geospatial types + indexes. Named in the report. Needs a
- *                  postgis image; see the note above about availability.
+ *                  was building a PgVectorStore. In the Genie image, which is
+ *                  built on `pgvector/pgvector` so this one never regressed.
+ *   - `postgis`    Geospatial types + indexes. Named in the report, and the
+ *                  reason Genie publishes its own image at all — see above.
  *   - `uuid-ossp`  UUID generation. Contrib, and in almost every Laravel/Rails
  *                  schema that does not generate ids in the app.
  *   - `pg_trgm`    Trigram indexes for fuzzy text search. Contrib.

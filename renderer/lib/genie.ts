@@ -758,6 +758,15 @@ export interface DevEngineInfo {
     configured: number;
     /** WHO — the workspace names. */
     workspaces: string[];
+    /** The image the RUNNING container was created from, when the runtime named
+     *  one. Not the same question as {@link image}, which is what Genie pins. */
+    runningImage?: string;
+    /** The container is running an image OTHER than the pinned one. An engine is
+     *  adopted by NAME, never by image, so one started before a pin changed
+     *  keeps the old image until somebody recreates it — which is how a shipped
+     *  fix fails to reach the install that needed it. Absent, not `false`, when
+     *  the runtime reported no image. */
+    staleImage?: boolean;
 }
 
 /** What one container-runtime candidate reported. */
@@ -1043,12 +1052,14 @@ export interface ToolchainVersionResult {
     freedBytes?: number;
 }
 
-/** Machine-level start | stop | logs for ONE shared engine. */
+/** Machine-level start | stop | logs | install | recreate for ONE shared engine. */
 export interface DevEngineActionRequest {
     recordKey: string;
     /** `install` PRE-DOWNLOADS this version's image (#242 P3, multi-version) —
-     *  it never starts anything. */
-    action: 'start' | 'stop' | 'logs' | 'install';
+     *  it never starts anything. `recreate` REPLACES the container on the image
+     *  Genie pins now, keeping the named volume — the cure for `staleImage`, and
+     *  a RESTART for every workspace holding a shared engine. */
+    action: 'start' | 'stop' | 'logs' | 'install' | 'recreate';
     tail?: number;
 }
 
