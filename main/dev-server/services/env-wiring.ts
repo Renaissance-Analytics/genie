@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto';
-import { SERVICE_ENGINES } from './catalog';
+import { SERVICE_ENGINES, engineSpecFor } from './catalog';
 import type { ServiceEngine } from './catalog';
 import type { WorkspaceSlice } from './provision';
 
@@ -357,4 +357,111 @@ export function terminalServiceEnv(env: Record<string, string>): Record<string, 
         }
     }
     return out;
+}
+
+// --- the inverse: which SERVICE a key came from (genie#540) ------------------
+
+/**
+ * Site-form key prefixes → the engine that emits them.
+ *
+ * This MIRRORS the switch in {@link serviceEnv}, and a prefix cannot be derived
+ * from a `switch` at runtime — so the drift guard in `env-wiring.test.ts` is
+ * what keeps the two in step. It walks every key each engine emits, in both
+ * forms, and goes red the day one of them attributes to nothing.
+ */
+const ENGINE_OF_KEY: ReadonlyArray<readonly [RegExp, ServiceEngine]> = [
+    [/^PG[A-Z]+$/, 'postgres'],
+    [/^MYSQL_/, 'mysql'],
+    [/^REDIS_/, 'redis'],
+    [/^MEILISEARCH_/, 'meilisearch'],
+    [/^AWS_/, 'minio'],
+    [/^MAIL_/, 'mailpit'],
+    [/^(?:GENIE_WS_|REVERB_|BROADCAST_CONNECTION$)/, 'websockets'],
+];
+
+/**
+ * The single-valued relational names. WHICH engine owns them is a fact about
+ * the env they appear in rather than about the key: `serviceEnv` hands them to
+ * the PRIMARY relational service, so attributing them to a fixed engine would
+ * name Postgres in a MySQL-only workspace.
+ */
+const SHARED_RELATIONAL = /^(?:DATABASE_URL$|DB_)/;
+
+/** `custom`'s endpoint variables, whose middle is the token its name produced. */
+const CUSTOM_ENDPOINT = /^GENIE_SERVICE_(.+)_(?:HOST|PORT)$/;
+
+/**
+ * The SERVICE a service-env key came from — an engine's catalog label
+ * (`Postgres`, `Mailpit`), a `custom` service's own name token, or null when
+ * Genie cannot attribute it.
+ *
+ * `within` is the env the key belongs to, needed only for the shared relational
+ * names above. It may be in either form: the keys that decide the question
+ * (`PGHOST`, `MYSQL_HOST`) are client-tool names and pass through a terminal's
+ * narrowing unchanged.
+ *
+ * Exists because a list of keys is not something a person can act on. "This
+ * terminal is missing GENIE_MAIL_HOST, GENIE_MAIL_MAILER, GENIE_MAIL_PORT"
+ * makes the reader do the grouping; "this terminal predates Mailpit" is the
+ * same fact already grouped.
+ */
+export function serviceOfEnvKey(key: string, within: Record<string, string>): string | null {
+    const custom = CUSTOM_ENDPOINT.exec(key);
+    if (custom) return custom[1];
+    // A terminal's copy is namespaced (`GENIE_MAIL_HOST`), a site's is not
+    // (`MAIL_HOST`) — the same key from the same service, so classify the name
+    // underneath the prefix Genie added. `GENIE_WS_*` is matched BEFORE this:
+    // it is Genie's own vocabulary rather than a namespaced borrowing, and
+    // stripping it would leave a `WS_` nothing emits.
+    const bare =
+        key.startsWith('GENIE_') && !key.startsWith('GENIE_WS_')
+            ? key.slice('GENIE_'.length)
+            : key;
+    for (const [pattern, engine] of ENGINE_OF_KEY) {
+        if (pattern.test(bare)) return engineSpecFor(engine).label;
+    }
+    if (SHARED_RELATIONAL.test(bare)) {
+        // Read the primary off the same env: every relational service present
+        // emits its OWN native set too, so the engine whose native keys are here
+        // is the engine these single-valued names point at.
+        for (const engine of RELATIONAL_PRIORITY) {
+            const native = engine === 'postgres' ? 'PGHOST' : 'MYSQL_HOST';
+            if (within[native] !== undefined) return engineSpecFor(engine).label;
+        }
+    }
+    return null;
+}
+
+/** Keys attributed to one service, together. */
+export interface ServiceKeyGroup {
+    /** The service, as {@link serviceOfEnvKey} names it, or null. */
+    service: string | null;
+    /** The keys, sorted. */
+    keys: string[];
+}
+
+/**
+ * `keys` grouped by the service that emitted them, services in alphabetical
+ * order and the unattributable group LAST — it is the one a reader can do least
+ * with, and leading with it would bury the services that are named.
+ */
+export function groupEnvKeysByService(
+    keys: readonly string[],
+    within: Record<string, string>,
+): ServiceKeyGroup[] {
+    const groups = new Map<string | null, string[]>();
+    for (const key of [...keys].sort()) {
+        const service = serviceOfEnvKey(key, within);
+        const bucket = groups.get(service);
+        if (bucket) bucket.push(key);
+        else groups.set(service, [key]);
+    }
+    return [...groups.entries()]
+        .map(([service, grouped]) => ({ service, keys: grouped }))
+        .sort((a, b) => {
+            if (a.service === b.service) return 0;
+            if (a.service === null) return 1;
+            if (b.service === null) return -1;
+            return a.service.localeCompare(b.service);
+        });
 }

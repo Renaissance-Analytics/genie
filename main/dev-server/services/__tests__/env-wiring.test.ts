@@ -1,6 +1,13 @@
 import { createHmac } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { serviceEnv } from '../env-wiring';
+import { SERVICE_ENGINES, engineSpecFor } from '../catalog';
+import {
+    groupEnvKeysByService,
+    serviceEnv,
+    serviceOfEnvKey,
+    terminalServiceEnv,
+} from '../env-wiring';
+import type { ServiceEngine } from '../catalog';
 import type { ProvisionedService } from '../env-wiring';
 
 /**
@@ -290,5 +297,87 @@ describe('two versions of one engine', () => {
         ]);
         expect(env.DATABASE_URL).toContain('postgres-17');
         expect(env.MYSQL_HOST).toBe('genie-svc-mysql-8');
+    });
+});
+
+/**
+ * THE INVERSE OF THE MAPPING ABOVE (genie#540).
+ *
+ * `serviceEnv` turns services into keys. Something has to turn keys back into
+ * the SERVICE they came from, because "this terminal is missing GENIE_MAIL_HOST,
+ * GENIE_MAIL_MAILER, GENIE_MAIL_PORT" makes a human do the grouping, while
+ * "this terminal predates Mailpit" is a sentence they can act on.
+ *
+ * The attribution table is hand-written — a prefix cannot be derived from a
+ * `switch` at runtime — so the drift guard below is the thing that keeps it
+ * honest: every key the emitter can produce for an engine must attribute back to
+ * that engine, or this file goes red the day somebody adds one.
+ */
+describe('attributing a key back to the service that emitted it', () => {
+    const label = (engine: ServiceEngine) => engineSpecFor(engine).label;
+
+    /**
+     * THE DRIFT GUARD, and the classifier's positive control. Every assertion
+     * about "missing service X" elsewhere is only as good as this: a table that
+     * silently stopped matching would attribute everything to null and the
+     * grouped notes would quietly degrade to raw key lists.
+     */
+    it.each(SERVICE_ENGINES.filter((e) => e !== 'custom'))(
+        'attributes every key %s emits back to %s — both site- and terminal-form',
+        (engine) => {
+            const env = serviceEnv([{ ...pg(), engine, adminPassword: 'master' }]);
+            expect(Object.keys(env).length).toBeGreaterThan(0);
+            for (const key of Object.keys(env)) {
+                expect([key, serviceOfEnvKey(key, env)]).toEqual([key, label(engine)]);
+            }
+            const terminal = terminalServiceEnv(env);
+            for (const key of Object.keys(terminal)) {
+                expect([key, serviceOfEnvKey(key, terminal)]).toEqual([key, label(engine)]);
+            }
+        },
+    );
+
+    /**
+     * `DATABASE_URL` and `DB_*` are single-valued and belong to whichever
+     * relational engine is PRIMARY — a fact about the env they appear in, not
+     * about the key. Attributing them to a fixed engine would name Postgres in a
+     * MySQL-only workspace.
+     */
+    it('gives the shared DB_* names to the relational engine that is primary', () => {
+        const withPg = serviceEnv([pg()]);
+        expect(serviceOfEnvKey('DB_HOST', withPg)).toBe(label('postgres'));
+
+        const withMysql = serviceEnv([{ ...pg(), engine: 'mysql', port: 3306 }]);
+        expect(serviceOfEnvKey('DB_HOST', withMysql)).toBe(label('mysql'));
+        expect(serviceOfEnvKey('GENIE_DATABASE_URL', terminalServiceEnv(withMysql))).toBe(
+            label('mysql'),
+        );
+    });
+
+    it("names a custom service by the token its own name produced", () => {
+        const env = serviceEnv([{ ...pg(), engine: 'custom', name: 'mailhog' }]);
+        expect(serviceOfEnvKey('GENIE_SERVICE_MAILHOG_HOST', env)).toBe('MAILHOG');
+    });
+
+    /** A `custom` service's own env is arbitrary, so some keys have no service
+     *  Genie can name. Saying null is honest; guessing would not be. */
+    it('returns null for a key it cannot attribute', () => {
+        expect(serviceOfEnvKey('GENIE_SOMETHING_ELSE', {})).toBeNull();
+    });
+
+    it('groups keys by service, sorted, with the unattributable ones last', () => {
+        const live = terminalServiceEnv(
+            serviceEnv([pg(), { ...pg(), engine: 'mailpit', port: 1025 }]),
+        );
+        expect(
+            groupEnvKeysByService(
+                ['GENIE_MAIL_PORT', 'GENIE_ODD', 'PGPORT', 'GENIE_MAIL_HOST'],
+                live,
+            ),
+        ).toEqual([
+            { service: 'Mailpit', keys: ['GENIE_MAIL_HOST', 'GENIE_MAIL_PORT'] },
+            { service: 'Postgres', keys: ['PGPORT'] },
+            { service: null, keys: ['GENIE_ODD'] },
+        ]);
     });
 });
