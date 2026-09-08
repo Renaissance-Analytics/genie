@@ -134,6 +134,14 @@ const phpCgiExe = (() => {
     }
 })();
 
+/** The Genie-owned upload spool for a real php run — created up front, exactly as
+ *  the host's `prepareUploadTmpDir` seam does before it spawns the worker. */
+function uploadDirIn(dir: string): string {
+    const uploads = path.join(dir, 'genie-uploads');
+    mkdirSync(uploads, { recursive: true });
+    return uploads;
+}
+
 describe('REAL php serve mode — the bundled Caddy + php-cgi actually EXECUTE PHP', () => {
     it.skipIf(!phpCgiExe)('serves executed PHP from public/ over the FastCGI worker', async () => {
         const dir = mkdtempSync(path.join(tmpdir(), 'genie-real-php-'));
@@ -147,7 +155,7 @@ describe('REAL php serve mode — the bundled Caddy + php-cgi actually EXECUTE P
 
         const sitePort = await allocateFreePort();
         const fcgiPort = await allocateFreePort(new Set([sitePort]));
-        const [wbin, ...wargs] = phpFastcgiWorkerCommand(phpCgiExe, fcgiPort);
+        const [wbin, ...wargs] = phpFastcgiWorkerCommand(phpCgiExe, fcgiPort, uploadDirIn(dir));
         procs.push(spawn(wbin!, wargs, { stdio: 'ignore' }));
 
         const configPath = path.join(dir, 'Caddyfile');
@@ -186,7 +194,7 @@ describe('REAL php serve mode — the bundled Caddy + php-cgi actually EXECUTE P
 
         const sitePort = await allocateFreePort();
         const fcgiPort = await allocateFreePort(new Set([sitePort]));
-        const [wbin, ...wargs] = phpFastcgiWorkerCommand(phpCgiExe, fcgiPort);
+        const [wbin, ...wargs] = phpFastcgiWorkerCommand(phpCgiExe, fcgiPort, uploadDirIn(dir));
         procs.push(spawn(wbin!, wargs, { stdio: 'ignore' }));
 
         const configPath = path.join(dir, 'Caddyfile');
@@ -250,7 +258,7 @@ echo json_encode([
 
         const sitePort = await allocateFreePort();
         const fcgiPort = await allocateFreePort(new Set([sitePort]));
-        const [wbin, ...wargs] = phpFastcgiWorkerCommand(phpCgiExe, fcgiPort);
+        const [wbin, ...wargs] = phpFastcgiWorkerCommand(phpCgiExe, fcgiPort, uploadDirIn(dir));
         procs.push(spawn(wbin!, wargs, { stdio: 'ignore' }));
 
         const configPath = path.join(dir, 'Caddyfile');
@@ -271,5 +279,128 @@ echo json_encode([
         // The header this hop downgrades to `http` unless repaired — a proxy-TRUSTING
         // app reads this one instead, so it must not be left lying.
         expect(seen.XFP).toBe('https');
+    });
+
+    /**
+     * THE upload bug (genie#534), asserted where it lives: inside the PHP process,
+     * on a real multipart request over the real worker.
+     *
+     * `$_FILES` is filled by PHP's rfc1867 parser only AFTER it has spooled the body
+     * to a temporary file. When that spool fails the request never reaches userland
+     * intact — PHP writes "File upload error - unable to create a temporary file" at
+     * REQUEST STARTUP and hands the script an entry with `UPLOAD_ERR_NO_TMP_DIR`, so
+     * no route, middleware or exception handler in the app can report it and the UI
+     * just shows a dead upload. Only a real POST through the real worker can tell
+     * these apart, which is why this lives here and not in the unit suite.
+     */
+    function reportsUpload(root: string): void {
+        // What the app sees. `err=0` + the round-tripped body is the only proof the
+        // spool actually happened; an entry can exist with an error and no file.
+        writeFileSync(
+            path.join(root, 'upload.php'),
+            `<?php
+$f = $_FILES['f'] ?? null;
+$ok = $f && (int) $f['error'] === UPLOAD_ERR_OK && is_uploaded_file($f['tmp_name']);
+echo 'files=' . ($f ? 1 : 0)
+   . ' err=' . ($f ? (int) $f['error'] : -1)
+   . ' body=' . ($ok ? file_get_contents($f['tmp_name']) : '-');`,
+        );
+    }
+
+    /** Start Caddy in front of the worker `buildWorker` names, POST a one-file
+     *  multipart body to `upload.php`, and return what PHP reported about it. */
+    async function postUpload(
+        dir: string,
+        root: string,
+        buildWorker: (fcgiPort: number) => string[],
+        workerEnv: NodeJS.ProcessEnv,
+        marker: string,
+    ): Promise<string> {
+        const sitePort = await allocateFreePort();
+        const fcgiPort = await allocateFreePort(new Set([sitePort]));
+        const [wbin, ...wargs] = buildWorker(fcgiPort);
+        procs.push(spawn(wbin!, wargs, { stdio: 'ignore', env: workerEnv }));
+
+        const configPath = path.join(dir, 'Caddyfile');
+        writeFileSync(configPath, serveCaddyfile({ sitePort, serve: { kind: 'php', root, fcgiPort } }));
+        const [bin, ...args] = caddyServeArgv(caddyBin, configPath);
+        procs.push(spawn(bin!, args, { stdio: 'ignore' }));
+        expect(await waitForHttp(sitePort, 15_000), 'Caddy + php-cgi must answer').toBe(true);
+
+        const form = new FormData();
+        form.append('f', new Blob([marker], { type: 'text/plain' }), 'note.txt');
+        const res = await fetch(`http://127.0.0.1:${sitePort}/upload.php`, { method: 'POST', body: form });
+        expect(res.status).toBe(200);
+        return await res.text();
+    }
+
+    /**
+     * The reported condition, reproduced: the worker inherits a temp directory it
+     * cannot use. That is not contrived — the worker is spawned with
+     * `{ ...process.env }`, so it gets whatever temp directory GENIE'S process had,
+     * which is not necessarily one the serving identity can write. On unix PHP takes
+     * `TMPDIR` verbatim with no writability check, so pointing it at a path that does
+     * not exist is exactly the state the reporter's machine was in.
+     */
+    const brokenTempEnv = (dir: string): NodeJS.ProcessEnv => {
+        const gone = path.join(dir, 'no-such-temp-dir');
+        return { ...process.env, TMPDIR: gone, TMP: gone, TEMP: gone };
+    };
+
+    it.skipIf(!phpCgiExe)('accepts a real multipart UPLOAD — the worker is TOLD where to spool (genie#534)', async () => {
+        const dir = mkdtempSync(path.join(tmpdir(), 'genie-real-php-upload-'));
+        dirs.push(dir);
+        const root = path.join(dir, 'public');
+        mkdirSync(root);
+        reportsUpload(root);
+
+        const marker = 'GENIE-REAL-UPLOAD-OK';
+        const uploads = uploadDirIn(dir);
+        const body = await postUpload(
+            dir,
+            root,
+            (fcgiPort) => phpFastcgiWorkerCommand(phpCgiExe, fcgiPort, uploads),
+            // Broken inherited temp dir AND a stated upload dir: the whole point is
+            // that the stated one wins, so the site serves uploads on a machine whose
+            // ambient temp directory Genie does not control.
+            brokenTempEnv(dir),
+            marker,
+        );
+
+        expect(body).toContain('err=0');
+        expect(body, 'PHP must have SPOOLED the file, not just seen the field').toContain(
+            `body=${marker}`,
+        );
+    });
+
+    it.skipIf(!phpCgiExe)('POSITIVE CONTROL: the pre-fix command line FAILS the same upload', async () => {
+        // Without this the test above is unfalsifiable — an upload that would have
+        // worked anyway proves nothing about `upload_tmp_dir`, and the harness itself
+        // (Caddy's body forwarding, the multipart encoding, the poisoned env actually
+        // reaching the worker) would be untested.
+        //
+        // This runs the EXACT command Genie emitted before genie#534 — php-cgi with a
+        // bind and nothing else — against the same broken inherited temp dir, and
+        // pins the failure: UPLOAD_ERR_NO_TMP_DIR (6), the userland face of "File
+        // upload error - unable to create a temporary file". If a future change makes
+        // this pass, the reproduction has stopped reproducing and the green test
+        // above has stopped meaning anything.
+        const dir = mkdtempSync(path.join(tmpdir(), 'genie-real-php-noupload-'));
+        dirs.push(dir);
+        const root = path.join(dir, 'public');
+        mkdirSync(root);
+        reportsUpload(root);
+
+        const body = await postUpload(
+            dir,
+            root,
+            (fcgiPort) => [phpCgiExe, '-b', `127.0.0.1:${fcgiPort}`],
+            brokenTempEnv(dir),
+            'GENIE-REAL-UPLOAD-CONTROL',
+        );
+
+        expect(body, 'the pre-fix worker must NOT be able to spool an upload').not.toContain('err=0');
+        expect(body).toContain(`err=${6}`); // UPLOAD_ERR_NO_TMP_DIR
+        expect(body).toContain('body=-');
     });
 });

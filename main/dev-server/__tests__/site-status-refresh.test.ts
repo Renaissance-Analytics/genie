@@ -115,6 +115,9 @@ function phpManager(
         allocateFreePort: async () => ports.shift() ?? 5999,
         caddyBin: '/opt/genie/caddy',
         writeServeConfig: (siteId: string) => `/cfg/${siteId}.caddyfile`,
+        // A php site is given the upload directory its worker spools into (genie#534);
+        // without one it does not start at all, which is the point of that refusal.
+        prepareUploadTmpDir: (siteId: string) => `/gd/host-site-uploads/${siteId}`,
         resolveEngine: async () => ({
             ok: true as const,
             version: '8.3.33',

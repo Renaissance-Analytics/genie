@@ -1434,6 +1434,7 @@ describe('service env injection (#234 P3)', () => {
             },
         };
         const asked: Array<{ tool: string; bin: string; version?: string }> = [];
+        const preparedFor: string[] = [];
         const m = manager(runtime, sites, {
             hostSpawn,
             probeReady: async () => true,
@@ -1443,6 +1444,10 @@ describe('service env injection (#234 P3)', () => {
             writeServeConfig: (siteId, content) => {
                 written.push({ siteId, content });
                 return `/cfg/${siteId}.caddyfile`;
+            },
+            prepareUploadTmpDir: (siteId) => {
+                preparedFor.push(siteId);
+                return `/gd/host-site-uploads/${siteId}`;
             },
             resolveEngine: async (req) => {
                 asked.push(req);
@@ -1474,13 +1479,20 @@ describe('service env injection (#234 P3)', () => {
         // bound to a loopback FastCGI port, run in the repo cwd with the DB env so
         // PHP reaches the managed database.
         expect(asked).toEqual([{ tool: 'php', bin: 'php-cgi' }]);
+        // …and it is told WHERE to spool an upload (genie#534). Genie prepares a
+        // per-site directory it owns and states it on the command line, because a
+        // worker left to inherit Genie's own temp dir fails every multipart request
+        // before Laravel is reached.
+        expect(preparedFor).toEqual([SITE_ID]);
         expect(worker?.command).toEqual([
             '/gd/toolchain/php/8.3.33/bin/php-cgi',
+            '-d',
+            `upload_tmp_dir=/gd/host-site-uploads/${SITE_ID}`,
             '-b',
             expect.stringMatching(/^127\.0\.0\.1:\d+$/),
         ]);
         expect(worker?.env.DB_HOST).toBe('127.0.0.1');
-        const fcgiPort = worker?.command[2]?.split(':')[1];
+        const fcgiPort = worker?.command.at(-1)?.split(':')[1];
         // Genie's Caddy serves public/ and routes PHP to that same worker port.
         expect(caddy?.command[0]).toBe('/opt/genie/caddy');
         const caddyfile = written.find((w) => w.siteId === SITE_ID)?.content ?? '';
@@ -1539,6 +1551,7 @@ describe('service env injection (#234 P3)', () => {
             allocateFreePort: async () => (nextPort += 1),
             caddyBin: '/opt/genie/caddy',
             writeServeConfig: (siteId: string) => `/cfg/${siteId}.caddyfile`,
+            prepareUploadTmpDir: (siteId: string) => `/gd/host-site-uploads/${siteId}`,
             resolveEngine: resolvesPhp83,
         });
 
@@ -1588,6 +1601,7 @@ describe('service env injection (#234 P3)', () => {
             allocateFreePort: async () => (nextPort += 1),
             caddyBin: '/opt/genie/caddy',
             writeServeConfig: (siteId: string) => `/cfg/${siteId}.caddyfile`,
+            prepareUploadTmpDir: (siteId: string) => `/gd/host-site-uploads/${siteId}`,
             resolveEngine: async (req) => {
                 asked.push(req);
                 return resolvesPhp83();
@@ -1684,6 +1698,106 @@ describe('service env injection (#234 P3)', () => {
         const status = await m.start('acme', SITE_ID);
         expect(status.state).toBe('failed');
         expect(spawned).toEqual([]);
+    });
+
+    it('a php serve fails CLEARLY when the build wires no upload-dir preparer (genie#534)', async () => {
+        // Exactly the same shape of refusal as the absent engine resolver above, and
+        // for the same reason: the fallback IS the bug. A worker started without
+        // `upload_tmp_dir` inherits Genie's own temp directory and then fails every
+        // multipart request at PHP request-startup — before any route, middleware or
+        // exception handler exists to say so. A site that CANNOT be given an upload
+        // directory must not come up looking healthy.
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const spawned: string[] = [];
+        const written: string[] = [];
+        const hostSpawn = {
+            start: async (i: { siteId: string }) => {
+                spawned.push(i.siteId);
+                return { ok: true as const, pid: 4242 };
+            },
+            stop: async () => {},
+            alive: async () => true,
+            readLog: async () => '',
+        };
+        const sites: DevSites = {
+            [SITE_ID]: {
+                name: 'moic',
+                genName: 'moic.acme.gen',
+                repo: 'moicsuite',
+                runMode: 'host',
+                kind: 'http',
+                enabled: true,
+                hostServe: { mode: 'php', root: 'public' },
+            },
+        };
+        const m = manager(runtime, sites, {
+            hostSpawn,
+            probeReady: async () => true,
+            allocateFreePort: async () => 5321,
+            caddyBin: '/opt/genie/caddy',
+            writeServeConfig: (siteId: string) => {
+                written.push(siteId);
+                return `/cfg/${siteId}.caddyfile`;
+            },
+            resolveEngine: resolvesPhp83,
+            // prepareUploadTmpDir deliberately absent.
+        });
+        const status = await m.start('acme', SITE_ID);
+        expect(status.state).toBe('failed');
+        expect(status.error).toMatch(/upload/i);
+        expect(spawned).toEqual([]);
+        expect(written).toEqual([]);
+    });
+
+    it('a php serve fails LOUDLY — not silently — when the upload dir cannot be created (genie#534)', async () => {
+        // The interesting failure: the seam is wired but the mkdir loses (a
+        // read-only data dir, a full disk, a serving identity with no write
+        // permission). Serving anyway is precisely the reported bug, so the site
+        // fails carrying the fs error, having spawned nothing and written no config.
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const spawned: string[] = [];
+        const written: string[] = [];
+        const hostSpawn = {
+            start: async (i: { siteId: string }) => {
+                spawned.push(i.siteId);
+                return { ok: true as const, pid: 4242 };
+            },
+            stop: async () => {},
+            alive: async () => true,
+            readLog: async () => '',
+        };
+        const sites: DevSites = {
+            [SITE_ID]: {
+                name: 'moic',
+                genName: 'moic.acme.gen',
+                repo: 'moicsuite',
+                runMode: 'host',
+                kind: 'http',
+                enabled: true,
+                hostServe: { mode: 'php', root: 'public' },
+            },
+        };
+        const m = manager(runtime, sites, {
+            hostSpawn,
+            probeReady: async () => true,
+            allocateFreePort: async () => 5321,
+            caddyBin: '/opt/genie/caddy',
+            writeServeConfig: (siteId: string) => {
+                written.push(siteId);
+                return `/cfg/${siteId}.caddyfile`;
+            },
+            resolveEngine: resolvesPhp83,
+            prepareUploadTmpDir: () => {
+                throw new Error("EACCES: permission denied, mkdir '/gd/host-site-uploads'");
+            },
+        });
+        const status = await m.start('acme', SITE_ID);
+        expect(status.state).toBe('failed');
+        // The REAL reason, not "the site failed": the fs error is the whole diagnosis.
+        expect(status.error).toContain('EACCES');
+        expect(status.error).toMatch(/upload/i);
+        expect(spawned).toEqual([]);
+        expect(written).toEqual([]);
     });
 
     it('warns in the site log when the repo declares an engine version the host does not match (item 4)', async () => {

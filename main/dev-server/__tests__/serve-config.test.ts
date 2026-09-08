@@ -127,23 +127,68 @@ describe('serveCaddyfile — php', () => {
 });
 
 describe('phpFastcgiWorkerCommand', () => {
+    const EXE = 'C:\\gd\\toolchain\\php\\8.3.33\\php-cgi.exe';
+    const UPLOADS = 'C:\\gd\\host-site-uploads\\a1b2c3';
+
     it('runs the RESOLVED php-cgi as a FastCGI server bound to the worker port', () => {
         // The executable comes from the site's toolchain resolution (genie#207) —
         // an absolute path inside the install Genie owns, so the worker is THE php
         // the site names rather than whatever PATH answers today.
-        expect(phpFastcgiWorkerCommand('C:\\gd\\toolchain\\php\\8.3.33\\php-cgi.exe', 5322)).toEqual([
-            'C:\\gd\\toolchain\\php\\8.3.33\\php-cgi.exe',
+        //
+        // The WHOLE array is pinned deliberately. "the command mentions
+        // upload_tmp_dir" would also pass against a builder that emitted nonsense
+        // around it; this says the invocation is still EXACTLY a php-cgi FastCGI
+        // bind, with the ini define added and nothing else disturbed.
+        expect(phpFastcgiWorkerCommand(EXE, 5322, UPLOADS)).toEqual([
+            EXE,
+            '-d',
+            'upload_tmp_dir=C:\\gd\\host-site-uploads\\a1b2c3',
             '-b',
             '127.0.0.1:5322',
         ]);
+    });
+
+    it('gives the worker an EXPLICIT upload_tmp_dir — an INHERITED one is genie#534', () => {
+        // Every multipart upload to a Genie-hosted PHP site died with
+        //   PHP Request Startup: File upload error - unable to create a temporary file
+        // BEFORE Laravel saw the request, so no route, middleware or exception
+        // handler could report it — from the UI it was simply a dead upload.
+        //
+        // The worker inherits `{ ...process.env }`, so with `upload_tmp_dir` unset
+        // PHP fell back to whatever temp directory GENIE'S OWN process happened to
+        // have: a directory the serving identity may not be able to write, or which
+        // may not exist at all. Genie writes the Caddyfile and spawns this worker,
+        // so uploads working is part of serving PHP — the directory is STATED here,
+        // never inherited.
+        const cmd = phpFastcgiWorkerCommand(EXE, 5322, UPLOADS);
+        const d = cmd.indexOf('-d');
+        expect(d).toBeGreaterThan(0);
+        expect(cmd[d + 1]).toBe(`upload_tmp_dir=${UPLOADS}`);
     });
 
     it('REFUSES a bare binary name — that PATH lookup is genie#206 itself', () => {
         // On the reporting machine PATH held only Herd's `php.bat` shim, so a bare
         // `php-cgi` started cmd.exe, printed "not recognized", and exited — with a
         // pid, so the start looked fine. Nothing may reintroduce it by accident.
-        expect(() => phpFastcgiWorkerCommand('php-cgi', 5322)).toThrow(/bare/i);
-        expect(() => phpFastcgiWorkerCommand('', 5322)).toThrow();
+        expect(() => phpFastcgiWorkerCommand('php-cgi', 5322, UPLOADS)).toThrow(/bare/i);
+        // The MESSAGE, not merely "it threw": an absent executable and a bare one are
+        // different mistakes with different fixes, and an assertion that accepts
+        // either lets one of the two guards rot into a no-op unnoticed (a bare `''`
+        // trips the separator check too, so "it throws" proves nothing about which).
+        expect(() => phpFastcgiWorkerCommand('', 5322, UPLOADS)).toThrow(/missing php-cgi/i);
+    });
+
+    it('REFUSES an upload dir that is missing, bare, or would break the ini define', () => {
+        // The same reasoning as the executable, one layer down. A BARE `uploads` is
+        // resolved by PHP against the WORKER'S cwd — the user's repo — so it would
+        // either litter their checkout or silently not exist, which is genie#534
+        // again under a different name. A quote or a newline in the value would end
+        // the `-d` define early, and on win32 this argv is re-joined into a cmd.exe
+        // command line, so neither may reach it.
+        expect(() => phpFastcgiWorkerCommand(EXE, 5322, '')).toThrow(/missing upload_tmp_dir/i);
+        expect(() => phpFastcgiWorkerCommand(EXE, 5322, 'uploads')).toThrow(/bare upload_tmp_dir/i);
+        expect(() => phpFastcgiWorkerCommand(EXE, 5322, '/tmp/a"b')).toThrow(/injectable/i);
+        expect(() => phpFastcgiWorkerCommand(EXE, 5322, '/tmp/a\nb')).toThrow(/injectable/i);
     });
 });
 
