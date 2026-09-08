@@ -77,6 +77,27 @@ export interface EngineInventoryRow {
     dedicated: boolean;
     /** Present on a dedicated engine: the workspace that owns the container. */
     ownerWorkspaceId?: string;
+    /**
+     * The image the RUNNING container was actually created from, when the
+     * runtime reported one. Not the same question as {@link image}, which is
+     * what Genie pins TODAY.
+     */
+    runningImage?: string;
+    /**
+     * The container is running an image other than the pinned one.
+     *
+     * An engine container is adopted by NAME, never by image, so a Postgres
+     * started before Genie pinned a new image keeps running the old one for as
+     * long as the container lives — which is how a shipped fix fails to reach
+     * the install that needed it. This field is the ANNOUNCEMENT; the cure is
+     * the `recreate` action, and somebody has to ask for it, because recreating
+     * an engine restarts it for every workspace holding it.
+     *
+     * ABSENT, not `false`, when the runtime reported no image: "we do not know"
+     * and "it is current" are different answers, and only one of them should
+     * send a person to recreate a healthy engine.
+     */
+    staleImage?: boolean;
     /** Workspaces holding it right now — the live reference count. */
     holders: number;
     /** Workspaces that have it configured at all, enabled or not. */
@@ -94,8 +115,12 @@ export interface EngineInventoryInput {
     configs: Array<{ workspaceId: string; workspaceLabel: string; services: DevServices }>;
     /** Image refs present on this machine. */
     images: ReadonlySet<string>;
-    /** Engine containers the runtime reported, keyed by container NAME. */
-    containers: ReadonlyMap<string, { id: string; state: ContainerState }>;
+    /** Engine containers the runtime reported, keyed by container NAME. The
+     *  `image` is what the container was CREATED from, which is not necessarily
+     *  what the catalog pins now — see {@link EngineInventoryRow.staleImage}.
+     *  Optional because a runtime that does not report one must not be read as
+     *  reporting a mismatch. */
+    containers: ReadonlyMap<string, { id: string; state: ContainerState; image?: string }>;
     /** The manager's live reference count: workspace ids per recordKey. */
     holders: ReadonlyMap<string, ReadonlySet<string>>;
 }
@@ -205,6 +230,13 @@ export function buildEngineInventory(input: EngineInventoryInput): EngineInvento
                       : 'stopped'
                   : 'absent',
             ...(container ? { containerId: container.id } : {}),
+            // Only when the runtime named one, and only against a pinned image
+            // we actually have: a `custom` engine whose config carries no image
+            // has nothing to be stale against.
+            ...(container?.image ? { runningImage: container.image } : {}),
+            ...(container?.image && draft.image
+                ? { staleImage: container.image !== draft.image }
+                : {}),
             dedicated: draft.dedicated,
             ...(draft.ownerWorkspaceId ? { ownerWorkspaceId: draft.ownerWorkspaceId } : {}),
             holders: held,

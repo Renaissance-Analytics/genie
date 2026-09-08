@@ -91,6 +91,11 @@ const SHARED_WITH_OTHERS = engine({
     workspaces: ['acme', 'beta', 'gamma'],
     workspaceIds: ['ws-acme', 'ws-beta', 'ws-gamma'],
     containerId: 'container-pg16',
+    // Adopted from an older pin — the ordinary state of any machine that ran
+    // Genie before the image changed, and the case the reader has to be told
+    // about rather than left to infer from a failing CREATE EXTENSION.
+    runningImage: 'pgvector/pgvector:pg16',
+    staleImage: true,
 });
 
 /** Shared MySQL 8 — held by a NEIGHBOUR only. acme is not on it, so a naive
@@ -261,6 +266,23 @@ describe('a workspace agent reading the workstation inventory', () => {
         expect(by('redis-7@ws-acme')).toMatchObject({ holders: 1, sharedWithOthers: false });
         // And an engine nobody has configured is nobody's.
         expect(by('postgres-17')).toMatchObject({ holders: 0, sharedWithOthers: false });
+    });
+
+    it('tells the reader when an engine is running an image other than the pinned one', async () => {
+        // The reader cannot recreate a shared engine — that is the operator's
+        // action, deliberately — but it must be able to SAY why `CREATE
+        // EXTENSION postgis` is still failing on a Genie that shipped the fix.
+        // An engine adopted by name keeps its old image forever, and without
+        // this field the only visible symptom is an error that reads like a bug.
+        //
+        // Neither field names a workspace, so neither is narrowed: an image ref
+        // is Genie's own pin, not somebody else's identity.
+        const res = await manageServiceForMcp('term-acme', { action: 'inventory' });
+        const pg = res.engines?.find((e) => e.recordKey === 'postgres-16');
+        expect(pg).toMatchObject({
+            staleImage: true,
+            runningImage: 'pgvector/pgvector:pg16',
+        });
     });
 
     it('refuses inventory to a caller whose workspace could not be resolved', async () => {

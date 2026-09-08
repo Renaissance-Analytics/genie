@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { SERVICE_LABEL, SHARED_SERVICES_NETWORK, WORKSPACE_LABEL } from '../../argv';
-import { workspaceSqlIdentifier } from '../catalog';
+import { engineSpecFor, workspaceSqlIdentifier } from '../catalog';
 import { createDevServiceManager } from '../service-manager';
 import { preferredServicePort } from '../service-ports';
 import type { DevServiceManagerDeps } from '../service-manager';
@@ -936,6 +936,107 @@ describe('the machine-level view', () => {
 });
 
 /**
+ * RECREATE — moving a running engine onto the image Genie pins NOW.
+ *
+ * An engine container is adopted by NAME, never by image (see the adoption
+ * branch in `acquire`). That is right for deduplication and wrong for delivery:
+ * a Postgres started before Genie pinned an image that carries PostGIS keeps
+ * running the old one for as long as the container lives, so the fix ships and
+ * never arrives. A changed default cannot reach an existing install by itself.
+ *
+ * The cure is deliberate on purpose. Recreating a SHARED engine restarts it for
+ * every workspace holding it, so it is an action somebody asks for — never a
+ * side effect of an unrelated call, and never something a page load does. The
+ * inventory's `staleImage` is the announcement that makes asking possible.
+ *
+ * The VOLUME is what makes it safe: it is named and outlives the container, so
+ * every workspace's database survives the swap.
+ */
+describe('engineAction — recreate (onto the pinned image)', () => {
+    /** A running engine whose container was created from an OLDER image, which
+     *  is exactly what a machine that ran Genie before the pin change has. */
+    async function staleEngine() {
+        const runtime = fakeRuntime();
+        const manager = createDevServiceManager(
+            deps(runtime, { a: pgFor('svc-a'), b: pgFor('svc-b') }),
+        );
+        await manager.acquire('a', 'svc-a');
+        await manager.acquire('b', 'svc-b');
+        const name = 'genie-svc-postgres-16';
+        const running = runtime.containers.get(name)!;
+        runtime.containers.set(name, { ...running, image: 'pgvector/pgvector:pg16' });
+        return { runtime, manager, name };
+    }
+
+    it('announces a stale engine in the inventory before anyone acts on it', async () => {
+        const { manager } = await staleEngine();
+        expect((await manager.inventory()).find((r) => r.recordKey === 'postgres-16'))
+            .toMatchObject({ state: 'running', staleImage: true });
+    });
+
+    it('replaces the container with one on the pinned image, and keeps the volume', async () => {
+        const { runtime, manager } = await staleEngine();
+        const before = runtime.containers.get('genie-svc-postgres-16')!.id;
+
+        const res = await manager.engineAction({ recordKey: 'postgres-16', action: 'recreate' });
+        expect(res.ok, res.error).toBe(true);
+
+        // The old container is gone — stopped AND removed. A stop alone would
+        // leave the adoption branch finding it again on the next acquire.
+        expect(runtime.stopped).toContain(before);
+        expect(runtime.removed).toContain(before);
+        // …and the replacement runs what the catalog pins now.
+        const created = runtime.ran.filter((c) => c.name === 'genie-svc-postgres-16');
+        expect(created.at(-1)?.image).toBe(engineSpecFor('postgres').image('16'));
+
+        // THE safety property: the data volume is named and survives. Dropping
+        // it would turn "pick up a new image" into "lose every workspace's
+        // database", which is a different action with a different name.
+        expect(runtime.removedVolumes).toEqual([]);
+    });
+
+    it('brings every workspace that held it back, re-provisioned', async () => {
+        // Not a bare re-create: a new container is an empty cluster as far as
+        // roles are concerned, so both workspaces have to go back through
+        // provisioning or they return to an engine that refuses their password.
+        const { runtime, manager } = await staleEngine();
+        runtime.execs.length = 0;
+
+        await manager.engineAction({ recordKey: 'postgres-16', action: 'recreate' });
+
+        expect(manager.list('a')[0]?.state).toBe('running');
+        expect(manager.list('b')[0]?.state).toBe('running');
+        expect(runtime.execs.some((e) => e.argv.join(' ').includes('CREATE DATABASE'))).toBe(true);
+        expect((await manager.inventory()).find((r) => r.recordKey === 'postgres-16'))
+            .toMatchObject({ state: 'running', holders: 2, staleImage: false });
+    });
+
+    it('removes a stale container no workspace uses, so the next acquire builds it fresh', async () => {
+        // Nothing to re-provision and nothing to serve, but the stale container
+        // is still what the adoption branch would find. Removing it IS the whole
+        // action here; reporting success without doing so would leave the engine
+        // pinned to the old image with nothing to say so.
+        const runtime = fakeRuntime();
+        const manager = createDevServiceManager(deps(runtime, { a: pgFor('svc-a') }));
+        await manager.acquire('a', 'svc-a');
+        const id = runtime.containers.get('genie-svc-postgres-16')!.id;
+        const orphan = createDevServiceManager(deps(runtime, {}));
+
+        const res = await orphan.engineAction({ recordKey: 'postgres-16', action: 'recreate' });
+        expect(res.ok, res.error).toBe(true);
+        expect(runtime.removed).toContain(id);
+        expect(runtime.removedVolumes).toEqual([]);
+    });
+
+    it('reports a missing container rather than pretending to recreate one', async () => {
+        const manager = createDevServiceManager(deps(fakeRuntime(), {}));
+        const res = await manager.engineAction({ recordKey: 'postgres-16', action: 'recreate' });
+        expect(res.ok).toBe(false);
+        expect(res.error).toMatch(/no container/i);
+    });
+});
+
+/**
  * MULTI-VERSION pre-install (#242 P3).
  *
  * Each (engine, version) is its own image, container and VOLUME, so holding
@@ -953,9 +1054,11 @@ describe('engineAction — install (multi-version)', () => {
 
         const res = await manager.engineAction({ recordKey: 'postgres-17', action: 'install' });
         expect(res.ok).toBe(true);
-        // The CATALOG's image for that major (pgvector, so extensions work) —
-        // derived, never a tag the caller supplied.
-        expect(runtime.pulled).toEqual(['pgvector/pgvector:pg17']);
+        // The CATALOG's image for that major (Genie's own, so every whitelisted
+        // extension works) — derived, never a tag the caller supplied. Derived
+        // HERE too: spelling it out would let this pass while the catalog and
+        // the pull disagreed. `catalog.test.ts` asserts the literal value.
+        expect(runtime.pulled).toEqual([engineSpecFor('postgres').image('17')]);
         // A pull is not a start: nothing was run, so no engine came up.
         expect(runtime.ran).toHaveLength(0);
     });

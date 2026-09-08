@@ -1,0 +1,10 @@
+# This directory is a Linux container build context, and the repo is developed
+# on Windows with core.autocrlf=true — so a plain checkout would hand
+# `docker build` a CRLF Dockerfile whose `RUN set -eux; \` continuations carry a
+# trailing carriage return into the shell.
+#
+# Nothing is COPY'd into the image here, so this cannot produce `dev-base/`'s
+# shebang failure — but the reason to pin it is the same one, and pinning is
+# free. CI never sees the difference (Linux checkouts are LF either way); a
+# developer building the image on their own machine does.
+* text eol=lf

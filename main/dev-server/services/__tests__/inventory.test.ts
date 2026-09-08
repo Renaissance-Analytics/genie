@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildEngineInventory } from '../inventory';
+import { engineSpecFor } from '../catalog';
 import type { EngineInventoryInput } from '../inventory';
 import type { DevServiceConfig } from '../services-config';
 
@@ -31,6 +32,11 @@ import type { DevServiceConfig } from '../services-config';
  */
 
 const password = 'pw';
+
+/** Derived, never spelled: these rows exist to prove the inventory reports what
+ *  the CATALOG pins, and a hand-written image ref could differ from it and still
+ *  pass. `catalog.test.ts` is where the literal value is asserted. */
+const PG16_IMAGE = engineSpecFor('postgres').image('16');
 
 const cfg = (over: Partial<DevServiceConfig> & Pick<DevServiceConfig, 'engine' | 'version'>):
     DevServiceConfig => ({
@@ -79,7 +85,7 @@ describe('buildEngineInventory', () => {
             engine: 'postgres',
             version: '16',
             engineKey: 'postgres-16',
-            image: 'pgvector/pgvector:pg16',
+            image: PG16_IMAGE,
             installed: false,
             state: 'absent',
             holders: 0,
@@ -101,7 +107,7 @@ describe('buildEngineInventory', () => {
     it('separates INSTALLED (image pulled) from RUNNING (container up)', () => {
         const rows = buildEngineInventory({
             ...bare,
-            images: new Set(['pgvector/pgvector:pg16', 'redis:7-alpine']),
+            images: new Set([PG16_IMAGE, 'redis:7-alpine']),
             containers: new Map([['genie-svc-postgres-16', { id: 'c1', state: 'running' }]]),
         });
         expect(rowFor(rows, 'postgres-16')).toMatchObject({
@@ -261,7 +267,66 @@ describe('buildEngineInventory', () => {
                 },
             ],
         }).map((r) => r.image);
-        expect(wanted).toContain('pgvector/pgvector:pg16');
+        expect(wanted).toContain(PG16_IMAGE);
         expect(wanted).toContain('ghcr.io/acme/thing:2');
+    });
+
+    it('reports a container running an image OTHER than the pinned one as stale', () => {
+        // An engine container is adopted by NAME, not by image, so a postgres
+        // started before Genie pinned a new image keeps running the old one
+        // FOREVER — silently, and with `CREATE EXTENSION postgis` still failing
+        // on a Genie that has shipped the fix. That is exactly the shape of "a
+        // changed default cannot reach an existing install", and the only cure
+        // is a recreate somebody asks for.
+        //
+        // So the row REPORTS it. Reporting is the whole contribution: nothing
+        // here recreates anything, because recreating an engine restarts it for
+        // every workspace holding it and that is not a side effect to hide
+        // inside a page load.
+        const rows = buildEngineInventory({
+            ...bare,
+            containers: new Map([
+                [
+                    'genie-svc-postgres-16',
+                    { id: 'c1', state: 'running', image: 'pgvector/pgvector:pg16' },
+                ],
+            ]),
+        });
+        expect(rowFor(rows, 'postgres-16')).toMatchObject({
+            state: 'running',
+            image: PG16_IMAGE,
+            runningImage: 'pgvector/pgvector:pg16',
+            staleImage: true,
+        });
+    });
+
+    it('does not call an engine stale when it is running the image it should', () => {
+        // The positive control for the row above: an assertion that only ever
+        // said `staleImage: true` would pass just as happily on a field that was
+        // hard-coded true.
+        const rows = buildEngineInventory({
+            ...bare,
+            containers: new Map([
+                ['genie-svc-postgres-16', { id: 'c1', state: 'running', image: PG16_IMAGE }],
+            ]),
+        });
+        expect(rowFor(rows, 'postgres-16')).toMatchObject({
+            state: 'running',
+            runningImage: PG16_IMAGE,
+            staleImage: false,
+        });
+    });
+
+    it('says nothing about staleness when the runtime did not report an image', () => {
+        // `staleImage: true` on a row whose image is simply UNKNOWN would send
+        // someone to recreate a perfectly current engine. Absent is the honest
+        // answer, and it is not the same as `false`.
+        const rows = buildEngineInventory({
+            ...bare,
+            containers: new Map([['genie-svc-postgres-16', { id: 'c1', state: 'running' }]]),
+        });
+        const row = rowFor(rows, 'postgres-16');
+        expect(row?.runningImage).toBeUndefined();
+        expect(row?.staleImage).toBeUndefined();
     });
 });

@@ -109,6 +109,32 @@ export function stopEngineWarning(engine: DevEngineInfo): string | null {
     );
 }
 
+/**
+ * What a machine-level RECREATE would actually do — always a sentence, never
+ * `null`.
+ *
+ * Unlike a stop, this one has something to say even with no holders: the
+ * container is removed and rebuilt either way. And unlike a stop, the question
+ * a person actually has is not "who goes down" but "do I lose the data" — the
+ * volume is named and outlives the container, so every workspace's database
+ * survives. Leaving that unsaid makes "recreate" read as "delete and start
+ * over", which is a different action with a different button (`remove` +
+ * `purge`).
+ */
+export function recreateEngineWarning(engine: DevEngineInfo): string {
+    const survives =
+        'The data volume is kept, so every workspace’s database survives the swap.';
+    if (engine.holders > 0) {
+        const many = engine.holders !== 1;
+        return (
+            `${engine.holders} workspace${many ? 's' : ''} (${listNames(engine.workspaces)}) ` +
+            `${many ? 'are' : 'is'} using this engine right now, and recreating it restarts it ` +
+            `for ${many ? 'all of them' : 'it'}. ${survives}`
+        );
+    }
+    return `The container is replaced with one built from the image Genie pins now. ${survives}`;
+}
+
 /** Which machine-level actions a row can offer. */
 export interface EngineActions {
     canStart: boolean;
@@ -116,6 +142,8 @@ export interface EngineActions {
     canLogs: boolean;
     /** Pre-download this version's image (#242 P3, multi-version). */
     canInstall: boolean;
+    /** Replace the container so the engine runs the image Genie pins NOW. */
+    canRecreate: boolean;
 }
 
 export function engineActionAvailability(
@@ -123,20 +151,45 @@ export function engineActionAvailability(
     hasRuntime: boolean,
 ): EngineActions {
     if (!hasRuntime) {
-        return { canStart: false, canStop: false, canLogs: false, canInstall: false };
+        return {
+            canStart: false,
+            canStop: false,
+            canLogs: false,
+            canInstall: false,
+            canRecreate: false,
+        };
     }
     // Install is the one action that does NOT need a consumer — holding several
     // majors ready is the whole point of multi-version, and each (engine,
     // version) is its own image. Nothing to pull once it is here, or for a
     // `custom` engine whose image no workspace has named yet.
     const canInstall = !engine.installed && !!engine.image;
+    // RECREATE is offered for exactly one situation: a container EXISTS and is
+    // running an image other than the one Genie pins. An engine is adopted by
+    // name and never by image, so that container will keep the old image for as
+    // long as it lives — which is how an extension Genie advertises stays
+    // uninstallable on a build that carries it.
+    //
+    // Narrow on purpose. `staleImage` ABSENT means the runtime never said what
+    // the container runs, and offering a restart-for-every-holder on a guess is
+    // the surprise this action exists to avoid. `absent` needs no recreate at
+    // all: there is nothing to replace, and the next acquire builds it on the
+    // pinned image anyway. A stopped container still qualifies — stopping does
+    // not change what it was created from, and the next start adopts it as-is.
+    const canRecreate = engine.state !== 'absent' && engine.staleImage === true;
     if (engine.state === 'running') {
-        return { canStart: false, canStop: true, canLogs: true, canInstall };
+        return { canStart: false, canStop: true, canLogs: true, canInstall, canRecreate };
     }
     // Start needs a CONSUMER: with no workspace using it there are no
     // credentials to provision and nothing to serve, so the action would fail
     // every time. A button that always fails is worse than no button.
-    return { canStart: engine.configured > 0, canStop: false, canLogs: false, canInstall };
+    return {
+        canStart: engine.configured > 0,
+        canStop: false,
+        canLogs: false,
+        canInstall,
+        canRecreate,
+    };
 }
 
 // --- grouping ---------------------------------------------------------------

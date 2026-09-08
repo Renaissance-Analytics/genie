@@ -1,0 +1,409 @@
+name: Postgres engine image
+
+# Builds and publishes `ghcr.io/renaissance-analytics/genie-postgres` — the
+# Postgres the Genie dev server runs every workspace's database on. Source:
+# `main/dev-server/postgres-image/`. Sole consumer of the published tags:
+# `GENIE_POSTGRES_IMAGE` in `main/dev-server/services/catalog.ts`.
+#
+# ## Why Genie publishes a Postgres at all
+#
+# `extensions.ts` whitelists `vector` AND `postgis`, and `manageService`
+# advertises both. No stock image carries both — `pgvector/pgvector` has no
+# PostGIS, `postgis/postgis` has no pgvector — so a workspace that wanted both
+# had no image at all. See the Dockerfile header.
+#
+# ## Why this is not on the CI path
+#
+# Deliberately NOT triggered by pushes to a branch or by pull requests. Eight
+# multi-hundred-megabyte images (4 Postgres majors x 2 architectures) that
+# compile nothing of Genie's own; running them per-commit would burn runner
+# hours to republish identical images. The per-commit guard is
+# `postgres-image.real.test.ts`, which builds ONE major in the `hosting` job and
+# installs every whitelisted extension against a real engine.
+#
+# It runs when someone decides to publish:
+#
+#   * push a `postgres-image-v*` tag  -> builds AND publishes
+#   * workflow_dispatch               -> builds only, unless `publish` is ticked
+#
+# ## Publishing (the owner's call)
+#
+#   git tag postgres-image-v1.0.0 && git push origin postgres-image-v1.0.0
+#
+# For each Postgres major that publishes two tags: the exact version
+# (`:pg17-1.0.0`, immutable) and the image MAJOR (`:pg17-1`, moving). `:pgN-1` is
+# what `catalog.ts` pins, so a `postgres-image-v1.x.y` tag is how a security
+# rebuild or an added extension reaches existing workspaces, and a
+# `postgres-image-v2.0.0` tag leaves `:pgN-1` alone for a breaking change.
+#
+# ## Package visibility
+#
+# The repo is public but the licence is proprietary; a GHCR package's visibility
+# is an OWNER SETTING, not something a workflow can assert. A brand-new package
+# is created PRIVATE and stays private until someone changes it at
+# github.com/orgs/Renaissance-Analytics/packages -> genie-postgres -> Package
+# settings. Until it is public, `docker pull` on a user's desktop needs a GHCR
+# login — and `service-manager.ts` already hands the user the exact pull command
+# rather than pulling silently, which is what makes that failure legible.
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Push to GHCR (leave unticked to only prove the build)'
+        type: boolean
+        default: false
+      version:
+        description: 'Version to publish as, e.g. 1.0.0 (required when publishing)'
+        type: string
+        default: ''
+  push:
+    tags:
+      - 'postgres-image-v*'
+
+# Least-privilege by default: the only jobs that need more are the ones that
+# write to GHCR, and they ask for `packages: write` and nothing else.
+permissions:
+  contents: read
+
+env:
+  # GHCR requires an all-lowercase name. Must stay byte-identical to
+  # GENIE_POSTGRES_IMAGE in main/dev-server/services/catalog.ts.
+  IMAGE: ghcr.io/renaissance-analytics/genie-postgres
+  CONTEXT: main/dev-server/postgres-image
+  # Every extension `POSTGRES_EXTENSIONS` (main/dev-server/services/extensions.ts)
+  # lets a workspace ask for. The smoke test installs ALL of them, because the
+  # bug this image exists to fix was a whitelist promising what the image could
+  # not deliver. MIRRORED from that file, and
+  # `main/dev-server/__tests__/postgres-image.test.ts` fails if the two drift —
+  # so adding an extension to the whitelist without an image that carries it is
+  # caught in the fast CI lane, not after a tag has gone out.
+  EXTENSIONS: 'vector postgis uuid-ossp pg_trgm citext hstore pgcrypto unaccent btree_gin btree_gist'
+
+concurrency:
+  # One publish at a time. Two runs racing to move `:pgN-1` would leave it
+  # pointing at whichever manifest landed last, which is not necessarily the
+  # newer build.
+  group: postgres-engine-image
+  cancel-in-progress: false
+
+jobs:
+  # --- what are we building, and are we publishing it? ----------------------
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.resolve.outputs.publish }}
+      version: ${{ steps.resolve.outputs.version }}
+      major: ${{ steps.resolve.outputs.major }}
+    steps:
+      - name: Resolve version and publish decision
+        id: resolve
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          IS_TAG: ${{ startsWith(github.ref, 'refs/tags/postgres-image-v') }}
+          INPUT_PUBLISH: ${{ inputs.publish }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          if [ "$IS_TAG" = 'true' ]; then
+            publish=true
+            version="${REF_NAME#postgres-image-v}"
+          else
+            publish="${INPUT_PUBLISH:-false}"
+            version="${INPUT_VERSION:-}"
+          fi
+
+          if [ "$publish" = 'true' ]; then
+            # Fail here rather than after eight builds — a publish with no
+            # version has nothing to tag and nothing to move `:pgN-1` to.
+            if [ -z "$version" ]; then
+              echo "::error::Publishing needs a version. Push a postgres-image-v* tag, or supply the 'version' input." >&2
+              exit 1
+            fi
+            if ! printf '%s' "$version" | grep -Eq '^[0-9]+(\.[0-9]+)*$'; then
+              echo "::error::Version '$version' is not dotted-numeric (e.g. 1.0.0)." >&2
+              exit 1
+            fi
+          fi
+
+          major="${version%%.*}"
+
+          {
+            echo "publish=$publish"
+            echo "version=$version"
+            echo "major=$major"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Postgres engine image"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| publish | \`$publish\` |"
+            echo "| version | \`${version:--}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # --- one native runner per (Postgres major, architecture) -----------------
+  #
+  # The matrix is `POSTGRES.versions` from catalog.ts. amd64 and arm64 are built
+  # on runners of their OWN architecture and pushed BY DIGEST, then stitched into
+  # one manifest list per Postgres major by the `manifest` job.
+  #
+  # Native runners rather than buildx + QEMU for the same reason
+  # `dev-base-image.yml` gives: GitHub's `ubuntu-24.04-arm` is free for public
+  # repositories, and an emulated leg is slow enough to trip its own timeouts.
+  # Here it matters for a second reason — the smoke test RUNS the database, and
+  # an emulated Postgres initdb is minutes of wall clock for no added coverage.
+  build:
+    needs: meta
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every version `POSTGRES.versions` offers. A major missing here is a
+        # major `manageService` will offer and nobody can start.
+        pg: ['17', '16', '15', '14']
+        # `arch` is a real matrix DIMENSION rather than two bare `include`
+        # entries: an include object whose keys are all absent from the matrix is
+        # merged into every combination, so two of them would each overwrite the
+        # other's `runner` and every leg would build on one architecture. With
+        # `arch` in the matrix, each include matches only its own combinations
+        # and contributes the runner and platform for them. 4 x 2 = 8 legs.
+        arch: [amd64, arm64]
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            platform: linux/amd64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Built into the local daemon FIRST, and only pushed once it has been run.
+      # A green `docker build` proves the layers assembled; it proves nothing
+      # about whether Postgres can actually load what was installed.
+      - name: Build pg${{ matrix.pg }} ${{ matrix.platform }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.CONTEXT }}
+          file: ${{ env.CONTEXT }}/Dockerfile
+          platforms: ${{ matrix.platform }}
+          build-args: PG_MAJOR=${{ matrix.pg }}
+          tags: genie-postgres:smoke
+          load: true
+          push: false
+          provenance: false
+
+      - name: Smoke-test the image
+        # The assertion this image exists for: every extension the whitelist
+        # names actually installs, on a real server, on this architecture.
+        #
+        # Started with EXACTLY the env `catalog.ts` starts an engine with —
+        # including PGDATA as a SUBDIRECTORY of the volume mount — so a change
+        # that broke the drop-in contract fails here rather than in a workspace.
+        env:
+          PG: ${{ matrix.pg }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          cid="$(docker run -d --rm \
+            --env POSTGRES_PASSWORD=smoke_pw_ci-01 \
+            --env POSTGRES_DB=postgres \
+            --env PGDATA=/var/lib/postgresql/data/pgdata \
+            genie-postgres:smoke)"
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+
+          # initdb, then a server. Poll — never assume a fixed sleep is enough
+          # on a contended runner.
+          ready=false
+          for _ in $(seq 1 120); do
+            if docker exec "$cid" pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" != 'true' ]; then
+            echo "::error::pg${PG} never became ready" >&2
+            docker logs "$cid" >&2 || true
+            exit 1
+          fi
+
+          psql() { docker exec "$cid" psql -U postgres -d postgres -v ON_ERROR_STOP=1 "$@"; }
+
+          # The server is the major we asked for — a build-arg that silently did
+          # not apply would otherwise publish four identical images.
+          got="$(psql -t -A -c 'SHOW server_version_num')"
+          case "$got" in
+            "${PG}"*) : ;;
+            *) echo "::error::expected a Postgres ${PG}.x server, got server_version_num=$got" >&2; exit 1 ;;
+          esac
+
+          # PGDATA landed in the subdirectory `catalog.ts` asks for.
+          test "$(psql -t -A -c 'SHOW data_directory')" = '/var/lib/postgresql/data/pgdata'
+
+          # Every whitelisted extension, one statement each so a failure names
+          # the extension rather than "a statement".
+          for ext in $EXTENSIONS; do
+            echo "--- CREATE EXTENSION $ext"
+            psql -c "CREATE EXTENSION IF NOT EXISTS \"$ext\""
+          done
+
+          # Installed is not the same as usable: these two call INTO the loaded
+          # libraries, which is what catches an extension whose control file
+          # shipped without its .so.
+          psql -t -A -c "SELECT postgis_full_version()"
+          psql -t -A -c "SELECT '[1,2,3]'::vector <-> '[3,2,1]'::vector"
+
+          # The tools provisioning, readiness and backup shell out to by bare
+          # name. `catalog.ts`'s readyExec and `backup.ts` both assume these.
+          for tool in psql pg_isready pg_dump pg_restore createdb; do
+            docker exec "$cid" sh -c "command -v $tool" >/dev/null
+          done
+
+          # Assigned first rather than interpolated inside the heredoc: the
+          # SQL carries single quotes, and nesting those inside a quoted
+          # command substitution is how a summary step ends up failing the job
+          # it was only meant to describe.
+          server_version="$(psql -t -A -c 'SHOW server_version')"
+          postgis_version="$(psql -t -A -c "SELECT extversion FROM pg_extension WHERE extname = 'postgis'")"
+          vector_version="$(psql -t -A -c "SELECT extversion FROM pg_extension WHERE extname = 'vector'")"
+          {
+            echo "### pg${PG} ${ARCH}"
+            echo ""
+            echo "- server: \`${server_version}\`"
+            echo "- postgis: \`${postgis_version}\`"
+            echo "- vector: \`${vector_version}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Log in to GHCR
+        if: needs.meta.outputs.publish == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          # The default token; `packages: write` above is the only scope it
+          # carries beyond read. No PAT, nothing to rotate.
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Fully cached against the build above — this step pushes, it does not
+      # rebuild. push-by-digest means each leg publishes an untagged,
+      # single-platform image and reports its digest; nothing is tagged until
+      # `manifest` decides what the pair is called, so a half-published pair can
+      # never be what `:pgN-1` points at.
+      - name: Push pg${{ matrix.pg }} ${{ matrix.platform }} by digest
+        id: build
+        if: needs.meta.outputs.publish == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.CONTEXT }}
+          file: ${{ env.CONTEXT }}/Dockerfile
+          platforms: ${{ matrix.platform }}
+          build-args: PG_MAJOR=${{ matrix.pg }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          # Attestations off: they add manifests that `imagetools create` would
+          # have to be taught about, and signed provenance is a follow-up worth
+          # doing properly rather than a flag flipped here.
+          provenance: false
+          sbom: false
+
+      - name: Export digest
+        if: needs.meta.outputs.publish == 'true'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+
+      # Named by Postgres major AND architecture: the manifest job stitches ONE
+      # major at a time, so a pattern that also matched another major's digests
+      # would publish a manifest list spanning two different servers.
+      - name: Upload digest
+        if: needs.meta.outputs.publish == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: digest-pg${{ matrix.pg }}-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # --- one manifest list per Postgres major ---------------------------------
+  manifest:
+    needs: [meta, build]
+    if: needs.meta.outputs.publish == 'true'
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: ['17', '16', '15', '14']
+    steps:
+      - name: Download digests for pg${{ matrix.pg }}
+        uses: actions/download-artifact@v7
+        with:
+          path: /tmp/digests
+          pattern: digest-pg${{ matrix.pg }}-*
+          merge-multiple: true
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push the manifest list
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+          MAJOR: ${{ needs.meta.outputs.major }}
+          PG: ${{ matrix.pg }}
+        run: |
+          set -euo pipefail
+          # Both legs, or nothing. A manifest list with one architecture in it
+          # would silently strand every Apple Silicon or arm64 cloud host.
+          count="$(find /tmp/digests -type f | wc -l)"
+          if [ "$count" -ne 2 ]; then
+            echo "::error::Expected 2 per-architecture digests for pg${PG}, found $count." >&2
+            exit 1
+          fi
+          # The find output is deliberately word-split — one `${IMAGE}@sha256:…`
+          # source argument per architecture, which is what imagetools stitches.
+          docker buildx imagetools create \
+            --tag "${IMAGE}:pg${PG}-${VERSION}" \
+            --tag "${IMAGE}:pg${PG}-${MAJOR}" \
+            $(find /tmp/digests -type f -printf "${IMAGE}@sha256:%f ")
+
+      - name: Show what was published
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+          MAJOR: ${{ needs.meta.outputs.major }}
+          PG: ${{ matrix.pg }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect "${IMAGE}:pg${PG}-${VERSION}"
+          {
+            echo "### Published pg${PG}"
+            echo ""
+            echo '```'
+            echo "${IMAGE}:pg${PG}-${VERSION}"
+            echo "${IMAGE}:pg${PG}-${MAJOR}"
+            echo '```'
+            echo ""
+            echo "\`GENIE_POSTGRES_IMAGE\` in \`main/dev-server/services/catalog.ts\` pins \`:pg${PG}-${MAJOR}\`."
+          } >> "$GITHUB_STEP_SUMMARY"

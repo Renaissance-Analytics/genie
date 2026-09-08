@@ -375,8 +375,10 @@ export interface EngineActionRequest {
     /** The CONTAINER: an engine key, or `<engineKey>@<workspaceId>`. */
     recordKey: string;
     /** `install` PRE-DOWNLOADS this version's image (#242 P3, multi-version) —
-     *  it never starts anything. */
-    action: 'start' | 'stop' | 'logs' | 'install';
+     *  it never starts anything. `recreate` REPLACES the container on the image
+     *  the catalog pins now, keeping the named volume — see the branch that
+     *  implements it for why that is never automatic. */
+    action: 'start' | 'stop' | 'logs' | 'install' | 'recreate';
     tail?: number;
 }
 
@@ -1451,11 +1453,19 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
             // No runtime is the ORDINARY first-run state, not a failure: the
             // catalog is still the true answer to "what could this machine run",
             // and it is the answer someone with no Docker most needs.
-            const containers = new Map<string, { id: string; state: ContainerState }>();
+            const containers = new Map<
+                string,
+                { id: string; state: ContainerState; image?: string }
+            >();
             const images = new Set<string>();
             if (runtime) {
                 for (const c of await runtime.psServices().catch(() => [])) {
-                    containers.set(c.name, { id: c.id, state: c.state });
+                    // The image the container was CREATED from, carried through so
+                    // the row can say whether the engine is still running what
+                    // Genie pins. A container is adopted by NAME, so without this
+                    // an engine started under an older pin looks identical to a
+                    // current one. See `EngineInventoryRow.staleImage`.
+                    containers.set(c.name, { id: c.id, state: c.state, image: c.image });
                 }
                 // Probed, never pulled. `imageExists` is a local lookup; opening a
                 // page must not be able to start a multi-gigabyte download.
@@ -1634,6 +1644,61 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
                 } catch (e) {
                     return { ok: false, error: `Could not read the engine log: ${messageOf(e)}` };
                 }
+            }
+
+            // RECREATE — move the engine onto the image the catalog pins NOW.
+            //
+            // A container is adopted by NAME, never by image, which is right for
+            // deduplication and wrong for delivery: an engine started before a
+            // pin changed keeps running the old image for as long as the
+            // container lives, so a shipped fix never reaches the install that
+            // needed it. Nothing else in this file can move it, because every
+            // other path either adopts what is there or refuses.
+            //
+            // Deliberate, never automatic. This RESTARTS a shared engine for
+            // every workspace holding it; doing that as a side effect of a page
+            // load or an unrelated call would be the worst kind of surprise. The
+            // inventory's `staleImage` is the announcement; this is the act, and
+            // somebody has to ask for it.
+            //
+            // REMOVE, not just stop: a stopped container is still what the
+            // adoption branch finds by name, so a stop alone would leave the old
+            // image in place and report success. The VOLUME is untouched — it is
+            // named and outlives the container, which is the whole reason this
+            // is safe. Dropping it is `remove` with `purge`: a different action,
+            // with a different name, and a refusal of its own.
+            if (action === 'recreate') {
+                try {
+                    await runtime.stop(containerId);
+                    await runtime.remove(containerId);
+                } catch (e) {
+                    return { ok: false, error: messageOf(e) };
+                }
+                // The holds described a container that no longer exists. Clearing
+                // them before re-acquiring is what stops the next release from
+                // "stopping" something already gone.
+                holders.delete(recordKey);
+                for (const [serviceId, entry] of [...live.entries()]) {
+                    if (entry.recordKey === recordKey) live.delete(serviceId);
+                }
+                changed();
+                // No consumer: removing the stale container IS the whole action.
+                // The next workspace to acquire this engine creates it fresh on
+                // the pinned image, which is exactly what was wanted.
+                if (consumers.length === 0) return { ok: true };
+                // Re-ACQUIRE rather than run a container: a new container is an
+                // empty cluster as far as roles are concerned, so every consumer
+                // has to go back through provisioning — including its declared
+                // extensions — or it returns to an engine that refuses its
+                // password. This is the same reasoning `start` gives.
+                const failures: string[] = [];
+                for (const { workspaceId, serviceId } of consumers) {
+                    const status = await acquire(workspaceId, serviceId);
+                    if (status.state === 'failed') {
+                        failures.push(status.error ?? 'failed to start');
+                    }
+                }
+                return failures.length ? { ok: false, error: failures[0]! } : { ok: true };
             }
 
             // STOP. Blunt on purpose, and the bookkeeping is the point: the

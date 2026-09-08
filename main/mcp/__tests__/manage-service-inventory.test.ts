@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { handleMcpMessage, manageServiceSummary, type McpContext } from '../protocol';
+import { CORE_TOOLS, handleMcpMessage, manageServiceSummary, type McpContext } from '../protocol';
 import type { ManageServiceRequest, ManageServiceResult } from '../protocol';
 
 /**
@@ -140,5 +140,18 @@ describe('the result an agent reads', () => {
             ],
         } as ManageServiceResult);
         expect(summary).toMatch(/1 .*running/i);
+    });
+
+    it('tells an agent what a stale engine image is, and whose job it is to fix', () => {
+        // The bug this whole area exists to end was a tool DESCRIPTION promising
+        // something the machine could not deliver. `staleImage` is the field
+        // that explains the remaining case — an engine adopted from before an
+        // image changed — and a field an agent is never told about is a field
+        // that does not help anybody.
+        const tool = CORE_TOOLS.find((t) => t.name === 'manageService');
+        expect(tool?.description).toContain('staleImage');
+        // And that recreating is NOT the agent's to do: it restarts a shared
+        // engine for every holder.
+        expect(tool?.description).toMatch(/operator/i);
     });
 });
