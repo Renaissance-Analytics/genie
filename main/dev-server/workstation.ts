@@ -124,11 +124,14 @@ export async function workstationDevServerInfo(): Promise<WorkstationDevServerIn
 }
 
 /**
- * Machine-level start / stop / logs for ONE shared engine.
+ * Machine-level start / stop / logs / install / recreate for ONE shared engine.
  *
  * Routed through the manager rather than the runtime, because the manager holds
- * the reference count: a container stopped behind its back would leave every
- * holder pointing at something that no longer exists.
+ * the reference count: a container stopped — or replaced — behind its back would
+ * leave every holder pointing at something that no longer exists. `recreate` is
+ * the sharpest case: it removes the container so the engine comes back on the
+ * image the catalog pins now, and only the manager can re-provision the
+ * workspaces that were on it.
  */
 export async function workstationEngineAction(
     req: EngineActionRequest,
