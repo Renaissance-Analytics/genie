@@ -138,14 +138,36 @@ describe('phpFastcgiWorkerCommand', () => {
         // The WHOLE array is pinned deliberately. "the command mentions
         // upload_tmp_dir" would also pass against a builder that emitted nonsense
         // around it; this says the invocation is still EXACTLY a php-cgi FastCGI
-        // bind, with the ini define added and nothing else disturbed.
+        // bind, with the ini defines added and nothing else disturbed.
         expect(phpFastcgiWorkerCommand(EXE, 5322, UPLOADS)).toEqual([
             EXE,
             '-d',
             'upload_tmp_dir=C:\\gd\\host-site-uploads\\a1b2c3',
+            '-d',
+            'variables_order=EGPCS',
             '-b',
             '127.0.0.1:5322',
         ]);
+    });
+
+    it('states `variables_order` so the APP can read the service env (genie#539)', () => {
+        // Genie composes the service env and starts the worker with it — that half
+        // was never in doubt. What decides whether the APP can READ it is
+        // `variables_order`, and Genie stated nothing: the answer came from whichever
+        // php.ini happened to win. PHP's own `php.ini-production` and
+        // `php.ini-development` both say `GPCS` — no `E` — so on a distro package,
+        // Herd or MAMP `$_ENV` is never populated from the process environment, and
+        // `$_ENV` is the surface Laravel's phpdotenv and Symfony read FIRST. Genie's
+        // own generated ini sets the key to nothing at all and rides on PHP's
+        // compiled-in `EGPCS`, and Genie writes a php.ini on Windows only.
+        //
+        // So it is STATED here, for the reason `upload_tmp_dir` is (genie#534): a
+        // define on the command line cannot be missing from an ini Genie does not
+        // own, and cannot be lost when someone else's ini wins.
+        const cmd = phpFastcgiWorkerCommand(EXE, 5322, UPLOADS);
+        const at = cmd.indexOf('variables_order=EGPCS');
+        expect(at, 'the define must be present').toBeGreaterThan(0);
+        expect(cmd[at - 1], 'and be passed as an ini define').toBe('-d');
     });
 
     it('gives the worker an EXPLICIT upload_tmp_dir — an INHERITED one is genie#534', () => {

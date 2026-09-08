@@ -87,4 +87,24 @@ describe('DEV_BASE_TOOLCHAIN', () => {
         // same breath is what stops the list drifting onto a different one.
         expect(GENIE_DEV_BASE_IMAGE).toMatch(/^ghcr\.io\/.+:\d+$/);
     });
+
+    /**
+     * genie#539 — a sandbox (`explicit`) site is one of the ways Genie hosts a repo,
+     * and the owner's criterion is "no matter how a site is hosted locally, genie
+     * needs to provide the values".
+     *
+     * Debian's `php-cli` installs its ini from PHP's own `php.ini-production`, which
+     * says `variables_order = "GPCS"` — no `E`. So inside this image `$_ENV` is never
+     * populated from the process environment, and every service value Genie hands the
+     * container is invisible to the surface Laravel's phpdotenv and Symfony read
+     * first. Genie builds this image, so the drop-in is Genie's to write.
+     */
+    it('makes $_ENV readable for a PHP app inside the sandbox (genie#539)', () => {
+        const df = dockerfile();
+        // A conf.d drop-in rather than an edit of the packaged ini: apt owns that
+        // file and would replace it, and the drop-in applies to every SAPI dir the
+        // package created.
+        expect(df).toMatch(/conf\.d/);
+        expect(df).toMatch(/variables_order\s*=\s*"?EGPCS"?/);
+    });
 });
