@@ -6,7 +6,7 @@ import path from 'node:path';
 import { demandWindowAttention } from '../attention-flash';
 import { encryptSecret, decryptSecret } from '../secrets/store';
 import { getAllSettings } from '../db';
-import { resolveAlertSound } from '../notify-sound';
+import { resolveAlertSound, alertSoundPayload } from '../notify-sound';
 import { planImDoneNotice } from '../attention/imdone-notice';
 import type { AgentTui } from '../agents/identity';
 import { shouldForwardToDriver } from './forward-decision';
@@ -782,7 +782,12 @@ function forwardImDoneToDriver(conn: RemoteConnection, payload: ImDoneWirePayloa
     if (settings.notify_sound === 'on') {
         const sound = resolveAlertSound('imDone');
         // Play in the bound host window's renderer (it subscribes to notify:sound).
-        if (sound) emitToConn(conn, 'notify:sound', { kind: 'imDone', sound });
+        // The payload is BUILT rather than written out here: it carries the motif
+        // as well as the kind now (genie#546), and a second hand-written copy is
+        // how the two surfaces end up disagreeing about which chime an alert
+        // means. This is deliberately still the driver's OWN imDone setting — a
+        // remote window chimes per the person sitting at it.
+        if (sound) emitToConn(conn, 'notify:sound', alertSoundPayload('imDone', sound));
     }
     if (settings.notify_toast === 'on' && Notification.isSupported()) {
         // The SAME text the local toast uses, plus the host — one place decides

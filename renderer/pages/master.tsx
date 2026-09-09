@@ -134,6 +134,8 @@ import {
     type PluginPanelView,
 } from '../lib/genie';
 import { nudgeGappDevSync, nudgeGappDevSyncOnFocus } from '../lib/gapp-dev';
+import { playChime } from '../lib/alert-chime';
+import { motifForPayload } from '../../main/notify-sound-kinds';
 
 /**
  * Master workspace — cross-project terminal organiser. Hosts the
@@ -733,13 +735,17 @@ function MasterInner() {
         return () => clearTimeout(t);
     }, [recovery]);
 
-    // Customization: play the notification sound when an agent calls imDone or
-    // ForceTheQuestion (gated by Settings → Customization on the main side). The
-    // payload carries a `sound` descriptor resolved per-alert: 'synth' keeps the
-    // built-in Web Audio chime (distinct per kind), 'asset' plays a bundled wav
-    // from ./sounds/<name>.wav (relative to the page, resolves under file://),
-    // 'data' plays a custom file the main side read into a data-URL. A legacy
-    // payload with no descriptor falls back to synth. All best-effort.
+    // Customization: play the notification sound for whichever alert the main
+    // side fired — the eight kinds in main/notify-sound-kinds.ts, each with its
+    // own Settings row (genie#546). The payload carries a `sound` descriptor
+    // resolved per-alert: 'synth' keeps the built-in Web Audio chime, 'asset'
+    // plays a bundled wav from ./sounds/<name>.wav (relative to the page, so it
+    // resolves under file://), 'data' plays a custom file the main side read
+    // into a data-URL. A legacy payload with no descriptor falls back to synth.
+    //
+    // WHICH chime `synth` means comes from `motifForPayload`, not from a `kind`
+    // comparison here: the payload now names its motif, and the kind-only form
+    // is the fallback for a REMOTE host one version behind. All best-effort.
     useEffect(() => {
         return api().on.notifySound((payload) => {
             try {
@@ -754,41 +760,7 @@ function MasterInner() {
                     void new Audio(payload.sound.dataUrl).play().catch(() => {});
                     return;
                 }
-                // 'synth' (or a legacy descriptor-less payload): synthesize a
-                // distinct per-kind chime via Web Audio so no asset is needed.
-                const Ctx =
-                    window.AudioContext ||
-                    (window as unknown as { webkitAudioContext?: typeof AudioContext })
-                        .webkitAudioContext;
-                if (!Ctx) return;
-                const ctx = new Ctx();
-                const now = ctx.currentTime;
-                const tone = (freq: number, start: number, dur: number, type: OscillatorType = 'sine') => {
-                    const osc = ctx.createOscillator();
-                    const gain = ctx.createGain();
-                    osc.type = type;
-                    osc.frequency.value = freq;
-                    gain.gain.setValueAtTime(0.0001, now + start);
-                    gain.gain.exponentialRampToValueAtTime(0.18, now + start + 0.02);
-                    gain.gain.exponentialRampToValueAtTime(0.0001, now + start + dur);
-                    osc.connect(gain).connect(ctx.destination);
-                    osc.start(now + start);
-                    osc.stop(now + start + dur);
-                };
-                if (payload?.kind === 'force-question') {
-                    // Distinct, more urgent motif: a fast triple-knock on a
-                    // brighter triangle wave (A5 ×3) so it's unmistakably NOT the
-                    // gentle imDone rise — "someone needs you NOW".
-                    tone(880, 0, 0.1, 'triangle');
-                    tone(880, 0.14, 0.1, 'triangle');
-                    tone(1175, 0.28, 0.26, 'triangle'); // D6 lift on the last knock
-                    setTimeout(() => void ctx.close().catch(() => {}), 900);
-                } else {
-                    // imDone: gentle rising two-note chime.
-                    tone(660, 0, 0.18); // E5
-                    tone(880, 0.16, 0.24); // A5
-                    setTimeout(() => void ctx.close().catch(() => {}), 700);
-                }
+                playChime(motifForPayload(payload ?? {}));
             } catch {
                 /* audio is best-effort */
             }

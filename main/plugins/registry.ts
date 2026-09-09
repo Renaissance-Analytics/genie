@@ -36,6 +36,8 @@ import {
     type PluginMcpTool,
 } from './manifest';
 import { pluginRowIsSurfaceable } from './trust';
+import { ARTBOARD_PLUGIN_ID } from './artboard-plugin';
+import { playAlert } from '../notify-sound';
 
 /** An MCP tool descriptor as `tools/list` returns it. */
 export interface PluginToolDescriptor {
@@ -266,6 +268,15 @@ export async function dispatchPluginTool(
                     panelId,
                     ...(activeItemId ? { activeItemId } : {}),
                 });
+                // An ArtBoard post is the one panel-open request that leaves a
+                // person OWING an answer — the agent stops and waits for the
+                // verdict — so it raises the reviewRequest alert (genie#546).
+                // Gated on the plugin id rather than on "a panel was requested":
+                // any plugin can ask for its panel for any reason, and chiming
+                // "waiting for your review" at all of them would have the alert
+                // asserting something nobody checked. Off by default; a no-op
+                // unless the owner turned it on.
+                if (plugin.id === ARTBOARD_PLUGIN_ID) playAlert('reviewRequest');
             }
         }
         return result;

@@ -1,6 +1,8 @@
 import Database from 'better-sqlite3';
 import { tuiSettingDefaults } from './agents/registry';
 import type { AgentTuiId, ProviderSettingKeys } from './agents/registry';
+import { soundSettingDefaults } from './notify-sound-kinds';
+import type { SoundSettingKeys } from './notify-sound-kinds';
 import path from 'path';
 import fs from 'fs';
 import { randomUUID } from 'node:crypto';
@@ -3134,7 +3136,7 @@ export function setAgentAvatar(
 
 // Settings helpers ------------------------------------------------------
 
-export interface Settings extends ProviderSettingKeys {
+export interface Settings extends ProviderSettingKeys, SoundSettingKeys {
     primary_workspace?: string;
     /** Last-activated workspace id in the master view; seeds the active workspace on launch. */
     active_workspace?: string;
@@ -3199,20 +3201,12 @@ export interface Settings extends ProviderSettingKeys {
     /** Show an OS notification (tray popup) when an agent calls imDone.
      *  Defaults 'off'. */
     notify_toast?: 'on' | 'off';
-    /** Which sound the imDone alert plays (gated by notify_sound). 'synth' (the
-     *  built-in Web Audio chime, default), a bundled wav name ('3tootpipe' |
-     *  'dingdongdoink'), 'custom' (sound_imdone_custom file), or 'off' (silent
-     *  even with notify_sound on). */
-    sound_imdone?: 'off' | 'synth' | '3tootpipe' | 'dingdongdoink' | 'sparkle' | 'triumphant' | 'winddown' | 'custom';
-    /** Absolute path to the user's custom imDone sound (used when
-     *  sound_imdone === 'custom'). Empty = none chosen. */
-    sound_imdone_custom?: string;
-    /** Which sound the ForceTheQuestion alert plays. Same value set as
-     *  sound_imdone; default 'synth'. */
-    sound_forcequestion?: 'off' | 'synth' | '3tootpipe' | 'dingdongdoink' | 'sparkle' | 'triumphant' | 'winddown' | 'custom';
-    /** Absolute path to the user's custom ForceTheQuestion sound (used when
-     *  sound_forcequestion === 'custom'). Empty = none chosen. */
-    sound_forcequestion_custom?: string;
+    // The per-alert sound keys — `sound_<kind>` (which sound that alert plays,
+    // gated by notify_sound; 'off' silences that one alert even with the master
+    // switch on) and `sound_<kind>_custom` (an absolute path, used when the
+    // choice is 'custom') — come from `SoundSettingKeys`, above. They were
+    // written out here by hand while there were four of them; the list that
+    // decides which alerts exist is `main/notify-sound-kinds.ts`.
     /** Fixed loopback port for the agent-integration MCP server. String-encoded
      *  (settings are k/v text). Default '51717' (obscure, outside the OS
      *  ephemeral range). Changing it requires restarting the MCP server. */
@@ -3406,13 +3400,16 @@ export function getAllSettings(): Settings {
         start_minimized: (out['start_minimized'] as 'on' | 'off') ?? 'off',
         notify_sound: (out['notify_sound'] as 'on' | 'off') ?? 'off',
         notify_toast: (out['notify_toast'] as 'on' | 'off') ?? 'off',
-        sound_imdone:
-            (out['sound_imdone'] as Settings['sound_imdone']) ?? 'synth',
-        sound_imdone_custom: out['sound_imdone_custom'] ?? '',
-        sound_forcequestion:
-            (out['sound_forcequestion'] as Settings['sound_forcequestion']) ??
-            'synth',
-        sound_forcequestion_custom: out['sound_forcequestion_custom'] ?? '',
+        // Per-alert sounds, DERIVED from `notify-sound-kinds.ts`. These four
+        // used to be written out here, which meant a fifth alert added without
+        // its two lines resolved to `undefined` and fell back to the built-in
+        // chime whatever its registry default said.
+        ...Object.fromEntries(
+            Object.entries(soundSettingDefaults()).map(([k, fallback]) => [
+                k,
+                out[k] ?? fallback,
+            ]),
+        ),
         mcp_port: out['mcp_port'] ?? '51717',
         mobile_enabled: (out['mobile_enabled'] as 'on' | 'off') ?? 'off',
         remote_network_local: (out['remote_network_local'] as 'on' | 'off') ?? 'on',

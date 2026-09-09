@@ -90,6 +90,9 @@ vi.mock('../../db', () => ({ getAllSettings: () => mockDb.settings }));
 vi.mock('../../notify-sound', () => ({
     resolveAlertSound: () => null,
     deliverAlertSound: () => {},
+    // The chime goes through ONE gate now (genie#546); inert here, like the
+    // two above, so these tests are about the modal and not about audio.
+    playAlertSound: () => false,
 }));
 const browserMock = vi.hoisted(() => ({
     open: vi.fn((..._a: unknown[]) => Promise.resolve()),

@@ -1,5 +1,10 @@
 import type { Settings } from './genie';
 import { providerSettingKeys, type ProviderSettingKey } from '../../main/agents/registry';
+import {
+    soundSettingKeys,
+    type SoundSettingKey,
+    type SoundCustomSettingKey,
+} from '../../main/notify-sound-kinds';
 
 /**
  * Both per-provider launch keys, for every provider, all `workstation`.
@@ -14,6 +19,26 @@ function providerSettingTiers(): Record<ProviderSettingKey, SettingTier> {
     for (const { command, flags } of providerSettingKeys()) {
         out[command as ProviderSettingKey] = 'workstation';
         out[flags as ProviderSettingKey] = 'workstation';
+    }
+    return out;
+}
+
+/**
+ * Both keys for every alert sound, all `user`.
+ *
+ * Which chime plays when an agent finishes is EXPERIENCE — it belongs to the
+ * person, not to the machine, and follows them between workstations. That was
+ * true of the two alerts that shipped and is true of the six added in
+ * genie#546, so it is a derivation rather than two lines each.
+ */
+function soundSettingTiers(): Record<
+    SoundSettingKey | SoundCustomSettingKey,
+    SettingTier
+> {
+    const out = {} as Record<SoundSettingKey | SoundCustomSettingKey, SettingTier>;
+    for (const { choice, custom } of soundSettingKeys()) {
+        out[choice] = 'user';
+        out[custom] = 'user';
     }
     return out;
 }
@@ -91,10 +116,11 @@ export const SETTING_TIERS: Record<keyof Settings, SettingTier> = {
     /* ── user: experience, syncable per person ──────────────────────────── */
     notify_sound: 'user',
     notify_toast: 'user',
-    sound_imdone: 'user',
-    sound_imdone_custom: 'user',
-    sound_forcequestion: 'user',
-    sound_forcequestion_custom: 'user',
+    // EVERY alert sound, DERIVED — see `soundSettingTiers` above. These four
+    // were written out while there were four; the exhaustive `Record<keyof
+    // Settings, …>` would have caught a missing one, but only by making every
+    // new alert a compile error somebody then fixes by hand.
+    ...soundSettingTiers(),
     notifications_muted: 'user',
     ftq_availability: 'user',
     ftq_availability_workspaces: 'user',

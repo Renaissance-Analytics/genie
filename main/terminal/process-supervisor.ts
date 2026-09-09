@@ -13,6 +13,8 @@ import { buildProcessArgs } from './process-spawn';
 import { decideOnExit, type ProcessStatus } from './process-lifecycle';
 import { mobileEmit } from '../mobile/server';
 import { broadcastLocal } from '../remote';
+import { playAlert } from '../notify-sound';
+import { alertKindForProcessStatus } from '../notify-sound-kinds';
 
 /**
  * Headless supervisor for Process service runners.
@@ -529,6 +531,12 @@ export function onProcessPtyExit(
             startProcess(id);
         }, d.restartInMs);
     }
+    // The process ENDED — chime, if the owner asked to hear about that
+    // (genie#546). Only from a terminal state: `restarting` is a step on the way
+    // to one, and firing there would spend five interruptions announcing a
+    // single crash. Gated by Settings and off by default; a no-op otherwise.
+    const alert = alertKindForProcessStatus(d.status);
+    if (alert) playAlert(alert);
 }
 
 /**

@@ -13,7 +13,7 @@ import {
 } from './draft-store';
 import { LOCAL_CONN_KEY, openTestingBrowser } from '../testing-browser';
 import { wireAskLinkRouting } from './link-route';
-import { resolveAlertSound, deliverAlertSound } from '../notify-sound';
+import { playAlertSound } from '../notify-sound';
 import { demandWindowAttention } from '../attention-flash';
 import type {
     ForceAnswer,
@@ -521,17 +521,11 @@ function notifyForceQuestion(): void {
  * like every other chime; a null descriptor / unreadable settings → silent.
  */
 function playForceQuestionChime(): void {
-    try {
-        if (getAllSettings().notify_sound !== 'on') return;
-    } catch {
-        return; // settings unreadable — skip the chime, never block the modal
-    }
-    const sound = resolveAlertSound('forceQuestion');
-    if (!sound) return;
-    deliverAlertSound(config?.getMasterWindow() ?? null, {
-        kind: 'force-question',
-        sound,
-    });
+    // Master switch, this alert's own choice, delivery to the master renderer —
+    // the same gate all eight alert kinds go through (genie#546). It never
+    // throws: unreadable settings are silent, and a chime must never be able to
+    // block the modal it is announcing.
+    playAlertSound('forceQuestion', config?.getMasterWindow() ?? null);
 }
 
 /** True when the owner opted to still HEAR a question land while in DND (the chime

@@ -141,12 +141,22 @@ async function post(args, bridge) {
 module.exports = { post: post };
 `;
 
+/**
+ * ArtBoard's plugin id, named once.
+ *
+ * Exported because another module has to recognise it: a post that asks Genie to
+ * surface the board is the one panel-open request that means "a person now owes
+ * an answer", so it raises the `reviewRequest` alert (genie#546) while an
+ * ordinary plugin surfacing its own panel does not.
+ */
+export const ARTBOARD_PLUGIN_ID = 'ai.genie.artboard';
+
 export const ARTBOARD_SOURCE: BundledPluginSource = {
-    id: 'ai.genie.artboard',
+    id: ARTBOARD_PLUGIN_ID,
     name: 'ArtBoard',
     description: 'Post a mockup or an image for a human to review, and hear the verdict.',
     manifest: {
-        id: 'ai.genie.artboard',
+        id: ARTBOARD_PLUGIN_ID,
         namespace: 'artboard',
         name: 'ArtBoard',
         version: '0.1.0',

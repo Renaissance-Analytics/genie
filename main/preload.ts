@@ -1751,6 +1751,10 @@ const api = {
         notifySound: (
             cb: (payload: {
                 kind: string;
+                /** Which built-in chime `synth` means, for the alert that fired.
+                 *  Absent from a REMOTE host one version behind, where `kind` is
+                 *  the only clue — see `motifForPayload`. */
+                motif?: string;
                 sound?:
                     | { mode: 'synth' }
                     | { mode: 'asset'; name: string }

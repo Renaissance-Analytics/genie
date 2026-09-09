@@ -3,6 +3,8 @@ import { mobileEmit } from '../mobile/server';
 import { broadcastTerminalAttention } from '../terminal/ipc';
 import { agentPulse } from '../terminal/agent-pulse';
 import { agentInboxBroker } from './broker';
+import { playAlert } from '../notify-sound';
+import { alertKindForInboxSender } from '../notify-sound-kinds';
 import type { AgentInboxBrokerEvent } from './types';
 
 /**
@@ -39,10 +41,20 @@ export function installAgentInboxPresence(): void {
                 mobileEmit('agentinbox:presence', payload);
                 break;
             }
-            case 'message':
+            case 'message': {
                 broadcastLocal('agentinbox:message', ev.preview);
                 mobileEmit('agentinbox:message', ev.preview);
+                // …and chime, if the owner asked to hear agents talking to each
+                // other, or a machine reporting in (genie#546). The SENDER
+                // decides which: an agent id is an agentMessage, a `genie:*` id
+                // is an automated notice, and the human is silent — you do not
+                // need a chime for the message you just typed. That last case is
+                // also the identity a cron currently borrows (genie#543), so it
+                // stays silent rather than announcing a scheduled job as "you".
+                const alert = alertKindForInboxSender(ev.preview.from);
+                if (alert) playAlert(alert);
                 break;
+            }
             case 'lifecycle':
                 // The pulse fans this out itself (broadcastLocal + mobileEmit on
                 // `agent-pulse`), so there is deliberately no broadcast here.
