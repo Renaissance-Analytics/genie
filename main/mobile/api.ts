@@ -64,7 +64,7 @@ import {
     resolveUserListItemOnHost,
     workspaceOfListItem,
 } from '../lists/wiring';
-import type { UserListAction } from '../lists/service';
+import { USER_LIST_ACTIONS, type UserListAction } from '../lists/service';
 import {
     postAsHuman,
     readHumanAttachment,
@@ -2026,6 +2026,21 @@ export async function handleApi(
         }
         if (pathname === '/api/desktop/lists/resolve') {
             if (guardControl()) return true;
+            // `action` lands in a column with a CHECK constraint, so anything
+            // outside the three throws SQLITE_CONSTRAINT out of the transaction
+            // and up through this route. The local IPC never sees one — the
+            // panel only ever sends its three buttons — but a wire client is not
+            // the panel, and "the renderer wouldn't do that" is not a validation.
+            // Refused rather than coerced to `done`: guessing which outcome a
+            // person meant is how an agent gets told the opposite of what it was.
+            const given = String(lb.action ?? '');
+            if (!(USER_LIST_ACTIONS as readonly string[]).includes(given)) {
+                sendJson(res, 400, {
+                    error: `A UserList outcome must be one of ${USER_LIST_ACTIONS.join(', ')}.`,
+                });
+                return true;
+            }
+            const action = given as UserListAction;
             const todoId = String(lb.todoId ?? '');
             // Which workspace the item belongs to is read BEFORE the write, off
             // the row itself — never from the body, which the client controls.
@@ -2037,7 +2052,7 @@ export async function handleApi(
             if (owner !== null && denyUnaddressable(owner)) return true;
             const result = resolveUserListItemOnHost({
                 todoId,
-                action: (lb.action ?? 'done') as UserListAction,
+                action,
                 comment: String(lb.comment ?? ''),
             });
             // Counts only, and never the item's text — a UserList item names
@@ -2045,7 +2060,7 @@ export async function handleApi(
             // for it.
             audit(
                 'lists.resolve',
-                result.ok ? `${lb.action ?? 'done'} nudge=${result.nudge.delivered}` : 'refused',
+                result.ok ? `${action} nudge=${result.nudge.delivered}` : 'refused',
                 actor,
             );
             sendJson(res, 200, result);

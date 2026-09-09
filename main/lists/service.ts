@@ -73,6 +73,18 @@ const PAST_TENSE: Record<UserListAction, string> = {
     refused: 'REFUSED',
 };
 
+/**
+ * The three outcomes as VALUES, for validating one that arrived over a wire —
+ * the type checks nothing at runtime, and the host's `/api/desktop/lists/resolve`
+ * takes its action from a client (genie#586).
+ *
+ * Derived from `PAST_TENSE` rather than written out again: that map is a
+ * `Record<UserListAction, …>`, so the compiler already refuses an incomplete
+ * one. A hand-written second list would compile happily while missing a member,
+ * and the member it missed would be an outcome the wire quietly rejected.
+ */
+export const USER_LIST_ACTIONS = Object.keys(PAST_TENSE) as readonly UserListAction[];
+
 /** What the agent reads when a person acts on something it asked for. */
 export function userItemNoticeText(
     item: { text: string },

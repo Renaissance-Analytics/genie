@@ -251,6 +251,41 @@ describe('POST /api/desktop/lists/resolve', () => {
         });
     });
 
+    /**
+     * `action` lands in a column with a CHECK constraint, so a value outside the
+     * three would throw SQLITE_CONSTRAINT out of the transaction and up through
+     * the route. The local IPC never sees one — the panel only ever sends the
+     * three buttons — but a wire client is not the panel, and "the renderer
+     * wouldn't do that" is not a validation.
+     */
+    it.each(['nonsense', 'open', ''])('refuses the unusable action %o', async (action) => {
+        const t = await mintToken();
+        const r = await call(
+            postReq(RESOLVE, { todoId: 'u1', action, comment: 'did it' }, bearer(t)),
+            RESOLVE,
+        );
+
+        expect(r.status).toBe(400);
+        expect(lists.resolveUserListItemOnHost).not.toHaveBeenCalled();
+    });
+
+    it('POSITIVE CONTROL: each of the three real outcomes goes through', async () => {
+        const t = await mintToken();
+        for (const action of ['done', 'thrown_back', 'refused'] as const) {
+            lists.resolveUserListItemOnHost.mockClear();
+            const r = await call(
+                postReq(RESOLVE, { todoId: 'u1', action, comment: 'did it' }, bearer(t)),
+                RESOLVE,
+            );
+            expect(r.status).toBe(200);
+            expect(lists.resolveUserListItemOnHost).toHaveBeenCalledWith({
+                todoId: 'u1',
+                action,
+                comment: 'did it',
+            });
+        }
+    });
+
     it('refuses with 423 while another user drives, and never resolves', async () => {
         const t = await mintToken();
         setLocked(true);
