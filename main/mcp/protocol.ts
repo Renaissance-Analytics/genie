@@ -158,9 +158,25 @@ export interface WorkspaceRepoInfo {
 export interface WorkspaceMap {
     /** Absolute path to the workspace root. */
     root: string;
-    /** True when the root looks like a `.agi` envelope. */
+    /**
+     * True when this workspace IS a `.agi` project envelope — the repos under
+     * `repos/` are the work.
+     *
+     * A CLAIM about the workspace, not a description of the folder. The
+     * workstation operator is never one, however envelope-shaped its directory:
+     * its row is written with `shape: 'agi'` and its `~/.gosa` envelope carries a
+     * `project.json`, and deciding this from the folder alone told the one
+     * workspace whose charter says "it is not a project" that it was one — in the
+     * same JSON block that told it it was the operator. See
+     * `workspace/envelope-identity.ts`.
+     *
+     * The folder's own facts live in the two fields below and in `repos`, and are
+     * unaffected by the role.
+     */
     isAgiEnvelope: boolean;
+    /** A `project.json` at the workspace root — the folder, whatever its role. */
     hasProjectJson: boolean;
+    /** A `.gitmodules` at the workspace root — the folder, whatever its role. */
     hasGitmodules: boolean;
     /** Absolute path to `.ai/knowledge` when present, else null. */
     knowledgeDir: string | null;
