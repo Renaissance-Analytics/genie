@@ -67,6 +67,20 @@ const SOURCE_ROOTS = ['renderer', 'main'];
 /** Blank comments out but KEEP the newlines, so reported line numbers are real. */
 const stripComments = (css: string) => css.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '));
 
+/**
+ * The same, for TS/TSX — and for the same reason the CSS parse strips first.
+ *
+ * A doc comment reading ``* `--genie-debug`: the startup log`` matches the
+ * `'--x':` shape exactly, so `main/debug-log.ts` was DEFINING a CLI flag as a
+ * CSS custom property. Prose about a token must not license using it.
+ *
+ * Only whole-line `//` comments are stripped, never a trailing one: `//` also
+ * occurs inside string literals (`https://…`), and cutting to end-of-line there
+ * could swallow a real definition further along the same line.
+ */
+const stripTsComments = (src: string) =>
+    src.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' ')).replace(/^[ \t]*\/\/.*$/gm, '');
+
 const lineOf = (text: string, index: number) => text.slice(0, index).split('\n').length;
 
 function walk(dir: string, keep: (file: string) => boolean, out: string[] = []): string[] {
@@ -91,7 +105,7 @@ describe('Genie stylesheet tokens', () => {
     /** `style={{ '--x': … }}` and `el.style.setProperty('--x', …)` in app source. */
     const definedInSource = SOURCE_ROOTS.flatMap((root) =>
         walk(join(ROOT, root), (f) => f.endsWith('.ts') || f.endsWith('.tsx')).flatMap((file) => {
-            const src = readFileSync(file, 'utf8');
+            const src = stripTsComments(readFileSync(file, 'utf8'));
             return [
                 ...[...src.matchAll(/setProperty\(\s*['"`](--[\w-]+)/g)].map((m) => m[1] as string),
                 ...[...src.matchAll(/['"`](--[\w-]+)['"`]\s*:/g)].map((m) => m[1] as string),
@@ -130,6 +144,13 @@ describe('Genie stylesheet tokens', () => {
         // …and that the TSX half of the parse works, or a token set only from a
         // component reads as undefined and gets "fixed" into the stylesheet.
         expect(definedInSource).toContain('--ask-modal-width');
+        expect(definedInSource).toContain('--nq');
+
+        // …and that it reads CODE, not prose. `--genie-debug` is a CLI flag that
+        // two doc comments mention in backticks followed by a colon — which is
+        // the `'--x':` shape — so before comments were stripped this list
+        // "defined" it. The negative control for the positive ones above.
+        expect(definedInSource).not.toContain('--genie-debug');
 
         // …and that Tailwind's theme was actually found and parsed. If the file
         // ever moves, this fails HERE — rather than the orphan check quietly
