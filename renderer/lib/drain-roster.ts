@@ -88,3 +88,40 @@ export function drainRosterSummary(snapshot: DrainSnapshot): DrainRosterSummary 
                 : `Waiting on ${pending} agent${pending === 1 ? '' : 's'} to finish and hand off.`,
     };
 }
+
+/**
+ * PURE. Is the upgrade modal on screen, and for which version (genie#565)?
+ *
+ * *"When an upgrade is in progress, I should see a big wide modal…"* — and
+ * "in progress" means once the DRAIN has started. Not at download time: a
+ * download is not something a person needs to watch their agents for, and a
+ * full-screen sheet over one would interrupt work to report progress nobody
+ * asked about.
+ *
+ * The three states of a snapshot are easy to confuse and the difference is the
+ * whole rule:
+ *
+ *  - `active`   — holding the upgrade. Open.
+ *  - `complete` — every row green, the apply on its way. Still open, so the
+ *                 final roster is the one the user actually sees.
+ *  - neither, with rows — the drain was CANCELLED. Closed: the upgrade is no
+ *                 longer happening, and a sheet left up over it describes
+ *                 something that stopped.
+ *
+ * An EMPTY roster is closed too. That is what an upgrade with nothing to ask
+ * produces — it resolves at once, and flashing a modal for it would be a
+ * full-screen interruption for an upgrade nobody was blocking.
+ */
+export function upgradeModalPlan(input: {
+    drain: DrainSnapshot | null;
+    /** The version being applied — the left pane's notes are about this. */
+    latestVersion: string | null;
+}): { open: boolean; version: string | null } {
+    const drain = input.drain;
+    const open =
+        !!drain && (drain.rows?.length ?? 0) > 0 && (drain.active || drain.complete);
+    // The version rides along even when null: the AGENT list is the half the
+    // user is being asked to decide about, and it must not wait on a notes
+    // fetch that may never land.
+    return { open, version: input.latestVersion ?? null };
+}

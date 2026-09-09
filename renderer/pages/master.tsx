@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { ensureOverlayRoot } from '../lib/overlay-root';
 import { DEFAULT_HOTKEYS, type HotkeyBindings } from '../lib/hotkeys';
 import { useGenieHotkeys } from '../lib/use-genie-hotkeys';
 import { ftqNudgeDelivery } from '../lib/ftq-nudge';
@@ -75,6 +77,7 @@ import {
     drainRosterSummary,
     drainRowIcon,
     drainRowStatusLabel,
+    upgradeModalPlan,
 } from '../lib/drain-roster';
 import type { DrainSnapshot } from '../../main/agents/drain';
 import { autoOpenWhatsNew } from '../lib/whats-new';
@@ -2332,7 +2335,7 @@ function MasterInner() {
                         onShowGenieOs={() => setGenieOsOpen((open) => !open)}
                         setupIncomplete={onboardingOpen}
                     />
-                    <DrainRosterFlyout />
+                    <UpgradeModal />
                     <Toolbar
                         activeWorkspace={
                             activeWorkspaceId
@@ -2946,8 +2949,8 @@ function UpdatePill() {
                 status.state === 'ready-to-restart' &&
                 (status.interruption?.terminals ?? 0) > 0,
             // The shape a CANCELLED drain leaves behind — rows, but neither
-            // running nor complete. The same test `DrainRosterFlyout` uses to
-            // take itself off screen, so the two agree on what "abandoned"
+            // running nor complete. The same test `upgradeModalPlan` uses to
+            // take the modal off screen, so the two agree on what "abandoned"
             // means rather than each carrying its own idea.
             drainCancelled:
                 !!drain && drain.rows.length > 0 && !drain.active && !drain.complete,
@@ -3149,25 +3152,51 @@ function UpdatePill() {
 
 
 /**
- * THE "WAITING ON" ROSTER (genie#389).
+ * THE UPGRADE MODAL (genie#565).
  *
- * The upgrade is being held while every live agent is asked to stop, write its
- * handoff and call `thumbsUp`. One row per agent: an EMPTY thumb while it is
- * still working, a filled green one the moment its answer lands.
+ * *"When an upgrade is in progress, I should see a big wide modal with a blurry
+ * backdrop that shows me what is in this upgrade on the left side and the agent
+ * shutdown list on the right that shows all agents status in a clean list."*
  *
- * The per-row thumb is a BUTTON, and that is the part that makes this
- * shippable. An agent can wedge — mid-tool-call, or with a dead harness — and a
- * drain that could only end when every agent cooperates would hang forever on
- * one of them, which is worse than the kill it replaces. So the user shuts that
- * one down by hand and presses its thumb, and the drain proceeds.
+ * The roster used to be a small dialog in the corner, which is the wrong weight
+ * for what is happening: the user is being asked to decide about their own
+ * running work, and the two things they need to weigh — what they GAIN by
+ * restarting, and what it COSTS right now — were on opposite sides of the
+ * screen from each other. So the notes and the roster are two panes of one
+ * sheet, and the backdrop goes quiet behind them.
  *
- * There is no auto-dismiss and no timeout. Cancel is explicit, and it abandons
- * the upgrade rather than applying it — a roster that gave up and installed
- * anyway would be the kill again, wearing a delay.
+ * ## The per-row thumb is still what makes this shippable
+ *
+ * An agent can wedge — mid-tool-call, or with a dead harness — and a drain that
+ * could only end when every agent cooperates would hang forever on one of them,
+ * which is worse than the kill it replaces. So the user shuts that one down by
+ * hand and presses its thumb, and the drain proceeds.
+ *
+ * ## And Force Restart is here, not elsewhere
+ *
+ * This is the screen where a person decides they are not waiting, so it is
+ * where the button belongs — under the list that names who is holding things
+ * up, which is the evidence for the decision. There is no auto-dismiss and no
+ * timeout. Cancel abandons the upgrade rather than applying it; a roster that
+ * gave up and installed anyway would be the kill again, wearing a delay.
  */
-function DrainRosterFlyout() {
+function UpgradeModal() {
     const [snapshot, setSnapshot] = useState<DrainSnapshot | null>(null);
+    const [status, setStatus] = useState<UpdaterStatus | null>(null);
+    const [changelog, setChangelog] = useState<Changelog | null>(null);
     const [busy, setBusy] = useState<string | null>(null);
+    // Genie's top layer (genie#114). A rung number alone is not enough: it only
+    // outranks the Fancy layer while EVERY ancestor is stacking-context-free,
+    // and one `transform` / `filter` / `contain` anywhere above traps the
+    // subtree silently. `position: fixed` has the same problem — a transformed
+    // ancestor becomes its containing block, so a "full-screen" backdrop would
+    // cover only part of the window. The overlay root is a direct child of
+    // <body> and carries the token scope, so `var(--card)` resolves to a real
+    // surface rather than transparent.
+    const [overlayRoot, setOverlayRoot] = useState<HTMLElement | null>(null);
+    useEffect(() => {
+        setOverlayRoot(ensureOverlayRoot<HTMLElement>(document));
+    }, []);
 
     useEffect(() => {
         let alive = true;
@@ -3175,20 +3204,41 @@ function DrainRosterFlyout() {
             .drain.snapshot()
             .then((s) => alive && setSnapshot(s))
             .catch(() => {});
+        void api()
+            .updater.status()
+            .then((s) => alive && setStatus(s))
+            .catch(() => {});
         // PUSHED, never polled: a thumb has to fill at the instant it lands, or
         // the user is watching a roster that lies for as long as the interval.
         const off = api().on.drainChanged((s) => setSnapshot(s));
+        const offStatus = api().on.updaterStatus((s) => setStatus(s));
         return () => {
             alive = false;
             off();
+            offStatus();
         };
     }, []);
 
-    // `complete` keeps it on screen for the last beat before the restart, so
-    // the roster's final state is the one the user actually sees. A snapshot
-    // that is neither active nor complete was CANCELLED — nothing to show.
-    if (!snapshot || snapshot.rows.length === 0) return null;
-    if (!snapshot.active && !snapshot.complete) return null;
+    const plan = upgradeModalPlan({
+        drain: snapshot,
+        latestVersion: status?.latestVersion ?? null,
+    });
+
+    // The notes for the version being APPLIED. Cached in main, so the fetch is
+    // cheap and re-runs across status ticks cost nothing.
+    useEffect(() => {
+        if (!plan.open || !plan.version) return;
+        let alive = true;
+        void api()
+            .updater.changelog(plan.version)
+            .then((c) => alive && setChangelog(c))
+            .catch(() => alive && setChangelog(null));
+        return () => {
+            alive = false;
+        };
+    }, [plan.open, plan.version]);
+
+    if (!plan.open || !snapshot || !overlayRoot) return null;
 
     const summary = drainRosterSummary(snapshot);
     const press = (agentId: string) => {
@@ -3200,96 +3250,150 @@ function DrainRosterFlyout() {
             .finally(() => setBusy(null));
     };
 
-    return (
-        <div className="drain-roster" role="dialog" aria-label="Waiting on agents">
-            <div className="dr-head">
-                <strong>Draining agents before the upgrade</strong>
-                <span>
-                    {summary.green}/{snapshot.rows.length}
-                </span>
+    const groups = changelog?.groups ?? [];
+    const anyNotes = groups.some((group) => group.changes.length > 0);
+
+    return createPortal(
+        <div className="upgrade-modal-backdrop" role="presentation">
+            <div
+                className="upgrade-modal"
+                role="dialog"
+                aria-modal="true"
+                aria-label={`Updating Genie${plan.version ? ` to v${plan.version}` : ''}`}
+            >
+                <header className="um-head">
+                    <strong>
+                        Updating Genie{plan.version ? ` to v${plan.version}` : ''}
+                    </strong>
+                    <span className="um-sub">{summary.headline}</span>
+                </header>
+
+                <section className="um-notes" aria-label="What is in this upgrade">
+                    <h3>What is in this upgrade</h3>
+                    {anyNotes ? (
+                        <div className="um-notes-scroll">
+                            {groups.map((group) => (
+                                <div className="um-group" key={group.version}>
+                                    <div className="um-group-v">v{group.version}</div>
+                                    <ul>
+                                        {group.changes.map((change, i) => (
+                                            <li key={`${group.version}-${i}`}>{change}</li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            ))}
+                            {changelog?.partial && (
+                                // Say so rather than presenting a short list as
+                                // the whole story — the notes come over the
+                                // network and the upgrade does not wait for them.
+                                <p className="um-partial">
+                                    Some release notes could not be fetched. This list may
+                                    be incomplete.
+                                </p>
+                            )}
+                        </div>
+                    ) : (
+                        <p className="um-empty">
+                            {changelog
+                                ? 'No release notes were published for this version.'
+                                : 'Fetching the release notes…'}
+                        </p>
+                    )}
+                </section>
+
+                <section className="um-agents" aria-label="Agent shutdown list">
+                    <h3>
+                        Agents
+                        <span className="um-count">
+                            {summary.green}/{snapshot.rows.length} ready
+                        </span>
+                    </h3>
+                    <ul className="dr-rows">
+                        {snapshot.rows.map((row) => {
+                            const icon = drainRowIcon(row);
+                            const canPress = canSatisfyDrainRow(row);
+                            return (
+                                <li key={row.agentId} className={`dr-row is-${icon}`}>
+                                    <button
+                                        type="button"
+                                        className="dr-thumb"
+                                        disabled={!canPress || busy === row.agentId}
+                                        onClick={() => press(row.agentId)}
+                                        title={
+                                            canPress
+                                                ? `Mark ${row.name} as done — use this after you have shut it down yourself`
+                                                : drainRowStatusLabel(row)
+                                        }
+                                        aria-label={`${row.name}: ${drainRowStatusLabel(row)}`}
+                                    >
+                                        <IconThumbUp size={14} />
+                                    </button>
+                                    <div className="dr-who">
+                                        <span className="dr-name">{row.name}</span>
+                                        <span className="dr-note">
+                                            {drainRowStatusLabel(row)}
+                                        </span>
+                                    </div>
+                                </li>
+                            );
+                        })}
+                    </ul>
+                    {summary.stuck > 0 && (
+                        <div className="dr-warn" role="alert">
+                            {summary.stuck === 1
+                                ? 'One agent has'
+                                : `${summary.stuck} agents have`}{' '}
+                            stopped answering. Shut {summary.stuck === 1 ? 'it' : 'them'} down
+                            yourself, then press the thumb to let the upgrade go ahead.
+                        </div>
+                    )}
+                </section>
+
+                <footer className="um-actions">
+                    {/* THE ESCAPE. The drain deliberately never resolves on a
+                        clock, so the only way past an agent that has stopped
+                        answering is a person deciding to lose what it was doing.
+                        It sits under the list that names who, so the choice is
+                        informed rather than a guess — and it says what it costs. */}
+                    <button
+                        type="button"
+                        className="um-force"
+                        onClick={() => {
+                            void api()
+                                .updater.restart({ force: true })
+                                .catch(() => {});
+                        }}
+                        disabled={summary.done}
+                        title={
+                            summary.done
+                                ? 'Every agent has answered — the upgrade is applying now'
+                                : `Restart now without waiting. ${
+                                      summary.pending === 1
+                                          ? 'The agent that has not answered loses'
+                                          : `The ${summary.pending} agents that have not answered lose`
+                                  } whatever they were part-way through, and no handoff is written for them.`
+                        }
+                    >
+                        Force restart now
+                    </button>
+                    <button
+                        type="button"
+                        className="um-cancel"
+                        onClick={() => {
+                            void api()
+                                .drain.cancel()
+                                .then((s) => setSnapshot(s))
+                                .catch(() => {});
+                        }}
+                        disabled={summary.done}
+                        title="Leave the update staged and go back to work. Nothing is installed."
+                    >
+                        Cancel the upgrade
+                    </button>
+                </footer>
             </div>
-            <div className="dr-sub">{summary.headline}</div>
-            <ul className="dr-rows">
-                {snapshot.rows.map((row) => {
-                    const icon = drainRowIcon(row);
-                    const canPress = canSatisfyDrainRow(row);
-                    return (
-                        <li key={row.agentId} className={`dr-row is-${icon}`}>
-                            <button
-                                type="button"
-                                className="dr-thumb"
-                                disabled={!canPress || busy === row.agentId}
-                                onClick={() => press(row.agentId)}
-                                title={
-                                    canPress
-                                        ? `Mark ${row.name} as done — use this after you have shut it down yourself`
-                                        : drainRowStatusLabel(row)
-                                }
-                                aria-label={`${row.name}: ${drainRowStatusLabel(row)}`}
-                            >
-                                <IconThumbUp size={14} />
-                            </button>
-                            <div className="dr-who">
-                                <span className="dr-name">{row.name}</span>
-                                <span className="dr-note">{drainRowStatusLabel(row)}</span>
-                            </div>
-                        </li>
-                    );
-                })}
-            </ul>
-            {summary.stuck > 0 && (
-                <div className="dr-warn" role="alert">
-                    {summary.stuck === 1 ? 'One agent has' : `${summary.stuck} agents have`} stopped
-                    answering. Shut{' '}
-                    {summary.stuck === 1 ? 'it' : 'them'} down yourself, then press the thumb to let
-                    the upgrade go ahead.
-                </div>
-            )}
-            <div className="dr-actions">
-                {/* THE ESCAPE (genie#565). The drain deliberately never resolves
-                    on a clock, so the only way past an agent that has stopped
-                    answering is a person deciding to lose what it was doing.
-                    That decision has to be a click, has to say what it costs,
-                    and sits under the roster that names who is holding things
-                    up — so it is an informed choice and not a guess. */}
-                <button
-                    type="button"
-                    className="dr-force"
-                    onClick={() => {
-                        void api()
-                            .updater.restart({ force: true })
-                            .catch(() => {});
-                    }}
-                    title={
-                        summary.done
-                            ? 'Every agent has answered — the upgrade is applying now'
-                            : `Restart now without waiting. ${
-                                  snapshot.rows.length - summary.green === 1
-                                      ? 'The agent that has not answered loses'
-                                      : `The ${
-                                            snapshot.rows.length - summary.green
-                                        } agents that have not answered lose`
-                              } whatever they were part-way through, and no handoff is written for them.`
-                    }
-                    disabled={summary.done}
-                >
-                    Force restart now
-                </button>
-                <button
-                    type="button"
-                    className="dr-cancel"
-                    onClick={() => {
-                        void api()
-                            .drain.cancel()
-                            .then((s) => setSnapshot(s))
-                            .catch(() => {});
-                    }}
-                    disabled={summary.done}
-                >
-                    Cancel the upgrade
-                </button>
-            </div>
-        </div>
+        </div>,
+        overlayRoot,
     );
 }
 

@@ -1215,3 +1215,27 @@ test('the Genie label carries the one update control, and the banner is gone', a
         await expect(offer).toHaveText(/\S/);
     }
 });
+
+/**
+ * THE UPGRADE MODAL IS NOT ON SCREEN WHEN NO UPGRADE IS HAPPENING (genie#565).
+ *
+ * A full-screen sheet with a blurred backdrop is the most disruptive surface in
+ * the app, and its visibility rule is the part that can be got wrong
+ * invisibly — `upgradeModalPlan` decides it, and its unit tests cover the four
+ * snapshot shapes. What only the real window can show is that the rule is
+ * actually WIRED: a modal whose open state defaulted true, or whose portal
+ * mounted unconditionally, would blank the app on every launch, and every other
+ * test in this file would fail with a mysterious "element not visible".
+ *
+ * So this is the cheap, decisive half. Staging a real drain needs live agents
+ * mid-turn, which this fixture has not got.
+ */
+test('no upgrade is in progress, so no modal covers the window', async () => {
+    await expect(page.locator('.upgrade-modal-backdrop')).toHaveCount(0);
+    await expect(page.locator('.upgrade-modal')).toHaveCount(0);
+
+    // The control: the window IS rendered, so the absence above is a modal that
+    // correctly stayed closed rather than a page that never mounted.
+    await expect(page.locator('.winframe')).toBeVisible();
+    await expect(page.locator('.glogo')).toBeVisible();
+});
