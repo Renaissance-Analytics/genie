@@ -6,6 +6,8 @@ import {
     type SettingTier,
 } from '../setting-tiers';
 import { HOST_SOURCED_SETTINGS_KEYS, RUNTIME_OWNED_SETTINGS_KEYS } from '../settings-nav';
+import { ALERT_KINDS, alertKindDef } from '../../../main/notify-sound-kinds';
+import type { Settings } from '../genie';
 
 /**
  * THREE TIERS, and none of them touch each other (owner directive 2026-09-02).
@@ -130,6 +132,18 @@ describe('the judgement calls', () => {
             'terminal_copy_paste',
         ] as const) {
             expect(settingTier(key)).toBe('user');
+        }
+    });
+
+    it('puts BOTH keys of EVERY alert sound in the user tier, not just the two above', () => {
+        // Which chime an alert plays belongs to the PERSON and follows them
+        // between workstations. The two named above were the whole list until
+        // genie#546; this is the version that cannot go stale when a ninth alert
+        // is added, because it reads the same registry the tiers derive from.
+        for (const kind of ALERT_KINDS) {
+            const def = alertKindDef(kind);
+            expect(settingTier(def.setting as keyof Settings), `${kind} choice`).toBe('user');
+            expect(settingTier(def.custom as keyof Settings), `${kind} custom`).toBe('user');
         }
     });
 

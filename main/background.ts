@@ -103,7 +103,7 @@ import {
     healTynnMcpEntry,
     syncWorkspaceCodexTynnMcp,
 } from './mcp/agent-config';
-import { resolveAlertSound, deliverAlertSound } from './notify-sound';
+import { playAlertSound, setAlertSoundWindowSource } from './notify-sound';
 import { demandWindowAttention, resolveAttentionWindow } from './attention-flash';
 import { workspaceDocHealth, repairWorkspaceDocs } from './workspace/create-agi';
 import {
@@ -390,21 +390,19 @@ function notifyImDone(terminalId: string): void {
     } catch {
         return;
     }
-    // Resolve the per-alert sound choice (synth / bundled wav / custom file →
-    // data-URL / off). A null descriptor means "off" for this alert — skip the
-    // chime entirely. Only resolved when the master sound gate is on.
-    const sound =
-        settings.notify_sound === 'on' ? resolveAlertSound('imDone') : null;
-    if (sound) {
-        // Deliver the chime to the MASTER renderer specifically — it's the only
-        // window that subscribes to `notify:sound`. A freshly-created master
-        // window (cold launch / upgrade-restart) may still be loading when the
-        // alert fires; sending then drops the message, so deliverAlertSound
-        // defers to did-finish-load (mirrors openTaskManagerWindow /
-        // sendOpenFile). When fully tray-resident (no master window) no renderer
-        // can play audio — the OS toast below still notifies.
-        deliverAlertSound(masterWindow, { kind: 'imDone', sound });
-    }
+    // The chime: master switch, this alert's own choice (synth / bundled wav /
+    // custom file → data-URL / None), and delivery to the MASTER renderer, which
+    // is the only window that subscribes to `notify:sound`. All of it lives in
+    // `playAlertSound` now, so the eight alert kinds cannot each grow their own
+    // slightly different copy of this sequence — and the two that predate the
+    // registry go through the same gate as the six that do not.
+    //
+    // A freshly-created master window (cold launch / upgrade-restart) may still
+    // be loading when the alert fires; sending then would drop it, so delivery
+    // defers to did-finish-load. Fully tray-resident (no master window) means no
+    // renderer can play audio at all — false comes back, and the OS toast below
+    // is then allowed to make its own sound.
+    const playedSound = playAlertSound('imDone', masterWindow);
     if (settings.notify_toast === 'on' && Notification.isSupported()) {
         const notice = planImDoneNotice(terminalNoticeFacts(terminalId));
         const n = new Notification({
@@ -412,7 +410,7 @@ function notifyImDone(terminalId: string): void {
             body: notice.body,
             // Silence the OS chime only when OUR chime actually plays, so we
             // don't double up — but if the alert sound is off, let the OS sound.
-            silent: !!sound,
+            silent: playedSound,
         });
         n.on('click', () => {
             // Surface (creating if needed) the master window — the previous
@@ -1899,6 +1897,14 @@ app.whenReady().then(async () => {
             /* best-effort */
         }
     }, 8000).unref?.();
+    // Alert sounds: tell `playAlert` where the master window is (genie#546).
+    // The modules that now raise alerts — the flow runner, the process
+    // supervisor, the AgentInbox fan-out, the plugin registry — have no business
+    // holding a BrowserWindow, and threading one through each of them is exactly
+    // how the two original call sites each ended up with their own copy of this
+    // lookup. Read LAZILY (a closure, not a value): `masterWindow` is recreated
+    // whenever the window is closed and reopened.
+    setAlertSoundWindowSource(() => masterWindow);
     // AgentInbox: wire the presence/message fan-out + the durable store, then
     // re-register every persisted AgentInbox agent (durable identity rides
     // terminal_specs.meta) and rehydrate their messages/inboxes from genie.db so

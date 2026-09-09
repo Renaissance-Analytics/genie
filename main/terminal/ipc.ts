@@ -68,6 +68,7 @@ import { computeOrphans } from './orphans';
 import { buildProcessArgs } from './process-spawn';
 import { devServiceHostEnvFor } from '../dev-server';
 import { terminalServiceEnv } from '../dev-server/services/env-wiring';
+import { playAlert } from '../notify-sound';
 import { recordTerminalServiceEnv } from '../dev-server/services/stale-terminal-env';
 import { withoutManagedServiceKeys } from '../dev-server/services/env-sync';
 import {
@@ -1802,6 +1803,14 @@ export function broadcastAgentThumbsUp(payload: {
 }): void {
     broadcastLocal('agent:thumbs-up', payload);
     mobileEmit('agent:thumbs-up', payload);
+    // Every thumbsUp, whichever reason. The ONE fan-out both `onThumbsUp`
+    // branches reach (the OS agent's and a workspace agent's), so wiring here
+    // cannot miss one the way two call sites could drift.
+    //
+    // `boot` fires on EVERY agent start, so a Genie restart chimes once per
+    // agent -- which is why this kind defaults to `off` and says so in its
+    // description. The owner opts in knowing what a restart sounds like.
+    playAlert('thumbsUp');
 }
 
 /**

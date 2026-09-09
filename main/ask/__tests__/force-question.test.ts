@@ -131,11 +131,22 @@ const mockDb = vi.hoisted(() => ({
     settings: { notify_sound: 'off' } as Record<string, string>,
 }));
 vi.mock('../../db', () => ({ getAllSettings: () => mockDb.settings }));
-// Spy the chime delivery so the DND-sound path is observable.
+// Spy the chime so the DND-sound path is observable.
+//
+// The spy sits on `playAlertSound` (genie#546): resolve-choice + master-switch
+// + deliver-to-the-master-renderer are ONE function now, and this file's subject
+// is whether the DND path asks for a chime at all — not how one is resolved.
+// The gate that moved inside it (`notify_sound` off silences every kind) is
+// covered directly, with a positive control, in
+// `main/__tests__/notify-sound-play.test.ts`.
 const soundMock = vi.hoisted(() => ({ deliver: vi.fn() }));
 vi.mock('../../notify-sound', () => ({
     resolveAlertSound: () => ({ kind: 'synth' }),
     deliverAlertSound: (...a: unknown[]) => soundMock.deliver(...a),
+    playAlertSound: (...a: unknown[]) => {
+        soundMock.deliver(...a);
+        return true;
+    },
 }));
 
 import {

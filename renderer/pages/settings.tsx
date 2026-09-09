@@ -119,6 +119,16 @@ import {
 } from '../lib/settings-nav';
 import { pickPath } from '../components/FilePickerModal';
 import ErrorBoundary from '../components/ErrorBoundary';
+// The alert-sound vocabulary. PURE (no db, no electron), so the settings page
+// can build its rows from the same list the main process resolves them with.
+import {
+    ALERT_KINDS,
+    SOUND_CHOICES,
+    alertKindDef,
+    type SoundChoice,
+    type SynthMotif,
+} from '../../main/notify-sound-kinds';
+import { playChime } from '../lib/alert-chime';
 
 /** Hard cap on the Ai.System instruction set (mirrors main's AI_SYSTEM_MAX).
  *  Enforced here in the UI (`maxLength` + slice) and again server-side in the
@@ -510,7 +520,7 @@ export default function SettingsPage() {
 
             <SetSection
                 title="Notifications"
-                desc="How Genie alerts you when an agent finishes (imDone) or asks a question"
+                desc="Which of an agent’s actions Genie makes a sound for — and which stay silent"
             >
                 <SettingRow
                     label="Play a sound"
@@ -527,22 +537,32 @@ export default function SettingsPage() {
                 {s.notify_sound === 'on' && (
                     <>
                         <SetSubhead>Alert sounds</SetSubhead>
-                        <AlertSoundRow
-                            label="Agent finishes — imDone"
-                            choice={s.sound_imdone ?? 'synth'}
-                            customPath={s.sound_imdone_custom ?? ''}
-                            kind="imDone"
-                            onChoice={(v) => patch({ sound_imdone: v })}
-                            onCustom={(p) => patch({ sound_imdone_custom: p })}
-                        />
-                        <AlertSoundRow
-                            label="Agent asks a question"
-                            choice={s.sound_forcequestion ?? 'synth'}
-                            customPath={s.sound_forcequestion_custom ?? ''}
-                            kind="force-question"
-                            onChoice={(v) => patch({ sound_forcequestion: v })}
-                            onCustom={(p) => patch({ sound_forcequestion_custom: p })}
-                        />
+                        {/* ONE row per alert kind, built from the registry in
+                            main/notify-sound-kinds.ts. Hand-writing a row per
+                            kind is what kept this at two for so long: the row,
+                            the settings key and the resolver were three lists
+                            and only one of them was checked. Every kind is
+                            reachable here BY CONSTRUCTION now, and “None” is an
+                            option on each. */}
+                        {ALERT_KINDS.map((kind) => {
+                            const def = alertKindDef(kind);
+                            return (
+                                <AlertSoundRow
+                                    key={kind}
+                                    label={def.label}
+                                    desc={def.desc}
+                                    keywords={def.keywords}
+                                    choice={
+                                        (s[def.setting] as SoundChoice | undefined) ??
+                                        def.fallback
+                                    }
+                                    customPath={s[def.custom] ?? ''}
+                                    motif={def.motif}
+                                    onChoice={(v) => patch({ [def.setting]: v })}
+                                    onCustom={(p) => patch({ [def.custom]: p })}
+                                />
+                            );
+                        })}
                     </>
                 )}
                 <SettingRow
@@ -1122,38 +1142,20 @@ function Segmented<T extends string>({
     );
 }
 
-/** The selectable alert-sound choices, shared by both alert rows. */
-type SoundChoice =
-    | 'off'
-    | 'synth'
-    | '3tootpipe'
-    | 'dingdongdoink'
-    | 'sparkle'
-    | 'triumphant'
-    | 'winddown'
-    | 'custom';
-
-const SOUND_OPTIONS: Array<{ value: SoundChoice; label: string }> = [
-    { value: 'synth', label: 'Default chime' },
-    { value: '3tootpipe', label: '3 Toot Pipe' },
-    { value: 'dingdongdoink', label: 'Ding Dong Doink' },
-    { value: 'sparkle', label: 'Sparkle' },
-    { value: 'triumphant', label: 'Triumphant' },
-    { value: 'winddown', label: 'Wind Down' },
-    { value: 'custom', label: 'Custom file…' },
-    { value: 'off', label: 'None' },
-];
-
 /**
  * Play the sound a choice resolves to, locally, for the Settings Preview button.
  * Mirrors the master-window playback: a bundled name plays ./sounds/<name>.wav,
  * 'custom' reads the file to a data-URL via the IPC bridge, 'synth' fires the
- * built-in per-kind Web Audio chime, 'off' is silent. Best-effort.
+ * built-in motif for that alert, 'off' is silent. Best-effort.
+ *
+ * The synth branch calls the SAME `playChime` the alert itself does — this used
+ * to be a second hand-written copy of the note list, so Preview could drift from
+ * what you would actually hear and nothing would say so.
  */
 async function previewSound(
     choice: SoundChoice,
     customPath: string,
-    kind: 'imDone' | 'force-question',
+    motif: SynthMotif,
 ): Promise<void> {
     try {
         if (choice === 'off') return;
@@ -1164,41 +1166,11 @@ async function previewSound(
             return;
         }
         if (choice !== 'synth') {
-            // Any bundled wav (3tootpipe / dingdongdoink / sparkle / triumphant /
-            // winddown) → ./sounds/<name>.wav. 'off'/'custom' handled above.
+            // Any bundled wav → ./sounds/<name>.wav. 'off'/'custom' handled above.
             await new Audio(`./sounds/${choice}.wav`).play().catch(() => {});
             return;
         }
-        // 'synth' — reuse the master window's per-kind motif.
-        const Ctx =
-            window.AudioContext ||
-            (window as unknown as { webkitAudioContext?: typeof AudioContext })
-                .webkitAudioContext;
-        if (!Ctx) return;
-        const ctx = new Ctx();
-        const now = ctx.currentTime;
-        const tone = (freq: number, start: number, dur: number, type: OscillatorType = 'sine') => {
-            const osc = ctx.createOscillator();
-            const gain = ctx.createGain();
-            osc.type = type;
-            osc.frequency.value = freq;
-            gain.gain.setValueAtTime(0.0001, now + start);
-            gain.gain.exponentialRampToValueAtTime(0.18, now + start + 0.02);
-            gain.gain.exponentialRampToValueAtTime(0.0001, now + start + dur);
-            osc.connect(gain).connect(ctx.destination);
-            osc.start(now + start);
-            osc.stop(now + start + dur);
-        };
-        if (kind === 'force-question') {
-            tone(880, 0, 0.1, 'triangle');
-            tone(880, 0.14, 0.1, 'triangle');
-            tone(1175, 0.28, 0.26, 'triangle');
-            setTimeout(() => void ctx.close().catch(() => {}), 900);
-        } else {
-            tone(660, 0, 0.18);
-            tone(880, 0.16, 0.24);
-            setTimeout(() => void ctx.close().catch(() => {}), 700);
-        }
+        playChime(motif);
     } catch {
         /* preview is best-effort */
     }
@@ -1217,16 +1189,20 @@ function baseName(p: string): string {
  */
 function AlertSoundRow({
     label,
+    desc,
+    keywords,
     choice,
     customPath,
-    kind,
+    motif,
     onChoice,
     onCustom,
 }: {
     label: string;
+    desc: string;
+    keywords: string;
     choice: SoundChoice;
     customPath: string;
-    kind: 'imDone' | 'force-question';
+    motif: SynthMotif;
     onChoice: (v: SoundChoice) => void;
     onCustom: (path: string) => void;
 }) {
@@ -1237,7 +1213,10 @@ function AlertSoundRow({
     return (
         <SettingRow
             label={label}
-            keywords={`alert sound ${kind} ${label} preview synth chime custom file`}
+            // What actually fires this alert. A row whose trigger you have to
+            // guess at is a row you will not turn on.
+            desc={desc}
+            keywords={`alert sound ${label} ${keywords} preview synth chime custom file none silent`}
             vertical
         >
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
@@ -1245,13 +1224,13 @@ function AlertSoundRow({
                     <Select
                         value={choice}
                         onValueChange={(v) => onChoice(v as SoundChoice)}
-                        list={SOUND_OPTIONS}
+                        list={[...SOUND_CHOICES]}
                     />
                 </div>
                 <Action
                     variant="ghost"
                     icon="play"
-                    onClick={() => void previewSound(choice, customPath, kind)}
+                    onClick={() => void previewSound(choice, customPath, motif)}
                     disabled={choice === 'off' || (choice === 'custom' && !customPath)}
                 >
                     Preview

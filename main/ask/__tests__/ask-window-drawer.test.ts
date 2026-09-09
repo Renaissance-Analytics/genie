@@ -120,6 +120,9 @@ vi.mock('../../db', () => ({
 vi.mock('../../notify-sound', () => ({
     resolveAlertSound: () => null,
     deliverAlertSound: () => {},
+    // The chime goes through ONE gate now (genie#546); inert here, like the
+    // two above, so these tests are about the modal and not about audio.
+    playAlertSound: () => false,
 }));
 vi.mock('../../testing-browser', () => ({
     LOCAL_CONN_KEY: 'local',

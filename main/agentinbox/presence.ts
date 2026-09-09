@@ -3,6 +3,9 @@ import { mobileEmit } from '../mobile/server';
 import { broadcastTerminalAttention } from '../terminal/ipc';
 import { agentPulse } from '../terminal/agent-pulse';
 import { agentInboxBroker } from './broker';
+import { playAlert } from '../notify-sound';
+import { alertKindForInboxSender } from '../notify-sound-kinds';
+import { readMachineSender } from './types';
 import type { AgentInboxBrokerEvent } from './types';
 
 /**
@@ -39,10 +42,27 @@ export function installAgentInboxPresence(): void {
                 mobileEmit('agentinbox:presence', payload);
                 break;
             }
-            case 'message':
+            case 'message': {
                 broadcastLocal('agentinbox:message', ev.preview);
                 mobileEmit('agentinbox:message', ev.preview);
+                // …and chime, if the owner asked to hear agents talking to each
+                // other, or a machine reporting in (genie#546). The SENDER
+                // decides which: an agent id is an agentMessage, a machine
+                // source is an automated notice, and the human is silent — you
+                // do not need a chime for the message you just typed.
+                //
+                // `readMachineSender` answers the machine half rather than this
+                // file matching on the id's shape: genie#543 made it the ONE
+                // place that parses a machine sender, and it is deliberately
+                // strict — an unrecognised `genie:<kind>:<id>` is ordinary mail,
+                // not a source Genie can claim to have understood.
+                const alert = alertKindForInboxSender(
+                    ev.preview.from,
+                    readMachineSender(ev.preview.from) !== null,
+                );
+                if (alert) playAlert(alert);
                 break;
+            }
             case 'lifecycle':
                 // The pulse fans this out itself (broadcastLocal + mobileEmit on
                 // `agent-pulse`), so there is deliberately no broadcast here.

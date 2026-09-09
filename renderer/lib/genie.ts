@@ -15,6 +15,7 @@ import type {
 import type { AddWorkspacePlan } from '../../main/workspace/add-workspace-types';
 import type { DrainSnapshot } from '../../main/agents/drain';
 import type { AgentTuiId, TuiDef } from '../../main/agents/registry';
+import type { SoundSettingKeys } from '../../main/notify-sound-kinds';
 import type { RestartMode } from '../../main/agents/restart-options';
 import type { AgentCliToolId } from '../../main/agents/agent-cli-catalog';
 /* The agent MANAGER's wire types (Tynn #709 / story #263).
@@ -1274,7 +1275,7 @@ export type ProviderLaunchSettings = {
     [K in TuiDef['commandSettingKey'] | TuiDef['flagsSettingKey']]?: string;
 };
 
-export interface Settings extends ProviderLaunchSettings {
+export interface Settings extends ProviderLaunchSettings, SoundSettingKeys {
     primary_workspace?: string;
     /** Last-activated workspace id in the master view. */
     active_workspace?: string;
@@ -1324,18 +1325,10 @@ export interface Settings extends ProviderLaunchSettings {
     /** Show an OS notification (tray popup) when an agent calls imDone.
      *  Defaults 'off'. */
     notify_toast?: 'on' | 'off';
-    /** Which sound the imDone alert plays (gated by notify_sound): 'synth' (the
-     *  built-in chime, default), a bundled wav ('3tootpipe' | 'dingdongdoink'),
-     *  'custom' (sound_imdone_custom file), or 'off'. */
-    sound_imdone?: 'off' | 'synth' | '3tootpipe' | 'dingdongdoink' | 'sparkle' | 'triumphant' | 'winddown' | 'custom';
-    /** Absolute path to the custom imDone sound (used when sound_imdone === 'custom'). */
-    sound_imdone_custom?: string;
-    /** Which sound the ForceTheQuestion alert plays. Same value set as
-     *  sound_imdone; default 'synth'. */
-    sound_forcequestion?: 'off' | 'synth' | '3tootpipe' | 'dingdongdoink' | 'sparkle' | 'triumphant' | 'winddown' | 'custom';
-    /** Absolute path to the custom ForceTheQuestion sound (used when
-     *  sound_forcequestion === 'custom'). */
-    sound_forcequestion_custom?: string;
+    // The per-alert sound keys - `sound_<kind>` and `sound_<kind>_custom` -
+    // come from `SoundSettingKeys`, so this mirror of `Settings` and the one in
+    // `main/db.ts` cannot disagree about which alerts exist. The list is
+    // `main/notify-sound-kinds.ts`.
     /** ForceTheQuestion AVAILABILITY (client-side). 'available' (default) pops the
      *  always-on-top modal now; 'dnd' suppresses the popup + chime and diverts the
      *  question to the top-bar inbox to answer at leisure. This is the GLOBAL
@@ -4534,6 +4527,10 @@ export interface GenieApi {
         notifySound: (
             cb: (payload: {
                 kind: string;
+                /** Which built-in chime `synth` means, for the alert that fired.
+                 *  Absent from a REMOTE host one version behind, where `kind` is
+                 *  the only clue — see `motifForPayload`. */
+                motif?: string;
                 sound?:
                     | { mode: 'synth' }
                     | { mode: 'asset'; name: string }

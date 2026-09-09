@@ -40,6 +40,8 @@ import { dispatchAppCall } from '../apps/bridge';
 import { onFileWatchEvent, unwatchWorkspace, watchWorkspace } from '../files/watch';
 import { setFlowFireHandler } from '../terminal/process-scheduler';
 import { broadcastLocal } from '../remote';
+import { playAlert } from '../notify-sound';
+import { alertKindForFlowOutcome } from '../notify-sound-kinds';
 import type { ServerDeps } from '../mcp/server';
 import type { AppGrant } from '../apps/bridge-decision';
 import { FlowActivity, type FlowRunRecord } from './activity';
@@ -181,6 +183,15 @@ async function runAndRecord(
     });
     if (record) recordFlowRun(record);
     pushActivity(record ?? undefined);
+
+    // The run is OVER — chime, if the owner asked to hear about it (genie#546).
+    // A Flow is the thing here most likely to run while nobody is watching,
+    // which is exactly what a sound is for. On the FINISH only: a start chime
+    // would double every alert while announcing nothing anyone can act on.
+    // `failed` and `refused` raise the FAILURE alert instead, because "a Flow
+    // finished" is not what happened in either case. Gated by Settings and off
+    // by default; a no-op otherwise.
+    playAlert(alertKindForFlowOutcome(outcome));
 
     return { ...result, outcome, runId };
 }
