@@ -116,6 +116,33 @@ function runningProcesses(): {
 }
 
 /**
+ * Write the restore list: every agent, site and background process up RIGHT NOW.
+ *
+ * Called from TWO places, because an upgrade reaches the installer two ways and
+ * both need the list (genie#551):
+ *
+ *  - {@link beginUpgradeDrain}, before the first nudge; and
+ *  - the pre-apply seam in `updater/ipc.ts`, for an apply that did NOT drain —
+ *    a Force Restart the user took without one, which is what the phone's
+ *    `mobileInstallUpdate(force)` sends.
+ *
+ * It REPLACES rather than appends, which is why the seam guards on
+ * {@link upgradeRosterPlan} rather than calling this unconditionally: after a
+ * drain, the recorded agents have already exited and a second walk would write
+ * a shorter list over a complete one.
+ */
+export function recordUpgradeRoster(agents: DrainTarget[] = collectDrainTargets()): void {
+    recordDrainRoster(
+        getDb(),
+        drainRosterFrom({
+            agents,
+            sites: runningSites(),
+            processes: runningProcesses(),
+        }),
+    );
+}
+
+/**
  * Start the drain: record what is running, then nudge every agent.
  *
  * The roster is written BEFORE the first nudge, deliberately. Everything after
@@ -126,14 +153,9 @@ function runningProcesses(): {
  */
 export function beginUpgradeDrain(opts: { stuckAfterMs?: number } = {}): Promise<DrainSnapshot> {
     const targets = collectDrainTargets();
-    recordDrainRoster(
-        getDb(),
-        drainRosterFrom({
-            agents: targets,
-            sites: runningSites(),
-            processes: runningProcesses(),
-        }),
-    );
+    // The same targets it is about to nudge — collected once, so the roster and
+    // the drain can never disagree about who was running.
+    recordUpgradeRoster(targets);
     return agentUpgradeDrain.begin(targets, opts);
 }
 
@@ -234,7 +256,23 @@ export function satisfyDrainRow(agentId: string): DrainSnapshot {
 
 // --- the restore, on the other side of the upgrade ---------------------------
 
-/** Is a drain's restore list waiting to be consumed by this launch? */
+/**
+ * Does a restore list EXIST?
+ *
+ * Two callers, on opposite sides of the same upgrade, asking the same question
+ * of the same table:
+ *
+ *  - at boot, *"is there a list waiting to be consumed by this launch?"*; and
+ *  - at the pre-apply seam, *"has anything already recorded one?"* — the guard
+ *    that stops an apply overwriting the drain's roster (genie#551).
+ *
+ * ONE predicate rather than a synonym per caller: two names for one row count
+ * is how they drift into disagreeing about what an empty roster means.
+ *
+ * A roster that cannot be READ answers false, and both callers want that. The
+ * boot then restores nothing (as it does today), and the seam records afresh —
+ * the direction that writes a list rather than the one that silently keeps none.
+ */
 export function pendingDrainRestore(): boolean {
     try {
         return readDrainRoster(getDb()).length > 0;

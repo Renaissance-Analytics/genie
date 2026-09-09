@@ -240,6 +240,43 @@ export function shutdownReadinessPlan(input: {
     return input.forUpdate && (input.drainCleared || input.forced === true) ? 'skip' : 'ask';
 }
 
+/**
+ * PURE. Does this upgrade apply have to write a RESTORE LIST first? (genie#551)
+ *
+ * genie#389 wrote the roster inside `beginUpgradeDrain`, which made *"we
+ * recorded what was running"* a consequence of *"we decided to nudge the
+ * agents"*. Those are different questions, and the gap between them is the bug:
+ * an apply that skips the drain quits with no list, so nothing on the other side
+ * knows anything had been running.
+ *
+ * genie#565 closed every door that skipped the drain by ACCIDENT. One that skips
+ * it on purpose remains, and must — {@link upgradeRestartPlan}'s `force`, a
+ * person who has been shown what they are about to lose and says go anyway. The
+ * phone reaches it with no roster in front of it at all
+ * (`mobileInstallUpdate(force)` from 'ready-to-restart'), and that apply took
+ * every running agent with it, unrecorded.
+ *
+ * So recording belongs to the APPLY, which is the one thing every door reaches.
+ *
+ * ## The guard is the whole of it
+ *
+ * `keep` exists because the drain writes its roster BEFORE the first nudge —
+ * deliberately, since everything after that point can be interrupted. By the
+ * time an apply runs, the agents on that list have handed off and EXITED, so a
+ * second walk of live state finds fewer of them, or none. Recording again would
+ * replace a correct list with a thinner one: the same bug, entered from the
+ * other side.
+ *
+ * The input is therefore *"is a roster already recorded"* and NOT *"did the
+ * drain clear"*, which is the near-miss worth naming. A Force Restart taken
+ * mid-drain has `drainCleared: false` and a complete roster on disk at the same
+ * time, and the agents already showing green are precisely the ones that have
+ * gone — so a `drainCleared` guard drops exactly them.
+ */
+export function upgradeRosterPlan(input: { rosterRecorded: boolean }): 'record' | 'keep' {
+    return input.rosterRecorded ? 'keep' : 'record';
+}
+
 /** Cancels an armed deadline. */
 type Cancel = () => void;
 

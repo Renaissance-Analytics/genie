@@ -123,6 +123,13 @@ class AutoUpdater extends EventEmitter {
      */
     private interruptionProbe: (() => RestartInterruption) | null = null;
     /**
+     * Injected side-effect run at the LAST moment everything this upgrade is
+     * about to interrupt is still running — see {@link setBeforeApply}. Null →
+     * nothing to do, which is what every test and every non-desktop embedding
+     * wants.
+     */
+    private beforeApply: (() => void) | null = null;
+    /**
      * THE GATED RESTART (genie#565). Injected by the updater IPC layer, which
      * can reach the agent domain this module deliberately cannot.
      *
@@ -182,6 +189,22 @@ class AutoUpdater extends EventEmitter {
      */
     setInterruptionProbe(fn: () => RestartInterruption): void {
         this.interruptionProbe = fn;
+    }
+
+    /**
+     * Wire the PRE-APPLY hook — the last instant before Genie hands over to the
+     * installer, while everything the upgrade is about to end is still running
+     * (genie#551). Genie uses it to write the drain's restore list.
+     *
+     * It lives HERE rather than at each call site because {@link restartAndApply}
+     * is the one funnel every apply reaches: the header pill, the staged-build
+     * banner, the phone's `installUpdate`, the drained apply, and the hands-free
+     * finish inside the `update-downloaded` handler that no caller can wrap.
+     * genie#551 escaped through a door that legitimately skips the drain, and a
+     * hook at any door but this one would have to be added to the next door too.
+     */
+    setBeforeApply(fn: () => void): void {
+        this.beforeApply = fn;
     }
 
     getStatus(): AutoUpdaterStatus {
@@ -396,6 +419,22 @@ class AutoUpdater extends EventEmitter {
     restartAndApply(): void {
         if (this.status.state !== 'ready-to-restart') {
             throw new Error('No update has been downloaded yet.');
+        }
+        // LAST CALL — everything this upgrade is about to interrupt is still
+        // running, and this is where Genie writes down what that is (genie#551).
+        // AFTER the readiness check, so an apply that is not happening records
+        // nothing: a roster left behind for an upgrade that never ran is
+        // replayed by the next ordinary launch.
+        //
+        // Best-effort by design. A restore list is worth a lot and it is not
+        // worth an upgrade that will not install; a failure is logged, and the
+        // boot on the other side simply finds no roster — today's behaviour.
+        try {
+            this.beforeApply?.();
+        } catch (e) {
+            this.appendLog(
+                `before-apply hook failed: ${e instanceof Error ? e.message : String(e)}`,
+            );
         }
         // Signal the before-quit teardown that this quit is an UPDATE apply,
         // not a normal quit. With a detached pty-host alive, the host pins
