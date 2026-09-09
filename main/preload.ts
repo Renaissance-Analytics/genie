@@ -17,6 +17,7 @@ import type { TypeCounts } from './issue-watch';
 import type { TynnHealth } from './mcp/tynn-health';
 import type { HostToolName } from './dev-server/toolchain-detect';
 import type { AskDraftEntry } from './ask/draft-store';
+import type { PinReason } from './remote/pairing-reason';
 // The knowledge argument shapes, from the modules that OWN them, for the reason
 // stated above `TypeCounts`: a hand-written duplicate at a boundary cannot
 // disagree with anything, so it drifts silently.
@@ -170,6 +171,11 @@ interface MobileStatus {
     needsFirewallRule: boolean;
     /** True when served over browser-trusted HTTPS (Tailscale cert); false = http. */
     secure: boolean;
+    /** Set when this run could not read the paired-device store (genie#578). */
+    pairingStoreIssue: {
+        reason: 'keychain-unavailable' | 'decrypt-failed' | 'malformed' | 'read-failed';
+        preservedPath: string | null;
+    } | null;
 }
 /** Who holds the host's baton, as this driver sees it (mirrors main/remote). */
 interface RemoteControlState {
@@ -552,6 +558,9 @@ const api = {
                 connKey?: string;
                 error?: string;
                 needsPin?: boolean;
+                /** WHY the PIN is wanted — the UI says a different sentence for
+                 *  each, instead of calling every failure a first pair. */
+                pinReason?: PinReason;
             }>,
         known: () =>
             ipcRenderer.invoke('host:known') as Promise<

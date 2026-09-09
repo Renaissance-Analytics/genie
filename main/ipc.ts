@@ -182,6 +182,7 @@ import {
     listSessions,
     type MobileServerState,
 } from './mobile/server';
+import { pairingStoreIssue } from './mobile/auth';
 import { DESKTOP_PRINCIPAL } from './mobile/baton';
 import { firewallRuleExists, ensureFirewallRule } from './mobile/firewall';
 import { getTailscaleStatus, tailscaleUp, installTailscale } from './tailscale';
@@ -1591,6 +1592,7 @@ export function registerIpcHandlers(): void {
             pin: string;
             qrDataUrl: string | null;
             needsFirewallRule: boolean;
+            pairingStoreIssue: ReturnType<typeof pairingStoreIssue>;
         }
     > => {
         const state = mobileServerState();
@@ -1618,7 +1620,10 @@ export function registerIpcHandlers(): void {
                 needsFirewallRule = false;
             }
         }
-        return { ...state, pin, qrDataUrl, needsFirewallRule };
+        // Non-null when this run could not read the store holding the PIN and
+        // every paired device — the failure that used to be completely silent
+        // and left the owner re-pairing without ever learning why (genie#578).
+        return { ...state, pin, qrDataUrl, needsFirewallRule, pairingStoreIssue: pairingStoreIssue() };
     };
     ipcMain.handle('mobile:status', () => mobileStatus());
     ipcMain.handle('mobile:restart', async (_e, enabled?: boolean) => {

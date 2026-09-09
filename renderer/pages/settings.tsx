@@ -58,6 +58,7 @@ import {
     workstationAgentCapField,
     writeWorkstationAgentCap,
 } from '../lib/agent-cap-field';
+import { pairingPrompt } from '../../main/remote/pairing-reason';
 import {
     agentCliRows,
     defaultChangeNotice,
@@ -4256,9 +4257,11 @@ function RemoteHostCard() {
         try {
             // Open the host in its OWN native Floor window (the local window
             // stays local). No PIN → reconnect with the remembered token; the
-            // host answers needsPin only for a first-time pair (or a dead token).
-            // The discovered host's stable hostId/dnsName ride along so pairing
-            // keys on identity, not the mutable ip:port.
+            // host answers needsPin with a pinReason saying WHICH way the saved
+            // pairing failed to be usable — never paired, unreadable, no
+            // keychain, or thrown out by the host (genie#578). The discovered
+            // host's stable hostId/dnsName ride along so pairing keys on
+            // identity, not the mutable ip:port.
             const r = await api().remote.open(host, pin?.trim() || undefined);
             if (r.ok) {
                 setPinNeeded((p) => ({ ...p, [key]: false }));
@@ -4269,7 +4272,7 @@ function RemoteHostCard() {
                 setMsg(
                     pin
                         ? 'That PIN was rejected — check the host and try again.'
-                        : `First time pairing ${host.hostname}: enter the PIN shown on it.`,
+                        : pairingPrompt(r.pinReason, host.hostname),
                 );
             } else {
                 setMsg(r.error ?? 'Could not connect.');
@@ -6144,6 +6147,26 @@ function MobileSection({
                     {networkAccess.tynn && <div>Tynn: authenticated relay enabled</div>}
                     {networkAccess.lan && (
                         <div>LAN: awaiting secure certificate enrollment (no plaintext listener)</div>
+                    )}
+                </div>
+            )}
+
+            {/* The paired-device store could not be read this run, so the PIN
+                changed and every paired phone/desktop is gone. That used to
+                happen in total silence — the owner just found themselves pairing
+                again, with no way to learn why (genie#578). Say it, and name the
+                file the old store was kept in so it can still be recovered. */}
+            {status?.pairingStoreIssue && (
+                <div className="set-note bad">
+                    {status.pairingStoreIssue.reason === 'keychain-unavailable'
+                        ? "This computer's keychain was unavailable at startup, so the saved pairings could not be read. The PIN below is a new one and previously paired devices will need to pair again. The old store was left untouched — restart Genie once the keychain is available to get them back."
+                        : 'The saved pairings could not be read at startup, so the PIN below is a new one and previously paired devices will need to pair again.'}
+                    {status.pairingStoreIssue.preservedPath && (
+                        <div style={{ marginTop: 8 }}>
+                            The unreadable store was kept at{' '}
+                            <code>{status.pairingStoreIssue.preservedPath}</code> rather than
+                            overwritten.
+                        </div>
                     )}
                 </div>
             )}
