@@ -56,6 +56,15 @@ import {
 } from '../issue-watch';
 import { requestIssueWatchRefresh } from '../issue-watch/force-refresh';
 import { agentInboxBroker } from '../agentinbox/broker';
+// The SAME db + broker wiring the local `lists:read` / `lists:resolveUser` IPC
+// handlers use — shared rather than re-assembled here, so a remote window's
+// resolve reports the very same delivery outcome a local one does (genie#586).
+import {
+    readWorkspaceLists,
+    resolveUserListItemOnHost,
+    workspaceOfListItem,
+} from '../lists/wiring';
+import type { UserListAction } from '../lists/service';
 import {
     postAsHuman,
     readHumanAttachment,
@@ -657,6 +666,34 @@ export function workspacesForRemote<T extends { id: string }>(
 ): T[] {
     if (isHeadless() || !system) return [...listed];
     return [system, ...listed];
+}
+
+/**
+ * The workspace ids a paired remote may ADDRESS on this host — the allow-list
+ * behind `/api/desktop/lists/*` (genie#586).
+ *
+ * Derived from {@link workspacesForRemote} rather than hand-written, so it is
+ * the SAME answer as "which workspaces does this host show a remote": a fourth
+ * definition of that set is a fourth thing to keep in step, and the one that
+ * drifts is the one holding the door.
+ *
+ * The consequences it inherits are the point:
+ *
+ *  - DESKTOP: every workspace plus the protected System row. The owner's own
+ *    machine, and a paired device already gets full access to it (genie#455) —
+ *    which is deliberate, and is what makes the workstation OSA's own lists
+ *    readable from another machine at all. Granular per-pairing permission is
+ *    deferred, and when it arrives it belongs at that seam, not here.
+ *  - HEADLESS (genie-cloud): the member's served workspaces only, fail-closed.
+ *    The operator's workspace is structurally absent, so a member cannot read or
+ *    resolve in it even by a known id.
+ */
+function remoteAddressableWorkspaceIds(deps: MobileDataDeps): Set<string> {
+    return new Set(
+        workspacesForRemote(deps.listWorkspaces(), deps.systemWorkspace?.() ?? null).map(
+            (w) => w.id,
+        ),
+    );
 }
 
 /** A workspace-bound target belongs to a real served workspace. A null/absent
@@ -1931,6 +1968,90 @@ export async function handleApi(
             return true;
         }
         sendJson(res, 404, { error: 'unknown agentinbox route' });
+        return true;
+    }
+
+    // --- host-sourced AgentList + UserList — for a remote DESKTOP driving this host ---
+    // The lists live in the db of the machine that OWNS the workspace (genie#556),
+    // so a host-bound window reading its own db found nothing and rendered an
+    // empty panel — the shape that is indistinguishable from "you have nothing to
+    // do" (genie#586). A list is WORK, and work is host-sourced, like terminals,
+    // workspaces and AgentInbox already are.
+    //
+    // Resolving is the half that matters, and it is why this has to be a HOST
+    // route rather than anything the client could do for itself: ticking an item
+    // off nudges the agent that asked, that agent's terminal is here, and the
+    // broker that would carry the notice is here. The record stands whatever
+    // happens to the nudge, and the OUTCOME comes back on the wire unflattened —
+    // a remote tick that silently loses its nudge is the same defect the local
+    // path reports away, wearing a network.
+    //
+    // The read is auth-only like the other `/api/desktop/*` GETs; the resolve is a
+    // "drive the host" mutation, so it takes the kill-switch too. Both are
+    // ALLOW-LISTED to the workspaces this host serves a remote
+    // (`remoteAddressableWorkspaceIds`) — a paired client must not be able to
+    // reach a workspace it was never given, and on a headless host that means the
+    // operator's own. Live updates ride `/ws/events` as `lists:changed` and are
+    // re-emitted client-side via PASSTHROUGH_EVENTS (see main/remote).
+    if (pathname.startsWith('/api/desktop/lists/')) {
+        const addressable = remoteAddressableWorkspaceIds(deps);
+        const denyUnaddressable = (id: string | null): boolean => {
+            if (id && addressable.has(id)) return false;
+            sendJson(res, 404, { error: 'unknown workspace' });
+            return true;
+        };
+
+        if (pathname === '/api/desktop/lists/read' && method === 'GET') {
+            let workspaceId = '';
+            try {
+                workspaceId =
+                    new URL(req.url ?? '', 'http://x').searchParams.get('workspaceId') ?? '';
+            } catch {
+                /* an unparseable url is an empty id, which is never addressable */
+            }
+            if (denyUnaddressable(workspaceId)) return true;
+            sendJson(res, 200, { view: readWorkspaceLists(workspaceId) });
+            return true;
+        }
+        if (method !== 'POST') {
+            sendJson(res, 405, { error: 'method not allowed' });
+            return true;
+        }
+        let lb: { todoId?: string; action?: UserListAction; comment?: string };
+        try {
+            lb = await readJsonBody(req);
+        } catch {
+            sendJson(res, 400, { error: 'invalid body' });
+            return true;
+        }
+        if (pathname === '/api/desktop/lists/resolve') {
+            if (guardControl()) return true;
+            const todoId = String(lb.todoId ?? '');
+            // Which workspace the item belongs to is read BEFORE the write, off
+            // the row itself — never from the body, which the client controls.
+            // A NULL answer is "no such item", not a denial: that is a stale id
+            // someone is ticking off twice, and the resolve's own sentence is the
+            // honest reply. Denying it as "unknown workspace" would answer a
+            // question they did not ask.
+            const owner = workspaceOfListItem(todoId);
+            if (owner !== null && denyUnaddressable(owner)) return true;
+            const result = resolveUserListItemOnHost({
+                todoId,
+                action: (lb.action ?? 'done') as UserListAction,
+                comment: String(lb.comment ?? ''),
+            });
+            // Counts only, and never the item's text — a UserList item names
+            // whatever a person was asked to do, and the trail is not the place
+            // for it.
+            audit(
+                'lists.resolve',
+                result.ok ? `${lb.action ?? 'done'} nudge=${result.nudge.delivered}` : 'refused',
+                actor,
+            );
+            sendJson(res, 200, result);
+            return true;
+        }
+        sendJson(res, 404, { error: 'unknown lists route' });
         return true;
     }
 

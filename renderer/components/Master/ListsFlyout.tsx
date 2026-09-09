@@ -21,6 +21,12 @@ import {
  *
  * Push-driven — `on.listsChanged` carries the workspace, so an agent adding an
  * item through the `lists` MCP tool updates an open panel with no polling.
+ *
+ * On a REMOTE window the lists are the HOST's, read and resolved over the bridge
+ * (genie#586) — a list is work, and work is host-sourced. The one state that
+ * still needs spelling out is a read that FAILED: an empty view and "the host
+ * could not be asked" are the same picture, and the second is what a window
+ * driving a host too old to serve `/api/desktop/lists/*` gets.
  */
 
 /** A resolution that has happened, and whether the agent actually heard about it. */
@@ -31,12 +37,21 @@ export type NudgeOutcomeView =
 export interface ListsBodyProps {
     view: WorkspaceListsSpec;
     /**
-     * This window drives a REMOTE host. These lists live in the database of the
-     * machine that owns the workspace, and this window reads its own — so the
-     * panel must say that rather than render the empty result, which is shaped
-     * exactly like "you have nothing to do".
+     * This window drives a REMOTE host. The lists themselves come from that host
+     * now, so this only changes what a FAILED read is likely to mean — a host on
+     * an older Genie serves no lists route at all, which is worth saying rather
+     * than leaving someone to read `HTTP 405` and guess.
      */
     remote: boolean;
+    /**
+     * Why the lists could not be read, if they could not be.
+     *
+     * Kept apart from an empty `view` because the two render identically and mean
+     * opposite things: one is "nothing is waiting on you", the other is "nobody
+     * knows what is waiting on you". Rendering the first for the second is the
+     * failure this panel is built to avoid.
+     */
+    error: string | null;
     /** The item id currently being resolved, if any. */
     busy: string | null;
     outcome: NudgeOutcomeView | null;
@@ -55,21 +70,29 @@ const ACTION_LABEL: Record<UserListActionSpec, string> = {
 export function ListsBody({
     view,
     remote,
+    error,
     busy,
     outcome,
     onResolve,
     initialTab = 'user',
 }: ListsBodyProps) {
-    if (remote) {
+    if (error) {
         return (
-            <div className="lists-notice" role="status">
-                <Text size="sm">
-                    This window is driving a remote workstation. These lists are deliberately
-                    local — they live in the database of the host that owns the workspace and
-                    are never synced — so they cannot be read from here. Open Genie on that
-                    machine to see them.
-                </Text>
-            </div>
+            <>
+                {/* The outcome survives the failure, and has to: a resolve and
+                    the re-read that follows it travel the same wire, so they
+                    fail together — exactly when someone has just ticked an item
+                    off and is owed an answer about whether the agent heard. */}
+                <NudgeOutcomeNotice outcome={outcome} />
+                <div className="lists-notice" role="status">
+                    <Text size="sm">
+                        Genie could not read this workspace’s lists: {error}
+                        {remote
+                            ? ' — this window is driving a remote workstation, and a host running an older Genie does not serve them at all.'
+                            : ''}
+                    </Text>
+                </div>
+            </>
         );
     }
 
@@ -83,18 +106,7 @@ export function ListsBody({
             </Tabs.List>
             <Tabs.Panels>
                 <Tabs.Panel value="user">
-                    {outcome && (
-                        <div
-                            className={`lists-outcome${outcome.delivered ? '' : ' is-undelivered'}`}
-                            role="status"
-                        >
-                            <Text size="sm">
-                                {outcome.delivered
-                                    ? `Recorded — ${outcome.agentName} was told.`
-                                    : `Recorded, but ${outcome.agentName} was NOT told: ${outcome.reason}`}
-                            </Text>
-                        </div>
-                    )}
+                    <NudgeOutcomeNotice outcome={outcome} />
                     {view.user.length === 0 ? (
                         <div className="lists-empty">
                             <Text size="sm">
@@ -157,6 +169,31 @@ export function ListsBody({
                 </Tabs.Panel>
             </Tabs.Panels>
         </Tabs>
+    );
+}
+
+/**
+ * What happened to the last resolution — and, separately, whether the agent that
+ * asked actually heard about it.
+ *
+ * Its own component because it has to render in two places: over the UserList in
+ * the ordinary case, and above the failure notice when the read that followed
+ * the resolve did not come back. Dropping it in the second case would lose the
+ * report at the one moment it matters most.
+ */
+function NudgeOutcomeNotice({ outcome }: { outcome: NudgeOutcomeView | null }) {
+    if (!outcome) return null;
+    return (
+        <div
+            className={`lists-outcome${outcome.delivered ? '' : ' is-undelivered'}`}
+            role="status"
+        >
+            <Text size="sm">
+                {outcome.delivered
+                    ? `Recorded — ${outcome.agentName} was told.`
+                    : `Recorded, but ${outcome.agentName} was NOT told: ${outcome.reason}`}
+            </Text>
+        </div>
     );
 }
 
@@ -249,17 +286,26 @@ export default function ListsFlyout({
     onTogglePin: () => void;
 }) {
     const [view, setView] = useState<WorkspaceListsSpec>(EMPTY_VIEW);
+    const [error, setError] = useState<string | null>(null);
     const [busy, setBusy] = useState<string | null>(null);
     const [outcome, setOutcome] = useState<NudgeOutcomeView | null>(null);
     const remote = isRemoteWindow();
 
+    // On a remote window this reads the HOST over the bridge (genie#586), so
+    // there is no longer anything to refuse. A REJECTION is kept and shown: it
+    // is the only thing that distinguishes "nothing is waiting on you" from
+    // "nobody could be asked", and the two look identical once the empty view
+    // renders.
     const refresh = useCallback(() => {
-        if (!hasGenieBridge() || !workspaceId || remote) return;
+        if (!hasGenieBridge() || !workspaceId) return;
         api()
             .lists.read(workspaceId)
-            .then(setView)
-            .catch(() => {});
-    }, [workspaceId, remote]);
+            .then((v) => {
+                setView(v);
+                setError(null);
+            })
+            .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+    }, [workspaceId]);
 
     // Fetch when the panel becomes visible. Pinned, it is always visible, so
     // `open` alone would leave a docked panel stale from the moment it docked.
@@ -267,9 +313,11 @@ export default function ListsFlyout({
         if (open || pinned) refresh();
     }, [open, pinned, refresh]);
 
-    // Push, not poll: both writers (an agent's MCP call, and the resolve below)
-    // announce through `lists:changed`, and the payload names the workspace so
-    // another project's activity never re-reads this one.
+    // Push, not poll: every writer (an agent's MCP call, and the resolve below,
+    // local or over the bridge) announces through `lists:changed`, and the
+    // payload names the workspace so another project's activity never re-reads
+    // this one. On a host window the event is the HOST's, re-emitted onto this
+    // channel by main (PASSTHROUGH_EVENTS).
     useEffect(() => {
         if (!hasGenieBridge()) return;
         return api().on.listsChanged?.((payload) => {
@@ -342,6 +390,7 @@ export default function ListsFlyout({
                 <ListsBody
                     view={view}
                     remote={remote}
+                    error={error}
                     busy={busy}
                     outcome={outcome}
                     onResolve={onResolve}

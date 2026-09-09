@@ -5,15 +5,15 @@ import ListsFlyout, { ListsBody, type ListsBodyProps } from '../Master/ListsFlyo
 import type { WorkspaceListsSpec } from '../../lib/genie';
 
 /**
- * What the lists panel actually SAYS — genie#556.
+ * What the lists panel actually SAYS — genie#556, genie#586.
  *
  * Three of the four states here are ones a person cannot tell apart from a
  * working empty list unless the panel spells them out, and each has a different
  * next action:
  *
  *   - nothing is waiting on you (fine, do nothing)
- *   - this window is bound to a REMOTE host, whose lists live on that machine
- *     and are not readable from here (go look there)
+ *   - the lists could not be READ at all (find out why — on a remote window the
+ *     likeliest cause is a host too old to serve them)
  *   - a nudge did not reach the agent that asked (tell them yourself)
  *
  * All three render as "an empty panel" if nobody writes the sentence, which is
@@ -28,6 +28,7 @@ const EMPTY: WorkspaceListsSpec = { agents: [], user: [], userCount: 0 };
 const props = (over: Partial<ListsBodyProps> = {}): ListsBodyProps => ({
     view: EMPTY,
     remote: false,
+    error: null,
     busy: null,
     outcome: null,
     onResolve: () => {},
@@ -90,23 +91,80 @@ describe('the AgentList half — what each agent is tracking', () => {
     });
 });
 
-describe('a REMOTE window says why it cannot show these', () => {
-    it('names the reason instead of rendering an empty list', () => {
-        // These lists live in the database of the machine that owns the
-        // workspace. A host-bound window reads its OWN db, so an empty panel
-        // here would be a lie shaped exactly like "you have nothing to do".
-        const html = render({ remote: true });
+describe('a REMOTE window renders the HOST’s lists (genie#586)', () => {
+    /**
+     * The lists are HOST-SOURCED now: the bridge reads `/api/desktop/lists/*`,
+     * so a host-bound window shows the same rows the owner's own window does.
+     * Refusing to render on `remote` — the interim behaviour while there was no
+     * passthrough — would now hide a list that was successfully fetched.
+     */
+    it('shows the items it was given, exactly as a local window does', () => {
+        const view: WorkspaceListsSpec = {
+            agents: [{ agentName: 'alpha', items: [{ id: 'a1', text: 'Read the RFC' }] }],
+            user: [{ id: 'u1', text: 'Approve the staging login', agentName: 'alpha' }],
+            userCount: 1,
+        };
 
-        expect(html).toMatch(/remote|host|this machine|another workstation/i);
+        const html = render({ remote: true, view });
+
+        expect(html).toContain('Approve the staging login');
+        expect(html).not.toMatch(/cannot be read from here|open genie on that machine/i);
+    });
+
+    it('says nothing is waiting when the HOST really has nothing waiting', () => {
+        const html = render({ remote: true });
+        expect(html).toMatch(/nothing.*waiting|no items/i);
+    });
+});
+
+describe('a panel that could not READ the lists says so, and why', () => {
+    /**
+     * The one state that must never render as an empty list. A host running an
+     * older Genie serves no `/api/desktop/lists/*` at all, and a dropped link
+     * fails the same way — both come back as a rejected read, which silently
+     * became "you have nothing to do" if the panel just kept its empty view.
+     */
+    it('names the reason instead of rendering an empty list', () => {
+        const html = render({ error: 'HTTP 405' });
+
+        expect(html).toMatch(/HTTP 405/);
         expect(html).not.toMatch(/nothing is waiting on you/i);
     });
 
-    it('POSITIVE CONTROL: a local window with the same empty view says the ordinary thing', () => {
-        // Without this, "the remote notice appears" would pass against a panel
+    it('tells a REMOTE window an older host may not serve them at all', () => {
+        const html = render({ remote: true, error: 'method not allowed' });
+
+        expect(html).toMatch(/method not allowed/);
+        expect(html).toMatch(/older/i);
+    });
+
+    it('POSITIVE CONTROL: the same empty view with no error says the ordinary thing', () => {
+        // Without this, "the failure notice appears" would pass against a panel
         // that shows the notice always.
-        const html = render({ remote: false });
+        const html = render({ error: null });
         expect(html).toMatch(/nothing.*waiting|no items/i);
-        expect(html).not.toMatch(/another workstation/i);
+        expect(html).not.toMatch(/could not read/i);
+    });
+
+    /**
+     * A resolve and the re-read that follows it travel the same wire, so they
+     * fail together — and that is precisely when the person has just ticked
+     * something off and is owed an answer about whether the agent heard.
+     * Replacing the whole panel with the read failure would throw that answer
+     * away at the one moment it is load-bearing.
+     */
+    it('still reports the nudge outcome when the re-read after it failed', () => {
+        const html = render({
+            error: 'Remote session expired — re-pair with the host.',
+            outcome: {
+                delivered: false,
+                agentName: 'alpha',
+                reason: 'alpha is not running in this workspace, so it was not told.',
+            },
+        });
+
+        expect(html).toMatch(/not running in this workspace/);
+        expect(html).toMatch(/Remote session expired/);
     });
 });
 
