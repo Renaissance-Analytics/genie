@@ -78,10 +78,10 @@
     line-height: 1;
     filter: drop-shadow(0 0 3px color-mix(in srgb, currentColor 45%, transparent));
 }
-.hosts-cloud-icon.is-green { color: #22c55e; }
-.hosts-cloud-icon.is-yellow { color: #eab308; }
-.hosts-cloud-icon.is-red { color: #ef4444; }
-.hosts-cloud-icon.is-blue { color: #3b82f6; }
+.hosts-cloud-icon.is-green { color: var(--emerald-400); }
+.hosts-cloud-icon.is-yellow { color: var(--yellow-400); }
+.hosts-cloud-icon.is-red { color: var(--rose-400); }
+.hosts-cloud-icon.is-blue { color: var(--blue-500); }
 .hosts-cloud-icon.is-pulsing { animation: hosts-cloud-pulse 1.4s ease-in-out infinite; }
 @keyframes hosts-cloud-pulse {
     0%, 100% { opacity: 0.55; transform: scale(0.92); }
@@ -179,10 +179,16 @@
     --agent-soft: color-mix(in srgb, #818cf8 18%, transparent);
     --agent-ring: color-mix(in srgb, #818cf8 42%, transparent);
 
-    --shell: #0e0e12;
-    --rail: #121217;
-    --card: #17171d;
-    --card-hover: #1c1c23;
+    /* `--shell` / `--rail` / `--card` / `--card-hover` were declared HERE, dark
+       only, and `--card` + `--shadow-xs` shadowed the working light/dark pairs
+       in `globals.css` — this rule is more specific and wins for the entire
+       master window. So `var(--card)` was `#17171d` under `var(--fg-1)`
+       `#18181b` in the light theme: 1.01:1, invisible text, on 31 declarations
+       (genie#591). They now live in `globals.css` on `:root` + `.dark`, which
+       reaches strictly more than this rule did — including the portaled overlay
+       host that genie#114 is about.
+
+       `--shadow-sm` stays: it is not a globals pair and has no consumers. */
 
     --radius-md: 0.375rem;
     --radius-lg: 0.5rem;
@@ -191,10 +197,7 @@
     --radius-full: 9999px;
     --radius-sm: 0.25rem;
 
-    --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.4);
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35), 0 1px 3px rgba(0, 0, 0, 0.4);
-    --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.5),
-        0 8px 10px -6px rgba(0, 0, 0, 0.4);
 
     --dur-fast: 150ms;
     --dur-base: 200ms;
@@ -448,7 +451,10 @@
     border-radius: 8px;
     font-size: 11.5px;
     line-height: 1.45;
-    color: #fbbf24;
+    /* `#fbbf24` was chosen against a fixed-dark `--card`. That card is white in
+       the light theme now, where this amber is 1.7:1 — `--amber-400` is the
+       same warning colour with a light half (genie#589). */
+    color: var(--amber-400);
     background: color-mix(in srgb, #f59e0b 14%, var(--card));
     border: 1px solid color-mix(in srgb, #f59e0b 38%, transparent);
 }
@@ -655,20 +661,23 @@
         color var(--dur-fast) var(--ease-out);
 }
 .upgrade-modal .dr-thumb:hover:not(:disabled) {
-    border-color: #22c55e;
-    color: #22c55e;
+    border-color: var(--emerald-400);
+    color: var(--emerald-400);
 }
 .upgrade-modal .dr-thumb:disabled {
     cursor: default;
 }
+/* FILLED, so the border is the fill and the ink sits on green in both themes —
+   nothing here is on a surface that flips, and a border that changed hue with
+   the theme would split the button into two shapes. */
 .upgrade-modal .dr-row.is-filled .dr-thumb {
     background: #22c55e;
     border-color: #22c55e;
     color: #06210f;
 }
 .upgrade-modal .dr-row.is-alert .dr-thumb {
-    border-color: #f59e0b;
-    color: #f59e0b;
+    border-color: var(--amber-400);
+    color: var(--amber-400);
 }
 .upgrade-modal .dr-row.is-closed .dr-thumb {
     opacity: 0.45;
@@ -1003,7 +1012,7 @@
 .proj-select .popen {
     font-size: 11px;
     font-weight: 500;
-    color: #10b981;
+    color: var(--emerald-400);
     display: inline-flex;
     align-items: center;
     gap: 5px;
@@ -1129,11 +1138,11 @@
     color: var(--agent);
 }
 .proj-popover-item.is-destructive {
-    color: #f43f5e;
+    color: var(--rose-400);
 }
 .proj-popover-item.is-destructive .ico {
     background: color-mix(in srgb, #f43f5e 14%, transparent);
-    color: #f43f5e;
+    color: var(--rose-400);
 }
 .proj-popover-item.is-destructive:hover:not(:disabled) {
     background: color-mix(in srgb, #f43f5e 12%, transparent);
@@ -1790,15 +1799,15 @@ button.iw-feedback-note.as-link:hover {
     white-space: nowrap;
 }
 .iw-kind-issue {
-    color: #34d399;
+    color: var(--emerald-400);
     background: color-mix(in srgb, #34d399 16%, transparent);
 }
 .iw-kind-pr {
-    color: #a78bfa;
+    color: var(--violet-400);
     background: color-mix(in srgb, #a78bfa 16%, transparent);
 }
 .iw-kind-dependabot {
-    color: #f59e0b;
+    color: var(--amber-400);
     background: color-mix(in srgb, #f59e0b 16%, transparent);
 }
 .iw-kind-code-scanning {
@@ -1806,7 +1815,7 @@ button.iw-feedback-note.as-link:hover {
     background: color-mix(in srgb, #f87171 16%, transparent);
 }
 .iw-kind-secret-scanning {
-    color: #fb7185;
+    color: var(--rose-400);
     background: color-mix(in srgb, #fb7185 16%, transparent);
 }
 .iw-item-title {
@@ -1972,7 +1981,7 @@ button.iw-feedback-note.as-link:hover {
     gap: 8px;
 }
 .quit-terms-title svg {
-    color: #f59e0b;
+    color: var(--amber-400);
     flex: none;
 }
 .quit-terms-list {
@@ -2038,10 +2047,10 @@ button.iw-feedback-note.as-link:hover {
     color: var(--fg-3);
 }
 .quit-term-row:not(.shutting) .quit-term-state {
-    color: #10b981;
+    color: var(--emerald-400);
 }
 .quit-term-row.shutting .quit-term-state {
-    color: #f43f5e;
+    color: var(--rose-400);
 }
 .quit-terms-actions {
     flex-wrap: wrap;
@@ -2602,7 +2611,7 @@ button.iw-feedback-note.as-link:hover {
     font-size: 9px;
     font-weight: 700;
     letter-spacing: 0.06em;
-    color: #c4b5fd;
+    color: var(--violet-400);
     background: color-mix(in srgb, var(--violet-500) 18%, transparent);
     border: 1px solid color-mix(in srgb, var(--violet-500) 45%, transparent);
     border-radius: var(--radius-full);
@@ -2617,12 +2626,12 @@ button.iw-feedback-note.as-link:hover {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    color: #f59e0b;
+    color: var(--amber-400);
     cursor: pointer;
     border-radius: var(--radius-sm);
 }
 .agi-health-dot:hover {
-    color: #fbbf24;
+    color: var(--amber-300);
 }
 .agi-health-pop {
     /* Portaled to <body> + fixed so the narrow scrollable sidebar can't
@@ -2810,7 +2819,7 @@ button.iw-feedback-note.as-link:hover {
 }
 .tterm-trash:hover {
     background: color-mix(in srgb, #f43f5e 14%, transparent);
-    color: #f43f5e;
+    color: var(--rose-400);
 }
 
 /* Tier 2 — suspend/resume row action (mirrors .tterm-trash chrome). */
@@ -2859,7 +2868,7 @@ button.iw-feedback-note.as-link:hover {
     text-transform: uppercase;
     padding: 2px 6px;
     border-radius: 999px;
-    color: #fbbf24;
+    color: var(--amber-400);
     background: color-mix(in srgb, #fbbf24 16%, transparent);
     white-space: nowrap;
 }
@@ -3834,7 +3843,7 @@ body.gutter-dragging .grid-gutter {
     color: #71717a;
 }
 .ctx-menu .ctx-note .ctx-note-em {
-    color: #c4b5fd;
+    color: var(--violet-400);
     font-family: ui-monospace, 'Geist Mono', monospace;
 }
 
@@ -4176,10 +4185,10 @@ body.gutter-dragging .grid-gutter {
     color: var(--term-warn, #e2c08d);
 }
 .proc-ind.proc-running {
-    color: #10b981;
+    color: var(--emerald-400);
 }
 .proc-ind.proc-crashed {
-    color: #f48771;
+    color: var(--rose-400);
 }
 
 /* Hosted-sites indicator (#232) — the sibling of .proc-ind, immediately after
@@ -4205,10 +4214,10 @@ body.gutter-dragging .grid-gutter {
     opacity: 0.55;
 }
 .sites-ind.sites-running {
-    color: #10b981;
+    color: var(--emerald-400);
 }
 .sites-ind.sites-failed {
-    color: #f48771;
+    color: var(--rose-400);
 }
 .sites-ind.sites-starting,
 .sites-ind.sites-idle {
@@ -4522,7 +4531,7 @@ body.gutter-dragging .grid-gutter {
     opacity: 1;
 }
 .tproj-procs .proc-row .proc-act.proc-go:hover {
-    color: #10b981;
+    color: var(--emerald-400);
 }
 .tproj-procs .proc-row .proc-act.proc-del:hover {
     color: var(--term-err, #f48771);
@@ -4809,7 +4818,7 @@ body.gutter-dragging .grid-gutter {
 }
 .docs-content .docs-error {
     font-size: 13px;
-    color: #f43f5e;
+    color: var(--rose-400);
 }
 
 /* ===== BootScreen — magical loading screen ============================== */
@@ -5151,7 +5160,7 @@ body.gutter-dragging .grid-gutter {
 }
 .agent-form-error {
     font-size: 11.5px;
-    color: #f43f5e;
+    color: var(--rose-400);
 }
 .agent-form-actions {
     display: flex;
@@ -5310,7 +5319,7 @@ body.gutter-dragging .grid-gutter {
     color: var(--fg-4);
 }
 .srow-ico.agent.run {
-    color: #10b981;
+    color: var(--emerald-400);
 }
 .tname.srow-hasub {
     display: flex;
@@ -5351,10 +5360,15 @@ body.gutter-dragging .grid-gutter {
 .agentinbox-flyout,
 .agentinbox-roster {
     --ai-purple: var(--agent, #818cf8);
-    --ai-cyan: #38bdf8;
-    --ai-amber: #fbbf24;
-    --ai-green: #34d399;
-    --ai-red: #f87171;
+    /* These four are INK — status text on `--ai-pane`, which is `--card` and is
+       therefore white in the light theme now. As fixed mid-tones they were 1.7:1
+       to 2.8:1 there. Pointing them at the genie#589 status pairs gives each a
+       light half; the dark halves are the same literals these lines carried, so
+       the roster does not change in the dark theme. */
+    --ai-cyan: var(--cyan-400);
+    --ai-amber: var(--amber-400);
+    --ai-green: var(--emerald-400);
+    --ai-red: var(--rose-400);
     --ai-neutral: var(--fg-3);
     --ai-pane: var(--card);
     --ai-raise: var(--card-hover);
@@ -5507,7 +5521,10 @@ body.gutter-dragging .grid-gutter {
 .agentinbox-chip.on {
     border-color: color-mix(in srgb, var(--ai-purple) 55%, transparent);
     background: color-mix(in srgb, var(--ai-purple) 18%, transparent);
-    color: #fff;
+    /* The background is 18% indigo over `--ai-pane`, which is a pale lavender in
+       the light theme — `#fff` on it is 1.06:1. It read as white-on-indigo only
+       because the pane underneath used to be near-black. */
+    color: var(--fg-1);
 }
 .agentinbox-chip-count {
     font-size: 10.5px;
@@ -6409,13 +6426,21 @@ body.gutter-dragging .grid-gutter {
     width: 180px;
 }
 
-/* --- Repository plugin panel (RepoChangesPanel adapter) ------------------- */
+/* --- Repository plugin panel (RepoChangesPanel adapter) -------------------
+   `PluginPanelHost` renders this inside a `.tpanel`, so the panel is TERMINAL
+   chrome: fixed dark in both themes, like the terminal and editor beside it.
+   Its ink was already `--term-fg`; the surfaces were `--shell` / `--card`,
+   which read as correct only while those tokens were dark too. Now that they
+   flip, light ink on a light panel would be 1.4:1 — so the surfaces move to the
+   `--term-*` family the ink already belonged to (genie#591). Same for the
+   hairlines: `--border-1` in the light theme is `rgba(0,0,0,.08)`, which is
+   invisible on a near-black panel. */
 .repo-panel {
     display: flex;
     flex-direction: column;
     height: 100%;
     min-height: 0;
-    background: var(--shell);
+    background: var(--term-bg);
     color: var(--term-fg);
     font-size: 12.5px;
 }
@@ -6425,7 +6450,7 @@ body.gutter-dragging .grid-gutter {
     align-items: center;
     gap: 8px;
     padding: 6px 8px;
-    border-bottom: 1px solid var(--border-1);
+    border-bottom: 1px solid var(--term-border);
 }
 .repo-panel-head .grow {
     flex: 1 1 auto;
@@ -6445,8 +6470,8 @@ body.gutter-dragging .grid-gutter {
 .repo-panel-branch-input {
     flex: 1 1 auto;
     min-width: 0;
-    background: var(--card);
-    border: 1px solid var(--border-1);
+    background: var(--term-head);
+    border: 1px solid var(--term-border);
     border-radius: var(--radius-md);
     color: var(--term-fg);
     padding: 4px 8px;
@@ -6456,15 +6481,22 @@ body.gutter-dragging .grid-gutter {
 .repo-panel-notice {
     padding: 5px 10px;
     font-size: 12px;
-    border-bottom: 1px solid var(--border-1);
+    border-bottom: 1px solid var(--term-border);
 }
+/* `--ai-red` / `--ai-green` are declared on `.agentinbox-roster` and NOTHING
+   else, and this panel is never inside it — so both `color` declarations were
+   invalid-at-computed-value-time and these banners inherited `--term-fg`: an
+   error that was not red and a notice that was not green, with no background.
+   `--term-err` / `--term-ok` say the same thing in the palette this panel is
+   actually in. (A token being DEFINED somewhere is not the same as being in
+   scope here, which is why the genie#589 guard cannot see this one.) */
 .repo-panel-error {
-    color: var(--ai-red);
-    background: color-mix(in srgb, var(--ai-red) 12%, transparent);
+    color: var(--term-err);
+    background: color-mix(in srgb, var(--term-err) 12%, transparent);
 }
 .repo-panel-notice {
-    color: var(--ai-green);
-    background: color-mix(in srgb, var(--ai-green) 12%, transparent);
+    color: var(--term-ok);
+    background: color-mix(in srgb, var(--term-ok) 12%, transparent);
 }
 .repo-panel-body {
     flex: 1 1 auto;
@@ -6776,7 +6808,11 @@ body.gutter-dragging .grid-gutter {
        card off the panel. */
     height: 420px;
     max-height: 60vh;
-    border: 1px solid var(--border-1);
+    /* Also inside a `.tpanel`, so also fixed-dark chrome. genie#589 moved this
+       off a dead `var(--border, #2a2a2a)` and onto `--border-1`, which was half
+       right: the token resolves now, but in the light theme it is
+       `rgba(0,0,0,.08)` against a near-black panel — a border you cannot see. */
+    border: 1px solid var(--term-border);
     border-radius: 6px;
     background: #fff;
     /* An image keeps its aspect ratio inside that box rather than stretching —
@@ -7137,10 +7173,10 @@ body.gutter-dragging .grid-gutter {
     font-weight: 600;
 }
 .agent-ctx-menu .ctx-item.is-destructive .ctx-item-label {
-    color: #f43f5e;
+    color: var(--rose-400);
 }
 .agent-ctx-menu .ctx-item.is-destructive svg {
-    color: #f43f5e;
+    color: var(--rose-400);
 }
 .agent-ctx-menu .ctx-item.is-destructive:hover {
     background: color-mix(in srgb, #f43f5e 12%, transparent);
@@ -7191,11 +7227,11 @@ body.gutter-dragging .grid-gutter {
    failure borrows the warning colour. */
 .iw-refresh.tone-ok {
     border-color: rgba(52, 211, 153, 0.5);
-    color: #34d399;
+    color: var(--emerald-400);
 }
 .iw-refresh.tone-error {
     border-color: rgba(244, 135, 113, 0.5);
-    color: #f48771;
+    color: var(--rose-400);
 }
 
 /* The "not tracking" repair. A warning that only describes a problem is a dead
@@ -7829,12 +7865,12 @@ body.gutter-dragging .grid-gutter {
     cursor: default;
 }
 .lists-btn.is-done:hover:not(:disabled) {
-    border-color: #10b981;
-    color: #10b981;
+    border-color: var(--emerald-400);
+    color: var(--emerald-400);
 }
 .lists-btn.is-refuse:hover:not(:disabled) {
-    border-color: #ef4444;
-    color: #ef4444;
+    border-color: var(--rose-400);
+    color: var(--rose-400);
 }
 .lists-group + .lists-group {
     margin-top: 14px;
