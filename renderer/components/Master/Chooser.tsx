@@ -56,6 +56,12 @@ import {
 import AgentDeleteModal from './AgentDeleteModal';
 import TerminalTypeSplitButton from './TerminalTypeSplitButton';
 import { workspaceHasThumb, workspaceNeedsAttention } from '../../lib/attention';
+import {
+    isWorkspaceCollapsed,
+    parseCollapsedWorkspaces,
+    serializeCollapsedWorkspaces,
+    toggleWorkspaceCollapsed,
+} from '../../lib/workspace-collapse';
 import { gappLaunchLabel, gappLaunchTarget } from '../../lib/gapp-launch';
 import {
     resolveWorkspaceKind,
@@ -488,24 +494,25 @@ export default function Chooser({
     };
 
     const [search, setSearch] = useState('');
-    const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<Set<string>>(
-        () => new Set(),
+    // Persisted sidebar expand/collapse. `null` = NOTHING RECORDED, which renders
+    // as collapse-all (genie#580) — distinct from a recorded EMPTY list, which is
+    // the user having expanded everything and must be honoured. The state starts
+    // null so the pre-settings render is already minimised rather than flashing
+    // fully expanded; the first toggle materialises a real list. See
+    // lib/workspace-collapse.ts.
+    const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<Set<string> | null>(
+        () => null,
     );
-    // Persisted sidebar expand/collapse: seed from the `collapsed_workspaces`
-    // setting (a JSON string[] of workspace ids) on mount so the state survives
-    // restarts. Toggling a row writes it back (see toggleCollapse below).
+    // Seed from the `collapsed_workspaces` setting (a JSON string[] of workspace
+    // ids) on mount so the state survives restarts. Toggling a row writes it back
+    // (see toggleCollapse below).
     useEffect(() => {
         let alive = true;
         void api()
             .settings.get()
             .then((s) => {
                 if (!alive) return;
-                try {
-                    const ids = JSON.parse(s?.collapsed_workspaces ?? '[]');
-                    if (Array.isArray(ids)) setCollapsedWorkspaces(new Set(ids));
-                } catch {
-                    /* ignore malformed value */
-                }
+                setCollapsedWorkspaces(parseCollapsedWorkspaces(s?.collapsed_workspaces));
             })
             .catch(() => {});
         return () => {
@@ -1257,7 +1264,7 @@ export default function Chooser({
                         const wsAll = byWorkspace.get(ws.id) ?? [];
                         const wsSpecs = wsAll.filter((s) => s.type !== 'process');
                         const wsProcs = wsAll.filter((s) => s.type === 'process');
-                        const collapsed = collapsedWorkspaces.has(ws.id);
+                        const collapsed = isWorkspaceCollapsed(collapsedWorkspaces, ws.id);
                         // Same derivation the rail uses: any terminal in the
                         // workspace flagged for attention → the ROW glows, so a
                         // COLLAPSED workspace shows it's ready without expanding.
@@ -1278,14 +1285,25 @@ export default function Chooser({
                         const kindLabel = workspaceKindLabel(kind);
                         const toggleCollapse = () =>
                             setCollapsedWorkspaces((prev) => {
-                                const next = new Set(prev);
-                                if (collapsed) next.delete(ws.id);
-                                else next.add(ws.id);
+                                // From the unrecorded default (prev === null,
+                                // everything collapsed) this materialises the
+                                // implicit state into an explicit list, so the
+                                // collapse-all default stops applying once the
+                                // user has said otherwise. `orderedWorkspaces` —
+                                // NOT the search-filtered rows — because a toggle
+                                // made while searching must not silently expand
+                                // the workspaces that are merely hidden.
+                                const next = toggleWorkspaceCollapsed(
+                                    prev,
+                                    ws.id,
+                                    orderedWorkspaces.map((w) => w.id),
+                                );
                                 // Persist so the expand/collapse state survives a
                                 // restart (JSON string[], k/v values are text).
                                 void api()
                                     .settings.set({
-                                        collapsed_workspaces: JSON.stringify([...next]),
+                                        collapsed_workspaces:
+                                            serializeCollapsedWorkspaces(next),
                                     })
                                     .catch(() => {});
                                 return next;

@@ -62,7 +62,12 @@ import type {
     TynnHealth,
 } from '../lib/genie';
 import { resolveShortcut } from '../lib/master-shortcuts';
-import { computeLaunchSelection } from '../lib/launch-restore';
+import {
+    clampToMaxViews,
+    computeLaunchSelection,
+    DEFAULT_MAX_VIEWS,
+    parseMaxViews,
+} from '../lib/launch-restore';
 import { canRunRecipe, recipeLaunchScope } from '../lib/recipe-launch';
 import { applyPanelOrder } from '../lib/panel-reorder';
 import {
@@ -717,7 +722,7 @@ function MasterInner() {
         setGithubCapsOpen(true);
     }, [githubNeedsResolve]);
     // Max panels visible per workspace (Settings → max_views, default 4).
-    const [maxViews, setMaxViews] = useState(4);
+    const [maxViews, setMaxViews] = useState(DEFAULT_MAX_VIEWS);
     // Transient notice (Tier 2 cap warnings, max-views blocks). Auto-clears.
     const [toast, setToast] = useState<string | null>(null);
     useEffect(() => {
@@ -1059,6 +1064,60 @@ function MasterInner() {
         return v && v !== '1' ? v : null;
     }, []);
 
+    /**
+     * Record this window's view of a workspace: update the in-memory cache
+     * synchronously (so a switch reads the settled value at once) and flush the
+     * whole store to the LOCAL settings table debounced — coalescing the
+     * transient intermediate renders of a workspace switch into ONE write,
+     * exactly like `layout_json`. `api().settings` is never bridged to a host,
+     * so a host window's writes stay client-local.
+     *
+     * Declared ABOVE `refresh` because the launch restore itself calls
+     * `persistView` to record a first-connect seed (genie#579) — a later `const`
+     * could not go in `refresh`'s dependency array without a TDZ error.
+     */
+    // Flush this window's view slice to the LOCAL settings, MERGING onto a fresh
+    // read so a CONCURRENT window (local + host windows share one `view_state_json`
+    // blob) that edited a different connKey isn't clobbered by our snapshot. We own
+    // only our `${currentConnKey()}|…` entries; every other window's slice is
+    // preserved from the freshly-read store. Best-effort: a read/link blip just
+    // skips this flush (the next view change re-flushes) rather than writing a
+    // possibly-stale full blob.
+    const flushViewState = useCallback(async () => {
+        const connKey = currentConnKey();
+        let latest: ViewStateStore;
+        try {
+            const s = await api().settings.get();
+            latest = parseViewStateStore(s.view_state_json);
+        } catch {
+            return;
+        }
+        const merged = overlayOwnConnKey(latest, viewCacheRef.current, connKey);
+        // Keep the cache consistent with disk for OTHER connKeys so a later restore
+        // (workspace switch) reads their up-to-date values, not our stale mount seed.
+        viewCacheRef.current = merged;
+        await api()
+            .settings.set({ view_state_json: JSON.stringify(merged) })
+            .catch(() => {});
+    }, []);
+
+    const persistView = useCallback(
+        (connKey: string, workspaceId: string, state: WorkspaceViewState) => {
+            viewCacheRef.current = writeWorkspaceView(
+                viewCacheRef.current,
+                connKey,
+                workspaceId,
+                state,
+            );
+            if (viewFlushRef.current) clearTimeout(viewFlushRef.current);
+            viewFlushRef.current = setTimeout(() => {
+                viewFlushRef.current = null;
+                void flushViewState();
+            }, 150);
+        },
+        [flushViewState],
+    );
+
     const refresh = useCallback(async () => {
         const [ws, sp, settings] = await Promise.all([
             api().workspaces.list(),
@@ -1074,7 +1133,18 @@ function MasterInner() {
         // Warm THIS window's client-local view store from the (local) settings
         // so the launch restore + subsequent switches read a settled cache.
         const connKey = currentConnKey();
-        viewCacheRef.current = parseViewStateStore(settings?.view_state_json);
+        // Re-warm from disk, but KEEP this window's own `${connKey}|…` slice: a
+        // refresh can land inside the 150ms persist debounce, and a plain
+        // re-parse would drop the close/focus the user just made — the pending
+        // flush would then write the STALE entry back and the panel would reopen
+        // on the next connect (genie#579). Other windows' slices still come from
+        // disk, which is what `overlayOwnConnKey` is for. On the first refresh the
+        // cache is empty, so this is exactly the plain parse.
+        viewCacheRef.current = overlayOwnConnKey(
+            parseViewStateStore(settings?.view_state_json),
+            viewCacheRef.current,
+            connKey,
+        );
         // Restore the launch grid ONCE, computed from the FRESHLY-FETCHED arrays
         // (not React state read through an effect closure). The previous seed
         // effect fired on `[workspaces.length]` but read `specs` via closure and
@@ -1084,7 +1154,7 @@ function MasterInner() {
         // directly removes that race — the specs are always in hand here.
         if (!seededActiveRef.current && ws.length > 0) {
             seededActiveRef.current = true;
-            const { activeWorkspaceId: target, selectedIds } = computeLaunchSelection({
+            const { activeWorkspaceId: target, selectedIds, seeded } = computeLaunchSelection({
                 specs: sp,
                 workspaces: ws,
                 savedActiveWorkspace: settings?.active_workspace ?? null,
@@ -1092,6 +1162,12 @@ function MasterInner() {
                 systemWorkspaceId: SYSTEM_WORKSPACE_ID,
                 viewStore: viewCacheRef.current,
                 connKey,
+                // The cap comes from the settings ALREADY IN HAND, not the
+                // `maxViews` state — that is loaded by its own effect and may not
+                // have landed yet, and a restore that races it would open an
+                // unclamped grid exactly once, on the launch that matters
+                // (genie#577).
+                maxViews: parseMaxViews(settings?.max_views),
             });
             if (target) {
                 setActiveWorkspaceId(target);
@@ -1105,12 +1181,26 @@ function MasterInner() {
                     setFocusId(saved.focusId);
                     setMaximizedId(saved.maximizedId);
                     setLayoutMode(saved.layoutMode);
+                } else if (seeded) {
+                    // FIRST connect for this `(connKey, workspace)`: record the seed
+                    // NOW, so the "seed from the host's enabled specs" fallback runs
+                    // exactly once. It is not a neutral default — closing a panel
+                    // never clears the host's `enabled`, so any later connect that
+                    // finds no entry resurrects every panel the user ever closed
+                    // (genie#579). Waiting for the debounced write-back effect left
+                    // that window open on every launch the user changed nothing in.
+                    persistView(connKey, target, {
+                        visibleIds: selectedIds,
+                        focusId: null,
+                        maximizedId: null,
+                        layoutMode: 'auto',
+                    });
                 }
             }
         }
         // The launch restore has run — subsequent view changes may now persist.
         viewRestoredRef.current = true;
-    }, [isStage, stageSeedWorkspace]);
+    }, [isStage, stageSeedWorkspace, persistView]);
 
     /**
      * Persist a user-defined sidebar order (full ordered list of workspace
@@ -1228,8 +1318,10 @@ function MasterInner() {
             void api()
                 .settings.get()
                 .then((s) => {
-                    const n = parseInt(String(s.max_views ?? '4'), 10);
-                    if (Number.isFinite(n) && n > 0) setMaxViews(n);
+                    // Same parser the launch restore uses, so the cap that
+                    // disables the Add button can never differ from the cap the
+                    // restore clamped to (genie#577).
+                    setMaxViews(parseMaxViews(s.max_views));
                     // Split Add-Terminal button: the last-used type + the custom
                     // agent command (drives the create form's placeholder).
                     setLastTerminalTypeState(
@@ -1694,11 +1786,16 @@ function MasterInner() {
                 } else {
                     // First run: every enabled (live) terminal is visible.
                     // Disabled (suspended) terminals stay out until re-enabled.
-                    for (const s of specs) {
-                        if (specWorkspaceId(s) === workspaceId && s.enabled !== false) {
-                            next.add(s.id);
-                        }
-                    }
+                    // CLAMPED to `max_views` — the same cap the Add affordances
+                    // enforce, applied to the set itself so a switch can't land on
+                    // a grid that is already over its own limit (genie#577).
+                    const inWs = specs.filter((s) => specWorkspaceId(s) === workspaceId);
+                    const seed = clampToMaxViews(
+                        inWs.filter((s) => s.enabled !== false).map((s) => s.id),
+                        inWs,
+                        maxViews,
+                    );
+                    for (const id of seed) next.add(id);
                 }
                 return next;
             });
@@ -1718,7 +1815,7 @@ function MasterInner() {
                     .catch(() => {});
             }
         },
-        [specs],
+        [specs, maxViews],
     );
 
     /**
@@ -1735,56 +1832,6 @@ function MasterInner() {
             activateWorkspace(wsId);
         },
         [activateWorkspace],
-    );
-
-    /**
-     * Record this window's view of a workspace: update the in-memory cache
-     * synchronously (so a switch reads the settled value at once) and flush the
-     * whole store to the LOCAL settings table debounced — coalescing the
-     * transient intermediate renders of a workspace switch into ONE write,
-     * exactly like `layout_json`. `api().settings` is never bridged to a host,
-     * so a host window's writes stay client-local.
-     */
-    // Flush this window's view slice to the LOCAL settings, MERGING onto a fresh
-    // read so a CONCURRENT window (local + host windows share one `view_state_json`
-    // blob) that edited a different connKey isn't clobbered by our snapshot. We own
-    // only our `${currentConnKey()}|…` entries; every other window's slice is
-    // preserved from the freshly-read store. Best-effort: a read/link blip just
-    // skips this flush (the next view change re-flushes) rather than writing a
-    // possibly-stale full blob.
-    const flushViewState = useCallback(async () => {
-        const connKey = currentConnKey();
-        let latest: ViewStateStore;
-        try {
-            const s = await api().settings.get();
-            latest = parseViewStateStore(s.view_state_json);
-        } catch {
-            return;
-        }
-        const merged = overlayOwnConnKey(latest, viewCacheRef.current, connKey);
-        // Keep the cache consistent with disk for OTHER connKeys so a later restore
-        // (workspace switch) reads their up-to-date values, not our stale mount seed.
-        viewCacheRef.current = merged;
-        await api()
-            .settings.set({ view_state_json: JSON.stringify(merged) })
-            .catch(() => {});
-    }, []);
-
-    const persistView = useCallback(
-        (connKey: string, workspaceId: string, state: WorkspaceViewState) => {
-            viewCacheRef.current = writeWorkspaceView(
-                viewCacheRef.current,
-                connKey,
-                workspaceId,
-                state,
-            );
-            if (viewFlushRef.current) clearTimeout(viewFlushRef.current);
-            viewFlushRef.current = setTimeout(() => {
-                viewFlushRef.current = null;
-                void flushViewState();
-            }, 150);
-        },
-        [flushViewState],
     );
 
     // Persist THIS window's panel VIEW state (visible set, focus, maximize,
