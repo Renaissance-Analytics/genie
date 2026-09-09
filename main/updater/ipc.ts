@@ -14,7 +14,7 @@ import { getChangelog, type Changelog } from './changelog';
 import { hostBackendKind, detachedHostPinsBinary } from '../terminal/host-service';
 import { liveHostTerminals } from '../terminal/quit-confirm';
 import { mobileEmit } from '../mobile/bus';
-import { type DrainSnapshot } from '../agents/drain';
+import { upgradeRosterPlan, type DrainSnapshot } from '../agents/drain';
 import {
     beginUpgradeDrain,
     cancelUpgradeDrain,
@@ -22,6 +22,8 @@ import {
     liveDrainableAgentCount,
     markUpgradeDrainCleared,
     markUpgradeRestartForced,
+    pendingDrainRestore,
+    recordUpgradeRoster,
     satisfyDrainRow,
     upgradeDrainCleared,
 } from '../agents/drain-service';
@@ -107,6 +109,38 @@ export function startUpgradeDrain(): DrainSnapshot {
 }
 
 /**
+ * THE RESTORE LIST, AT THE APPLY (genie#551). Wired into `restartAndApply` — the
+ * one funnel every door reaches — so it cannot be skipped by a door that does
+ * not drain.
+ *
+ * The drain still records first, before its nudges, and that snapshot is the
+ * better one: it was taken while the agents were working, and by the time an
+ * apply runs they have handed off and gone. So this records only when NOTHING
+ * has — which is the apply a person forced without a drain in front of them,
+ * exactly the case genie#551 reported.
+ *
+ * `upgradeDrainCleared()` is deliberately NOT the question. It is false on a
+ * Force Restart taken mid-drain, where a complete roster already exists and the
+ * agents missing from live state are the ones that answered — so asking it
+ * would drop precisely them.
+ *
+ * Exported so the wiring is assertable without standing up an Electron app; a
+ * pre-apply hook that silently records the wrong thing is invisible until an
+ * upgrade nobody can undo.
+ */
+export function recordRosterBeforeApply(): void {
+    try {
+        if (upgradeRosterPlan({ rosterRecorded: pendingDrainRestore() }) !== 'record') return;
+        recordUpgradeRoster();
+    } catch (e) {
+        // A list that cannot be written must not cost the upgrade. The apply
+        // logs this and carries on; the boot then finds no roster, which is the
+        // behaviour every release before this one had.
+        console.error('[drain] could not record the restore roster', e);
+    }
+}
+
+/**
  * Unified IPC for the updater. The renderer doesn't know whether it's
  * talking to the Phase 1 (git-pull) or Phase 2 (electron-updater)
  * backend — both expose the same channels and a status object the UI
@@ -160,6 +194,11 @@ export function registerUpdaterIpc(): void {
     a.setRestartRequest(() => {
         requestUpgradeRestart();
     });
+    // And to write down WHAT IS RUNNING before it hands over to the installer
+    // (genie#551). The gate above makes sure the agents are ASKED; this makes
+    // sure that, on the one apply a person is allowed to force past that ask,
+    // something still records what the upgrade is about to take down.
+    a.setBeforeApply(recordRosterBeforeApply);
 
     // Kick off automatic checks for the ACTIVE backend. Packaged builds
     // (phase2) previously never auto-polled — updates only showed after a

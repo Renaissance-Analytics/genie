@@ -173,6 +173,44 @@ export interface DrainRestoreOutcome {
     at: number;
 }
 
+/** How many failures a notice names before it starts counting instead. */
+const RESTORE_NOTICE_NAMED = 4;
+
+/**
+ * PURE. What to TELL the user when the restore did not bring something back
+ * (genie#551).
+ *
+ * The restore reported every non-`started` outcome to `console.log` and nowhere
+ * else, so an agent that failed to restart was invisible unless somebody read
+ * the main-process log. That is how genie#551 was found rather than reported:
+ * a person noticing an absence, days later, is the slowest and least reliable
+ * monitor there is.
+ *
+ * Only a FAILURE is worth saying out loud. A skip is a decision the restore made
+ * correctly — *"you stopped it"*, *"it is already running"* — and surfacing those
+ * would train the user to dismiss the one that matters. `null` means say nothing.
+ */
+export function planRestoreNotice(
+    outcomes: readonly DrainRestoreOutcome[],
+): { title: string; body: string } | null {
+    const failed = outcomes.filter((o) => o.status === 'failed');
+    if (failed.length === 0) return null;
+    const lines = failed
+        .slice(0, RESTORE_NOTICE_NAMED)
+        .map((o) => `${o.entry.label} (${o.entry.kind}) — ${o.reason ?? 'no reason given'}`);
+    const rest = failed.length - lines.length;
+    // A toast that lists twelve is a toast nobody finishes reading; the count is
+    // what makes someone open the window, and the window has the whole list.
+    if (rest > 0) lines.push(`…and ${rest} more`);
+    return {
+        title:
+            failed.length === 1
+                ? `${failed[0]!.entry.label} did not come back after the upgrade`
+                : `${failed.length} things did not come back after the upgrade`,
+        body: lines.join('\n'),
+    };
+}
+
 export interface DrainRestoreInput {
     roster: readonly DrainRestoreEntry[];
     desired: DrainRestoreDesiredState;

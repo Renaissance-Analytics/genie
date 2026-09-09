@@ -166,6 +166,7 @@ import {
     upgradeRestartForced,
 } from './agents/drain-service';
 import { shutdownReadinessPlan } from './agents/drain';
+import { planRestoreNotice, type DrainRestoreOutcome } from './agents/drain-restore';
 import { agentModeByTerminal, agentModeFor } from './agents/agent-mode-source';
 import { MANUAL_RECOVERY, reconnectStrategy, type McpRecovery } from './agents/mcp-reconnect';
 import { terminalIsBlocked } from './agents/injection-guard';
@@ -374,6 +375,35 @@ import { seedFlowsE2E } from './e2e/flows';
 
 const isProd = process.env.NODE_ENV === 'production';
 const isDev = !isProd;
+
+/**
+ * SAY SO when the post-upgrade restore did not bring something back (genie#551).
+ *
+ * The restore's only report was a `console.log`, so an agent, site or process
+ * that failed to restart was invisible until a person noticed its absence — and
+ * that is how genie#551 arrived, rather than as a report of the failure itself.
+ *
+ * An OS notification, deliberately, and NOT gated on `notify_toast`: that
+ * setting governs the agent-finished chime, and this is a failure report. Right
+ * after an upgrade Genie may have no window on screen at all, which is exactly
+ * the case a renderer-side surface cannot cover.
+ *
+ * {@link planRestoreNotice} decides what is worth saying — failures only; a skip
+ * is a decision the restore made correctly.
+ */
+function reportRestoreFailures(outcomes: readonly DrainRestoreOutcome[]): void {
+    try {
+        const notice = planRestoreNotice(outcomes);
+        if (!notice || !Notification.isSupported()) return;
+        const n = new Notification({ title: notice.title, body: notice.body });
+        n.on('click', () => showMasterWindow());
+        n.show();
+    } catch (e) {
+        // A toast that cannot be shown must not take the boot with it — the
+        // console lines already carry the same facts.
+        console.error('[drain] could not report the restore failures', e);
+    }
+}
 
 /**
  * Notify the user that an agent called imDone, per the Customization settings:
@@ -2726,7 +2756,7 @@ app.whenReady().then(async () => {
                 beforeResume: async () => {
                     if (!drainRestorePending) return;
                     try {
-                        await runPendingDrainRestore({
+                        const outcomes = await runPendingDrainRestore({
                             onOutcome: (outcome) => {
                                 if (outcome.status === 'started') return;
                                 console.log(
@@ -2735,6 +2765,13 @@ app.whenReady().then(async () => {
                                 );
                             },
                         });
+                        // …and TELL somebody (genie#551). The log line above was
+                        // the only report a failed restore ever produced, so an
+                        // agent that did not come back was invisible until a
+                        // person noticed its absence — which is how this bug was
+                        // found. A SKIP stays in the log: it is a decision the
+                        // restore made correctly.
+                        reportRestoreFailures(outcomes);
                     } finally {
                         // The restored processes are live by now, and the pass
                         // leaves a live process alone — so this only picks up
