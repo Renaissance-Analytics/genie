@@ -28,10 +28,12 @@ import { join } from 'node:path';
  * genie#114 documented this once already, for `var(--shell)` in a portaled
  * overlay, where the Add-workspace modal showed straight through its own panel.
  *
- * genie#589 found 24 undefined tokens, 10 of them read with no fallback, which
- * left the agent cards and the terminal nudge notice with no background and no
- * border in EITHER theme. Every one would have failed this file on the day it
- * was written, which is the whole argument for the file.
+ * genie#589 found 23 tokens the sheets read and Genie never declares: 22 that
+ * nothing defines at all, plus `--shadow-lg`, which only Tailwind does. NINE of
+ * the 22 were read with no fallback anywhere, voiding 22 declarations — which is
+ * why the agent cards, the terminal nudge notice and the agent panel's head had
+ * no background and no border in EITHER theme. Every one would have failed this
+ * file on the day it was written, which is the whole argument for the file.
  *
  * ## What counts as "defined"
  *
