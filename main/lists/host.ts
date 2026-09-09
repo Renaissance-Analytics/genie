@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { emitListsChanged } from './changed';
 import { planListOwner } from './identity';
 import {
     addListItem,
@@ -94,6 +95,11 @@ export function handleListsRequest(
             // nothing was added AND nothing was dropped, which is the thing a
             // caller needs to know before it decides what to do next.
             if (!added.ok) return { ok: false, error: added.error };
+            // Only after a write that actually landed — an announcement for a
+            // refused add would make the panel re-read for nothing, and worse,
+            // would say something changed when the caller was just told it did
+            // not.
+            emitListsChanged(workspaceId);
             return snapshot(
                 io,
                 workspaceId,
@@ -107,11 +113,13 @@ export function handleListsRequest(
         case 'done': {
             const done = completeAgentItem(io.db, { todoId: req.id ?? '', agentName });
             if (!done.ok) return { ok: false, error: done.error };
+            emitListsChanged(workspaceId);
             return snapshot(io, workspaceId, agentName, `Marked done: ${done.todo.text}`);
         }
 
         case 'clear': {
             const { cleared } = clearAgentList(io.db, workspaceId, agentName);
+            if (cleared > 0) emitListsChanged(workspaceId);
             return snapshot(
                 io,
                 workspaceId,

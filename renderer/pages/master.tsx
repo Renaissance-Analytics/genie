@@ -35,6 +35,7 @@ import TaskManagerFlyout from '../components/Master/TaskManagerFlyout';
 import AgentInboxFlyout from '../components/Master/AgentInboxFlyout';
 import FlowManagerFlyout from '../components/Master/FlowManagerFlyout';
 import QuestionInboxFlyout from '../components/Master/QuestionInboxFlyout';
+import ListsFlyout from '../components/Master/ListsFlyout';
 import AppStoreFlyout from '../components/Master/AppStoreFlyout';
 import AppTray from '../components/Master/AppTray';
 import Floor from '../components/Master/Floor';
@@ -96,6 +97,7 @@ import {
     IconPanelLeft,
     IconEye,
     IconCpu,
+    IconListTree,
     IconMessage,
     IconMailQuestion,
     IconFlow,
@@ -154,6 +156,11 @@ import { motifForPayload } from '../../main/notify-sound-kinds';
  *     this in renderer state because the TerminalManager is per-window;
  *     a panel goes "active" once XTerm mounts and "inactive" on exit.
  */
+
+/** Whether the lists panel is docked to the right edge — per WINDOW, not a
+ *  setting: it describes this screen's layout, not the workstation's. */
+const LISTS_PIN_KEY = 'genie-lists-pinned';
+
 export default function MasterPage() {
     const [ready, setReady] = useState(false);
     // Keep the magical boot screen mounted briefly after readiness so it can
@@ -545,6 +552,58 @@ function MasterInner() {
     // The panel owns the grouped list; the master just tracks the badge total and
     // refreshes it on `questions:changed` (event-driven, no polling).
     const [questionsOpen, setQuestionsOpen] = useState(false);
+    // The workspace lists (genie#556): a header icon, and a PIN that docks the
+    // panel to the right edge. The pin is a per-window UI preference, so it
+    // lives in localStorage — same reasoning as the AgentInbox's seen state, and
+    // unlike a setting it has no business reaching another workstation.
+    const [listsOpen, setListsOpen] = useState(false);
+    const [listsPinned, setListsPinned] = useState(false);
+    useEffect(() => {
+        try {
+            setListsPinned(window.localStorage.getItem(LISTS_PIN_KEY) === '1');
+        } catch {
+            /* a browser with storage blocked simply starts unpinned */
+        }
+    }, []);
+    const toggleListsPin = useCallback(() => {
+        setListsPinned((was) => {
+            const now = !was;
+            try {
+                window.localStorage.setItem(LISTS_PIN_KEY, now ? '1' : '0');
+            } catch {
+                /* the pin still applies for this session */
+            }
+            // Docking makes the panel permanent, so the transient "open" state
+            // stops meaning anything; clear it so unpinning doesn't leave a
+            // flyout hanging open over the Floor.
+            if (now) setListsOpen(false);
+            return now;
+        });
+    }, []);
+    // The badge counts ONLY what is waiting on the PERSON. An agent's own
+    // checklist is the agent's work, and a number the user cannot clear is a
+    // number they learn to ignore.
+    const [listsUserCount, setListsUserCount] = useState(0);
+    useEffect(() => {
+        // A remote window reads its OWN database, which is not where a host's
+        // lists live — so it shows no badge rather than a count from the wrong
+        // machine. The panel says the same thing in words when it is opened.
+        if (!hasGenieBridge() || !activeWorkspaceId || isRemoteWindow()) {
+            setListsUserCount(0);
+            return;
+        }
+        const load = () =>
+            void api()
+                .lists.read(activeWorkspaceId)
+                .then((v) => setListsUserCount(v.userCount))
+                .catch(() => {});
+        load();
+        // Push-driven, like the questions badge: an agent adding an item through
+        // the `lists` tool moves this without a timer.
+        return api().on.listsChanged?.((payload) => {
+            if (!payload?.workspaceId || payload.workspaceId === activeWorkspaceId) load();
+        });
+    }, [activeWorkspaceId]);
     // The GApp Store drawer, opened from the App Tray's icon in the header.
     const [appStoreOpen, setAppStoreOpen] = useState(false);
     const [questionCount, setQuestionCount] = useState(0);
@@ -2185,7 +2244,7 @@ function MasterInner() {
     }
 
     return (
-        <div className="gwrap" id="app">
+        <div className={`gwrap${listsPinned ? ' lists-docked' : ''}`} id="app">
             {/* TWO FULL-HEIGHT COLUMNS:
                   LEFT  — the workspace chooser (icon rail + search/list
                           sidebar), under a drag strip that owns the window's
@@ -2305,6 +2364,8 @@ function MasterInner() {
                         onShowQuestions={() => setQuestionsOpen((o) => !o)}
                         onShowAppStore={() => setAppStoreOpen((o) => !o)}
                         questionCount={questionCount}
+                        onShowLists={() => setListsOpen((o) => !o)}
+                        listsUserCount={listsUserCount}
                         onShowKnowledge={() => {
                             // Header button → open the standalone Knowledge Graph
                             // window (main-owned, via knowledge.openWindow). Guarded
@@ -2458,6 +2519,17 @@ function MasterInner() {
             <QuestionInboxFlyout
                 open={questionsOpen}
                 onClose={() => setQuestionsOpen(false)}
+            />
+            {/* Renders in one of two shapes, chosen inside the component:
+                floating over the Floor, or docked in the right-hand gutter that
+                `.gwrap.lists-docked` reserves — so a pinned panel covers
+                nothing. */}
+            <ListsFlyout
+                open={listsOpen}
+                onClose={() => setListsOpen(false)}
+                workspaceId={activeWorkspaceId}
+                pinned={listsPinned}
+                onTogglePin={toggleListsPin}
             />
             <GithubCapabilitiesFlyout
                 open={githubCapsOpen}
@@ -3546,6 +3618,8 @@ function TitleBar({
     agentInboxLag = 0,
     onShowQuestions,
     questionCount = 0,
+    onShowLists,
+    listsUserCount = 0,
     onShowAppStore,
     onShowKnowledge,
     onShowFlows,
@@ -3570,6 +3644,10 @@ function TitleBar({
     agentInboxLag?: number;
     onShowQuestions?: () => void;
     questionCount?: number;
+    onShowLists?: () => void;
+    /** Items on the workspace UserList waiting on the PERSON. An agent's own
+     *  checklist is deliberately NOT counted here. */
+    listsUserCount?: number;
     onShowAppStore?: () => void;
     onShowKnowledge?: () => void;
     onShowFlows?: () => void;
@@ -3740,6 +3818,24 @@ function TitleBar({
                 {questionCount > 0 && (
                     <span className="iw-btn-badge">
                         {questionCount > 99 ? '99+' : questionCount}
+                    </span>
+                )}
+            </button>
+            <button
+                type="button"
+                className="gicon lists-btn"
+                title={
+                    listsUserCount > 0
+                        ? `Lists — ${listsUserCount} item${listsUserCount === 1 ? '' : 's'} waiting on you`
+                        : 'Lists — what agents are tracking, and what is waiting on you'
+                }
+                aria-label="Lists"
+                onClick={() => onShowLists?.()}
+            >
+                <IconListTree size={16} />
+                {listsUserCount > 0 && (
+                    <span className="iw-btn-badge">
+                        {listsUserCount > 99 ? '99+' : listsUserCount}
                     </span>
                 )}
             </button>

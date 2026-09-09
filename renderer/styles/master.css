@@ -7658,3 +7658,174 @@ body.gutter-dragging .grid-gutter {
 .floweditor-errors li + li {
     margin-top: 4px;
 }
+
+/* ===== Lists panel (AgentList + UserList, genie#556) ====================
+   Two shapes for one panel. UNPINNED it reuses the Docs flyout chrome
+   (`.docs-flyout-root` / `.docs-flyout`), so it inherits the titlebar offset,
+   the scrim and the slide. PINNED it becomes a DOCK: a fixed column at the
+   right edge, with `.gwrap.lists-docked` reserving exactly that width so the
+   Floor shrinks beside it instead of being covered.
+
+   The reserve and the dock read their width from ONE token. Two numbers here
+   is a panel that overlaps the grid by however much they differ.
+
+   On ':root', beside --titlebar-h, and NOT on .gwrap: this is a layout
+   constant like that one, whereas .gwrap's token block is the SURFACE palette
+   that overlay-layers.test.ts requires .genie-overlay-root to mirror in full
+   (genie#114). A width no portaled overlay ever reads has no business in that
+   contract. */
+:root {
+    --lists-dock-w: 340px;
+}
+.gwrap.lists-docked {
+    padding-right: var(--lists-dock-w);
+}
+.lists-dock {
+    position: fixed;
+    top: var(--titlebar-h);
+    right: 0;
+    bottom: 0;
+    width: var(--lists-dock-w);
+    display: flex;
+    flex-direction: column;
+    background: var(--shell);
+    border-left: 1px solid var(--border-1);
+    /* Below the flyout layer (60): a docked panel is CHROME, and a flyout or a
+       modal opened over it must still cover it. See the ladder at the top. */
+    z-index: 30;
+}
+.lists-flyout {
+    width: min(460px, 74vw);
+}
+.lists-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 12px 14px 16px;
+}
+/* The pin reads as ON when it is on — an unlit toggle beside a docked panel
+   leaves the user hunting for what pinned it. */
+.docs-head .gicon.is-pinned {
+    color: var(--violet-400, #a78bfa);
+    background: color-mix(in srgb, currentColor 14%, transparent);
+}
+.lists-tabs {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+.lists-empty,
+.lists-notice,
+.lists-foot {
+    padding: 14px 2px;
+    color: var(--fg-3);
+}
+.lists-notice {
+    padding: 16px;
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-lg);
+    background: var(--bg-1);
+}
+.lists-outcome {
+    margin: 10px 0;
+    padding: 10px 12px;
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border-1);
+    background: var(--bg-1);
+}
+/* A nudge that did NOT land is the one state a person must not skim past —
+   they are the only one who can now tell the agent. */
+.lists-outcome.is-undelivered {
+    border-color: var(--amber-500, #f59e0b);
+    background: color-mix(in srgb, var(--amber-500, #f59e0b) 10%, transparent);
+}
+.lists-items {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.lists-item {
+    padding: 10px 12px;
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-lg);
+    background: var(--bg-1);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.lists-item.is-readonly {
+    background: transparent;
+    padding: 7px 10px;
+}
+.lists-item-text {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+}
+.lists-asker {
+    flex: 0 0 auto;
+    font-size: 11px;
+    color: var(--fg-3);
+    border: 1px solid var(--border-1);
+    border-radius: 999px;
+    padding: 1px 7px;
+    white-space: nowrap;
+}
+.lists-comment {
+    width: 100%;
+}
+.lists-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.lists-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+    padding: 4px 9px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-1);
+    background: var(--bg-2);
+    color: var(--fg-2);
+    cursor: pointer;
+}
+.lists-btn:hover:not(:disabled) {
+    color: var(--fg-1);
+    border-color: var(--border-2);
+}
+.lists-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+.lists-btn.is-done:hover:not(:disabled) {
+    border-color: #10b981;
+    color: #10b981;
+}
+.lists-btn.is-refuse:hover:not(:disabled) {
+    border-color: #ef4444;
+    color: #ef4444;
+}
+.lists-group + .lists-group {
+    margin-top: 14px;
+}
+.lists-group-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 2px 6px;
+    border-bottom: 1px solid var(--border-1);
+    margin-bottom: 8px;
+}
+.lists-group-count {
+    font-size: 11px;
+    color: var(--fg-3);
+    border: 1px solid var(--border-1);
+    border-radius: 999px;
+    padding: 0 6px;
+}
