@@ -45,6 +45,7 @@ const manager = vi.hoisted(() => ({
     envFor: vi.fn(),
     hostEnvFor: vi.fn(),
     hostEnvReportFor: vi.fn(),
+    runtimeSeen: vi.fn().mockReturnValue(null),
 }));
 
 const db = vi.hoisted(() => ({
