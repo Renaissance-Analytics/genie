@@ -139,10 +139,19 @@ export interface AgentRuntimeView {
 /* ── The manager's state ──────────────────────────────────────────────────── */
 
 export interface AgentManagerPersona extends PersonaView {
-    /** Absolute path to `AGENT.md`, or null for an agent with no `persona_path`. */
-    path: string | null;
+    /**
+     * Absolute path to `AGENT.md` — the recorded `persona_path`, or the one a
+     * save will DERIVE and record (`.agents/<name>/AGENT.md`).
+     *
+     * Never null (genie#570). It was, for an agent whose row carried no path,
+     * and the editor then drew "Saving writes one at ⟨empty⟩" above a Save
+     * button that refused. A surface has to be able to name the file it is
+     * about to write.
+     */
+    path: string;
     /** False when the path is known but nothing is on disk yet — agents
-     *  registered before registration started writing the file. */
+     *  registered before registration started writing the file, and agents
+     *  whose path has just been derived and not yet saved. */
     exists: boolean;
 }
 
