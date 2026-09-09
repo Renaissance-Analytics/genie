@@ -29,6 +29,7 @@ import { isTerminalLive } from '../terminal/ipc';
 import { workspaceIdOfSpec } from '../terminal/workspace-of-terminal';
 import { runtimeInfo } from './dev-site-tools';
 import { callerSeesWholeWorkstation, resolveAgentTarget } from './host-tools';
+import type { ServiceEngine } from '../dev-server/services/catalog';
 import type { DevServiceRow } from '../dev-server/services/service-manager';
 import type { EngineInventoryRow } from '../dev-server/services/inventory';
 import type { DevServiceConfig } from '../dev-server/services/services-config';
@@ -38,6 +39,7 @@ import type {
     DevServiceInfo,
     ManageServiceRequest,
     ManageServiceResult,
+    ServiceEnvReport,
 } from './protocol';
 
 /**
@@ -104,15 +106,23 @@ function toInfo(row: DevServiceRow): DevServiceInfo {
  *     (#222). It is holding a value that is now WRONG.
  *   - A service PROVISIONED after a terminal spawned never reaches it at all
  *     (#540). Nothing it holds is wrong; it is MISSING a service.
+ *   - Genie is holding NOTHING for a service the workspace enabled (#559), so
+ *     the terminal has no env for it and neither would a new one. The remedy is
+ *     the service, not the terminal.
  *
- * Neither is fixable — both are properties of ptys. The defect in both cases is
- * that Genie held both sides and said nothing: `onPortMoved` wrote to
- * `console.warn`, which no user and no agent reads.
+ * None is fixable in the pty — all three are properties of ptys. The defect in
+ * every case is that Genie held both sides and said nothing: `onPortMoved` wrote
+ * to `console.warn`, which no user and no agent reads.
  *
  * The live side is narrowed through `terminalServiceEnv` so it is compared in
- * exactly the form a terminal is handed, not the fuller set a site gets. The
- * comparison and both sentences are pure and live in `stale-terminal-env.ts`;
- * this function is only the I/O — which manager, and which terminals are open.
+ * exactly the form a terminal is handed, not the fuller set a site gets. It
+ * comes from `hostEnvReportFor` rather than the quieter `hostEnvFor`, because
+ * the report carries the OTHER side of the comparison: the engines this
+ * workspace enabled that are contributing nothing. Without it the detector is
+ * blind exactly when it is needed — an empty live env has no keys to walk, so a
+ * terminal that received nothing looks complete (genie#559). The comparison and
+ * all three sentences are pure and live in `stale-terminal-env.ts`; this
+ * function is only the I/O — which manager, and which terminals are open.
  *
  * Returns an EMPTY object when there is nothing to say, so a caller spreads it
  * and adds nothing. That is the overwhelmingly common case for the stale half,
@@ -129,7 +139,71 @@ function terminalEnvNotesFor(workspaceId: string): {
         .map((spec) => spec.id)
         .filter((id) => isTerminalLive(id));
     if (open.length === 0) return {};
-    return terminalEnvNotes(terminalServiceEnv(manager.hostEnvFor(workspaceId)), open);
+    const report = manager.hostEnvReportFor(workspaceId);
+    return terminalEnvNotes(
+        terminalServiceEnv(report.env),
+        open,
+        report.gaps.map((gap) => engineSpecFor(gap.engine as ServiceEngine).label),
+    );
+}
+
+/**
+ * The manager's host-env diagnostic, in the shape a tool result carries.
+ *
+ * A straight restatement — `protocol.ts` holds no `dev-server` imports, so the
+ * type is declared there and the values are copied across here. The copy is the
+ * seam, not a transformation: adding a field to one without the other is the
+ * mistake this comment exists to make visible.
+ */
+function serviceEnvReportFor(workspaceId: string): ServiceEnvReport {
+    const report = devServiceManager()?.hostEnvReportFor(workspaceId);
+    if (!report) return { enabled: 0, live: 0, withHostPort: 0, gaps: [] };
+    return {
+        enabled: report.enabled,
+        live: report.live,
+        withHostPort: report.withHostPort,
+        gaps: report.gaps.map((gap) => ({
+            engine: gap.engine,
+            version: gap.version,
+            reason: gap.reason,
+            ...(gap.error ? { error: gap.error } : {}),
+        })),
+    };
+}
+
+/**
+ * WHY this workspace's connection env came back empty — or null when it did not.
+ *
+ * The sentence an agent gets INSTEAD of `ok: true, env: {}` (genie#559). It has
+ * to carry three things, because the hour two agents lost was spent
+ * reconstructing exactly them: that the workspace DOES declare services (so the
+ * emptiness is a failure, not a configuration), how many of them Genie is
+ * holding (none), and the diagnosis the manager already recorded for each —
+ * *"Docker is installed but its engine is not running"* was known the whole
+ * time and was being thrown away.
+ *
+ * Null when the workspace enabled nothing: `{}` is then the correct and complete
+ * answer, and reporting it as a failure would replace one indistinguishable pair
+ * of empty results with another.
+ */
+function emptyServiceEnvReason(
+    report: ServiceEnvReport,
+    env: Record<string, string>,
+): string | null {
+    if (report.enabled === 0 || Object.keys(env).length > 0) return null;
+    const named = report.gaps.length
+        ? report.gaps
+              .map((gap) => `${gap.engine} ${gap.version}${gap.error ? ` — ${gap.error}` : ''}`)
+              .join('; ')
+        : 'no engine reported a reason';
+    return (
+        `This workspace has ${report.enabled} enabled service${
+            report.enabled === 1 ? '' : 's'
+        } and Genie is holding ${report.live} of them, so there is no connection to hand back. ` +
+        `\`env\` is empty because of THAT, not because the workspace configured nothing: ${named}. ` +
+        `Start the service (\`manageService\` \`start\`) and ask again — and note that a terminal ` +
+        `already open cannot pick the values up afterwards, so open it AFTER the service is ready.`
+    );
 }
 
 /**
@@ -385,6 +459,12 @@ export async function runManageService(
                     services: services(),
                     runtime,
                     ...(req.id ? { affectedId: req.id } : {}),
+                    // …and WHY the workspace's service env is what it is. On a
+                    // list the services array already carries each engine's
+                    // state, so this does not change the verdict — it is here so
+                    // the same field means the same thing on both reads
+                    // (genie#559).
+                    serviceEnv: serviceEnvReportFor(ws.id),
                     ...terminalEnvNotesFor(ws.id),
                 };
             }
@@ -513,18 +593,29 @@ export async function runManageService(
                 await manager.refresh().catch(() => {});
                 const target = targetService();
                 if ('error' in target) return fail(target.error);
+                // The whole point of the action: what a site container is
+                // actually given, so an agent can reason about the app's
+                // config without guessing at key names.
+                const env = manager.envFor(ws.id);
+                const serviceEnv = serviceEnvReportFor(ws.id);
+                // …and, when that came back EMPTY from a workspace that declares
+                // services, the reason — instead of `ok: true` beside `env: {}`,
+                // which is the exact payload that cost two agents an hour
+                // (genie#559). `ok` reports whether the caller got the thing it
+                // asked for, and an empty connection is not one.
+                const emptyReason = emptyServiceEnvReason(serviceEnv, env);
                 return {
-                    ok: true,
+                    ok: !emptyReason,
+                    ...(emptyReason ? { error: emptyReason } : {}),
                     services: services(),
                     affectedId: target.serviceId,
-                    // The whole point of the action: what a site container is
-                    // actually given, so an agent can reason about the app's
-                    // config without guessing at key names.
-                    env: manager.envFor(ws.id),
+                    env,
+                    serviceEnv,
                     runtime,
                     // …and WHICH open terminals were handed an earlier answer to
-                    // this same question (genie#222), or never received one at
-                    // all (genie#540).
+                    // this same question (genie#222), never received one at all
+                    // (genie#540), or are holding nothing because Genie is
+                    // (genie#559).
                     ...terminalEnvNotesFor(ws.id),
                 };
             }

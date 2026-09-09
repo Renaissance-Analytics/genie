@@ -31,6 +31,15 @@ import type { TeardownResult } from './workspace-sandbox';
  * manager ensures the sandbox itself before it starts anything — so the gate
  * costs nothing but the warm start it was there to give.
  *
+ * Open is ALSO where a boot adoption that could not run gets taken (genie#559).
+ * Docker Desktop restarts with the host, so a workstation that crashed brings
+ * Genie back first and boot adoption finds no daemon; nothing used to re-run it,
+ * and every terminal opened afterwards composed no service env at all. This is
+ * the right moment because it is the last one before a terminal — a pty's
+ * environment is fixed at spawn, so a repair that lands after it is too late for
+ * that shell. It is a no-op (not even a runtime probe) when boot went normally,
+ * which is what keeps a read from re-acquiring engines other workspaces share.
+ *
  * **REMOVE — release, stop, then sweep, in that order.** The order is the whole
  * point. `teardownWorkspaceSandbox` removes exactly what carries
  * `genie.workspace`, which is correct and is also why it cannot be the only
@@ -51,6 +60,12 @@ import type { TeardownResult } from './workspace-sandbox';
  * or host reboot restarts empty. Either way the site is dark and stays dark until
  * a human restarts it by hand, once per site — the reported "every time I update,
  * all our sites go down". `resumeEnabledSites()` closes that gap.
+ *
+ * Boot adoption can also fail to happen AT ALL, which is a third thing again: it
+ * asks the container runtime, and the runtime may not be up yet. That is not
+ * rare — Docker Desktop starts with the host, so a crashed workstation races
+ * Genie against it. The pass is then OWED rather than done, and the workspace
+ * OPEN above takes it (genie#559).
  *
  * Two lines it does NOT cross. `enabled` IS the user asking for the site to be
  * served, and only those come back — a site nobody enabled still starts nothing
@@ -158,6 +173,22 @@ export function createDevServerLifecycle(deps: DevServerLifecycleDeps): DevServe
             // instead of throwing: opening a workspace on a machine with no
             // Docker must be completely silent.
             if (!runtime) return { ensured: false, reason: 'no-runtime' };
+
+            // A runtime EXISTS now, and boot may have found none (genie#559).
+            // Docker Desktop restarts with the host, so a workstation that
+            // crashed brings Genie back FIRST and boot adoption acquires
+            // nothing; nothing used to re-run it, and every terminal opened
+            // afterwards composed no service env at all. Take the owed pass
+            // here, because this is the last moment before the user opens a
+            // terminal in this workspace — and a pty's environment cannot be
+            // rewritten once it starts, so a repair that lands afterwards is
+            // too late for that shell. A no-op, not even a probe, when boot
+            // adoption completed normally.
+            try {
+                await deps.services()?.adoptIfDeferred();
+            } catch {
+                /* a repair that could not run must not fail the open */
+            }
 
             // No `confirmImagePull` seam, deliberately: absent means NO PULL
             // (`workspace-sandbox.ts`). Opening a workspace is the last place a

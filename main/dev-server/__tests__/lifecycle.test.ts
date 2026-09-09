@@ -580,6 +580,54 @@ describe('workspace open', () => {
         expect(result.reason).toBe('no-runtime');
         expect(runtime.ran).toEqual([]);
     });
+
+    it('takes the adoption pass a Docker-less boot could not (genie#559)', async () => {
+        // The ordering that matters for the reported symptom. Genie booted while
+        // Docker Desktop was still starting, so boot adoption acquired nothing and
+        // `live` stayed empty; a pty's environment is fixed at spawn, so the
+        // repair has to land BEFORE the terminal is opened. Opening the workspace
+        // is that moment — the user is on their way to the terminal, the runtime
+        // is being resolved here anyway, and nothing has to poll for it.
+        let dockerUp = false;
+        const runtime = fakeRuntime({
+            existing: [
+                {
+                    id: 'id-pg',
+                    name: serviceContainerNameFor('postgres-16'),
+                    image: 'postgres:16-alpine',
+                    state: 'running',
+                },
+            ],
+        });
+        const resolveRuntime = async () =>
+            dockerUp
+                ? { runtime, detection: DOCKER_OK }
+                : { runtime: null, detection: NO_RUNTIME };
+        const services = createDevServiceManager({
+            resolveRuntime,
+            listWorkspaces: () => [WS],
+            devServicesFor: () => ({ 'svc-a': PG }),
+            engineAdmin: (req) => ({ user: req.adminUser, password: `admin-${req.recordKey}` }),
+        });
+        const lifecycle = createDevServerLifecycle({
+            resolveRuntime,
+            workspaceFor: () => WS,
+            devSitesFor: () => ({}),
+            devServicesFor: () => ({ 'svc-a': PG }),
+            sites: () => null,
+            services: () => services,
+            platform: 'linux',
+            hostIds: null,
+        });
+
+        await lifecycle.onBoot();
+        expect(services.hostEnvFor(WS.id)).toEqual({});
+
+        dockerUp = true;
+        await lifecycle.onWorkspaceOpen(WS.id);
+
+        expect(services.hostEnvFor(WS.id)).toMatchObject({ PGHOST: '127.0.0.1' });
+    });
 });
 
 // --- workspace remove -------------------------------------------------------

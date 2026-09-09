@@ -1289,6 +1289,47 @@ export interface DevServiceEngineInfo {
     staleImage?: boolean;
 }
 
+/**
+ * WHY the service env is what it is — the counts that explain an EMPTY one
+ * (genie#559).
+ *
+ * `env: {}` used to be indistinguishable from a workspace that configured no
+ * services at all, and it was returned alongside `ok: true`. That is the shape
+ * the issue named **success-shaped nothing**: nothing errors, nothing is
+ * missing-looking, and every caller and every test walks past it. The counts
+ * make the two `{}`s different objects — `enabled: 0` is the honest empty, and
+ * `enabled: 3, live: 0` is Genie holding nothing.
+ *
+ * Mirrors the manager's own `HostEnvReport` rather than re-deriving it: that
+ * type was built for exactly this and its doc already said so ("the counts that
+ * explain an EMPTY result"). Restated here because this module stays free of
+ * `dev-server` imports.
+ */
+export interface ServiceEnvReport {
+    /** Services this workspace has ENABLED in config. */
+    enabled: number;
+    /** Of those, how many the manager is holding right now. */
+    live: number;
+    /** Of the live ones, how many publish a loopback port a host process can
+     *  dial — the ones that actually contribute env. */
+    withHostPort: number;
+    /** Every enabled engine contributing NO env, and why. Empty ⇒ the workspace
+     *  got everything it declared. */
+    gaps: ServiceEnvGap[];
+}
+
+/** One enabled engine that contributed nothing, and the diagnosis the manager
+ *  already recorded for it. */
+export interface ServiceEnvGap {
+    engine: string;
+    version: string;
+    /** `not-live` — the manager is not holding it (never came up, failed, or was
+     *  released); `no-host-port` — it IS held, but nothing on this machine can
+     *  dial it because the runtime published no loopback port. */
+    reason: 'not-live' | 'no-host-port';
+    error?: string;
+}
+
 export interface ManageServiceResult {
     ok: boolean;
     /** Set when ok is false (no runtime, bad args, unknown id, …). */
@@ -1306,6 +1347,14 @@ export interface ManageServiceResult {
     logs?: string;
     /** connection: the env this workspace's site containers are given. */
     env?: Record<string, string>;
+    /**
+     * connection / list: WHY `env` is what it is (genie#559).
+     *
+     * Always present on those two actions, empty result or not — a diagnostic
+     * that appears only on failure is one nobody learns to read, and its whole
+     * job is to make an EMPTY `env` legible. See {@link ServiceEnvReport}.
+     */
+    serviceEnv?: ServiceEnvReport;
     /** A consequence the caller must know about even though the action SUCCEEDED
      *  — e.g. switching the active engine version leaves the old version's data
      *  behind, so the newly-active one starts empty (#242 P3). */

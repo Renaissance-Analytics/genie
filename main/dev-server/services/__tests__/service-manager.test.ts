@@ -51,6 +51,9 @@ interface Fake extends ContainerRuntime {
     /** The published-port map, so a test can move a port underneath the manager —
      *  which is exactly what a container recreate does in production. */
     readonly ports: Map<string, PortMapping[]>;
+    /** How many times the engine list was swept — the cost of one adoption pass.
+     *  A test can prove a pass was taken, or that none was. */
+    readonly sweeps: { n: number };
 }
 
 function fakeRuntime(
@@ -77,6 +80,7 @@ function fakeRuntime(
     const pulled: string[] = [];
     const containers = new Map<string, ContainerSummary>();
     const ports = new Map<string, PortMapping[]>();
+    const sweeps = { n: 0 };
     let nextHostPort = 49_800;
     for (const seed of opts.seedUnpublished ?? []) {
         // Running, but no `ports.set` — so portMappings returns [] for it, exactly
@@ -99,6 +103,7 @@ function fakeRuntime(
         execs,
         pulled,
         containers,
+        sweeps,
         async detect() {
             return opts.detection ?? DOCKER_OK;
         },
@@ -192,6 +197,7 @@ function fakeRuntime(
         async psServices() {
             // The fake stands in for the `genie.service` label filter: every
             // container this manager creates is a service engine.
+            sweeps.n += 1;
             return [...containers.values()];
         },
         async portMappings(id) {
@@ -1631,5 +1637,199 @@ describe('a published port that does not move', () => {
         await manager.acquire('b', 'svc-b');
 
         expect(runtime.removed).toEqual(['old-id']);
+    });
+});
+
+/**
+ * A BOOT ADOPTION THAT COULD NOT RUN IS OWED, NOT FORGOTTEN (genie#559).
+ *
+ * The workstation crashed. Docker Desktop restarts with the host and Genie
+ * booted first, so `adopt()` had no daemon to ask, acquired nothing, and `live`
+ * stayed empty. Nothing re-ran it when the daemon came back — so every terminal
+ * spawned afterwards composed NO service env at all, for every engine, and the
+ * tool an agent would reach for to work around that read the same empty map.
+ *
+ * The engines themselves were fine throughout: they carry `restart:
+ * unless-stopped`, so Docker brought them back on its own. The only thing lost
+ * was Genie's knowledge of them.
+ *
+ * These tests are written against the ENV, never against a boolean. A `{}` that
+ * reports success is the whole defect, so a test that accepts one proves
+ * nothing (the standing rule the issue produced: *assert on content, never on
+ * `ok`*).
+ */
+describe('a deferred boot adoption (genie#559)', () => {
+    /** Docker, then no Docker, then Docker again — the crash, in one seam. */
+    function daemon(runtime: Fake): {
+        resolveRuntime: () => Promise<{ runtime: Fake | null; detection: RuntimeDetection }>;
+        up: (yes: boolean) => void;
+    } {
+        let alive = true;
+        return {
+            resolveRuntime: async () =>
+                alive
+                    ? { runtime, detection: DOCKER_OK }
+                    : {
+                          runtime: null,
+                          detection: {
+                              kind: 'none' as const,
+                              reason: 'not-running' as const,
+                              installHint: 'Docker is installed but its engine is not running.',
+                              probes: [],
+                          },
+                      },
+            up: (yes: boolean) => {
+                alive = yes;
+            },
+        };
+    }
+
+    it('repopulates the service env when the runtime comes back', async () => {
+        const runtime = fakeRuntime();
+        const services = { a: pgFor('svc-a') };
+        const docker = daemon(runtime);
+
+        // The Genie that was running before the crash brought the engine up.
+        const before = createDevServiceManager(
+            deps(runtime, services, { resolveRuntime: docker.resolveRuntime }),
+        );
+        await before.acquire('a', 'svc-a');
+        expect(before.hostEnvFor('a')).toMatchObject({ PGHOST: '127.0.0.1' });
+
+        // The crash. Docker Desktop restarts with the host; Genie boots first.
+        // The CONTAINER survives (`restart: unless-stopped`) — only Genie's
+        // knowledge of it is gone.
+        docker.up(false);
+        const after = createDevServiceManager(
+            deps(runtime, services, { resolveRuntime: docker.resolveRuntime }),
+        );
+        await after.adopt();
+        expect(after.hostEnvFor('a')).toEqual({});
+
+        // The daemon answers again. The next read a caller acts on takes the
+        // adoption pass that was owed.
+        docker.up(true);
+        await after.refresh();
+
+        const env = after.hostEnvFor('a');
+        expect(env).toMatchObject({ PGHOST: '127.0.0.1', PGUSER: expect.any(String) });
+        expect(env.DATABASE_URL).toContain('127.0.0.1');
+        expect(after.list('a')[0].state).toBe('running');
+    });
+
+    it('takes the pass ONCE — a healthy boot is never re-swept', async () => {
+        // The control that makes the retry safe. A workspace with a service that
+        // is CONFIGURED but not running is the ordinary case (the user stopped
+        // it), and it is the one an unguarded retry punishes: adoption would
+        // sweep the engine list looking for it again on every single read, so
+        // `manageService list` would shell out to Docker once per stopped
+        // service, forever. The pass is owed only when one was actually missed.
+        const runtime = fakeRuntime();
+        const manager = createDevServiceManager(
+            deps(runtime, {
+                a: pgFor('svc-a'),
+                // Enabled, never started, no container: exactly what adoption
+                // looks for and does not find.
+                b: { 'svc-b': { ...REDIS7 } },
+            }),
+        );
+        await manager.acquire('a', 'svc-a');
+
+        await manager.adopt();
+        const afterBoot = runtime.sweeps.n;
+        expect(afterBoot).toBeGreaterThan(0);
+        await manager.refresh();
+        await manager.refresh();
+
+        expect(runtime.sweeps.n).toBe(afterBoot);
+        expect(runtime.ran).toHaveLength(1);
+    });
+
+    it('keeps the holder count right across the retry', async () => {
+        // Two workspaces on ONE engine. A retry that double-counted would leave an
+        // engine nobody can ever stop; one that under-counted would let the first
+        // release stop a database the other workspace is still using.
+        const runtime = fakeRuntime();
+        const services = { a: pgFor('svc-a'), b: pgFor('svc-b') };
+        const docker = daemon(runtime);
+
+        const before = createDevServiceManager(
+            deps(runtime, services, { resolveRuntime: docker.resolveRuntime }),
+        );
+        await before.acquire('a', 'svc-a');
+        await before.acquire('b', 'svc-b');
+        expect(before.list('a')[0].holders).toBe(2);
+
+        docker.up(false);
+        const after = createDevServiceManager(
+            deps(runtime, services, { resolveRuntime: docker.resolveRuntime }),
+        );
+        await after.adopt();
+        docker.up(true);
+        await after.refresh();
+
+        expect(after.list('a')[0].holders).toBe(2);
+        expect(after.list('b')[0].holders).toBe(2);
+        expect(runtime.ran).toHaveLength(1);
+    });
+
+    it('tells a workspace with services apart from one with none', async () => {
+        // The other half of "success-shaped nothing": `{}` is the RIGHT answer for
+        // a workspace that configured no services, and the report is what makes
+        // the two `{}`s different things.
+        const runtime = fakeRuntime();
+        const services: Record<string, DevServices> = { a: pgFor('svc-a'), b: {} };
+        const docker = daemon(runtime);
+        const before = createDevServiceManager(
+            deps(runtime, services, { resolveRuntime: docker.resolveRuntime }),
+        );
+        await before.acquire('a', 'svc-a');
+
+        docker.up(false);
+        const after = createDevServiceManager(
+            deps(runtime, services, { resolveRuntime: docker.resolveRuntime }),
+        );
+        await after.adopt();
+
+        expect(after.hostEnvReportFor('a')).toMatchObject({
+            env: {},
+            enabled: 1,
+            live: 0,
+            gaps: [{ engine: 'postgres', version: '16', reason: 'not-live' }],
+        });
+        expect(after.hostEnvReportFor('b')).toMatchObject({
+            env: {},
+            enabled: 0,
+            live: 0,
+            gaps: [],
+        });
+    });
+
+    it('stays owed across repeated reads while the daemon is still down', async () => {
+        // The pass is not spent by attempting it. A daemon that takes minutes to
+        // come back gets asked again every time, and until it answers the reads
+        // in between cost no sweep at all — there is nothing to sweep.
+        const runtime = fakeRuntime();
+        const services = { a: pgFor('svc-a') };
+        const docker = daemon(runtime);
+        const before = createDevServiceManager(
+            deps(runtime, services, { resolveRuntime: docker.resolveRuntime }),
+        );
+        await before.acquire('a', 'svc-a');
+
+        docker.up(false);
+        const after = createDevServiceManager(
+            deps(runtime, services, { resolveRuntime: docker.resolveRuntime }),
+        );
+        await after.adopt();
+        const sweptByBoot = runtime.sweeps.n;
+        await after.refresh();
+        await after.refresh();
+        expect(runtime.sweeps.n).toBe(sweptByBoot);
+        expect(after.hostEnvFor('a')).toEqual({});
+
+        docker.up(true);
+        await after.refresh();
+        expect(after.hostEnvFor('a')).toMatchObject({ PGHOST: '127.0.0.1' });
     });
 });
