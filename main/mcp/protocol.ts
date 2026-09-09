@@ -661,6 +661,12 @@ export interface McpContext {
          * somebody else's bug. Where it SHOULD go is an open decision. Naming
          * where it went is what turns a silent misfile into an obvious one, and
          * needs no decision at all.
+         *
+         * The confirmation names the PROJECT and no longer names a list. Tynn's
+         * Wishes/Feedback became Issues, and `routes/web.php` now redirects
+         * `/feedback` to `issues?source=feedback` — so "the project feedback
+         * list" was a surface that had stopped existing under that name. The
+         * project is the durable half of the answer.
          */
         project?: string;
     }>;
@@ -4656,7 +4662,7 @@ ${body}` }],
                         {
                             type: 'text',
                             text: result.ok
-                                ? `Feedback filed in Tynn${result.project ? ` — project “${result.project}”` : ''}. A human will see it in that project's feedback list — you do not need to repeat it in the terminal.`
+                                ? `Feedback filed in Tynn${result.project ? ` — project “${result.project}”` : ''}. A human will see it there — you do not need to repeat it in the terminal.`
                                 : `Could not file feedback: ${result.error ?? 'unknown error'}`,
                         },
                     ],
