@@ -18,6 +18,7 @@ import type { AgentTuiId, TuiDef } from '../../main/agents/registry';
 import type { SoundSettingKeys } from '../../main/notify-sound-kinds';
 import type { RestartMode } from '../../main/agents/restart-options';
 import type { AgentCliToolId } from '../../main/agents/agent-cli-catalog';
+import type { PinReason } from '../../main/remote/pairing-reason';
 /* The agent MANAGER's wire types (Tynn #709 / story #263).
  *
  * From `agent-manager-types.ts` — a ZERO-IMPORT leaf — and from NOTHING else,
@@ -1518,6 +1519,14 @@ export interface MobileStatus {
     /** True when served over browser-trusted HTTPS (a Tailscale cert was issued);
      *  false = http-over-WireGuard (still encrypted — the fail-open fallback). */
     secure: boolean;
+    /** Set when this run could NOT read the store holding the PIN + every paired
+     *  device, so the devices are missing and the PIN has changed. Null on a
+     *  clean load (and on a genuine first run). See genie#578. */
+    pairingStoreIssue: {
+        reason: 'keychain-unavailable' | 'decrypt-failed' | 'malformed' | 'read-failed';
+        /** Where the unreadable store was moved so it can still be recovered. */
+        preservedPath: string | null;
+    } | null;
 }
 
 /** A remote/phone currently connected to THIS host. */
@@ -3378,7 +3387,14 @@ export interface GenieApi {
         open: (
             host: RemoteHost,
             pin?: string,
-        ) => Promise<{ ok: boolean; connKey?: string; error?: string; needsPin?: boolean }>;
+        ) => Promise<{
+            ok: boolean;
+            connKey?: string;
+            error?: string;
+            needsPin?: boolean;
+            /** WHY the PIN is wanted (genie#578) — feed it to `pairingPrompt`. */
+            pinReason?: PinReason;
+        }>;
         /** The persisted known-hosts list (for the picker), each tagged connected. */
         known: () => Promise<KnownHost[]>;
         forget: (connKey: string) => Promise<{ ok: boolean }>;

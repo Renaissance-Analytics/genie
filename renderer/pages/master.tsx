@@ -4,6 +4,7 @@ import { ensureOverlayRoot } from '../lib/overlay-root';
 import { DEFAULT_HOTKEYS, type HotkeyBindings } from '../lib/hotkeys';
 import { useGenieHotkeys } from '../lib/use-genie-hotkeys';
 import { ftqNudgeDelivery } from '../lib/ftq-nudge';
+import { pairingPrompt } from '../../main/remote/pairing-reason';
 import GenieCommandWindow, { type SavedPrompt } from '../components/Master/GenieCommandWindow';
 import FeedbackModal from '../components/Master/FeedbackModal';
 import Chooser from '../components/Master/Chooser';
@@ -4203,6 +4204,8 @@ function HostsPanel({ onClose }: { onClose: () => void }) {
     const [loading, setLoading] = useState(true);
     const [pinFor, setPinFor] = useState<string | null>(null);
     const [pin, setPin] = useState('');
+    /** The sentence explaining WHY the PIN field is showing. */
+    const [pinWhy, setPinWhy] = useState<string | null>(null);
     const [busy, setBusy] = useState<string | null>(null);
     const [err, setErr] = useState<string | null>(null);
 
@@ -4292,9 +4295,18 @@ function HostsPanel({ onClose }: { onClose: () => void }) {
             if (res.ok) {
                 setPinFor(null);
                 setPin('');
+                setPinWhy(null);
                 onClose();
             } else if (res.needsPin) {
                 setPinFor(row.connKey);
+                // SAY why the PIN is back. Showing a bare PIN box for a rejected
+                // or unreadable token is what made genie#578 unexplainable: the
+                // user sees a first-time pair and has no way to know otherwise.
+                setPinWhy(
+                    withPin
+                        ? 'That PIN was rejected — check the host and try again.'
+                        : pairingPrompt(res.pinReason, row.name || row.hostname),
+                );
             } else {
                 setErr(res.error ?? 'Could not connect.');
             }
@@ -4385,6 +4397,10 @@ function HostsPanel({ onClose }: { onClose: () => void }) {
                             )}
                         </div>
                         {pinFor === row.connKey && (
+                            <>
+                            {pinWhy && (
+                                <div style={{ marginTop: 6, color: '#a1a1aa', lineHeight: 1.4 }}>{pinWhy}</div>
+                            )}
                             <div style={{ display: 'flex', gap: 6, marginTop: 7 }}>
                                 <input
                                     autoFocus
@@ -4397,6 +4413,7 @@ function HostsPanel({ onClose }: { onClose: () => void }) {
                                 />
                                 <button type="button" className="gbtn gbtn-sm" disabled={!pin.trim() || busy === row.connKey} onClick={() => void openHost(row, pin)}>Pair</button>
                             </div>
+                            </>
                         )}
                     </div>
                 ))}

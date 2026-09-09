@@ -280,6 +280,7 @@ import {
     type RecoveryState,
 } from './terminal/recovery-channels';
 import { setSecretEncryptor } from './secrets/store';
+import { setPairingJournalDir } from './pairing-journal';
 import { buildHostServerDeps } from './host-core/server-deps';
 import { registerAppBridge } from './apps/bridge';
 import { registerAppsIpc, sweepPreviewsAtBoot } from './apps/ipc';
@@ -1808,6 +1809,10 @@ app.whenReady().then(async () => {
     // safeStorage-backed impl; genie-cloud injects its KMS one. Fail-closed: if
     // unavailable, those stores keep secrets in memory only (never plaintext).
     setSecretEncryptor(electronEncryptor());
+    // …and open the pairing journal beside those stores, so the next time a
+    // pairing is dropped there is a record of WHICH way it happened — the thing
+    // nobody could answer in genie#578. Non-secret, bounded, local-only.
+    setPairingJournalDir(app.getPath('userData'));
     // Inject the two desktop-GUI hooks the extracted MCP tools need (tray-menu
     // rebuild + surfacing the master window). Headless leaves these as no-ops.
     registerHostTools({

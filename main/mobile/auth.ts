@@ -2,10 +2,11 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-    encryptSecret,
-    decryptSecret,
-    secretEncryptionAvailable,
+    encryptSecretResult,
+    decryptSecretResult,
+    type CryptFailure,
 } from '../secrets/store';
+import { recordPairingEvent, setPairingJournalDir } from '../pairing-journal';
 import { assignEmoji } from './emoji';
 import type { BatonPrincipal } from './baton';
 
@@ -95,6 +96,28 @@ interface PersistShape {
  *  pattern). Resolves true to allow the pairing, false to deny. */
 export type ConfirmPairHook = (info: { ip: string; ua: string }) => Promise<boolean>;
 
+/** WHY this run started without the paired devices it should have had. */
+export interface PairingStoreIssue {
+    /**
+     * `'keychain-unavailable'` — no key to decrypt with right now. TRANSIENT: the
+     *   store on disk is probably fine and is left exactly where it is.
+     * `'decrypt-failed'` — the key is working and still won't open this blob.
+     * `'malformed'` — the file isn't the shape we write.
+     * `'read-failed'` — the file is there and we couldn't read it at all.
+     */
+    reason: 'keychain-unavailable' | 'decrypt-failed' | 'malformed' | 'read-failed';
+    /** Where the unreadable blob was moved so it can still be recovered, or null
+     *  while it is still sitting untouched at the normal path. */
+    preservedPath: string | null;
+    at: number;
+}
+
+/** The issue, if any, from this process's load of the store. Null when it loaded
+ *  cleanly — or when there was nothing to load (a genuine first run). */
+export function pairingStoreIssue(): PairingStoreIssue | null {
+    return state?.issue ?? null;
+}
+
 interface AuthState {
     pin: string;
     sessions: Map<string, MobileSession>;
@@ -102,6 +125,19 @@ interface AuthState {
     confirmPair: ConfirmPairHook;
     /** Sliding window of recent pair-attempt timestamps (epoch ms). */
     attempts: number[];
+    /** Why this run has no restored devices (see PairingStoreIssue). */
+    issue: PairingStoreIssue | null;
+    /**
+     * A store file we did NOT manage to load, still sitting at the normal path.
+     * Nothing may be written over it until it has been moved aside — that write
+     * is the destruction genie#578 is about, and it happens whether the failed
+     * read was a moment ago (init) or the keychain came back mid-run and the
+     * first `persist()` is only happening now.
+     */
+    unreadStorePath: string | null;
+    /** The last reason a persist was declined, so the journal records the state
+     *  CHANGE rather than a line per session mutation. */
+    lastPersistDecline: CryptFailure | null;
 }
 
 const RATE_WINDOW_MS = 60_000; // 1 minute window
@@ -114,50 +150,136 @@ function statePath(dir: string): string {
 }
 
 /**
+ * Move a store we could not read out of the way so it can never be written
+ * over, and so whoever looks into it later still has the evidence. Returns the
+ * path it was moved to, or null when there was nothing to move.
+ *
+ * Throws on a failed move — deliberately. The caller's next act is a write to
+ * the path this was supposed to clear, and doing that anyway is exactly the
+ * data loss this whole change exists to stop.
+ */
+function preserveUnreadStore(): string | null {
+    if (!state?.unreadStorePath) return null;
+    const from = state.unreadStorePath;
+    if (!fs.existsSync(from)) {
+        state.unreadStorePath = null;
+        return null;
+    }
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    let to = `${from}.unreadable-${stamp}`;
+    for (let n = 1; fs.existsSync(to); n++) to = `${from}.unreadable-${stamp}-${n}`;
+    fs.renameSync(from, to);
+    state.unreadStorePath = null;
+    if (state.issue) state.issue.preservedPath = to;
+    recordPairingEvent({ side: 'host', event: 'host-store-preserved', detail: { preserved: to } });
+    return to;
+}
+
+/**
  * Persist { pin, sessions } ENCRYPTED via the Encryptor port. FAIL CLOSED: when
  * no encryptor is available we write NOTHING (everything stays in memory only) —
  * never a plaintext PIN or token on disk.
+ *
+ * And NEVER over a store we failed to read: an in-memory state that is missing
+ * devices because we couldn't load them must not become the on-disk truth.
  */
 function persist(): void {
     if (!state?.userDataDir) return;
-    if (!secretEncryptionAvailable()) return; // fail closed — memory only
     const payload = {
         pin: state.pin,
         sessions: [...state.sessions.values()],
     };
-    const enc = encryptSecret(JSON.stringify(payload));
-    if (enc == null) return; // encrypt failed → don't write plaintext
+    const enc = encryptSecretResult(JSON.stringify(payload));
+    if (!enc.ok) {
+        // Fail closed — memory only. Record the CHANGE, not every call: persist
+        // runs on each session mutation and a line per mutation would bury it.
+        if (state.lastPersistDecline !== enc.reason) {
+            state.lastPersistDecline = enc.reason;
+            recordPairingEvent({
+                side: 'host',
+                event: 'host-store-not-persisted',
+                detail: {
+                    reason: enc.reason === 'unavailable' ? 'keychain-unavailable' : 'encrypt-failed',
+                    devices: state.sessions.size,
+                },
+            });
+        }
+        return;
+    }
     try {
-        fs.writeFileSync(statePath(state.userDataDir), JSON.stringify({ enc } as PersistShape) + '\n', {
+        preserveUnreadStore();
+    } catch {
+        // Could not move the unreadable store aside → do not write. Better to
+        // lose this run's persistence than the devices we could not read.
+        recordPairingEvent({
+            side: 'host',
+            event: 'host-store-not-persisted',
+            detail: { reason: 'preserve-failed', devices: state.sessions.size },
+        });
+        return;
+    }
+    try {
+        fs.writeFileSync(statePath(state.userDataDir), JSON.stringify({ enc: enc.value } as PersistShape) + '\n', {
             mode: 0o600,
         });
+        state.lastPersistDecline = null;
     } catch {
         /* best-effort persistence */
     }
 }
 
-/** Load persisted { pin, sessions } if present + decryptable; else nulls. */
-function load(dir: string): { pin: string | null; sessions: MobileSession[] } {
+/** What a load of the store found. The three outcomes are NOT interchangeable:
+ *  only `'absent'` means "there is nothing here, start fresh". */
+type StoreLoad =
+    | { kind: 'loaded'; pin: string | null; sessions: MobileSession[] }
+    | { kind: 'absent' }
+    | { kind: 'unreadable'; reason: PairingStoreIssue['reason'] };
+
+/**
+ * Read the persisted { pin, sessions }, reporting WHY when it can't be read.
+ *
+ * The old version answered every failure with `{pin: null, sessions: []}` —
+ * indistinguishable from a first run, which is how a failed decrypt came to
+ * mint a new PIN and overwrite every paired device (genie#578).
+ */
+function loadStore(dir: string): StoreLoad {
+    const file = statePath(dir);
+    if (!fs.existsSync(file)) return { kind: 'absent' };
+    let raw: string;
     try {
-        const j = JSON.parse(
-            fs.readFileSync(statePath(dir), 'utf8'),
-        ) as PersistShape;
-        if (j.enc) {
-            const dec = decryptSecret(j.enc);
-            if (dec == null) return { pin: null, sessions: [] }; // can't decrypt → fresh
-            const payload = JSON.parse(dec) as {
-                pin: string;
-                sessions: Array<Partial<MobileSession> & { token: string }>;
-            };
-            return {
-                pin: payload.pin ?? null,
-                sessions: (payload.sessions ?? []).map(normalizeSession),
-            };
-        }
+        raw = fs.readFileSync(file, 'utf8');
     } catch {
-        /* no/garbled state — start fresh */
+        return { kind: 'unreadable', reason: 'read-failed' };
     }
-    return { pin: null, sessions: [] };
+    let j: PersistShape;
+    try {
+        j = JSON.parse(raw) as PersistShape;
+    } catch {
+        return { kind: 'unreadable', reason: 'malformed' };
+    }
+    if (!j?.enc) return { kind: 'unreadable', reason: 'malformed' };
+    const dec = decryptSecretResult(j.enc);
+    if (!dec.ok) {
+        return {
+            kind: 'unreadable',
+            reason: dec.reason === 'unavailable' ? 'keychain-unavailable' : 'decrypt-failed',
+        };
+    }
+    try {
+        const payload = JSON.parse(dec.value) as {
+            pin: string;
+            sessions: Array<Partial<MobileSession> & { token: string }>;
+        };
+        return {
+            kind: 'loaded',
+            pin: payload.pin ?? null,
+            sessions: (payload.sessions ?? []).map(normalizeSession),
+        };
+    } catch {
+        // Decrypted, but the plaintext isn't our shape. The ciphertext is still
+        // the only copy of whatever it is — preserve it like any other.
+        return { kind: 'unreadable', reason: 'malformed' };
+    }
 }
 
 /** A fresh 6-digit PIN as a zero-padded string ('000000'..'999999'). */
@@ -176,18 +298,54 @@ export function initAuth(opts: {
 }): void {
     if (state) {
         state.confirmPair = opts.confirmPair;
-        if (opts.userDataDir) state.userDataDir = opts.userDataDir;
+        if (opts.userDataDir) {
+            state.userDataDir = opts.userDataDir;
+            setPairingJournalDir(opts.userDataDir);
+        }
         return;
     }
-    const restored = opts.userDataDir ? load(opts.userDataDir) : { pin: null, sessions: [] };
+    if (opts.userDataDir) setPairingJournalDir(opts.userDataDir);
+    const restored: StoreLoad = opts.userDataDir ? loadStore(opts.userDataDir) : { kind: 'absent' };
+    const loaded = restored.kind === 'loaded' ? restored : null;
     state = {
-        pin: restored.pin ?? generatePin(),
-        sessions: new Map(restored.sessions.map((s) => [s.token, s])),
+        pin: loaded?.pin ?? generatePin(),
+        sessions: new Map((loaded?.sessions ?? []).map((s) => [s.token, s])),
         userDataDir: opts.userDataDir,
         confirmPair: opts.confirmPair,
         attempts: [],
+        issue:
+            restored.kind === 'unreadable'
+                ? { reason: restored.reason, preservedPath: null, at: Date.now() }
+                : null,
+        // Mark the file as unread so NOTHING overwrites it — not this init, and
+        // not a persist later in the run once the keychain comes back.
+        unreadStorePath:
+            restored.kind === 'unreadable' && opts.userDataDir ? statePath(opts.userDataDir) : null,
+        lastPersistDecline: null,
     };
-    if (!restored.pin) persist(); // freshly minted PIN → persist it
+    if (restored.kind === 'loaded') {
+        recordPairingEvent({
+            side: 'host',
+            event: 'host-store-restored',
+            detail: { devices: state.sessions.size },
+        });
+    } else if (restored.kind === 'absent') {
+        recordPairingEvent({ side: 'host', event: 'host-store-absent' });
+    }
+    // A freshly minted PIN is persisted — but `persist()` moves an unread store
+    // aside first, so "start over" never means "destroy what we couldn't read".
+    // With no keychain it writes nothing at all, which leaves that store exactly
+    // where it is for a boot that can open it.
+    if (!loaded?.pin) persist();
+    if (restored.kind === 'unreadable') {
+        // Journalled AFTER the persist attempt so the entry says where the old
+        // store ended up — the one fact a recovery needs.
+        recordPairingEvent({
+            side: 'host',
+            event: 'host-store-unreadable',
+            detail: { reason: restored.reason, preserved: state.issue?.preservedPath ?? null },
+        });
+    }
 }
 
 /** The current pairing PIN (shown on the desktop). */

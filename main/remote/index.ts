@@ -4,7 +4,13 @@ import fs from 'node:fs';
 import httpsMod from 'node:https';
 import path from 'node:path';
 import { demandWindowAttention } from '../attention-flash';
-import { encryptSecret, decryptSecret } from '../secrets/store';
+import {
+    encryptSecretResult,
+    decryptSecretResult,
+    secretEncryptionAvailable,
+} from '../secrets/store';
+import { recordPairingEvent } from '../pairing-journal';
+import type { PinReason } from './pairing-reason';
 import { getAllSettings } from '../db';
 import { resolveAlertSound, alertSoundPayload } from '../notify-sound';
 import { planImDoneNotice } from '../attention/imdone-notice';
@@ -255,18 +261,55 @@ function writeTokenStore(store: Record<string, string>): void {
         /* best-effort persistence */
     }
 }
-function loadSavedToken(host: RemoteHost): string | null {
-    const enc = readTokenStore()[connKeyOf(host)];
-    return enc ? decryptSecret(enc) : null;
+/** What happened when we went looking for this host's saved token. The ways of
+ *  not having one are NOT the same thing to a user: only `'none'` WITH a working
+ *  keychain is the reassuring "you have never paired this" (genie#578). */
+type SavedTokenLoad =
+    | { kind: 'ok'; token: string }
+    /** Nothing on file. `keychainDown` means a new token wouldn't be kept
+     *  either — which is how the store came to be empty in the first place. */
+    | { kind: 'none'; keychainDown: boolean }
+    | { kind: 'unreadable'; reason: 'keychain-unavailable' | 'decrypt-failed' };
+
+function loadSavedToken(host: RemoteHost): SavedTokenLoad {
+    const key = connKeyOf(host);
+    const enc = readTokenStore()[key];
+    if (!enc) return { kind: 'none', keychainDown: !secretEncryptionAvailable() };
+    const dec = decryptSecretResult(enc);
+    if (dec.ok) return { kind: 'ok', token: dec.value };
+    const reason = dec.reason === 'unavailable' ? 'keychain-unavailable' : 'decrypt-failed';
+    // NOT cleared: with no keychain the blob is probably still good, and even a
+    // failed decrypt is the only copy there is. Throwing it away here would be
+    // the client-side twin of the host bug this change fixes.
+    recordPairingEvent({
+        side: 'client',
+        event: 'client-token-unreadable',
+        detail: { host: key, reason },
+    });
+    return { kind: 'unreadable', reason };
 }
 function saveSavedToken(host: RemoteHost, token: string): void {
     // FAIL CLOSED: without an encryptor we do NOT persist the token in clear —
-    // the host just asks for the PIN again after a restart.
-    const enc = encryptSecret(token);
-    if (enc == null) return;
+    // the host just asks for the PIN again after a restart. Which is precisely
+    // the complaint in genie#578, so SAY so rather than letting the next launch
+    // look like a first-time pair all over again.
+    const key = connKeyOf(host);
+    const enc = encryptSecretResult(token);
+    if (!enc.ok) {
+        recordPairingEvent({
+            side: 'client',
+            event: 'client-token-not-saved',
+            detail: {
+                host: key,
+                reason: enc.reason === 'unavailable' ? 'keychain-unavailable' : 'encrypt-failed',
+            },
+        });
+        return;
+    }
     const store = readTokenStore();
-    store[connKeyOf(host)] = enc;
+    store[key] = enc.value;
     writeTokenStore(store);
+    recordPairingEvent({ side: 'client', event: 'client-token-saved', detail: { host: key } });
 }
 function clearSavedToken(host: RemoteHost): void {
     const store = readTokenStore();
@@ -1810,7 +1853,16 @@ function closeAllTerminals(conn: RemoteConnection): void {
  * the registry (`connKey`) with its events bridge running; the caller binds a
  * window to it. Reconnecting an already-live host is a no-op success.
  */
-type ConnectResult = { ok: boolean; connKey?: string; error?: string; needsPin?: boolean };
+type ConnectResult = {
+    ok: boolean;
+    connKey?: string;
+    error?: string;
+    needsPin?: boolean;
+    /** WHY the PIN is being asked for, when it is. Set with `needsPin` and
+     *  never without it — the UI says one sentence per cause instead of
+     *  greeting every failure as a first-time pair (genie#578). */
+    pinReason?: PinReason;
+};
 
 /** In-flight connect promises keyed by connKey — so two concurrent connects for
  *  the SAME host share one attempt instead of racing (the loser would otherwise
@@ -1928,11 +1980,39 @@ async function connectRemoteInner(
         token = data.token;
         saveSavedToken(host, token);
     } else {
-        // Reconnect with the REMEMBERED token — no PIN. needsPin tells the UI to
-        // reveal the PIN field only for a genuine first-time pair.
+        // Reconnect with the REMEMBERED token — no PIN. needsPin reveals the PIN
+        // field; pinReason says which of the three ways of not having a usable
+        // token this was, so the UI doesn't call all of them a first pair.
         const saved = loadSavedToken(host);
-        if (!saved) return { ok: false, needsPin: true };
-        token = saved;
+        if (saved.kind === 'none') {
+            recordPairingEvent({
+                side: 'client',
+                event: 'client-token-missing',
+                // `encryptor`, not `keychain`: the journal redacts any detail
+                // key that looks secret, and "key" is in that pattern — so a
+                // key named `keychain` would be written as <redacted>.
+                detail: { host: connKey, encryptor: saved.keychainDown ? 'unavailable' : 'available' },
+            });
+            return {
+                ok: false,
+                needsPin: true,
+                // An empty store with no keychain is not a first pair: it is the
+                // shape a client leaves behind when it could never save the
+                // token it minted last time (genie#578).
+                pinReason: saved.keychainDown ? 'keychain-unavailable' : 'first-pair',
+            };
+        }
+        if (saved.kind === 'unreadable') {
+            return {
+                ok: false,
+                needsPin: true,
+                pinReason:
+                    saved.reason === 'keychain-unavailable'
+                        ? 'keychain-unavailable'
+                        : 'token-unreadable',
+            };
+        }
+        token = saved.token;
     }
 
     // Validate before entering remote mode (a cheap authed call). A 401 means a
@@ -1945,8 +2025,16 @@ async function connectRemoteInner(
             headers: { Authorization: `Bearer ${token}` },
         });
         if (res.status === 401) {
+            // The host has spoken: it doesn't know this token. Dropping it is
+            // right (keeping it only fails the same way next time) — but say
+            // WHY, so "pair again" doesn't read as "you never paired".
             clearSavedToken(host);
-            return { ok: false, needsPin: true };
+            recordPairingEvent({
+                side: 'client',
+                event: 'client-token-rejected',
+                detail: { host: connKey },
+            });
+            return { ok: false, needsPin: true, pinReason: 'token-rejected' };
         }
         if (!res.ok && res.status !== 423) {
             return { ok: false, error: `Host returned HTTP ${res.status}.` };
