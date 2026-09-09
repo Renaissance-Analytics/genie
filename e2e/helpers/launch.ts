@@ -764,6 +764,34 @@ export async function readPtyGrid(
     }, terminalId);
 }
 
+/** One grid a pty was driven to. Mirrors `TerminalSizeEvent` in main. */
+export interface PtyGridEvent {
+    cols: number;
+    rows: number;
+    /** ms since main started. */
+    at: number;
+}
+
+/**
+ * EVERY grid main drove that pty to, oldest first.
+ *
+ * {@link readPtyGrid} says where the pty is NOW, which cannot distinguish one
+ * that never moved from one that moved and was put back — and a spec asserting a
+ * NON-EVENT ("the panel a switch hid never drove its pty") is asking exactly
+ * that. Two uses, both in master-window.spec.ts: waiting until nothing is in
+ * flight before trusting a reading, and saying whether a forbidden resize
+ * happened at all rather than comparing a snapshot (genie#542).
+ */
+export async function readPtyGridLog(
+    app: ElectronApplication,
+    terminalId: string,
+): Promise<PtyGridEvent[]> {
+    return app.evaluate((_e, id) => {
+        const h = (globalThis as Record<string, any>).__GENIE_E2E_MASTER__;
+        return (h?.ptyGridLog?.(id) as PtyGridEvent[]) ?? [];
+    }, terminalId);
+}
+
 /**
  * The terminal ids main currently has a LIVE pty for. Read alongside
  * {@link readPtyGrid} so a missing grid says which half failed: no live pty means

@@ -9,6 +9,32 @@
  */
 const sizes = new Map<string, { cols: number; rows: number }>();
 
+/** One grid a pty was driven to, and when. */
+export interface TerminalSizeEvent {
+    cols: number;
+    rows: number;
+    /** ms since this process started (monotonic — the wall clock can step). */
+    at: number;
+}
+
+/**
+ * DIAGNOSTIC (suite only): every grid a terminal was driven to, oldest first.
+ *
+ * The tracker above answers "where is this pty NOW", which is all the product
+ * needs. A test asserting a NON-EVENT — genie#229's "the panel a workspace
+ * switch hid never drove its pty" — is asking something else: was it EVER moved,
+ * and when. A last-applied size cannot tell a pty that never moved from one that
+ * moved and was put back, and the E2E spec that leant on it flaked for precisely
+ * that reason (genie#542): it compared against a snapshot taken before an earlier
+ * layout change had finished reaching the pty, so the CORRECT resize landing a
+ * moment later read as a fit against a hidden panel.
+ *
+ * Off unless `GENIE_E2E=1`. A long-lived session keeps one terminal for days and
+ * must not pay for a list only the suite reads.
+ */
+const HISTORY_LIMIT = 200;
+const history = new Map<string, TerminalSizeEvent[]>();
+
 /**
  * Is this a grid we can actually drive a pty to? Guards every size that crosses a
  * process/wire boundary — a remote `create` body, a `resize` frame, a tracked size.
@@ -30,6 +56,21 @@ export function recordTerminalSize(id: string, cols: number, rows: number): void
     if (!id) return;
     if (!isUsableGrid({ cols, rows })) return;
     sizes.set(id, { cols, rows });
+    if (process.env.GENIE_E2E !== '1') return;
+    const log = history.get(id) ?? [];
+    log.push({ cols, rows, at: Math.round(performance.now()) });
+    // Drop the OLDEST when full: a failure is about the resizes around it, so
+    // keeping the head instead would keep the useless half of the list.
+    if (log.length > HISTORY_LIMIT) log.splice(0, log.length - HISTORY_LIMIT);
+    history.set(id, log);
+}
+
+/**
+ * Every grid this terminal was driven to, oldest first — `[]` when the history is
+ * off. Diagnostic: never branch product behaviour on it.
+ */
+export function getTerminalSizeHistory(id: string): TerminalSizeEvent[] {
+    return history.get(id) ?? [];
 }
 
 /** The last-applied size for a terminal, or null if none has been recorded. */
@@ -40,4 +81,5 @@ export function getTerminalSize(id: string): { cols: number; rows: number } | nu
 /** Forget a terminal's size (on exit) so a reused id starts clean. */
 export function forgetTerminalSize(id: string): void {
     sizes.delete(id);
+    history.delete(id);
 }
