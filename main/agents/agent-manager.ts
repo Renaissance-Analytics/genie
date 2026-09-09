@@ -39,6 +39,7 @@ import type { PersonaEdit } from './agent-manager-types';
 import { isSidecarName } from './sidecar';
 import { sidecarActions, sidecarsOf } from './sidecar-control';
 import { agentAllowedTuis } from './agent-file';
+import { agentPersonaPath } from './registration';
 import { terminalsToStopFor } from './deletion';
 import { planAgentStop } from './stop-plan';
 
@@ -140,6 +141,29 @@ function effectiveTui(agent: WorkspaceAgentRow): string | null {
     return listAgentRuntimes(agent.id).find((r) => r.fronted)?.tui ?? agent.tui ?? null;
 }
 
+/**
+ * WHERE this agent's `AGENT.md` belongs — genie#570.
+ *
+ * The recorded `persona_path` when there is one; otherwise the path
+ * registration would have given it, `.agents/<name>/AGENT.md`. A row with no
+ * path is an ordinary state — `registerAgent` only started writing the file
+ * later, and other insert paths never set it at all — so the answer is to
+ * DERIVE one, not to tell the human their agent has nowhere to live.
+ *
+ * `derived` is what the caller records afterwards, and it is deliberately not
+ * the same question as "does the file exist": an agent may have a recorded path
+ * pointing at nothing (already handled) or an existing file at a path nothing
+ * wrote down (adopted, never clobbered — the whole reason UNMOUNT keeps files).
+ */
+function personaFileFor(
+    agent: WorkspaceAgentRow,
+    workspacePath: string,
+): { file: string; derived: boolean } {
+    const recorded = agent.persona_path?.trim();
+    if (recorded) return { file: recorded, derived: false };
+    return { file: agentPersonaPath(workspacePath, agent.name), derived: true };
+}
+
 /** Everything the agent manager draws, for one agent. */
 export function agentManagerState(agentId: string): AgentManagerState {
     const agent = getWorkspaceAgentById(String(agentId ?? ''));
@@ -153,10 +177,14 @@ export function agentManagerState(agentId: string): AgentManagerState {
     const running = isAgentRunning(agent);
 
     // --- AGENT.md ---------------------------------------------------------
-    const personaPath = agent.persona_path;
-    const personaExists = !!personaPath && fs.existsSync(personaPath);
+    // The path Genie will actually write, recorded or derived (genie#570). The
+    // editor's own copy names this file — "Saving writes one at …" — and it
+    // rendered an empty `<code>` for every agent whose row carried no path,
+    // which is the same silence the refusal underneath it was.
+    const { file: personaPath } = personaFileFor(agent, ws.path);
+    const personaExists = fs.existsSync(personaPath);
     const raw = personaExists
-        ? readTextFile(personaPath!)
+        ? readTextFile(personaPath)
         : blankPersona(agent.name, agent.purpose, tui ? [tui] : []);
     const persona: AgentManagerPersona = {
         ...personaView(raw),
@@ -246,6 +274,18 @@ export function agentManagerState(agentId: string): AgentManagerState {
  * whose `persona_path` points at nothing is a normal state, and telling the
  * human their agent has no file and leaving them there is not a surface.
  *
+ * genie#570: for a while that promise sat three lines above a guard doing the
+ * opposite, and an empty `persona_path` — a row that predates registration
+ * writing the file, or came from an insert path that never set it — was told
+ * "there is nowhere to save this. Re-register the agent to give it one". The
+ * answer to a missing filename is to DERIVE one (`personaFileFor`) and record
+ * it, so the next save is the ordinary one.
+ *
+ * The file on disk always WINS. An existing file at the derived path is
+ * adopted — read, edited, written back — never replaced: it is what UNMOUNT
+ * deliberately leaves behind, and a persona a human authored and committed must
+ * not be overwritten by an editor that had merely never heard of it.
+ *
  * `purpose` is mirrored into the record afterwards. The FILE is the source of
  * truth and the row is its cache (see `agent-file.ts`); leaving the cache stale
  * would show one purpose in the roster and another in the editor.
@@ -253,16 +293,15 @@ export function agentManagerState(agentId: string): AgentManagerState {
 export function saveAgentPersona(agentId: string, edit: PersonaEdit): WriteResult {
     const agent = getWorkspaceAgentById(String(agentId ?? ''));
     if (!agent) return { ok: false, error: 'That agent is no longer registered.' };
-    if (!agent.persona_path) {
-        return {
-            ok: false,
-            error: `${agent.name} has no AGENT.md path recorded, so there is nowhere to save this. Re-register the agent to give it one.`,
-        };
+    const ws = getWorkspace(agent.workspace_id);
+    if (!ws) {
+        return { ok: false, error: 'That agent’s workspace is no longer registered.' };
     }
+    const { file, derived } = personaFileFor(agent, ws.path);
 
-    const exists = fs.existsSync(agent.persona_path);
+    const exists = fs.existsSync(file);
     const before = exists
-        ? readTextFile(agent.persona_path)
+        ? readTextFile(file)
         : blankPersona(agent.name, agent.purpose, effectiveTui(agent) ? [effectiveTui(agent)!] : []);
     const after = applyPersonaEdit(before, edit);
 
@@ -271,13 +310,30 @@ export function saveAgentPersona(agentId: string, edit: PersonaEdit): WriteResul
     // has to be told it did not land, per CONTRIBUTING's "never report a success
     // you have not verified".
     try {
-        fs.mkdirSync(path.dirname(agent.persona_path), { recursive: true });
-        fs.writeFileSync(agent.persona_path, after);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, after);
     } catch (e) {
         return {
             ok: false,
-            error: `Could not write ${agent.persona_path}: ${e instanceof Error ? e.message : String(e)}`,
+            error: `Could not write ${file}: ${e instanceof Error ? e.message : String(e)}`,
         };
+    }
+
+    // RECORD the derived path, and only now that something is actually there:
+    // a row pointing at a file that was never written is the state this issue
+    // is about, and writing one on a failed save would recreate it.
+    if (derived) {
+        try {
+            getDb()
+                .prepare('UPDATE workspace_agents SET persona_path = ?, updated_at = ? WHERE id = ?')
+                .run(file, Date.now(), agent.id);
+            broadcastAgentsChanged();
+        } catch (e) {
+            return {
+                ok: false,
+                error: `Saved ${file}, but could not record it on the agent: ${e instanceof Error ? e.message : String(e)}`,
+            };
+        }
     }
 
     const purpose = personaView(after).purpose;
@@ -293,7 +349,7 @@ export function saveAgentPersona(agentId: string, edit: PersonaEdit): WriteResul
             // cache catches up, and that is worth saying rather than hiding.
             return {
                 ok: false,
-                error: `Saved ${agent.persona_path}, but could not update the agent record: ${e instanceof Error ? e.message : String(e)}`,
+                error: `Saved ${file}, but could not update the agent record: ${e instanceof Error ? e.message : String(e)}`,
             };
         }
     }

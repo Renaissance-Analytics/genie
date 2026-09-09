@@ -651,8 +651,13 @@ export default function AgentManager({
                                 </div>
                             </div>
                         ) : (
+                            /* Not "this agent has no AGENT.md path recorded" —
+                               that state no longer exists (genie#570): a save
+                               derives the path. Reaching here means the HOST
+                               could not read the agent at all, so say what it
+                               said rather than a guess about a filename. */
                             <Text size="sm" color="muted">
-                                This agent has no AGENT.md path recorded.
+                                {state.error ?? 'Genie could not read this agent.'}
                             </Text>
                         )}
                     </Tabs.Panel>
