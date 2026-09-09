@@ -65,6 +65,11 @@ vi.mock('../../dev-server/repo-facts', () => ({
     // Off by default so the existing cases still exercise the dev-server path;
     // the PHP-is-served behaviour has its own tests against the real detector.
     detectPhpServe: () => null,
+    // Likewise off. `start` re-decides a stale `artisan serve` fallback (genie#538),
+    // and that has its own file — `php-serving-architecture.test.ts`, which runs the
+    // REAL detector against a repo on disk. Here it must never fire, or every start
+    // case below would be asserting about a site whose config it had rewritten.
+    outdatedPhpDevServer: () => null,
 }));
 vi.mock('../host-tools', () => ({ resolveAgentTarget: async () => ({ decision: { allowed: false } }) }));
 

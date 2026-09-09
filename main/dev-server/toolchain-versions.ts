@@ -473,6 +473,46 @@ export function addableRecipes(
 // --- php.ini — Genie owns the CONFIG too ------------------------------------
 
 /**
+ * `variables_order` — whether a PHP app can READ the environment Genie gave it
+ * (genie#539).
+ *
+ * `E` is the whole letter: without it PHP never populates `$_ENV` from the process
+ * environment, and `$_ENV` is what Laravel's phpdotenv (`EnvConstAdapter`) and
+ * Symfony read FIRST. Genie composes the service env correctly and hands it to
+ * every execution context — but a value the app cannot read is a value that did
+ * not arrive, and `manageService` promises agents that "an app served there needs
+ * no `.env` edit".
+ *
+ * ## Why THIS value and not another
+ *
+ * `EGPCS` is PHP's own compiled-in default, so stating it changes nothing an app
+ * expects — it removes a coin toss rather than introducing a behaviour. PHP's
+ * shipped `php.ini-production` and `php.ini-development` both say `GPCS`, which is
+ * where every distro package, Herd and MAMP get theirs, so leaving the key unset
+ * means the answer is decided by whichever ini happens to win. This tree has
+ * already lost that argument once (genie#206: PATH resolved `php` to Herd's shim,
+ * and its ini came along with it).
+ *
+ * The letters that are not in question are `G`, `P`, `C` and `S`: dropping any of
+ * them would empty `$_GET`/`$_POST`/`$_COOKIE`/`$_SERVER` and break every site
+ * Genie serves. So the only real question is whether adding `E` COSTS anything,
+ * and there is exactly one candidate — `$_REQUEST`. When `request_order` is EMPTY,
+ * PHP falls back to this setting to build it, so the fear is that `E` puts the
+ * workspace's database password somewhere app code reads as user input
+ * (`$_REQUEST['PATH']`). It does not: PHP's `$_REQUEST` builder reads only the
+ * `G`, `P` and `C` letters and ignores `E` and `S`. That is asserted against a
+ * real `php-cgi` in `service-env-reaches-php.real.test.ts`, with `request_order`
+ * pinned empty so the fallback is genuinely in play — rather than taken on trust
+ * from a reading of the source.
+ *
+ * Named once and used twice: here, in the ini Genie writes for the PHP it
+ * installs, and on the FastCGI worker's command line in `serve-config.ts` — which
+ * has to be right on a machine whose PHP Genie did NOT install, since Genie
+ * installs PHP on Windows only.
+ */
+export const PHP_VARIABLES_ORDER = 'EGPCS';
+
+/**
  * The extensions Genie's php.ini enables.
  *
  * ## Why this file has to exist at all
@@ -699,6 +739,12 @@ export function phpIniContents(
         '; directory: with `file_cache` pointing at a directory that exists, plus',
         '; `file_cache_fallback=1`, php-cgi starts (verified) — pointing it at one',
         '; that does not exist changes nothing, because PHP will not create it.',
+        '',
+        '; $_ENV is populated from the process environment — the surface Laravel and',
+        '; Symfony read FIRST for the service env Genie injects (genie#539). This is',
+        "; PHP's own compiled-in default, but php.ini-production ships GPCS, so an",
+        '; unset key means whichever ini wins decides. See PHP_VARIABLES_ORDER.',
+        `variables_order = "${PHP_VARIABLES_ORDER}"`,
         '',
         '; Room for a real framework boot + a composer install.',
         'memory_limit = 512M',

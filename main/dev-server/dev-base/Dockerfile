@@ -149,6 +149,29 @@ RUN set -eux; \
     php --version; \
     python3 --version
 
+# --- PHP: let the app READ the environment Genie gives it (genie#539) --------
+#
+# Debian installs its php.ini from PHP's own php.ini-production, which says
+# `variables_order = "GPCS"`. `E` is missing, so PHP never populates `$_ENV` from
+# the process environment — and `$_ENV` is what Laravel's phpdotenv and Symfony
+# read FIRST. A sandbox (`explicit`) site is one of the ways Genie hosts a repo,
+# and it hands the container a full service environment; without this line every
+# one of those values is invisible to the app while `getenv()` still works, which
+# is why the failure reads as "works in a terminal, fails in the app".
+#
+# A conf.d drop-in, not an edit: apt owns the packaged ini and would replace it on
+# any upgrade. `99-` sorts last so it wins, and the loop covers every SAPI
+# directory the package created rather than hard-coding `cli`.
+RUN set -eux; \
+    found=0; \
+    for d in /etc/php/*/*/conf.d/; do \
+        [ -d "$d" ] || continue; \
+        printf '; Genie (genie#539): populate $_ENV from the process environment.\nvariables_order = "EGPCS"\n' > "${d}99-genie.ini"; \
+        found=1; \
+    done; \
+    test "$found" = 1; \
+    php -r 'exit(str_contains(ini_get("variables_order"), "E") ? 0 : 1);'
+
 # --- Node + package managers ------------------------------------------------
 #
 # Official nodejs.org tarball rather than the NodeSource apt repo: one URL for

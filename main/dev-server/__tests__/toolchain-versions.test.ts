@@ -307,6 +307,32 @@ describe('php.ini — Genie owns the CONFIG, not just the binaries', () => {
             'extension=bcmath',
         );
     });
+
+    /**
+     * genie#539 — `variables_order` decides whether `$_ENV` is populated from the
+     * process environment at all, and Genie said nothing about it.
+     *
+     * Saying nothing is not the same as saying the right thing. PHP's compiled-in
+     * default happens to be `EGPCS`, so this ini worked BY LUCK; the moment anything
+     * else supplies a value — PHP ships `GPCS` in both `php.ini-production` and
+     * `php.ini-development`, which is where every distro package, Herd and MAMP get
+     * theirs — `$_ENV` goes empty and every service value Genie injected becomes
+     * invisible to the app. Genie owns this file, so it states the value.
+     *
+     * This covers everything a Genie-installed PHP runs: the CLI, `php artisan serve`
+     * and the `php -S` child it spawns, composer, and a terminal. The FastCGI worker
+     * states it on its command line as well, because Genie installs PHP on Windows
+     * only and the worker must be right on a machine whose PHP it did not install.
+     */
+    it('states variables_order = "EGPCS" so $_ENV is populated — genie#539', () => {
+        // THE EXACT VALUE, not "it mentions E". This is a global default for every
+        // site Genie serves, so which letters and in which order IS the decision, and
+        // a test that accepts any string containing an E would let `EG` through —
+        // which would silently empty `$_COOKIE` and `$_SERVER`. See
+        // PHP_VARIABLES_ORDER for why this value and not another.
+        const ini = phpIniContents('C:\\g\\toolchain\\php\\8.4.24', 'win32');
+        expect(ini).toMatch(/^variables_order = "EGPCS"$/m);
+    });
 });
 
 /**

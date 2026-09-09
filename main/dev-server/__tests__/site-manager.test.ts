@@ -1484,10 +1484,16 @@ describe('service env injection (#234 P3)', () => {
         // worker left to inherit Genie's own temp dir fails every multipart request
         // before Laravel is reached.
         expect(preparedFor).toEqual([SITE_ID]);
+        // …and it is told to populate `$_ENV` (genie#539), so the service env
+        // asserted below is READABLE by the app and not merely present on the
+        // process. Stated on the command line rather than left to a php.ini: Genie
+        // installs PHP on Windows only, so it owns no ini anywhere else.
         expect(worker?.command).toEqual([
             '/gd/toolchain/php/8.3.33/bin/php-cgi',
             '-d',
             `upload_tmp_dir=/gd/host-site-uploads/${SITE_ID}`,
+            '-d',
+            'variables_order=EGPCS',
             '-b',
             expect.stringMatching(/^127\.0\.0\.1:\d+$/),
         ]);
