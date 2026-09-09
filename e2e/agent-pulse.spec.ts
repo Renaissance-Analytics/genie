@@ -355,7 +355,15 @@ test.beforeAll(async () => {
     // Collapse by clicking directly rather than via setCollapsed(): the ring is
     // still empty at this point, so there is no sparkline yet to wait for — the
     // component renders nothing until some bytes have arrived.
-    await page.locator('.tproj-head [title="Collapse"]').first().click();
+    //
+    // Conditional since genie#580: a workspace with nothing recorded in
+    // `collapsed_workspaces` now STARTS collapsed, so on a fresh E2E profile the
+    // chevron already reads "Expand" and the unconditional click had nothing to
+    // hit. What this beforeAll needs is the END state (collapsed), not a
+    // transition — so click only when the row is still expanded.
+    const collapseButton = page.locator('.tproj-head [title="Collapse"]').first();
+    if (await collapseButton.count()) await collapseButton.click();
+    await expect(page.locator('.tproj.collapsed').first()).toBeVisible();
 
     // Fill the ring through the REAL broadcast, with `active: false`. The ring
     // fills from `bytes` either way, and an agent-active row runs a breathing

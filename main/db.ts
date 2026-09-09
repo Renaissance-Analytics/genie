@@ -3477,7 +3477,12 @@ export function getAllSettings(): Settings {
         terminal_copy_paste:
             (out['terminal_copy_paste'] as 'contextmenu' | 'linux' | 'winmac') ?? 'contextmenu',
         ai_system: out['ai_system'] ?? '',
-        collapsed_workspaces: out['collapsed_workspaces'] ?? '[]',
+        // NO default. `'[]'` is a real answer meaning "every workspace expanded",
+        // so manufacturing it for an unset row destroys the only signal the
+        // sidebar has that the user has recorded NOTHING — which is what makes it
+        // open minimised (genie#580). An absent row must stay absent; the Chooser
+        // materialises a real list on the first toggle.
+        collapsed_workspaces: out['collapsed_workspaces'],
         // Every provider's command + flags, defaulted from TUI_REGISTRY
         // (genie#261) with the stored value winning where one exists.
         ...Object.fromEntries(
