@@ -312,6 +312,27 @@ describe('an unreadable store is preserved, never overwritten (genie#578)', () =
         expect(issue?.preservedPath).toBe(path.join(dir, kept[0]));
     });
 
+    it('a FIRST boot with no keychain at all moves nothing and reports nothing (the CI-mac shape)', () => {
+        // A headless macOS runner has no unlocked login keychain, so
+        // safeStorage reports unavailable there in a way it never does on
+        // ubuntu or windows. That is the one environment where a new
+        // preserve-aside path could plausibly fire when it should not — a fresh
+        // profile plus a dead encryptor — so pin it: nothing is moved, nothing
+        // is written, no issue is raised, and boot does not throw.
+        const dir = makeTmpDir('auth-578-nokeychain-fresh');
+        setSecretEncryptor(null);
+        expect(() => initAuth({ userDataDir: dir, confirmPair: async () => true })).not.toThrow();
+
+        expect(preservedFiles(dir)).toHaveLength(0);
+        expect(fs.existsSync(path.join(dir, 'genie-mobile.json'))).toBe(false);
+        expect(pairingStoreIssue()).toBeNull(); // nothing was there to fail on
+        expect(currentPin()).toMatch(/^\d{6}$/); // and pairing still works in memory
+
+        // The ONLY thing this adds to a profile directory is the journal. Named
+        // exactly, so a future addition here has to be deliberate.
+        expect(fs.readdirSync(dir).sort()).toEqual(['genie-pairing-journal.jsonl']);
+    });
+
     it('does NOT touch the store while the keychain is unavailable, and recovers when it returns', async () => {
         const dir = makeTmpDir('auth-578-unavailable');
         const original = await seedPairedStore(dir);
