@@ -157,7 +157,13 @@ export const ALERT_SOUND_KINDS = {
         wire: 'automated-notice',
         motif: 'done',
         label: 'A machine reports in',
-        desc: 'Genie itself, or a cron / watched process, posted a notice to an agent rather than a person.',
+        // Names only what actually reaches this today — a scheduled task
+        // (`genie:cron:<id>`, from process-scheduler) and Genie's own
+        // announcements (`genie:system`). genie#543 also DECLARES a `process`
+        // machine source, but nothing emits one yet, so saying "watched process"
+        // here would promise a sound that cannot fire. The classifier already
+        // handles it; the description can grow when the emitter does.
+        desc: 'A scheduled task, or Genie itself, posted a notice to an agent rather than to a person.',
         keywords: 'cron webhook script scheduled job automated system notice machine',
     },
     flowRun: {

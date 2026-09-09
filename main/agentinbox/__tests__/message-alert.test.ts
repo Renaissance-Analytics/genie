@@ -95,11 +95,20 @@ describe('a machine reporting in', () => {
             type: 'message',
             preview: preview(machineSenderId({ kind: 'cron', id: 'spec-1', label: 'nightly' })),
         });
+        expect(alerts.played).toEqual(['automatedNotice']);
+    });
+
+    it('would raise it for a `process` source too — SHAPE ONLY, nothing emits one yet', () => {
+        // genie#543 DECLARES the `process` machine kind, but no production code
+        // sends one: the only machine source emitted today is the scheduler's
+        // `cron`. So this is the classifier being ready, NOT evidence that such
+        // a notice exists — labelled as such deliberately, because a green test
+        // is the easiest place to read coverage that was never built.
         emit({
             type: 'message',
             preview: preview(machineSenderId({ kind: 'process', id: 'proc-9' })),
         });
-        expect(alerts.played).toEqual(['automatedNotice', 'automatedNotice']);
+        expect(alerts.played).toEqual(['automatedNotice']);
     });
 
     it('treats an unrecognised `genie:` kind as ordinary mail, exactly as the reader does', () => {
