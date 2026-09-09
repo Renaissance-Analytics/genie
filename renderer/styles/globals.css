@@ -41,12 +41,32 @@
     --violet-500: #8b5cf6;
     --zinc-400: #a1a1aa;
 
+    /* The -400 STATUS INKS. The 500s above are fills — a dot, a pill, a bar —
+       where a mid-tone reads on either ground. These are the same hues used as
+       TEXT and ICONS ("Read failed", "Reconnect GitHub", the ⚑/? pulse markers),
+       and a mid-tone does not survive that: #fbbf24 on white is 1.7:1.
+
+       So each is a PAIR, and the light half is the Tailwind 700/800 step of the
+       same hue rather than a new colour: the surface changes, the hue does not.
+       The dark halves are the exact literals these tokens were being given as
+       fallbacks before they existed, so dark mode does not move (genie#589). */
+    --amber-400: #b45309;
+    --amber-300: #92400e;
+    --yellow-400: #a16207;
+    --emerald-400: #047857;
+    --rose-400: #be123c;
+    --violet-400: #7c3aed;
+
     --radius-md: 8px;
     --radius-lg: 12px;
     --radius-xl: 16px;
     --radius-2xl: 20px;
 
     --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.04);
+    /* An overlay pane's lift (the Flow editor's palette/panel when they float
+       over the canvas). Light needs a tenth of dark's alpha to read as the same
+       depth — a 0.45 black under a white pane is a bruise, not a shadow. */
+    --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.12);
 
     --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
     --weight-medium: 500;
@@ -69,7 +89,18 @@
     --border-1: rgba(255, 255, 255, 0.08);
     --border-2: rgba(255, 255, 255, 0.16);
 
+    /* Status inks — see the light half above. These are the literals that used
+       to live at the call sites as `var(--amber-400, #fbbf24)` fallbacks, so
+       every one of these rules renders in dark mode exactly as it did before. */
+    --amber-400: #fbbf24;
+    --amber-300: #fcd34d;
+    --yellow-400: #facc15;
+    --emerald-400: #34d399;
+    --rose-400: #fb7185;
+    --violet-400: #a78bfa;
+
     --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.45);
 }
 
 html,
@@ -271,7 +302,7 @@ textarea.input {
 .ask-q-content {
     font-size: 13px;
     font-weight: 400;
-    color: var(--text-1, #d4d4d8);
+    color: var(--fg-2);
 }
 .ask-q-content p {
     margin: 0 0 8px;
@@ -298,7 +329,7 @@ textarea.input {
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    color: var(--violet-400, #a78bfa);
+    color: var(--violet-400);
     background: color-mix(in srgb, #a78bfa 14%, transparent);
     border: 1px solid color-mix(in srgb, #a78bfa 30%, var(--border-1));
     border-radius: 6px;
@@ -915,7 +946,7 @@ textarea.input {
     padding: 0 2px;
     border: none;
     background: transparent;
-    color: var(--blue-400);
+    color: var(--blue-500);
     font: inherit;
     font-size: 11.5px;
     cursor: pointer;
@@ -1012,7 +1043,7 @@ textarea.input {
     color: var(--emerald-500, #10b981);
 }
 .site-card-status.site-failed {
-    color: var(--rose-400, #fb7185);
+    color: var(--rose-400);
 }
 .site-card-status.site-starting {
     color: var(--amber-500, #f59e0b);

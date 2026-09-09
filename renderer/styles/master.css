@@ -874,9 +874,12 @@
     right: 0;
     width: 190px;
     padding: 6px;
-    border: 1px solid var(--line, #30343d);
+    border: 1px solid var(--border-1);
     border-radius: 10px;
-    background: #191b21;
+    /* Was `#191b21`. This drops out of the titlebar, which is `--bg-0`, and the
+       menu's own text inherits `--fg-1` from `.gwrap` — so a fixed dark panel
+       here meant near-black labels on a near-black card in the light theme. */
+    background: var(--bg-1);
     box-shadow: 0 16px 42px rgb(0 0 0 / 45%);
 }
 
@@ -886,13 +889,15 @@
     border: 0;
     border-radius: 7px;
     background: transparent;
-    color: var(--text, #f5f6f8);
+    color: var(--fg-1);
     text-align: left;
     cursor: pointer;
 }
 
 .system-menu button:hover {
-    background: rgb(255 255 255 / 8%);
+    /* A white wash only lifts a dark row; `--bg-2` is the hover every other row
+       in this app uses, and it darkens or lightens with the theme. */
+    background: var(--bg-2);
 }
 
 .whats-new-backdrop {
@@ -910,9 +915,13 @@
     width: min(640px, 100%);
     max-height: min(720px, calc(100vh - 48px));
     overflow: hidden;
-    border: 1px solid var(--line, #30343d);
+    border: 1px solid var(--border-1);
     border-radius: 16px;
-    background: #17191f;
+    /* Was `#17191f`. The release notes carry no `color` of their own, so they
+       inherit `--fg-1` — near-black in the light theme, on a near-black card.
+       This is the modal EVERY upgrade opens, which is why it is the one people
+       report (genie#589). */
+    background: var(--bg-1);
     box-shadow: 0 28px 80px rgb(0 0 0 / 55%);
 }
 
@@ -922,17 +931,18 @@
     align-items: center;
     justify-content: space-between;
     padding: 18px 22px;
-    border-bottom: 1px solid var(--line, #30343d);
+    border-bottom: 1px solid var(--border-1);
 }
 
 .whats-new-modal > footer {
     justify-content: flex-end;
-    border-top: 1px solid var(--line, #30343d);
+    border-top: 1px solid var(--border-1);
     border-bottom: 0;
 }
 
 .whats-new-kicker {
-    color: #8dd8a7;
+    /* Was `#8dd8a7` — a mint picked for a dark card, and 1.9:1 on a light one. */
+    color: var(--emerald-400);
     font-size: 11px;
     font-weight: 700;
     letter-spacing: .08em;
@@ -1298,7 +1308,7 @@ button.iw-feedback-note.as-link:hover {
     border: none;
     padding: 0;
     font: inherit;
-    color: var(--accent, #3b82f6);
+    color: var(--blue-500);
     text-decoration: underline;
     cursor: pointer;
 }
@@ -1385,7 +1395,7 @@ button.iw-feedback-note.as-link:hover {
 }
 /* Workspace-level reason for an empty feed (read failed, not "nothing open"). */
 .iw-warn {
-    color: var(--amber-400, #fbbf24);
+    color: var(--amber-400);
     font-size: 12px;
     padding: 6px 2px;
     line-height: 1.4;
@@ -1412,7 +1422,7 @@ button.iw-feedback-note.as-link:hover {
     color: var(--fg-1);
 }
 .iw-gate-head svg {
-    color: var(--amber-400, #fbbf24);
+    color: var(--amber-400);
     flex: 0 0 auto;
     margin-top: 1px;
 }
@@ -1449,7 +1459,7 @@ button.iw-feedback-note.as-link:hover {
     color: var(--fg-1);
 }
 .iw-reauth-head svg {
-    color: var(--rose-400, #fb7185);
+    color: var(--rose-400);
     flex: 0 0 auto;
     margin-top: 1px;
 }
@@ -1457,7 +1467,7 @@ button.iw-feedback-note.as-link:hover {
     font-size: 11.5px;
     line-height: 1.4;
     color: var(--fg-2);
-    font-family: var(--mono, ui-monospace, monospace);
+    font-family: var(--font-mono);
     word-break: break-word;
 }
 
@@ -1465,11 +1475,11 @@ button.iw-feedback-note.as-link:hover {
 /* Persistent titlebar warning — amber so it reads as "needs attention", with
    a soft pulse to draw the eye without being a hard alarm. */
 .gh-warn-btn {
-    color: var(--amber-400, #fbbf24);
+    color: var(--amber-400);
     animation: gh-warn-pulse 2.4s ease-in-out infinite;
 }
 .gh-warn-btn:hover {
-    color: var(--amber-300, #fcd34d);
+    color: var(--amber-300);
     background: color-mix(in srgb, #f59e0b 14%, transparent);
 }
 @keyframes gh-warn-pulse {
@@ -1505,7 +1515,7 @@ button.iw-feedback-note.as-link:hover {
     color: var(--fg-1);
 }
 .ghcap-row-icon {
-    color: var(--amber-400, #fbbf24);
+    color: var(--amber-400);
     flex: 0 0 auto;
 }
 .ghcap-row-name {
@@ -1520,7 +1530,7 @@ button.iw-feedback-note.as-link:hover {
 .ghcap-perm {
     background: color-mix(in srgb, #f59e0b 12%, transparent);
     border: 1px solid color-mix(in srgb, #f59e0b 35%, var(--border-1));
-    color: var(--amber-300, #fcd34d);
+    color: var(--amber-300);
     font-size: 11px;
     font-weight: 600;
     border-radius: 999px;
@@ -1689,21 +1699,21 @@ button.iw-feedback-note.as-link:hover {
     width: 9px;
     height: 9px;
     border-radius: 50%;
-    background: var(--fg-5, #555);
+    background: var(--fg-4);
     flex: none;
 }
 .tm-running {
-    background: var(--green-500, #22c55e);
+    background: var(--emerald-500);
 }
 .tm-restarting {
     background: var(--amber-500, #f59e0b);
 }
 .tm-crashed,
 .tm-failed {
-    background: var(--red-500, #ef4444);
+    background: var(--rose-500);
 }
 .tm-stopped {
-    background: var(--fg-5, #555);
+    background: var(--fg-4);
 }
 .tm-main {
     min-width: 0;
@@ -2448,8 +2458,8 @@ button.iw-feedback-note.as-link:hover {
     height: auto;
     font: 700 9px / 1 ui-monospace, monospace;
 }
-.agent-pulse-markers .apm-question { color: var(--yellow-400, #facc15); }
-.agent-pulse-markers .apm-flow { color: var(--emerald-400, #34d399); }
+.agent-pulse-markers .apm-question { color: var(--yellow-400); }
+.agent-pulse-markers .apm-flow { color: var(--emerald-400); }
 
 .agent-nudge-questions {
     position: absolute;
@@ -2891,7 +2901,7 @@ button.iw-feedback-note.as-link:hover {
     top: 44px;
     bottom: auto;
     max-width: 560px;
-    border-color: var(--accent-2, #6366f1);
+    border-color: var(--agent);
     animation: g-toast-in-top 160ms var(--ease-out, ease-out);
 }
 @keyframes g-toast-in-top {
@@ -3406,12 +3416,16 @@ body.gutter-dragging .grid-gutter {
     padding: 10px 12px;
     border: 1px solid color-mix(in srgb, var(--agent) 55%, transparent);
     border-radius: var(--radius-md);
-    background: color-mix(in srgb, var(--panel) 94%, transparent);
+    /* App-chrome tokens, not `--term-*`, even though this floats OVER a terminal:
+       everything else on this element (--agent, --agent-soft, --radius-*) is app
+       chrome, because a nudge notice is Genie speaking, not terminal output. It
+       should read as a card that has landed on the terminal. */
+    background: color-mix(in srgb, var(--bg-1) 94%, transparent);
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.42);
     backdrop-filter: blur(14px);
 }
 .terminal-nudge-notice span { display: grid; gap: 2px; min-width: 0; }
-.terminal-nudge-notice small { color: var(--muted); }
+.terminal-nudge-notice small { color: var(--fg-3); }
 .terminal-nudge-notice button {
     margin-left: auto;
     flex: 0 0 auto;
@@ -3419,7 +3433,7 @@ body.gutter-dragging .grid-gutter {
     border-radius: var(--radius-sm);
     padding: 6px 10px;
     background: var(--agent-soft);
-    color: var(--text);
+    color: var(--fg-1);
     cursor: pointer;
 }
 
@@ -3437,13 +3451,20 @@ body.gutter-dragging .grid-gutter {
 .agent-panel-shell.agent-provider-codex { --agent-accent: #74a7ff; }
 .agent-panel-shell.agent-provider-kiwi { --agent-accent: #84cc16; }
 .agent-panel-shell.agent-provider-genie { --agent-accent: #2dd4bf; }
+/* This TINTS `.tpanel-head`, so it mixes into the head's OWN tokens. `--term-*`
+   is fixed dark in both themes on purpose (terminals do not flip), and an
+   agent's head that flipped while the terminal under it did not would be a
+   white strip on a black panel. */
 .agent-panel .tpanel-head {
-    border-bottom-color: color-mix(in srgb, var(--agent-accent) 45%, var(--border));
-    background: color-mix(in srgb, var(--agent-accent) 9%, var(--panel));
+    border-bottom-color: color-mix(in srgb, var(--agent-accent) 45%, var(--term-border));
+    background: color-mix(in srgb, var(--agent-accent) 9%, var(--term-head));
 }
 .agent-panel-role {
     display: block;
-    color: var(--muted);
+    /* Sits on that fixed-dark head, beside `.ploc` — whose #71717a IS --fg-4's
+       dark value, so this matches its neighbour in dark and stays legible on the
+       dark head in light. */
+    color: var(--fg-4);
     font-size: 9px;
     font-weight: 600;
     letter-spacing: .08em;
@@ -3471,23 +3492,26 @@ body.gutter-dragging .grid-gutter {
     align-content: center;
     gap: 7px;
     padding: 9px 6px;
-    border: 1px solid var(--line);
+    /* Sibling of `.tterm` / `.tproj-head` in the same flyout, so it takes the
+       same flipping tokens they do. The accent is `--agent`, not the brand blue:
+       these squares ARE agents, and the panel they open wears `--agent-accent`. */
+    border: 1px solid var(--border-1);
     border-radius: 10px;
-    background: color-mix(in srgb, var(--surface-2) 88%, transparent);
-    color: var(--muted);
+    background: color-mix(in srgb, var(--bg-2) 88%, transparent);
+    color: var(--fg-3);
     cursor: pointer;
 }
 
 .ams-agent-card:hover,
 .ams-agent-card.is-open {
-    border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
-    background: color-mix(in srgb, var(--accent) 9%, var(--surface-2));
-    color: var(--text);
+    border-color: color-mix(in srgb, var(--agent) 55%, var(--border-1));
+    background: color-mix(in srgb, var(--agent) 9%, var(--bg-2));
+    color: var(--fg-1);
 }
 
 .ams-agent-card.is-active {
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 65%, transparent),
-        0 0 18px color-mix(in srgb, var(--accent) 20%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--agent) 65%, transparent),
+        0 0 18px color-mix(in srgb, var(--agent) 20%, transparent);
 }
 
 .ams-agent-avatar {
@@ -3496,7 +3520,8 @@ body.gutter-dragging .grid-gutter {
     height: 32px;
     place-items: center;
     border-radius: 9px;
-    background: rgb(255 255 255 / 5%);
+    /* Was `rgb(255 255 255 / 5%)`, which is invisible on the light card above. */
+    background: var(--bg-3);
 }
 
 .ams-agent-name {
@@ -6578,7 +6603,7 @@ body.gutter-dragging .grid-gutter {
     padding: 2px;
 }
 .tynn-health-hit:focus-visible {
-    outline: 2px solid var(--accent, #6366f1);
+    outline: 2px solid var(--blue-500);
     outline-offset: 2px;
 }
 .tynn-health-dot {
@@ -6693,7 +6718,7 @@ body.gutter-dragging .grid-gutter {
     overflow-wrap: anywhere;
 }
 .tynn-health-pop .thp-tools {
-    font-family: var(--mono, ui-monospace, monospace);
+    font-family: var(--font-mono);
     opacity: 0.85;
 }
 .tynn-health-pop .thp-foot {
@@ -6751,7 +6776,7 @@ body.gutter-dragging .grid-gutter {
        card off the panel. */
     height: 420px;
     max-height: 60vh;
-    border: 1px solid var(--border, #2a2a2a);
+    border: 1px solid var(--border-1);
     border-radius: 6px;
     background: #fff;
     /* An image keeps its aspect ratio inside that box rather than stretching —
@@ -6772,9 +6797,9 @@ body.gutter-dragging .grid-gutter {
 @keyframes genie-os-pulse { 50% { color: #35f2a3; filter: drop-shadow(0 0 5px #35f2a3); } }
 @media (prefers-reduced-motion: reduce) { .genie-os-flyout, .genie-os-backdrop { transition-duration: 1ms; } .genie-os-flyout, .genie-os-button { animation: none !important; } }
 .agent-panel-shell { position: relative; }
-.agent-panel-menu { min-width: 180px; padding: 6px; z-index: 1200; background: var(--bg-0); border: 1px solid var(--border); box-shadow: 0 16px 38px rgba(0, 0, 0, .38); }
-.agent-panel-menu button { width: 100%; display: flex; align-items: center; gap: 8px; border: 0; border-radius: 6px; padding: 8px 9px; background: transparent; color: var(--text); text-align: left; cursor: pointer; }
-.agent-panel-menu button:hover { background: var(--hover); }
+.agent-panel-menu { min-width: 180px; padding: 6px; z-index: 1200; background: var(--bg-0); border: 1px solid var(--border-1); box-shadow: 0 16px 38px rgba(0, 0, 0, .38); }
+.agent-panel-menu button { width: 100%; display: flex; align-items: center; gap: 8px; border: 0; border-radius: 6px; padding: 8px 9px; background: transparent; color: var(--fg-1); text-align: left; cursor: pointer; }
+.agent-panel-menu button:hover { background: var(--bg-2); }
 
 /* ── Thumbs-up on a COLLAPSED workspace row ──────────────────────────────────
    The thumb is drawn on an agent's SQUARE in the grid, and a collapsed workspace
@@ -7021,12 +7046,12 @@ body.gutter-dragging .grid-gutter {
     border: 0;
     border-radius: var(--radius-sm, 4px);
     background: transparent;
-    color: var(--text);
+    color: var(--fg-1);
     text-align: left;
     cursor: pointer;
 }
 .agent-tui-item:hover {
-    background: var(--hover);
+    background: var(--bg-2);
 }
 .agent-tui-item.is-fronted {
     color: var(--agent, #8b5cf6);
@@ -7072,7 +7097,7 @@ body.gutter-dragging .grid-gutter {
     font-size: 12px;
 }
 .agent-tui-note.is-error {
-    color: var(--red-500, #f48771);
+    color: var(--rose-400);
 }
 
 /* ── The AGENT square's right-click menu ─────────────────────────────────────
@@ -7236,7 +7261,7 @@ body.gutter-dragging .grid-gutter {
    waiting for something", which is not what this says — Genie is fine, and a
    Flow is working in the background. */
 .gicon.flows-button.is-running {
-    color: var(--accent, #3b82f6);
+    color: var(--blue-500);
     animation: flows-running 1.9s var(--ease-out, ease-in-out) infinite;
 }
 @keyframes flows-running {
@@ -7269,7 +7294,7 @@ body.gutter-dragging .grid-gutter {
 }
 
 .flowmgr-row {
-    border: 1px solid var(--bd-1, rgba(255, 255, 255, 0.07));
+    border: 1px solid var(--border-1);
     border-radius: 8px;
     padding: 8px 9px;
     margin-bottom: 6px;
@@ -7314,7 +7339,7 @@ body.gutter-dragging .grid-gutter {
     width: 6px;
     height: 6px;
     border-radius: 50%;
-    background: var(--accent, #3b82f6);
+    background: var(--blue-500);
     animation: flows-running 1.9s ease-in-out infinite;
 }
 @media (prefers-reduced-motion: reduce) {
@@ -7382,7 +7407,7 @@ body.gutter-dragging .grid-gutter {
 .flowmgr-history {
     margin-top: 8px;
     padding-top: 6px;
-    border-top: 1px solid var(--bd-1, rgba(255, 255, 255, 0.07));
+    border-top: 1px solid var(--border-1);
 }
 .flowmgr-clauses {
     margin: 0 0 4px;
@@ -7406,7 +7431,7 @@ body.gutter-dragging .grid-gutter {
     color: var(--fg-3);
 }
 .flowmgr-run-event {
-    font-family: var(--mono, ui-monospace, monospace);
+    font-family: var(--font-mono);
     font-size: 10.5px;
     color: var(--fg-4);
 }
@@ -7428,7 +7453,7 @@ body.gutter-dragging .grid-gutter {
     margin-top: 7px;
     padding: 6px 8px;
     border-radius: 6px;
-    border: 1px solid var(--bd-1, rgba(255, 255, 255, 0.07));
+    border: 1px solid var(--border-1);
     color: var(--fg-4);
     font-size: 11.5px;
 }
@@ -7462,7 +7487,7 @@ body.gutter-dragging .grid-gutter {
     margin: 0 2px 8px;
     padding: 7px 9px;
     border-radius: 6px;
-    border: 1px solid var(--bd-1, rgba(255, 255, 255, 0.07));
+    border: 1px solid var(--border-1);
     background: var(--bg-2, rgba(255, 255, 255, 0.03));
     color: var(--fg-2, #d4d4d8);
     font-size: 11.5px;
@@ -7567,7 +7592,7 @@ body.gutter-dragging .grid-gutter {
     top: 0;
     bottom: 0;
     z-index: 4;
-    box-shadow: var(--shadow-lg, 0 12px 32px rgba(0, 0, 0, 0.45));
+    box-shadow: var(--shadow-lg);
 }
 .floweditor-shell[data-overlay='palette'] .ff-editor__palette {
     left: 0;
@@ -7617,7 +7642,7 @@ body.gutter-dragging .grid-gutter {
     display: grid;
     gap: 5px;
     padding: 7px 8px;
-    border: 1px solid var(--bd-1, rgba(255, 255, 255, 0.07));
+    border: 1px solid var(--border-1);
     border-radius: 7px;
 }
 .floweditor-trigger-head {
@@ -7706,7 +7731,7 @@ body.gutter-dragging .grid-gutter {
 /* The pin reads as ON when it is on — an unlit toggle beside a docked panel
    leaves the user hunting for what pinned it. */
 .docs-head .gicon.is-pinned {
-    color: var(--violet-400, #a78bfa);
+    color: var(--violet-400);
     background: color-mix(in srgb, currentColor 14%, transparent);
 }
 .lists-tabs {
