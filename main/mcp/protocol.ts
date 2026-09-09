@@ -36,6 +36,16 @@ import type {
     KnowledgeSearchResult,
     MemoryClass,
 } from '../knowledge/types';
+import type { ListItem, ListsRequest, ListsResult } from '../lists/types';
+// The caps are ADVERTISED in the rendered list ("3/10 open"), read from the one
+// place they are defined, so a cap changed cannot be misreported to the agent
+// that is about to hit it. They live in the pure types module precisely so this
+// file can read them without importing the database.
+import { WORKSPACE_TODO_CAPS } from '../lists/types';
+// A VALUE: the AgentList line appended to `imDone` is composed by the same pure
+// function the tool's own output uses, so "what an unfinished list says" has one
+// definition rather than one per surface.
+import { agentListSummary } from '../lists/identity';
 // A VALUE, not a type: the advertised `class` enum is generated from it, so a
 // class added to the store cannot ship without the tool offering it.
 import { MEMORY_CLASSES } from '../knowledge/types';
@@ -57,6 +67,7 @@ import { operatorRoleBrief } from '../agents/os-agent';
 export type { SetEnvRequest, SetEnvResult, CheckEnvRequest, CheckEnvResult };
 export type { AgentInboxScope, AgentInboxAgentInfo, AgentInboxChannelInfo, AgentInboxMessage };
 export type { KnowledgeNode, KnowledgeSearchResult, MemoryClass };
+export type { ListItem, ListsRequest, ListsResult };
 
 export const MCP_PROTOCOL_VERSION = '2024-11-05';
 
@@ -637,6 +648,17 @@ export interface McpContext {
      * Does the sqlite + FTS I/O (kept out of this pure module).
      */
     knowledge: (terminalId: string, req: KnowledgeToolRequest) => Promise<KnowledgeToolResult>;
+    /**
+     * The workspace-local AgentList + UserList (the `lists` tool, genie#556).
+     * Resolves the caller's workspace AND agent name from the terminal, then
+     * does the sqlite I/O. Also read by `imDone`, to append whatever is still
+     * open on the caller's own list.
+     *
+     * OPTIONAL: a host with no list storage simply does not wire it, and the
+     * tool says so rather than the surface throwing — the same shape the other
+     * host-backed tools use.
+     */
+    lists?: (terminalId: string, req: ListsRequest) => ListsResult;
     /**
      * Open a file in Genie's built-in editor FOR THE USER (the openFileForUser
      * tool): resolve the caller's workspace from the terminal (incl the System
@@ -1981,6 +2003,39 @@ const ENV_TARGET_PROP = {
             "Which `.env` to act on. Omit (or 'workspace') for the workspace root `.env`; pass a REPO NAME for `repos/<name>/.env`. Resolved within the workspace (no traversal).",
     },
 } as const;
+
+const LISTS_TOOL = {
+    name: 'lists',
+    description:
+        "Two short, LOCAL to-do lists for this workspace — your own AgentList, and the shared UserList you write FOR the person. Neither is ever synced to Tynn: they stay on this machine, in this workspace, and roadmap or project-management work belongs in Tynn instead. Your AgentList is your own scratch checklist (launch steps, things to come back to): one per agent, up to 10 open items, and it PERSISTS across restarts — it is filed under your agent NAME, so the next run of you finds it. Anything still open on it is appended to every `imDone` you send, which is what stops a half-finished checklist from disappearing when a terminal dies. The UserList is the counterpart to ForceTheQuestion: FTQ parks you until a human answers, while a UserList item lets you CARRY ON while they do something — and when they mark it done you get a nudge with their comment, so add an item here instead of blocking whenever you do not need the answer right now. Up to 5 open items per workspace, shared by every agent. `show` reads both. `add` takes `text` (and `list: 'user'` for the person's list; the default is your own). `done` takes the `id` of one of YOUR AgentList items — user items are the person's to tick off, and doing so is what sends you the nudge. `clear` empties your AgentList. Both lists refuse a new item once full rather than dropping the oldest, so nothing you recorded goes missing without you being told. Pass `terminalId` (your GENIE_TERMINAL_ID) — a list is scoped to a workspace and an agent name, and with several terminals Genie will not guess which is yours.",
+    inputSchema: {
+        type: 'object',
+        properties: {
+            ...TERMINAL_ID_PROP,
+            action: {
+                type: 'string',
+                enum: ['show', 'add', 'done', 'clear'],
+                description:
+                    "`show` both lists; `add` an item; `done` marks one of YOUR AgentList items finished; `clear` empties your AgentList. Defaults to `show`.",
+            },
+            list: {
+                type: 'string',
+                enum: ['agent', 'user'],
+                description:
+                    "Which list `add` writes to. `agent` (default) is your own checklist. `user` is the shared list for the PERSON — use it for things blocked on a human that you do not need to wait on; you are nudged when they tick it off.",
+            },
+            text: {
+                type: 'string',
+                description: 'The item, for `add`. One short line — these lists are bounded on purpose.',
+            },
+            id: {
+                type: 'string',
+                description: 'The item id to mark done, for `done`. Ids come from `show`.',
+            },
+        },
+        additionalProperties: false,
+    },
+};
 
 const SET_ENV_TOOL = {
     name: 'setEnv',
@@ -3833,6 +3888,41 @@ function readStateNote(state: TerminalReadState | undefined): string {
  * exist outside its permission model, and that check is only as good as the list
  * it reads. Tools are filtered only when their Host capability is not wired.
  */
+/**
+ * Both lists as an agent reads them back.
+ *
+ * Every item carries its id inline rather than in a separate legend: `done`
+ * takes an id, and a rendering that makes the agent correlate two lists to find
+ * one is a rendering that produces a wrong `done` call.
+ */
+function formatLists(result: ListsResult): string {
+    if (!result.ok) return `lists failed: ${result.error}`;
+    const section = (title: string, items: ListItem[], empty: string): string => {
+        if (items.length === 0) return `${title}\n  (${empty})`;
+        const lines = items.map((i) => {
+            const who = i.agentName ? ` — asked by ${i.agentName}` : '';
+            return `  - [${i.id}] ${i.text}${who}`;
+        });
+        return `${title}\n${lines.join('\n')}`;
+    };
+    return [
+        result.note,
+        section(
+            `Your AgentList (${result.agentName}) — ${result.agent.length}/${WORKSPACE_TODO_CAPS.agent} open:`,
+            result.agent,
+            'empty',
+        ),
+        section(
+            `The UserList for this workspace — ${result.user.length}/${WORKSPACE_TODO_CAPS.user} open:`,
+            result.user,
+            'empty — nothing is waiting on a person',
+        ),
+        'These lists are local to this workspace and are never synced to Tynn.',
+    ]
+        .filter(Boolean)
+        .join('\n\n');
+}
+
 export const CORE_TOOLS = [
     IMDONE_TOOL,
     THUMBS_UP_TOOL,
@@ -3850,6 +3940,7 @@ export const CORE_TOOLS = [
     MANAGE_WORKSPACES_TOOL,
     AGENTINBOX_TOOL,
     KNOWLEDGE_TOOL,
+    LISTS_TOOL,
     OPEN_FILE_TOOL,
     SET_ENV_TOOL,
     CHECK_ENV_TOOL,
@@ -4095,7 +4186,23 @@ export async function handleMcpMessage(
                 // conditional; it's appended on every imDone.
                 const ftqReminder =
                     'Questions or concerns for the Operator? Use ForceTheQuestion — never print a question and wait; a plaintext question goes unseen.';
-                const extras = [handoffLine, countsLine, mailLine, ftqReminder]
+                // The AgentList rides the finish (genie#556). This is the whole
+                // reason the list survives a restart: a terminal dies between
+                // turns, and the last thing the agent said was a checklist it
+                // had not finished. Best-effort like the lines above — the glow
+                // is what imDone exists for, and a list that cannot be read is a
+                // missing line, never a lost finish signal. An EMPTY list adds
+                // nothing at all: `agentListSummary` returns null, which
+                // `.filter(Boolean)` drops, so an agent that keeps no list pays
+                // nothing for the feature.
+                let listLine: string | null = null;
+                try {
+                    const own = ctx.lists?.(ctx.terminalId, { action: 'show' });
+                    if (own?.ok) listLine = agentListSummary(own.agent);
+                } catch {
+                    /* best-effort — see above */
+                }
+                const extras = [handoffLine, countsLine, mailLine, listLine, ftqReminder]
                     .filter(Boolean)
                     .join('\n');
                 return ok(msg.id, {
@@ -4739,6 +4846,52 @@ ${body}` }],
                         },
                     ],
                 });
+            }
+            if (params.name === 'lists') {
+                if (!ctx.lists) {
+                    return ok(msg.id, {
+                        content: [
+                            {
+                                type: 'text',
+                                text: 'Lists are not available on this Genie host — it has no list storage wired up.',
+                            },
+                        ],
+                    });
+                }
+                const a = (params.arguments ?? {}) as Record<string, unknown>;
+                // `show` is the default: reading a list is the harmless action,
+                // and it is what a caller that omitted `action` meant. It is
+                // defaulted BEFORE the check so the enum in the schema stays the
+                // one place the accepted actions are written down.
+                const checked = checkAction<ListsRequest['action']>(
+                    'lists',
+                    a.action === undefined ? 'show' : a.action,
+                );
+                if (!checked.ok) return err(msg.id, -32602, checked.message);
+                const action = checked.action;
+
+                // Validate BEFORE the host call, so a malformed request never
+                // reaches storage and the caller is told which field was wrong
+                // rather than reading a generic failure back out of the list.
+                const req: ListsRequest = { action };
+                if (action === 'add') {
+                    const text = typeof a.text === 'string' ? a.text.trim() : '';
+                    if (!text) {
+                        return err(msg.id, -32602, 'lists `add` requires a non-empty `text` — the item to add.');
+                    }
+                    const list = a.list === 'user' ? 'user' : 'agent';
+                    req.text = text;
+                    req.list = list;
+                } else if (action === 'done') {
+                    const id = typeof a.id === 'string' ? a.id.trim() : '';
+                    if (!id) {
+                        return err(msg.id, -32602, 'lists `done` requires the `id` of the item to mark done — ids come from `show`.');
+                    }
+                    req.id = id;
+                }
+
+                const result = ctx.lists(ctx.terminalId, req);
+                return ok(msg.id, { content: [{ type: 'text', text: formatLists(result) }] });
             }
             if (params.name === 'setEnv') {
                 const a = (params.arguments ?? {}) as Partial<SetEnvRequest>;

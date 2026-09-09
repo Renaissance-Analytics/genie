@@ -7,6 +7,7 @@ import path from 'path';
 import fs from 'fs';
 import { randomUUID } from 'node:crypto';
 import { SYSTEM_WORKSPACE_ROW_ID } from './workspace/system-workspace-id';
+import { WORKSPACE_TODO_CAPS } from './lists/types';
 // Pure (no store, no electron): the v68 audit has to resolve links both the old
 // way and the new way, and importing the STORE here would be a cycle.
 import { buildLegacyResolver, buildLinkResolver } from './knowledge/resolve';
@@ -4058,13 +4059,14 @@ export interface WorkspaceTodoRow {
     updated_at: number;
 }
 
-/** How many OPEN items each list holds before it refuses more. */
-export const WORKSPACE_TODO_CAPS: Record<WorkspaceTodoKind, number> = {
-    /** One shared list per workspace, so the human is never handed a wall. */
-    user: 5,
-    /** Per AGENT, not per workspace — the owner's spec is "no more than 10". */
-    agent: 10,
-};
+/**
+ * How many OPEN items each list holds before it refuses more.
+ *
+ * Defined in `lists/types.ts` and re-exported here: the pure MCP layer
+ * advertises these numbers to agents and cannot import this module. One
+ * definition, two readers.
+ */
+export { WORKSPACE_TODO_CAPS };
 
 export function listWorkspaceTodos(
     database: Database.Database,
@@ -4211,6 +4213,81 @@ export function resolveUserTodo(
             ).get(todoId)!,
         };
     })();
+}
+
+/**
+ * An agent ticks one item off its OWN AgentList.
+ *
+ * Scoped to `agentName` in the WHERE clause rather than checked after the fact,
+ * so the refusal and the update cannot disagree. The scoping is the point: the
+ * lists all share one table, and an unscoped `UPDATE … WHERE id = ?` is one
+ * agent quietly completing another's item — which the owning agent then reads
+ * as a list that lost something on its own.
+ *
+ * No `workspace_todo_events` row. That table records how a USER resolved
+ * something, and its `comment` is NOT NULL because the agent waiting on the
+ * item has to be told WHY. An agent finishing its own note answers to nobody,
+ * so there is no comment to write and inventing one ("completed") would be
+ * putting words in a person's mouth.
+ */
+export function completeAgentTodo(
+    database: Database.Database,
+    todoId: string,
+    agentName: string,
+): { ok: true; todo: WorkspaceTodoRow } | { ok: false; error: string } {
+    const owner = agentName.trim();
+    if (!owner) return { ok: false, error: 'An AgentList item can only be completed by the agent it belongs to, so the agent name is required.' };
+    return database.transaction(() => {
+        const todo = database.prepare<[string, string], WorkspaceTodoRow>(
+            `SELECT * FROM workspace_todos
+             WHERE id = ? AND agent_name = ? AND kind = 'agent' AND status = 'open'`,
+        ).get(todoId, owner);
+        if (!todo) {
+            // One message for all three misses (no such id, someone else's item,
+            // a user item) — deliberately, because distinguishing them would tell
+            // a caller what is on another agent's list.
+            return {
+                ok: false as const,
+                error: `There is no open item with that id on ${owner}'s AgentList. It may already be done, or it may belong to another agent or to the UserList — an agent can only complete its own.`,
+            };
+        }
+        const now = Date.now();
+        database.prepare(
+            `UPDATE workspace_todos SET status = 'done', updated_at = ? WHERE id = ?`,
+        ).run(now, todoId);
+        return {
+            ok: true as const,
+            todo: database.prepare<[string], WorkspaceTodoRow>(
+                'SELECT * FROM workspace_todos WHERE id = ?',
+            ).get(todoId)!,
+        };
+    })();
+}
+
+/**
+ * Clear one agent's AgentList — the other half of "persists until cleared".
+ *
+ * `kind = 'agent'` and the agent's own name both appear in the WHERE clause:
+ * the UserList lives in this table too, and it is the person's, not the
+ * agent's, to empty.
+ *
+ * Rows are marked `done` rather than deleted, so a cleared list leaves the same
+ * trail as a worked one.
+ */
+export function clearAgentTodos(
+    database: Database.Database,
+    workspaceId: string,
+    agentName: string,
+): { cleared: number } {
+    const owner = agentName.trim();
+    if (!owner) return { cleared: 0 };
+    const info = database
+        .prepare(
+            `UPDATE workspace_todos SET status = 'done', updated_at = ?
+             WHERE workspace_id = ? AND agent_name = ? AND kind = 'agent' AND status = 'open'`,
+        )
+        .run(Date.now(), workspaceId, owner);
+    return { cleared: info.changes };
 }
 
 /**

@@ -101,6 +101,7 @@ describe('tools/list plugin generalization', () => {
             'manageWorkspaces',
             'agentinbox',
             'knowledge',
+            'lists',
             'openFileForUser',
             'setEnv',
             'checkEnv',

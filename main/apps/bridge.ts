@@ -81,6 +81,10 @@ function appMcpContext(deps: ServerDeps, appId: string) {
         manageWorkspaces: deps.manageWorkspaces,
         agentInbox: deps.agentInbox,
         knowledge: deps.knowledge,
+        // No `lists`, deliberately. It is in UNGRANTABLE_TOOLS (an app has no
+        // agent name, so it can own no list), and `bridge-decision.ts` refuses
+        // it with that reason before a call ever gets here — so wiring it would
+        // be unreachable code implying an app could reach the lists.
         openFileForUser: deps.openFileForUser,
         setEnv: deps.setEnv,
         checkEnv: deps.checkEnv,

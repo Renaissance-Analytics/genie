@@ -1,5 +1,7 @@
 import type Database from 'better-sqlite3';
 import {
+    clearAgentTodos,
+    completeAgentTodo,
     createWorkspaceTodo,
     listAgentTodos,
     listWorkspaceTodos,
@@ -138,6 +140,29 @@ export function resolveUserListItem(
         todo,
         nudge: sent.ok ? { delivered: true, terminalId } : { delivered: false, reason: sent.reason },
     };
+}
+
+/**
+ * An agent ticks one item off its own AgentList.
+ *
+ * The agent name is an ARGUMENT rather than something re-derived here: the
+ * caller has already resolved it from the terminal through `planListOwner`, and
+ * resolving it twice is how two answers to "whose list is this" drift apart.
+ */
+export function completeAgentItem(
+    database: Database.Database,
+    input: { todoId: string; agentName: string },
+): { ok: true; todo: WorkspaceTodoRow } | { ok: false; error: string } {
+    return completeAgentTodo(database, input.todoId, input.agentName);
+}
+
+/** Empty one agent's AgentList, reporting how many items it actually held. */
+export function clearAgentList(
+    database: Database.Database,
+    workspaceId: string,
+    agentName: string,
+): { cleared: number } {
+    return clearAgentTodos(database, workspaceId, agentName);
 }
 
 /** Add one item to a list. Refuses past the cap and says so — see `db.ts`. */

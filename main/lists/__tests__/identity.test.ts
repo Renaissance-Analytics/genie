@@ -11,7 +11,10 @@ import { agentListSummary, liveTerminalForAgent, planListOwner } from '../identi
  * nothing to say.
  */
 
-const spec = (over: Partial<{ workspace_id: string | null; meta: unknown }> = {}) => ({
+/** A terminal spec as `planListOwner` reads one — only the two fields it looks at. */
+type SpecLike = { workspace_id: string | null; meta?: { whisper_purpose?: unknown } | null };
+
+const spec = (over: Partial<SpecLike> = {}): SpecLike => ({
     workspace_id: 'ws-1',
     meta: { whisper_purpose: 'lists' },
     ...over,

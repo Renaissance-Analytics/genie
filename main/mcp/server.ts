@@ -42,6 +42,8 @@ import {
     type AgentInboxResult,
     type KnowledgeToolRequest,
     type KnowledgeToolResult,
+    type ListsRequest,
+    type ListsResult,
     type OpenFileRequest,
     type OpenFileResult,
     type SetEnvRequest,
@@ -187,6 +189,9 @@ export interface ServerDeps {
     agentInbox: (terminalId: string, req: AgentInboxRequest) => Promise<AgentInboxResult>;
     /** Workstation Knowledge Graph — the shared local memory store (knowledge tool). */
     knowledge: (terminalId: string, req: KnowledgeToolRequest) => Promise<KnowledgeToolResult>;
+    /** The workspace-local AgentList + UserList (lists tool, genie#556). Also read
+     *  by imDone, to append whatever is still open on the caller's own list. */
+    lists?: (terminalId: string, req: ListsRequest) => ListsResult;
     /** Open a file in Genie's built-in editor for the user (openFileForUser tool). */
     openFileForUser: (
         terminalId: string,
@@ -717,6 +722,7 @@ async function handle(
         manageWorkspaces: deps.manageWorkspaces,
         agentInbox: deps.agentInbox,
         knowledge: deps.knowledge,
+        lists: deps.lists,
         openFileForUser: deps.openFileForUser,
         setEnv: deps.setEnv,
         checkEnv: deps.checkEnv,

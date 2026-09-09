@@ -37,6 +37,7 @@ import { manageServiceForMcp } from '../mcp/dev-service-tools';
 import { openFileForUserForMcp } from '../editor/open-file';
 import { applySetEnv, applyCheckEnv } from '../env-store';
 import { pluginToolDescriptors, dispatchPluginTool } from '../plugins/registry';
+import { handleListsRequest } from '../lists/host';
 import { agentInboxBroker } from '../agentinbox/broker';
 import { agentPulse } from '../terminal/agent-pulse';
 import { agentShutdownReadiness } from '../agents/shutdown-readiness';
@@ -277,6 +278,12 @@ export function buildHostServerDeps(
         manageWorkspaces: (terminalId, req) => manageWorkspacesForMcp(terminalId, req),
         agentInbox: (terminalId, req) => agentInboxForMcp(terminalId, req),
         knowledge: (terminalId, req) => knowledgeForMcp(terminalId, req),
+        // The workspace-local AgentList + UserList (genie#556). The real db and
+        // the real terminal lookup, injected — `handleListsRequest` itself takes
+        // them as arguments so the identity rule can be tested without a main
+        // process. `imDone` reads the caller's own list through this same dep.
+        lists: (terminalId, req) =>
+            handleListsRequest({ db: getDb(), specOf: (id) => getTerminalSpec(id) }, terminalId, req),
         openFileForUser: (terminalId, req) => openFileForUserForMcp(terminalId, req),
         setEnv: (terminalId, req) => {
             const root = workspaceRootForTerminal(terminalId);

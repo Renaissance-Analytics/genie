@@ -707,7 +707,34 @@ hook. The response also reports your workspace's open IssueWatch counts (e.g.
 \`IssueWatch — issues:3, PR:1, sec:3, feedback:2\`, where \`sec\` is the
 security-alert aggregate and \`feedback:\` is unresolved project feedback waiting
 on triage in Tynn — work waiting, **not a failure**), so you see what's still
-open the moment you hand back; call \`checkIssues\` for the full list.
+open the moment you hand back; call \`checkIssues\` for the full list. Anything
+still open on your **AgentList** (see \`lists\`) is appended too — an empty list
+adds nothing, so this costs you nothing if you keep none.
+
+### lists
+**Two short, LOCAL to-do lists per workspace.** Neither is ever synced to Tynn —
+they stay on this machine; roadmap and project-management work belongs in Tynn
+instead.
+
+Your **AgentList** is your own scratch checklist: one per agent, up to 10 open
+items, filed under your agent **NAME** so it survives a restart (a terminal id is
+re-minted every launch — the same rule the handoff note uses). Whatever is still
+open on it rides every \`imDone\` you send, which is what stops a half-finished
+checklist from vanishing when a terminal dies.
+
+The **UserList** is the counterpart to \`ForceTheQuestion\`. FTQ parks you until a
+human answers; a UserList item lets you **carry on** while they do something, and
+when they mark it done you get a nudge carrying their comment. Reach for it
+instead of blocking whenever you don't need the answer right now. Up to 5 open
+items per workspace, shared by every agent, and each one shows who asked.
+
+Args: \`action\` (\`show\` — the default — / \`add\` / \`done\` / \`clear\`),
+\`text\` plus optional \`list\` (\`agent\` default, or \`user\`) for \`add\`,
+\`id\` for \`done\`, and the usual \`terminalId\`. \`done\` marks one of **your
+own** AgentList items finished — user items are the person's to tick off, and
+their doing so is what sends you the nudge. Both lists **refuse** a new item once
+full rather than dropping the oldest, so nothing you recorded goes missing
+without you being told.
 
 ### openFileForUser
 **Put a file in front of the user** in Genie's built-in editor (a Code panel on
