@@ -600,10 +600,12 @@ function MasterInner() {
     // number they learn to ignore.
     const [listsUserCount, setListsUserCount] = useState(0);
     useEffect(() => {
-        // A remote window reads its OWN database, which is not where a host's
-        // lists live — so it shows no badge rather than a count from the wrong
-        // machine. The panel says the same thing in words when it is opened.
-        if (!hasGenieBridge() || !activeWorkspaceId || isRemoteWindow()) {
+        // A host window counts the HOST's items: `lists.read` is host-sourced in
+        // the bridge (genie#586), so the badge reflects the machine whose work it
+        // is. A failed read falls back to NO badge rather than a stale number —
+        // "we could not ask" is not "nothing is waiting", and the panel is where
+        // that difference gets said in words.
+        if (!hasGenieBridge() || !activeWorkspaceId) {
             setListsUserCount(0);
             return;
         }
@@ -611,10 +613,11 @@ function MasterInner() {
             void api()
                 .lists.read(activeWorkspaceId)
                 .then((v) => setListsUserCount(v.userCount))
-                .catch(() => {});
+                .catch(() => setListsUserCount(0));
         load();
         // Push-driven, like the questions badge: an agent adding an item through
-        // the `lists` tool moves this without a timer.
+        // the `lists` tool moves this without a timer. On a host window the push
+        // is the HOST's `lists:changed`, re-emitted onto this channel by main.
         return api().on.listsChanged?.((payload) => {
             if (!payload?.workspaceId || payload.workspaceId === activeWorkspaceId) load();
         });

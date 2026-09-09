@@ -1312,6 +1312,14 @@ export const PASSTHROUGH_EVENTS = new Set([
     // and the high-frequency start stream the local preload already subscribes to.
     'dev-server:changed',
     'dev-server:site-progress',
+    // AgentList + UserList (genie#586). The lists live in the db of the host that
+    // owns the workspace, and both writers there — an agent's `lists` MCP call
+    // and a person resolving an item — announce with `lists:changed`. Without
+    // passthrough a remote window's panel would be right exactly once, at
+    // fetch-on-open, and its header badge never at all: the client's own db has
+    // none of these rows, so nothing local ever fires. Same reason as
+    // questions:changed, one surface along.
+    'lists:changed',
 ]);
 
 /**

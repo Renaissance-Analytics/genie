@@ -119,10 +119,10 @@ import { decideTuiSwitch } from './agents/tui-switch';
 import type { PersonaEdit } from './agents/persona';
 import type { SidecarAction } from './agents/sidecar-control';
 import { agentInboxBroker } from './agentinbox/broker';
+import { broadcastListsChanged } from './lists/announce';
 import { onListsChanged } from './lists/changed';
-import { buildListNudgeIO } from './lists/nudge-io';
-import { resolveUserListItem, type UserListAction } from './lists/service';
-import { workspaceListsView } from './lists/workspace-view';
+import { type UserListAction } from './lists/service';
+import { readWorkspaceLists, resolveUserListItemOnHost } from './lists/wiring';
 import { type AgentInboxScope } from './agentinbox/types';
 import { appendLaunchFlags } from './agentinbox/session-capture';
 import {
@@ -2152,8 +2152,8 @@ export function registerIpcHandlers(): void {
     });
 
     // --- AgentList + UserList (workspace-local, genie#556) ----------------
-    // Two lists that never leave this machine. The panel reads a WORKSPACE cut
-    // of them (every agent's checklist, plus the shared list waiting on a
+    // Two lists that never leave this workstation. The panel reads a WORKSPACE
+    // cut of them (every agent's checklist, plus the shared list waiting on a
     // person); agents read their own through the `lists` MCP tool.
     //
     // Resolving a user item is the half that matters: it records the outcome and
@@ -2162,35 +2162,20 @@ export function registerIpcHandlers(): void {
     // delivery is REPORTED rather than allowed to roll the resolution back. A
     // tick in the UI over a nudge that went nowhere is the failure this feature
     // exists to prevent.
-    ipcMain.handle('lists:read', (_e, workspaceId: string) =>
-        workspaceListsView(getDb(), workspaceId),
-    );
-    // Both writers announce through the same emitter — an agent's MCP call and
-    // the resolve below — so an open panel re-reads without polling either one.
+    //
+    // Both handlers are one line into `lists/wiring`, which the host's
+    // `/api/desktop/lists/*` routes call too (genie#586). A remote window's read
+    // and resolve therefore run the SAME code as a local one — including the
+    // nudge, which has to happen here because the authoring agent is here.
+    ipcMain.handle('lists:read', (_e, workspaceId: string) => readWorkspaceLists(workspaceId));
+    // Every writer announces through the same emitter — an agent's MCP call, a
+    // local resolve, and a remote one over the bridge — so an open panel
+    // re-reads without polling any of them.
     onListsChanged((workspaceId) => broadcastListsChanged(workspaceId));
     ipcMain.handle(
         'lists:resolveUser',
-        (_e, todoId: string, action: UserListAction, comment: string) => {
-            const io = buildListNudgeIO({
-                terminals: () => listTerminalSpecs(),
-                // "Live" is deliverability, not liveness in the abstract: the
-                // broker is what would carry the notice, so the same lookup
-                // decides whether one can land. A gate that consults anything
-                // else can disagree with the delivery it guards (genie#502).
-                isLive: (id) => agentInboxBroker.agentIdForTerminal(id) != null,
-                deliver: (terminalId, text) =>
-                    agentInboxBroker.deliverHumanMessageToTerminalResult(terminalId, text),
-            });
-            const result = resolveUserListItem(getDb(), io, {
-                todoId,
-                action,
-                comment: comment ?? '',
-            });
-            // The resolve writes directly rather than through the MCP host, so
-            // it announces its own change.
-            if (result.ok) broadcastListsChanged(result.todo.workspace_id);
-            return result;
-        },
+        (_e, todoId: string, action: UserListAction, comment: string) =>
+            resolveUserListItemOnHost({ todoId, action, comment }),
     );
 
     // --- Knowledge Graph (workstation-wide local memory store) -----------
@@ -2632,19 +2617,6 @@ export function registerIpcHandlers(): void {
         setAutostart(Boolean(enabled));
         return { enabled: getAutostart() };
     });
-}
-
-/**
- * Tell open windows a workspace's lists moved.
- *
- * `broadcastLocal`, not `broadcast`: a host-bound window's lists belong to the
- * HOST's database, not this one, so pushing a local change into it would
- * overwrite what it shows with counts from a different machine. There is no
- * passthrough for these yet — a remote window says so in the panel rather than
- * rendering an empty list it cannot actually see.
- */
-function broadcastListsChanged(workspaceId: string): void {
-    broadcastLocal('lists:changed', { workspaceId });
 }
 
 function broadcast(channel: string, payload: unknown): void {

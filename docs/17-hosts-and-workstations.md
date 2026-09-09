@@ -32,7 +32,9 @@ A remote window splits cleanly so the host owns your *work* and your machine own
 your *view*:
 
 - **From the host:** workspaces, files, terminals and agents, processes, Issue
-  Watch (via the host's GitHub), and the host's `.gen` dev sites.
+  Watch (via the host's GitHub), the host's `.gen` dev sites, and the workspace's
+  lists — so ticking something off in **Lists** nudges the agent that asked for
+  it, which is running over there.
 - **Stays local to your machine:** your layout and panel arrangement, your
   Settings and theme, your GitHub sign-in, and the app updater.
 

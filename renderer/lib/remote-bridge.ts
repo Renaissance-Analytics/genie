@@ -22,6 +22,8 @@ import type {
     ManageSiteResult,
     ManageServiceResult,
     DevRuntimeInfo,
+    WorkspaceListsSpec,
+    ResolveUserItemSpec,
 } from './genie';
 import { isHostSourcedSettingKey } from './settings-nav';
 // The PURE inbox grouping main uses (electron-free by construction — see the
@@ -780,6 +782,39 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
             ).answered === true,
     };
 
+    // Host-sourced AgentList + UserList (genie#586). Both lists live in the db of
+    // the machine that OWNS the workspace, so spread-from-local this asked the
+    // CLIENT's db for a HOST workspace id and came back empty — a result shaped
+    // exactly like "you have nothing to do", which is the rendering this window
+    // must never produce. Same treatment as AgentInbox: read the host, render the
+    // host.
+    //
+    // `resolveUser` matters more than the read. It does not just record a tick: it
+    // NUDGES the agent that asked, and that agent's terminal and the broker that
+    // would carry the notice are both on the HOST. Run locally it would find no
+    // such item and silently do nothing. The host's answer carries its own
+    // delivery outcome — an undelivered nudge included — and is passed straight
+    // back, because a remote tick over a nudge that went nowhere is the same
+    // failure the local path exists to report away.
+    //
+    // Live refresh needs no work here: the host pushes `lists:changed` on every
+    // write (an agent's `lists` MCP call as well as this resolve), and main
+    // re-emits it onto this window's local channel via PASSTHROUGH_EVENTS.
+    const lists: GenieApi['lists'] = {
+        ...local.lists,
+        read: async (workspaceId) =>
+            (
+                (await req(
+                    `/api/desktop/lists/read?workspaceId=${encodeURIComponent(workspaceId)}`,
+                )) as { view: WorkspaceListsSpec }
+            ).view,
+        resolveUser: async (todoId, action, comment) =>
+            (await req('/api/desktop/lists/resolve', {
+                method: 'POST',
+                json: { todoId, action, comment },
+            })) as ResolveUserItemSpec,
+    };
+
     // Host-sourced Tynn provisioning. The workspace-settings "Tynn agent" panel writes
     // the MCP agent token into a workspace's .mcp.json — but the workspace files, the
     // running agent, and the user's Tynn session all live on the HOST. So a remote
@@ -1115,6 +1150,7 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
         settings,
         agentInbox,
         questions,
+        lists,
         tynn,
         tynnHost,
         mcp,

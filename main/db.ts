@@ -4091,6 +4091,31 @@ export function listWorkspaceTodos(
           ).all(workspaceId);
 }
 
+/**
+ * One list item by id, whatever its kind or status, or null.
+ *
+ * The one thing a caller can learn from this that it cannot learn from
+ * `resolveUserTodo`'s answer is WHICH WORKSPACE the item belongs to — and it has
+ * to learn that BEFORE the write, because the host's `/api/desktop/lists/resolve`
+ * allow-lists a remote against the workspaces it serves. Reading the workspace
+ * off the row the write returns would be checking the door after walking
+ * through it.
+ *
+ * Deliberately unfiltered on `status`: a resolved row still answers "whose
+ * workspace is this", and denying an already-ticked item as "unknown workspace"
+ * would answer a different question than the person asked.
+ */
+export function getWorkspaceTodo(
+    database: Database.Database,
+    todoId: string,
+): WorkspaceTodoRow | null {
+    return (
+        database
+            .prepare<[string], WorkspaceTodoRow>('SELECT * FROM workspace_todos WHERE id = ?')
+            .get(todoId) ?? null
+    );
+}
+
 /** One agent's own open AgentList, oldest first. */
 export function listAgentTodos(
     database: Database.Database,

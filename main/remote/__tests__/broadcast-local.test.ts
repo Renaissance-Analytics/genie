@@ -123,4 +123,14 @@ describe('PASSTHROUGH_EVENTS — every host→client badge event passes through 
         expect(PASSTHROUGH_EVENTS.has('dev-server:changed')).toBe(true);
         expect(PASSTHROUGH_EVENTS.has('dev-server:site-progress')).toBe(true);
     });
+
+    // genie#586 — AgentList + UserList are HOST-sourced on a remote window, so the
+    // host's `lists:changed` is the only thing that can move that window's panel or
+    // its header badge. Without passthrough a remote panel would be correct exactly
+    // once (at fetch-on-open) and then silently freeze while an agent filled the
+    // list in on the host — the same shape as the questions badge above, one
+    // surface along.
+    it('includes lists:changed so a remote lists panel + badge track the HOST', () => {
+        expect(PASSTHROUGH_EVENTS.has('lists:changed')).toBe(true);
+    });
 });
