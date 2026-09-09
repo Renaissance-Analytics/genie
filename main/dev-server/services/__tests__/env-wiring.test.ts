@@ -150,19 +150,124 @@ describe('namespace engines', () => {
         expect(env.AWS_ACCESS_KEY_ID).toBe('ws-acme');
     });
 
+    const mailpit = (identifier: string): ProvisionedService => ({
+        engine: 'mailpit',
+        host: 'genie-svc-mailpit-1',
+        port: 1025,
+        slice: { identifier, dnsName: identifier.replace(/_/g, '-'), password: 'unused' },
+    });
+
     it('points mail at the shared catch-all', () => {
-        const env = serviceEnv([
-            {
-                engine: 'mailpit',
-                host: 'genie-svc-mailpit-1',
-                port: 1025,
-                slice: { identifier: 'ws_acme', dnsName: 'ws-acme', password: 'unused' },
-            },
-        ]);
+        const env = serviceEnv([mailpit('ws_acme')]);
         expect(env).toMatchObject({
             MAIL_MAILER: 'smtp',
             MAIL_HOST: 'genie-svc-mailpit-1',
             MAIL_PORT: '1025',
+        });
+    });
+
+    /**
+     * MAILPIT'S NAMESPACE (genie#552).
+     *
+     * The catalog has always DESCRIBED Mailpit as "each workspace tags its mail
+     * with its own namespace" and marked it `provision: 'namespace'` — the same
+     * contract Meilisearch keeps with `MEILISEARCH_INDEX_PREFIX`. Mailpit kept
+     * none of it: every workspace on the shared instance sent into one
+     * undifferentiated inbox and nothing marked which one a message came from.
+     *
+     * The tag is carried by a PLUS ADDRESS in the From, because that is a
+     * first-class Mailpit feature rather than a convention Genie invented:
+     * Mailpit tags any message with a `<name>+<tag>@<domain>` address in From,
+     * To, Cc or Bcc, and that auto-tagging is ON BY DEFAULT. So one env var an
+     * app already reads produces a real `tag:` the inbox can filter, with no
+     * cooperation from the app and no change to the running engine.
+     */
+    describe('the per-workspace namespace (genie#552)', () => {
+        /**
+         * Mailpit's documented rule, reimplemented so the ADDRESS is asserted to
+         * be shaped the way Mailpit parses it — not merely to be some string
+         * containing the identifier. If someone later "tidies" the address into
+         * a form Mailpit does not tag, this goes red rather than the inbox
+         * quietly showing nothing.
+         *
+         * https://mailpit.axllent.org/docs/usage/tagging/
+         */
+        const plusTagsOf = (address: string): string[] => {
+            const local = address.slice(0, address.lastIndexOf('@'));
+            const [, ...tags] = local.split('+');
+            // Mailpit's allowed tag characters, and its 1..100 length bound.
+            return tags.filter((t) => /^[A-Za-z0-9\-. _@]{1,100}$/.test(t));
+        };
+
+        it('tags mail with the workspace namespace, via a plus address Mailpit reads as a tag', () => {
+            const env = serviceEnv([mailpit('ws_acme')]);
+            expect(plusTagsOf(env.MAIL_FROM_ADDRESS)).toEqual(['ws_acme']);
+        });
+
+        /**
+         * The tag an app must reproduce itself when it sets its OWN From — the
+         * one case the plus address cannot cover. Naming it in the environment
+         * is what makes that possible without the app deriving Genie's slug.
+         */
+        it('names the tag outright, for an app that sets its own From', () => {
+            expect(serviceEnv([mailpit('ws_acme')]).GENIE_MAIL_TAG).toBe('ws_acme');
+        });
+
+        /**
+         * POSITIVE CONTROL. A tag that is the same for everyone is not a
+         * namespace — it would pass every assertion above and isolate nothing.
+         */
+        it('gives two workspaces DIFFERENT tags, not just a tag', () => {
+            const a = serviceEnv([mailpit('ws_acme')]);
+            const b = serviceEnv([mailpit('ws_beta')]);
+            expect(a.GENIE_MAIL_TAG).not.toBe(b.GENIE_MAIL_TAG);
+            expect(a.MAIL_FROM_ADDRESS).not.toBe(b.MAIL_FROM_ADDRESS);
+            expect(plusTagsOf(b.MAIL_FROM_ADDRESS)).toEqual(['ws_beta']);
+        });
+
+        /**
+         * POSITIVE CONTROL. Apps read `MAIL_MAILER`/`MAIL_HOST`/`MAIL_PORT`
+         * today; a namespace that arrived by changing what mail already worked
+         * would be a regression wearing a feature's clothes.
+         */
+        it('leaves the connection an app already depends on untouched', () => {
+            expect(serviceEnv([mailpit('ws_acme')])).toMatchObject({
+                MAIL_MAILER: 'smtp',
+                MAIL_HOST: 'genie-svc-mailpit-1',
+                MAIL_PORT: '1025',
+            });
+        });
+
+        /**
+         * POSITIVE CONTROL for the namespace that already worked: Meilisearch's
+         * index prefix is the pattern Mailpit is being made to match, so it has
+         * to still land.
+         */
+        it('does not disturb the namespace that already worked', () => {
+            const env = serviceEnv([
+                mailpit('ws_acme'),
+                {
+                    engine: 'meilisearch',
+                    host: 'genie-svc-meilisearch-1',
+                    port: 7700,
+                    slice: { identifier: 'ws_acme', dnsName: 'ws-acme', password: 'unused' },
+                    adminPassword: 'master-key',
+                },
+            ]);
+            expect(env.MEILISEARCH_INDEX_PREFIX).toBe('ws_acme_');
+            expect(env.GENIE_MAIL_TAG).toBe('ws_acme');
+        });
+
+        /**
+         * Every identifier `workspaceSqlIdentifier` can produce has to survive
+         * as a Mailpit tag — the longest one, and one that leans on the
+         * underscores Mailpit happens to allow. A tag Mailpit rejects would
+         * leave that workspace silently unattributed.
+         */
+        it('produces a valid Mailpit tag for the longest identifier the slug rule allows', () => {
+            const longest = `w${'x'.repeat(50)}_${'9'.repeat(11)}`;
+            expect(longest).toMatch(/^[a-z][a-z0-9_]{0,62}$/);
+            expect(plusTagsOf(serviceEnv([mailpit(longest)]).MAIL_FROM_ADDRESS)).toEqual([longest]);
         });
     });
 });
