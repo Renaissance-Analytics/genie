@@ -7,6 +7,7 @@ import path from 'path';
 import fs from 'fs';
 import { randomUUID } from 'node:crypto';
 import { SYSTEM_WORKSPACE_ROW_ID } from './workspace/system-workspace-id';
+import { WORKSPACE_TODO_CAPS } from './lists/types';
 // Pure (no store, no electron): the v68 audit has to resolve links both the old
 // way and the new way, and importing the STORE here would be a cycle.
 import { buildLegacyResolver, buildLinkResolver } from './knowledge/resolve';
@@ -2794,6 +2795,48 @@ export function runMigrations(
                         ON pending_questions(terminal_id);
                 `),
         },
+        {
+            // v76 — a list belongs to an AGENT, and the agent is its NAME.
+            //
+            // v51 created `workspace_todos` for "AMS short-term workflow lists"
+            // and nothing ever called it. genie#556 turns it into the AgentList
+            // and UserList the product actually ships, which needs one thing the
+            // v51 shape cannot express: WHICH agent an item belongs to, in a way
+            // that still means the same agent after a restart.
+            //
+            // `agent_id` cannot answer that. It FKs to `workspace_agents(id)`,
+            // a row only `registerAgent` ever creates — so an agent that never
+            // registered has no id at all — and `main/agents/agent-mode-source.ts`
+            // documents it as a DIFFERENT id from the AgentInbox agent id, which
+            // `spawnTerminal` re-mints on every single launch. A list whose whole
+            // promise is "it is always there until it clears" cannot hang off
+            // either one.
+            //
+            // The agent NAME can. `main/agents/handoff.ts` already settled this
+            // for the handoff note, which bridges exactly the same gap: "one file
+            // per AGENT NAME, not per terminal: a terminal id changes every
+            // restart, which is exactly the identity that fails to carry across
+            // the gap the handoff exists to bridge." Keying here the same way is
+            // one identity rule used twice rather than a fourth one invented.
+            //
+            // Nullable, because ALTER TABLE ADD COLUMN cannot be NOT NULL without
+            // inventing a default, and a default agent name would be a lie. The
+            // NOT-NULL-ness that matters is enforced where it can be reported:
+            // `createWorkspaceTodo` refuses a blank name and says why.
+            //
+            // `agent_id` is left alone. It is still the right column for the AMS
+            // linkage it was built for; it is simply not the list's identity.
+            version: 76,
+            runner: (db) => {
+                if (!migrationHasColumn(db, 'workspace_todos', 'agent_name')) {
+                    db.exec(`ALTER TABLE workspace_todos ADD COLUMN agent_name TEXT`);
+                }
+                db.exec(`
+                    CREATE INDEX IF NOT EXISTS idx_workspace_todos_agent
+                        ON workspace_todos(workspace_id, agent_name, kind, status, created_at);
+                `);
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -3999,12 +4042,31 @@ export interface WorkspaceTodoRow {
     id: string;
     workspace_id: string;
     agent_id: string | null;
+    /**
+     * The agent this item belongs to, by NAME — for an agent item, whose list it
+     * is; for a user item, who gets nudged when the human ticks it off.
+     *
+     * Not `agent_id`, and not the AgentInbox agent id. Both of those change or
+     * go missing across the restart this list is supposed to survive; see the
+     * v76 migration comment. Nullable only because ALTER TABLE made it so — every
+     * row `createWorkspaceTodo` writes has one.
+     */
+    agent_name: string | null;
     kind: WorkspaceTodoKind;
     text: string;
     status: WorkspaceTodoStatus;
     created_at: number;
     updated_at: number;
 }
+
+/**
+ * How many OPEN items each list holds before it refuses more.
+ *
+ * Defined in `lists/types.ts` and re-exported here: the pure MCP layer
+ * advertises these numbers to agents and cannot import this module. One
+ * definition, two readers.
+ */
+export { WORKSPACE_TODO_CAPS };
 
 export function listWorkspaceTodos(
     database: Database.Database,
@@ -4024,28 +4086,94 @@ export function listWorkspaceTodos(
           ).all(workspaceId);
 }
 
+/** One agent's own open AgentList, oldest first. */
+export function listAgentTodos(
+    database: Database.Database,
+    workspaceId: string,
+    agentName: string,
+): WorkspaceTodoRow[] {
+    return database
+        .prepare<[string, string], WorkspaceTodoRow>(
+            `SELECT * FROM workspace_todos
+             WHERE workspace_id = ? AND agent_name = ? AND kind = 'agent' AND status = 'open'
+             ORDER BY created_at ASC`,
+        )
+        .all(workspaceId, agentName);
+}
+
 export function createWorkspaceTodo(
     database: Database.Database,
-    input: { workspaceId: string; kind: WorkspaceTodoKind; text: string; agentId?: string | null },
+    input: {
+        workspaceId: string;
+        kind: WorkspaceTodoKind;
+        text: string;
+        agentName: string;
+        agentId?: string | null;
+    },
 ): { ok: true; todo: WorkspaceTodoRow; reminder: string } | { ok: false; error: string; cap?: number } {
     const text = input.text.trim();
     if (!text) return { ok: false, error: 'Todo text cannot be empty.' };
-    const cap = input.kind === 'user' ? 5 : 10;
+    const agentName = input.agentName.trim();
+    // Every item belongs to an agent: for an agent item it says whose list this
+    // is, and for a user item it says who to nudge when the human ticks it off.
+    // An item with no owner is a nudge with nowhere to go, which is the exact
+    // failure this feature exists to prevent — so it is refused at the door.
+    if (!agentName) {
+        return {
+            ok: false,
+            error: 'A list item needs the name of the agent it belongs to (a terminal id changes on every restart, so the NAME is the identity).',
+        };
+    }
+    const cap = WORKSPACE_TODO_CAPS[input.kind];
     return database.transaction(() => {
-        const count = database.prepare<[string, WorkspaceTodoKind], { n: number }>(
-            `SELECT COUNT(*) AS n FROM workspace_todos
-             WHERE workspace_id = ? AND kind = ? AND status = 'open'`,
-        ).get(input.workspaceId, input.kind)?.n ?? 0;
+        // The AGENT list is capped per agent; the USER list is one shared list
+        // per workspace and is capped across all of them. Counting the agent
+        // list per workspace (as v51 did) meant three busy agents could refuse a
+        // fourth its very first item.
+        const count =
+            input.kind === 'agent'
+                ? database
+                      .prepare<[string, string], { n: number }>(
+                          `SELECT COUNT(*) AS n FROM workspace_todos
+                           WHERE workspace_id = ? AND agent_name = ?
+                             AND kind = 'agent' AND status = 'open'`,
+                      )
+                      .get(input.workspaceId, agentName)?.n ?? 0
+                : database
+                      .prepare<[string], { n: number }>(
+                          `SELECT COUNT(*) AS n FROM workspace_todos
+                           WHERE workspace_id = ? AND kind = 'user' AND status = 'open'`,
+                      )
+                      .get(input.workspaceId)?.n ?? 0;
         if (count >= cap) {
-            return { ok: false as const, cap, error: `${input.kind === 'user' ? 'UserToDo' : 'AgentTodo'} is capped at ${cap} open items.` };
+            // Refuse the new item rather than evicting the oldest. A silent drop
+            // loses work the agent believed was recorded; a refusal it can read
+            // lets it decide what to clear.
+            return {
+                ok: false as const,
+                cap,
+                error:
+                    input.kind === 'user'
+                        ? `This workspace's UserList already holds ${cap} open items, the most it takes. Nothing was added and nothing was dropped — the user has to clear some before you can add more.`
+                        : `Your AgentList already holds ${cap} open items, the most it takes. Nothing was added and nothing was dropped — mark something done or clear the list first.`,
+            };
         }
         const now = Date.now();
         const id = randomUUID();
         database.prepare(
             `INSERT INTO workspace_todos
-                (id, workspace_id, agent_id, kind, text, status, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, 'open', ?, ?)`,
-        ).run(id, input.workspaceId, input.agentId ?? null, input.kind, text, now, now);
+                (id, workspace_id, agent_id, agent_name, kind, text, status, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)`,
+        ).run(
+            id,
+            input.workspaceId,
+            input.agentId ?? null,
+            agentName,
+            input.kind,
+            text,
+            now,
+            now,
+        );
         const todo = database.prepare<[string], WorkspaceTodoRow>(
             'SELECT * FROM workspace_todos WHERE id = ?',
         ).get(id)!;
@@ -4085,6 +4213,81 @@ export function resolveUserTodo(
             ).get(todoId)!,
         };
     })();
+}
+
+/**
+ * An agent ticks one item off its OWN AgentList.
+ *
+ * Scoped to `agentName` in the WHERE clause rather than checked after the fact,
+ * so the refusal and the update cannot disagree. The scoping is the point: the
+ * lists all share one table, and an unscoped `UPDATE … WHERE id = ?` is one
+ * agent quietly completing another's item — which the owning agent then reads
+ * as a list that lost something on its own.
+ *
+ * No `workspace_todo_events` row. That table records how a USER resolved
+ * something, and its `comment` is NOT NULL because the agent waiting on the
+ * item has to be told WHY. An agent finishing its own note answers to nobody,
+ * so there is no comment to write and inventing one ("completed") would be
+ * putting words in a person's mouth.
+ */
+export function completeAgentTodo(
+    database: Database.Database,
+    todoId: string,
+    agentName: string,
+): { ok: true; todo: WorkspaceTodoRow } | { ok: false; error: string } {
+    const owner = agentName.trim();
+    if (!owner) return { ok: false, error: 'An AgentList item can only be completed by the agent it belongs to, so the agent name is required.' };
+    return database.transaction(() => {
+        const todo = database.prepare<[string, string], WorkspaceTodoRow>(
+            `SELECT * FROM workspace_todos
+             WHERE id = ? AND agent_name = ? AND kind = 'agent' AND status = 'open'`,
+        ).get(todoId, owner);
+        if (!todo) {
+            // One message for all three misses (no such id, someone else's item,
+            // a user item) — deliberately, because distinguishing them would tell
+            // a caller what is on another agent's list.
+            return {
+                ok: false as const,
+                error: `There is no open item with that id on ${owner}'s AgentList. It may already be done, or it may belong to another agent or to the UserList — an agent can only complete its own.`,
+            };
+        }
+        const now = Date.now();
+        database.prepare(
+            `UPDATE workspace_todos SET status = 'done', updated_at = ? WHERE id = ?`,
+        ).run(now, todoId);
+        return {
+            ok: true as const,
+            todo: database.prepare<[string], WorkspaceTodoRow>(
+                'SELECT * FROM workspace_todos WHERE id = ?',
+            ).get(todoId)!,
+        };
+    })();
+}
+
+/**
+ * Clear one agent's AgentList — the other half of "persists until cleared".
+ *
+ * `kind = 'agent'` and the agent's own name both appear in the WHERE clause:
+ * the UserList lives in this table too, and it is the person's, not the
+ * agent's, to empty.
+ *
+ * Rows are marked `done` rather than deleted, so a cleared list leaves the same
+ * trail as a worked one.
+ */
+export function clearAgentTodos(
+    database: Database.Database,
+    workspaceId: string,
+    agentName: string,
+): { cleared: number } {
+    const owner = agentName.trim();
+    if (!owner) return { cleared: 0 };
+    const info = database
+        .prepare(
+            `UPDATE workspace_todos SET status = 'done', updated_at = ?
+             WHERE workspace_id = ? AND agent_name = ? AND kind = 'agent' AND status = 'open'`,
+        )
+        .run(Date.now(), workspaceId, owner);
+    return { cleared: info.changes };
 }
 
 /**

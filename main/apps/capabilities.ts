@@ -157,6 +157,8 @@ export const UNGRANTABLE_TOOLS: Readonly<Record<string, string>> = {
         'Opens a REAL GApp window over whatever source a folder holds, with its own permission consent. An installed app that could drive that would be an app launching apps — a way to run unreviewed code in Genie’s own window that no capability the user granted describes.',
     manageFlows:
         'Authors AUTOMATION. A flow can do no more than its owner’s grant, but it can do it UNATTENDED — which an app’s window never can — so an app that wrote its own flows would widen its reach in the one dimension that matters, without the user agreeing to anything new. A GApp’s flows are authored by a person, in that app’s Flows tab.',
+    lists:
+        'Both workspace lists are keyed on an AGENT NAME, which an installed app does not have and cannot be given — so there is no list an app could own. The UserList makes that worse than merely useless: an item written there goes in front of the PERSON, and their ticking it off wakes whichever agent is named against it. An app writing there would be scheduling a human’s work and interrupting an agent under a name that is not its own.',
 };
 
 const TOOL_TO_CAPABILITY: ReadonlyMap<string, string> = new Map(

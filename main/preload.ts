@@ -1234,6 +1234,25 @@ const api = {
         answer: (id: string, answers: Array<{ header: string; selected: string[]; note: string }>) =>
             ipcRenderer.invoke('questions:answer', id, answers),
     },
+    /**
+     * The workspace's AgentLists + UserList (genie#556). Local to this machine
+     * and never synced to Tynn.
+     */
+    lists: {
+        /** Every agent's checklist in this workspace, plus the shared UserList. */
+        read: (workspaceId: string) => ipcRenderer.invoke('lists:read', workspaceId),
+        /**
+         * The person acted on a UserList item. Records the outcome, then nudges
+         * the agent that asked — and REPORTS whether that nudge landed, because
+         * an agent that has since exited never hears it, and the person needs to
+         * know that rather than see a tick.
+         */
+        resolveUser: (
+            todoId: string,
+            action: 'done' | 'thrown_back' | 'refused',
+            comment: string,
+        ) => ipcRenderer.invoke('lists:resolveUser', todoId, action, comment),
+    },
     agentInbox: {
         /** All agents in this Genie (the human owns the workstation → no scope filter). */
         directory: () => ipcRenderer.invoke('agentinbox:directory'),
@@ -1757,6 +1776,15 @@ const api = {
                 cb(payload);
             ipcRenderer.on('questions:changed', handler);
             return () => ipcRenderer.off('questions:changed', handler);
+        },
+        /** A workspace's lists changed — from an agent's `lists` MCP call or from
+         *  the panel itself. Carries the workspace so an open panel re-reads only
+         *  when it is the one being shown; both writers announce here, which is
+         *  what keeps the panel off a polling timer. */
+        listsChanged: (cb: (payload?: { workspaceId: string }) => void) => {
+            const handler = (_e: unknown, payload?: { workspaceId: string }) => cb(payload);
+            ipcRenderer.on('lists:changed', handler);
+            return () => ipcRenderer.off('lists:changed', handler);
         },
         // Customization: play a notification chime. The payload carries a
         // `sound` descriptor resolved main-side from the per-alert setting:

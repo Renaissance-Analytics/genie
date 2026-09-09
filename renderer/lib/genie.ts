@@ -359,6 +359,52 @@ export interface PendingQuestionSpec {
     createdAt?: number;
 }
 
+/** One line of an AgentList or the UserList (genie#556). */
+export interface ListItemSpec {
+    id: string;
+    text: string;
+    /** On a USER item, the agent that asked for it — and the one nudged when it
+     *  is resolved. */
+    agentName?: string;
+}
+
+/** One agent's own checklist, as the panel groups it. */
+export interface AgentListGroupSpec {
+    agentName: string;
+    items: ListItemSpec[];
+}
+
+/**
+ * A workspace's lists as the panel reads them: every agent's checklist, plus
+ * the shared list waiting on a person.
+ *
+ * `userCount` is the badge, and counts ONLY the user's items — an agent's own
+ * checklist is not the user's work and must not put a number on their header
+ * that nothing they do can clear.
+ */
+export interface WorkspaceListsSpec {
+    agents: AgentListGroupSpec[];
+    user: ListItemSpec[];
+    userCount: number;
+}
+
+/** What a person can do to a UserList item. */
+export type UserListActionSpec = 'done' | 'thrown_back' | 'refused';
+
+/**
+ * The outcome of resolving one. The resolution ALWAYS stands — the person
+ * really did the thing — so `nudge` reports separately whether the agent that
+ * asked was actually told, and a `delivered: false` carries the reason to show
+ * them. A tick over a nudge that went nowhere is the failure this reports away.
+ */
+export type ResolveUserItemSpec =
+    | {
+          ok: true;
+          todo: { id: string; text: string; agent_name: string | null };
+          nudge: { delivered: true; terminalId: string } | { delivered: false; reason: string };
+      }
+    | { ok: false; error: string };
+
 /** Pending questions grouped by workspace for the inbox panel (main-side grouping). */
 export interface WorkspaceQuestionGroupSpec {
     workspaceLabel: string;
@@ -4085,6 +4131,15 @@ export interface GenieApi {
         list: () => Promise<{ groups: WorkspaceQuestionGroupSpec[]; count: number }>;
         answer: (id: string, answers: ForceAnswerSpec[]) => Promise<boolean>;
     };
+    /** AgentList + UserList for a workspace (genie#556) — local, never in Tynn. */
+    lists: {
+        read: (workspaceId: string) => Promise<WorkspaceListsSpec>;
+        resolveUser: (
+            todoId: string,
+            action: UserListActionSpec,
+            comment: string,
+        ) => Promise<ResolveUserItemSpec>;
+    };
     agentInbox: {
         /** Every discoverable agent (the directory pane). */
         directory: () => Promise<{ agents: AgentInboxAgentInfo[] }>;
@@ -4546,6 +4601,9 @@ export interface GenieApi {
         inboxUpdated: (cb: (payload: { count: number }) => void) => () => void;
         /** PendingQuestions — a question was added / answered / deferred; refetch. */
         questionsChanged: (cb: () => void) => () => void;
+        /** A workspace's lists changed (an agent's `lists` call, or this panel);
+         *  carries the workspace so only the one on screen re-reads. */
+        listsChanged: (cb: (payload?: { workspaceId: string }) => void) => () => void;
         /** Customization: play a notification chime. The `sound` descriptor is
          *  resolved main-side from the per-alert setting (synth / bundled asset /
          *  custom data-URL); a legacy payload without it falls back to synth. */
