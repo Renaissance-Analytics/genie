@@ -211,7 +211,15 @@ describe('Genie stylesheet tokens', () => {
             { name: 'light', block: scope(':root') },
             { name: 'dark', block: scope('.dark') },
         ];
-        const INKS = ['--amber-400', '--amber-300', '--yellow-400', '--emerald-400', '--rose-400', '--violet-400'];
+        const INKS = [
+            '--amber-400',
+            '--amber-300',
+            '--yellow-400',
+            '--emerald-400',
+            '--rose-400',
+            '--violet-400',
+            '--cyan-400',
+        ];
 
         const luminance = (hex: string) => {
             const channels = [1, 3, 5]
@@ -237,6 +245,69 @@ describe('Genie stylesheet tokens', () => {
                 expect(value, `${ink} has no ${theme.name} half`).toMatch(/^#[0-9a-f]{6}$/i);
                 const ratio = contrast(value, grounds[index]);
                 if (ratio < 4.5) failures.push(`${theme.name} ${ink} ${value} on ${grounds[index]} = ${ratio.toFixed(2)}:1`);
+            }
+        }
+        expect(failures).toEqual([]);
+    });
+
+    it('keeps every SURFACE readable under the primary ink, in BOTH themes', () => {
+        // The other half of the same arithmetic, and the one genie#591 was.
+        //
+        // `--fg-1` is what `.gwrap` sets and therefore what almost everything
+        // inherits, so a ground the app paints is only usable if `--fg-1` reads
+        // on it. `--card` was `#17171d` in BOTH themes while `--fg-1` correctly
+        // flipped to `#18181b`, which is **1.01:1** — not dim text, invisible
+        // text, on 31 declarations including the toolbar project selector, every
+        // `.input`, the popovers and the upgrade modal. `--shell` was 1.09:1 and
+        // `--rail` 1.05:1 on the same reasoning.
+        //
+        // Reading both halves out of `globals.css` is what makes this assertion
+        // possible at all: a surface declared once, outside a theme scope, has no
+        // "light value" to measure — which is exactly why it was unmeasured.
+        const scope = (selector: string) => {
+            const css = sheets.find((s) => s.name.endsWith('globals.css'))!.css;
+            const open = css.indexOf(`${selector} {`);
+            return css.slice(open, css.indexOf('\n}', open));
+        };
+        const valueIn = (block: string, token: string) =>
+            new RegExp(`${token}:\\s*(#[0-9a-f]{6})`, 'i').exec(block)?.[1] ?? '';
+        const luminance = (hex: string) => {
+            const channels = [1, 3, 5]
+                .map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+                .map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+            return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+        };
+        const contrast = (a: string, b: string) => {
+            const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+            return (hi + 0.05) / (lo + 0.05);
+        };
+
+        /** Every token the sheets use as a background people read text on. */
+        const SURFACES = ['--bg-0', '--bg-1', '--bg-2', '--bg-3', '--card', '--card-hover', '--shell', '--rail'];
+
+        const themes = [
+            { name: 'light', block: scope(':root') },
+            { name: 'dark', block: scope('.dark') },
+        ];
+
+        // Positive control: the ink itself parsed, and it genuinely differs
+        // between the themes. Comparing '' to '' would pass every row below.
+        const inks = themes.map((t) => valueIn(t.block, '--fg-1'));
+        expect(inks).toEqual(['#18181b', '#fafafa']);
+
+        const failures: string[] = [];
+        for (const [index, theme] of themes.entries()) {
+            for (const surface of SURFACES) {
+                const value = valueIn(theme.block, surface);
+                expect(
+                    value,
+                    `${surface} has no ${theme.name} half in globals.css — a surface declared ` +
+                        `outside :root/.dark cannot flip, and cannot be measured either`,
+                ).toMatch(/^#[0-9a-f]{6}$/i);
+                const ratio = contrast(value, inks[index]);
+                if (ratio < 4.5) {
+                    failures.push(`${theme.name} ${surface} ${value} under --fg-1 ${inks[index]} = ${ratio.toFixed(2)}:1`);
+                }
             }
         }
         expect(failures).toEqual([]);
@@ -269,7 +340,7 @@ describe('Genie stylesheet tokens', () => {
         expect(pairs).toContain('--bg-0'); // positive control: pairs were found
 
         const redefined = new Set([...master.matchAll(/(--[\w-]+)\s*:/g)].map((m) => m[1] as string));
-        expect(pairs.filter((t) => redefined.has(t)).sort()).toEqual(['--card', '--shadow-xs']);
+        expect(pairs.filter((t) => redefined.has(t)).sort()).toEqual([]);
     });
 
     it('never reads a custom property nothing defines', () => {
