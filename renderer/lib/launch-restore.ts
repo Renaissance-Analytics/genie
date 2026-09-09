@@ -142,14 +142,22 @@ export interface LaunchSelection {
  *      window stays hidden across a relaunch, and a host window's layout is its
  *      own rather than dictated by the host's `enabled` flags. Stored ids whose
  *      spec no longer exists are dropped.
+ *      An entry whose `visibleIds` is EMPTY is a recorded preference (every panel
+ *      closed), not an absent one — only a MISSING entry reaches case 2.
  *   2. FIRST RUN for that `(connKey, workspace)` — no saved view — falls back to
- *      the workspace's ENABLED specs (today's behaviour), so nothing that was
- *      visible disappears on upgrade. A suspended (disabled) terminal stays out
- *      of the grid until explicitly re-enabled.
+ *      the workspace's ENABLED specs, so nothing that was visible disappears on
+ *      upgrade. A suspended (disabled) terminal stays out of the grid until
+ *      explicitly re-enabled. This is reported as `seeded`, because the fallback
+ *      must run exactly ONCE per pair: closes never clear the host's `enabled`,
+ *      so a second run of it would resurrect every panel the user closed
+ *      (genie#579). The caller persists the seed on seeing the flag.
+ *
+ * Either branch is then CLAMPED to `maxViews` — the cap belongs to the restored
+ * set, not only to the Add button (genie#577). See {@link clampToMaxViews}.
  *
  * Process specs are included here exactly as the original seed did — they're
  * harmless in `selected` because the grid memo filters `type === 'process'` out
- * on its own.
+ * on its own, and for the same reason they do not consume a capped slot.
  */
 export function computeLaunchSelection(args: {
     specs: TerminalSpec[];
