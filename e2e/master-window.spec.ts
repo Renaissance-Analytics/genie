@@ -339,6 +339,14 @@ test('a workspace switch never fits the panel it hid (genie#229)', async () => {
     // sayable: any entry past it is a resize that arrived while the panel was
     // off screen.
     const settled = await settledPtyGrid(seed.terminalId);
+    // The history has to be RECORDING, or the non-event below passes vacuously on
+    // an empty list. By now the pty has been fitted at least once (the create
+    // round-trip sends a grid as soon as it lands), so a zero here is the seam
+    // being dark, not a terminal that was never sized.
+    expect(
+        settled,
+        'main recorded no pty resizes at all — the non-event below would pass on nothing',
+    ).toBeGreaterThan(0);
     const onScreen = (await readPtyGrid(app, seed.terminalId))!;
 
     // The grid a VISIBLE panel measured. Stated as its own assertion because the
