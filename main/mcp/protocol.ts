@@ -1146,6 +1146,19 @@ export interface DevServiceInfo {
     /** The env keys injected into this workspace's site containers. */
     envKeys?: string[];
     error?: string;
+    /**
+     * WHEN the failure in `error` was observed (epoch ms), on a `failed` row
+     * (genie#558).
+     *
+     * `state: "failed"` is a claim about the LAST ATTEMPT, and with no moment
+     * attached it reads as the present tense forever — which is how a verdict
+     * recorded while Docker Desktop was still starting was still telling
+     * operators to restart Docker Desktop hours later, in a response that also
+     * carried Docker's own version. The stale verdict is now retired at the
+     * source when the runtime changes underneath it; this is so a reader can see
+     * the age rather than have to trust that it was.
+     */
+    failedAt?: number;
 }
 
 /** One engine the catalog offers. */
