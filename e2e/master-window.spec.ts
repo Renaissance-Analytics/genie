@@ -1,4 +1,6 @@
 import { test, expect, type ElectronApplication, type Page } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import {
     announceInboxIncoming,
     killMasterTerminals,
@@ -1199,20 +1201,40 @@ test('the Genie label carries the one update control, and the banner is gone', a
     // And it no longer sits loose in the title bar beside the icon cluster.
     await expect(page.locator('.titlebar .update-pill')).toHaveCount(0);
 
-    // When nothing is pending the label states what is RUNNING — the half of
-    // the ask that makes the wordmark worth reading. Checked against the app's
-    // own version rather than a regex, so a label showing some other build's
-    // number could not pass.
+    // The running version, read straight off disk.
+    //
+    // NOT `app.getVersion()`. In this suite that returns ELECTRON's version
+    // (42.8.1, the dependency), because Electron documents a fallback to "the
+    // version of the current bundle or executable" when the loaded app has none
+    // of its own — and these shards launch an unpackaged build. The first draft
+    // used it and failed on all three platforms against a label that was right.
+    //
+    // Unpackaged also means `updaterMode()` is phase1, so `updater:status`
+    // reports `currentVersion: readVersion()` (main/updater/git-updater.ts),
+    // which reads this same package.json. Reading the FILE rather than asking
+    // the app keeps the oracle independent of the IPC the label renders from,
+    // so this still fails on a label showing the latest version, a blank, the
+    // bare wordmark, or Electron's number.
+    const running = (
+        JSON.parse(readFileSync(path.resolve(__dirname, '..', 'package.json'), 'utf8')) as {
+            version?: string;
+        }
+    ).version;
+    expect(running, 'no version in package.json to check against').toMatch(/^\d+\.\d+\.\d+/);
+
     if ((await version.count()) === 1) {
-        const running = await app.evaluate(({ app: electronApp }) =>
-            electronApp.getVersion(),
-        );
+        // Nothing pending: the label states what is RUNNING — the half of the
+        // ask that makes the wordmark worth reading. Exact text, never a regex
+        // over any version: "it shows the version" is only a feature if it is
+        // the right one.
         await expect(version).toHaveText(`v${running}`);
     } else {
-        // The other branch: an offer names a version, and it is not the one
-        // already running — "Upgrade to" the build you have is the bug this
-        // wording replaces.
-        await expect(offer).toHaveText(/\S/);
+        // The other branch: the offer names a version, and it is NOT the one
+        // already running — "Upgrade to" the build you have is the wording this
+        // replaces. The owner asked for this string, so it is asserted as the
+        // string rather than as "some text is present".
+        await expect(offer).toHaveText(/^Upgrade to v\d/);
+        await expect(offer).not.toHaveText(`Upgrade to v${running}`);
     }
 });
 
