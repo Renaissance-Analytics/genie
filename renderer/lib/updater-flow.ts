@@ -53,11 +53,24 @@ export function planCommitStep(opts: {
      * shows an explicit "Restart & update" confirm and the user decides when.
      */
     interruptionPending?: boolean;
+    /**
+     * The drain this commit's restart started was CANCELLED (genie#565).
+     *
+     * The gate answers `draining: true` far more often than the old code did —
+     * it consults the drain on every door, including paths where the
+     * interruption probe reports nothing live. Nothing restarts; the roster
+     * takes over. If the user then cancels, the upgrade is abandoned and the
+     * commit riding it is over, so the pill must be handed back rather than
+     * left armed with no driver.
+     */
+    drainCancelled?: boolean;
 }): CommitStep {
     if (!opts.committed) return 'none';
     // The update this commit was riding is gone — failed ('error') or moot
-    // ('up-to-date'). Disarm so a future 'available' starts a fresh cycle.
+    // ('up-to-date'), or the drain holding its restart was cancelled. Disarm so
+    // a future 'available' starts a fresh cycle.
     if (opts.state === 'error' || opts.state === 'up-to-date') return 'reset';
+    if (opts.drainCancelled === true) return 'reset';
     if (opts.state === 'available' && !opts.manualDownloadUrl && !opts.applied) {
         return 'apply';
     }

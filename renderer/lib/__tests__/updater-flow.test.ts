@@ -126,3 +126,43 @@ describe('planCommitStep', () => {
         expect(planCommitStep({ ...base, state: 'applying', applied: true })).toBe('none');
     });
 });
+
+/**
+ * A CANCELLED DRAIN HANDS THE PILL BACK (genie#565).
+ *
+ * The commit driver arms `restartedRef` and calls `updater.restart()`. That
+ * call now answers `draining: true` far more often than it used to — the gate
+ * consults the drain on every door, including paths where the interruption
+ * probe reports nothing live. Nothing restarts; the roster takes over.
+ *
+ * If the user then CANCELS that drain, the upgrade is abandoned and the commit
+ * it was riding is over — exactly the condition 'reset' already exists for.
+ * Without this the pill sits committed with its ref armed and no driver, which
+ * is the wedge `planCommitStep` was given a reset step to prevent in the first
+ * place.
+ */
+describe('planCommitStep — a cancelled drain', () => {
+    const committedReady = {
+        state: 'ready-to-restart',
+        committed: true,
+        applied: true,
+        restarted: true,
+        manualDownloadUrl: null,
+    };
+
+    it('hands the pill back when the drain was cancelled', () => {
+        expect(planCommitStep({ ...committedReady, drainCancelled: true })).toBe('reset');
+    });
+
+    it('does NOT reset while the drain is still running', () => {
+        // The control. A reset here would disarm mid-drain and let the driver
+        // re-fire a restart over agents that are still being asked.
+        expect(planCommitStep({ ...committedReady, drainCancelled: false })).toBe('none');
+    });
+
+    it('ignores a cancelled drain on an uncommitted pill', () => {
+        expect(
+            planCommitStep({ ...committedReady, committed: false, drainCancelled: true }),
+        ).toBe('none');
+    });
+});

@@ -2945,6 +2945,12 @@ function UpdatePill() {
             interruptionPending:
                 status.state === 'ready-to-restart' &&
                 (status.interruption?.terminals ?? 0) > 0,
+            // The shape a CANCELLED drain leaves behind — rows, but neither
+            // running nor complete. The same test `DrainRosterFlyout` uses to
+            // take itself off screen, so the two agree on what "abandoned"
+            // means rather than each carrying its own idea.
+            drainCancelled:
+                !!drain && drain.rows.length > 0 && !drain.active && !drain.complete,
         });
         if (step === 'reset') {
             appliedRef.current = false;
@@ -2992,7 +2998,10 @@ function UpdatePill() {
             // else: the phase-2 backend applies via installWhenReady; the progress
             // display just rides its states to "Restarting…".
         }
-    }, [committed, status?.state]);
+        // `drain` is a dependency because a cancelled drain is one of the ways
+        // this commit ends, and it arrives on the drain stream rather than the
+        // updater's.
+    }, [committed, status?.state, drain]);
 
     const version = status?.latestVersion ?? '';
     const ready = status?.state === 'ready-to-restart';
