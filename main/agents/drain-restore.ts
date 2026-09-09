@@ -165,12 +165,90 @@ export function planDrainRestore(
     });
 }
 
+/** The live-state probes {@link restoreEntryIsRunning} needs, one per kind. */
+export interface DrainRestoreLiveProbes {
+    /** Is this agent's bound terminal up? Keyed by `workspace_agents.id`. */
+    agentIsLive: (agentId: string, workspaceId: string) => boolean;
+    siteIsRunning: (siteId: string) => boolean;
+    processIsRunning: (specId: string) => boolean;
+}
+
+/**
+ * PURE. Is the thing this roster entry names up RIGHT NOW?
+ *
+ * Since genie#551 the roster is written on EVERY upgrade apply rather than only
+ * on a drained one, so the ordinary case is an upgrade whose pty host survived
+ * and whose entries are all still running. The restore has to be able to say so.
+ *
+ * Agents used to be exempt from the question, on the grounds that
+ * `startRegisteredAgent` reattaches to a live agent rather than minting a second
+ * one. That is right about CORRECTNESS and wrong about COST: a warm reattach is
+ * a no-op, but it is still a START, so it spends the 3-second inter-start gap —
+ * and on a surviving-host upgrade that is the whole roster, holding the site
+ * resume behind a queue of no-ops.
+ *
+ * Each kind is asked its OWN probe. An agent id, a site id and a process spec id
+ * are three namespaces, and one shared lookup is how a live process silently
+ * suppresses a dead site that happens to share its name.
+ *
+ * A probe that throws answers "not running". Unknown must not become "everything
+ * is up", which is a restore that silently does nothing; the cost of being wrong
+ * this way is one redundant start, and for an agent that start is a reattach.
+ */
+export function restoreEntryIsRunning(
+    entry: DrainRestoreEntry,
+    probes: DrainRestoreLiveProbes,
+): boolean {
+    try {
+        if (entry.kind === 'agent') return probes.agentIsLive(entry.ref, entry.workspaceId);
+        if (entry.kind === 'site') return probes.siteIsRunning(entry.ref);
+        return probes.processIsRunning(entry.ref);
+    } catch {
+        return false;
+    }
+}
+
 export interface DrainRestoreOutcome {
     entry: DrainRestoreEntry;
     status: 'started' | 'skipped' | 'failed';
     /** Why it was skipped, or what the start threw. */
     reason?: string;
     at: number;
+}
+
+/** How many failures a notice names before it starts counting instead. */
+const RESTORE_NOTICE_NAMED = 4;
+
+/**
+ * PURE. What to TELL the user when the restore did not bring everything back
+ * (genie#551).
+ *
+ * The restore reported every non-`started` outcome to `console.log` and nowhere
+ * else. An agent that failed to come back was therefore invisible unless somebody
+ * read the main-process log — which is why this bug needed a human to notice the
+ * absence rather than Genie saying *"3 agents did not come back"*.
+ *
+ * Only a FAILURE is worth a notice. A skip is a decision the restore made
+ * correctly — *"you stopped it"*, *"it is already running"* — and surfacing those
+ * would train the user to dismiss the one that matters. `null` means say nothing.
+ */
+export function planRestoreNotice(
+    outcomes: readonly DrainRestoreOutcome[],
+): { title: string; body: string } | null {
+    const failed = outcomes.filter((o) => o.status === 'failed');
+    if (failed.length === 0) return null;
+    const lines = failed
+        .slice(0, RESTORE_NOTICE_NAMED)
+        .map((o) => `${o.entry.label} (${o.entry.kind}) — ${o.reason ?? 'no reason given'}`);
+    const rest = failed.length - lines.length;
+    if (rest > 0) lines.push(`…and ${rest} more`);
+    return {
+        title:
+            failed.length === 1
+                ? `${failed[0]!.entry.label} did not come back after the upgrade`
+                : `${failed.length} things did not come back after the upgrade`,
+        body: lines.join('\n'),
+    };
 }
 
 export interface DrainRestoreInput {

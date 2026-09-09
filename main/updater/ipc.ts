@@ -14,12 +14,13 @@ import { getChangelog, type Changelog } from './changelog';
 import { hostBackendKind, detachedHostPinsBinary } from '../terminal/host-service';
 import { liveHostTerminals } from '../terminal/quit-confirm';
 import { mobileEmit } from '../mobile/bus';
-import { restartPlanForUpgrade, type DrainSnapshot } from '../agents/drain';
+import { restartPlanForUpgrade, upgradeRosterPlan, type DrainSnapshot } from '../agents/drain';
 import {
     beginUpgradeDrain,
     cancelUpgradeDrain,
     drainSnapshot,
     markUpgradeDrainCleared,
+    recordUpgradeRoster,
     satisfyDrainRow,
     upgradeDrainCleared,
 } from '../agents/drain-service';
@@ -159,6 +160,20 @@ export function registerUpdaterIpc(): void {
     // apply HOLDS (and the pill asks the user to confirm) instead of silently
     // killing live agent terminals during an upgrade.
     a.setInterruptionProbe(describeRestartInterruption);
+    // THE RESTORE LIST, ON EVERY APPLY (genie#551). `describeRestartInterruption`
+    // above answers *"will the swap tear the pty host down?"*, and reports zero
+    // whenever the host is expected to survive — so `restartPlanForUpgrade` plans
+    // `apply`, no drain runs, and the roster the drain used to write is never
+    // written at all. When the host then does not survive, every running agent is
+    // gone and unrecorded. Recording is therefore not the drain's job: it is the
+    // APPLY's, and this is the one seam every apply reaches.
+    a.setBeforeApply(() => {
+        // A drain that CLEARED already wrote its roster, before the nudges, which
+        // is the snapshot that matters — those agents have since stopped, so
+        // re-recording would replace a correct list with an empty one.
+        if (upgradeRosterPlan({ drainCleared: upgradeDrainCleared() }) !== 'record') return;
+        recordUpgradeRoster();
+    });
 
     // Kick off automatic checks for the ACTIVE backend. Packaged builds
     // (phase2) previously never auto-polled — updates only showed after a

@@ -201,6 +201,37 @@ export function shutdownReadinessPlan(input: {
     return input.forUpdate && input.drainCleared ? 'skip' : 'ask';
 }
 
+/**
+ * PURE. Does this upgrade apply need to write a RESTORE LIST first? (genie#551)
+ *
+ * genie#389 wrote the roster inside {@link restartPlanForUpgrade}'s `drain`
+ * branch, which made *"we recorded what was running"* a consequence of *"we
+ * decided to nudge the agents"*. They are different questions, and the second is
+ * answered from `describeRestartInterruption()` — a probe of what the installer
+ * swap TEARS DOWN, which reports zero whenever the pty host is expected to
+ * survive it (a service host, or a detached host on the standalone Node runtime,
+ * which is what Genie falls back to when the OS service cannot be installed).
+ *
+ * On those machines the plan is always `apply`, so no drain ever runs and no
+ * roster is ever written. When the host then does NOT survive — an installer
+ * that reaped it, a relaunch that could not reattach and spawned a fresh one —
+ * every running agent is gone with nothing recording that it had been there.
+ * That is genie#551: *"Agents don't restart after an upgrade if they are
+ * forcefully shutdown unless I click on their workspace."*
+ *
+ * So RECORDING is unconditional on the apply path. It costs one row set that the
+ * next boot consumes, and a roster whose entries all survived is a restore of
+ * no-ops — each entry reports itself already running and is skipped.
+ *
+ * `keep` is the ONE exception, and it matters: the drain writes its roster
+ * BEFORE the first nudge, so by the time it has cleared, the agents it recorded
+ * have stopped. Re-recording there would replace a correct list with an empty
+ * one — the same bug, arrived at from the other side.
+ */
+export function upgradeRosterPlan(input: { drainCleared: boolean }): 'record' | 'keep' {
+    return input.drainCleared ? 'keep' : 'record';
+}
+
 /** Cancels an armed deadline. */
 type Cancel = () => void;
 

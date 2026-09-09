@@ -20,6 +20,7 @@ import { agentModeFor } from './agent-mode-source';
 import { AgentDrain, drainableAgents, type DrainSnapshot, type DrainTarget } from './drain';
 import {
     drainRosterFrom,
+    restoreEntryIsRunning,
     runDrainRestore,
     type DrainRestoreEntry,
     type DrainRestoreOutcome,
@@ -116,6 +117,32 @@ function runningProcesses(): {
 }
 
 /**
+ * Write the restore list: every agent, site and background process running NOW.
+ *
+ * Called from TWO places, because there are two ways an upgrade reaches the
+ * installer and both need the list (genie#551):
+ *
+ *  - {@link beginUpgradeDrain}, before the first nudge; and
+ *  - the pre-apply seam in `updater/ipc.ts`, for every apply that did NOT drain
+ *    — which, on a machine whose pty host is expected to survive the swap, is
+ *    every apply there is.
+ *
+ * Recording is cheap and idempotent (it REPLACES), and an entry that turns out
+ * to have survived is skipped by the restore rather than restarted. Recording is
+ * therefore always the safe direction; NOT recording is the one that loses work.
+ */
+export function recordUpgradeRoster(agents: DrainTarget[] = collectDrainTargets()): void {
+    recordDrainRoster(
+        getDb(),
+        drainRosterFrom({
+            agents,
+            sites: runningSites(),
+            processes: runningProcesses(),
+        }),
+    );
+}
+
+/**
  * Start the drain: record what is running, then nudge every agent.
  *
  * The roster is written BEFORE the first nudge, deliberately. Everything after
@@ -126,14 +153,9 @@ function runningProcesses(): {
  */
 export function beginUpgradeDrain(opts: { stuckAfterMs?: number } = {}): Promise<DrainSnapshot> {
     const targets = collectDrainTargets();
-    recordDrainRoster(
-        getDb(),
-        drainRosterFrom({
-            agents: targets,
-            sites: runningSites(),
-            processes: runningProcesses(),
-        }),
-    );
+    // The same targets it is about to nudge — collected once, so the roster and
+    // the drain can never disagree about who was running.
+    recordUpgradeRoster(targets);
     return agentUpgradeDrain.begin(targets, opts);
 }
 
@@ -291,31 +313,32 @@ export async function runPendingDrainRestore(
                     }
                 },
                 // Already up? The roster is written BEFORE the upgrade, so a
-                // launch can find one for things that were never stopped — a
-                // crash in between, or a restart the user backed out of. Only
-                // sites and processes can be in that state and be RESTARTED by
-                // a redundant start; `startRegisteredAgent` reattaches to a
-                // live agent rather than minting a second one, so an agent
-                // needs no equivalent check.
-                alreadyRunning: (entry) => {
-                    try {
-                        if (entry.kind === 'process') {
-                            return getProcessStatuses()[entry.ref] === 'running';
-                        }
-                        if (entry.kind === 'site') {
-                            return (
-                                devSiteManager()
-                                    ?.list()
-                                    .find((row) => row.siteId === entry.ref)?.state === 'running'
+                // launch routinely finds one for things that were never
+                // stopped: a crash in between, a restart the user backed out
+                // of, or — since genie#551 records on every apply — an upgrade
+                // whose pty host survived, where the whole roster is still up.
+                //
+                // This used to exempt AGENTS, because a redundant start is a
+                // warm reattach rather than a second agent. True, and beside
+                // the point: that no-op is still a START, so it spends the
+                // 3-second gap, and on a surviving-host upgrade that is every
+                // row on the list holding up the site resume behind it.
+                alreadyRunning: (entry) =>
+                    restoreEntryIsRunning(entry, {
+                        agentIsLive: (agentId, workspaceId) => {
+                            const agent = listWorkspaceAgents(workspaceId).find(
+                                (row) => row.id === agentId,
                             );
-                        }
-                    } catch {
-                        // Unknown is NOT running: the cost of being wrong here
-                        // is one redundant restart, and the cost of the other
-                        // default is a restore that silently does nothing.
-                    }
-                    return false;
-                },
+                            return (
+                                !!agent?.terminal_spec_id && isTerminalLive(agent.terminal_spec_id)
+                            );
+                        },
+                        siteIsRunning: (siteId) =>
+                            devSiteManager()
+                                ?.list()
+                                .find((row) => row.siteId === siteId)?.state === 'running',
+                        processIsRunning: (specId) => getProcessStatuses()[specId] === 'running',
+                    }),
             },
             ...(opts.gapMs !== undefined ? { gapMs: opts.gapMs } : {}),
             start: (entry) => startDrainEntry(entry, starters),
