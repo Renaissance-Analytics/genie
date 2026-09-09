@@ -328,17 +328,15 @@ export default function ListsFlyout({
                 >
                     <IconPin size={14} />
                 </button>
-                {!pinned && (
-                    <button
-                        type="button"
-                        className="gicon"
-                        onClick={onClose}
-                        title="Close lists"
-                        aria-label="Close lists"
-                    >
-                        <IconX />
-                    </button>
-                )}
+                <button
+                    type="button"
+                    className="gicon"
+                    onClick={onClose}
+                    title={pinned ? 'Hide lists (stays docked next time)' : 'Close lists'}
+                    aria-label="Hide lists"
+                >
+                    <IconX />
+                </button>
             </div>
             <div className="lists-body">
                 <ListsBody
@@ -355,7 +353,13 @@ export default function ListsFlyout({
     // Docked, it is part of the layout: no scrim (the Floor stays usable beside
     // it) and no slide transform. `.gwrap.lists-docked` reserves the width, so
     // this covers nothing.
+    //
+    // `open` still gates it. The two flags mean different things — `open` is
+    // "the panel is showing", `pinned` is "when it shows, dock it" — and
+    // ignoring `open` here left the header icon toggling a state with no
+    // visible effect for as long as the panel was docked.
     if (pinned) {
+        if (!open) return null;
         return (
             <aside className="lists-dock" aria-label="Lists">
                 {body}

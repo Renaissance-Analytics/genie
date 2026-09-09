@@ -560,11 +560,21 @@ function MasterInner() {
     const [listsPinned, setListsPinned] = useState(false);
     useEffect(() => {
         try {
-            setListsPinned(window.localStorage.getItem(LISTS_PIN_KEY) === '1');
+            if (window.localStorage.getItem(LISTS_PIN_KEY) === '1') {
+                setListsPinned(true);
+                // A panel that was docked when the window closed comes back
+                // docked. Restoring the preference but not the panel would
+                // leave the pin set with nothing on screen to show for it.
+                setListsOpen(true);
+            }
         } catch {
             /* a browser with storage blocked simply starts unpinned */
         }
     }, []);
+    // The two flags stay separate on purpose: `listsOpen` is "the panel is
+    // showing", `listsPinned` is "when it shows, dock it rather than float it".
+    // Folding them together is what made the header icon a dead control while
+    // the panel was docked — it toggled a state nothing rendered.
     const toggleListsPin = useCallback(() => {
         setListsPinned((was) => {
             const now = !was;
@@ -573,10 +583,9 @@ function MasterInner() {
             } catch {
                 /* the pin still applies for this session */
             }
-            // Docking makes the panel permanent, so the transient "open" state
-            // stops meaning anything; clear it so unpinning doesn't leave a
-            // flyout hanging open over the Floor.
-            if (now) setListsOpen(false);
+            // Pinning is done FROM the open panel, so it stays open: changing
+            // HOW it is shown must never be a way to lose it.
+            setListsOpen(true);
             return now;
         });
     }, []);
@@ -2244,7 +2253,7 @@ function MasterInner() {
     }
 
     return (
-        <div className={`gwrap${listsPinned ? ' lists-docked' : ''}`} id="app">
+        <div className={`gwrap${listsPinned && listsOpen ? ' lists-docked' : ''}`} id="app">
             {/* TWO FULL-HEIGHT COLUMNS:
                   LEFT  — the workspace chooser (icon rail + search/list
                           sidebar), under a drag strip that owns the window's

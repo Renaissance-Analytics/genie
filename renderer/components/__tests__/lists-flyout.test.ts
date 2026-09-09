@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { ListsBody, type ListsBodyProps } from '../Master/ListsFlyout';
+import ListsFlyout, { ListsBody, type ListsBodyProps } from '../Master/ListsFlyout';
 import type { WorkspaceListsSpec } from '../../lib/genie';
 
 /**
@@ -139,5 +139,47 @@ describe('the nudge outcome is reported, never assumed', () => {
         });
         expect(html).toMatch(/not running in this workspace/);
         expect(html).not.toMatch(/notified alpha|alpha was told/i);
+    });
+});
+
+/**
+ * `open` and `pinned` mean different things, and the panel has to honour both.
+ *
+ * `open` is "the panel is showing"; `pinned` is "when it shows, dock it rather
+ * than float it". Folding them together made the header icon a DEAD CONTROL for
+ * as long as the panel was docked — it toggled a state nothing rendered, which
+ * is the worst kind of broken button because it looks fine.
+ */
+const shell = (over: { open: boolean; pinned: boolean }): string =>
+    renderToStaticMarkup(
+        React.createElement(ListsFlyout, {
+            workspaceId: 'ws-1',
+            onClose: () => {},
+            onTogglePin: () => {},
+            ...over,
+        }),
+    );
+
+describe('showing and docking are two different switches', () => {
+    it('docks when it is pinned AND showing', () => {
+        expect(shell({ open: true, pinned: true })).toContain('lists-dock');
+    });
+
+    it('renders NOTHING when pinned but hidden — the icon must still hide it', () => {
+        expect(shell({ open: false, pinned: true })).toBe('');
+    });
+
+    it('floats over the Floor when it is showing and not pinned', () => {
+        const html = shell({ open: true, pinned: false });
+        expect(html).toContain('docs-flyout');
+        expect(html).not.toContain('lists-dock');
+    });
+
+    it('keeps the unpinned flyout mounted but closed, so it can slide in', () => {
+        // The flyout animates on `.open`, so unlike the dock it stays in the
+        // tree — asserting "" here instead would pin the wrong mechanism.
+        const html = shell({ open: false, pinned: false });
+        expect(html).toContain('docs-flyout-root');
+        expect(html).not.toContain('docs-flyout-root open');
     });
 });
