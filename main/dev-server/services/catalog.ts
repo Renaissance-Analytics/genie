@@ -36,7 +36,7 @@ import { workspaceSlugFor } from '../argv';
  *     boundary: anyone holding root could delete anyone's bucket, an installed
  *     Genie App's included. MinIO has a real mechanism, so it uses it.
  *   - **`namespace`** (Meilisearch, Mailpit) — the owner's decision for these
- *     two is a per-workspace **namespace** (index prefix / inbox), not a
+ *     two is a per-workspace **namespace** (index prefix / inbox tag), not a
  *     per-workspace credential. Say so plainly rather than implying an isolation
  *     that is not there: workspaces sharing one of these share its master key,
  *     and separation is by name. Meilisearch could be scoped the same way MinIO
@@ -281,7 +281,7 @@ const MAILPIT: EngineSpec = {
     runtime: 'container',
     label: 'Mailpit',
     summary:
-        'Catch-all SMTP + a web inbox. Shared instance; each workspace tags its mail with its own namespace.',
+        'Catch-all SMTP + a web inbox. Shared instance; Genie injects a plus-addressed From that Mailpit tags with the workspace namespace. An app that sets its own From needs GENIE_MAIL_TAG in an X-Tags header.',
     // Mailpit publishes `v<major>.<minor>` and `latest` — there is NO bare
     // `v1`, unlike Meilisearch. `v1` 404s at the registry, which is a failure
     // that no unit test can see and that the live smoke found on the first run.

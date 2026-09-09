@@ -156,6 +156,27 @@ describe('the catalog', () => {
         expect(engineSpecFor('mailpit').provision).toBe('namespace');
     });
 
+    /**
+     * MAILPIT'S NAMESPACE DEPENDS ON A DEFAULT (genie#552).
+     *
+     * The workspace tag is carried by a plus address in the From, and Mailpit
+     * applies it only because auto-tagging from plus addresses is ON BY DEFAULT.
+     * `MP_TAGS_DISABLE=plus-addresses` would switch it off silently: the env
+     * would still be injected, `env-wiring.test.ts` would still be green, and
+     * every workspace's mail would land untagged in the shared inbox.
+     *
+     * So the thing worth asserting is the ABSENCE — see the note in
+     * `env-wiring.ts`. This test is not vacuous: adding
+     * `MP_TAGS_DISABLE: 'plus-addresses'` to Mailpit's `adminEnv` turns it red.
+     */
+    it('never disables the Mailpit auto-tagging the workspace namespace rides on', () => {
+        const env = engineSpecFor('mailpit').adminEnv?.('unused') ?? {};
+        // Positive control for the accessor itself: an empty object would pass
+        // the assertion below while proving nothing.
+        expect(env.MP_DATABASE).toBe('/data/mailpit.db');
+        expect(env.MP_TAGS_DISABLE).toBeUndefined();
+    });
+
     it('forces the generic escape hatch to be DEDICATED', () => {
         // A caller-supplied image has no multi-tenant story, so it cannot be
         // shared between workspaces.

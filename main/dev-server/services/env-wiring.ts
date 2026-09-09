@@ -53,6 +53,18 @@ export interface ProvisionedService {
     customEnv?: Record<string, string>;
 }
 
+/**
+ * The two halves of the plus address that carries a workspace's mail tag.
+ *
+ * Split out because the SHAPE is the contract, not the strings: Mailpit derives
+ * the tag from everything between the first `+` and the `@`, so anything that
+ * changes this address changes what the inbox can find. Tag characters are
+ * limited to `a-zA-Z0-9-._@` and spaces, 1-100 of them — a superset of what
+ * `workspaceSqlIdentifier` can produce, which is why the identifier goes in raw.
+ */
+const MAIL_TAG_LOCAL_PART = 'genie';
+const MAIL_TAG_DOMAIN = 'mail.gen';
+
 /** Which relational engine owns `DATABASE_URL` / `DB_*` when there are two. */
 const RELATIONAL_PRIORITY: readonly ServiceEngine[] = ['postgres', 'mysql'];
 
@@ -224,6 +236,44 @@ export function serviceEnv(entries: ProvisionedService[]): Record<string, string
                     MAIL_MAILER: 'smtp',
                     MAIL_HOST: host,
                     MAIL_PORT: String(port),
+                    // THE NAMESPACE (genie#552). The catalog has always called
+                    // Mailpit a `namespace` engine — "each workspace tags its
+                    // mail with its own namespace" — and until this line nothing
+                    // did it: every workspace on the shared instance sent into
+                    // one undifferentiated inbox with nothing marking which one
+                    // a message came from.
+                    //
+                    // The tag rides on a PLUS ADDRESS rather than a convention
+                    // Genie invented, because Mailpit already reads one: it tags
+                    // any message carrying `<name>+<tag>@<domain>` in From, To,
+                    // Cc or Bcc, and that auto-tagging is ON BY DEFAULT. It is
+                    // documented from Mailpit v1.19 (the release that added the
+                    // opt-OUT), and Genie's lowest pin is v1.30 — so every image
+                    // this catalog can run has it, and `MP_TAGS_DISABLE`, which
+                    // Genie does not set, is the only thing that turns it off.
+                    // So ONE variable every mail
+                    // framework already reads becomes a real `tag:` the inbox
+                    // can filter on, with no cooperation from the app and no
+                    // change to the running engine.
+                    //
+                    // `mail.gen` is a sink, not a route: `.gen` is Genie's own
+                    // TLD and site vhosts are `<name>.<workspace>.gen`, so this
+                    // collides with nothing and resolves nowhere — which is
+                    // correct for an address a catch-all never replies to.
+                    MAIL_FROM_ADDRESS: `${MAIL_TAG_LOCAL_PART}+${slice.identifier}@${MAIL_TAG_DOMAIN}`,
+                    // THE HOLE, named. An app that sets its OWN From — many do,
+                    // in code rather than in env — defeats the plus address, and
+                    // nothing Genie injects can stop it. This is the tag such an
+                    // app puts in an `X-Tags` header (Mailpit's other default
+                    // auto-tag route) to stay attributable; it is the SAME token
+                    // the plus address carries, so the inbox filters on one name
+                    // whichever route delivered it.
+                    //
+                    // An app that does neither is genuinely unattributable. That
+                    // is a fact about the mail, not a gap to paper over: it has
+                    // to surface as untagged rather than be guessed at, or the
+                    // inbox shows one workspace's mail to another.
+                    GENIE_MAIL_TAG: slice.identifier,
                 });
                 break;
             }
