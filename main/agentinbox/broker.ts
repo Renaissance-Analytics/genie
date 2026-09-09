@@ -331,12 +331,16 @@ export class AgentInboxBroker {
     /**
      * Is a harness-native transport bound for this agent RIGHT NOW?
      *
-     * The PTY notice and the unread backstop exist for one case only: an agent
-     * running in a terminal with no channel of its own. `transportSink` answers
-     * that at delivery time, but the backstop is armed from {@link markTurnEnd},
-     * where no message is in hand and the sink is never consulted — which is how
-     * an attached agent could still be woken at its prompt five minutes on
-     * (genie#344).
+     * A ROUTE, never a receipt. It says mail has somewhere else to go, which is
+     * enough to keep the IMMEDIATE notice off the agent's keyboard: a second
+     * copy of something its channel is already carrying, typed where nothing can
+     * tell it from the human, is the noise genie#344 removed.
+     *
+     * It is NOT enough to decide the message arrived, and it no longer stands in
+     * for that. The unread deadline ({@link scheduleNudge}) asks whether the
+     * agent READ its mail and answers from the cursor, whatever is bound —
+     * because a bound channel that delivers nothing is exactly the case with no
+     * other way out (genie#549).
      *
      * Injected by the host (background.ts reads the transport registry).
      * Unwired → false, so a build with no transports keeps the PTY fallback
@@ -526,11 +530,14 @@ export class AgentInboxBroker {
     /**
      * The PTY-nudge FALLBACK, and when it is allowed to fire.
      *
-     * `deliverToHarness` owns live delivery: an agent attached to Genie's
-     * services gets its mail natively and its cursor moves, so none of this
-     * runs. What this covers is the case the owner named — an agent RUNNING in a
-     * terminal but not attached, where the durable message would otherwise sit
-     * unread with the sender seeing nothing but a stale read-receipt.
+     * What it covers is the case the owner named — a durable message sitting
+     * unread while the sender sees nothing but a stale read-receipt. It used to
+     * be scoped to agents with no harness channel, on the reasoning that an
+     * attached one gets its mail natively and its cursor moves on its own. The
+     * first half is a hope and the second is the only observable, so this is now
+     * armed for EVERY agent and gated on the observable alone (genie#549): a
+     * channel that delivers keeps its agent's cursor moving and never reaches
+     * the deadline; one that silently delivers nothing has no other way out.
      *
      * Two gates, and both must pass:
      *
@@ -547,13 +554,19 @@ export class AgentInboxBroker {
      */
     private scheduleNudge(target: AgentInboxAgent): void {
         if (!this.wakeSink || !target.terminalId) return;
-        // An attached agent's unread mail is its channel's to deliver, on its own
-        // schedule. Arming a deadline against it would put "you have N unread"
-        // at a prompt Genie has no business typing into.
-        if (this.harnessOwnsDelivery(target)) {
-            this.clearNudge(target);
-            return;
-        }
+        // Deliberately NOT gated on whether a harness transport is bound
+        // (genie#549). It used to be: an attached agent's mail was "its
+        // channel's to deliver", so the deadline was cleared the moment a
+        // binding existed. But `harnessOwnsDelivery` answers "is there a route",
+        // and everything below asks "did the agent READ it" — a strictly
+        // stronger claim no binding can support. A Claude Channel whose
+        // notifications Claude Code never registered a handler for stays bound
+        // and polling while it delivers nothing, and clearing the deadline for
+        // it removed the last thing that would ever ask again.
+        //
+        // The gate that matters is the one already here: mail past the agent's
+        // cursor, unchecked for five minutes. A channel that works never reaches
+        // it, because the agent's own read clears it first.
         const unread = target.inbox.filter((m) => m.seq > target.cursor);
         if (unread.length === 0) {
             this.clearNudge(target);
@@ -604,9 +617,10 @@ export class AgentInboxBroker {
      *  failed inject leaves the mail queued for the next deadline. */
     private fireNudge(target: AgentInboxAgent): void {
         if (!this.wakeSink || !target.terminalId) return;
-        // Re-checked at the deadline, not just when it was armed: a channel that
-        // came up in between owns this agent now.
-        if (this.harnessOwnsDelivery(target)) return;
+        // No transport check here either, and for the same reason as in
+        // {@link scheduleNudge}: a channel that came up in between is a route
+        // this mail has demonstrably not travelled, since the cursor would have
+        // moved and cleared the deadline if it had.
         const safe = shouldWakeAgent({
             lastTurnEndAt: target.lastTurnEndAt,
             lastOutputAt: target.lastOutputAt,
@@ -1221,6 +1235,22 @@ export class AgentInboxBroker {
                 // is attached, and treating that as a refusal would inject a
                 // PTY notice for mail the agent already has.
                 this.notAttached(agent, msg);
+            } else {
+                // TOOK IT, and cannot say it arrived (the pull adapters). A
+                // route is not a receipt: the Claude Channel writes a
+                // notification Claude Code may never register a handler for, and
+                // no signal comes back either way (genie#549).
+                //
+                // So no notice — the agent probably has it, and a second copy
+                // typed at its prompt is the noise genie#344 removed — but the
+                // unread DEADLINE arms, exactly as it does for an unattached
+                // agent. It costs nothing when the channel works, because the
+                // agent's own read clears it long before it is due; and when the
+                // channel silently delivered nothing, it is the only thing that
+                // ever asks again. Without it, mail handed to a dead channel had
+                // no recovery path at all — six upgrade notices and a human's
+                // answer sat unseen for five days that way.
+                this.scheduleNudge(agent);
             }
         } catch {
             /* durable inbox remains queued; the PTY is the only way to say so */

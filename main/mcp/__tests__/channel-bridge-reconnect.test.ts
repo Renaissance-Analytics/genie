@@ -35,8 +35,14 @@ interface StubEndpoint {
     registrations: number;
     /** Hand the bridge's waiting long-poll a message. */
     push: (message: { id: string; seq: number; text: string }) => void;
-    /** Cursors the bridge has ACKed, in order. */
+    /** Cursors the bridge has ACKed, in order. Empty since genie#549 — a
+     *  transport does not commit the agent's read cursor — and kept because
+     *  "it acknowledged nothing" is now part of the contract. */
     acks: number[];
+    /** The `cursor` each `receive` asked from; `null` when it asked from its
+     *  durable position instead. This is what "resumes where it left off" is
+     *  visible as, now that no ACK marks the spot. */
+    receiveCursors: (number | null)[];
     /** Kill it the way an upgrade does: stop listening AND cut live sockets. */
     kill: () => Promise<void>;
 }
@@ -60,7 +66,7 @@ function startStub(port: number, opts: { status?: number } = {}): Promise<StubEn
     const sockets = new Set<import('net').Socket>();
     let waiting: http.ServerResponse | null = null;
     const queue: { id: string; seq: number; text: string }[] = [];
-    const state = { registrations: 0, acks: [] as number[] };
+    const state = { registrations: 0, acks: [] as number[], receiveCursors: [] as (number | null)[] };
 
     const flush = (): void => {
         if (!waiting || queue.length === 0) return;
@@ -95,6 +101,9 @@ function startStub(port: number, opts: { status?: number } = {}): Promise<StubEn
                 return;
             }
             if (args.action === 'receive') {
+                state.receiveCursors.push(
+                    Object.prototype.hasOwnProperty.call(args, 'cursor') ? Number(args.cursor) : null,
+                );
                 if (queue.length > 0) {
                     const messages = queue.splice(0).map((m) => ({ ...m, from: 'genie:system', kind: 'dm' }));
                     res.end(rpcText(rpc.id, { messages }));
@@ -122,6 +131,9 @@ function startStub(port: number, opts: { status?: number } = {}): Promise<StubEn
                 },
                 get acks() {
                     return state.acks;
+                },
+                get receiveCursors() {
+                    return state.receiveCursors;
                 },
                 push: (message) => {
                     queue.push(message);
@@ -259,20 +271,30 @@ describe('the AgentInbox channel bridge survives an upgrade (genie#346)', () => 
 
         await until(() => stub.registrations === 1);
         stub.push({ id: 'm1', seq: 7, text: 'seq seven' });
-        await until(() => stub.acks.includes(7));
+        await until(() => bridge.delivered.length === 1);
 
         await stub.kill();
         const replacement = await startStub(port);
         cleanup.push(() => void replacement.kill());
         await until(() => replacement.registrations >= 1);
+        await until(() => replacement.receiveCursors.length >= 1);
 
         // The durable inbox re-queues undelivered mail on the broker's side; the
         // bridge's job is to ask from where it left off rather than from zero,
         // which is what stops the whole backlog being re-read on every upgrade.
+        //
+        // Since genie#549 that position is the bridge's own write mark rather
+        // than an ACK it made the server commit, so the surviving state is read
+        // straight off the poll: the FIRST receive against the replacement asks
+        // from 7, not from 0 and not from nowhere.
+        expect(replacement.receiveCursors[0]).toBe(7);
+
         replacement.push({ id: 'm2', seq: 8, text: 'seq eight' });
         await until(() => bridge.delivered.length === 2);
-        await until(() => replacement.acks.includes(8));
         expect(bridge.delivered).toEqual(['seq seven', 'seq eight']);
+        // …and it never asked the server to mark either of them read. That is
+        // the agent's to say, and this process cannot know it.
+        expect([...stub.acks, ...replacement.acks]).toEqual([]);
     }, 40_000);
 
     it('does NOT retry an endpoint that refuses it — that is config, not an upgrade', async () => {

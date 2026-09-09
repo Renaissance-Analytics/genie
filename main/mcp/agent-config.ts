@@ -125,7 +125,16 @@ export function claudeChannelBridge(): string {
 
 const endpoint = process.env.GENIE_MCP_URL;
 let requestId = 1;
-let cursor = 0;
+/**
+ * How far THIS PROCESS has written, and nothing more (genie#549).
+ *
+ * Not a read receipt and not the agent's cursor: the durable one lives on the
+ * server and only the agent moves it. This is here purely so the next poll asks
+ * for what comes after the last line we wrote. \`null\` means "we have written
+ * nothing yet", which is a different question from "start at zero" — see the
+ * poll in \`deliver()\`.
+ */
+let handedOff = null;
 let stopped = false;
 let running = false;
 
@@ -156,7 +165,22 @@ function fatal(message) {
     return error;
 }
 
-function writeAccepted(message) {
+/**
+ * Put a line on stdout, and resolve when the WRITE completes. That is all it
+ * proves — the bytes reached the pipe (genie#549).
+ *
+ * It was called \`writeAccepted\`, and the cursor was advanced on it. But
+ * \`notifications/claude/channel\` is a JSON-RPC NOTIFICATION: Claude Code
+ * registers a handler for it and answers nothing, by design, so there is no
+ * reply to await and nothing here can ever fail. Worse, whether that handler
+ * exists at all is decided by a gate we cannot see — the negotiated protocol
+ * era, the provider, a feature flag, org policy, the \`--channels\` list, the
+ * plugin allowlist — and every refusal is silent. So a successful write says
+ * nothing whatsoever about whether a model ever saw the message.
+ *
+ * The name is now what it does. Nothing built on it may claim more.
+ */
+function writeToStdout(message) {
     return new Promise((resolve, reject) => {
         process.stdout.write(JSON.stringify(message) + '\\n', (error) => error ? reject(error) : resolve());
     });
@@ -211,10 +235,17 @@ async function deliver(onConnected) {
     if (onConnected) onConnected();
     while (!stopped) {
         const result = await agentInbox({
-            action: 'receive', cursor, wait: true, timeoutMs: 240000, acknowledge: false
+            // NO cursor on the first poll of the process, deliberately. Omitting
+            // it means "since I last read" on the broker — the agent's own
+            // DURABLE cursor — so anything an earlier session was handed but
+            // never acknowledged is re-offered to this one instead of being
+            // silently skipped. Sending 0 is the opposite mistake: an explicit
+            // cursor wins outright there, so it re-reads the whole inbox.
+            action: 'receive', ...(handedOff === null ? {} : { cursor: handedOff }),
+            wait: true, timeoutMs: 240000, acknowledge: false
         });
         for (const message of result.messages || []) {
-            await writeAccepted({
+            await writeToStdout({
                 jsonrpc: '2.0',
                 method: 'notifications/claude/channel',
                 params: {
@@ -227,8 +258,18 @@ async function deliver(onConnected) {
                     },
                 },
             });
-            cursor = Number(message.seq || cursor);
-            await agentInbox({ action: 'acknowledge', cursor });
+            // Our own position, and nothing more. It exists so the next poll
+            // asks for what comes AFTER this message rather than for this one
+            // again — a hot loop, and the failure genie#393 was about.
+            //
+            // What it deliberately does NOT do is tell the server the agent has
+            // read it. That is a claim only the reader can make, and this
+            // process cannot: see writeToStdout. The agent commits its own
+            // cursor by CALLING receive, which the imDone mail line asks it to
+            // do whenever anything is unread. Until it does, the message stays
+            // unread — and Genie's five-minute backstop will say so at the
+            // prompt if the channel turns out to have delivered nothing.
+            handedOff = Number(message.seq || handedOff || 0);
         }
     }
 }
@@ -250,8 +291,12 @@ async function deliver(onConnected) {
  * an hour while an agent terminal stays open, and a bridge that had given up
  * would never notice it came back.
  *
- * \`cursor\` is module state and is preserved across reconnects, so the channel
- * resumes where it left off instead of re-reading the whole backlog.
+ * \`handedOff\` is module state and is preserved across RECONNECTS, so a channel
+ * that comes back after an upgrade resumes where it left off instead of
+ * re-writing the whole backlog. It is deliberately NOT preserved across a
+ * process restart: a new bridge is a new Claude Code session, and whatever the
+ * old one wrote may have gone nowhere, so that session starts from the agent's
+ * durable cursor and is re-offered anything still unread (genie#549).
  */
 async function run() {
     if (running) return;

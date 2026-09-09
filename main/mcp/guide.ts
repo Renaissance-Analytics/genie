@@ -558,6 +558,14 @@ For Codex, Genie automatically installs a SessionStart hook that sends Codex's g
   blocking \`receive\` is what actually hands you the message either way. A message
   that carries files has an \`attachments\` array on it (\`id\`, \`filename\`,
   \`bytes\`, \`mime\`) — that \`id\` is what you save with.
+
+  **Your \`receive\` is what marks mail READ, and nothing else can.** A message
+  pushed to your harness channel lands in your prompt but stays UNREAD until you
+  call this — deliberately, since no transport can prove you saw it (genie#549).
+  So when \`imDone\` reports unread mail, call \`receive\` even if you believe you
+  already have it. The cursor also REWINDS: pass a \`cursor\` BELOW your last read
+  position (with \`acknowledge: false\` to leave it unread) to recover a message
+  you suspect was marked read without ever reaching you.
 - \`saveAttachment\` — write a received file into **your own workspace**:
   \`attachmentId\` (from a message's \`attachments\`), optional \`path\` (a folder, or
   a trailing slash, means "land in here" under the original name; omit it to save
