@@ -1674,7 +1674,10 @@ export interface AgentInboxRequest {
     wait?: boolean;
     /** receive (optional): long-poll window in ms (default ~55s, capped). */
     timeoutMs?: number;
-    /** Native adapters fetch without ACK, then acknowledge after harness acceptance. */
+    /** receive (optional): `false` fetches without advancing the durable read
+     *  cursor, leaving the message unread and re-offered. A PULL transport uses
+     *  it to carry mail it cannot prove was delivered — and, since it cannot,
+     *  the `acknowledge` ACTION refuses it thereafter (genie#549). */
     acknowledge?: boolean;
     /** setAccessibility: who can see/DM you. */
     scope?: AgentInboxScope;
@@ -2805,11 +2808,13 @@ const AGENTINBOX_TOOL = {
             },
             cursor: {
                 type: 'number',
-                description: 'receive: page from this cursor; acknowledge: commit this cursor after native harness acceptance.',
+                description:
+                    'receive (optional): page from this cursor instead of from your last read position. Pass one BELOW that position to RE-READ a message you believe you missed — the read cursor can be rewound, and that is the recovery path when something was marked read without reaching you.',
             },
             acknowledge: {
                 type: 'boolean',
-                description: 'receive (internal native adapters): false fetches without advancing the durable read cursor.',
+                description:
+                    'receive (optional): false fetches WITHOUT advancing your durable read cursor, so the message stays unread and is offered again. Reading normally (the default) is what commits it — nothing else may commit it for you.',
             },
             wait: {
                 type: 'boolean',

@@ -28,9 +28,14 @@ export type HarnessTransportDelivery =
  *  - `push` — Genie calls the adapter's `send` and learns from its promise
  *    whether the harness took the message (Codex App Server).
  *  - `pull` — the harness holds a blocking `receive` on the durable inbox and
- *    ACKs itself once its own output has accepted the notification (the Claude
- *    Channel bridge). Genie has no pipe into that process, so there is nothing
- *    to push to: the binding exists to say the channel is LIVE.
+ *    carries the message the last hop itself (the Claude Channel bridge). Genie
+ *    has no pipe into that process, so there is nothing to push to: the binding
+ *    exists to say the channel is LIVE.
+ *
+ *    It ACKs nothing, and may not (genie#549). Its last hop is a JSON-RPC
+ *    NOTIFICATION with no reply, so it can prove a write and never a delivery —
+ *    the read cursor stays the agent's own to commit, and unread mail keeps its
+ *    five-minute deadline the way an unattached agent's does.
  *
  * Both are harness-native. Neither is the PTY.
  */

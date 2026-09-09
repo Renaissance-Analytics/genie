@@ -14,8 +14,9 @@ import type { AgentInboxMessage, AgentInboxNotifyTarget } from './types';
  *  - `false`  — declined. No harness transport at all, so the PTY nudge is the
  *               fallback, with every draft-safety rule that comes with it.
  *  - `true`   — delivered, and Genie ACKs on the agent's behalf.
- *  - nothing  — the adapter took it and the ACK is the agent's own. The agent
- *               is attached, so nothing may be typed at its prompt.
+ *  - nothing  — the adapter TOOK it and cannot say it arrived. Nothing is typed
+ *               at the prompt (the agent probably has it), but the message stays
+ *               unread and the five-minute deadline arms behind it (genie#549).
  */
 export function createHarnessTransportSink(
     registry: HarnessTransportRegistry = harnessTransportRegistry,
@@ -30,9 +31,11 @@ export function createHarnessTransportSink(
         if (!mode) return false;
         // PULL (Claude Channel): the bridge holds a blocking `receive` on the
         // durable inbox, and `send` has already settled it with this message.
-        // It ACKs only once its own stdout accepts the notification, so Genie
-        // neither pushes nor ACKs here — it answers "attached", which is what
-        // keeps the notice off the agent's keyboard.
+        // There is nothing to push to and nothing to ACK on — the bridge writes
+        // a notification Claude Code answers nothing to, so no receipt exists in
+        // this direction at all (genie#549). Answering "took it, unconfirmed" is
+        // what keeps a second copy off the agent's keyboard while leaving the
+        // message unread until the agent itself reads it.
         //
         // Gating this on `codex-app-server` was genie#344: a live Claude
         // Channel was told `false`, the broker read that as "the harness

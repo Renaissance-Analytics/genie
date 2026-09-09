@@ -133,21 +133,26 @@ describe('AgentInbox harness transport sink (genie#344)', () => {
 });
 
 /**
- * The OTHER door onto the same keyboard.
+ * The OTHER door onto the same keyboard — and the one #344 shut too far.
  *
- * Fixing the sink stops the delivery-time notice, but the unread backstop is
- * armed from `markTurnEnd`, not from delivery — so an attached agent that had
- * not yet drained its channel still got "you have N unread" typed at its prompt
- * five minutes later. `deliverToHarness` never ran for it; the sink never saw
- * it. Both doors have to shut, or the fix only moves when the PTY is used.
+ * Fixing the sink stops the delivery-time notice. The unread DEADLINE is a
+ * different question, and this block used to answer it the same way: an agent
+ * with a channel bound was never woken, full stop, on the reasoning that its
+ * mail was its channel's to deliver.
+ *
+ * That reasoning fails whenever the channel delivers nothing — a state Genie
+ * cannot see and Claude Code enters silently, and the one with no other way out
+ * (genie#549). The deadline now asks whether the mail was READ; that contract
+ * lives in `backstop-unread.test.ts`. What stays here is the part a binding
+ * really does support: no SECOND copy typed the instant a message arrives.
  */
-describe('the unread-mail backstop respects a live harness transport', () => {
+describe('a bound transport keeps the DELIVERY-TIME notice off the keyboard', () => {
     afterEach(() => {
         vi.useRealTimers();
     });
 
-    /** Drive an agent to the exact point the backstop is due. */
-    function runToBackstop(bind: boolean): ReturnType<typeof vi.fn> {
+    /** Deliver one message, with or without a live channel bound. */
+    function deliverOne(bind: boolean): ReturnType<typeof vi.fn> {
         vi.useFakeTimers();
         vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
         const { broker, registry, pty } = wired();
@@ -157,32 +162,28 @@ describe('the unread-mail backstop respects a live harness transport', () => {
             // the whole of this scenario. Without it the binding would be
             // trusted only for as long as `PULL_LIVENESS_GRACE_MS` (genie#528),
             // and this test would pass or fail on whether that constant happens
-            // to exceed the 50s below — a coupling nothing here declares.
+            // to exceed the window below — a coupling nothing here declares.
             registry.notePullPollOpen('B');
         }
 
         broker.send({ fromAgentId: 'A', toAgentId: 'B', text: 'unread mail' });
-        // The agent finishes a turn without having read it — which is what arms
-        // the five-minute deadline.
+        // Well short of NUDGE_UNCHECKED_MS: the only thing that can have reached
+        // the keyboard by now is the arrival notice.
         vi.advanceTimersByTime(50_000);
-        broker.markTurnEnd('t-B');
-        // Past NUDGE_UNCHECKED_MS from the message, and long past the quiet
-        // window, so the deadline is both warranted and safe.
-        vi.advanceTimersByTime(300_000);
         return pty;
     }
 
-    it('POSITIVE CONTROL: an agent with no transport still gets the backstop', () => {
-        // Without this, "the backstop did not fire" below would pass against a
-        // scenario that never reached the deadline at all.
-        const pty = runToBackstop(false);
+    it('POSITIVE CONTROL: an unattached agent IS told the moment mail lands', () => {
+        // Without this, "nothing was typed" below would pass against a broker
+        // that never types at all.
+        const pty = deliverOne(false);
         const texts = pty.mock.calls.map((c) => (c[0] as { text: string }).text);
 
-        expect(texts.some((t) => /unread AgentInbox message/.test(t))).toBe(true);
+        expect(texts.some((t) => /You just received a message/.test(t))).toBe(true);
     });
 
-    it('an agent with a bound channel is never woken at its prompt', () => {
-        const pty = runToBackstop(true);
+    it('an agent with a bound channel is not told twice', () => {
+        const pty = deliverOne(true);
 
         expect(pty).not.toHaveBeenCalled();
     });

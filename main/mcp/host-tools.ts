@@ -2942,6 +2942,32 @@ export async function agentInboxForMcp(
                 }
             }
             case 'acknowledge': {
+                // A PULL transport may not commit this cursor (genie#549).
+                //
+                // The action exists for a native adapter to commit "after
+                // harness acceptance", and the Claude Channel cannot establish
+                // acceptance: `notifications/claude/channel` is a notification,
+                // so it has no reply, and Claude Code decides silently whether
+                // to register a handler for it at all. Its bridge was
+                // acknowledging its own `stdout.write` — consuming messages
+                // nothing had delivered, with no way for the agent to notice.
+                //
+                // Refusing it HERE, and not only in the bridge template, is what
+                // reaches the workstations already broken: those bridges are
+                // spawned by Claude Code and run for days from the old file, so
+                // an upgraded Genie has to be the thing that says no. The agent
+                // behind the channel is not stranded — it commits its own cursor
+                // by READING (`receive`), which is what the imDone mail line
+                // asks it to do whenever anything is unread.
+                if (harnessTransportRegistry.deliveryModeFor(agentId) === 'pull') {
+                    return {
+                        ok: false,
+                        error:
+                            'A pull transport cannot acknowledge on the agent’s behalf: writing a ' +
+                            'channel notification is not evidence anyone read it. The agent commits ' +
+                            'its own cursor by calling agentinbox(action:"receive").',
+                    };
+                }
                 if (typeof req.cursor !== 'number' || !agentInboxBroker.acknowledge(agentId, req.cursor)) {
                     return { ok: false, error: 'acknowledge requires a valid delivered cursor.' };
                 }
