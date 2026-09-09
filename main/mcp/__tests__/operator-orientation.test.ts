@@ -116,6 +116,52 @@ describe('orientation for a workstation operator', () => {
         expect(formatWorkspaceMap(ORDINARY)).not.toContain('How to operate this workstation');
     });
 
+    /**
+     * The map an operator ACTUALLY gets now: designated, and therefore not a
+     * project envelope. `isAgiEnvelope` is a claim about the workspace, so the
+     * producer can no longer emit it alongside the designation.
+     */
+    const OPERATOR_TODAY: WorkspaceMap = { ...BASE, isAgiEnvelope: false, workstationOperator: true };
+
+    it('reads the SAME to the operator with the flag corrected — the prose never depended on it', () => {
+        // The prose branched on the designation first and was already right; the
+        // DATA underneath was the half that lied. If narrowing the flag changed
+        // a word of what the operator reads, the fix would have moved something
+        // it had no business moving.
+        expect(prose(OPERATOR_TODAY)).toEqual(prose(OPERATOR));
+    });
+
+    it('stops the machine-readable block asserting two contradictory things', () => {
+        // The block is a verbatim echo of the map, and its reader is a language
+        // model rather than a branch — which is why the contradiction could not
+        // be gated at a consumer. It read `"workstationOperator": true` and
+        // `"isAgiEnvelope": true` in one object, on every orientation call.
+        const json = formatWorkspaceMap(OPERATOR_TODAY).split('```json')[1];
+
+        expect(json).toContain('"workstationOperator": true');
+        expect(json).toContain('"isAgiEnvelope": false');
+        // POSITIVE CONTROL — an ordinary envelope still says so, in the same block.
+        expect(formatWorkspaceMap(ORDINARY).split('```json')[1]).toContain(
+            '"isAgiEnvelope": true',
+        );
+    });
+
+    it('POSITIVE CONTROL — the operator still gets its repos listed', () => {
+        // Its folder really does contain them and navigating them is useful; the
+        // complaint was never that the operator could SEE repos. A fix that took
+        // the listing away would have cost it something nobody asked to lose.
+        const text = formatWorkspaceMap(OPERATOR_TODAY);
+
+        expect(text).toContain('## Repos (1) in this folder — reference only, not your work');
+        expect(text).toContain('**thing**');
+        expect(text).toContain('C:/work/thing/repos/thing');
+        // …and the folder's own facts are still in the block for anyone who
+        // wants the DIRECTORY rather than the role.
+        const json = text.split('```json')[1];
+        expect(json).toContain('"hasProjectJson": true');
+        expect(json).toContain('"hasGitmodules": true');
+    });
+
     it('keeps the parts of orientation that are true for EVERY agent', () => {
         // The operator branch replaces the project-shaped steps, not the whole
         // plan. The on-finish hook is how any agent stops stalling silently, and
@@ -210,5 +256,112 @@ describe('describeWorkspaceForMcp resolves the designation', () => {
         await expect(describeWorkspaceForMcp('term-ws-project')).resolves.toMatchObject({
             workstationOperator: false,
         });
+    });
+});
+
+/**
+ * ROLE IS NOT SHAPE (genie#553).
+ *
+ * The owner's report: *"the Genie OSA still thinks of itself as an AGI envelope,
+ * why would it do that? It keeps trying to create a new repo using the same
+ * names."*
+ *
+ * The prose above was fixed and the DATA was not. `describeWorkspaceForMcp`
+ * decided envelope-ness from DIRECTORY SHAPE alone — the row's `shape`, the
+ * `detectFolder` state, a `project.json`, a `.gitmodules` — and never consulted
+ * the workspace's ROLE. The operator's own row is written with `shape: 'agi'`
+ * (`ensureSystemWorkspaceRow`) and its envelope carries a `project.json`, so the
+ * flag was true by construction, and a designated operator that happens to live
+ * in a real envelope folder is true twice over.
+ *
+ * The result reaches the agent verbatim: `formatWorkspaceMap` echoes the whole
+ * map as a machine-parseable JSON block, so the operator reads
+ * `"workstationOperator": true` and `"isAgiEnvelope": true` in the same object,
+ * on every `connectToGenie` call. That contradiction is not gateable — its
+ * consumer is a language model, not a branch.
+ *
+ * The DIRECTORY facts are not lost, and they are what a reader that genuinely
+ * wants "is this folder an envelope" should read: `hasProjectJson`,
+ * `hasGitmodules`, and the `repos` list all keep their own answers.
+ */
+describe('describeWorkspaceForMcp separates role from shape', () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'genie-envelope-role-'));
+    const dataDir = path.join(tmpRoot, 'userData');
+    const opRoot = path.join(tmpRoot, 'operator.agi');
+    const projRoot = path.join(tmpRoot, 'project.agi');
+
+    /** An envelope-SHAPED folder: exactly what `describeWorkspaceForMcp` reads. */
+    const envelopeAt = (root: string): void => {
+        fs.mkdirSync(root, { recursive: true });
+        fs.writeFileSync(path.join(root, 'project.json'), '{"name":"x"}');
+        fs.writeFileSync(path.join(root, '.gitmodules'), '');
+    };
+
+    fs.mkdirSync(dataDir, { recursive: true });
+    envelopeAt(opRoot);
+    envelopeAt(projRoot);
+    (app as unknown as { getPath: (name: string) => string }).getPath = () => dataDir;
+
+    afterAll(() => {
+        try {
+            fs.rmSync(tmpRoot, { recursive: true, force: true });
+        } catch {
+            /* best-effort */
+        }
+    });
+
+    it('an OPERATOR workspace is not a project envelope, even in an envelope folder', async () => {
+        const { addWorkspace, createTerminalSpec, initDatabase, setWorkstationOperator } =
+            await import('../../db');
+        const { describeWorkspaceForMcp } = await import('../host-tools');
+        initDatabase(dataDir);
+
+        const register = (id: string, root: string): void => {
+            addWorkspace({
+                id,
+                backend: 'tynn',
+                project_id: id,
+                project_name: id,
+                tynn_project_id: id,
+                tynn_project_name: id,
+                // 'agi' on BOTH: the operator's own row is written with this
+                // shape unconditionally, so a fix that only looked at the folder
+                // would still call it an envelope.
+                shape: 'agi',
+                path: root,
+                editor: null,
+                editor_cmd: null,
+                start_cmd: null,
+                env_file: null,
+                last_opened_at: null,
+                created_by_genie: 0,
+            });
+            createTerminalSpec({
+                id: `term-${id}`,
+                workspace_id: id,
+                label: id,
+                cwd: root,
+                type: 'terminal',
+                meta: {},
+            });
+        };
+        register('ws-op-envelope', opRoot);
+        register('ws-proj-envelope', projRoot);
+        setWorkstationOperator('ws-op-envelope', true);
+
+        const operator = await describeWorkspaceForMcp('term-ws-op-envelope');
+        const project = await describeWorkspaceForMcp('term-ws-proj-envelope');
+
+        // The payload must not assert two things that contradict each other.
+        expect(operator).toMatchObject({ workstationOperator: true, isAgiEnvelope: false });
+
+        // POSITIVE CONTROL — same shape, same code path, ordinary workspace. A
+        // fix that turned the flag off for everybody passes the assertion above.
+        expect(project).toMatchObject({ workstationOperator: false, isAgiEnvelope: true });
+
+        // POSITIVE CONTROL — the DIRECTORY facts are untouched for the operator.
+        // Role decides what the workspace IS; it does not rewrite what is on
+        // disk, and a reader that wants the folder's shape still has one.
+        expect(operator).toMatchObject({ hasProjectJson: true, hasGitmodules: true });
     });
 });

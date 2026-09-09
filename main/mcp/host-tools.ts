@@ -131,6 +131,7 @@ import type { RestartMode } from '../agents/restart-options';
 import { launchBlockReason } from '../agents/availability';
 import type { AgentTuiId } from '../agents/registry';
 import { detectFolder } from '../workspace/detect';
+import { isProjectEnvelope } from '../workspace/envelope-identity';
 import { workspaceDocHealth } from '../workspace/create-agi';
 import { repoCheckoutInfo } from '../workspace/repo-checkout';
 import { app } from 'electron';
@@ -286,11 +287,29 @@ export async function describeWorkspaceForMcp(
             return null;
         }
     })();
-    const isAgiEnvelope =
-        ws.shape === 'agi' ||
-        detect?.state === 'FULL_ENVELOPE' ||
-        exists('project.json') ||
-        exists('.gitmodules');
+    const hasProjectJson = exists('project.json');
+    const hasGitmodules = exists('.gitmodules');
+    // The DESIGNATION the workspace row carries (Tynn #269), never the caller's
+    // `agent_id`. That identity branch would be one more entry in a deliberately
+    // pinned count (`main/__tests__/osa-special-cases.test.ts`), and it would
+    // also be the wrong question: a second workspace granted the designation has
+    // the same job, so it gets the same orientation. One indexed lookup on a row
+    // this function has already resolved — and it is read HERE, above the map,
+    // because what this workspace is FOR decides what it IS.
+    const workstationOperator = isWorkstationOperator(ws.id);
+    // ROLE, then shape. The workstation operator's row is written with
+    // `shape: 'agi'` and its envelope carries a `project.json`, so deciding this
+    // from the directory alone made the flag true for the one workspace whose
+    // whole charter is that it is NOT a project — while the prose below said so
+    // in as many words. `formatWorkspaceMap` echoes this map as JSON, so the
+    // operator read both claims at once. See `workspace/envelope-identity.ts`.
+    const isAgiEnvelope = isProjectEnvelope({
+        shape: ws.shape,
+        detectedState: detect?.state ?? null,
+        hasProjectJson,
+        hasGitmodules,
+        workstationOperator,
+    });
 
     const resolved = await resolveWorkspaceRepos(workspaceId).catch(() => []);
     const repos: WorkspaceRepoInfo[] = await Promise.all(
@@ -348,8 +367,8 @@ export async function describeWorkspaceForMcp(
     return {
         root,
         isAgiEnvelope,
-        hasProjectJson: exists('project.json'),
-        hasGitmodules: exists('.gitmodules'),
+        hasProjectJson,
+        hasGitmodules,
         knowledgeDir: exists('.ai', 'knowledge')
             ? path.join(root, '.ai', 'knowledge')
             : null,
@@ -392,14 +411,8 @@ export async function describeWorkspaceForMcp(
         // …and the other answer to the same question (Tynn #269). The operator's
         // charter says it does not do project work; orientation told it the repos
         // were the primary resource and ended by asking which one to work on.
-        //
-        // Read from the DESIGNATION the workspace row carries, never from the
-        // caller's `agent_id`. That identity branch would be one more entry in a
-        // deliberately pinned count (`main/__tests__/osa-special-cases.test.ts`),
-        // and it would also be the wrong question: a second workspace granted the
-        // designation has the same job, so it gets the same orientation. One
-        // indexed lookup on a row this function has already resolved.
-        workstationOperator: isWorkstationOperator(ws.id),
+        // Resolved above, because `isAgiEnvelope` is derived from it.
+        workstationOperator,
         docHealth: (() => {
             const dh = workspaceDocHealth(root);
             return {
