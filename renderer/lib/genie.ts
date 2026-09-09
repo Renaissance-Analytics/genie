@@ -3945,7 +3945,16 @@ export interface GenieApi {
         status: () => Promise<UpdaterStatus>;
         check: () => Promise<UpdaterStatus>;
         apply: () => Promise<{ ok: boolean; error?: string }>;
-        restart: () => Promise<{ ok: boolean; error?: string; draining?: boolean }>;
+        /**
+         * Restart into the new build. `force` is the user's explicit Force
+         * Restart (genie#565) — the only thing that proceeds over a drain
+         * roster that has not cleared, and never a clock. Without it the call
+         * starts the drain and answers `draining: true`, having restarted
+         * nothing; the apply follows on its own when the last thumb lands.
+         */
+        restart: (opts?: {
+            force?: boolean;
+        }) => Promise<{ ok: boolean; error?: string; draining?: boolean }>;
         getConfig: () => Promise<UpdaterConfig>;
         setConfig: (
             patch: Partial<UpdaterConfig>,

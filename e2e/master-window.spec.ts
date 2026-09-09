@@ -1,4 +1,6 @@
 import { test, expect, type ElectronApplication, type Page } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import {
     announceInboxIncoming,
     killMasterTerminals,
@@ -1146,4 +1148,116 @@ test('the palette offers no step Genie would refuse — not even via search', as
     await editor.close();
     await page.keyboard.press('Escape');
     await expect(flowsRoot()).not.toHaveClass(/open/);
+});
+
+/**
+ * ONE UPDATE CONTROL, AND IT IS THE GENIE LABEL (genie#565).
+ *
+ * Two controls used to render for the same `ready-to-restart` state and call
+ * the same `updater.restart()`: the title-bar pill and a full-width
+ * "Restart & update" banner under the header. The owner asked for one, on the
+ * wordmark, reading the running version until there is something to install.
+ *
+ * The wording of every state is settled without a DOM in
+ * `renderer/lib/__tests__/header-update-label.test.ts`. What only the real
+ * window can show is that the control MOVED — that it is inside `.glogo`, that
+ * nothing renders it a second time, and that the deleted banner has no
+ * stylesheet or mount left behind.
+ *
+ * Deliberately indifferent to whether an update happens to be on offer while
+ * this runs. The updater is NOT mocked on this route, so it polls GitHub for
+ * real and either answer is legitimate — a test that demanded the idle branch
+ * would fail on the day a release lands, which is a test about the weather.
+ */
+test('the Genie label carries the one update control, and the banner is gone', async () => {
+    const glogo = page.locator('.glogo');
+    await expect(glogo).toBeVisible();
+
+    // Exactly one of the two branches renders, and it is inside the wordmark.
+    const version = glogo.locator('.glogo-version');
+    const offer = glogo.locator('.update-pill');
+    await expect
+        .poll(async () => (await version.count()) + (await offer.count()))
+        .toBe(1);
+
+    // The duplicate is gone — no mount, and no orphaned stylesheet rule that
+    // would let it come back looking styled.
+    await expect(page.locator('.update-banner')).toHaveCount(0);
+    const bannerStyled = await page.evaluate(() =>
+        [...document.styleSheets].some((sheet) => {
+            try {
+                return [...sheet.cssRules].some((rule) =>
+                    (rule as CSSStyleRule).selectorText?.includes('update-banner'),
+                );
+            } catch {
+                // A cross-origin sheet we cannot read contributes nothing rather
+                // than failing the check for the wrong reason.
+                return false;
+            }
+        }),
+    );
+    expect(bannerStyled, '.update-banner still has stylesheet rules').toBe(false);
+
+    // And it no longer sits loose in the title bar beside the icon cluster.
+    await expect(page.locator('.titlebar .update-pill')).toHaveCount(0);
+
+    // The running version, read straight off disk.
+    //
+    // NOT `app.getVersion()`. In this suite that returns ELECTRON's version
+    // (42.8.1, the dependency), because Electron documents a fallback to "the
+    // version of the current bundle or executable" when the loaded app has none
+    // of its own — and these shards launch an unpackaged build. The first draft
+    // used it and failed on all three platforms against a label that was right.
+    //
+    // Unpackaged also means `updaterMode()` is phase1, so `updater:status`
+    // reports `currentVersion: readVersion()` (main/updater/git-updater.ts),
+    // which reads this same package.json. Reading the FILE rather than asking
+    // the app keeps the oracle independent of the IPC the label renders from,
+    // so this still fails on a label showing the latest version, a blank, the
+    // bare wordmark, or Electron's number.
+    const running = (
+        JSON.parse(readFileSync(path.resolve(__dirname, '..', 'package.json'), 'utf8')) as {
+            version?: string;
+        }
+    ).version;
+    expect(running, 'no version in package.json to check against').toMatch(/^\d+\.\d+\.\d+/);
+
+    if ((await version.count()) === 1) {
+        // Nothing pending: the label states what is RUNNING — the half of the
+        // ask that makes the wordmark worth reading. Exact text, never a regex
+        // over any version: "it shows the version" is only a feature if it is
+        // the right one.
+        await expect(version).toHaveText(`v${running}`);
+    } else {
+        // The other branch: the offer names a version, and it is NOT the one
+        // already running — "Upgrade to" the build you have is the wording this
+        // replaces. The owner asked for this string, so it is asserted as the
+        // string rather than as "some text is present".
+        await expect(offer).toHaveText(/^Upgrade to v\d/);
+        await expect(offer).not.toHaveText(`Upgrade to v${running}`);
+    }
+});
+
+/**
+ * THE UPGRADE MODAL IS NOT ON SCREEN WHEN NO UPGRADE IS HAPPENING (genie#565).
+ *
+ * A full-screen sheet with a blurred backdrop is the most disruptive surface in
+ * the app, and its visibility rule is the part that can be got wrong
+ * invisibly — `upgradeModalPlan` decides it, and its unit tests cover the four
+ * snapshot shapes. What only the real window can show is that the rule is
+ * actually WIRED: a modal whose open state defaulted true, or whose portal
+ * mounted unconditionally, would blank the app on every launch, and every other
+ * test in this file would fail with a mysterious "element not visible".
+ *
+ * So this is the cheap, decisive half. Staging a real drain needs live agents
+ * mid-turn, which this fixture has not got.
+ */
+test('no upgrade is in progress, so no modal covers the window', async () => {
+    await expect(page.locator('.upgrade-modal-backdrop')).toHaveCount(0);
+    await expect(page.locator('.upgrade-modal')).toHaveCount(0);
+
+    // The control: the window IS rendered, so the absence above is a modal that
+    // correctly stayed closed rather than a page that never mounted.
+    await expect(page.locator('.winframe')).toBeVisible();
+    await expect(page.locator('.glogo')).toBeVisible();
 });

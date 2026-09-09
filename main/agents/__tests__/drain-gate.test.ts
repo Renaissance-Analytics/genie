@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { restartPlanForUpgrade, shutdownReadinessPlan } from '../drain';
+import { restartPlanForUpgrade, shutdownReadinessPlan, upgradeRestartPlan } from '../drain';
 
 /**
  * NO AGENT IS KILLED BY AN UPGRADE WITHOUT BEING ASKED FIRST (genie#389).
@@ -62,5 +62,60 @@ describe('shutdownReadinessPlan', () => {
         // A workstation reset or an ordinary full shutdown is a different event;
         // a drain that ran for an upgrade says nothing about it.
         expect(shutdownReadinessPlan({ forUpdate: false, drainCleared: true })).toBe('ask');
+    });
+});
+
+describe('upgradeRestartPlan — the ONE door (genie#565)', () => {
+    it('drains when agents are live and the user did not force', () => {
+        expect(
+            upgradeRestartPlan({ force: false, liveAgents: 3, drainComplete: false }),
+        ).toBe('drain');
+    });
+
+    it('FORCE applies over live agents — a human act, never a clock', () => {
+        // The drain deliberately never resolves on a timeout, so the only way
+        // past a wedged agent is a person deciding to lose its work. That
+        // decision is this flag, and nothing else may set it.
+        expect(
+            upgradeRestartPlan({ force: true, liveAgents: 3, drainComplete: false }),
+        ).toBe('apply');
+    });
+
+    it('force does not invent a drain when there was nothing to drain', () => {
+        expect(
+            upgradeRestartPlan({ force: true, liveAgents: 0, drainComplete: false }),
+        ).toBe('apply');
+    });
+
+    it('an unforced restart with an unreadable count still drains', () => {
+        expect(
+            upgradeRestartPlan({ force: false, liveAgents: null, drainComplete: false }),
+        ).toBe('drain');
+    });
+});
+
+describe('shutdownReadinessPlan — a forced restart is not a drained one', () => {
+    it('skips the quit-time ask after a FORCED restart', () => {
+        // Force means "do not wait". Running the 30-second readiness barrier
+        // over agents the user just chose not to wait for is waiting, and it is
+        // the same question the drain already put in their inbox.
+        expect(
+            shutdownReadinessPlan({ forUpdate: true, drainCleared: false, forced: true }),
+        ).toBe('skip');
+    });
+
+    it('does NOT treat a forced restart as a cleared drain elsewhere', () => {
+        // The positive control for the sin this guards: `drainCleared` means
+        // the agents answered. A force means they did not. The two reach the
+        // same skip here and must stay separate facts everywhere else.
+        expect(
+            shutdownReadinessPlan({ forUpdate: true, drainCleared: false, forced: false }),
+        ).toBe('ask');
+    });
+
+    it('a force on a quit that is not an update keeps the barrier', () => {
+        expect(
+            shutdownReadinessPlan({ forUpdate: false, drainCleared: false, forced: true }),
+        ).toBe('ask');
     });
 });

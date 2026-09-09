@@ -123,6 +123,21 @@ class AutoUpdater extends EventEmitter {
      */
     private interruptionProbe: (() => RestartInterruption) | null = null;
     /**
+     * THE GATED RESTART (genie#565). Injected by the updater IPC layer, which
+     * can reach the agent domain this module deliberately cannot.
+     *
+     * The hands-free finish below used to call `this.restartAndApply()`
+     * directly, which meant the ONE path most upgrades take — *"one user click
+     * drives download → install → restart with no further prompts"* — was also
+     * the one path that never asked a single agent to hand off. It goes through
+     * the gate now, and the gate either applies or drains.
+     *
+     * Null only before `registerUpdaterIpc` has run (and in tests), where the
+     * old direct apply is the honest fallback: there is no agent domain wired
+     * up yet to drain.
+     */
+    private restartRequest: (() => void) | null = null;
+    /**
      * The version electron-updater has DOWNLOADED and staged, waiting for a restart
      * to take effect (set by the `update-downloaded` handler). Durable for the life
      * of the process so a re-check can't regress it: the RUNNING process keeps
@@ -408,6 +423,11 @@ class AutoUpdater extends EventEmitter {
         autoUpdater.quitAndInstall(true, true);
     }
 
+    /** Wire the gated restart — see {@link restartRequest}. */
+    setRestartRequest(request: () => void): void {
+        this.restartRequest = request;
+    }
+
     private bind(): void {
         // electron-updater's OWN auto-download stays OFF, and so does any
         // download of ours: a check only ever SURFACES an update ('available'),
@@ -470,7 +490,16 @@ class AutoUpdater extends EventEmitter {
             if (this.installWhenReady && decideDownloadedApply(interruption) === 'apply') {
                 this.installWhenReady = false;
                 try {
-                    this.restartAndApply();
+                    // THROUGH THE GATE (genie#565), never straight to the apply.
+                    // `decideDownloadedApply` answers a different question —
+                    // whether live TERMINALS need a human confirm — and answers
+                    // it from a probe that reports zero whenever the pty host
+                    // survives the swap, and zero for the in-process tier it
+                    // cannot enumerate. Agents were live in both. The gate asks
+                    // the drain's own roster instead, and holds the restart
+                    // until every one of them has handed off.
+                    if (this.restartRequest) this.restartRequest();
+                    else this.restartAndApply();
                 } catch (e) {
                     this.setStatus({
                         state: 'error',

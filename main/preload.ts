@@ -701,8 +701,14 @@ const api = {
         status: () => ipcRenderer.invoke('updater:status'),
         check: () => ipcRenderer.invoke('updater:check'),
         apply: () => ipcRenderer.invoke('updater:apply'),
-        restart: () =>
-            ipcRenderer.invoke('updater:restart') as Promise<{
+        /**
+         * Ask to restart into the new build. `force` is the user's explicit
+         * Force Restart (genie#565) — the ONLY thing that may proceed over a
+         * drain roster that has not cleared. Without it the call starts the
+         * drain and answers `draining: true`, having restarted nothing.
+         */
+        restart: (opts?: { force?: boolean }) =>
+            ipcRenderer.invoke('updater:restart', opts) as Promise<{
                 ok: boolean;
                 error?: string;
                 /** genie#389 — the restart started a DRAIN instead of applying:
