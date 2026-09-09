@@ -74,6 +74,15 @@ import type { ImagePullConsent } from '../workspace-sandbox';
  * Failures are STATUSES, never exceptions — same house rule as
  * `../site-manager.ts`, and for the same reason: an MCP agent is driving this,
  * and an exception crossing that boundary becomes a tool error with no state.
+ *
+ * **And a failure is evidence about a MOMENT** (genie#558). A status is
+ * remembered so `list` can say why a service is not running, and for a long time
+ * it was remembered with nothing attached — so *"Docker is installed but its
+ * engine is not running"*, recorded while the daemon was still starting, was
+ * still being served hours later beside that daemon's own version, telling
+ * operators to restart Docker Desktop and stop a Postgres five workspaces share.
+ * Every remembered failure now carries the runtime verdict it was observed under
+ * and the time; a verdict change retires it. See {@link observeRuntime}.
  */
 
 // --- what a caller sees -----------------------------------------------------
@@ -120,11 +129,42 @@ export interface DevServiceStatus {
     /** The env keys injected into this workspace's site containers. */
     envKeys?: string[];
     error?: string;
+    /**
+     * WHEN the failure in `error` was observed (epoch ms), on a `failed` row
+     * served from the REMEMBERED attempt rather than from a live one (genie#558).
+     *
+     * A failure with no moment attached reads as the present tense forever. That
+     * is how *"Docker is installed but its engine is not running"* was still
+     * being served hours later, beside a live Docker version, prescribing a
+     * remedy that would have stopped every container on the machine. The verdict
+     * is retired when the runtime changes underneath it; this is so a reader can
+     * see the age for themselves rather than trust that it was.
+     */
+    failedAt?: number;
 }
 
 /** One configured service plus whatever is currently true about it. */
 export interface DevServiceRow extends DevServiceStatus {
     enabled: boolean;
+}
+
+/**
+ * The runtime verdict the manager OBSERVED, and when (genie#558).
+ *
+ * Exists so a caller can quote ONE verdict rather than two. `manageService`
+ * derived its rows from the manager and its `runtime` footer from a separately
+ * cached probe, and the two could disagree — which is exactly what shipped: one
+ * response asserting both that Docker was running and that it was not. Two
+ * independent observations of the same machine can always contradict each other.
+ * One cannot.
+ */
+export interface RuntimeObservation {
+    kind: RuntimeDetection['kind'];
+    version?: string;
+    installHint?: string;
+    reason?: RuntimeDetection['reason'];
+    /** Epoch ms. */
+    at: number;
 }
 
 // --- deps -------------------------------------------------------------------
@@ -323,6 +363,17 @@ export interface DevServiceManager {
      * a container five workspaces share is never churned by a caller reading.
      */
     adoptIfDeferred(): Promise<void>;
+    /**
+     * The runtime verdict this manager last OBSERVED, or null before its first
+     * resolve (genie#558).
+     *
+     * Every row this manager produces was derived under this verdict, so a
+     * caller reporting both can report ONE observation instead of two. It used
+     * to report the rows from here and the runtime from a separately cached
+     * probe — and shipped a response saying the engine was not running beside
+     * that engine's version.
+     */
+    runtimeSeen(): RuntimeObservation | null;
     /** Configured services + live state. All workspaces, or one. */
     list(workspaceId?: string): DevServiceRow[];
     /** A bounded log tail for the engine behind one service. Never throws. */
@@ -455,8 +506,25 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
     const holders = new Map<string, Set<string>>();
     /** In-flight acquires, so two agents cannot race two containers onto one name. */
     const acquiring = new Map<string, Promise<DevServiceStatus>>();
-    /** Why a service is NOT running, kept until it is acquired or released. */
-    const lastFailure = new Map<string, DevServiceStatus>();
+    /**
+     * Why a service is NOT running, kept until it is acquired, released, or the
+     * machine it describes stops existing (genie#558).
+     *
+     * The verdict it was observed under is stored WITH it, because a failure is
+     * evidence about a moment and this map used to serve it as the present
+     * tense forever. See {@link observeRuntime}.
+     */
+    const lastFailure = new Map<
+        string,
+        { status: DevServiceStatus; runtimeKey: string; at: number }
+    >();
+    /** The runtime verdict last observed, and its identity. */
+    let seenRuntime: RuntimeObservation | null = null;
+    let seenRuntimeKey = '';
+    /** How many times the runtime has been observed. Lets a caller tell whether
+     *  the work it just did CONSULTED the runtime — a failure that never asked
+     *  is not evidence about it, and must not be retired when it changes. */
+    let observeCount = 0;
     /** Engine containers we have already re-created to add a missing loopback
      *  publication — so a runtime that keeps failing to report a port can never
      *  loop us into recreating the same container over and over. */
@@ -470,6 +538,55 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
      * branch on a boolean, so the retry costs nothing on a healthy machine.
      */
     let adoptOwed = false;
+
+    /**
+     * Resolve the container runtime, and REMEMBER what was seen (genie#558).
+     *
+     * Every `resolveRuntime` in this file goes through here, because every one
+     * of them is an observation of the machine and the manager's memory of
+     * failures is only meaningful relative to one.
+     *
+     * **A verdict change retires the failures recorded under the old one.** A
+     * failure recorded while there was no engine is not evidence about a machine
+     * that now has one — and serving it as though it were is genie#558: hours
+     * after the daemon came up, `list` still said *"Docker is installed but its
+     * engine is not running"*, in a payload whose own footer carried Docker's
+     * version, recommending a Docker Desktop restart that would have stopped a
+     * Postgres five workspaces share. Nothing re-attempts anything here; the
+     * claim is simply withdrawn, and the row falls back to `stopped`.
+     *
+     * The key includes the VERSION, so a Docker that restarted to upgrade itself
+     * also retires them. That is deliberate rather than over-eager: an engine
+     * upgrade restarts every container, so a failure from before it describes a
+     * machine that is gone too. The cost is that a genuine provisioning failure
+     * is forgotten across a Docker upgrade and re-recorded on the next attempt —
+     * a row that reads `stopped` instead of `failed` for one read, which is the
+     * safe direction to be wrong in.
+     */
+    async function observeRuntime(): Promise<ResolvedRuntimeLike> {
+        observeCount += 1;
+        const resolved = await deps.resolveRuntime();
+        const { detection } = resolved;
+        const key = `${detection.kind}:${detection.version ?? ''}:${detection.reason ?? ''}`;
+        if (key !== seenRuntimeKey) {
+            for (const [serviceId, record] of [...lastFailure.entries()]) {
+                // An EMPTY key is a failure that never consulted the runtime — a
+                // host-native engine that would not start, an id that is not a
+                // service here. The machine's engine changing says nothing about
+                // those, so they stay.
+                if (record.runtimeKey && record.runtimeKey !== key) lastFailure.delete(serviceId);
+            }
+            seenRuntimeKey = key;
+        }
+        seenRuntime = {
+            kind: detection.kind,
+            ...(detection.version ? { version: detection.version } : {}),
+            ...(detection.installHint ? { installHint: detection.installHint } : {}),
+            ...(detection.reason ? { reason: detection.reason } : {}),
+            at: Date.now(),
+        };
+        return resolved;
+    }
 
     const changed = () => {
         try {
@@ -680,7 +797,7 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
             }
         }
 
-        const { runtime, detection } = await deps.resolveRuntime();
+        const { runtime, detection } = await observeRuntime();
         if (!runtime || detection.kind === 'none') {
             // The guided-install path, not an error — the message carries the
             // remedy, because an agent has nothing else to act on.
@@ -1066,9 +1183,14 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
         // which is also the moment the runtime is being resolved anyway. It
         // costs a boolean when nothing is owed.
         await adoptIfDeferred();
-        if (live.size === 0) return;
-        const { runtime } = await deps.resolveRuntime();
-        if (!runtime) return;
+        // OBSERVE BEFORE the empty-map short-circuit too (genie#558). Holding
+        // nothing is exactly the state a machine is left in when the boot pass
+        // failed, so skipping the probe here is how the verdict that failure was
+        // recorded under could never be re-read — and the stale "the engine is
+        // not running" went on being served next to a live engine version. The
+        // sweep below still has nothing to do; the observation is the point.
+        const { runtime } = await observeRuntime();
+        if (live.size === 0 || !runtime) return;
 
         /** Workspaces whose published address actually MOVED — the ones whose
          *  `.env` is now wrong (genie#242). Announced once each, after the sweep,
@@ -1142,6 +1264,11 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
     async function acquire(workspaceId: string, serviceId: string): Promise<DevServiceStatus> {
         const inFlight = acquiring.get(serviceId);
         if (inFlight) return inFlight;
+        // Whether THIS attempt consulted the runtime decides whether its failure
+        // is evidence about the runtime — see {@link observeRuntime}. A
+        // host-native engine and an unknown service id both fail without ever
+        // asking, and a Docker that comes up later says nothing about either.
+        const observedBefore = observeCount;
         const promise = acquireOnce(workspaceId, serviceId)
             .then((status) => {
                 if (status.state === 'running') {
@@ -1149,7 +1276,16 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
                     // The connection this workspace's apps read now exists (or has
                     // been re-published on a new port) — write it to their `.env`.
                     envChanged(workspaceId);
-                } else lastFailure.set(serviceId, status);
+                } else {
+                    // Stamped with the verdict it was observed under and the
+                    // moment (genie#558), so it can be retired when the machine
+                    // it describes stops existing.
+                    lastFailure.set(serviceId, {
+                        status,
+                        runtimeKey: observeCount > observedBefore ? seenRuntimeKey : '',
+                        at: Date.now(),
+                    });
+                }
                 return status;
             })
             .finally(() => acquiring.delete(serviceId));
@@ -1165,7 +1301,7 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
         if (!entry) return;
         live.delete(serviceId);
 
-        const { runtime } = await deps.resolveRuntime();
+        const { runtime } = await observeRuntime();
         const held = holdersOf(entry.recordKey);
         held.delete(workspaceId);
 
@@ -1214,7 +1350,7 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
      * permanently empty and every terminal opened afterwards got no service env.
      */
     async function adoptPass(): Promise<void> {
-        const { runtime } = await deps.resolveRuntime();
+        const { runtime } = await observeRuntime();
         if (!runtime) {
             adoptOwed = true;
             return;
@@ -1265,6 +1401,8 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
         adopt: adoptPass,
         adoptIfDeferred,
 
+        runtimeSeen: () => seenRuntime,
+
         list(workspaceId) {
             const rows: DevServiceRow[] = [];
             for (const workspace of deps.listWorkspaces()) {
@@ -1273,18 +1411,27 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
                     deps.devServicesFor(workspace.id),
                 )) {
                     const entry = live.get(serviceId);
-                    const status = entry
+                    const failure = lastFailure.get(serviceId);
+                    const status: DevServiceStatus = entry
                         ? statusOf(entry)
-                        : lastFailure.get(serviceId) ?? {
-                              serviceId,
-                              workspaceId: workspace.id,
-                              engine: config.engine,
-                              version: config.version,
-                              engineKey: engineKeyFor(config.engine, config.version),
-                              dedicated: config.dedicated,
-                              ...(config.active ? { active: true } : {}),
-                              state: 'stopped' as const,
-                          };
+                        : failure
+                          ? // A remembered failure comes back WITH its moment
+                            // (genie#558). It is a claim about the past, and
+                            // saying so is what stops it being read as the
+                            // present tense — the reading that had an operator
+                            // restarting Docker Desktop over a verdict recorded
+                            // hours earlier.
+                            { ...failure.status, failedAt: failure.at }
+                          : {
+                                serviceId,
+                                workspaceId: workspace.id,
+                                engine: config.engine,
+                                version: config.version,
+                                engineKey: engineKeyFor(config.engine, config.version),
+                                dedicated: config.dedicated,
+                                ...(config.active ? { active: true } : {}),
+                                state: 'stopped' as const,
+                            };
                     rows.push({
                         ...status,
                         // The stored intent always comes from CONFIG, so a row
@@ -1303,14 +1450,14 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
             const entry = live.get(serviceId);
             if (!entry) {
                 const failure = lastFailure.get(serviceId);
-                return failure?.error
-                    ? `This service is not running. It last failed with:\n${failure.error}`
+                return failure?.status.error
+                    ? `This service is not running. It last failed with:\n${failure.status.error}`
                     : 'This service is not running, so it has no engine log.';
             }
             if (entry.hostNative) {
                 return (await deps.hostWebSockets?.logs(tail)) ?? 'The Host WebSocket runtime is unavailable.';
             }
-            const { runtime } = await deps.resolveRuntime();
+            const { runtime } = await observeRuntime();
             if (!runtime) return 'No container runtime is available, so the log cannot be read.';
             try {
                 return await runtime.logs(entry.containerId, ...(tail ? [{ tail }] : []));
@@ -1371,7 +1518,7 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
                 };
             }
 
-            const { runtime } = await deps.resolveRuntime();
+            const { runtime } = await observeRuntime();
             if (!runtime) {
                 return {
                     purged: false,
@@ -1428,7 +1575,7 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
                 if (gaps.some((g) => g.engine === config.engine)) continue;
                 const entry = live.get(serviceId);
                 const liveHere = entry?.workspaceId === workspaceId;
-                const error = lastFailure.get(serviceId)?.error;
+                const error = lastFailure.get(serviceId)?.status.error;
                 gaps.push({
                     engine: config.engine,
                     version: config.version,
@@ -1508,7 +1655,7 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
                 workspaceLabel: w.label || w.id,
                 services: deps.devServicesFor(w.id),
             }));
-            const { runtime } = await deps.resolveRuntime();
+            const { runtime } = await observeRuntime();
 
             // No runtime is the ORDINARY first-run state, not a failure: the
             // catalog is still the true answer to "what could this machine run",
@@ -1581,7 +1728,7 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
                 return { ok: true };
             }
 
-            const { runtime, detection } = await deps.resolveRuntime();
+            const { runtime, detection } = await observeRuntime();
             if (!runtime) {
                 return {
                     ok: false,
