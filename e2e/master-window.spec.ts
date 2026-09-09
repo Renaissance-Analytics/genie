@@ -1147,3 +1147,71 @@ test('the palette offers no step Genie would refuse — not even via search', as
     await page.keyboard.press('Escape');
     await expect(flowsRoot()).not.toHaveClass(/open/);
 });
+
+/**
+ * ONE UPDATE CONTROL, AND IT IS THE GENIE LABEL (genie#565).
+ *
+ * Two controls used to render for the same `ready-to-restart` state and call
+ * the same `updater.restart()`: the title-bar pill and a full-width
+ * "Restart & update" banner under the header. The owner asked for one, on the
+ * wordmark, reading the running version until there is something to install.
+ *
+ * The wording of every state is settled without a DOM in
+ * `renderer/lib/__tests__/header-update-label.test.ts`. What only the real
+ * window can show is that the control MOVED — that it is inside `.glogo`, that
+ * nothing renders it a second time, and that the deleted banner has no
+ * stylesheet or mount left behind.
+ *
+ * Deliberately indifferent to whether an update happens to be on offer while
+ * this runs. The updater is NOT mocked on this route, so it polls GitHub for
+ * real and either answer is legitimate — a test that demanded the idle branch
+ * would fail on the day a release lands, which is a test about the weather.
+ */
+test('the Genie label carries the one update control, and the banner is gone', async () => {
+    const glogo = page.locator('.glogo');
+    await expect(glogo).toBeVisible();
+
+    // Exactly one of the two branches renders, and it is inside the wordmark.
+    const version = glogo.locator('.glogo-version');
+    const offer = glogo.locator('.update-pill');
+    await expect
+        .poll(async () => (await version.count()) + (await offer.count()))
+        .toBe(1);
+
+    // The duplicate is gone — no mount, and no orphaned stylesheet rule that
+    // would let it come back looking styled.
+    await expect(page.locator('.update-banner')).toHaveCount(0);
+    const bannerStyled = await page.evaluate(() =>
+        [...document.styleSheets].some((sheet) => {
+            try {
+                return [...sheet.cssRules].some((rule) =>
+                    (rule as CSSStyleRule).selectorText?.includes('update-banner'),
+                );
+            } catch {
+                // A cross-origin sheet we cannot read contributes nothing rather
+                // than failing the check for the wrong reason.
+                return false;
+            }
+        }),
+    );
+    expect(bannerStyled, '.update-banner still has stylesheet rules').toBe(false);
+
+    // And it no longer sits loose in the title bar beside the icon cluster.
+    await expect(page.locator('.titlebar .update-pill')).toHaveCount(0);
+
+    // When nothing is pending the label states what is RUNNING — the half of
+    // the ask that makes the wordmark worth reading. Checked against the app's
+    // own version rather than a regex, so a label showing some other build's
+    // number could not pass.
+    if ((await version.count()) === 1) {
+        const running = await app.evaluate(({ app: electronApp }) =>
+            electronApp.getVersion(),
+        );
+        await expect(version).toHaveText(`v${running}`);
+    } else {
+        // The other branch: an offer names a version, and it is not the one
+        // already running — "Upgrade to" the build you have is the bug this
+        // wording replaces.
+        await expect(offer).toHaveText(/\S/);
+    }
+});

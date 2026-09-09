@@ -14,15 +14,18 @@ import { getChangelog, type Changelog } from './changelog';
 import { hostBackendKind, detachedHostPinsBinary } from '../terminal/host-service';
 import { liveHostTerminals } from '../terminal/quit-confirm';
 import { mobileEmit } from '../mobile/bus';
-import { restartPlanForUpgrade, type DrainSnapshot } from '../agents/drain';
+import { type DrainSnapshot } from '../agents/drain';
 import {
     beginUpgradeDrain,
     cancelUpgradeDrain,
     drainSnapshot,
+    liveDrainableAgentCount,
     markUpgradeDrainCleared,
+    markUpgradeRestartForced,
     satisfyDrainRow,
     upgradeDrainCleared,
 } from '../agents/drain-service';
+import { UpgradeRestartGate, type UpgradeRestartResult } from './restart-gate';
 
 /**
  * What a restart-to-apply would tear down RIGHT NOW — the probe the auto-updater
@@ -64,55 +67,43 @@ export function describeRestartInterruption(): RestartInterruption {
 // it: the restart below, and the quit-time readiness barrier in `background.ts`
 // that would otherwise ask every drained agent the same question a second time.
 
-let drainInFlight = false;
-/** Wired by {@link registerUpdaterIpc}: what to run once the roster clears. */
-let applyDrainedUpdate: (() => void) | null = null;
-
-/** The input `restartPlanForUpgrade` needs, probed defensively. */
-function currentRestartPlanInput(): { liveAgents: number | null; drainComplete: boolean } {
-    let liveAgents: number | null = null;
-    try {
-        liveAgents = describeRestartInterruption().agentChats;
-    } catch {
-        // Unknown, NOT zero. `restartPlanForUpgrade` reads null as "there may be
-        // agents" and drains, which is the direction that cannot kill one.
-        liveAgents = null;
-    }
-    return { liveAgents, drainComplete: upgradeDrainCleared() };
-}
+/**
+ * THE ONE DOOR (genie#565). Every restart-to-apply goes through this — the
+ * header control, the roster's Force Restart, the hands-free finish the
+ * download arms, and the phone. Its decisions live in `restart-gate.ts`, where
+ * they are tested against the real drain with no app around them.
+ *
+ * `liveAgents` asks the DRAIN's own roster rather than
+ * `describeRestartInterruption().agentChats`. Those are different questions and
+ * they disagree: the interruption probe short-circuits to zero whenever the pty
+ * host survives the swap, and is blind to the in-process tier it cannot
+ * enumerate — while in both cases Genie's main process, and the MCP server
+ * every agent is connected to, restarts anyway. When the two disagreed the gate
+ * won, and the agents it did not know about were killed.
+ */
+const restartGate = new UpgradeRestartGate({
+    liveAgents: () => liveDrainableAgentCount(),
+    drainCleared: () => upgradeDrainCleared(),
+    beginDrain: () => beginUpgradeDrain(),
+    markDrainCleared: () => markUpgradeDrainCleared(),
+    markForced: () => markUpgradeRestartForced(),
+    applyNow: () => autoUpdaterInstance().restartAndApply(),
+});
 
 /**
- * Start the drain, once, and apply the update when the roster clears.
- *
- * A drain already running is returned as-is rather than restarted: a second
- * `begin` would nudge every agent a second time and leave two rosters
- * disagreeing about which upgrade is being held.
- *
- * A drain that ends INCOMPLETE was cancelled, and a cancelled drain must not
- * apply anything — that is the whole difference between it and a timeout.
+ * Ask for the restart. `force` is the user's explicit Force Restart — the only
+ * thing that may proceed over a roster that has not cleared, and never a clock.
  */
+export function requestUpgradeRestart(
+    opts: { force?: boolean } = {},
+): UpgradeRestartResult {
+    return restartGate.request(opts);
+}
+
+/** Start the drain and return its opening roster, for the `drain:begin` IPC. */
 export function startUpgradeDrain(): DrainSnapshot {
-    if (drainInFlight) return drainSnapshot();
-    drainInFlight = true;
-    let started: DrainSnapshot;
-    try {
-        const done = beginUpgradeDrain();
-        started = drainSnapshot();
-        void done
-            .then((snapshot) => {
-                drainInFlight = false;
-                if (!snapshot.complete) return;
-                markUpgradeDrainCleared();
-                applyDrainedUpdate?.();
-            })
-            .catch(() => {
-                drainInFlight = false;
-            });
-    } catch (e) {
-        drainInFlight = false;
-        throw e;
-    }
-    return started;
+    requestUpgradeRestart();
+    return drainSnapshot();
 }
 
 /**
@@ -129,11 +120,14 @@ export function startUpgradeDrain(): DrainSnapshot {
  *                              "Update" — downloads the available build and,
  *                              the moment it lands, applies it hands-free
  *                              (download → install → restart, no 2nd click)
- *   updater:restart        () → relaunches Genie into the new installer
- *                              (phase2 only — noop on phase1, since
- *                              phase1 has its own "Restart" via app.quit).
- *                              Mostly a fallback now: the one-click apply
- *                              path already restarts on download-complete
+ *   updater:restart        ({force?}) → THE one door to a restart-to-apply
+ *                              (genie#565). Without `force` it consults the
+ *                              drain: live agents are asked to hand off first
+ *                              and the call answers `draining: true`, having
+ *                              restarted nothing — the apply follows on its own
+ *                              when the last thumb lands. `force` is the user's
+ *                              explicit Force Restart. (phase2 only — noop on
+ *                              phase1, which has its own "Restart" via app.quit)
  *   updater:config:get     () → UpdaterConfig (phase1 only meaningful)
  *   updater:config:set     (patch) → UpdaterConfig
  *
@@ -159,6 +153,13 @@ export function registerUpdaterIpc(): void {
     // apply HOLDS (and the pill asks the user to confirm) instead of silently
     // killing live agent terminals during an upgrade.
     a.setInterruptionProbe(describeRestartInterruption);
+    // And teach it to FINISH through the gate (genie#565). Its hands-free apply
+    // — the path a single "Upgrade" click takes — called `restartAndApply`
+    // directly, so the one route most upgrades actually take was the one route
+    // that never asked an agent to hand off.
+    a.setRestartRequest(() => {
+        requestUpgradeRestart();
+    });
 
     // Kick off automatic checks for the ACTIVE backend. Packaged builds
     // (phase2) previously never auto-polled — updates only showed after a
@@ -204,41 +205,19 @@ export function registerUpdaterIpc(): void {
 
     ipcMain.handle(
         'updater:restart',
-        (): { ok: boolean; error?: string; draining?: boolean } => {
+        (_e, opts?: { force?: boolean }): UpgradeRestartResult => {
             if (mode === 'phase1') {
                 // Phase 1's "restart" is just app.quit + user re-launch — the
                 // Settings UI has a separate path for this via app.quit. We
                 // could automate but it's a separate IPC.
                 return { ok: false, error: 'Phase 1 updater does not handle restart here.' };
             }
-            // THE DRAIN GATE (genie#389). The old comment here said no agent
-            // guard was needed because the renderer had already confirmed —
-            // and confirming is not the same as ASKING THE AGENTS. Every door
-            // to `restartAndApply` passes through `restartPlanForUpgrade`, so
-            // adding a door cannot skip the drain by accident.
-            if (restartPlanForUpgrade(currentRestartPlanInput()) === 'drain') {
-                try {
-                    startUpgradeDrain();
-                } catch (e) {
-                    // A drain that cannot even START must not apply the update
-                    // behind the user's back, and must not reject this call
-                    // either — the renderer has no handler for that and would
-                    // leave the pill mid-click. Say what happened instead.
-                    return {
-                        ok: false,
-                        error: `The agent drain could not start: ${
-                            e instanceof Error ? e.message : String(e)
-                        }`,
-                    };
-                }
-                return { ok: true, draining: true };
-            }
-            try {
-                a.restartAndApply();
-                return { ok: true };
-            } catch (e) {
-                return { ok: false, error: e instanceof Error ? e.message : String(e) };
-            }
+            // THE DRAIN GATE (genie#389, finished in genie#565). The comment
+            // that used to sit here claimed every door to `restartAndApply`
+            // already passed through the plan. Two did not — the hands-free
+            // apply and the phone. They do now, because this is no longer a
+            // check that a door performs but the only door there is.
+            return requestUpgradeRestart({ force: opts?.force === true });
         },
     );
 
@@ -247,15 +226,11 @@ export function registerUpdaterIpc(): void {
     // Registered beside the updater because the drain IS the step before
     // `restartAndApply`: it exists only to make that restart safe, and holding
     // it is the whole feature.
-
-    /** Apply the update for real. Reached only once the roster has cleared. */
-    applyDrainedUpdate = () => {
-        try {
-            a.restartAndApply();
-        } catch {
-            /* surfaced via the status stream, as every other apply failure is */
-        }
-    };
+    //
+    // `drain:begin` is the SAME door as `updater:restart` (genie#565), not a way
+    // to open a roster without committing to the upgrade — with nothing to
+    // drain it applies, because a drain over an empty roster is a delay with no
+    // purpose.
 
     ipcMain.handle('drain:snapshot', (): DrainSnapshot => drainSnapshot());
     ipcMain.handle('drain:begin', (): DrainSnapshot => {
@@ -366,8 +341,9 @@ export async function mobileCheckUpdate(): Promise<MobileUpdateStatus> {
  * desktop "Update" button uses. Two valid entry states (we never auto-download
  * in the background, so a build is rarely pre-staged):
  *   • 'available'        → downloadAndInstall(): download the build then apply
- *     it the instant it lands (→ restartAndApply → quitAndInstall).
- *   • 'ready-to-restart' → restartAndApply() directly (build already on disk).
+ *     it the instant it lands — through the drain gate, like every other door
+ *     (genie#565), so live agents are asked to hand off before the restart.
+ *   • 'ready-to-restart' → requestUpgradeRestart() (build already on disk).
  * Anything else reports `not-ready` so the REST layer answers 409. Phase-1 (git
  * checkout) has no installer → `unsupported`. The action is deferred a tick by
  * the caller so the REST response flushes to the phone before teardown begins.
@@ -410,8 +386,12 @@ export function mobileInstallUpdate(force = false): {
     // auto-apply (one hands-free flow); from 'ready-to-restart' we apply now.
     setTimeout(() => {
         try {
+            // Through the gate (genie#565), like every other door. A phone that
+            // sent `force` has confirmed the interruption it was shown, and
+            // that confirmation IS the Force Restart: the same person making
+            // the same call, without a roster in front of them.
             if (state === 'available') void a.downloadAndInstall().catch(() => {});
-            else a.restartAndApply();
+            else requestUpgradeRestart({ force });
         } catch {
             /* surfaced via the status stream if it ever throws here */
         }

@@ -180,6 +180,34 @@ export function restartPlanForUpgrade(input: {
 }
 
 /**
+ * PURE. THE ONE DOOR to a restart-to-apply (genie#565).
+ *
+ * {@link restartPlanForUpgrade} answered *"does this restart need a drain?"*,
+ * and genie#389 wired it to the `updater:restart` IPC. That was not the only
+ * way in: the hands-free apply `downloadAndInstall` arms, and the phone's
+ * `mobileInstallUpdate`, both reached `restartAndApply` directly — so the
+ * property held for the BUTTON and not for the PATH.
+ *
+ * This adds the only thing that may legitimately skip the drain: a person
+ * clicking Force Restart, having been shown the roster and who it is waiting
+ * on. It is an INPUT rather than a second function, because the reason the old
+ * comment's *"adding a door cannot skip the drain by accident"* was untrue is
+ * that skipping was reachable without ever saying so. Here it has to be said,
+ * and its only source is a click.
+ *
+ * A force is emphatically NOT a clock. Nothing inside the drain may set it.
+ */
+export function upgradeRestartPlan(input: {
+    /** The user chose to proceed without waiting, losing what is in flight. */
+    force: boolean;
+    liveAgents: number | null;
+    drainComplete: boolean;
+}): 'drain' | 'apply' {
+    if (input.force) return 'apply';
+    return restartPlanForUpgrade(input);
+}
+
+/**
  * PURE. Should the QUIT still run its own readiness barrier?
  *
  * `teardownTerminals` asks every live agent to signal `thumbsUp(reason:
@@ -190,15 +218,26 @@ export function restartPlanForUpgrade(input: {
  * the user watch a half-minute timeout at the end of an upgrade they just spent
  * time draining.
  *
- * Only an UPDATE quit that a drain actually cleared skips it. A reset, an
- * ordinary shutdown and any apply that skipped the drain keep the barrier they
- * have always had.
+ * A FORCED restart skips it for the opposite reason (genie#565): those agents
+ * did NOT answer, and the user has just said not to wait for them. Spending
+ * thirty seconds asking them again is the waiting they declined, arriving after
+ * the click that was supposed to end it.
+ *
+ * The two stay separate inputs on purpose. `drainCleared` means the agents
+ * answered; `forced` means they did not and a person decided anyway. They reach
+ * the same skip HERE and must never be collapsed anywhere else — a force
+ * recorded as a cleared drain would have the system claiming a thumb nobody
+ * pressed, which is the distinction `satisfiedBy` exists to keep.
+ *
+ * A reset and an ordinary shutdown keep the barrier they have always had.
  */
 export function shutdownReadinessPlan(input: {
     forUpdate: boolean;
     drainCleared: boolean;
+    /** The user clicked Force Restart on this apply. */
+    forced?: boolean;
 }): 'ask' | 'skip' {
-    return input.forUpdate && input.drainCleared ? 'skip' : 'ask';
+    return input.forUpdate && (input.drainCleared || input.forced === true) ? 'skip' : 'ask';
 }
 
 /** Cancels an armed deadline. */

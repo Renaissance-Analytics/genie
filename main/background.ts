@@ -163,6 +163,7 @@ import {
     pendingDrainRestore,
     runPendingDrainRestore,
     upgradeDrainCleared,
+    upgradeRestartForced,
 } from './agents/drain-service';
 import { shutdownReadinessPlan } from './agents/drain';
 import { agentModeByTerminal, agentModeFor } from './agents/agent-mode-source';
@@ -2806,8 +2807,16 @@ app.whenReady().then(async () => {
         // 30-second timeout at the end of an upgrade they just spent time
         // draining. Every other quit — a reset, an ordinary shutdown, an apply
         // that skipped the drain — keeps the barrier it has always had.
+        // A FORCED restart (genie#565) skips it for the opposite reason: those
+        // agents did not answer, and the user has just clicked the button that
+        // says do not wait for them. Thirty more seconds of asking is the wait
+        // they declined.
         const askReadiness =
-            shutdownReadinessPlan({ forUpdate, drainCleared: upgradeDrainCleared() }) === 'ask';
+            shutdownReadinessPlan({
+                forUpdate,
+                drainCleared: upgradeDrainCleared(),
+                forced: upgradeRestartForced(),
+            }) === 'ask';
         if (fullShutdown && askReadiness) {
             const targets = listWorkspaces().flatMap((workspace) =>
                 listWorkspaceAgents(workspace.id).flatMap((agent) => {

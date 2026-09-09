@@ -175,6 +175,53 @@ export function markUpgradeDrainCleared(): void {
     drainCleared = true;
 }
 
+/**
+ * Did the user FORCE past the drain on this apply (genie#565)?
+ *
+ * Stored apart from {@link drainCleared} for the same reason a roster row
+ * records `satisfied` apart from `ready`: they are different facts. One says
+ * the agents answered; this one says they did not and a person decided anyway.
+ * The quit-time readiness barrier skips on either — re-asking agents the user
+ * just declined to wait for is the waiting they declined — but nothing else may
+ * read a force as an answer.
+ */
+let restartForced = false;
+
+export function upgradeRestartForced(): boolean {
+    return restartForced;
+}
+
+export function markUpgradeRestartForced(): void {
+    restartForced = true;
+}
+
+/**
+ * How many agents the drain would actually nudge, or `null` when the roster
+ * cannot be built at all.
+ *
+ * This is the count the restart gate asks for, and it is NOT the same question
+ * `describeRestartInterruption` answers. That one reports what a restart would
+ * tear down and short-circuits to zero whenever the pty HOST survives the swap
+ * — true of the terminal, but Genie's main process (which hosts the MCP server
+ * every agent is talking to) restarts underneath it either way. It is blind to
+ * the in-process tier as well, where the terminals genuinely die and
+ * `liveHostTerminals()` cannot see them.
+ *
+ * So the gate and the roster it guards could disagree — the gate saying "no
+ * agents, apply" over a roster of five. `restartPlanForUpgrade` already states
+ * which way to err when the two are in doubt: *"guessing zero applies the
+ * upgrade over live agents, which is the thing being prevented, while guessing
+ * 'some' costs a roster the user clears in one click."*
+ */
+export function liveDrainableAgentCount(): number | null {
+    try {
+        return collectDrainTargets().length;
+    } catch {
+        // Unknown, NOT zero — see above.
+        return null;
+    }
+}
+
 export function drainSnapshot(): DrainSnapshot {
     return agentUpgradeDrain.snapshot();
 }

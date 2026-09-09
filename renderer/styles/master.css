@@ -567,7 +567,29 @@
 .drain-roster .dr-actions {
     display: flex;
     justify-content: flex-end;
+    gap: 8px;
     margin-top: 10px;
+}
+/* The escape hatch. Deliberately quieter than the roster's green thumbs: it is
+   the choice that LOSES work, so it must be available without being the thing
+   the eye lands on first. */
+.drain-roster .dr-force {
+    padding: 5px 10px;
+    border-radius: var(--radius-md, 8px);
+    border: 1px solid color-mix(in srgb, #f59e0b 45%, var(--border-1));
+    background: transparent;
+    color: color-mix(in srgb, #f59e0b 70%, var(--fg-1));
+    font: inherit;
+    font-size: 11.5px;
+    cursor: pointer;
+}
+.drain-roster .dr-force:hover:not(:disabled) {
+    background: color-mix(in srgb, #f59e0b 16%, transparent);
+    border-color: #f59e0b;
+}
+.drain-roster .dr-force:disabled {
+    opacity: 0.5;
+    cursor: default;
 }
 .drain-roster .dr-cancel {
     padding: 5px 10px;
@@ -588,80 +610,6 @@
     cursor: default;
 }
 
-/* ===== "Restart & update" ready banner ================================== */
-/* A slim strip under the title bar, shown only once a build is staged. Mirrors
-   the amber update accent; one click runs the same quitAndInstall as the pill. */
-.update-banner {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 7px 12px;
-    font-size: 12px;
-    color: var(--fg-1);
-    background: color-mix(in srgb, #f59e0b 14%, var(--bg-1));
-    border-bottom: 1px solid color-mix(in srgb, #f59e0b 38%, var(--border-1));
-    animation: update-banner-in 180ms var(--ease-out, ease-out);
-}
-@keyframes update-banner-in {
-    from {
-        opacity: 0;
-        transform: translateY(-4px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-.update-banner .ub-dot {
-    flex: 0 0 auto;
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: #f59e0b;
-    box-shadow: 0 0 0 0 color-mix(in srgb, #f59e0b 60%, transparent);
-    animation: up-pulse 2s ease-out infinite;
-}
-.update-banner .ub-text {
-    flex: 1;
-    min-width: 0;
-    line-height: 1.4;
-}
-.update-banner .ub-action {
-    flex: 0 0 auto;
-    padding: 4px 12px;
-    border-radius: var(--radius-md);
-    border: none;
-    background: #f59e0b;
-    color: #09090b;
-    font: inherit;
-    font-size: 12px;
-    font-weight: 700;
-    cursor: pointer;
-}
-.update-banner .ub-action:hover {
-    background: color-mix(in srgb, #f59e0b 88%, #fff);
-}
-.update-banner .ub-action:disabled {
-    cursor: default;
-    opacity: 0.7;
-}
-.update-banner .ub-dismiss {
-    flex: 0 0 auto;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 24px;
-    height: 24px;
-    border-radius: var(--radius-md);
-    border: none;
-    background: transparent;
-    color: var(--fg-3);
-    cursor: pointer;
-}
-.update-banner .ub-dismiss:hover {
-    background: color-mix(in srgb, var(--fg-1) 10%, transparent);
-    color: var(--fg-1);
-}
 .glogo {
     display: flex;
     align-items: center;
@@ -674,6 +622,42 @@
 .glogo .lamp {
     width: 22px;
     height: 22px;
+}
+/* THE HEADER LABEL (genie#565). With nothing to install it states the running
+   version beside the wordmark; with an update on offer the whole thing becomes
+   the one Upgrade control. `.glogo-text` is hidden by the rail's collapsed rule
+   further up, and the version goes with it — but the OFFER must not, or a user
+   with a collapsed rail has no way to upgrade at all. So the button stays, and
+   loses only its words. */
+.glogo-version {
+    font-weight: 500;
+    font-size: 11.5px;
+    color: var(--fg-3);
+    letter-spacing: 0;
+    font-variant-numeric: tabular-nums;
+}
+.gleft .glogo-version {
+    display: none;
+}
+.gleft.pinned .glogo-version {
+    display: inline;
+}
+/* The label sits inside a fixed-height drag strip, so it must never widen the
+   corner past it — a long pre-release version truncates instead. */
+.glogo .update-pill {
+    max-width: 190px;
+    -webkit-app-region: no-drag;
+}
+.glogo .update-pill .up-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.gleft:not(.pinned) .glogo .update-pill .up-label {
+    display: none;
+}
+.gleft:not(.pinned) .glogo .update-pill {
+    padding: 5px 7px;
 }
 .titlebar .ttl {
     font-size: 13px;
