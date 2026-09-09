@@ -1,11 +1,19 @@
 /**
- * WHAT AN OPEN TERMINAL'S SERVICE ENV NO LONGER MATCHES (genie#222, genie#540).
+ * WHAT AN OPEN TERMINAL'S SERVICE ENV NO LONGER MATCHES (genie#222, genie#540,
+ * genie#559).
  *
- * TWO states, because a pty's environment drifts in two ways that mean
- * different things: a value it holds is now WRONG (#222, the file's original
- * subject, below), or a service it never received has appeared since
- * ({@link incompleteServiceTerminals}, at the bottom). The file kept its name
- * because staleness is still the half that is a problem.
+ * THREE states, because a pty's environment goes wrong in three ways that mean
+ * different things and have different remedies:
+ *
+ *   - a value it holds is now WRONG (#222 — the file's original subject, below);
+ *   - a service it never received has APPEARED since (#540 — the remedy is a
+ *     new terminal);
+ *   - Genie is holding NOTHING for a service this workspace enabled (#559), so
+ *     the terminal has no env for it and a new terminal would inherit the same
+ *     nothing — the remedy is the SERVICE, not the terminal.
+ *
+ * The last two are both {@link incompleteServiceTerminals}, at the bottom. The
+ * file kept its name because staleness is still the half that is a problem.
  *
  * A managed engine's PUBLISHED host port moves when its container is recreated.
  * `#242` took the application's configuration out of a terminal's environment
@@ -123,6 +131,19 @@ export interface IncompleteTerminalEnv {
     services: string[];
     /** The missing keys themselves, sorted. */
     keys: string[];
+    /**
+     * Services the workspace ENABLED that are contributing no env at all right
+     * now, and that this terminal holds nothing for (genie#559).
+     *
+     * A THIRD state, and the reason it is not folded into `services`: those are
+     * missing from the terminal, while these are missing from Genie. There are
+     * no keys to name because nobody has any, and the remedy is the opposite —
+     * opening a new terminal inherits nothing either until the service is back.
+     *
+     * Present only when non-empty, so the common case is the shape it always
+     * was.
+     */
+    absentServices?: string[];
 }
 
 /**
@@ -158,10 +179,27 @@ export interface IncompleteTerminalEnv {
  * An EMPTY entry is a real observation — that terminal predates the workspace's
  * first service, holds nothing, and is the worst instance of the defect rather
  * than an exception to it.
+ *
+ * ## …and an empty LIVE env is not "nothing is missing" (genie#559)
+ *
+ * Walking `live`'s keys asks the right question only while the workspace is
+ * publishing something. When Genie holds nothing — it booted while Docker was
+ * down, acquired nothing, and never retried — there are no keys to walk, so a
+ * terminal that received NOTHING compares as complete and the detector goes
+ * silent exactly when it is needed.
+ *
+ * `absent` is the missing half: the services this workspace ENABLED that are
+ * contributing no env at all (`DevServiceManager.hostEnvReportFor` computes it
+ * as `gaps`, which is why the caller passes labels rather than this file
+ * deriving them). A terminal is named for one only when it holds NO key
+ * attributable to it — a terminal that received Postgres before the engine went
+ * down is not missing Postgres, it is holding a dead address, and that is the
+ * STALE half's finding, not this one.
  */
 export function incompleteServiceTerminals(
     live: Record<string, string>,
     openTerminalIds: readonly string[],
+    absent: readonly string[] = [],
 ): IncompleteTerminalEnv[] {
     const out: IncompleteTerminalEnv[] = [];
     for (const terminalId of [...openTerminalIds].sort()) {
@@ -173,11 +211,26 @@ export function incompleteServiceTerminals(
         const keys = Object.keys(live)
             .filter((key) => !(key in had))
             .sort();
-        if (keys.length === 0) continue;
         const services = groupEnvKeysByService(keys, live)
             .map((group) => group.service)
             .filter((service): service is string => service !== null);
-        out.push({ terminalId, services, keys });
+        // Classified WITHIN the snapshot, because that is the env these keys
+        // were handed in: `serviceOfEnvKey` reads the surrounding set to decide
+        // which engine the single-valued relational names point at, and the live
+        // env is empty here by construction.
+        const held = new Set(
+            groupEnvKeysByService(Object.keys(had), had)
+                .map((group) => group.service)
+                .filter((service): service is string => service !== null),
+        );
+        const absentServices = [...new Set(absent)].filter((s) => !held.has(s)).sort();
+        if (keys.length === 0 && absentServices.length === 0) continue;
+        out.push({
+            terminalId,
+            services,
+            keys,
+            ...(absentServices.length ? { absentServices } : {}),
+        });
     }
     return out;
 }
@@ -194,27 +247,55 @@ export function incompleteServiceTerminals(
  * Names the SERVICE rather than the keys wherever it can. "This terminal
  * predates Mailpit" is actionable; three `GENIE_MAIL_*` names make the reader
  * do the grouping. The keys are the fallback for a service Genie cannot name.
+ *
+ * TWO sentences, because there are two remedies (genie#559). A terminal that
+ * predates a RUNNING service is fixed by opening a new one. A terminal whose
+ * service is contributing nothing at all is fixed by NOTHING until that service
+ * is back — a new terminal there inherits the same nothing, which is exactly
+ * the loop the single sentence used to send people round.
  */
 export function incompleteTerminalNote(
     incomplete: readonly IncompleteTerminalEnv[],
 ): string | null {
     if (incomplete.length === 0) return null;
-    const one = incomplete.length === 1;
-    const named = incomplete
-        .map((t) => `${t.terminalId} (${(t.services.length ? t.services : t.keys).join(', ')})`)
-        .join(', ');
-    return (
-        `${
-            one
-                ? 'One open terminal predates a service'
-                : `${incomplete.length} open terminals predate services`
-        } this workspace publishes and never received ${one ? 'its' : 'their'} environment: ` +
-        `${named}. Nothing ${one ? 'it holds' : 'they hold'} is wrong — the value is MISSING, not ` +
-        `moved — and the application is unaffected either way: its configuration is read from the ` +
-        `repo's \`.env\`, which Genie keeps current. A pty's environment is fixed at spawn, so open ` +
-        `a NEW terminal (or restart the agent in it) if a shell here needs to reach ` +
-        `${one ? 'that service' : 'those services'} by hand.`
-    );
+    const name = (t: IncompleteTerminalEnv): string =>
+        `${t.terminalId} (${(t.services.length ? t.services : t.keys).join(', ')})`;
+
+    const predating = incomplete.filter((t) => t.keys.length > 0);
+    const one = predating.length === 1;
+    const predates = predating.length
+        ? `${
+              one
+                  ? 'One open terminal predates a service'
+                  : `${predating.length} open terminals predate services`
+          } this workspace publishes and never received ${one ? 'its' : 'their'} environment: ` +
+          `${predating.map(name).join(', ')}. Nothing ${one ? 'it holds' : 'they hold'} is wrong — ` +
+          `the value is MISSING, not moved — and the application is unaffected either way: its ` +
+          `configuration is read from the repo's \`.env\`, which Genie keeps current. A pty's ` +
+          `environment is fixed at spawn, so open a NEW terminal (or restart the agent in it) if a ` +
+          `shell here needs to reach ${one ? 'that service' : 'those services'} by hand.`
+        : '';
+
+    // The DOWN half. Deliberately does not offer the reopen remedy: Genie is
+    // holding no connection for these, so a new terminal would inherit the same
+    // nothing. The service has to come back first.
+    const absent = incomplete.filter((t) => (t.absentServices?.length ?? 0) > 0);
+    const onlyOne = absent.length === 1;
+    const down = absent.length
+        ? `${
+              onlyOne ? 'One open terminal has' : `${absent.length} open terminals have`
+          } no environment for ${
+              onlyOne ? 'a service' : 'services'
+          } this workspace ENABLED that Genie is currently holding nothing for: ` +
+          `${absent
+              .map((t) => `${t.terminalId} (${(t.absentServices ?? []).join(', ')})`)
+              .join(', ')}. ` +
+          `Genie has no connection to hand out for ${onlyOne ? 'it' : 'them'} — the value is ` +
+          `MISSING, not moved — so a new terminal would inherit the same nothing. Start the ` +
+          `service (\`manageService\` \`start\`) and open the terminal after it is ready.`
+        : '';
+
+    return [predates, down].filter(Boolean).join(' ') || null;
 }
 
 /**
@@ -222,9 +303,16 @@ export function incompleteTerminalNote(
  * — each field present only when there is something to say.
  *
  * PURE: the caller supplies the live env (already narrowed to the form a
- * terminal is handed) and the ids of the terminals that are actually open. That
- * leaves the MCP layer with nothing but the I/O, which is the part no unit test
- * can reach.
+ * terminal is handed), the ids of the terminals that are actually open, and
+ * `absent` — the services this workspace ENABLED that are contributing no env
+ * at all (`DevServiceManager.hostEnvReportFor`'s `gaps`, by label). That leaves
+ * the MCP layer with nothing but the I/O, which is the part no unit test can
+ * reach.
+ *
+ * `absent` defaults to none, and a caller that omits it gets exactly the
+ * behaviour this had before genie#559 — including the blind spot: with an empty
+ * live env there are no keys to walk, so a terminal holding nothing compares as
+ * complete. Pass it.
  *
  * A terminal can be BOTH — its Postgres moved AND it predates Mailpit — and
  * then it is named twice, once per fact. That is the point of the split: the
@@ -235,10 +323,11 @@ export function incompleteTerminalNote(
 export function terminalEnvNotes(
     live: Record<string, string>,
     openTerminalIds: readonly string[],
+    absent: readonly string[] = [],
 ): { note?: string; terminalsMissingEnv?: string } {
     const stale = staleTerminalNote(staleServiceTerminals(live, openTerminalIds));
     const missing = incompleteTerminalNote(
-        incompleteServiceTerminals(live, openTerminalIds),
+        incompleteServiceTerminals(live, openTerminalIds, absent),
     );
     return {
         ...(stale ? { note: stale } : {}),

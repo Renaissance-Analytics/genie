@@ -335,3 +335,100 @@ describe('both notes, shaped for one result', () => {
         expect(both.note).not.toContain('Mailpit');
     });
 });
+
+/**
+ * THE DETECTOR IS BLIND EXACTLY WHEN IT IS NEEDED (genie#559).
+ *
+ * `incompleteServiceTerminals` walks the keys of the LIVE env and asks which
+ * ones a terminal never got. That is the right question while the workspace is
+ * publishing something. It is the wrong one during the failure this issue is
+ * about: Genie booted while Docker was down, acquired nothing, and the live env
+ * is `{}` — so there are no keys to walk, and a terminal that received NOTHING
+ * compares as complete. The worst instance of the defect reads as the healthy
+ * case.
+ *
+ * What the workspace ENABLED is the missing half. `hostEnvReportFor` already
+ * computes it (`gaps` — every enabled engine contributing no env, and why), so
+ * the comparison gains that side rather than inventing one.
+ *
+ * The remedy differs, which is why these are not folded into the sentence above:
+ * a terminal that predates a RUNNING service is fixed by opening a new one, and
+ * a terminal whose service is DOWN is not fixed by anything until the service is
+ * back.
+ */
+describe('a terminal holding nothing while the workspace publishes nothing', () => {
+    it('names the terminal and the enabled service that is contributing no env', () => {
+        recordTerminalServiceEnv('t1', {});
+        expect(incompleteServiceTerminals({}, ['t1'], ['Postgres', 'Redis'])).toEqual([
+            { terminalId: 't1', services: [], keys: [], absentServices: ['Postgres', 'Redis'] },
+        ]);
+    });
+
+    /**
+     * POSITIVE CONTROL, and the distinction the whole fix turns on: `{}` from a
+     * workspace that configured NO services is the right answer and must stay
+     * silent. Only an enabled service contributing nothing is a finding.
+     */
+    it('says nothing when the workspace has no services at all — positive control', () => {
+        recordTerminalServiceEnv('t1', {});
+        expect(incompleteServiceTerminals({}, ['t1'], [])).toEqual([]);
+        expect(terminalEnvNotes({}, ['t1'], [])).toEqual({});
+    });
+
+    /**
+     * DO NOT CRY WOLF. A terminal that DID receive Postgres before the engine
+     * went down is not missing it — it is holding an address that no longer
+     * answers, which is the STALE half and is reported there. Naming it under
+     * both would make the informational note shout on every engine restart.
+     */
+    it('leaves a terminal that already holds the service to the stale note', () => {
+        recordTerminalServiceEnv('t1', { ...PG_LIVE });
+        expect(incompleteServiceTerminals({}, ['t1'], ['Postgres'])).toEqual([]);
+        expect(staleServiceTerminals({}, ['t1'])).toEqual([
+            { terminalId: 't1', keys: ['PGHOST', 'PGPORT'] },
+        ]);
+    });
+
+    it('still says nothing about a terminal it has no snapshot for', () => {
+        expect(incompleteServiceTerminals({}, ['t3'], ['Postgres'])).toEqual([]);
+    });
+
+    it('reports the live-missing and the absent halves for one terminal together', () => {
+        // Mailpit is up and this terminal predates it; Postgres is enabled and
+        // holding nothing. Two different remedies, one terminal.
+        recordTerminalServiceEnv('t1', {});
+        expect(incompleteServiceTerminals({ ...MAIL_LIVE }, ['t1'], ['Postgres'])).toEqual([
+            {
+                terminalId: 't1',
+                services: ['Mailpit'],
+                keys: ['GENIE_MAIL_HOST', 'GENIE_MAIL_MAILER', 'GENIE_MAIL_PORT'],
+                absentServices: ['Postgres'],
+            },
+        ]);
+    });
+});
+
+describe('what the caller is told when the service itself is holding nothing', () => {
+    const noteFor = (absentServices: string[]): string =>
+        incompleteTerminalNote([
+            { terminalId: 'term-a', services: [], keys: [], absentServices },
+        ]) ?? '';
+
+    it('names the terminal and the service, and says a new terminal will not help', () => {
+        const note = noteFor(['Postgres']);
+        expect(note).toContain('term-a');
+        expect(note).toContain('Postgres');
+        // The remedy is the SERVICE, not the terminal — the opposite of the
+        // advice the live-missing half gives, and getting it wrong sends
+        // somebody round a loop of reopening terminals that inherit nothing.
+        expect(note).toMatch(/not running|is down|start/i);
+    });
+
+    it('does not tell the reader to reopen the terminal and expect the values', () => {
+        expect(noteFor(['Postgres'])).not.toMatch(/open a NEW terminal to inherit/i);
+    });
+
+    it('is null when nothing is absent — nothing to say', () => {
+        expect(incompleteTerminalNote([])).toBeNull();
+    });
+});

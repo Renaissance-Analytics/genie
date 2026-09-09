@@ -300,8 +300,29 @@ export interface DevServiceManager {
      *
      * Engines that are NOT running stay stopped: boot must not pull images or
      * start databases for workspaces nobody has opened.
+     *
+     * A pass that could not ASK — no container runtime, or a runtime that failed
+     * to list its engines — leaves the pass OWED rather than done. See
+     * {@link adoptIfDeferred}.
      */
     adopt(): Promise<void>;
+    /**
+     * Take the adoption pass that was owed, if one is (genie#559).
+     *
+     * Boot adoption is the only thing that fills `live` after a restart, and it
+     * is a ONE-SHOT that no-ops silently when the runtime cannot be reached.
+     * That is not a rare corner: Docker Desktop restarts with the host, so a
+     * workstation that crashed brings Genie back FIRST, `adopt()` finds no
+     * daemon, and every terminal spawned afterwards composes no service env at
+     * all — for every engine, because the emptiness is in the map rather than in
+     * any one of them. Until this, nothing ever re-ran it.
+     *
+     * A NO-OP when nothing is owed — a boolean, and not even a runtime probe —
+     * so it is safe to call before any read. That is also the guard that keeps
+     * the retry from becoming a re-acquire loop: a healthy boot owes nothing, so
+     * a container five workspaces share is never churned by a caller reading.
+     */
+    adoptIfDeferred(): Promise<void>;
     /** Configured services + live state. All workspaces, or one. */
     list(workspaceId?: string): DevServiceRow[];
     /** A bounded log tail for the engine behind one service. Never throws. */
@@ -440,6 +461,15 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
      *  publication — so a runtime that keeps failing to report a port can never
      *  loop us into recreating the same container over and over. */
     const republished = new Set<string>();
+    /**
+     * An adoption pass is OWED (genie#559).
+     *
+     * Set when adoption could not ASK — no runtime, or a runtime that refused to
+     * list its engines — and cleared by the first pass that got all the way
+     * through. False is the ordinary state and makes {@link adoptIfDeferred} a
+     * branch on a boolean, so the retry costs nothing on a healthy machine.
+     */
+    let adoptOwed = false;
 
     const changed = () => {
         try {
@@ -1029,6 +1059,13 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
      * this is fixing.
      */
     async function refresh(): Promise<void> {
+        // FIRST, and deliberately ahead of the empty-map short-circuit below: an
+        // empty map is the exact state a deferred adoption exists to repair
+        // (genie#559), so returning early on it is how the retry would never
+        // happen. This is the trigger — a read a caller is about to act on,
+        // which is also the moment the runtime is being resolved anyway. It
+        // costs a boolean when nothing is owed.
+        await adoptIfDeferred();
         if (live.size === 0) return;
         const { runtime } = await deps.resolveRuntime();
         if (!runtime) return;
@@ -1167,43 +1204,66 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
         envChanged(workspaceId);
     }
 
+    /**
+     * ONE adoption pass. Records whether it actually got to ask.
+     *
+     * The pass is OWED, not failed, when the runtime could not be reached: the
+     * engines are up (Docker restarts them itself), Genie simply has not met
+     * them yet. Marking that and re-running later is the whole of genie#559 —
+     * before it, a boot that raced Docker Desktop's own startup left `live`
+     * permanently empty and every terminal opened afterwards got no service env.
+     */
+    async function adoptPass(): Promise<void> {
+        const { runtime } = await deps.resolveRuntime();
+        if (!runtime) {
+            adoptOwed = true;
+            return;
+        }
+        /** An engine we could not READ. Same treatment: owed, not skipped. */
+        let unread = false;
+        for (const workspace of deps.listWorkspaces()) {
+            for (const [serviceId, config] of Object.entries(deps.devServicesFor(workspace.id))) {
+                if (!config.enabled || live.has(serviceId)) continue;
+                const engineKey = engineKeyFor(config.engine, config.version);
+                const dedicated =
+                    config.dedicated || Boolean(engineSpecFor(config.engine).alwaysDedicated);
+                const containerName = serviceContainerNameFor(
+                    engineKey,
+                    dedicated ? workspace.id : undefined,
+                );
+                let found;
+                try {
+                    found = (await runtime.psServices(engineKey)).find(
+                        (c) => c.name === containerName && c.state === 'running',
+                    );
+                } catch {
+                    // One unreadable engine must not abandon the rest. It used to
+                    // get no second chance either; now the pass stays owed, so a
+                    // daemon that was mid-restart is asked again.
+                    unread = true;
+                    continue;
+                }
+                // Not running: leave it. Adoption is for what Docker kept
+                // alive, never a back door into starting things on boot.
+                if (!found) continue;
+                await acquire(workspace.id, serviceId);
+            }
+        }
+        adoptOwed = unread;
+    }
+
+    async function adoptIfDeferred(): Promise<void> {
+        if (!adoptOwed) return;
+        await adoptPass();
+    }
+
     return {
         acquire,
         release,
         refresh,
 
-        async adopt() {
-            const { runtime } = await deps.resolveRuntime();
-            if (!runtime) return;
-            for (const workspace of deps.listWorkspaces()) {
-                for (const [serviceId, config] of Object.entries(
-                    deps.devServicesFor(workspace.id),
-                )) {
-                    if (!config.enabled || live.has(serviceId)) continue;
-                    const engineKey = engineKeyFor(config.engine, config.version);
-                    const dedicated =
-                        config.dedicated || Boolean(engineSpecFor(config.engine).alwaysDedicated);
-                    const containerName = serviceContainerNameFor(
-                        engineKey,
-                        dedicated ? workspace.id : undefined,
-                    );
-                    let found;
-                    try {
-                        found = (await runtime.psServices(engineKey)).find(
-                            (c) => c.name === containerName && c.state === 'running',
-                        );
-                    } catch {
-                        // One unreadable engine must not abandon the rest —
-                        // this runs once at boot and gets no second chance.
-                        continue;
-                    }
-                    // Not running: leave it. Adoption is for what Docker kept
-                    // alive, never a back door into starting things on boot.
-                    if (!found) continue;
-                    await acquire(workspace.id, serviceId);
-                }
-            }
-        },
+        adopt: adoptPass,
+        adoptIfDeferred,
 
         list(workspaceId) {
             const rows: DevServiceRow[] = [];
