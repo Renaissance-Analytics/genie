@@ -50,6 +50,17 @@ import { join } from 'node:path';
  * Test files are deliberately NOT scanned for definitions: a guard a test can
  * satisfy by mentioning a token is not a guard.
  *
+ * ## What this does NOT watch, and it is not a small gap
+ *
+ * READS are collected from `renderer/styles/*.css` only. Components read `var()`
+ * inline too — `style={{ color: 'var(--zinc-500)' }}` — and 35 of those
+ * declarations name a token nothing defines, 17 of them with no fallback. The
+ * Question-inbox flyout, the first-run wizard, Workspace settings, the Ask modal
+ * and Settings are all affected, and `--zinc-*` is among them, which is the very
+ * thing the check below exists to stop: it evaded that check by not being in a
+ * stylesheet. Inventoried in genie#592; widening `reads` to TSX is part of
+ * fixing it, because the widened parse fails until the call sites are decided.
+ *
  * ## Deliberately NOT asserted
  *
  * That every token flips between themes. `--term-bg` / `--term-head` / `--term-fg`
