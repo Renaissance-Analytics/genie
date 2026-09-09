@@ -33,6 +33,7 @@ const manager = vi.hoisted(() => ({
     remove: vi.fn(),
     logs: vi.fn(),
     envFor: vi.fn(),
+    runtimeSeen: vi.fn().mockReturnValue(null),
 }));
 
 const hostTools = vi.hoisted(() => ({

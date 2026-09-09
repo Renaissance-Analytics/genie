@@ -91,6 +91,11 @@ function toInfo(row: DevServiceRow): DevServiceInfo {
         ...(row.namespace ? { namespace: row.namespace } : {}),
         ...(row.envKeys ? { envKeys: row.envKeys } : {}),
         ...(row.error ? { error: row.error } : {}),
+        // WHEN the failure being reported was observed (genie#558). A `failed`
+        // row is a claim about the last attempt, and without a moment it reads
+        // as the present tense — which is how a boot-time verdict was still
+        // prescribing a Docker Desktop restart hours later.
+        ...(row.failedAt ? { failedAt: row.failedAt } : {}),
     };
 }
 
@@ -365,12 +370,44 @@ export async function runManageService(
     req: ManageServiceRequest,
     view: InventoryView,
 ): Promise<ManageServiceResult> {
-    const runtime = await runtimeInfo();
+    const probed = await runtimeInfo();
+
+    /**
+     * The runtime verdict to REPORT — the one the rows in this response were
+     * derived under, whenever there is one (genie#558).
+     *
+     * The rows come from the service manager and this used to come from a
+     * separately cached probe, so one response could assert both that Docker was
+     * running and that it was not. It did, for hours, recommending a Docker
+     * Desktop restart that would have stopped a Postgres five workspaces share.
+     * Two independent observations of one machine can always disagree; one
+     * cannot, so the manager's own observation is authoritative here.
+     *
+     * It is also strictly fresher: every read that matters resolves the runtime
+     * on the way through, where the probe is cached for 30 seconds. `probed`
+     * stays the answer when there is no manager in this process, or before it
+     * has resolved anything — an honest fallback rather than an invented
+     * verdict.
+     *
+     * Evaluated at RESULT-BUILD time, never hoisted: `start`, `add` and
+     * `extension` all acquire first, and the verdict that acquire observed is
+     * the one their row was written under.
+     */
+    const reported = (): ManageServiceResult['runtime'] => {
+        const seen = devServiceManager()?.runtimeSeen();
+        if (!seen) return probed;
+        return {
+            kind: seen.kind,
+            ...(seen.version ? { version: seen.version } : {}),
+            ...(seen.installHint ? { installHint: seen.installHint } : {}),
+        };
+    };
+
     const bare = (error: string): ManageServiceResult => ({
         ok: false,
         error,
         services: [],
-        runtime,
+        runtime: reported(),
     });
 
     if (req.action === 'catalog') {
@@ -379,7 +416,7 @@ export async function runManageService(
             ok: true,
             services: ws && manager ? manager.list(ws.id).map(toInfo) : [],
             catalog: catalogEntries(),
-            runtime,
+            runtime: reported(),
         };
     }
 
@@ -402,7 +439,7 @@ export async function runManageService(
                 ok: true,
                 services: ws ? manager.list(ws.id).map(toInfo) : [],
                 engines: enginesFor(await manager.inventory(), view),
-                runtime,
+                runtime: reported(),
             };
         } catch (e) {
             return bare(
@@ -427,7 +464,7 @@ export async function runManageService(
         ok: false,
         error,
         services: services(),
-        runtime,
+        runtime: reported(),
         ...extra,
     });
 
@@ -457,7 +494,7 @@ export async function runManageService(
                 return {
                     ok: true,
                     services: services(),
-                    runtime,
+                    runtime: reported(),
                     ...(req.id ? { affectedId: req.id } : {}),
                     // …and WHY the workspace's service env is what it is. On a
                     // list the services array already carries each engine's
@@ -520,7 +557,7 @@ export async function runManageService(
                 }
 
                 if (req.enabled === false) {
-                    return { ok: true, services: services(), affectedId: serviceId, runtime };
+                    return { ok: true, services: services(), affectedId: serviceId, runtime: reported() };
                 }
                 const status = await manager.acquire(ws.id, serviceId);
                 return {
@@ -528,7 +565,7 @@ export async function runManageService(
                     ...(status.error ? { error: status.error } : {}),
                     services: services(),
                     affectedId: serviceId,
-                    runtime,
+                    runtime: reported(),
                     // THE MOMENT IT BECOMES TRUE (genie#540). `add` is the only
                     // action that can create a service which never existed, and
                     // the instant it does, every terminal already open is
@@ -557,7 +594,7 @@ export async function runManageService(
                     ...(status.error ? { error: status.error } : {}),
                     services: services(),
                     affectedId: target.serviceId,
-                    runtime,
+                    runtime: reported(),
                 };
             }
 
@@ -572,7 +609,7 @@ export async function runManageService(
                     version: target.config.version,
                     enabled: false,
                 });
-                return { ok: true, services: services(), affectedId: target.serviceId, runtime };
+                return { ok: true, services: services(), affectedId: target.serviceId, runtime: reported() };
             }
 
             case 'logs': {
@@ -583,7 +620,7 @@ export async function runManageService(
                     services: services(),
                     affectedId: target.serviceId,
                     logs: await manager.logs(target.serviceId, req.tail),
-                    runtime,
+                    runtime: reported(),
                 };
             }
 
@@ -611,7 +648,7 @@ export async function runManageService(
                     affectedId: target.serviceId,
                     env,
                     serviceEnv,
-                    runtime,
+                    runtime: reported(),
                     // …and WHICH open terminals were handed an earlier answer to
                     // this same question (genie#222), never received one at all
                     // (genie#540), or are holding nothing because Genie is
@@ -633,7 +670,7 @@ export async function runManageService(
                     (c) => c.engine === target.config.engine && c.active,
                 );
                 if (target.config.active) {
-                    return { ok: true, services: services(), affectedId: target.serviceId, runtime };
+                    return { ok: true, services: services(), affectedId: target.serviceId, runtime: reported() };
                 }
                 setWorkspaceDevServices(ws.id, setActiveService(configs, target.serviceId));
                 // Re-acquire so the consumers' environment is rebuilt around the
@@ -649,7 +686,7 @@ export async function runManageService(
                     ...(status.error ? { error: status.error } : warning ? { note: warning } : {}),
                     services: services(),
                     affectedId: target.serviceId,
-                    runtime,
+                    runtime: reported(),
                 };
             }
 
@@ -695,7 +732,7 @@ export async function runManageService(
                           }),
                     services: services(),
                     affectedId: target.serviceId,
-                    runtime,
+                    runtime: reported(),
                 };
             }
 
@@ -704,7 +741,7 @@ export async function runManageService(
                 if ('error' in target) return fail(target.error);
                 const dedicated = req.dedicated !== false;
                 if (target.config.dedicated === dedicated) {
-                    return { ok: true, services: services(), affectedId: target.serviceId, runtime };
+                    return { ok: true, services: services(), affectedId: target.serviceId, runtime: reported() };
                 }
                 // Release from the CURRENT engine first — otherwise this
                 // workspace stays counted as a holder of a container it no
@@ -726,7 +763,7 @@ export async function runManageService(
                     ...(status.error ? { error: status.error } : {}),
                     services: services(),
                     affectedId: target.serviceId,
-                    runtime,
+                    runtime: reported(),
                 };
             }
 
@@ -747,7 +784,7 @@ export async function runManageService(
                     // a declined purge left the data exactly where it was, and
                     // saying nothing would read as "the data is gone too".
                     ...(removal.declined ? { note: removal.declined } : {}),
-                    runtime,
+                    runtime: reported(),
                 };
             }
 

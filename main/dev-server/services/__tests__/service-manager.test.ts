@@ -1833,3 +1833,209 @@ describe('a deferred boot adoption (genie#559)', () => {
         expect(after.hostEnvFor('a')).toMatchObject({ PGHOST: '127.0.0.1' });
     });
 });
+
+/**
+ * A STORED FAILURE IS NOT CURRENT STATE (genie#558).
+ *
+ * Measured on the owner's machine, in one response:
+ *
+ * ```
+ * state: "failed"
+ * error: "Docker is installed but its engine is not running — start Docker
+ *         Desktop and wait for the whale to settle, then try again."
+ * runtime: { kind: "docker", version: "29.6.1" }
+ * ```
+ *
+ * One payload asserting both that Docker is running and that it is not, with
+ * `docker ps` showing five containers up. The verdict was the failed boot pass's,
+ * recorded hours earlier and served ever since: `lastFailure` had no moment
+ * attached, so nothing could tell that it described a machine that no longer
+ * existed.
+ *
+ * That is not a cosmetic staleness. The remedy it prescribes is *restart Docker
+ * Desktop*, which stops every container on the machine — including a Postgres
+ * five workspaces share — at the exact moment `start` would have worked first
+ * time, as an agent proved by ignoring it. A user who trusts the message damages
+ * every workspace to fix nothing.
+ *
+ * The fix is provenance: a failure is stamped with the runtime verdict it was
+ * observed under, and a verdict change retires it. A failure recorded while
+ * there was no engine is not evidence about a machine that now has one.
+ */
+describe('a failure is evidence about a MOMENT (genie#558)', () => {
+    const NO_DOCKER: RuntimeDetection = {
+        kind: 'none',
+        reason: 'not-running',
+        installHint:
+            'Docker is installed but its engine is not running — start Docker Desktop and wait ' +
+            'for the whale to settle, then try again.',
+        probes: [],
+    };
+
+    function daemon(runtime: Fake): {
+        resolveRuntime: () => Promise<{ runtime: Fake | null; detection: RuntimeDetection }>;
+        up: (yes: boolean) => void;
+    } {
+        let alive = true;
+        return {
+            resolveRuntime: async () =>
+                alive ? { runtime, detection: DOCKER_OK } : { runtime: null, detection: NO_DOCKER },
+            up: (yes: boolean) => {
+                alive = yes;
+            },
+        };
+    }
+
+    it('retires the "engine is not running" verdict once an engine is running', async () => {
+        const runtime = fakeRuntime();
+        const docker = daemon(runtime);
+        docker.up(false);
+        const manager = createDevServiceManager(
+            deps(runtime, { a: pgFor('svc-a') }, { resolveRuntime: docker.resolveRuntime }),
+        );
+
+        // The boot attempt, with the daemon still starting.
+        await manager.acquire('a', 'svc-a');
+        expect(manager.list('a')[0]).toMatchObject({
+            state: 'failed',
+            error: expect.stringContaining('its engine is not running'),
+        });
+
+        // Docker answers. The verdict that failure was recorded under is gone,
+        // so the failure goes with it — nothing here re-attempted anything.
+        docker.up(true);
+        await manager.refresh();
+
+        const row = manager.list('a')[0];
+        expect(row.state).toBe('stopped');
+        expect(row.error).toBeUndefined();
+        expect(row.failedAt).toBeUndefined();
+    });
+
+    /**
+     * POSITIVE CONTROL, and the one that stops this from being "forget every
+     * error". A failure recorded under the runtime that is STILL current is the
+     * live diagnosis and must survive — that message is the whole answer to why
+     * the service will not start.
+     */
+    it('KEEPS a failure whose runtime verdict has not changed', async () => {
+        const runtime = fakeRuntime({ execFails: 'CREATE DATABASE' });
+        const manager = createDevServiceManager(deps(runtime, { a: pgFor('svc-a') }));
+
+        await manager.acquire('a', 'svc-a');
+        await manager.refresh();
+        await manager.refresh();
+
+        expect(manager.list('a')[0]).toMatchObject({
+            state: 'failed',
+            error: expect.stringContaining('engine said no'),
+        });
+    });
+
+    it('says WHEN it failed, so a reader can see for themselves', async () => {
+        const before = Date.now();
+        const runtime = fakeRuntime({ execFails: 'CREATE DATABASE' });
+        const manager = createDevServiceManager(deps(runtime, { a: pgFor('svc-a') }));
+
+        await manager.acquire('a', 'svc-a');
+
+        const row = manager.list('a')[0];
+        expect(row.state).toBe('failed');
+        expect(row.failedAt).toBeGreaterThanOrEqual(before);
+        expect(row.failedAt).toBeLessThanOrEqual(Date.now());
+    });
+
+    it('reports the runtime IT observed, so a caller can quote one verdict', async () => {
+        // The seam that makes the contradiction unrepresentable rather than
+        // unlikely: the rows and the runtime footer come from ONE observation
+        // instead of two independent probes that can disagree.
+        const runtime = fakeRuntime();
+        const docker = daemon(runtime);
+        docker.up(false);
+        const manager = createDevServiceManager(
+            deps(runtime, { a: pgFor('svc-a') }, { resolveRuntime: docker.resolveRuntime }),
+        );
+
+        expect(manager.runtimeSeen()).toBeNull();
+
+        await manager.refresh();
+        expect(manager.runtimeSeen()).toMatchObject({ kind: 'none', reason: 'not-running' });
+
+        docker.up(true);
+        await manager.refresh();
+        expect(manager.runtimeSeen()).toMatchObject({ kind: 'docker', version: '29.6.1' });
+    });
+
+    /**
+     * POSITIVE CONTROL for the other half of the rule: a failure that never
+     * ASKED about the container runtime is not evidence about it, so a Docker
+     * that comes up later says nothing and must not retire it. The bundled
+     * WebSocket engine runs on the host and needs no Docker at all — the
+     * clearest case of a verdict that is none of Docker's business.
+     */
+    it('KEEPS a failure that never consulted the runtime, whatever Docker does', async () => {
+        const runtime = fakeRuntime();
+        const docker = daemon(runtime);
+        docker.up(false);
+        const manager = createDevServiceManager(
+            deps(
+                runtime,
+                {
+                    a: {
+                        'ws-a': {
+                            engine: 'websockets',
+                            version: '1',
+                            dedicated: false,
+                            password: 'workspace_websocket_password_0123456789',
+                            enabled: true,
+                        },
+                    },
+                },
+                {
+                    resolveRuntime: docker.resolveRuntime,
+                    hostWebSockets: {
+                        acquire: async () => ({
+                            processId: 'sockudo-1',
+                            port: 49_123,
+                            ready: false,
+                        }),
+                        release: async () => {},
+                        logs: () => '',
+                        stop: async () => {},
+                    },
+                },
+            ),
+        );
+
+        await manager.acquire('a', 'ws-a');
+        expect(manager.list('a')[0]).toMatchObject({
+            state: 'failed',
+            error: expect.stringContaining('did not become ready'),
+        });
+
+        docker.up(true);
+        await manager.refresh();
+
+        expect(manager.list('a')[0]).toMatchObject({
+            state: 'failed',
+            error: expect.stringContaining('did not become ready'),
+        });
+    });
+
+    it('does not let an empty map skip the observation', async () => {
+        // `refresh` used to return before resolving anything when it held nothing
+        // — which is exactly the state a machine is in after the boot pass
+        // failed, so the verdict could never be re-read and the stale failure
+        // could never be retired.
+        const runtime = fakeRuntime();
+        const docker = daemon(runtime);
+        docker.up(false);
+        const manager = createDevServiceManager(
+            deps(runtime, { a: pgFor('svc-a') }, { resolveRuntime: docker.resolveRuntime }),
+        );
+
+        await manager.refresh();
+
+        expect(manager.runtimeSeen()).not.toBeNull();
+    });
+});
