@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { AGENTINBOX_SYSTEM, machineSenderId } from '../types';
 import type { AgentInboxBrokerEvent, AgentInboxMessagePreview } from '../types';
 
 /**
@@ -13,14 +14,17 @@ import type { AgentInboxBrokerEvent, AgentInboxMessagePreview } from '../types';
  * Genie's own surfaces — rather than in `broker.ts`, which owns no I/O and
  * should keep owning none.
  *
- * ## The distinction this test is careful NOT to fake
+ * ## Telling a machine from an agent
  *
- * genie#543 is still in flight. Until it lands, a cron nudging an agent sends as
- * the HUMAN, so "your scheduled job reported in" is byte-identical on the wire
- * to "the person typed you a message". This deliberately stays silent for a
- * human sender rather than guessing, and the `genie:` prefix cases below are the
- * proof that machine notices route to their own alert the moment #543 gives them
- * their own ids.
+ * genie#543 landed while this was in review, and it is what makes
+ * `automatedNotice` a real alert rather than an aspiration: a scheduled task now
+ * arrives as `genie:cron:<spec id>` instead of borrowing the HUMAN's identity,
+ * which is what it used to do (so "your job reported in" was byte-identical to
+ * "a person typed you a message").
+ *
+ * The sender ids below are built with `machineSenderId` and classified through
+ * `readMachineSender` — the one reader that owns that format — so these cannot
+ * drift from what the inbox actually sends. A human sender stays silent.
  */
 
 const emitter = vi.hoisted(() => ({ fn: null as null | ((e: AgentInboxBrokerEvent) => void) }));
@@ -78,14 +82,34 @@ describe('an agent messaging another agent', () => {
 
 describe('a machine reporting in', () => {
     it('raises automatedNotice for a Genie system announcement', () => {
-        emit({ type: 'message', preview: preview('genie:system') });
+        emit({ type: 'message', preview: preview(AGENTINBOX_SYSTEM) });
         expect(alerts.played).toEqual(['automatedNotice']);
     });
 
-    it('raises automatedNotice for the cron and process senders genie#543 adds', () => {
-        emit({ type: 'message', preview: preview('genie:cron:spec-1') });
-        emit({ type: 'message', preview: preview('genie:process:proc-9') });
+    it('raises automatedNotice for a real cron sender, built by genie#543 itself', () => {
+        // `machineSenderId` rather than a hand-typed string: this is the id a
+        // scheduled task actually arrives under now that genie#543 has landed
+        // (`process-scheduler.ts` hands the broker `{kind:'cron', id, label}`),
+        // so this cannot pass against a format the inbox stopped using.
+        emit({
+            type: 'message',
+            preview: preview(machineSenderId({ kind: 'cron', id: 'spec-1', label: 'nightly' })),
+        });
+        emit({
+            type: 'message',
+            preview: preview(machineSenderId({ kind: 'process', id: 'proc-9' })),
+        });
         expect(alerts.played).toEqual(['automatedNotice', 'automatedNotice']);
+    });
+
+    it('treats an unrecognised `genie:` kind as ordinary mail, exactly as the reader does', () => {
+        // POSITIVE CONTROL for the two above: they would hold just as well if
+        // every `genie:` prefix were called automated. `readMachineSender` is
+        // strict about which kinds exist — a kind this build has no behaviour
+        // for is not a source it can claim to have understood — and the alert
+        // follows it rather than matching the prefix itself.
+        emit({ type: 'message', preview: preview('genie:teapot:1') });
+        expect(alerts.played).toEqual(['agentMessage']);
     });
 });
 

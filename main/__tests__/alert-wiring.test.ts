@@ -41,6 +41,9 @@ const FIRED_BY: Record<string, string[]> = {
     reviewRequest: ['plugins/registry.ts'],
     processExit: ['terminal/process-supervisor.ts'],
     failure: ['flows/index.ts', 'terminal/process-supervisor.ts'],
+    // The ONE fan-out both `onThumbsUp` branches reach — the OS agent's and a
+    // workspace agent's — so a kind wired here cannot miss one of them.
+    thumbsUp: ['terminal/ipc.ts'],
 };
 
 describe('no kind is a dead control', () => {

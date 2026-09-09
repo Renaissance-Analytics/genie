@@ -200,6 +200,39 @@ export const ALERT_SOUND_KINDS = {
         desc: 'A background process crashed or gave up restarting, or a Flow errored or was refused.',
         keywords: 'failure failed crash error broken refused died',
     },
+    /**
+     * ONE kind for all three `thumbsUp` reasons — and the loudest control here,
+     * which is why its description says so out loud.
+     *
+     * TWO of the three reasons are broadcast-and-answer, not one-off, so a thumb
+     * arrives once PER AGENT:
+     *
+     *   - `boot` — every agent is told to call it after a (re)start, by
+     *     `agents/relaunch-prompt.ts`, `agents/upgrade-guide.ts`,
+     *     `agents/os-lifecycle.ts`, and the MCP guide's own orientation.
+     *   - `shutdown` — `AgentShutdownReadiness.begin()` prompts every live agent
+     *     and each answers, inside one 30-second window; the upgrade drain
+     *     (`agents/drain.ts`) does the same before an upgrade.
+     *
+     * So a Genie upgrade with N registered agents is N thumbs, a restart, then N
+     * more. `ack` — one agent acknowledging one peer — is the only reason that is
+     * a single discrete event.
+     *
+     * Splitting by reason was considered and rejected: it would buy three rows of
+     * which two are still bursts, and the owner asked for thumbsUp as ONE signal.
+     * Defaulting to `off` is what makes that safe — nobody hears the burst
+     * without choosing it, having been told what a restart sounds like.
+     */
+    thumbsUp: {
+        setting: 'sound_thumbsup',
+        custom: 'sound_thumbsup_custom',
+        fallback: 'off',
+        wire: 'thumbs-up',
+        motif: 'done',
+        label: 'Agent signals ready — thumbsUp',
+        desc: 'An agent acknowledged: it booted, answered a peer, or is ready for Genie to stop. Note `boot` fires on EVERY agent start, so a Genie restart chimes once per agent.',
+        keywords: 'thumbsup ready boot ack acknowledge shutdown readiness',
+    },
 } as const satisfies Record<string, AlertKindDef>;
 
 /** Every alert kind Genie can chime for. DERIVED — never restate it as a union. */
@@ -296,29 +329,27 @@ export function motifForPayload(payload: {
 }
 
 /**
- * Which alert an AgentInbox message is, from its sender id — or null for no
- * chime at all.
+ * Which alert an AgentInbox message is — or null for no chime at all.
  *
- * Three senders exist today: `human` (the person at the keyboard, via the panel
- * OR — and this is the part that matters — anything machine-originated that had
- * to borrow an identity), `genie:system` (Genie's own announcements to agents),
- * and an agent's own `agentId`.
+ * `isMachine` is the caller's answer to "did a machine send this", and it is a
+ * PARAMETER rather than something read out of `from` here on purpose. genie#543
+ * made `readMachineSender` the one place that parses a machine sender id, saying
+ * in as many words that a second reader is how two answers to the same question
+ * start disagreeing. An earlier draft of this function tested
+ * `from.startsWith('genie:')` and did disagree, on exactly the case that reader
+ * documents: an unrecognised `genie:<kind>:<id>` is deliberately NOT a machine
+ * source, because a kind this build has no behaviour for is not one it can act
+ * on. So the format stays in the agentinbox module and this stays pure.
  *
- * ## The one distinction this CANNOT draw yet
- *
- * genie#543 exists because a cron nudging an agent currently sends as the human,
- * so "the scheduled job you set up reported in" is byte-identical to "the person
- * typed you a message". This function does not guess between them: a `human`
- * sender is SILENT, so a cron notice is missing rather than mislabelled as one
- * of yours. Once #543 lands, those notices arrive as `genie:cron:<id>` /
- * `genie:process:<id>` and fall through to `automatedNotice` with no edit here —
- * which is why the prefix test is written now.
+ * The human is silent: you do not need a chime for the message you just typed.
  */
-export function alertKindForInboxSender(from: string): AlertKind | null {
+export function alertKindForInboxSender(
+    from: string,
+    isMachine: boolean,
+): AlertKind | null {
     if (!from) return null;
     if (from === 'human') return null;
-    if (from.startsWith('genie:')) return 'automatedNotice';
-    return 'agentMessage';
+    return isMachine ? 'automatedNotice' : 'agentMessage';
 }
 
 /**

@@ -15,6 +15,11 @@ import {
     alertKindForProcessStatus,
     type AlertKind,
 } from '../notify-sound-kinds';
+import {
+    AGENTINBOX_SYSTEM,
+    machineSenderId,
+    readMachineSender,
+} from '../agentinbox/types';
 
 /**
  * ONE place defines an alert sound (genie#546).
@@ -173,6 +178,7 @@ describe('which motif a kind plays', () => {
         expect(alertKindDef('processExit').motif).toBe('done');
         expect(alertKindDef('agentMessage').motif).toBe('done');
         expect(alertKindDef('automatedNotice').motif).toBe('done');
+        expect(alertKindDef('thumbsUp').motif).toBe('done');
     });
 
     it('reads the motif a payload carries', () => {
@@ -190,30 +196,46 @@ describe('which motif a kind plays', () => {
     });
 });
 
-describe('classifying an inbox message (genie#543 boundary)', () => {
+describe('classifying an inbox message', () => {
     it('calls an agent-to-agent DM an agentMessage', () => {
-        expect(alertKindForInboxSender('claude-reviewer-7')).toBe('agentMessage');
+        expect(alertKindForInboxSender('claude-reviewer-7', false)).toBe('agentMessage');
     });
 
     it('says NOTHING when the sender is the person at the keyboard', () => {
         // You do not need a chime for the message you just typed.
-        expect(alertKindForInboxSender('human')).toBeNull();
+        expect(alertKindForInboxSender('human', false)).toBeNull();
     });
 
-    it('calls a GENIE-originated notice automated, which is what fires it today', () => {
-        // `genie:system` is the upgrade announcement — a machine telling agents
-        // something, with no reply address. It is the one machine sender that
-        // exists before genie#543.
-        expect(alertKindForInboxSender('genie:system')).toBe('automatedNotice');
+    it('calls a machine source an automated notice', () => {
+        expect(alertKindForInboxSender('genie:system', true)).toBe('automatedNotice');
     });
 
-    it('will call a cron or a watched process automated the moment #543 lands', () => {
-        // genie#543 gives machine-originated notices their own sender ids. Until
-        // it does, a cron nudging an agent borrows the HUMAN identity, which is
-        // why the `human` case above is silent rather than guessed at. This
-        // classifier needs no edit when those ids start arriving.
-        expect(alertKindForInboxSender('genie:cron:spec-1')).toBe('automatedNotice');
-        expect(alertKindForInboxSender('genie:process:proc-9')).toBe('automatedNotice');
+    it('agrees with the ONE reader that owns the machine-sender format (genie#543)', () => {
+        // The ids come from `machineSenderId` itself and are read back with
+        // `readMachineSender`, so this cannot pass against a format the inbox no
+        // longer uses. An earlier draft matched `genie:` by hand here and
+        // disagreed with that reader on the unrecognised-kind case below.
+        const cron = machineSenderId({ kind: 'cron', id: 'spec-1', label: 'nightly' });
+        const proc = machineSenderId({ kind: 'process', id: 'proc-9', label: 'worker' });
+        expect(cron).toBe('genie:cron:spec-1');
+        for (const from of [cron, proc, AGENTINBOX_SYSTEM]) {
+            expect(
+                alertKindForInboxSender(from, readMachineSender(from) !== null),
+                from,
+            ).toBe('automatedNotice');
+        }
+    });
+
+    it('treats a `genie:` id that reader does NOT recognise as ordinary mail', () => {
+        // POSITIVE CONTROL for the agreement above: it would hold just as well
+        // if everything were classified automated. `readMachineSender` returns
+        // null for a kind this build has no behaviour for, and the alert follows
+        // it rather than guessing from the prefix.
+        const odd = 'genie:teapot:1';
+        expect(readMachineSender(odd)).toBeNull();
+        expect(alertKindForInboxSender(odd, readMachineSender(odd) !== null)).toBe(
+            'agentMessage',
+        );
     });
 });
 
