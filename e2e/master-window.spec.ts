@@ -9,6 +9,7 @@ import {
     readLiveTerminals,
     readMasterSeed,
     readPtyGrid,
+    readPtyGridLog,
     type MasterSeed,
 } from './helpers/launch';
 
@@ -156,6 +157,50 @@ const railRow = (name: string) => page.locator('.tproj-head').filter({ hasText: 
  */
 const switchToWorkspace = (name: string) => railRow(name).locator('.pname').click();
 
+/**
+ * Wait until main has stopped receiving resizes for this pty, then return how
+ * many it has received. Nothing in flight ⇒ a reading of the grid can be trusted.
+ *
+ * A layout change reaches the pty ASYNCHRONOUSLY — ResizeObserver → fit →
+ * `onResize` → IPC — and the test that caused it is free to finish before it
+ * lands. So reading the grid on its own can hand back a grid belonging to a
+ * layout that no longer exists.
+ *
+ * That is genie#542's macOS flake exactly. The test above this one collapses the
+ * workspace chooser to its 56px rail and pins it back; the Floor goes 580px →
+ * 824px → 580px and the pty 72 → 103 → 72 cols. On a run where the last of those
+ * had not yet reached main, the panel-hiding test below snapshotted **103** — the
+ * collapsed-rail grid, from a layout that had already been dismantled — and then
+ * read the correct 72 arriving moments later as a fit against a hidden panel.
+ *
+ * Note this is NOT "sleep longer". Once the snapshot is stale, waiting longer
+ * makes the failure MORE certain, not less: it only guarantees the late-but-
+ * correct resize is observed. What was missing is the CONDITION — that nothing
+ * is in flight — which no fixed wait can express.
+ */
+const settledPtyGrid = async (terminalId: string): Promise<number> => {
+    const QUIET_MS = 750;
+    const POLL_MS = 100;
+    const deadline = Date.now() + 20_000;
+    let seen = (await readPtyGridLog(app, terminalId)).length;
+    let quietSince = Date.now();
+    while (Date.now() - quietSince < QUIET_MS) {
+        if (Date.now() > deadline) {
+            throw new Error(
+                `the pty for ${terminalId} never stopped resizing: ` +
+                    JSON.stringify(await readPtyGridLog(app, terminalId)),
+            );
+        }
+        await page.waitForTimeout(POLL_MS);
+        const n = (await readPtyGridLog(app, terminalId)).length;
+        if (n !== seen) {
+            seen = n;
+            quietSince = Date.now();
+        }
+    }
+    return seen;
+};
+
 test('the window comes up signed in, on the real two-column frame', async () => {
     // Either branch of the page renders `.winframe`, so this waits for the window
     // to have decided which one — and the sign-in assertion below is then a real
@@ -288,6 +333,12 @@ test('a workspace switch never fits the panel it hid (genie#229)', async () => {
             timeout: 30_000,
         })
         .not.toBeNull();
+    // The pty must have caught up with the layout that is on screen NOW before
+    // anything is snapshotted from it — see `settledPtyGrid`. `settled` is the
+    // resize count at that point, which is what makes the non-event below
+    // sayable: any entry past it is a resize that arrived while the panel was
+    // off screen.
+    const settled = await settledPtyGrid(seed.terminalId);
     const onScreen = (await readPtyGrid(app, seed.terminalId))!;
 
     // The grid a VISIBLE panel measured. Stated as its own assertion because the
@@ -309,6 +360,16 @@ test('a workspace switch never fits the panel it hid (genie#229)', async () => {
     // the resize over IPC. Without the guard the pty has the nonsense geometry
     // well inside this window; with it, nothing is sent at all.
     await page.waitForTimeout(1500);
+
+    // The non-event, stated AS one: while the panel was off screen its pty was
+    // not resized AT ALL. Stronger than comparing the last-applied grid to a
+    // snapshot, which is blind to a pty that moved and was put back — and which
+    // was what let a resize belonging to an earlier on-screen layout read as this
+    // failure (genie#542). A failure here names the forbidden grid and its time.
+    expect(
+        (await readPtyGridLog(app, seed.terminalId)).slice(settled),
+        'a panel that is not on screen drove its pty',
+    ).toEqual([]);
     expect(await readPtyGrid(app, seed.terminalId)).toEqual(onScreen);
 
     // Back again. The panel is on screen at the size it left, and the terminal

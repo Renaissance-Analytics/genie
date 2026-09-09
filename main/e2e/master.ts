@@ -11,7 +11,7 @@ import {
     setSettings,
     setWorkspaceGappDev,
 } from '../db';
-import { getTerminalSize } from '../terminal/size-tracker';
+import { getTerminalSize, getTerminalSizeHistory } from '../terminal/size-tracker';
 import { killTerminalById, announceInboxIncoming } from '../terminal/ipc';
 import { liveHostTerminals } from '../terminal/quit-confirm';
 
@@ -233,6 +233,14 @@ export function seedMasterE2E(): MasterSeed {
          * scrollback the TUI reflowed to it.
          */
         ptyGrid: (id: string) => getTerminalSize(id),
+        /**
+         * EVERY grid that pty was driven to, oldest first (main/terminal/
+         * size-tracker). `ptyGrid` says where it is NOW, which cannot tell a pty
+         * that never moved from one that moved and was put back — and for an
+         * assertion about a NON-EVENT that is the whole question. Read it to say
+         * WHETHER a forbidden resize happened, and when (genie#542).
+         */
+        ptyGridLog: (id: string) => getTerminalSizeHistory(id),
         /**
          * The ids main currently has a LIVE pty for. Read alongside `ptyGrid` so a
          * missing grid says WHICH half failed: no live pty means the spawn never
