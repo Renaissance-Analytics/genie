@@ -1802,22 +1802,57 @@ describe('v51 — bounded short-term AMS todos', () => {
         expect(cols(db, 'workspace_todo_events').has('comment')).toBe(true);
     });
 
-    it('caps open UserToDo at 5 and AgentTodo at 10 per workspace list', () => {
+    it('caps the shared UserToDo list at 5 and one agent’s AgentTodo list at 10', () => {
         const db = seeded();
         for (let i = 0; i < 5; i++) {
-            expect(createWorkspaceTodo(db, { workspaceId: 'ws-todo', kind: 'user', text: `u${i}` }).ok).toBe(true);
+            expect(
+                createWorkspaceTodo(db, {
+                    workspaceId: 'ws-todo',
+                    kind: 'user',
+                    agentName: 'alpha',
+                    text: `u${i}`,
+                }).ok,
+            ).toBe(true);
         }
-        expect(createWorkspaceTodo(db, { workspaceId: 'ws-todo', kind: 'user', text: 'overflow' })).toMatchObject({ ok: false, cap: 5 });
+        // A SECOND agent cannot get around the user cap — it is ONE shared list
+        // per workspace, which is what the human actually has to work through.
+        expect(
+            createWorkspaceTodo(db, {
+                workspaceId: 'ws-todo',
+                kind: 'user',
+                agentName: 'beta',
+                text: 'overflow',
+            }),
+        ).toMatchObject({ ok: false, cap: 5 });
 
         for (let i = 0; i < 10; i++) {
-            expect(createWorkspaceTodo(db, { workspaceId: 'ws-todo', kind: 'agent', text: `a${i}` }).ok).toBe(true);
+            expect(
+                createWorkspaceTodo(db, {
+                    workspaceId: 'ws-todo',
+                    kind: 'agent',
+                    agentName: 'alpha',
+                    text: `a${i}`,
+                }).ok,
+            ).toBe(true);
         }
-        expect(createWorkspaceTodo(db, { workspaceId: 'ws-todo', kind: 'agent', text: 'overflow' })).toMatchObject({ ok: false, cap: 10 });
+        expect(
+            createWorkspaceTodo(db, {
+                workspaceId: 'ws-todo',
+                kind: 'agent',
+                agentName: 'alpha',
+                text: 'overflow',
+            }),
+        ).toMatchObject({ ok: false, cap: 10 });
     });
 
     it('requires a human comment for every UserToDo outcome and frees capacity once resolved', () => {
         const db = seeded();
-        const made = createWorkspaceTodo(db, { workspaceId: 'ws-todo', kind: 'user', text: 'Approve access' });
+        const made = createWorkspaceTodo(db, {
+            workspaceId: 'ws-todo',
+            kind: 'user',
+            agentName: 'alpha',
+            text: 'Approve access',
+        });
         if (!made.ok) throw new Error(made.error);
 
         expect(resolveUserTodo(db, made.todo.id, 'refused', '   ').ok).toBe(false);
