@@ -3506,6 +3506,28 @@ export function getAllSettings(): Settings {
     };
 }
 
+/**
+ * Told when `active_workspace` actually CHANGES — from ANY writer (genie#597).
+ *
+ * The Dev Server's open hook belongs to the moment a workspace becomes the one
+ * the user is working in, and that moment is exactly this write: the
+ * `settings:set` IPC behind the master window's workspace switch,
+ * `openWorkspace()` itself, and whatever writes it next. Hooking the WRITE
+ * rather than any one of its callers is what stops a second door from being
+ * added — which is the whole of genie#597.
+ *
+ * Injected the way {@link setHostedSitesSync} is, and for the same reason: db.ts
+ * must not import the dev server. Default null — headless builds and tests
+ * simply never set it. `observeActiveWorkspace(null)` clears it.
+ */
+let activeWorkspaceObserver: ((workspaceId: string) => void) | null = null;
+
+export function observeActiveWorkspace(
+    fn: ((workspaceId: string) => void) | null,
+): void {
+    activeWorkspaceObserver = fn;
+}
+
 export function setSettings(patch: Partial<Settings>): Settings {
     const d = getDb();
     const stmt = d.prepare(
@@ -3518,7 +3540,31 @@ export function setSettings(patch: Partial<Settings>): Settings {
     for (const [k, v] of Object.entries(patch)) {
         if (v !== undefined && v !== null) entries.push([k, String(v)]);
     }
+    // Read the OLD value before the write, and only when the patch carries the
+    // key at all: `settings:set` is a hot path written for many unrelated keys
+    // (a panel layout flushes through it every 150ms), and none of them may pay
+    // for this (genie#597).
+    const nextActive =
+        typeof patch.active_workspace === 'string' && patch.active_workspace !== ''
+            ? patch.active_workspace
+            : null;
+    const prevActive =
+        nextActive === null
+            ? null
+            : (d
+                  .prepare<[string], { value: string }>(
+                      'SELECT value FROM settings WHERE key = ?',
+                  )
+                  .get('active_workspace')?.value ?? null);
     tx(entries);
+    if (nextActive !== null && nextActive !== prevActive) {
+        try {
+            activeWorkspaceObserver?.(nextActive);
+        } catch {
+            // An observer is a side effect of the write, never a condition of
+            // it: a workspace switch must not fail because a dev server did.
+        }
+    }
     return getAllSettings();
 }
 

@@ -52,6 +52,23 @@ import type { TeardownResult } from './workspace-sandbox';
  * a host-native service needs no container runtime and must not be skipped for
  * the absence of one.
  *
+ * What "OPEN" MEANS was itself the bug (genie#597). All three of the paragraphs
+ * above were true and reached almost nobody: the only caller was
+ * `openWorkspace()`, which is the TRAY, the Add Workspace modal and MCP. The
+ * master window's own workspace switch wrote `active_workspace` and stopped, and
+ * the launch restore read it and wrote nothing, so on the ordinary journey —
+ * quit, relaunch, land in your workspace, open a terminal — none of this ran for
+ * the workspace that mattered. Open now means "this became the workspace the
+ * user is working in", however that happened; `main/workspace/activate.ts` is
+ * the one door, and it hangs off the WRITE so a future caller inherits it
+ * instead of having to remember it.
+ *
+ * That makes this hook FAR more frequent than it was — a switch, not a tray
+ * click — which is why every step of it is either gated or idempotent, and why
+ * nothing here may become expensive without revisiting that. The gate itself is
+ * unchanged: this widens WHICH opens count, never whether a workspace nobody
+ * opened starts anything.
+ *
  * **REMOVE — release, stop, then sweep, in that order.** The order is the whole
  * point. `teardownWorkspaceSandbox` removes exactly what carries
  * `genie.workspace`, which is correct and is also why it cannot be the only

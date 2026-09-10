@@ -3,7 +3,7 @@ import { simpleGit } from 'simple-git';
 import { getWorkspace, touchWorkspace, setSettings } from '../db';
 import { rebuildMenu } from '../tray';
 import { broadcastLocal } from '../remote';
-import { devLifecycle } from '../dev-server/lifecycle';
+import { workspaceActivated } from './activate';
 import { detectFolder } from './detect';
 
 /**
@@ -64,14 +64,23 @@ async function openWorkspaceInner(id: string): Promise<void> {
     touchWorkspace(id);
     rebuildMenu();
 
-    // Warm the Dev Server sandbox (#234 P4). Fire-and-forget and AFTER the
-    // focus, deliberately: this talks to a container daemon, and the workspace
-    // must appear the instant it is clicked whether or not Docker answers. It
-    // no-ops for a workspace that defines no dev site or service, and it never
-    // downloads an image — see `dev-server/lifecycle.ts`.
-    void devLifecycle()
-        ?.onWorkspaceOpen(id)
-        .catch(() => {
-            /* the lifecycle already reports failure as a result; nothing to do */
-        });
+    // Warm the Dev Server sandbox (#234 P4). Fire-and-forget: this talks to a
+    // container daemon, and the workspace must appear the instant it is clicked
+    // whether or not Docker answers. It no-ops for a workspace that defines no
+    // dev site or service, and it never downloads an image — see
+    // `dev-server/lifecycle.ts`.
+    //
+    // Through the same door every OTHER activation now takes (genie#597), not a
+    // direct call. Two consequences worth knowing:
+    //
+    //  - An open that MOVES the active workspace has ALREADY started this pass,
+    //    from the `setSettings` above — the write is what announces the change
+    //    now, so the hook no longer waits for the focus below. It is a handful
+    //    of synchronous sqlite reads before the hook's first await, not a
+    //    daemon round-trip, so the broadcast is not held up by it. This call
+    //    then coalesces into that one rather than starting a second.
+    //  - It is still made explicitly, because an open of the workspace you are
+    //    ALREADY in changes nothing and so announces nothing — and re-warming a
+    //    sandbox that had exited is exactly what a tray open is for.
+    workspaceActivated(id);
 }
