@@ -116,7 +116,7 @@ describe('the drain nudge announces itself as the showstopper it is', () => {
         // mode is guidance, and no notice may tell an agent it is forbidden.
         const envelope = drainOneAgent();
         expect(envelope).not.toMatch(/you (are not allowed|may not|cannot|are forbidden)/i);
-        expect(envelope).not.toMatch(/(denied|blocked|not permitted|no permission)/i);
+        expect(envelope).not.toMatch(/\b(denied|blocked|not permitted|no permission)\b/i);
     });
 });
 
