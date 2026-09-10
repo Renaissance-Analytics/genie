@@ -203,6 +203,41 @@ const PG: DevServiceConfig = {
     enabled: true,
 };
 
+/** The HOST-NATIVE engine: a bundled Sockudo running as a child of Genie, with
+ *  no container anywhere — so nothing survives a Genie restart to be adopted. */
+const WEBSOCKETS: DevServiceConfig = {
+    engine: 'websockets',
+    version: '1',
+    dedicated: false,
+    password: 'workspace_websocket_password_0123456789',
+    enabled: true,
+};
+
+/** The bundled Host WebSocket service, recording what was asked of it. */
+function fakeHostWebSockets() {
+    const acquired: string[] = [];
+    const released: string[] = [];
+    const stops: number[] = [];
+    return {
+        acquired,
+        released,
+        stops,
+        service: {
+            acquire: async (app: { id: string; key: string; secret: string }) => {
+                acquired.push(app.id);
+                return { processId: 'sockudo-1', port: 49_123, ready: true };
+            },
+            release: async (appId: string) => {
+                released.push(appId);
+            },
+            logs: () => 'Sockudo ready',
+            stop: async () => {
+                stops.push(Date.now());
+            },
+        },
+    };
+}
+
 function siteManager(
     runtime: Fake,
     sites: Record<string, DevSites>,
@@ -252,12 +287,18 @@ const HOST_SITE: DevSiteConfig = {
     enabled: true,
 };
 
-function serviceManager(runtime: Fake, services: Record<string, DevServices>, workspaces = [WS]) {
+function serviceManager(
+    runtime: Fake,
+    services: Record<string, DevServices>,
+    workspaces = [WS],
+    extra: Partial<Parameters<typeof createDevServiceManager>[0]> = {},
+) {
     return createDevServiceManager({
         resolveRuntime: async () => ({ runtime, detection: await runtime.detect() }),
         listWorkspaces: () => workspaces,
         devServicesFor: (id) => services[id] ?? {},
         engineAdmin: (req) => ({ user: req.adminUser, password: `admin-${req.recordKey}` }),
+        ...extra,
     });
 }
 
@@ -627,6 +668,247 @@ describe('workspace open', () => {
         await lifecycle.onWorkspaceOpen(WS.id);
 
         expect(services.hostEnvFor(WS.id)).toMatchObject({ PGHOST: '127.0.0.1' });
+    });
+});
+
+// --- workspace open: the HOST-NATIVE services (genie#573) --------------------
+
+/**
+ * A HOST-NATIVE service has nothing to adopt.
+ *
+ * `adopt()` fills `live` at boot by finding the CONTAINER that Docker kept
+ * running — which is the whole answer for an engine carrying
+ * `restart: unless-stopped`, and no answer at all for the bundled Sockudo, which
+ * is a child of Genie's own process and dies with it. Boot adoption therefore
+ * looked for `genie-svc-websockets-1`, found nothing, and moved on; worse, it
+ * returned before even looking on a machine with no container runtime, so a
+ * service that needs no Docker whatsoever was skipped for the absence of
+ * something it does not use.
+ *
+ * The cost was not "not adopted": it was a workspace whose WebSockets stayed
+ * dark after every Genie restart, so terminals spawned there composed no
+ * `REVERB_*` at all — repaired only incidentally, when something else (a site
+ * start, whose `serviceEnvFor` acquires every enabled service) happened to
+ * spawn it.
+ *
+ * So OPEN acquires them, alongside genie#559's deferred adoption pass. Open is a
+ * different moment from boot with a different contract: it already ensures a
+ * whole container sandbox, gated on the workspace actually using the dev server.
+ * That gate is what is kept — a workspace nobody opened still starts nothing —
+ * and `adopt()`'s "never start one" contract is left exactly as it was.
+ */
+describe('workspace open acquires host-native services', () => {
+    function openLifecycle(
+        services: ReturnType<typeof serviceManager>,
+        opts: { runtime: Fake | null; workspaces?: typeof WS[] } = { runtime: null },
+    ) {
+        const workspaces = opts.workspaces ?? [WS];
+        return createDevServerLifecycle({
+            resolveRuntime: async () =>
+                opts.runtime
+                    ? { runtime: opts.runtime, detection: DOCKER_OK }
+                    : { runtime: null, detection: NO_RUNTIME },
+            workspaceFor: (id) => workspaces.find((w) => w.id === id) ?? null,
+            devSitesFor: () => ({}),
+            devServicesFor: (id): DevServices =>
+                id === OTHER.id ? { 'ws-b': WEBSOCKETS } : { 'ws-a': WEBSOCKETS },
+            sites: () => null,
+            services: () => services,
+            platform: 'linux',
+            hostIds: null,
+        });
+    }
+
+    it('starts the workspace’s WebSockets on open, so its terminals get REVERB_*', async () => {
+        const host = fakeHostWebSockets();
+        const runtime = fakeRuntime();
+        const services = serviceManager(runtime, { [WS.id]: { 'ws-a': WEBSOCKETS } }, [WS], {
+            hostWebSockets: host.service,
+        });
+        const lifecycle = openLifecycle(services, { runtime });
+
+        // Boot adopts what survived, and NOTHING did: the Sockudo was a child of
+        // the Genie that just exited. This is the state a restart leaves behind.
+        await lifecycle.onBoot();
+        expect(host.acquired).toEqual([]);
+        expect(services.hostEnvFor(WS.id)).toEqual({});
+
+        await lifecycle.onWorkspaceOpen(WS.id);
+
+        expect(host.acquired).toEqual(['ws_acme']);
+        expect(services.hostEnvFor(WS.id)).toMatchObject({
+            REVERB_HOST: '127.0.0.1',
+            REVERB_PORT: '49123',
+        });
+        expect(services.list(WS.id)[0]?.state).toBe('running');
+    });
+
+    it('starts it on a machine with NO container runtime — it needs none', async () => {
+        // The sharpest half of the bug. `adopt()` resolves the container runtime
+        // FIRST and returns when there is none, so on a Docker-less machine the
+        // one service that requires no Docker was the one guaranteed never to
+        // come up. Open still reports `no-runtime` (no sandbox was warmed) — and
+        // the WebSockets is live anyway.
+        const host = fakeHostWebSockets();
+        const services = serviceManager(
+            fakeRuntime({ detection: NO_RUNTIME }),
+            { [WS.id]: { 'ws-a': WEBSOCKETS } },
+            [WS],
+            {
+                resolveRuntime: async () => ({ runtime: null, detection: NO_RUNTIME }),
+                hostWebSockets: host.service,
+            },
+        );
+        const lifecycle = openLifecycle(services, { runtime: null });
+
+        const result = await lifecycle.onWorkspaceOpen(WS.id);
+
+        expect(result).toEqual({ ensured: false, reason: 'no-runtime' });
+        expect(host.acquired).toEqual(['ws_acme']);
+        expect(services.hostEnvFor(WS.id)).toMatchObject({ REVERB_PORT: '49123' });
+    });
+
+    it('starts NOTHING for a workspace nobody opened — the gate boot has is kept', async () => {
+        // The reason this is not simply done at boot. One Reverb per workspace
+        // with `websockets` enabled, opened or not, is the accumulation
+        // `adopt()`'s contract exists to prevent, in a different shape.
+        const host = fakeHostWebSockets();
+        const runtime = fakeRuntime();
+        const services = serviceManager(runtime, { [WS.id]: { 'ws-a': WEBSOCKETS } }, [WS], {
+            hostWebSockets: host.service,
+        });
+
+        await openLifecycle(services, { runtime }).onBoot();
+
+        expect(host.acquired).toEqual([]);
+        expect(services.list(WS.id)[0]?.state).toBe('stopped');
+    });
+
+    it('is IDEMPOTENT — opening the same workspace twice acquires once', async () => {
+        const host = fakeHostWebSockets();
+        const runtime = fakeRuntime();
+        const services = serviceManager(runtime, { [WS.id]: { 'ws-a': WEBSOCKETS } }, [WS], {
+            hostWebSockets: host.service,
+        });
+        const lifecycle = openLifecycle(services, { runtime });
+
+        await lifecycle.onWorkspaceOpen(WS.id);
+        await lifecycle.onWorkspaceOpen(WS.id);
+
+        expect(host.acquired).toEqual(['ws_acme']);
+        expect(services.list(WS.id)[0]?.holders).toBe(1);
+    });
+
+    it('does NOT start a service the user has disabled', async () => {
+        const host = fakeHostWebSockets();
+        const runtime = fakeRuntime();
+        const services = serviceManager(
+            runtime,
+            { [WS.id]: { 'ws-a': { ...WEBSOCKETS, enabled: false } } },
+            [WS],
+            { hostWebSockets: host.service },
+        );
+        const lifecycle = createDevServerLifecycle({
+            resolveRuntime: async () => ({ runtime, detection: DOCKER_OK }),
+            workspaceFor: () => WS,
+            devSitesFor: () => ({}),
+            devServicesFor: () => ({ 'ws-a': { ...WEBSOCKETS, enabled: false } }),
+            sites: () => null,
+            services: () => services,
+            platform: 'linux',
+            hostIds: null,
+        });
+
+        await lifecycle.onWorkspaceOpen(WS.id);
+
+        expect(host.acquired).toEqual([]);
+        expect(services.list(WS.id)[0]?.state).toBe('stopped');
+    });
+
+    it('counts BOTH workspaces as holders, so one closing does not take the other’s Sockudo down', async () => {
+        // One Sockudo process serves every workspace, each as its own app. The
+        // refcount is the only thing standing between "beta released" and "acme's
+        // WebSockets went dark", and an open that acquired without registering a
+        // holder would produce exactly that on the next release.
+        const host = fakeHostWebSockets();
+        const runtime = fakeRuntime();
+        const services = serviceManager(
+            runtime,
+            { [WS.id]: { 'ws-a': WEBSOCKETS }, [OTHER.id]: { 'ws-b': WEBSOCKETS } },
+            [WS, OTHER],
+            { hostWebSockets: host.service },
+        );
+        const lifecycle = openLifecycle(services, { runtime, workspaces: [WS, OTHER] });
+
+        await lifecycle.onWorkspaceOpen(WS.id);
+        await lifecycle.onWorkspaceOpen(OTHER.id);
+
+        expect(host.acquired).toEqual(['ws_acme', 'ws_beta']);
+        expect(services.list(WS.id)[0]?.holders).toBe(2);
+
+        await services.release(OTHER.id, 'ws-b');
+
+        expect(services.list(WS.id)[0]?.holders).toBe(1);
+        expect(host.stops).toEqual([]); // still held by acme
+        expect(services.hostEnvFor(WS.id)).toMatchObject({ REVERB_PORT: '49123' });
+    });
+
+    it('does not disturb a CONTAINER service — those are adoption’s job, not open’s', async () => {
+        // Open must not become a back door into starting databases. A Postgres
+        // that is not running stays stopped; only the host-native engines, which
+        // have nothing to adopt, are acquired here.
+        const host = fakeHostWebSockets();
+        const runtime = fakeRuntime();
+        const services = serviceManager(
+            runtime,
+            { [WS.id]: { 'ws-a': WEBSOCKETS, 'svc-a': PG } },
+            [WS],
+            { hostWebSockets: host.service },
+        );
+        const lifecycle = createDevServerLifecycle({
+            resolveRuntime: async () => ({ runtime, detection: DOCKER_OK }),
+            workspaceFor: () => WS,
+            devSitesFor: () => ({}),
+            devServicesFor: () => ({ 'ws-a': WEBSOCKETS, 'svc-a': PG }),
+            sites: () => null,
+            services: () => services,
+            platform: 'linux',
+            hostIds: null,
+        });
+
+        await lifecycle.onWorkspaceOpen(WS.id);
+
+        expect(host.acquired).toEqual(['ws_acme']);
+        expect(runtime.ran.map((s) => s.name)).not.toContain(serviceContainerNameFor('postgres-16'));
+        expect(services.list(WS.id).find((r) => r.serviceId === 'svc-a')?.state).toBe('stopped');
+    });
+
+    it('still warms the sandbox when the host service cannot start', async () => {
+        // A build without the bundled Sockudo, or one whose binary is missing.
+        // The service records its own failure (which `list` then explains); what
+        // must NOT happen is the rest of the open being lost with it — the
+        // sandbox is the thing every site in this workspace needs.
+        const runtime = fakeRuntime();
+        const services = serviceManager(runtime, { [WS.id]: { 'ws-a': WEBSOCKETS } }, [WS], {
+            hostWebSockets: {
+                acquire: async () => {
+                    throw new Error('Sockudo runtime is missing.');
+                },
+                release: async () => {},
+                logs: () => '',
+                stop: async () => {},
+            },
+        });
+        const lifecycle = openLifecycle(services, { runtime });
+
+        const result = await lifecycle.onWorkspaceOpen(WS.id);
+
+        expect(result.ensured).toBe(true);
+        expect(runtime.ran.map((s) => s.name)).toEqual([devContainerNameFor(WS.id)]);
+        expect(services.list(WS.id)[0]).toMatchObject({
+            state: 'failed',
+            error: 'Sockudo runtime is missing.',
+        });
     });
 });
 
