@@ -256,6 +256,17 @@ test('the file drawer scrolls, wraps, and renders markdown (genie#603)', async (
     const wrapped = await panel.evaluate((el) => el.scrollWidth <= el.clientWidth + 1);
     expect(wrapped).toBe(true);
 
+    // --- 5. The editor is dark, whatever the window is doing -----------------
+    // Genie's convention: terminals and editors stay dark in BOTH themes, which
+    // is why `CodePanel.tsx` pins `theme="dark"` rather than resolving one. The
+    // drawer carried `<FileViewer>`'s "auto" at first and rendered WHITE in light
+    // mode beside a Code panel that was still dark. `#18181b` is fancy-code's
+    // dark ground, so this holds whatever `prefers-color-scheme` the runner
+    // reports — the DISCRIMINATING case (a light window with a dark editor in
+    // it) is measured in `renderer/components/__tests__/ask-file-preview.test.ts`,
+    // where `auto` demonstrably resolves to `#ffffff`.
+    await expect(panel).toHaveCSS('background-color', 'rgb(24, 24, 27)');
+
     // Back to prose, and closed — the next test starts from a closed drawer at
     // the original width, so wait for the window to give it back rather than
     // leaving a resize in flight for that test to race.

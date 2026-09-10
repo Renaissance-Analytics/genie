@@ -102,13 +102,17 @@ export default function AskFilePreview({ filename, content, source }: Props) {
             readOnly
             lineNumbers
             wordWrap
-            // Unchanged from what `<FileViewer>` defaulted to. fancy-code's
-            // "auto" reads the OS `prefers-color-scheme`, NOT Genie's own `.dark`
-            // class, so a user who PINS a theme against their OS gets an editor
-            // that disagrees with the window around it. That is true of every
-            // fancy-code surface in Genie and predates this drawer; it is not
-            // one of genie#603's three bugs and is not quietly changed here.
-            theme="auto"
+            // PINNED, exactly as the file editor pins it (`CodePanel.tsx`).
+            // Editors and terminals stay dark in both of Genie's themes — the
+            // same convention that has `--term-bg` / `--term-fg` declared once,
+            // dark, and never flipping. This carried `<FileViewer>`'s "auto" at
+            // first, which is not "the app's theme": fancy-code resolves it from
+            // the OS `prefers-color-scheme`, while Genie's theme is a `.dark`
+            // class a pinned preference can set AGAINST the OS. So the drawer
+            // could disagree with the window it sits in and with every other
+            // editor in the app at once, and in LIGHT mode it rendered white
+            // beside a Code panel that was still dark.
+            theme="dark"
         >
             <CodeEditor.Panel />
             {/* Wrap is fixed ON and nothing in this drawer can toggle it, so the
