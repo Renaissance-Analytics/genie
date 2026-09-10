@@ -146,9 +146,10 @@ describe('the reconnect covers EVERY server the upgrade replaced (genie#613)', (
     it('asks Claude Code for one command, because it only gets one', () => {
         // `wakeTerminalIfIdle` stamps `lastWokenAt` and `shouldWakeAgent` allows
         // one wake per idle period, so the second command of a pair would be
-        // refused — and `/mcp` is a built-in local command, so the agent cannot
-        // run the leftover itself. Claude Code's own grammar takes a single
-        // server name or the literal `all`, so a set of two can only be `all`.
+        // refused — and `/mcp` is a built-in local command, which the model has
+        // no way to invoke, so the agent cannot run the leftover itself. Claude
+        // Code's own grammar takes a single server name or the literal `all`, so
+        // a set of two can only be `all`.
         expect(claudeReconnectCommand([GENIE_SERVER_NAME])).toBe('/mcp reconnect genie');
         expect(claudeReconnectCommand(GENIE_ENDPOINT_SERVERS.claude)).toBe('/mcp reconnect all');
         expect(claudeReconnectCommand(['a', 'b', 'c'])).toBe('/mcp reconnect all');

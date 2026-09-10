@@ -94,18 +94,20 @@ export function manualReconnectNotice(servers: readonly string[]): string {
  *
  * Two constraints decide this, and together they leave one answer:
  *
- *  1. **Claude Code's grammar takes one name, or `all`.** Its own usage string
- *     is `/mcp [reconnect <server>|enable|disable [<server>|all]]`, and the
- *     handler compares the argument to `"all"` and otherwise looks up a single
- *     server by name. There is no `/mcp reconnect a b` form to reach for.
+ *  1. **Claude Code's grammar takes one name, or `all`.** Read off the shipped
+ *     CLI (claude-code 2.1.267): the command declares
+ *     `argumentHint: "[reconnect <server>|enable|disable [<server>|all]]"`, and
+ *     its handler compares the argument to `"all"` and otherwise looks up a
+ *     single server by name. There is no `/mcp reconnect a b` form to reach for.
  *  2. **Genie gets exactly ONE typed command per upgrade.**
  *     `wakeTerminalIfIdle` stamps `lastWokenAt` when a nudge lands and
  *     `shouldWakeAgent` allows one wake per idle period, so a second command
  *     typed straight after the first is refused — by design. Nor can the agent
- *     run the leftover itself: `/mcp` is a built-in local command, not a
- *     model-invocable one, so "run this other one yourself" is advice a Claude
- *     agent cannot act on. That is what made the hard-coded single name a
- *     SILENT failure rather than a partial one.
+ *     be told to run the leftover itself: `/mcp` is declared in that same CLI as
+ *     a `local` / `local-jsx` command, and the SlashCommand tool the model can
+ *     call surfaces SKILL commands, so a built-in one is not a thing an agent
+ *     can invoke. That is what made the hard-coded single name a SILENT failure
+ *     rather than a partial one — nobody but Genie or the human could finish it.
  *
  * So a single server is named directly, and two or more can only be `all`.
  *
