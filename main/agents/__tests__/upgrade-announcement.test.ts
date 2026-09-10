@@ -6,15 +6,28 @@ import {
     formatAgentUpgradeMessage,
     withWorkstationOperator,
 } from '../upgrade-announcement';
-import { MANUAL_RECONNECT_NOTICE, type McpRecovery } from '../mcp-reconnect';
+import { reconnectStrategy, type McpRecovery } from '../mcp-reconnect';
 import { upgradeNoticeMode } from '../agent-mode';
 import { GENIE_OS_AGENT } from '../os-agent';
 
+/* Built from the REAL strategies rather than hand-rolled shapes: the notice's
+   whole job is to relay what an upgrade did to this agent's servers, so a
+   fixture that invents its own server list would test the composer against a
+   world Genie never produces (genie#613). */
+
 /** The recovery a Claude terminal gets when the reconnect command actually ran. */
-const RECONNECTED: McpRecovery = {
-    strategy: { kind: 'command', text: '/mcp reconnect genie' },
-    applied: true,
-};
+const RECONNECTED: McpRecovery = { strategy: reconnectStrategy('claude'), applied: true };
+
+/** …and one it gets when the terminal refused the command. */
+const HELD_BACK_CLAUDE: McpRecovery = { strategy: reconnectStrategy('claude'), applied: false };
+
+/** A provider Genie cannot repair at all — kilo, the Genie TUI, `custom`. */
+const MANUAL: McpRecovery = { strategy: reconnectStrategy('kilo'), applied: false };
+const MANUAL_NOTICE =
+    MANUAL.strategy.kind === 'notice' ? MANUAL.strategy.text : '(not a notice strategy)';
+
+/** The one command Claude Code takes for a set of two — see `claudeReconnectCommand`. */
+const CLAUDE_COMMAND = '/mcp reconnect all';
 
 /**
  * The stagger's scheduler seam, driven SYNCHRONOUSLY (genie#353). Tests drive
@@ -40,9 +53,13 @@ describe('agent upgrade announcement', () => {
             ),
         ).toBe(
             'Genie upgraded to v0.8.0. What changed:\n- Native AgentInbox transport\n- What’s New menu\n\n' +
-            "The upgrade replaced the process behind `genie`'s MCP endpoint, and Genie cannot tell whether " +
-            'yours survived it — call a `genie` tool and see, rather than assuming either way. ' +
-            'Genie ran `/mcp reconnect genie` in this terminal to restore it. If `genie` still does not answer, run it again yourself.\n\n' +
+            "The upgrade replaced the process behind Genie's MCP endpoint. `genie` and " +
+            '`genie-agentinbox-channel` connect to it. Genie cannot tell whether yours survived it — ' +
+            'call a `genie` tool and see, rather than assuming either way. That settles `genie` and ' +
+            'nothing else — a delivery channel that is down reads exactly like an empty inbox. ' +
+            'Genie ran `/mcp reconnect all` in this terminal to restore `genie` and ' +
+            '`genie-agentinbox-channel`. If any of them still does not answer, run ' +
+            '`/mcp reconnect all` again yourself.\n\n' +
             'Once `genie` answers again: if this terminal predates AMS, call agentUpgrade and follow its ordered migration guide.\n\n' +
             upgradeNoticeMode('manual') + '\n\n' +
             'This is a system notice; no reply is needed.',
@@ -64,7 +81,7 @@ describe('agent upgrade announcement', () => {
             // answer — is no longer asserted at all (genie#371).
             expect(msg).toContain('replaced the process behind');
             // The restore step is stated BEFORE the migration is asked for…
-            expect(msg.indexOf('/mcp reconnect genie')).toBeLessThan(msg.indexOf('agentUpgrade'));
+            expect(msg.indexOf(CLAUDE_COMMAND)).toBeLessThan(msg.indexOf('agentUpgrade'));
             // …and the migration is CONDITIONED on the connection being back,
             // not demanded "now".
             expect(msg).toContain('Once `genie` answers again');
@@ -75,27 +92,15 @@ describe('agent upgrade announcement', () => {
             // A kiwi/custom/Genie-TUI agent gets no reconnect at all. Handing it
             // Claude's sentence would tell it a command had been run in a
             // terminal that never saw one.
-            const msg = formatAgentUpgradeMessage(
-                '0.8.0',
-                [],
-                { strategy: { kind: 'notice', text: MANUAL_RECONNECT_NOTICE }, applied: false },
-                'manual',
-                'unknown',
-            );
-            expect(msg).toContain(MANUAL_RECONNECT_NOTICE);
-            expect(msg).not.toContain('/mcp reconnect genie');
+            const msg = formatAgentUpgradeMessage('0.8.0', [], MANUAL, 'manual', 'unknown');
+            expect(msg).toContain(MANUAL_NOTICE);
+            expect(msg).not.toContain('/mcp reconnect');
         });
 
         it('says a reconnect was HELD BACK when the terminal refused it', () => {
-            const msg = formatAgentUpgradeMessage(
-                '0.8.0',
-                [],
-                { strategy: { kind: 'command', text: '/mcp reconnect genie' }, applied: false },
-                'manual',
-                'unknown',
-            );
+            const msg = formatAgentUpgradeMessage('0.8.0', [], HELD_BACK_CLAUDE, 'manual', 'unknown');
             expect(msg).toContain('held the command back');
-            expect(msg).not.toContain('Genie ran `/mcp reconnect genie`');
+            expect(msg).not.toContain(`Genie ran \`${CLAUDE_COMMAND}\``);
         });
     });
 
@@ -117,10 +122,7 @@ describe('agent upgrade announcement', () => {
      * the opposite, so `unknown` is a real state and not a synonym for dead.
      */
     describe('the notice does not assert a connection state it has not established (genie#371)', () => {
-        const HELD_BACK: McpRecovery = {
-            strategy: { kind: 'command', text: '/mcp reconnect genie' },
-            applied: false,
-        };
+        const HELD_BACK = HELD_BACK_CLAUDE;
 
         it('never claims the tools do not answer — in either evidence state', () => {
             for (const evidence of ['attached', 'unknown'] as const) {
@@ -149,7 +151,7 @@ describe('agent upgrade announcement', () => {
         it('still carries the reconnect instruction in BOTH states', () => {
             for (const evidence of ['attached', 'unknown'] as const) {
                 expect(formatAgentUpgradeMessage('0.8.0', [], HELD_BACK, 'manual', evidence))
-                    .toContain('Run `/mcp reconnect genie` in this terminal');
+                    .toContain(`Run \`${CLAUDE_COMMAND}\` in this terminal`);
             }
         });
 
@@ -228,8 +230,8 @@ describe('agent upgrade announcement', () => {
         // are told different truths, so the message cannot be built once.
         const send = vi.fn((_agentId: string, _text: string) => true);
         const recoveries: Record<string, McpRecovery> = {
-            'a-claude': { strategy: { kind: 'command', text: '/mcp reconnect genie' }, applied: true },
-            'a-kiwi': { strategy: { kind: 'notice', text: MANUAL_RECONNECT_NOTICE }, applied: false },
+            'a-claude': RECONNECTED,
+            'a-kiwi': MANUAL,
         };
 
         announceAgentUpgrade({
@@ -246,9 +248,9 @@ describe('agent upgrade announcement', () => {
             schedule: runNow,
         });
 
-        expect(send.mock.calls[0][1]).toContain('Genie ran `/mcp reconnect genie`');
-        expect(send.mock.calls[1][1]).toContain(MANUAL_RECONNECT_NOTICE);
-        expect(send.mock.calls[1][1]).not.toContain('/mcp reconnect genie');
+        expect(send.mock.calls[0][1]).toContain(`Genie ran \`${CLAUDE_COMMAND}\``);
+        expect(send.mock.calls[1][1]).toContain(MANUAL_NOTICE);
+        expect(send.mock.calls[1][1]).not.toContain('/mcp reconnect');
     });
 
     it('does nothing when this version was already announced', () => {

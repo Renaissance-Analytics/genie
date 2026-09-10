@@ -48,19 +48,15 @@ const MANAGED = new Set<string>([
 /** The entries an agent cannot function without. */
 const REQUIRED = new Set<string>([GENIE_SERVER_NAME, AGENTINBOX_CLAUDE_CHANNEL_NAME]);
 
-/**
- * Which config an agent's TUI actually reads.
- *
- * A registered-but-never-started agent has `tui: null`, and it will almost
- * certainly start under Claude Code. Showing it nothing would read as "this
- * agent has no MCP servers", which is false and is exactly the invisible-set
- * problem again.
- */
-export function mcpSourceForTui(tui: string | null): McpConfigSource {
-    if (tui === 'cursor') return 'cursor';
-    if (tui === 'codex') return 'codex';
-    return 'claude';
-}
+/* `mcpSourceForTui` now lives in `mcp/genie-servers.ts` — a zero-import leaf —
+   because the post-upgrade reconnect needs the same TUI→config mapping to work
+   out which servers an upgrade replaced, and that module is PURE while this one
+   reaches `mcp/agent-config.ts` (fs, db, plugins). Re-exported so this stays its
+   address for the surfaces already reading it. See genie#613. */
+export { mcpSourceForTui } from '../mcp/genie-servers';
+// Re-exporting does NOT bind the name locally, and `agentMcpServers` below uses
+// it.
+import { mcpSourceForTui } from '../mcp/genie-servers';
 
 /** The workspace-relative path of the config a source lives in. */
 export const MCP_CONFIG_RELATIVE_PATH: Record<McpConfigSource, string> = {

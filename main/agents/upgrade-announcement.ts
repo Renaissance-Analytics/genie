@@ -1,6 +1,11 @@
 import { NEVER_NUDGED_AGENT_NAME } from './reserved-names';
 import { GENIE_OS_AGENT } from './os-agent';
-import { MANUAL_RECOVERY, recoveryInstruction, type McpRecovery } from './mcp-reconnect';
+import {
+    MANUAL_RECOVERY,
+    namedServers,
+    recoveryInstruction,
+    type McpRecovery,
+} from './mcp-reconnect';
 import { DEFAULT_AGENT_MODE, upgradeNoticeMode, type AgentMode } from './agent-mode';
 
 /**
@@ -119,19 +124,37 @@ export type McpConnectionEvidence = 'attached' | 'unknown';
  * owner who was reading it through the very tools it declared dead.
  *
  * Neither branch asserts the connection is gone, because neither can.
+ *
+ * `servers` is what genie#613 added: the endpoint is one process, but more than
+ * one of this agent's MCP servers talks to it, and the paragraph named only
+ * `genie`. A `genie` tool call is proof about `genie` and about nothing else —
+ * the AgentInbox channel is a separate connection, and a dead one is
+ * indistinguishable from an empty inbox — so where there is more than one
+ * server, this says so instead of letting one good tool call read as the
+ * all-clear.
  */
-function connectionSentence(evidence: McpConnectionEvidence): string {
+function connectionSentence(
+    evidence: McpConnectionEvidence,
+    servers: readonly string[],
+): string {
+    const named = namedServers(servers);
+    const endpoint = named
+        ? `The upgrade replaced the process behind Genie's MCP endpoint. ${named} ${servers.length === 1 ? 'connects' : 'connect'} to it.`
+        : 'The upgrade replaced the process behind Genie\'s MCP endpoint.';
     if (evidence === 'attached') {
         return (
-            'The upgrade replaced the process behind `genie`\'s MCP endpoint. Your ' +
-            'harness channel has already re-attached to the replacement, so `genie`\'s ' +
-            'tools may be answering for you too — call one before you reconnect.'
+            `${endpoint} Your harness channel has already re-attached to the ` +
+            'replacement, so `genie`\'s tools may be answering for you too — call one ' +
+            'before you reconnect.'
         );
     }
+    const onlySettlesGenie =
+        servers.length > 1
+            ? ' That settles `genie` and nothing else — a delivery channel that is down reads exactly like an empty inbox.'
+            : '';
     return (
-        'The upgrade replaced the process behind `genie`\'s MCP endpoint, and Genie ' +
-        'cannot tell whether yours survived it — call a `genie` tool and see, rather ' +
-        'than assuming either way.'
+        `${endpoint} Genie cannot tell whether yours survived it — call a \`genie\` ` +
+        `tool and see, rather than assuming either way.${onlySettlesGenie}`
     );
 }
 
@@ -172,7 +195,7 @@ export function formatAgentUpgradeMessage(
     const summary = changes.length > 0
         ? ` What changed:\n${changes.map((change) => `- ${change}`).join('\n')}`
         : '';
-    return `Genie upgraded to v${version}.${summary}\n\n${connectionSentence(evidence)} ${recoveryInstruction(recovery)}\n\nOnce \`genie\` answers again: if this terminal predates AMS, call agentUpgrade and follow its ordered migration guide.\n\n${upgradeNoticeMode(mode)}\n\nThis is a system notice; no reply is needed.`;
+    return `Genie upgraded to v${version}.${summary}\n\n${connectionSentence(evidence, recovery.strategy.servers)} ${recoveryInstruction(recovery)}\n\nOnce \`genie\` answers again: if this terminal predates AMS, call agentUpgrade and follow its ordered migration guide.\n\n${upgradeNoticeMode(mode)}\n\nThis is a system notice; no reply is needed.`;
 }
 
 /** One agent the announcement may reach. */
