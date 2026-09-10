@@ -16,7 +16,7 @@
  * Everything here is PURE (string in ⇒ string out), so the block math is
  * deterministically testable. The privileged write to the real hosts file needs
  * elevation (Administrator on Windows, root elsewhere) and is validated on a real
- * machine; {@link reconcileHostsFile} isolates that IO behind an injected pair so
+ * machine; {@link stageHostsFile} isolates that IO behind an injected pair so
  * the "skip the write (and the elevation prompt) when nothing changed" logic is
  * testable without touching the OS.
  */
@@ -122,17 +122,22 @@ export function hostsBlockNeedsUpdate(content: string, genNames: string[]): bool
     return upsertGenHostsBlock(content, genNames) !== content;
 }
 
-/** Read + compute + (only if changed) write the hosts file. The `io` pair is
- *  injected so callers supply the real elevated reader/writer while tests supply
- *  fakes — the point being to PROVE we never write (never prompt for elevation)
- *  when nothing changed. */
-export async function reconcileHostsFile(
+/** Read + compute + (only if changed) STAGE the hosts write. The `io` pair is
+ *  injected so callers supply the real reader/stager while tests supply fakes —
+ *  the point being to PROVE we never stage, and so never contribute an elevation
+ *  prompt, when nothing changed.
+ *
+ *  Staging rather than writing: the privileged copy is DEFERRED so it can travel
+ *  in the same elevation as whatever else the pass needs (genie#604).
+ *  `prepareWrite` returns whatever the caller will run later — a `PrivilegedStep`
+ *  for the real effects — and stays generic here so the block math keeps no
+ *  opinion about elevation. */
+export async function stageHostsFile<TStep>(
     genNames: string[],
-    io: { read: () => Promise<string>; write: (next: string) => Promise<void> },
-): Promise<{ changed: boolean }> {
+    io: { read: () => Promise<string>; prepareWrite: (next: string) => Promise<TStep> },
+): Promise<{ changed: false } | { changed: true; step: TStep }> {
     const current = await io.read();
     const next = upsertGenHostsBlock(current, genNames);
     if (next === current) return { changed: false };
-    await io.write(next);
-    return { changed: true };
+    return { changed: true, step: await io.prepareWrite(next) };
 }

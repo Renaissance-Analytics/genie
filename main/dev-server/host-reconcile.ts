@@ -1,6 +1,7 @@
 import { buildHostCaddyfile } from './host-caddyfile';
 import { issueGenLeaf, loadOrCreateGenCa, type GenCaStore } from './host-ca';
-import { reconcileHostsFile } from './hosts-file';
+import type { PrivilegedStep } from './elevate';
+import { stageHostsFile } from './hosts-file';
 
 /**
  * The host-native reconcile brain: make the HOST match the machine's live set of
@@ -14,6 +15,13 @@ import { reconcileHostsFile } from './hosts-file';
  *
  * Order matters: a trusted CA + a leaf must exist BEFORE Caddy is told to serve
  * with it, and the hosts entry must exist for the name to resolve at all.
+ *
+ * It also owns the pass's ELEVATION BUDGET (genie#604). The two privileged
+ * actions — the trust-store install and the hosts write — used to elevate
+ * separately, so enabling one browser-exposed site cost the user two
+ * administrator approvals. They are now STAGED as they become necessary and run
+ * together under a single elevation; a pass that needs neither elevates not at
+ * all, which is the steady state.
  */
 
 export interface HostSiteRoute {
@@ -34,11 +42,18 @@ export interface HostReconcileEffects {
     caStore: GenCaStore;
     /** Persist the freshly-issued leaf, returning the paths Caddy's `tls` references. */
     writeLeaf: (leaf: { certPem: string; keyPem: string }) => Promise<{ certPath: string; keyPath: string }>;
-    /** Install the CA into the OS trust store (elevated). Called ONLY when a new CA
-     *  was minted — so the one-time Administrator prompt fires once, not every run. */
-    installCaTrust: (caPem: string) => Promise<void>;
-    /** The hosts-file reader + (elevated) writer. */
-    hostsIo: { read: () => Promise<string>; write: (next: string) => Promise<void> };
+    /** Stage the CA cert on disk and return the privileged trust-store install to
+     *  run. Called ONLY when a new CA was minted — an existing, still-valid CA is
+     *  already trusted, so nothing is staged and nothing prompts. */
+    prepareCaTrust: (caPem: string) => Promise<PrivilegedStep>;
+    /** The hosts-file reader + stager. `prepareWrite` writes NOTHING privileged:
+     *  it stages the new content and returns the copy to run under the pass's one
+     *  elevation. */
+    hostsIo: { read: () => Promise<string>; prepareWrite: (next: string) => Promise<PrivilegedStep> };
+    /** Run every step this pass staged under a SINGLE elevation, throwing an error
+     *  that names the step that failed. The brain calls it only when something was
+     *  staged; an empty list is a no-op that elevates nothing. */
+    applyPrivileged: (steps: PrivilegedStep[]) => Promise<void>;
     /** Write the host Caddyfile and reload the host Caddy. */
     writeCaddyfileAndReload: (caddyfile: string) => Promise<void>;
 }
@@ -70,6 +85,13 @@ export async function reconcileHostSites(
     const routes = [...bySite.values()].sort((a, b) => a.genName.localeCompare(b.genName));
     const genNames = routes.map((r) => r.genName);
 
+    // The privileged work this pass owes, collected rather than performed: every
+    // step runs under ONE elevation at step 3½, so enabling a browser-exposed site
+    // costs the user a single administrator approval instead of one per action
+    // (genie#604). Each step is added only when it is genuinely needed, so a pass
+    // that owes nothing elevates not at all.
+    const privileged: PrivilegedStep[] = [];
+
     // 1 + 2. Ensure a trusted CA and issue ONE multi-SAN leaf — but ONLY when there
     //    are sites to serve. An empty reconcile is a DRAIN (clear the hosts block +
     //    write a bare Caddyfile); it needs no cert and must NEVER mint/install a CA,
@@ -81,14 +103,20 @@ export async function reconcileHostSites(
         created = ca.created;
         // Install into the trust store ONLY when a new CA was minted (an existing,
         // still-valid CA is already trusted).
-        if (created) await fx.installCaTrust(ca.material.caPem);
+        if (created) privileged.push(await fx.prepareCaTrust(ca.material.caPem));
         const leaf = issueGenLeaf(ca.material, genNames);
         tls = await fx.writeLeaf(leaf);
     }
 
-    // 3. Reconcile the OS hosts file (adds/removes our block; only writes — and only
-    //    prompts for elevation — when something actually changed).
-    const { changed: hostsChanged } = await reconcileHostsFile(genNames, fx.hostsIo);
+    // 3. Reconcile the OS hosts file (adds/removes our block; only stages — and so
+    //    only contributes to the elevation — when something actually changed).
+    const staged = await stageHostsFile(genNames, fx.hostsIo);
+    const hostsChanged = staged.changed;
+    if (staged.changed) privileged.push(staged.step);
+
+    // 3½. ONE prompt, carrying everything above. Throws naming the failing step, so
+    //     Caddy is never left serving a name whose cert nobody trusts.
+    if (privileged.length > 0) await fx.applyPrivileged(privileged);
 
     // 4. Write + reload the host Caddyfile pointing every vhost at the new leaf.
     const caddyfile = buildHostCaddyfile(

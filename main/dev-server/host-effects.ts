@@ -2,7 +2,7 @@ import type { HostReconcileEffects } from './host-reconcile';
 import type { GenCaMaterial } from './host-ca';
 import { trustStoreInstallCommand } from './host-ca';
 import { applyHostCaddy } from './host-caddy';
-import { elevationLauncherArgv, isProcessElevated, runPrivileged } from './elevate';
+import { isProcessElevated, runPrivilegedBatch, type PrivilegedStep } from './elevate';
 
 /**
  * Wire {@link HostReconcileEffects} to the real host: the on-disk CA + leaf store,
@@ -11,6 +11,14 @@ import { elevationLauncherArgv, isProcessElevated, runPrivileged } from './eleva
  * machine — kept thin, with the fs/spawn primitives injected so the ORCHESTRATION
  * (write-then-install, temp-then-copy, loud throw on privileged failure) is unit-
  * tested and only the leaves need CI/real-machine validation.
+ *
+ * The privileged verbs come in two halves (genie#604): `prepare…` does the
+ * UNPRIVILEGED staging — dropping the CA cert on disk, writing the new hosts
+ * content to a temp file — and returns the command that would install it, while
+ * {@link HostReconcileEffects.applyPrivileged} runs everything the pass staged
+ * under one elevation. Splitting them is what turns two administrator prompts
+ * into one; keeping each step's `label` here is what keeps a batched failure as
+ * legible as the two separate ones were.
  */
 
 export interface HostEffectPaths {
@@ -42,6 +50,12 @@ export interface HostEffectIo {
     isElevated?: () => boolean;
 }
 
+/** Step ids for the two privileged actions a reconcile can owe — stable strings
+ *  so a batch failure can be matched on in tests and logs without depending on
+ *  the user-facing label. */
+export const CA_TRUST_STEP_ID = 'ca-trust';
+export const HOSTS_FILE_STEP_ID = 'hosts-file';
+
 /** The command that copies the staged hosts file over the real one, per OS. */
 export function hostsCopyCommand(
     src: string,
@@ -54,19 +68,6 @@ export function hostsCopyCommand(
 
 export function buildHostReconcileEffects(paths: HostEffectPaths, io: HostEffectIo): HostReconcileEffects {
     const isElevated = io.isElevated ?? (() => isProcessElevated(io.platform));
-    const privileged = (cmd: string, args: string[]) =>
-        runPrivileged(
-            { cmd, args },
-            {
-                platform: io.platform,
-                isElevated,
-                spawnDirect: (c, a) => io.spawn(c, a),
-                spawnElevated: (c, a) => {
-                    const [lc, ...la] = elevationLauncherArgv(c, a, io.platform);
-                    return io.spawn(lc, la);
-                },
-            },
-        );
 
     return {
         caStore: {
@@ -82,27 +83,40 @@ export function buildHostReconcileEffects(paths: HostEffectPaths, io: HostEffect
             await io.writeFile(paths.leafKeyPath, leaf.keyPem, { mode: 0o600 });
             return { certPath: paths.leafCertPath, keyPath: paths.leafKeyPath };
         },
-        installCaTrust: async (caPem: string) => {
+        prepareCaTrust: async (caPem: string) => {
             // The trust command reads the cert from disk — make sure it's there.
             await io.writeFile(paths.caCertPath, caPem);
             const cmd = trustStoreInstallCommand(paths.caCertPath, io.platform);
-            const res = await privileged(cmd.cmd, cmd.args);
-            if (!res.ok) {
-                throw new Error(`Genie could not install its local CA into the trust store: ${res.error}`);
-            }
+            return {
+                id: CA_TRUST_STEP_ID,
+                label: 'install its local CA into the trust store',
+                run: { cmd: cmd.cmd, args: cmd.args },
+            };
         },
         hostsIo: {
             read: async () => (await io.readFile(paths.hostsFilePath)) ?? '',
-            write: async (next: string) => {
+            prepareWrite: async (next: string) => {
                 // Editing the hosts file needs elevation; stage the new content in a
-                // temp file, then privilege-copy it over the real one.
+                // temp file now, and hand back the copy for the pass's one elevation.
                 const tmp = await io.tempFile(next);
-                const copy = hostsCopyCommand(tmp, paths.hostsFilePath, io.platform);
-                const res = await privileged(copy.cmd, copy.args);
-                if (!res.ok) {
-                    throw new Error(`Genie could not update the hosts file: ${res.error}`);
-                }
+                return {
+                    id: HOSTS_FILE_STEP_ID,
+                    label: 'update the hosts file',
+                    run: hostsCopyCommand(tmp, paths.hostsFilePath, io.platform),
+                };
             },
+        },
+        applyPrivileged: async (steps: PrivilegedStep[]) => {
+            const res = await runPrivilegedBatch(steps, { platform: io.platform, isElevated, spawn: io.spawn });
+            if (res.ok) return;
+            // Name the ACTION, not the batch. A step we can attribute keeps exactly
+            // the sentence it had when it prompted on its own; a failure of the
+            // elevation itself (prompt dismissed) blames no step but must still say
+            // what Genie was trying to do — an opaque "elevated batch failed" would
+            // be a worse trade than the two prompts this replaced.
+            if (res.step) throw new Error(`Genie could not ${res.step.label}: ${res.error}`);
+            const wanted = steps.map((s) => s.label).join(' and ');
+            throw new Error(`Genie could not get Administrator approval to ${wanted}: ${res.error}`);
         },
         writeCaddyfileAndReload: async (caddyfile: string) => {
             const res = await applyHostCaddy(caddyfile, {
