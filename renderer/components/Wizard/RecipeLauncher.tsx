@@ -71,7 +71,7 @@ export default function RecipeLauncher({ workspaceId, workstationId, defaultCwd,
                                     textAlign: 'left',
                                     borderRadius: 8,
                                     cursor: 'pointer',
-                                    border: '1px solid var(--zinc-700)',
+                                    border: '1px solid var(--border-2)',
                                     background: 'transparent',
                                 }}
                             >

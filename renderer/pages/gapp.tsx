@@ -123,7 +123,7 @@ export default function GAppWindow() {
                             cursor: 'pointer',
                             borderBottom:
                                 i === active
-                                    ? '2px solid var(--indigo-400, #818cf8)'
+                                    ? '2px solid var(--agent)'
                                     : '2px solid transparent',
                             // GENIE'S OWN TABS NEVER SHRINK (genie#264). Flows is
                             // APPENDED last, so without this an app with enough
@@ -164,7 +164,7 @@ export default function GAppWindow() {
                             fontSize: 11,
                             letterSpacing: 0.3,
                             textTransform: 'uppercase',
-                            color: 'var(--indigo-300, #a5b4fc)',
+                            color: 'var(--violet-400)',
                             paddingRight: 6,
                         }}
                     >
@@ -197,8 +197,8 @@ export default function GAppWindow() {
                         padding: '6px 12px',
                         fontSize: 11,
                         lineHeight: 1.5,
-                        color: 'var(--amber-200, #fde68a)',
-                        background: 'var(--amber-950, rgba(120, 80, 10, 0.35))',
+                        color: 'var(--amber-400)',
+                        background: 'color-mix(in srgb, var(--amber-500) 14%, transparent)',
                         borderBottom: '1px solid rgba(180, 130, 40, 0.35)',
                         position: 'relative',
                         zIndex: 2,

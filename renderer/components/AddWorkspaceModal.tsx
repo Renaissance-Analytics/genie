@@ -859,7 +859,7 @@ function ContainerRepoNote({
 
     if (plan.reason === 'missing-permission') {
         return (
-            <Text size="xs" style={{ color: 'var(--amber-600)', lineHeight: 1.4 }}>
+            <Text size="xs" style={{ color: 'var(--amber-400)', lineHeight: 1.4 }}>
                 Genie&apos;s GitHub App is missing <strong>repository contents</strong> write access, so
                 this workspace stays on this machine. Approve the permission on GitHub and reconnect
                 (see the warning in the title bar) to back it up.
@@ -958,7 +958,7 @@ function ProjectPicker({
         <div>
             <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
                 <Text size="xs" style={{ fontWeight: 600 }}>
-                    Project <span style={{ fontWeight: 400, color: 'var(--zinc-500)' }}>(optional)</span>
+                    Project <span style={{ fontWeight: 400, color: 'var(--fg-3)' }}>(optional)</span>
                 </Text>
                 {onProjectCreated && (
                     <Action

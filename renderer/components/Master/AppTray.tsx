@@ -103,7 +103,7 @@ export default function AppTray({ onOpenStore }: { onOpenStore: () => void }) {
                             fontSize: 10,
                             background: pill.dev
                                 ? 'var(--amber-500, #f59e0b)'
-                                : 'var(--indigo-400, #818cf8)',
+                                : 'var(--agent)',
                             color: '#0a0a0c',
                         }}
                     >

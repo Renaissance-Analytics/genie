@@ -1663,7 +1663,7 @@ function EnvelopeStep({
                 <div>
                     <Text size="xs" style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>
                         Project{' '}
-                        <span style={{ fontWeight: 400, color: 'var(--zinc-500)' }}>
+                        <span style={{ fontWeight: 400, color: 'var(--fg-3)' }}>
                             (optional)
                         </span>
                     </Text>
