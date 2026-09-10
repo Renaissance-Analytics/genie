@@ -44,10 +44,22 @@ import { join } from 'node:path';
  *
  * …and Tailwind's, because `globals.css` opens with `@import 'tailwindcss'` and
  * its `@theme default` block compiles to `:root`. Those tokens are as real as
- * Genie's own. Two names overlap today — `--shadow-lg` and `--shadow-xs` — and
- * that overlap is not academic: `var(--shadow-lg, 0 12px 32px …)` in the Flow
- * editor looked orphaned, but Tailwind's much lighter `--shadow-lg` was
- * resolving, so the fallback the author wrote had never once painted.
+ * Genie's own, and what Tailwind quietly supplies has now caught two changes
+ * out:
+ *
+ *   · `var(--shadow-lg, 0 12px 32px …)` in the Flow editor looked orphaned. It
+ *     was not — Tailwind's much lighter `--shadow-lg` was resolving, so the
+ *     fallback the author wrote had never once painted (genie#589).
+ *   · `--radius-sm` and `--ease-out` looked like they needed moving out of
+ *     `.gwrap` alongside `--radius-full`. They did not, and re-declaring
+ *     `--ease-out` would have swapped Tailwind's curve for Genie's in every
+ *     non-master window — a regression introduced BY a bug fix, in a property
+ *     nobody would think to check (genie#595).
+ *
+ * **When in doubt, grep the BUILT stylesheet, not the source.** Tailwind's
+ * contribution does not appear anywhere in `renderer/styles/`; the only place it
+ * is visible is `renderer/.next/static/css/*.css` after `npx next build
+ * renderer`. Both findings above came from reading that file, not this one.
  *
  * Test files are deliberately NOT scanned for definitions: a guard a test can
  * satisfy by mentioning a token is not a guard.
@@ -79,6 +91,24 @@ import { join } from 'node:path';
  *
  * Neither is visible to a "is this token defined anywhere?" check, and both fail
  * the way this whole file is about: the declaration is dropped, silently.
+ *
+ * ### The rule, which is what generalises — not the two instances
+ *
+ * **`master.css` styles the MASTER window. `globals.css` styles EVERY window.**
+ * `.gwrap` is `pages/master.tsx`'s wrapper, and Ask, Settings, Docs, Capture,
+ * GApp and Mobile mount no `.gwrap` — so a token declared there does not exist
+ * for them. Two ways to get this wrong, and this repo has now shipped both:
+ *
+ *   · `.gwrap` SHADOWING a `globals.css` pair, so the token stops flipping —
+ *     `--card` was `#17171d` under `--fg-1` `#18181b`, 1.01:1, invisible text on
+ *     31 declarations (genie#591);
+ *   · `globals.css` READING a `.gwrap`-only token, so the declaration is dropped
+ *     in every other window — `.site-dot` drew circles in master and 8×8 squares
+ *     in Settings (genie#595).
+ *
+ * They are mirror images of one seam. Both were invisible while everyone ran
+ * dark, and neither degrades — each drops a declaration outright. A token that
+ * belongs to more than the master window belongs in `globals.css`.
  *
  * ## Deliberately NOT asserted
  *
