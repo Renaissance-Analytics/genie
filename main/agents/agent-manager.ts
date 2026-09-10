@@ -7,12 +7,7 @@ import {
     listWorkspaceAgents,
     type WorkspaceAgentRow,
 } from '../db';
-import {
-    applyServer,
-    claudeEntry,
-    cursorEntry,
-    GENIE_SERVER_NAME,
-} from '../mcp/agent-config';
+import { applyServer, claudeEntry, cursorEntry } from '../mcp/agent-config';
 import { restartAgentTerminal, startRegisteredAgent } from '../mcp/host-tools';
 import { isTerminalLive, killTerminalById } from '../terminal/ipc';
 import { broadcastAgentsChanged } from '../ipc';
@@ -29,6 +24,7 @@ import type {
 import {
     agentMcpServers,
     MCP_CONFIG_RELATIVE_PATH,
+    mcpAddGuard,
     mcpConfigDrift,
     mcpRemovalGuard,
     mcpSourceForTui,
@@ -430,12 +426,11 @@ export function addAgentMcpServer(agentId: string, input: McpServerInput): Write
 
     const name = input.name.trim();
     if (!name) return { ok: false, error: 'Give the server a name.' };
-    if (name === GENIE_SERVER_NAME) {
-        return {
-            ok: false,
-            error: 'Genie writes its own server entry. Toggle Agent MCP on the workspace instead of adding it by hand — a hand-written one is overwritten on the next sync.',
-        };
-    }
+    // PURE, and beside `mcpRemovalGuard` — the two are the same question asked
+    // in opposite directions, and neither should be reachable only through a
+    // database row (genie#618).
+    const addGuard = mcpAddGuard(name);
+    if (!addGuard.allowed) return { ok: false, error: addGuard.reason };
 
     const { source, file } = mcpConfigFileFor(agent, ws.path);
     if (source === 'codex') {
