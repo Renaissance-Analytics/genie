@@ -26,8 +26,9 @@ const MANUAL: McpRecovery = { strategy: reconnectStrategy('kilo'), applied: fals
 const MANUAL_NOTICE =
     MANUAL.strategy.kind === 'notice' ? MANUAL.strategy.text : '(not a notice strategy)';
 
-/** The one command Claude Code takes for a set of two — see `claudeReconnectCommand`. */
-const CLAUDE_COMMAND = '/mcp reconnect all';
+/** The one command Genie types — ONE server, in the documented form. See
+ *  `claudeReconnectCommand` for why it is not the whole set. */
+const CLAUDE_COMMAND = '/mcp reconnect genie';
 
 /**
  * The stagger's scheduler seam, driven SYNCHRONOUSLY (genie#353). Tests drive
@@ -57,9 +58,12 @@ describe('agent upgrade announcement', () => {
             '`genie-agentinbox-channel` connect to it. Genie cannot tell whether yours survived it — ' +
             'call a `genie` tool and see, rather than assuming either way. That settles `genie` and ' +
             'nothing else — a delivery channel that is down reads exactly like an empty inbox. ' +
-            'Genie ran `/mcp reconnect all` in this terminal to restore `genie` and ' +
-            '`genie-agentinbox-channel`. If any of them still does not answer, run ' +
-            '`/mcp reconnect all` again yourself.\n\n' +
+            'Genie ran `/mcp reconnect genie` in this terminal to restore `genie`. If it still ' +
+            'does not answer, ask for that command to be run again. Genie could not also restore ' +
+            '`genie-agentinbox-channel` — it gets one typed command per upgrade, and a built-in ' +
+            'slash command is not something an agent can run for itself. That server supervises ' +
+            'itself and usually comes back on its own; if AgentInbox goes quiet, a person has to ' +
+            'run `/mcp reconnect genie-agentinbox-channel` in this terminal.\n\n' +
             'Once `genie` answers again: if this terminal predates AMS, call agentUpgrade and follow its ordered migration guide.\n\n' +
             upgradeNoticeMode('manual') + '\n\n' +
             'This is a system notice; no reply is needed.',

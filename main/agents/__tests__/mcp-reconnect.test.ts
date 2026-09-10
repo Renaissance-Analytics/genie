@@ -46,11 +46,12 @@ const MANUAL_NOTICE = manualReconnectNotice(genieEndpointServers(null));
  * typed into a prompt whose grammar Genie does not know.
  */
 describe('mcpReconnectCommand', () => {
-    it('gives Claude Code its slash command', () => {
-        // `all`, not `genie`, and that is genie#613: Claude Code's reconnect
-        // takes ONE server name or the literal `all`, and Genie has exactly one
-        // typed command per upgrade to restore two servers with.
-        expect(mcpReconnectCommand('claude')).toBe('/mcp reconnect all');
+    it('gives Claude Code its slash command, for ONE server', () => {
+        // Deliberately still one name. `/mcp reconnect <server>` is documented
+        // to take exactly one, and Genie gets exactly one typed command per
+        // upgrade — so `genie`, the tool channel, and the rest is SAID rather
+        // than silently skipped (genie#613, below).
+        expect(mcpReconnectCommand('claude')).toBe('/mcp reconnect genie');
     });
 
     it('gives Codex a RESTART, never typed text', () => {
@@ -63,6 +64,9 @@ describe('mcpReconnectCommand', () => {
         expect(reconnectStrategy('codex')).toEqual({
             kind: 'restart',
             servers: [GENIE_SERVER_NAME],
+            // A resume re-reads launch config, so the restart genuinely reaches
+            // every one of them — unlike the typed command, which reaches one.
+            restores: [GENIE_SERVER_NAME],
         });
         expect(mcpReconnectCommand('codex')).toBeNull();
     });
@@ -143,16 +147,46 @@ describe('the reconnect covers EVERY server the upgrade replaced (genie#613)', (
         expect(recoveryInstruction(MANUAL_RECOVERY)).toContain(AGENTINBOX_CLAUDE_CHANNEL_NAME);
     });
 
-    it('asks Claude Code for one command, because it only gets one', () => {
-        // `wakeTerminalIfIdle` stamps `lastWokenAt` and `shouldWakeAgent` allows
-        // one wake per idle period, so the second command of a pair would be
-        // refused — and `/mcp` is a built-in local command, which the model has
-        // no way to invoke, so the agent cannot run the leftover itself. Claude
-        // Code's own grammar takes a single server name or the literal `all`, so
-        // a set of two can only be `all`.
-        expect(claudeReconnectCommand([GENIE_SERVER_NAME])).toBe('/mcp reconnect genie');
-        expect(claudeReconnectCommand(GENIE_ENDPOINT_SERVERS.claude)).toBe('/mcp reconnect all');
-        expect(claudeReconnectCommand(['a', 'b', 'c'])).toBe('/mcp reconnect all');
+    it('types DOCUMENTED syntax — one server name, never `all`', () => {
+        // `/mcp reconnect <server>` is documented to take exactly ONE server
+        // name; `all` is documented only for `enable`/`disable`. The shipped CLI
+        // does appear to accept `reconnect all`, but a recovery path leaning on
+        // another program's UNDOCUMENTED behaviour breaks silently the day its
+        // parser tightens — and a REJECTED command restores nothing, which is
+        // worse than the bug being fixed.
+        const strategy = reconnectStrategy('claude');
+        expect(strategy.kind).toBe('command');
+        if (strategy.kind !== 'command') return;
+        expect(strategy.text).toBe(`/mcp reconnect ${GENIE_SERVER_NAME}`);
+        expect(strategy.text).not.toContain('all');
+    });
+
+    it('declares what it actually restored — one of the two — and says so', () => {
+        // Genie gets ONE typed command per upgrade: `shouldWakeAgent`'s mid-turn
+        // tripwire refuses a second the instant the first starts a turn. So the
+        // notice must not let "Genie reconnected you" cover both.
+        const strategy = reconnectStrategy('claude');
+        expect(strategy.restores).toEqual([GENIE_SERVER_NAME]);
+        expect(strategy.servers).toEqual(GENIE_ENDPOINT_SERVERS.claude);
+
+        const ran = recoveryInstruction({ strategy, applied: true });
+        expect(ran).toContain(AGENTINBOX_CLAUDE_CHANNEL_NAME);
+        // Named as NOT restored, with the exact command, and pointed at a
+        // PERSON: `/mcp` is a built-in local command, so telling the agent to
+        // run it is advice it cannot act on. That is what made the single
+        // hard-coded name a SILENT failure rather than a partial one.
+        expect(ran).toContain(`/mcp reconnect ${AGENTINBOX_CLAUDE_CHANNEL_NAME}`);
+        expect(ran).toMatch(/person|someone|human/i);
+    });
+
+    it('a codex RESTART honestly claims all of them; a notice claims none', () => {
+        // A resumed session re-reads its launch config, so the restart really
+        // does repair every server — unlike a typed command, which repairs one.
+        const codex = reconnectStrategy('codex');
+        expect(codex.restores).toEqual(codex.servers);
+        for (const provider of ['kilo', 'genie', 'custom'] as const) {
+            expect(reconnectStrategy(provider).restores).toEqual([]);
+        }
     });
 
     it('names servers readably, however many there are', () => {
@@ -203,6 +237,8 @@ describe('every provider has a recovery path (genie#346)', () => {
                 kind: 'notice',
                 text: MANUAL_NOTICE,
                 servers: genieEndpointServers(provider),
+                // A notice repairs nothing, and says nothing that implies it did.
+                restores: [],
             });
         }
     });
@@ -216,6 +252,7 @@ describe('every provider has a recovery path (genie#346)', () => {
             kind: 'notice',
             text: MANUAL_NOTICE,
             servers: genieEndpointServers(null),
+            restores: [],
         };
         expect(reconnectStrategy('not-a-tui')).toEqual(unknown);
         expect(reconnectStrategy(null)).toEqual(unknown);
@@ -234,18 +271,22 @@ describe('every provider has a recovery path (genie#346)', () => {
  */
 describe('recoveryInstruction tells the truth about what was done', () => {
     const command = reconnectStrategy('claude');
-    const restart: ReconnectStrategy = { kind: 'restart', servers: [GENIE_SERVER_NAME] };
+    const restart: ReconnectStrategy = {
+        kind: 'restart',
+        servers: [GENIE_SERVER_NAME],
+        restores: [GENIE_SERVER_NAME],
+    };
 
     it('distinguishes a reconnect that ran from one that was held back', () => {
         const ran = recoveryInstruction({ strategy: command, applied: true });
         const held = recoveryInstruction({ strategy: command, applied: false });
         expect(ran).not.toBe(held);
-        expect(ran).toContain('/mcp reconnect all');
-        expect(held).toContain('/mcp reconnect all');
-        // The held case must ASK the agent to run it; the applied case must not
+        expect(ran).toContain('/mcp reconnect genie');
+        expect(held).toContain('/mcp reconnect genie');
+        // The held case must ASK for it to be run; the applied case must not
         // claim the connection is already good either, since the command may
         // still fail.
-        expect(held.toLowerCase()).toMatch(/run `\/mcp reconnect all`/);
+        expect(held).toMatch(/Run `\/mcp reconnect genie`/);
     });
 
     it('distinguishes a restart that ran from one that could not', () => {
