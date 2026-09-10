@@ -6,7 +6,7 @@ import {
     parseGenHostsBlock,
     upsertGenHostsBlock,
     hostsBlockNeedsUpdate,
-    reconcileHostsFile,
+    stageHostsFile,
 } from '../hosts-file';
 
 /**
@@ -120,23 +120,36 @@ describe('hosts-file — managed .gen block', () => {
     });
 });
 
-describe('reconcileHostsFile — read/compute/write orchestration', () => {
-    it('writes the upserted content once when the block would change', async () => {
+describe('stageHostsFile — read/compute/stage orchestration', () => {
+    /** A staging fake standing in for the effects' privileged copy: it records the
+     *  content it was handed and returns the (unrun) command that would install it. */
+    type FakeStep = { id: string; label: string; run: { cmd: string; args: string[] }; staged: string };
+    function stager() {
+        return vi.fn<(next: string) => Promise<FakeStep>>().mockImplementation(async (next: string) => ({
+            id: 'hosts-file',
+            label: 'update the hosts file',
+            run: { cmd: 'cp', args: ['-f', '/tmp/hosts.new', '/etc/hosts'] },
+            staged: next,
+        }));
+    }
+
+    it('stages the upserted content once when the block would change', async () => {
         const read = vi.fn().mockResolvedValue('127.0.0.1\tlocalhost\n');
-        const write = vi.fn().mockResolvedValue(undefined);
-        const res = await reconcileHostsFile(['moic.gen'], { read, write });
+        const prepareWrite = stager();
+        const res = await stageHostsFile(['moic.gen'], { read, prepareWrite });
         expect(res.changed).toBe(true);
-        expect(write).toHaveBeenCalledOnce();
-        expect(write.mock.calls[0][0]).toContain('127.0.0.1\tmoic.gen');
-        expect(write.mock.calls[0][0]).toContain('127.0.0.1\tlocalhost');
+        expect(prepareWrite).toHaveBeenCalledOnce();
+        expect(prepareWrite.mock.calls[0][0]).toContain('127.0.0.1\tmoic.gen');
+        expect(prepareWrite.mock.calls[0][0]).toContain('127.0.0.1\tlocalhost');
+        if (res.changed) expect(res.step.id).toBe('hosts-file');
     });
 
-    it('does NOT write (no elevation prompt) when already in sync', async () => {
+    it('does NOT stage (so nothing is added to the elevation) when already in sync', async () => {
         const synced = upsertGenHostsBlock('127.0.0.1\tlocalhost\n', ['moic.gen']);
         const read = vi.fn().mockResolvedValue(synced);
-        const write = vi.fn().mockResolvedValue(undefined);
-        const res = await reconcileHostsFile(['moic.gen'], { read, write });
+        const prepareWrite = stager();
+        const res = await stageHostsFile(['moic.gen'], { read, prepareWrite });
         expect(res.changed).toBe(false);
-        expect(write).not.toHaveBeenCalled();
+        expect(prepareWrite).not.toHaveBeenCalled();
     });
 });
