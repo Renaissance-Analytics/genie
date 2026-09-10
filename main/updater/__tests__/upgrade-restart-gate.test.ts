@@ -26,8 +26,8 @@ function stagedDrain(names: string[]) {
     const sent: string[] = [];
     let fireDeadline: (() => void) | null = null;
     const drain = new AgentDrain({
-        send: (inboxAgentId, text) => {
-            sent.push(`${inboxAgentId}:${text.slice(0, 24)}`);
+        send: (inboxAgentId, notice) => {
+            sent.push(`${inboxAgentId}:${notice.text.slice(0, 24)}`);
             return true;
         },
         schedule: (run) => {

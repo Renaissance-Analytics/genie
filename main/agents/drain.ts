@@ -1,4 +1,5 @@
 import { DEFAULT_AGENT_MODE, drainNudgeMode, type AgentMode } from './agent-mode';
+import type { InboxUrgency } from '../agentinbox/urgency';
 import { NEVER_NUDGED_AGENT_NAME } from './reserved-names';
 
 /**
@@ -106,6 +107,33 @@ export function drainRowIsGreen(state: DrainRowState): boolean {
 }
 
 /**
+ * The drain's ask: WHAT IT SAYS AND HOW LOUD, inseparably (genie#602).
+ *
+ * These used to be two things. The body was minted here and the urgency was
+ * whatever the call site passed to the broker — and `drain-service.ts` passed
+ * nothing, so a message reading *"Stop work now … Genie is holding the upgrade
+ * until every agent has answered"* was announced as *"It is not urgent — check
+ * it when you are not busy"*. A busy agent reads the envelope first.
+ *
+ * One value now carries both, and there is no way to obtain the text without
+ * it. That is the whole point: the reason those two could disagree is that a
+ * caller could hold one and forget the other.
+ *
+ * `showstopper` is not decoration. It is the SAME FACT that makes {@link
+ * AgentDrain.begin} hold: this promise does not resolve until the last row is
+ * green, so the upgrade really is blocked on this agent, for everyone.
+ */
+export interface DrainNotice {
+    text: string;
+    urgency: InboxUrgency;
+}
+
+/** The drain's ask — see {@link DrainNotice} for why it is one value. */
+export function drainNudge(mode: AgentMode): DrainNotice {
+    return { text: drainNudgeBody(mode), urgency: 'showstopper' };
+}
+
+/**
  * What the drain asks for, in the order it needs it.
  *
  * STOP first, because an agent that reads "write a handoff" while still working
@@ -113,8 +141,11 @@ export function drainRowIsGreen(state: DrainRowState): boolean {
  * whole reason the drain is worth more than the kill, and `boot-prompt.ts`
  * already tells the agent's next run to look for one. `thumbsUp` last, because
  * it is the signal that the two before it are done.
+ *
+ * NOT exported: the body and its urgency ship together or not at all, and a
+ * bare-text export is the escape hatch that let them come apart (genie#602).
  */
-export function drainNudgeText(mode: AgentMode): string {
+function drainNudgeBody(mode: AgentMode): string {
     return [
         'Genie is upgrading, and this terminal will be closed to do it.',
         '',
@@ -130,6 +161,35 @@ export function drainNudgeText(mode: AgentMode): string {
         '',
         drainNudgeMode(mode),
     ].join('\n');
+}
+
+/**
+ * PURE. The drain's half of `drain-service.ts`'s wiring (genie#602).
+ *
+ * The line that shipped the bug was the wiring itself —
+ *
+ *     send: (inboxAgentId, text) =>
+ *         agentInboxBroker.send({ system: true, toAgentId: inboxAgentId, text }).ok,
+ *
+ * — and `drain-service.ts` cannot be unit-tested: it reaches for the database,
+ * the dev-site manager and the process supervisor at import time. So the
+ * decision moves out of it and into here, where the send it builds is asserted
+ * against a real broker. What is left behind is a binding, not a judgement.
+ *
+ * The notice is SPREAD, never rebuilt: {@link DrainNotice} is exactly the two
+ * fields the broker's send wants, so forwarding the body without its urgency
+ * means deliberately taking it apart.
+ */
+export function drainNudgeSender(
+    send: (input: {
+        system: true;
+        toAgentId: string;
+        text: string;
+        urgency: InboxUrgency;
+    }) => { ok: boolean },
+): AgentDrainDeps['send'] {
+    return (inboxAgentId, notice) =>
+        send({ system: true, toAgentId: inboxAgentId, ...notice }).ok;
 }
 
 /**
@@ -281,8 +341,14 @@ export function upgradeRosterPlan(input: { rosterRecorded: boolean }): 'record' 
 type Cancel = () => void;
 
 export interface AgentDrainDeps {
-    /** Put the nudge in the agent's inbox. Returns whether it landed. */
-    send: (inboxAgentId: string, text: string) => boolean;
+    /**
+     * Put the nudge in the agent's inbox. Returns whether it landed.
+     *
+     * Takes the whole {@link DrainNotice} rather than its text, so a wiring that
+     * announces the drain at the wrong urgency has to drop a field on purpose
+     * instead of merely never having been given one (genie#602).
+     */
+    send: (inboxAgentId: string, notice: DrainNotice) => boolean;
     /**
      * THIS agent's mode (genie#410). Optional and defensive for the same reason
      * the upgrade announcement's is: resolving it reads the database and a file
@@ -433,7 +499,7 @@ export class AgentDrain {
             mode = DEFAULT_AGENT_MODE;
         }
         try {
-            return this.deps.send(target.inboxAgentId, drainNudgeText(mode)) !== false;
+            return this.deps.send(target.inboxAgentId, drainNudge(mode)) !== false;
         } catch {
             return false;
         }

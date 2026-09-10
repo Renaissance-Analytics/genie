@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { containsHumanInput, inboxNoticeText, tokenize } from '../notify';
+import type { InboxUrgency } from '../urgency';
 
 /**
  * Reading the human keystroke path correctly.
@@ -134,32 +135,76 @@ describe('containsHumanInput', () => {
 
 describe('inboxNoticeText', () => {
     it('names the sender and says it arrived as a DM', () => {
-        const text = inboxNoticeText({ from: 'guardian', priority: 'normal', mode: 'manual' });
+        const text = inboxNoticeText({ from: 'guardian', urgency: 'normal', mode: 'manual' });
         expect(text).toContain('guardian');
         expect(text).toContain('as a DM');
         expect(text).toContain('[Genie]');
     });
 
     it('a high-priority notice says to check it immediately', () => {
-        const text = inboxNoticeText({ from: 'guardian', priority: 'high', mode: 'manual' });
+        const text = inboxNoticeText({ from: 'guardian', urgency: 'urgent', mode: 'manual' });
         expect(text).toMatch(/HIGH PRIORITY/);
         expect(text).toMatch(/immediately/i);
     });
 
     it('a normal notice says it can wait until the agent is free', () => {
-        const text = inboxNoticeText({ from: 'guardian', priority: 'normal', mode: 'manual' });
+        const text = inboxNoticeText({ from: 'guardian', urgency: 'normal', mode: 'manual' });
         expect(text).toMatch(/not urgent/i);
         expect(text).toMatch(/when you are not busy/i);
     });
 
     it('a channel post names the channel instead', () => {
-        const text = inboxNoticeText({ from: 'guardian', channel: 'ops', priority: 'normal', mode: 'manual' });
+        const text = inboxNoticeText({ from: 'guardian', channel: 'ops', urgency: 'normal', mode: 'manual' });
         expect(text).toContain('#ops');
         expect(text).toContain('channel');
     });
 
     it('always says HOW to read it — mail with no instructions is just noise', () => {
-        expect(inboxNoticeText({ from: 'x', priority: 'high', mode: 'manual' })).toMatch(/agentinbox/i);
-        expect(inboxNoticeText({ from: 'x', priority: 'high', mode: 'manual' })).toMatch(/receive/);
+        expect(inboxNoticeText({ from: 'x', urgency: 'urgent', mode: 'manual' })).toMatch(/agentinbox/i);
+        expect(inboxNoticeText({ from: 'x', urgency: 'urgent', mode: 'manual' })).toMatch(/receive/);
+    });
+
+    it('a showstopper says work stops and that Genie is held on the answer', () => {
+        // genie#602. Louder than `urgent` on purpose: "check it immediately"
+        // is what you say about a message, not about a message the whole
+        // workstation is waiting on.
+        const text = inboxNoticeText({ from: 'Genie (no reply)', urgency: 'showstopper', mode: 'manual' });
+        expect(text).toMatch(/SHOWSTOPPER/);
+        expect(text).toMatch(/stop work now/i);
+        expect(text).toMatch(/hold(s|ing)/i);
+    });
+
+    it('the three rungs are three DIFFERENT notices', () => {
+        // A rung that renders the same as its neighbour is a rung that does not
+        // exist — the exact failure a two-valued flag produced.
+        const at = (urgency: InboxUrgency) => inboxNoticeText({ from: 'x', urgency, mode: 'manual' });
+        expect(new Set([at('normal'), at('urgent'), at('showstopper')]).size).toBe(3);
+    });
+
+    it('ONLY `normal` may say a message can wait', () => {
+        // THE FAIL-OPEN GUARD. "It is not urgent" is the default any rung
+        // falls into when nobody handles it, which is how a notice that held an
+        // upgrade came out reading as ordinary mail. A rung added later and left
+        // out of the switch is a COMPILE error (the `never`); this is what
+        // happens if one reaches the function anyway.
+        const rungs: InboxUrgency[] = ['urgent', 'showstopper', 'a-rung-nobody-handled' as InboxUrgency];
+        for (const urgency of rungs) {
+            const text = inboxNoticeText({ from: 'x', urgency, mode: 'manual' });
+            expect(text).not.toMatch(/not urgent/i);
+            expect(text).not.toMatch(/when you are not busy/i);
+            expect(text).toMatch(/immediately|before anything else/i);
+        }
+        // POSITIVE CONTROL: the wording it must not reach is still reachable,
+        // so the assertions above are not passing against a string that no
+        // longer exists anywhere.
+        expect(inboxNoticeText({ from: 'x', urgency: 'normal', mode: 'manual' })).toMatch(/not urgent/i);
+    });
+
+    it('an ftq answer has the same three rungs', () => {
+        const at = (urgency: InboxUrgency) =>
+            inboxNoticeText({ from: 'You', urgency, kind: 'ftq-answer', mode: 'manual' });
+        expect(at('showstopper')).toMatch(/SHOWSTOPPER/);
+        expect(at('showstopper')).toMatch(/stop work now/i);
+        expect(new Set([at('normal'), at('urgent'), at('showstopper')]).size).toBe(3);
     });
 });

@@ -135,7 +135,7 @@ describe('the agent mode is guidance, not enforcement', () => {
             upgradeNoticeMode('manual'),
             inboxNoticeMode('manual'),
             attentionNudgeMode('manual'),
-            inboxNoticeText({ from: 'moic', priority: 'high', mode: 'manual' }),
+            inboxNoticeText({ from: 'moic', urgency: 'urgent', mode: 'manual' }),
             wakeNudgeText(2, 'manual'),
         ];
         for (const text of manualTexts) {
@@ -150,7 +150,7 @@ describe('the agent mode is guidance, not enforcement', () => {
         }
         // …and a Manual agent is still told HOW to read its mail. Guidance that
         // withheld the tool would be enforcement wearing a hint's clothes.
-        expect(inboxNoticeText({ from: 'moic', priority: 'normal', mode: 'manual' })).toContain(
+        expect(inboxNoticeText({ from: 'moic', urgency: 'normal', mode: 'manual' })).toContain(
             'agentinbox',
         );
         expect(wakeNudgeText(2, 'manual')).toContain('agentinbox');

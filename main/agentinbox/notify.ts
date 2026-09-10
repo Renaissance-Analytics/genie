@@ -25,7 +25,8 @@
  * jammed the guard that used to live here.
  */
 
-import { inboxNoticeMode, type AgentMode } from '../agents/agent-mode';
+import { inboxNoticeMode, showstopperNoticeMode, type AgentMode } from '../agents/agent-mode';
+import type { InboxUrgency } from './urgency';
 
 /**
  * Split a `terminal:write` chunk into the LITERAL bytes (what a person's
@@ -144,8 +145,15 @@ export interface InboxNotice {
     mode: AgentMode;
     /** Set when the message was posted to a channel rather than DMed. */
     channel?: string;
-    /** `high` = the sender marked it urgent (an `interrupt` DM). */
-    priority: 'normal' | 'high';
+    /**
+     * How loud this notice is — {@link InboxUrgency}.
+     *
+     * REQUIRED, and named for what it is rather than for a scale, because the
+     * thing that produced genie#602 was a caller that simply did not pass one:
+     * the drain's `send` left it off and the notice defaulted to the gentlest
+     * wording there is, over a body that said *"Stop work now"*.
+     */
+    urgency: InboxUrgency;
     /**
      * `ftq-answer` = the human answering a question THIS agent asked.
      *
@@ -170,19 +178,48 @@ export function inboxNoticeText(n: InboxNotice): string {
     const read = 'read it with the agentinbox tool (action: "receive")';
     // The mode clause CLOSES the notice: it is a rider on what was just said,
     // and putting it first would read as the headline.
-    const mode = ` ${inboxNoticeMode(n.mode)}`;
+    //
+    // A showstopper takes a DIFFERENT clause, and must: the ordinary one tells a
+    // Manual agent not to act unless a person asks, which is the same
+    // contradiction as "it is not urgent" wearing different words (genie#602).
+    const mode = ` ${(n.urgency === 'showstopper' ? showstopperNoticeMode : inboxNoticeMode)(n.mode)}`;
     // An answer to YOUR question is not "a message from you". It is the user
     // unblocking a decision you asked for and are waiting on, and it must be
     // distinguishable at a glance from ordinary mail.
     if (n.kind === 'ftq-answer') {
         const what = 'The user answered a question you asked';
-        return n.priority === 'high'
-            ? `[Genie] ${what} — it was marked urgent, so read it now: ${read}.${mode}`
-            : `[Genie] ${what}: ${read}.${mode}`;
+        switch (n.urgency) {
+            case 'showstopper':
+                return `[Genie] ${what} — SHOWSTOPPER. Stop work now and read it before anything else; Genie is holding until you act on it: ${read}.${mode}`;
+            case 'urgent':
+                return `[Genie] ${what} — it was marked urgent, so read it now: ${read}.${mode}`;
+            case 'normal':
+                return `[Genie] ${what}: ${read}.${mode}`;
+        }
+        // Guarded HERE as well as below: an unhandled rung that fell out of this
+        // block would land in the DM path and announce an answer to the agent's
+        // own question as "a message from You as a DM" — the note-to-self
+        // reading `ftq-answer` exists to remove.
+        return unhandledUrgency(n.urgency, what, read, mode);
     }
     const source = n.channel ? `in the #${n.channel} channel` : 'as a DM';
     const what = `You just received a message from ${n.from} ${source}`;
-    return n.priority === 'high'
-        ? `[Genie] ${what}, marked HIGH PRIORITY — check it immediately: ${read}.${mode}`
-        : `[Genie] ${what}. It is not urgent — check it when you are not busy: ${read}.${mode}`;
+    switch (n.urgency) {
+        case 'showstopper':
+            return `[Genie] ${what} — SHOWSTOPPER. Stop work now: do not start anything new, read it before anything else, and answer it. Genie is holding until your answer arrives — for everyone, not just for you: ${read}.${mode}`;
+        case 'urgent':
+            return `[Genie] ${what}, marked HIGH PRIORITY — check it immediately: ${read}.${mode}`;
+        case 'normal':
+            return `[Genie] ${what}. It is not urgent — check it when you are not busy: ${read}.${mode}`;
+    }
+    // A rung nobody handled must never fall through to the gentlest wording —
+    // that is genie#602 arriving a second time, by omission instead of by
+    // default. The `never` makes it a COMPILE error; this is what happens if one
+    // reaches here anyway, from JavaScript that was never typechecked.
+    return unhandledUrgency(n.urgency, what, read, mode);
+}
+
+/** @see inboxNoticeText — the exhaustiveness guard, and its fail-LOUD landing. */
+function unhandledUrgency(urgency: never, what: string, read: string, mode: string): string {
+    return `[Genie] ${what}, marked ${String(urgency).toUpperCase()} — check it immediately: ${read}.${mode}`;
 }
