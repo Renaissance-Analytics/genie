@@ -355,10 +355,13 @@
     cursor: default;
     opacity: 0.85;
 }
-/* One-way progress (after the user commits with the single Upgrade click) —
-   a non-interactive status display, not a button. */
+/* One-way progress (after the user commits with the single Upgrade click). It
+   cannot re-fire the apply -- the pill's driver effect owns that -- but it is
+   clickable, because someone who closed the upgrade window needs a way back to
+   it (genie#622). Quieter than the call-to-action states: it reports rather
+   than asks. */
 .update-pill.is-progress {
-    cursor: default;
+    font-weight: 500;
 }
 /* Ready-to-restart is the call to action — fill it solid. */
 .update-pill.ready {
@@ -520,14 +523,33 @@
         gap: 16px 0;
     }
 }
+/* THE PREVIEW (genie#622) -- opened from the header control with no drain
+   running. There is nobody to list, so the second column would be an empty pane
+   with a rule down its left edge; the notes take the whole sheet instead, and
+   it narrows, because one column of prose at 980px is a long line to read. */
+.upgrade-modal.is-preview {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+        'head'
+        'notes'
+        'foot';
+    width: min(620px, 100%);
+}
 .upgrade-modal .um-head {
     grid-area: head;
     display: flex;
-    flex-direction: column;
-    gap: 4px;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
     padding-bottom: 14px;
     margin-bottom: 16px;
     border-bottom: 1px solid var(--border-1);
+}
+.upgrade-modal .um-head-text {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
 }
 .upgrade-modal .um-head strong {
     font-size: 16px;
@@ -754,6 +776,30 @@
 .upgrade-modal .um-cancel:disabled {
     opacity: 0.5;
     cursor: default;
+}
+/* The one thing on the preview that STARTS something -- solid, like the header
+   control it was moved off (genie#622). It is the only filled control in the
+   sheet, so there is never a question which button commits. */
+.upgrade-modal .um-go {
+    padding: 6px 14px;
+    border-radius: var(--radius-md, 8px);
+    border: 1px solid #f59e0b;
+    background: #f59e0b;
+    color: #09090b;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 650;
+    cursor: pointer;
+}
+.upgrade-modal .um-go:hover {
+    background: color-mix(in srgb, #f59e0b 88%, #fff);
+}
+/* Already under way: a status line where the commit button was, so the footer
+   does not offer a second way to fire the same apply. */
+.upgrade-modal .um-progress {
+    align-self: center;
+    font-size: 12px;
+    color: var(--fg-2);
 }
 
 .glogo {
