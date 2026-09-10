@@ -36,6 +36,26 @@ describe('pairingPrompt', () => {
         expect(pairingPrompt('keychain-unavailable', 'zeus')).toMatch(/remember|again next time|won't be saved/i);
     });
 
+    /**
+     * genie#588 — this sentence is the one the reporter read for six days on a
+     * machine whose keyring was provably healthy the whole time. Blaming the
+     * computer sent them to reinstall gnome-keyring and libsecret that were
+     * already installed and already serving `gh`.
+     */
+    it('does NOT blame the computer when GENIE is the one on the plaintext store', () => {
+        const notSelected = pairingPrompt('keychain-not-selected', 'AlphaR');
+        expect(notSelected).not.toMatch(/keychain is unavailable|keychain was unavailable/i);
+        expect(notSelected).not.toMatch(/install/i);
+        // It says what is actually true — a working keyring this process is not
+        // using — and it still warns that the pairing will not be kept.
+        expect(notSelected).toMatch(/plain ?text|basic/i);
+        expect(notSelected).toMatch(/remember|kept|saved/i);
+        // Negative control: the genuine no-keychain reason still reads as one,
+        // so the assertions above are about the NEW reason, not the wording of
+        // both drifting together.
+        expect(pairingPrompt('keychain-unavailable', 'AlphaR')).toMatch(/keychain is unavailable/i);
+    });
+
     it('falls back to the first-pair wording for an unknown/absent reason', () => {
         expect(pairingPrompt(undefined, 'zeus')).toBe(pairingPrompt('first-pair', 'zeus'));
         expect(pairingPrompt('nonsense' as PinReason, 'zeus')).toBe(pairingPrompt('first-pair', 'zeus'));

@@ -19,6 +19,12 @@ export const PIN_REASONS = [
      *  have SAVED it with last time, which is why the store is empty. Either
      *  way the pairing about to be made won't be kept until it comes back. */
     'keychain-unavailable',
+    /** This machine HAS a working keyring and this Genie process is sitting on
+     *  Chromium's plaintext store, so it refuses to save. Genie's fault, not the
+     *  machine's — told apart from the reason above so nobody is sent to
+     *  reinstall a keyring that is already running and already serving other
+     *  apps (genie#588). */
+    'keychain-not-selected',
     /** The host answered 401: it no longer knows this token. */
     'token-rejected',
 ] as const;
@@ -33,6 +39,8 @@ export function pairingPrompt(reason: PinReason | undefined, hostname: string): 
             return `The saved pairing for ${hostname} could not be decrypted, so it can't be reused. Enter the PIN shown on ${hostname} to pair again.`;
         case 'keychain-unavailable':
             return `This computer's keychain is unavailable, so pairings can't be read or saved. You can pair with ${hostname} using its PIN now, but it won't be remembered until the keychain is back — which is why it keeps asking.`;
+        case 'keychain-not-selected':
+            return `Genie is running on Chromium's plaintext password store even though this computer's keyring is working, so it won't save pairings. Pair with ${hostname} using its PIN now; restart Genie and it will remember the keyring backend from then on.`;
         case 'token-rejected':
             return `${hostname} no longer recognises this device — its pairing was dropped there. Enter the PIN shown on ${hostname} to pair again.`;
         case 'first-pair':

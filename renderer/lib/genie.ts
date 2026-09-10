@@ -4298,6 +4298,8 @@ export interface GenieApi {
             storageOk: boolean;
             /** Why storage is unavailable, when it is — null while it works. */
             storageHint: string | null;
+            /** Which Chromium password store this process is on (Linux only). */
+            keychainBackend: string | null;
             flow:
                 | { kind: 'idle' }
                 | {

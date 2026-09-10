@@ -10,6 +10,8 @@ import {
     secretEncryptionAvailable,
 } from '../secrets/store';
 import { recordPairingEvent } from '../pairing-journal';
+import { classifyKeychainFault } from '../secrets/linux-password-store';
+import { currentKeychainState } from '../secrets/keychain-state';
 import type { PinReason } from './pairing-reason';
 import { getAllSettings } from '../db';
 import { resolveAlertSound, alertSoundPayload } from '../notify-sound';
@@ -270,6 +272,24 @@ type SavedTokenLoad =
      *  either — which is how the store came to be empty in the first place. */
     | { kind: 'none'; keychainDown: boolean }
     | { kind: 'unreadable'; reason: 'keychain-unavailable' | 'decrypt-failed' };
+
+/**
+ * WHICH "no keychain" this is (genie#588). Until now every one of them told the
+ * user their computer's keychain was unavailable — on a machine whose keyring
+ * was healthy, unlocked, and serving other apps the whole time. Blame the
+ * process when the process is what is wrong.
+ */
+function keychainDownReason(): PinReason {
+    try {
+        return classifyKeychainFault(currentKeychainState()) === 'not-selected'
+            ? 'keychain-not-selected'
+            : 'keychain-unavailable';
+    } catch {
+        // A diagnostic must never break a reconnect; the older, vaguer reason is
+        // still true enough to show.
+        return 'keychain-unavailable';
+    }
+}
 
 function loadSavedToken(host: RemoteHost): SavedTokenLoad {
     const key = connKeyOf(host);
@@ -2007,7 +2027,7 @@ async function connectRemoteInner(
                 // An empty store with no keychain is not a first pair: it is the
                 // shape a client leaves behind when it could never save the
                 // token it minted last time (genie#578).
-                pinReason: saved.keychainDown ? 'keychain-unavailable' : 'first-pair',
+                pinReason: saved.keychainDown ? keychainDownReason() : 'first-pair',
             };
         }
         if (saved.kind === 'unreadable') {
@@ -2016,7 +2036,7 @@ async function connectRemoteInner(
                 needsPin: true,
                 pinReason:
                     saved.reason === 'keychain-unavailable'
-                        ? 'keychain-unavailable'
+                        ? keychainDownReason()
                         : 'token-unreadable',
             };
         }

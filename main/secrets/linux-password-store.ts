@@ -15,8 +15,16 @@ import { execFileSync } from 'node:child_process';
  * A session bus name is a much better signal than a desktop name: if something
  * OWNS `org.freedesktop.secrets`, there is a working Secret Service to talk to,
  * whatever the window manager calls itself. So Genie probes for it and passes
- * `--password-store=` itself, on EVERY launch — which also means the fix does
- * not depend on a launch flag surviving a self-restart (see ../self-restart.ts).
+ * `--password-store=` itself, on EVERY launch.
+ *
+ * genie#588: that probe is a SUBPROCESS, and it was the only thing selecting a
+ * backend. On a machine whose keyring is provably healthy it comes back empty,
+ * Genie selects nothing, Chromium falls back to the plaintext store, and the
+ * user is told their computer's keychain is unavailable. So the probe is no
+ * longer the only opinion: whenever a launch DOES end up on a real backend,
+ * Electron's own `safeStorage.getSelectedStorageBackend()` says which one, and
+ * that answer is written down (see ./password-store-memo.ts) and re-asserted on
+ * every later launch — including the ones that re-exec with an empty argv.
  *
  * The decisions here are PURE and unit-tested; only {@link probeOwnedBusNames}
  * touches a subprocess.
@@ -32,12 +40,61 @@ const KWALLET_BACKENDS: ReadonlyArray<[name: string, backend: string]> = [
     ['org.kde.kwalletd', 'kwallet'],
 ];
 
+/**
+ * The `--password-store` values worth carrying between launches — the four
+ * backends that actually encrypt. `basic` is deliberately absent: a memo may
+ * only ever pin a WORKING store, never the plaintext fallback that is the whole
+ * failure being fixed.
+ */
+const REMEMBERABLE_STORES: ReadonlySet<string> = new Set([
+    'gnome-libsecret',
+    ...KWALLET_BACKENDS.map(([, backend]) => backend),
+]);
+
+/** PURE: is this a `--password-store` value Genie is willing to pass on? Values
+ *  read back off disk go straight onto Chromium's command line, and one it does
+ *  not recognise is logged and ignored — i.e. silently back to plaintext. */
+export function isRememberablePasswordStore(value: unknown): value is string {
+    return typeof value === 'string' && REMEMBERABLE_STORES.has(value);
+}
+
+/** PURE: does this argv already carry an explicit `--password-store`? */
+export function hasPasswordStoreArg(argv: readonly string[]): boolean {
+    return argv.some((a) => a === '--password-store' || a.startsWith('--password-store='));
+}
+
+/**
+ * PURE: the `--password-store` switch value that reproduces what
+ * `safeStorage.getSelectedStorageBackend()` just reported, or null when the
+ * report is not a backend worth remembering.
+ *
+ * The two vocabularies differ: Electron answers `gnome_libsecret`, Chromium's
+ * switch takes `gnome-libsecret`. `basic_text` is the failure state and
+ * `unknown` only means the question was asked before app-ready — writing either
+ * one down would make the bug stick rather than heal.
+ */
+export function switchValueForSelectedBackend(selected: string | null | undefined): string | null {
+    switch (selected) {
+        case 'gnome_libsecret':
+            return 'gnome-libsecret';
+        case 'kwallet':
+        case 'kwallet5':
+        case 'kwallet6':
+            return selected;
+        default:
+            return null;
+    }
+}
+
 export interface PasswordStoreChoice {
     platform: NodeJS.Platform;
     /** This process's argv — an explicit `--password-store` wins over us. */
     argv: string[];
     /** Bus names with an owner on the session bus (see {@link probeOwnedBusNames}). */
     ownedBusNames: string[];
+    /** The backend a previous launch was seen using, as a switch value — the
+     *  fallback for when the probe answers nothing (genie#588). */
+    remembered?: string | null;
 }
 
 /**
@@ -48,9 +105,7 @@ export function chooseLinuxPasswordStore(input: PasswordStoreChoice): string | n
     if (input.platform !== 'linux') return null;
     // An explicit choice — from the user, a wrapper script, or a `.desktop`
     // Exec= line — is the user's decision, not ours to override.
-    if (input.argv.some((a) => a === '--password-store' || a.startsWith('--password-store='))) {
-        return null;
-    }
+    if (hasPasswordStoreArg(input.argv)) return null;
     const owned = new Set(input.ownedBusNames);
     // KWallet also publishes org.freedesktop.secrets, so prefer its native
     // backend when it is the thing answering.
@@ -58,7 +113,11 @@ export function chooseLinuxPasswordStore(input: PasswordStoreChoice): string | n
         if (owned.has(name)) return backend;
     }
     if (owned.has(SECRET_SERVICE_NAME)) return 'gnome-libsecret';
-    return null;
+    // The bus said nothing. That is either a machine with no keyring — where
+    // selecting one would be wrong — or a probe that could not run, which looks
+    // exactly the same from here. What a working launch was actually SEEN using
+    // breaks the tie; a live probe above still overrules it.
+    return isRememberablePasswordStore(input.remembered) ? input.remembered : null;
 }
 
 /**
@@ -149,6 +208,28 @@ export interface KeychainHintInput {
 }
 
 /**
+ * WHICH fault is behind "encryption is unavailable". Three Linux causes wear the
+ * same face and have three different remedies — one of which is not the user's
+ * to apply.
+ *
+ *  - `no-service`   nothing owns the Secret Service bus name. A keyring really
+ *                   is missing, and package advice is finally appropriate.
+ *  - `not-selected` a keyring IS answering and this process is on the plaintext
+ *                   store. Genie's fault, not the machine's (genie#588).
+ *  - `refused`      a real backend is selected and would not produce a key —
+ *                   a locked collection, typically. Only this one is the
+ *                   keychain being unavailable in the sense the word implies.
+ */
+export type KeychainFault = 'not-linux' | 'no-service' | 'not-selected' | 'refused';
+
+/** PURE: {@link KeychainFault} for the state described by `input`. */
+export function classifyKeychainFault(input: KeychainHintInput): KeychainFault {
+    if (input.platform !== 'linux') return 'not-linux';
+    if (!input.secretServiceOwned) return 'no-service';
+    return switchValueForSelectedBackend(input.selectedBackend) ? 'refused' : 'not-selected';
+}
+
+/**
  * PURE: why can this machine not encrypt a secret at rest?
  *
  * genie#379: the old text — "On Linux: install gnome-keyring / libsecret" —
@@ -158,25 +239,39 @@ export interface KeychainHintInput {
  * when nothing is actually answering on the bus.
  */
 export function keychainUnavailableHint(input: KeychainHintInput): string {
-    if (input.platform !== 'linux') {
-        return (
-            'Genie could not reach this machine’s OS keystore, so it will not store a token ' +
-            'unencrypted. Sign out and back in, or restart Genie, and try again.'
-        );
-    }
-    if (!input.secretServiceOwned) {
-        return (
-            `Nothing on this session bus owns ${SECRET_SERVICE_NAME}, so there is no keyring to ` +
-            'encrypt with. Start a secret service — gnome-keyring-daemon (--components=secrets) ' +
-            'or KWallet — then reopen Genie.'
-        );
-    }
     const desktop = input.desktop?.trim();
-    return (
-        `A secret service is running, but this process is using the ${
-            input.selectedBackend ?? 'plaintext'
-        } store` +
-        (desktop ? `, because ${desktop} is not a desktop Chromium auto-detects` : '') +
-        '. Restart Genie — it selects the backend itself on launch.'
-    );
+    switch (classifyKeychainFault(input)) {
+        case 'not-linux':
+            return (
+                'Genie could not reach this machine’s OS keystore, so it will not store a token ' +
+                'unencrypted. Sign out and back in, or restart Genie, and try again.'
+            );
+        case 'no-service':
+            return (
+                `Nothing on this session bus owns ${SECRET_SERVICE_NAME}, so there is no keyring to ` +
+                'encrypt with. Start a secret service — gnome-keyring-daemon (--components=secrets) ' +
+                'or KWallet — then reopen Genie.'
+            );
+        case 'refused':
+            // NOT "restart Genie": the backend is already the right one, so the
+            // next launch would select exactly the same thing and fail the same
+            // way. The key is what is missing, and only the keyring has it.
+            return (
+                `A secret service is running and Genie is using the ${input.selectedBackend} store, ` +
+                'but it would not hand over an encryption key — the keyring collection is most ' +
+                'likely locked. Unlock your login keyring, then try again.'
+            );
+        case 'not-selected':
+        default:
+            // Genie's own fault, and it says so: nothing here asks the user to
+            // install a keyring they already have (genie#379, genie#588).
+            return (
+                `A secret service is running, but this process is using the ${
+                    input.selectedBackend ?? 'plaintext'
+                } store, so nothing can be encrypted at rest` +
+                (desktop ? ` (desktop: ${desktop})` : '') +
+                '. Restart Genie — it records the backend that works on this machine and ' +
+                'selects it on every launch from then on.'
+            );
+    }
 }

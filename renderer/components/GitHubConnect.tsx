@@ -61,6 +61,10 @@ export interface GitHubAccount {
     storageOk: boolean;
     /** Why storage is unavailable, when it is — null while it works. */
     storageHint: string | null;
+    /** Which Chromium password store this process is on (Linux only, null
+     *  elsewhere). Shown whether it is working or not — genie#588 took six days
+     *  to establish a value Electron hands over in one call. */
+    keychainBackend: string | null;
     clientIdSet: boolean;
     flow: Flow;
     connect: () => Promise<void>;
@@ -97,6 +101,7 @@ interface GitHubAccountSnapshot {
     installationsError: string | null;
     storageOk: boolean;
     storageHint: string | null;
+    keychainBackend: string | null;
     clientIdSet: boolean;
 }
 let accountCache: GitHubAccountSnapshot | null = null;
@@ -119,6 +124,9 @@ export function useGitHubAccount(): GitHubAccount {
     const [storageHint, setStorageHint] = useState<string | null>(
         accountCache?.storageHint ?? null,
     );
+    const [keychainBackend, setKeychainBackend] = useState<string | null>(
+        accountCache?.keychainBackend ?? null,
+    );
     const [clientIdSet, setClientIdSet] = useState(accountCache?.clientIdSet ?? false);
     const [flow, setFlow] = useState<Flow>({ kind: 'idle' });
     const polling = useRef(false);
@@ -138,6 +146,7 @@ export function useGitHubAccount(): GitHubAccount {
         setUsername(st.username);
         setStorageOk(st.storageOk);
         setStorageHint(st.storageHint ?? null);
+        setKeychainBackend(st.keychainBackend ?? null);
         setClientIdSet(st.clientIdSet);
         setLoaded(true);
         let nextInstallations: GitHubInstallationLite[] = [];
@@ -187,6 +196,7 @@ export function useGitHubAccount(): GitHubAccount {
             installationsError: nextInstallationsError,
             storageOk: st.storageOk,
             storageHint: st.storageHint ?? null,
+            keychainBackend: st.keychainBackend ?? null,
             clientIdSet: st.clientIdSet,
         };
         // Reflect the main-side flow outcome into local state.
@@ -334,6 +344,7 @@ export function useGitHubAccount(): GitHubAccount {
         personalInstalled,
         storageOk,
         storageHint,
+        keychainBackend,
         clientIdSet,
         flow,
         connect,
@@ -447,6 +458,7 @@ export function GitHubConnect({ account }: { account: GitHubAccount }) {
         username,
         storageOk,
         storageHint,
+        keychainBackend,
         clientIdSet,
         flow,
         installations,
