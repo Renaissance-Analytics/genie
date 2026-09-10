@@ -78,7 +78,12 @@ import {
     type ViewStateStore,
     type WorkspaceViewState,
 } from '../lib/view-state';
-import { headerUpdateLabel, planCommitStep, shouldDriveRestart } from '../lib/updater-flow';
+import {
+    headerUpdateLabel,
+    planCommitStep,
+    shouldDriveRestart,
+    updateIsPending,
+} from '../lib/updater-flow';
 import {
     canSatisfyDrainRow,
     drainRosterSummary,
@@ -86,6 +91,14 @@ import {
     drainRowStatusLabel,
     upgradeModalPlan,
 } from '../lib/drain-roster';
+import {
+    closeUpgradeView,
+    commitUpgrade,
+    markRestartDriven,
+    openUpgradeView,
+    resetUpgradeCommit,
+    useUpgradeView,
+} from '../lib/upgrade-view';
 import type { DrainSnapshot } from '../../main/agents/drain';
 import { autoOpenWhatsNew } from '../lib/whats-new';
 import { emitOpenInPanel, openFileInEditor, surfaceMaximized } from '../lib/editor-open';
@@ -3008,12 +3021,15 @@ function UpdatePill() {
     // polled — the label has to stop saying "Restarting…" at the instant the
     // gate decides to ask the agents instead, not up to an interval later.
     const [drain, setDrain] = useState<DrainSnapshot | null>(null);
-    const [committed, setCommitted] = useState(false);
+    // What the user has decided about this upgrade lives in a store, not here
+    // (genie#622): the window is a sibling component, the header control is
+    // what opens it, and BOTH can start the restart — so the decisions have to
+    // sit somewhere the two of them can see.
+    const { committed, restartDriven } = useUpgradeView();
     const [changelog, setChangelog] = useState<Changelog | null>(null);
     const [hover, setHover] = useState(false);
     // Each step fires at most once after the user commits.
     const appliedRef = useRef(false);
-    const restartedRef = useRef(false);
     // Which updater backend is active — decides whether the FRONTEND drives the
     // restart or the backend auto-restarts itself (see shouldDriveRestart).
     const modeRef = useRef<'phase1' | 'phase2' | null>(null);
@@ -3039,11 +3055,7 @@ function UpdatePill() {
         };
     }, []);
 
-    const pending =
-        status &&
-        ['available', 'downloading', 'applying', 'ready-to-restart'].includes(
-            status.state,
-        );
+    const pending = updateIsPending(status?.state);
 
     // Fetch the changelog once we know a version is on offer. Cached in
     // main, so re-fetches across status ticks are cheap.
@@ -3070,7 +3082,10 @@ function UpdatePill() {
             state: status.state,
             committed,
             applied: appliedRef.current,
-            restarted: restartedRef.current,
+            // Shared, not a ref: the upgrade window's held-restart button can
+            // have driven one already, and a ref private to this component
+            // could not see it (genie#622).
+            restarted: restartDriven,
             // A manual-download update must NOT auto-apply — electron-updater
             // can't install it on this build. The pill shows a Download button
             // instead (handled in the render).
@@ -3089,8 +3104,7 @@ function UpdatePill() {
         });
         if (step === 'reset') {
             appliedRef.current = false;
-            restartedRef.current = false;
-            setCommitted(false);
+            resetUpgradeCommit();
         } else if (step === 'apply') {
             appliedRef.current = true;
             void (async () => {
@@ -3105,11 +3119,11 @@ function UpdatePill() {
                 // "Upgrading…" with no driver and no button forever.
                 if (!r.ok) {
                     appliedRef.current = false;
-                    setCommitted(false);
+                    resetUpgradeCommit();
                 }
             })();
         } else if (step === 'restart') {
-            restartedRef.current = true;
+            markRestartDriven();
             // Only drive the restart when the backend WON'T auto-restart itself.
             // On a fresh phase-2 apply, downloadAndInstall() armed installWhenReady
             // so the backend already runs quitAndInstall on update-downloaded —
@@ -3175,26 +3189,6 @@ function UpdatePill() {
         heldChats > 0
             ? `${heldChats} active agent chat${heldChats === 1 ? '' : 's'}`
             : `${heldTerminals} terminal${heldTerminals === 1 ? '' : 's'}`;
-    const confirmHeldRestart = (): void => {
-        void (async () => {
-            // A REJECTED call and a REFUSED one are different, and only the
-            // second is a reason to quit. `!ok` is phase-1 saying it has no
-            // installer, where quitting so the user relaunches is the honest
-            // fallback; a rejection is the IPC failing, and quitting Genie over
-            // that would turn a transient error into lost work. Leave the
-            // button clickable instead.
-            const r = await api().updater.restart().catch(() => null);
-            if (!r) return;
-            // genie#389 — `draining` means nothing restarted: the agents are
-            // being asked to finish and hand off first, and the roster flyout is
-            // now on screen. The apply follows on its own when it clears, so the
-            // ref stays disarmed — a cancelled drain must leave this button
-            // clickable again.
-            if (r.draining) return;
-            restartedRef.current = true;
-            if (!r.ok) await api().app.quit();
-        })();
-    };
 
     // Before the first status lands there is no version to state, so the label
     // is the plain wordmark rather than a blank space that fills in a beat later.
@@ -3235,13 +3229,14 @@ function UpdatePill() {
                 </button>
             ) : label.kind === 'held' ? (
                 // Held for confirmation: restarting now would close live agent
-                // chats. One explicit click starts the drain; leaving it staged
-                // defers. It never restarts on its own from here.
+                // chats. The click OPENS the window — what is in the upgrade,
+                // and who it would interrupt — and the decision is made there
+                // (genie#622). Nothing restarts from the header.
                 <button
                     type="button"
                     className="update-pill ready"
                     title={`Updating to v${version} closes ${heldNoun}. Genie asks each agent to finish and write a handoff first, and shows you who it is waiting on.`}
-                    onClick={confirmHeldRestart}
+                    onClick={openUpgradeView}
                 >
                     <span className="up-dot" />
                     <span className="up-label">{label.text}</span>
@@ -3250,23 +3245,27 @@ function UpdatePill() {
                 <button
                     type="button"
                     className="update-pill ready"
-                    title={`Genie ${version} is available — you are running v${status.currentVersion}`}
-                    onClick={() => setCommitted(true)}
+                    title={`Genie ${version} is available — you are running v${status.currentVersion}. See what is in it.`}
+                    onClick={openUpgradeView}
                 >
                     <span className="up-dot" />
                     <span className="up-label">{label.text}</span>
                 </button>
             ) : (
-                // One-way progress: no button, no second click — the effect
-                // above carries it through install → restart.
-                <span
+                // Under way. The click cannot mis-fire the apply — the effect
+                // above is what carries it through install → restart — so it
+                // does the one useful thing left: puts the window back up, for
+                // a user who closed it and wants to watch again (genie#622).
+                <button
+                    type="button"
                     className="update-pill is-progress"
-                    role="status"
                     aria-live="polite"
+                    title="Show what is in this upgrade, and who it is waiting on"
+                    onClick={openUpgradeView}
                 >
                     <span className="up-dot" />
                     <span className="up-label">{label.text}</span>
-                </span>
+                </button>
             )}
             {hover && (
                 <UpdatePopover
@@ -3311,12 +3310,40 @@ function UpdatePill() {
  * up, which is the evidence for the decision. There is no auto-dismiss and no
  * timeout. Cancel abandons the upgrade rather than applying it; a roster that
  * gave up and installed anyway would be the kill again, wearing a delay.
+ *
+ * ## It is a WINDOW now, not a projection of the drain (genie#622)
+ *
+ * The owner: *"If I cancel an upgrade I am unable to open the upgrade window
+ * again. I should be able to open that window and close it without starting the
+ * whole process over again."*
+ *
+ * It was a projection: `open` came entirely from the drain, so the only control
+ * that dismissed it was **Cancel the upgrade** — closing the window WAS
+ * cancelling it — and cancelling clears the roster, so nothing left in the UI
+ * could put it back. Three things changed, and none of them touch the drain:
+ *
+ *  - **Opening** is the header control's job, for as long as an upgrade is
+ *    staged. With no drain the sheet is the release notes alone, which is the
+ *    preview somebody wants before deciding.
+ *  - **Closing** is ✕, Esc and the backdrop, matching `WhatsNewModal`. It sets
+ *    view state and NOTHING else: a drain in flight keeps draining, its roster
+ *    is untouched, and reopening shows it again mid-flight.
+ *  - **Cancel the upgrade** stays, as the one deliberate button that abandons
+ *    it — and `cancelUpgradeDrain` is still a no-op once the drain is no longer
+ *    running, so a late click cannot delete the restore list of an upgrade that
+ *    is already applying.
  */
 function UpgradeModal() {
     const [snapshot, setSnapshot] = useState<DrainSnapshot | null>(null);
     const [status, setStatus] = useState<UpdaterStatus | null>(null);
     const [changelog, setChangelog] = useState<Changelog | null>(null);
     const [busy, setBusy] = useState<string | null>(null);
+    // Whether the USER is looking at this — the half that is not the drain's to
+    // decide (genie#622).
+    const view = useUpgradeView();
+    // One held restart per press. The button is the door to the drain, and
+    // opening it twice would nudge every agent twice.
+    const startingRef = useRef(false);
     // Genie's top layer (genie#114). A rung number alone is not enough: it only
     // outranks the Fancy layer while EVERY ancestor is stacking-context-free,
     // and one `transform` / `filter` / `contain` anywhere above traps the
@@ -3354,7 +3381,30 @@ function UpgradeModal() {
     const plan = upgradeModalPlan({
         drain: snapshot,
         latestVersion: status?.latestVersion ?? null,
+        view,
+        // The floor under an explicit open: the header control offers this
+        // window only while an upgrade is staged, so a stale intent must not
+        // leave a full-screen sheet over nothing.
+        upgradePending: updateIsPending(status?.state),
     });
+
+    // DISMISS THE VIEW, and nothing else (genie#622). The drain on screen is
+    // named so that a LATER drain still puts itself up — genie#565's gate is
+    // not something one ✕ may disarm for good.
+    const startedAt = snapshot?.startedAt ?? null;
+    const dismiss = useCallback(() => {
+        closeUpgradeView(startedAt);
+    }, [startedAt]);
+
+    // Esc closes it, as it does every other modal in this window.
+    useEffect(() => {
+        if (!plan.open) return;
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') dismiss();
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [plan.open, dismiss]);
 
     // The notes for the version being APPLIED. Cached in main, so the fetch is
     // cheap and re-runs across status ticks cost nothing.
@@ -3370,9 +3420,12 @@ function UpgradeModal() {
         };
     }, [plan.open, plan.version]);
 
-    if (!plan.open || !snapshot || !overlayRoot) return null;
+    if (!plan.open || !overlayRoot) return null;
 
-    const summary = drainRosterSummary(snapshot);
+    // Only while a drain is running — with none, the sheet is the release notes
+    // alone, which is the preview somebody wants before deciding.
+    const summary = plan.roster && snapshot ? drainRosterSummary(snapshot) : null;
+    const rows = plan.roster && snapshot ? snapshot.rows : [];
     const press = (agentId: string) => {
         setBusy(agentId);
         void api()
@@ -3385,19 +3438,87 @@ function UpgradeModal() {
     const groups = changelog?.groups ?? [];
     const anyNotes = groups.some((group) => group.changes.length > 0);
 
+    // What the sheet offers when no drain is running: the same decision the
+    // header control used to take on the user's behalf the instant they clicked
+    // it, moved to where they can see what they are deciding about.
+    const manualUrl = status?.manualDownloadUrl ?? null;
+    const heldTerminals = status?.interruption?.terminals ?? 0;
+    const heldChats = status?.interruption?.agentChats ?? 0;
+    const held = status?.state === 'ready-to-restart' && heldTerminals > 0;
+    const heldNoun =
+        heldChats > 0
+            ? `${heldChats} active agent chat${heldChats === 1 ? '' : 's'}`
+            : `${heldTerminals} terminal${heldTerminals === 1 ? '' : 's'}`;
+    const startHeldRestart = (): void => {
+        // One per press. This button is the door to the drain, and opening it
+        // twice would nudge every agent twice.
+        if (startingRef.current) return;
+        startingRef.current = true;
+        void (async () => {
+            // A REJECTED call and a REFUSED one are different, and only the
+            // second is a reason to quit. `!ok` is phase-1 saying it has no
+            // installer, where quitting so the user relaunches is the honest
+            // fallback; a rejection is the IPC failing, and quitting Genie over
+            // that would turn a transient error into lost work. Leave the
+            // button clickable instead.
+            const r = await api().updater.restart().catch(() => null);
+            // genie#389 — `draining` means nothing restarted: the agents are
+            // being asked to finish and hand off first, and the roster is now on
+            // screen. The apply follows on its own when it clears, so the press
+            // is disarmed again — a cancelled drain must leave this clickable.
+            if (!r || r.draining) {
+                startingRef.current = false;
+                return;
+            }
+            // It really is restarting. Say so where the pill's driver can see
+            // it, or that driver asks for a second one and quitAndInstall fires
+            // twice (genie#622 — it used to be a ref private to the pill, back
+            // when the pill was also the only thing that could start one).
+            markRestartDriven();
+            if (!r.ok) await api().app.quit();
+        })();
+    };
+
+    const versioned = plan.version ? ` to v${plan.version}` : '';
+    const title = summary ? `Updating Genie${versioned}` : `Upgrade Genie${versioned}`;
+    const subtitle = summary
+        ? summary.headline
+        : held
+          ? `Installing it closes ${heldNoun}. Genie asks each agent to finish and write a handoff first.`
+          : status?.currentVersion
+            ? `You are running v${status.currentVersion}.`
+            : 'Here is what it contains.';
+
     return createPortal(
-        <div className="upgrade-modal-backdrop" role="presentation">
+        // Backdrop dismiss, matching WhatsNewModal — and `onMouseDown` rather
+        // than `onClick` so a drag that STARTS inside the sheet and ends on the
+        // backdrop (selecting release-note text to the edge) does not close it.
+        <div className="upgrade-modal-backdrop" role="presentation" onMouseDown={dismiss}>
             <div
-                className="upgrade-modal"
+                className={`upgrade-modal${plan.roster ? '' : ' is-preview'}`}
                 role="dialog"
                 aria-modal="true"
-                aria-label={`Updating Genie${plan.version ? ` to v${plan.version}` : ''}`}
+                aria-label={title}
+                onMouseDown={(event) => event.stopPropagation()}
             >
                 <header className="um-head">
-                    <strong>
-                        Updating Genie{plan.version ? ` to v${plan.version}` : ''}
-                    </strong>
-                    <span className="um-sub">{summary.headline}</span>
+                    <div className="um-head-text">
+                        <strong>{title}</strong>
+                        <span className="um-sub">{subtitle}</span>
+                    </div>
+                    {/* CLOSING IS NOT CANCELLING (genie#622). It takes the view
+                        away and touches nothing else: a drain in flight keeps
+                        draining, its restore roster is untouched, and the header
+                        control puts this back up in one click. */}
+                    <button
+                        type="button"
+                        className="gicon"
+                        aria-label="Close"
+                        title="Close this window. The upgrade is not cancelled."
+                        onClick={dismiss}
+                    >
+                        <IconX size={18} />
+                    </button>
                 </header>
 
                 <section className="um-notes" aria-label="What is in this upgrade">
@@ -3433,95 +3554,166 @@ function UpgradeModal() {
                     )}
                 </section>
 
-                <section className="um-agents" aria-label="Agent shutdown list">
-                    <h3>
-                        Agents
-                        <span className="um-count">
-                            {summary.green}/{snapshot.rows.length} ready
-                        </span>
-                    </h3>
-                    <ul className="dr-rows">
-                        {snapshot.rows.map((row) => {
-                            const icon = drainRowIcon(row);
-                            const canPress = canSatisfyDrainRow(row);
-                            return (
-                                <li key={row.agentId} className={`dr-row is-${icon}`}>
-                                    <button
-                                        type="button"
-                                        className="dr-thumb"
-                                        disabled={!canPress || busy === row.agentId}
-                                        onClick={() => press(row.agentId)}
-                                        title={
-                                            canPress
-                                                ? `Mark ${row.name} as done — use this after you have shut it down yourself`
-                                                : drainRowStatusLabel(row)
-                                        }
-                                        aria-label={`${row.name}: ${drainRowStatusLabel(row)}`}
-                                    >
-                                        <IconThumbUp size={14} />
-                                    </button>
-                                    <div className="dr-who">
-                                        <span className="dr-name">{row.name}</span>
-                                        <span className="dr-note">
-                                            {drainRowStatusLabel(row)}
-                                        </span>
-                                    </div>
-                                </li>
-                            );
-                        })}
-                    </ul>
-                    {summary.stuck > 0 && (
-                        <div className="dr-warn" role="alert">
-                            {summary.stuck === 1
-                                ? 'One agent has'
-                                : `${summary.stuck} agents have`}{' '}
-                            stopped answering. Shut {summary.stuck === 1 ? 'it' : 'them'} down
-                            yourself, then press the thumb to let the upgrade go ahead.
-                        </div>
-                    )}
-                </section>
+                {/* Only while a drain is running. With none there is nobody to
+                    list, and an empty "Agents" pane beside the notes would be
+                    saying something about the user's agents that is not true. */}
+                {plan.roster && summary && (
+                    <section className="um-agents" aria-label="Agent shutdown list">
+                        <h3>
+                            Agents
+                            <span className="um-count">
+                                {summary.green}/{rows.length} ready
+                            </span>
+                        </h3>
+                        <ul className="dr-rows">
+                            {rows.map((row) => {
+                                const icon = drainRowIcon(row);
+                                const canPress = canSatisfyDrainRow(row);
+                                return (
+                                    <li key={row.agentId} className={`dr-row is-${icon}`}>
+                                        <button
+                                            type="button"
+                                            className="dr-thumb"
+                                            disabled={!canPress || busy === row.agentId}
+                                            onClick={() => press(row.agentId)}
+                                            title={
+                                                canPress
+                                                    ? `Mark ${row.name} as done — use this after you have shut it down yourself`
+                                                    : drainRowStatusLabel(row)
+                                            }
+                                            aria-label={`${row.name}: ${drainRowStatusLabel(row)}`}
+                                        >
+                                            <IconThumbUp size={14} />
+                                        </button>
+                                        <div className="dr-who">
+                                            <span className="dr-name">{row.name}</span>
+                                            <span className="dr-note">
+                                                {drainRowStatusLabel(row)}
+                                            </span>
+                                        </div>
+                                    </li>
+                                );
+                            })}
+                        </ul>
+                        {summary.stuck > 0 && (
+                            <div className="dr-warn" role="alert">
+                                {summary.stuck === 1
+                                    ? 'One agent has'
+                                    : `${summary.stuck} agents have`}{' '}
+                                stopped answering. Shut {summary.stuck === 1 ? 'it' : 'them'} down
+                                yourself, then press the thumb to let the upgrade go ahead.
+                            </div>
+                        )}
+                    </section>
+                )}
 
                 <footer className="um-actions">
-                    {/* THE ESCAPE. The drain deliberately never resolves on a
-                        clock, so the only way past an agent that has stopped
-                        answering is a person deciding to lose what it was doing.
-                        It sits under the list that names who, so the choice is
-                        informed rather than a guess — and it says what it costs. */}
-                    <button
-                        type="button"
-                        className="um-force"
-                        onClick={() => {
-                            void api()
-                                .updater.restart({ force: true })
-                                .catch(() => {});
-                        }}
-                        disabled={summary.done}
-                        title={
-                            summary.done
-                                ? 'Every agent has answered — the upgrade is applying now'
-                                : `Restart now without waiting. ${
-                                      summary.pending === 1
-                                          ? 'The agent that has not answered loses'
-                                          : `The ${summary.pending} agents that have not answered lose`
-                                  } whatever they were part-way through, and no handoff is written for them.`
-                        }
-                    >
-                        Force restart now
-                    </button>
-                    <button
-                        type="button"
-                        className="um-cancel"
-                        onClick={() => {
-                            void api()
-                                .drain.cancel()
-                                .then((s) => setSnapshot(s))
-                                .catch(() => {});
-                        }}
-                        disabled={summary.done}
-                        title="Leave the update staged and go back to work. Nothing is installed."
-                    >
-                        Cancel the upgrade
-                    </button>
+                    {summary ? (
+                        <>
+                            {/* THE ESCAPE. The drain deliberately never resolves
+                                on a clock, so the only way past an agent that has
+                                stopped answering is a person deciding to lose what
+                                it was doing. It sits under the list that names who,
+                                so the choice is informed rather than a guess — and
+                                it says what it costs. */}
+                            <button
+                                type="button"
+                                className="um-force"
+                                onClick={() => {
+                                    void api()
+                                        .updater.restart({ force: true })
+                                        .catch(() => {});
+                                }}
+                                disabled={summary.done}
+                                title={
+                                    summary.done
+                                        ? 'Every agent has answered — the upgrade is applying now'
+                                        : `Restart now without waiting. ${
+                                              summary.pending === 1
+                                                  ? 'The agent that has not answered loses'
+                                                  : `The ${summary.pending} agents that have not answered lose`
+                                          } whatever they were part-way through, and no handoff is written for them.`
+                                }
+                            >
+                                Force restart now
+                            </button>
+                            {/* ABANDON THE UPGRADE — a different act from closing
+                                the window, and the only control here that is. It
+                                dismisses the view as well, because a user who has
+                                just stopped the upgrade is done looking at it; the
+                                header control still offers it, so coming back is
+                                one click (genie#622). */}
+                            <button
+                                type="button"
+                                className="um-cancel"
+                                onClick={() => {
+                                    void api()
+                                        .drain.cancel()
+                                        .then((s) => setSnapshot(s))
+                                        .catch(() => {});
+                                    dismiss();
+                                }}
+                                disabled={summary.done}
+                                title="Leave the update staged and go back to work. Nothing is installed."
+                            >
+                                Cancel the upgrade
+                            </button>
+                        </>
+                    ) : (
+                        <>
+                            {/* NO DRAIN: this is the preview, so it carries the
+                                decision the header control used to take the
+                                instant it was clicked. "Not now" is the same
+                                dismissal as ✕ — it starts nothing and stops
+                                nothing. */}
+                            <button type="button" className="um-cancel" onClick={dismiss}>
+                                Not now
+                            </button>
+                            {manualUrl ? (
+                                <button
+                                    type="button"
+                                    className="um-go"
+                                    title="Auto-update isn't available on this build — download the new version"
+                                    onClick={() => {
+                                        void api()
+                                            .shell.openExternal(manualUrl)
+                                            .catch(() => {});
+                                    }}
+                                >
+                                    Download{plan.version ? ` v${plan.version}` : ''}
+                                </button>
+                            ) : held ? (
+                                <button
+                                    type="button"
+                                    className="um-go"
+                                    title={`Genie asks ${heldNoun} to finish and write a handoff first, and shows you who it is waiting on. Nothing restarts until they are done or you say so.`}
+                                    onClick={startHeldRestart}
+                                >
+                                    Install it
+                                </button>
+                            ) : view.committed ? (
+                                // Already under way. The header narrates it and
+                                // the notes are here to read; a second button
+                                // would only be a way to fire the apply twice.
+                                <span className="um-progress" role="status" aria-live="polite">
+                                    Upgrading…
+                                </span>
+                            ) : (
+                                <button
+                                    type="button"
+                                    className="um-go"
+                                    title={
+                                        status?.currentVersion
+                                            ? `Install this upgrade. You are running v${status.currentVersion}.`
+                                            : 'Install this upgrade.'
+                                    }
+                                    onClick={commitUpgrade}
+                                >
+                                    Upgrade{plan.version ? ` to v${plan.version}` : ''}
+                                </button>
+                            )}
+                        </>
+                    )}
                 </footer>
             </div>
         </div>,

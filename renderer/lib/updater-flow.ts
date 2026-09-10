@@ -83,6 +83,26 @@ export function planCommitStep(opts: {
 }
 
 
+/**
+ * Is there an upgrade to look at — offered, downloading, applying, or staged?
+ *
+ * One list, read by three callers that must agree: the header label (what it
+ * says), the pill (whether to fetch release notes) and the upgrade window
+ * (whether the user may open it at all — genie#622, where the window is no
+ * longer a projection of the drain and needs its own floor). Three private
+ * copies of the same array is how they drift.
+ */
+const PENDING_STATES: ReadonlySet<string> = new Set([
+    'available',
+    'downloading',
+    'applying',
+    'ready-to-restart',
+]);
+
+export function updateIsPending(state: string | null | undefined): boolean {
+    return PENDING_STATES.has(state ?? '');
+}
+
 /** What the Genie header label is showing right now. */
 export type HeaderUpdateLabelKind =
     /** No update pending — the label states the version you are running. */
@@ -139,11 +159,7 @@ export function headerUpdateLabel(opts: {
      */
     draining?: { active: boolean; total: number; green: number } | null;
 }): HeaderUpdateLabel {
-    const pending =
-        opts.state === 'available' ||
-        opts.state === 'downloading' ||
-        opts.state === 'applying' ||
-        opts.state === 'ready-to-restart';
+    const pending = updateIsPending(opts.state);
 
     // Nothing on offer — including while a check is running, and including a
     // check that ERRORED. A failed poll is the updater's problem; the label's

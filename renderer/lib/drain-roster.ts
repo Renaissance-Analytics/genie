@@ -90,38 +90,99 @@ export function drainRosterSummary(snapshot: DrainSnapshot): DrainRosterSummary 
 }
 
 /**
- * PURE. Is the upgrade modal on screen, and for which version (genie#565)?
+ * What the USER has decided about the window (genie#622).
  *
- * *"When an upgrade is in progress, I should see a big wide modal…"* — and
- * "in progress" means once the DRAIN has started. Not at download time: a
- * download is not something a person needs to watch their agents for, and a
- * full-screen sheet over one would interrupt work to report progress nobody
- * asked about.
+ * Stored, and passed in, rather than derived — that is the whole fix. See
+ * {@link upgradeModalPlan}; the store that holds it is `./upgrade-view`.
+ */
+export interface UpgradeViewState {
+    /**
+     *  - `auto`   — the user has not touched it. The drain gate decides.
+     *  - `open`   — they asked to see it, from the header control.
+     *  - `closed` — they dismissed it. Only for the drain named below.
+     */
+    intent: 'auto' | 'open' | 'closed';
+    /**
+     * Which drain a `closed` was about — its `startedAt`, or null when there
+     * was no drain to dismiss.
+     *
+     * Without this, closing the window once would disarm genie#565's gate for
+     * every upgrade afterwards: the next drain would start under working agents
+     * with nothing on screen saying so.
+     */
+    forDrain: number | null;
+}
+
+const NO_INTENT: UpgradeViewState = { intent: 'auto', forDrain: null };
+
+/**
+ * PURE. Is the upgrade window on screen, for which version, and does it show a
+ * roster (genie#565, genie#622)?
  *
- * The three states of a snapshot are easy to confuse and the difference is the
- * whole rule:
+ * ## Two facts, and only the second belongs to the drain
  *
- *  - `active`   — holding the upgrade. Open.
- *  - `complete` — every row green, the apply on its way. Still open, so the
- *                 final roster is the one the user actually sees.
- *  - neither, with rows — the drain was CANCELLED. Closed: the upgrade is no
- *                 longer happening, and a sheet left up over it describes
- *                 something that stopped.
+ * This used to be one. `open` was `drain is running or complete`, which made
+ * the sheet a PROJECTION of the drain rather than a window: the only control
+ * that took it away was *Cancel the upgrade*, so closing the window was
+ * cancelling the upgrade — and since `cancelUpgradeDrain` clears the roster
+ * too, both halves of that predicate went false with nothing in the UI able to
+ * set them again. The owner could not get back in without starting over.
  *
- * An EMPTY roster is closed too. That is what an upgrade with nothing to ask
- * produces — it resolves at once, and flashing a modal for it would be a
- * full-screen interruption for an upgrade nobody was blocking.
+ * So:
+ *
+ *  - **`open`** answers *am I looking at the upgrade* — the user's intent,
+ *    with the drain deciding only while they have expressed none. The
+ *    header control opens it; ✕ / Esc / the backdrop close it; neither touches
+ *    anything the upgrade depends on.
+ *  - **`roster`** answers *is a drain running* — and that is all it answers.
+ *    Without one the sheet is release notes alone, which is the preview
+ *    somebody wants BEFORE deciding.
+ *
+ * ## What still decides it on its own
+ *
+ * With no intent (`auto`) the rule is exactly genie#565's, unchanged: a drain
+ * that is `active`, or `complete` and about to apply, puts itself on screen.
+ * That gate is what stops an upgrade restarting under working agents, and a
+ * dismissal is scoped to the drain it was about (`forDrain`) precisely so the
+ * NEXT one still shows itself.
+ *
+ * A drain that is neither — rows, but not running and not complete — was
+ * CANCELLED, and nothing reopens the sheet over it by itself. An EMPTY roster
+ * is the same: that is what an upgrade with nothing to ask produces, and
+ * flashing a modal for it would be a full-screen interruption for an upgrade
+ * nobody was blocking.
  */
 export function upgradeModalPlan(input: {
     drain: DrainSnapshot | null;
-    /** The version being applied — the left pane's notes are about this. */
+    /** The version being applied — the notes pane is about this. */
     latestVersion: string | null;
-}): { open: boolean; version: string | null } {
+    /** What the user did with the window. Absent means they have not touched it. */
+    view?: UpgradeViewState;
+    /**
+     * Is there an upgrade to look at at all — offered, downloading, or staged?
+     *
+     * The floor under an explicit `open`: the header control is the only thing
+     * that sets one, and it is not clickable when Genie is up to date, so a
+     * stale intent must not leave a sheet over nothing.
+     */
+    upgradePending?: boolean;
+}): { open: boolean; version: string | null; roster: boolean } {
     const drain = input.drain;
-    const open =
+    const draining =
         !!drain && (drain.rows?.length ?? 0) > 0 && (drain.active || drain.complete);
+    const view = input.view ?? NO_INTENT;
+    // A dismissal is about the drain that was on screen at the time. A
+    // different one — or the first one after a preview was closed — is a new
+    // gate and has not been dismissed at all.
+    const dismissed =
+        view.intent === 'closed' && view.forDrain === (drain?.startedAt ?? null);
+    const open = dismissed
+        ? false
+        : view.intent === 'open'
+          ? draining || input.upgradePending === true
+          : draining;
     // The version rides along even when null: the AGENT list is the half the
     // user is being asked to decide about, and it must not wait on a notes
     // fetch that may never land.
-    return { open, version: input.latestVersion ?? null };
+    return { open, version: input.latestVersion ?? null, roster: draining };
 }
