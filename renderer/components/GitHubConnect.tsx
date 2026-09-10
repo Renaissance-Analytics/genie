@@ -458,7 +458,6 @@ export function GitHubConnect({ account }: { account: GitHubAccount }) {
         username,
         storageOk,
         storageHint,
-        keychainBackend,
         clientIdSet,
         flow,
         installations,
