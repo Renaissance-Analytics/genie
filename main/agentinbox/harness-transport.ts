@@ -146,9 +146,14 @@ export class HarnessTransportRegistry {
      *
      * The honest limit of that: a bridge KILLED while parked leaves its poll
      * open until our own timer settles it, so it is detected a poll-length later
-     * than one that stopped between polls. Both real triggers — a fatal 401/403,
-     * and Claude Code closing stdin — stop the bridge with its last poll already
-     * returned, which is the case this measures tightly.
+     * than one that stopped between polls. The remaining trigger — Claude Code
+     * closing stdin — stops the bridge with its last poll already returned,
+     * which is the case this measures tightly.
+     *
+     * A "fatal 401/403" used to be listed here as the other one. It is gone:
+     * every error retries now (genie#619), and Genie's endpoint has no 401/403
+     * path to begin with, so that trigger described a state only a non-Genie
+     * server on the port could produce.
      */
     notePullPollClosed(agentId: string): void {
         const session = this.sessions.get(agentId);

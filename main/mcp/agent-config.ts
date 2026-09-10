@@ -169,6 +169,27 @@ export function claudeChannelBridge(): string {
     return `'use strict';
 
 const endpoint = process.env.GENIE_MCP_URL;
+/**
+ * The ONE error this process cannot retry its way out of, checked BEFORE it
+ * speaks any MCP (genie#619).
+ *
+ * Ending here rather than on the first poll is deliberate. A client re-dials a
+ * stdio server that reached "connected" and then closed, so a bridge that
+ * answered \`initialize\`, went on to discover it has no endpoint and exited
+ * would simply be respawned to fail the same way, forever. Failing at STARTUP is
+ * what keeps an honest exit from becoming a respawn loop: the server never
+ * becomes connected, nothing re-dials it, and the harness reports a server that
+ * would not start — which is true, and visible.
+ *
+ * \`process.exit\` and NOT \`process.exitCode\`: the latter names the code a
+ * natural exit will use and causes no exit at all. That distinction is the whole
+ * of genie#619 — with stdin flowing, setting it left this process alive, deaf,
+ * and still answering health checks.
+ */
+if (!endpoint) {
+    process.stderr.write('[AgentInbox Channel] GENIE_MCP_URL is required.\\n');
+    process.exit(1);
+}
 let requestId = 1;
 /**
  * How far THIS PROCESS has written, and nothing more (genie#549).
@@ -202,14 +223,6 @@ function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** An error the endpoint will keep giving us. Retrying it is a hot loop, not a
- *  heal, so it stops the bridge and surfaces in the harness instead. */
-function fatal(message) {
-    const error = new Error(message);
-    error.fatal = true;
-    return error;
-}
-
 /**
  * Put a line on stdout, and resolve when the WRITE completes. That is all it
  * proves — the bytes reached the pipe (genie#549).
@@ -238,7 +251,6 @@ function decodeRpc(body) {
 }
 
 async function agentInbox(args) {
-    if (!endpoint) throw fatal('GENIE_MCP_URL is required.');
     const id = requestId++;
     const response = await fetch(endpoint, {
         method: 'POST',
@@ -254,14 +266,24 @@ async function agentInbox(args) {
         }),
     });
     if (!response.ok) {
-        // 401/403 mean the endpoint is UP and has REFUSED this token — that is
-        // configuration, and no amount of retrying fixes it. Everything else is
-        // treated as the replacement server coming back: a 404 while it is
-        // still wiring its workspace endpoints, a 5xx mid-boot, a refused
-        // socket. Those are the upgrade, and they heal.
-        if (response.status === 401 || response.status === 403) {
-            throw fatal('AgentInbox HTTP ' + response.status);
-        }
+        // EVERY bad status retries, 401 and 403 included (genie#619).
+        //
+        // Those two used to be fatal, on the reasoning that the endpoint is up
+        // and has refused this token, so retrying is a hot loop rather than a
+        // heal. The reasoning was sound and the premise was wrong: Genie's MCP
+        // server has no 401/403 path at all — an unresolvable token gets 404, a
+        // server still binding gets 503. So a 403 here does not mean Genie
+        // refused us. It means something that is NOT GENIE is answering the
+        // configured port, which \`mcp/server.ts\` explicitly anticipates: on
+        // EADDRINUSE it falls back to an ephemeral port and leaves every baked
+        // URL pointing at whatever squatted the old one.
+        //
+        // That is transient — it clears when Genie next binds the right port —
+        // and it was the one condition that killed this bridge permanently. Note
+        // the asymmetry it leaves behind: a WRONG URL (404) already retries
+        // forever by design, deliberately, because "Genie can legitimately be
+        // shut for an hour". A wrong token was the only config error treated as
+        // fatal, and it was the one Genie cannot actually produce.
         throw new Error('AgentInbox HTTP ' + response.status);
     }
     const rpc = decodeRpc(await response.text());
@@ -330,11 +352,23 @@ async function deliver(onConnected) {
  * upgrade notice was TYPED at the agent's prompt — the exact symptom genie#344
  * fixed, reproduced on every upgrade.
  *
- * Retrying is bounded by the HARNESS's own lifetime, not by a timer: \`stopped\`
- * is set when Claude Code closes stdin, and a fatal error stops it outright.
+ * Retrying is bounded by the HARNESS's own lifetime and by NOTHING else:
+ * \`stopped\` is set when Claude Code closes stdin, and that is the only way out.
  * There is deliberately no give-up window — Genie can legitimately be shut for
  * an hour while an agent terminal stays open, and a bridge that had given up
  * would never notice it came back.
+ *
+ * That last sentence used to carry an exception — "and a fatal error stops it
+ * outright" — and the exception was genie#619. Stopping "outright" meant
+ * \`process.exitCode = 1\` and a \`return\`, which sets the code a NATURAL exit
+ * would use and exits nothing: with stdin still flowing the process stayed up,
+ * \`running\` latched, answering \`ping\` and \`tools/list\` while delivering
+ * nothing. A live, deaf bridge that passes every health check — which is the
+ * failure this docblock describes as HISTORY, still reachable one function down.
+ *
+ * There is no fatal branch now. The single unrecoverable condition (no
+ * \`GENIE_MCP_URL\`) is checked at startup, before this process claims to be an
+ * MCP server at all, and every other error retries.
  *
  * \`handedOff\` is module state and is preserved across RECONNECTS, so a channel
  * that comes back after an upgrade resumes where it left off instead of
@@ -347,25 +381,32 @@ async function run() {
     if (running) return;
     running = true;
     let delay = RETRY_MIN_MS;
-    while (!stopped) {
-        try {
-            // Reset on a CONNECTION, not on a clean exit: a channel that ran for
-            // an hour and then dropped should retry fast, not at the old cap.
-            await deliver(() => { delay = RETRY_MIN_MS; });
-            return;
-        } catch (error) {
-            const message = (error && error.message) || String(error);
-            if (error && error.fatal) {
-                process.stderr.write('[AgentInbox Channel] ' + message + '\\n');
-                process.exitCode = 1;
+    try {
+        while (!stopped) {
+            try {
+                // Reset on a CONNECTION, not on a clean exit: a channel that ran
+                // for an hour and then dropped should retry fast, not at the old
+                // cap.
+                await deliver(() => { delay = RETRY_MIN_MS; });
                 return;
+            } catch (error) {
+                // EVERY error retries now. There is no longer a branch that ends
+                // this loop while the process lives — that state was genie#619,
+                // and it is gone by construction rather than by care.
+                const message = (error && error.message) || String(error);
+                process.stderr.write(
+                    '[AgentInbox Channel] disconnected (' + message + '); reconnecting in ' + delay + 'ms\\n',
+                );
+                await sleep(delay);
+                delay = Math.min(delay * 2, RETRY_MAX_MS);
             }
-            process.stderr.write(
-                '[AgentInbox Channel] disconnected (' + message + '); reconnecting in ' + delay + 'ms\\n',
-            );
-            await sleep(delay);
-            delay = Math.min(delay * 2, RETRY_MAX_MS);
         }
+    } finally {
+        // Unlatched on the way out, so a later \`notifications/initialized\` can
+        // start delivery again instead of hitting \`if (running) return\` and
+        // silently doing nothing. Only reachable at shutdown today; the point is
+        // that it cannot become a trap if that ever stops being true.
+        running = false;
     }
 }
 
