@@ -247,6 +247,7 @@ import {
     type RemoteHost,
 } from './remote';
 import { openWorkspace } from './workspace/open';
+import { activateRestoredWorkspace, watchActiveWorkspace } from './workspace/activate';
 import {
     computeOpsProvisionPlan,
     applyOpsProvision,
@@ -1792,6 +1793,15 @@ app.whenReady().then(async () => {
         openInBrowser: (genName) =>
             openTestingBrowser(LOCAL_CONN_KEY, 'This machine', remoteGenUrl(genName)),
     });
+    // …and tell the Dev Server whenever the ACTIVE WORKSPACE changes (genie#597).
+    // Installed here, right after the hosting managers exist, because the hook
+    // it runs is theirs. The moment matters more than the caller: switching
+    // workspace in the master window writes `active_workspace` through
+    // `settings:set` and nothing else, so before this the workspace-open hook —
+    // #234 P4's sandbox warm, #559's owed adoption pass, #573's host-native
+    // service start — fired only for a TRAY open. Hooking the WRITE rather than
+    // that one caller is what keeps the next writer from having to remember.
+    watchActiveWorkspace();
     // Mirror a Tynn-linked envelope's hosted-site config to Tynn (#661) whenever
     // it is persisted, so the hosting control UX can track it. Fire-and-forget:
     // a dead session or offline Tynn must never fail the local write. db.ts
@@ -2794,6 +2804,20 @@ app.whenReady().then(async () => {
             runDeferredAutostart();
             await resumeHostBrowser?.();
         }
+        // THE LAUNCH RESTORE (genie#597). The master window is about to land in
+        // the workspace the user left active, and landing there writes nothing —
+        // so the write hook installed above has no change to see, and until this
+        // the ordinary quit→relaunch→open-a-terminal journey took the workspace
+        // OPEN hook not at all: #573's host-native services stayed dark and
+        // #559's owed adoption pass went untaken for the one workspace that
+        // mattered. Once per PROCESS, not once per master window. AFTER onBoot,
+        // so adoption has already re-attached whatever survived and this starts
+        // only what it structurally could not. Fire-and-forget, like every other
+        // activation — a service that cannot start must not cost the launch.
+        //
+        // Outside the try/finally deliberately: an onBoot that threw is a
+        // stronger reason to take this pass, not a reason to skip it.
+        activateRestoredWorkspace();
         broadcastDevServerChanged();
         // Adopt re-attached any browser-exposed host-native site that was already
         // running — bring its host Caddy/hosts/CA back in one pass. No-op (and no
