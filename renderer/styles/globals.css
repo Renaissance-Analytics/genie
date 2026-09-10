@@ -539,7 +539,20 @@ textarea.input {
     white-space: nowrap;
 }
 /* The pane does NOT scroll: fancy-code's own panel does, exactly as it does in
-   the editor (see .code-host .cv-panel in master.css). One scroller here too. */
+   the editor (see .code-host .cv-panel in master.css). One scroller here too.
+
+   That was the intent from the start and it never held (genie#603), because the
+   chain skipped a link. fancy-code nests its scrolling Panel inside a CodeEditor
+   ROOT, and that root is a plain `overflow-hidden` BLOCK — so `flex: 1 1 auto`
+   on the Panel had no flex parent to be a child of. The Panel sized to its
+   content, grew past the pane, and the `overflow: hidden` below clipped the
+   overflow away: no scrollbar anywhere, and everything past the fold
+   unreachable. The editor has carried the missing rule since the Code view
+   shipped, which is exactly why the editor scrolls and this did not.
+
+   `overflow: auto` here is the WRONG fix and is pinned against: it wraps a
+   SECOND scroller around a pane meant to have one, with the Panel's own
+   `overflow-auto` still nested inside it. The pane still clips, on purpose. */
 .ask-file-view {
     flex: 1 1 auto;
     min-height: 0;
@@ -547,16 +560,42 @@ textarea.input {
     flex-direction: column;
     overflow: hidden;
 }
-.ask-file-view [data-fancy-file-viewer] {
-    flex: 1 1 auto;
-    min-height: 0;
+/* The missing link: make the CodeEditor root a full-height flex COLUMN, so it
+   can be squeezed to the pane and the Panel below has a bounded height to fill.
+   Mirrors `.code-host .code-editor-col > [data-fancy-code-editor]`. */
+.ask-file-view [data-fancy-code-editor] {
     display: flex;
     flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+    height: 100%;
 }
+/* `max-height` is an INLINE style fancy-code writes from its own props, so only
+   `!important` defeats a cap the drawer never asked for. */
 .ask-file-view [data-fancy-code-panel] {
     flex: 1 1 auto;
     min-height: 0;
     max-height: none !important;
+}
+/* Rendered markdown (genie#603). The one region in the drawer that IS its own
+   scroll container — there is no editor Panel underneath this one to own the
+   scrollbar. Typography comes from react-fancy's ContentRenderer, which brings
+   its own prose styles and its own dark variants, so nothing is restated here:
+   only the box. `overflow: auto` covers both axes, which is what a wide table
+   or a long fenced block in someone's plan document needs. */
+.ask-file-md {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    padding: 14px 16px 28px;
+    color: var(--fg-2);
+}
+/* The Source / Rendered switch, for markdown only. Reuses the file-chip shape
+   from the question column above, so the drawer introduces no new control. */
+.ask-file-views {
+    display: inline-flex;
+    gap: 4px;
+    -webkit-app-region: no-drag;
 }
 .ask-file-note {
     padding: 14px;

@@ -30,6 +30,12 @@ const WORKSPACE_NAME = 'Ask Fixture';
 export const ASK_FIXTURE_FILE = '.ai/plans/spec.md';
 /** A line the spec looks for in the drawer, distinctive enough to be no accident. */
 export const ASK_FIXTURE_MARKER = 'Bridges are named after the river they cross.';
+/**
+ * The fixture file's H1. It is asserted as a RENDERED heading (genie#603): the
+ * drawer showed markdown as a code buffer, and `# Action catalog` reaching the
+ * screen as text proves nothing — it did that while the bug was open.
+ */
+export const ASK_FIXTURE_HEADING = 'Action catalog';
 
 const LONG_PARAGRAPH =
     'The action catalog is the list of things an agent may do without asking, ' +
@@ -74,15 +80,26 @@ export function seedAskE2E(): AskFixture {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     // Rewritten every run: a spec that asserts on the marker must not pass
     // against whatever a previous run happened to leave behind.
+    //
+    // TALLER THAN THE DRAWER, on purpose (genie#603). The drawer clipped instead
+    // of scrolling, and a file that fits cannot demonstrate the difference: the
+    // pane looks identical whether it scrolls or throws the overflow away. The
+    // sections in between exist to push §3 past the fold, and every paragraph is
+    // one long unbroken LINE so the same file also answers whether it wraps.
+    const filler = Array.from(
+        { length: 24 },
+        (_, i) => `## ${i + 2}. Section ${i + 2}\n\n${LONG_PARAGRAPH}\n`,
+    ).join('\n');
     fs.writeFileSync(
         filePath,
         [
-            '# Action catalog',
+            `# ${ASK_FIXTURE_HEADING}`,
             '',
             '## 1. Scope',
             '',
             LONG_PARAGRAPH,
             '',
+            filler,
             '## 3. Naming',
             '',
             ASK_FIXTURE_MARKER,

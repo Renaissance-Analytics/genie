@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Action, ContentRenderer, Heading, Icon, Text } from '@particle-academy/react-fancy';
-import { FileViewer } from '@particle-academy/fancy-code';
+import AskFilePreview, { isMarkdownPath } from '../components/Ask/AskFilePreview';
 import { api, hasGenieBridge, type ForceQuestionSpec } from '../lib/genie';
 import { extractFileRefs, splitByExistence, type AskFileRef } from '../lib/ask-file-refs';
 import { ASK_MODAL_WIDTH } from '../../main/ask/drawer-bounds';
@@ -78,6 +78,10 @@ export default function AskPage() {
     // The file being read beside the question, and what came back for it (#272).
     const [openFile, setOpenFile] = useState<AskFileRef | null>(null);
     const [fileState, setFileState] = useState<FileState>({ status: 'loading' });
+    // Markdown opens RENDERED (genie#603). This is the way back to the source —
+    // a question that names `plans/x.md:42` is pointing at a line, and prose has
+    // no lines. Per FILE: opening a different one starts from prose again.
+    const [showSource, setShowSource] = useState(false);
 
     useEffect(() => {
         if (hasGenieBridge()) setBridgeReady(true);
@@ -220,6 +224,7 @@ export default function AskPage() {
         if (!openFile || !workspacePath) return;
         let cancelled = false;
         setFileState({ status: 'loading' });
+        setShowSource(false);
         void api()
             .files.read(workspacePath, openFile.path)
             .then((r) => {
@@ -555,6 +560,31 @@ export default function AskPage() {
                             {openFile.path}
                         </span>
                         <div style={{ flex: 1 }} />
+                        {/* Prose or source, for the files where the two differ.
+                            Only markdown renders, so only markdown gets a way
+                            back — anything else is already its own source. */}
+                        {isMarkdownPath(openFile.path) && (
+                            <div className="ask-file-views">
+                                {(
+                                    [
+                                        ['Rendered', false],
+                                        ['Source', true],
+                                    ] as const
+                                ).map(([label, wantsSource]) => (
+                                    <button
+                                        key={label}
+                                        type="button"
+                                        className={`ask-file-chip${
+                                            showSource === wantsSource ? ' on' : ''
+                                        }`}
+                                        aria-pressed={showSource === wantsSource}
+                                        onClick={() => setShowSource(wantsSource)}
+                                    >
+                                        {label}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
                         <button
                             type="button"
                             className="ask-x"
@@ -575,11 +605,16 @@ export default function AskPage() {
                             </div>
                         )}
                         {fileState.status === 'ready' && (
-                            <FileViewer
+                            <AskFilePreview
+                                // The path in the key, so a different file is a
+                                // fresh editor rather than a re-used one holding
+                                // the previous file's scroll position. `source`
+                                // is deliberately NOT in it: flipping the view
+                                // should swap the body, not reload the file.
                                 key={openFile.path}
-                                filename={openFile.name}
-                                value={fileState.content}
-                                wordWrap
+                                filename={openFile.path}
+                                content={fileState.content}
+                                source={showSource}
                             />
                         )}
                     </div>

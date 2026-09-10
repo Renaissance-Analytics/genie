@@ -72,6 +72,32 @@ async function scrollableInColumn(): Promise<string[]> {
     );
 }
 
+/**
+ * The same census, for the file drawer (genie#603).
+ *
+ * The drawer has the mirror-image requirement to the question column: exactly
+ * ONE region scrolls, and which one depends on the view — the rendered-markdown
+ * pane owns its own scrollbar, the source view leaves it to fancy-code's editor
+ * Panel. What must never appear is a second scroller wrapped around either, which
+ * is what `overflow: auto` on `.ask-file-view` would have produced.
+ */
+async function scrollableInPane(): Promise<string[]> {
+    return pane().evaluate((root) =>
+        Array.from(root.querySelectorAll<HTMLElement>('*'))
+            .filter((el) => !['TEXTAREA', 'INPUT', 'SELECT'].includes(el.tagName))
+            .filter((el) => {
+                const style = getComputedStyle(el);
+                const scrolls = /auto|scroll/.test(style.overflowY + style.overflow);
+                return scrolls && el.scrollHeight > el.clientHeight + 1;
+            })
+            .map((el) =>
+                typeof el.className === 'string' && el.className
+                    ? el.className
+                    : el.tagName.toLowerCase(),
+            ),
+    );
+}
+
 test.beforeAll(async () => {
     ({ app, page } = await launchGenieE2E('ask'));
     await expect(frame()).toBeVisible();
@@ -161,6 +187,83 @@ test('a file path opens the file beside the question, without navigating', async
     await expect(pane()).toHaveCount(0);
     await page.waitForFunction((w) => window.innerWidth === w, widthBefore);
     expect(page.url()).toBe(before);
+});
+
+/**
+ * genie#603 — the drawer scrolls, wraps, and renders markdown as markdown.
+ *
+ * This is the only place any of that can be shown. The stylesheet test beside it
+ * (`renderer/lib/__tests__/ask-file-drawer.test.ts`) pins the RULES; whether a
+ * rule produces a scrollbar is a question about boxes after layout, and the bug
+ * was precisely a stylesheet that looked correct and clipped anyway — every rule
+ * it declared was right, and the one it did not declare took the scrollbar away.
+ * So the measurements here are `scrollHeight` against `clientHeight` on the real
+ * elements, in the product's own window.
+ *
+ * The fixture file is deliberately taller than the pane and made of long
+ * unbroken lines; a file that fits proves nothing about either axis.
+ */
+test('the file drawer scrolls, wraps, and renders markdown (genie#603)', async () => {
+    const widthBefore = await page.evaluate(() => window.innerWidth);
+    await chip().click();
+    await expect(pane()).toBeVisible();
+    // WAIT for the window to finish widening before measuring anything. Every
+    // assertion below is a box comparison, and a resize still in flight over IPC
+    // would have them racing it — `scrollWidth <= clientWidth` most of all.
+    await page.waitForFunction((w) => window.innerWidth > w, widthBefore);
+
+    // --- 1. Markdown renders as markdown, not as a code buffer ---------------
+    // `# Action catalog` reached the screen as TEXT throughout the bug, so the
+    // assertion is that it is an <h1>, in the rendered pane, with no editor.
+    await expect(page.locator('.ask-file-md h1')).toHaveText('Action catalog');
+    await expect(pane().locator('[data-fancy-code-panel]')).toHaveCount(0);
+
+    // --- 2. It scrolls, and the scroll actually moves ------------------------
+    const md = page.locator('.ask-file-md');
+    expect(await overflows(md)).toBe(true);
+    const scrolled = await md.evaluate((el) => {
+        el.scrollTop = el.scrollHeight;
+        return el.scrollTop;
+    });
+    expect(scrolled).toBeGreaterThan(0);
+
+    // The PANE around it does not scroll and does not clip: exactly one scroller
+    // in the drawer, which is the shape `.ask-file-view` was written for and
+    // never had. Before the fix its content overflowed a hidden box — the bug.
+    expect(await overflows(page.locator('.ask-file-view'))).toBe(false);
+    expect(await scrollableInPane()).toEqual(['ask-file-md']);
+
+    // --- 3. Source view: the code path is the half that was clipped ----------
+    await pane().getByRole('button', { name: 'Source' }).click();
+    const panel = pane().locator('[data-fancy-code-panel]');
+    await expect(panel).toBeVisible();
+    await expect(page.locator('.ask-file-md')).toHaveCount(0);
+
+    // The same two measurements against the editor. This is the direct proof of
+    // the reported bug: the Panel had no bounded height to scroll inside, so it
+    // grew and `.ask-file-view` threw the overflow away.
+    expect(await overflows(panel)).toBe(true);
+    const codeScrolled = await panel.evaluate((el) => {
+        el.scrollTop = el.scrollHeight;
+        return el.scrollTop;
+    });
+    expect(codeScrolled).toBeGreaterThan(0);
+    expect(await overflows(page.locator('.ask-file-view'))).toBe(false);
+
+    // --- 4. Word wrap --------------------------------------------------------
+    // Every paragraph in the fixture is one long line. Wrapped, nothing overflows
+    // horizontally; unwrapped, the Panel scrolls sideways instead.
+    const wrapped = await panel.evaluate((el) => el.scrollWidth <= el.clientWidth + 1);
+    expect(wrapped).toBe(true);
+
+    // Back to prose, and closed — the next test starts from a closed drawer at
+    // the original width, so wait for the window to give it back rather than
+    // leaving a resize in flight for that test to race.
+    await pane().getByRole('button', { name: 'Rendered' }).click();
+    await expect(page.locator('.ask-file-md h1')).toBeVisible();
+    await page.locator('.ask-file-head .ask-x').click();
+    await expect(pane()).toHaveCount(0);
+    await page.waitForFunction((w) => window.innerWidth === w, widthBefore);
 });
 
 test('a short question renders correctly too', async () => {
