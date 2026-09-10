@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { describe, expect, it } from 'vitest';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -150,5 +152,84 @@ describe('long lines wrap (regression pin — see the note above)', () => {
             }),
         );
         expect(whiteSpace(unwrapped)).toBe('pre');
+    });
+});
+
+/**
+ * The drawer's editor is DARK, because every editor in Genie is (genie#603
+ * follow-up).
+ *
+ * `<FileViewer>` defaulted to `theme="auto"` and the rewrite carried that value
+ * over unexamined — deliberately, as a colour nobody could look at, but wrongly.
+ * The file editor does not guess: `CodePanel.tsx` PINS `theme="dark"`, and that
+ * is a repo-wide convention rather than one component's taste. `--term-bg` /
+ * `--term-fg` are declared once with dark values and never flip, and
+ * `.tpanel-head`'s light ink on a permanently dark ground is correct for the
+ * same reason. Terminals and editors stay dark in both themes here.
+ *
+ * `auto` is not "the app's theme" either, which is what made the divergence
+ * invisible: fancy-code resolves it from the OS `prefers-color-scheme`, while
+ * Genie's theme is a `.dark` class that `_app.tsx` owns and a pinned preference
+ * can set AGAINST the OS. So the drawer could disagree with the window it sits
+ * in and with every other editor in the app at the same time.
+ *
+ * Two assertions, because they fail for different reasons. The first is about
+ * this component and reads the colour actually rendered; the second is about the
+ * two surfaces staying in step, and is the property that stops them drifting
+ * apart the way the scroll chain already had.
+ */
+describe('the drawer editor matches the file editor, and both are dark', () => {
+    /** The background colour fancy-code paints the Panel with. */
+    function panelBackground(html: string): string | null {
+        const m = /background-color:\s*([^;"]+)/.exec(html);
+        return m ? m[1]!.trim() : null;
+    }
+
+    /** A bare CodeEditor at `theme`, as the reference for what that theme looks like. */
+    function referenceAt(theme: string): string {
+        return renderToStaticMarkup(
+            React.createElement(CodeEditor, {
+                value: 'const a = 1;\n',
+                language: 'typescript',
+                theme,
+                children: React.createElement(CodeEditor.Panel, {}),
+            }),
+        );
+    }
+
+    it('renders on the dark ground, not the light one', () => {
+        const drawer = panelBackground(render('main/db.ts', 'const a = 1;\n'));
+        expect(drawer).toBe(panelBackground(referenceAt('dark')));
+    });
+
+    it('POSITIVE CONTROL: the light theme is a different colour', () => {
+        // Without this, "it matches dark" would pass against a build where every
+        // theme resolved to the same grey — and `theme="auto"` renders LIGHT in
+        // this environment (fancy-code's server snapshot is `prefers-dark:
+        // false`), which is exactly the value being ruled out.
+        expect(panelBackground(referenceAt('light'))).not.toBe(
+            panelBackground(referenceAt('dark')),
+        );
+        expect(panelBackground(referenceAt('auto'))).toBe(panelBackground(referenceAt('light')));
+    });
+
+    it('passes the SAME theme the file editor pins, so the two cannot drift', () => {
+        // Source-level, because the editor cannot be rendered here — CodePanel is
+        // a whole panel with an IPC bridge behind it. What can be compared is the
+        // decision each surface makes, which is the thing that drifted.
+        const themeOf = (file: string): string => {
+            const src = fs
+                .readFileSync(path.resolve(__dirname, '..', file), 'utf8')
+                // Prose about a theme must not be mistaken for passing one.
+                .replace(/\/\*[\s\S]*?\*\//g, '')
+                .replace(/\{\/\*[\s\S]*?\*\/\}/g, '');
+            const hits = [...src.matchAll(/\btheme="([a-z]+)"/g)].map((m) => m[1]!);
+            expect(hits, `expected exactly one theme= in ${file}`).toHaveLength(1);
+            return hits[0]!;
+        };
+        expect(themeOf('Ask/AskFilePreview.tsx')).toBe(themeOf('Code/CodePanel.tsx'));
+        // Named too: matching each other on "auto" would satisfy the line above
+        // while both diverged from every other editor surface in Genie.
+        expect(themeOf('Ask/AskFilePreview.tsx')).toBe('dark');
     });
 });
