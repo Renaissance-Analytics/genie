@@ -204,6 +204,38 @@ export function drainNudgeMode(mode: AgentMode): string {
 }
 
 /**
+ * A SHOWSTOPPER notice's clause (genie#602) — the second surface where a Manual
+ * agent is asked to act, and for the same structural reason as the first.
+ *
+ * {@link inboxNoticeMode} tells a Manual agent that what just arrived is for its
+ * awareness and not to act on it unless a person asks. That is right for mail.
+ * It is flatly wrong for the envelope of a message that HOLDS SOMETHING UNTIL
+ * THIS AGENT ANSWERS — and it was the second half of the contradiction genie#602
+ * reported: the drain's body already carried {@link drainNudgeMode}'s *"do this
+ * now rather than waiting to be asked"*, while the envelope wrapped around it
+ * still said the opposite.
+ *
+ * A person HAS asked, in the only way a blocking surface has: whatever they did
+ * is what is now waiting. Both modes are told to answer; what the mode changes
+ * is the SCOPE, exactly as it does for the drain nudge.
+ *
+ * The notice this closes says HELD rather than *blocked*, deliberately. To an
+ * agent being told what it may do unattended, "blocked" reads as a permission
+ * verdict — the register `agent-mode-is-guidance.test.ts` exists to keep out of
+ * these strings. What is true is simpler than that: Genie is waiting.
+ */
+export function showstopperNoticeMode(mode: AgentMode): string {
+    if (mode === 'automated') {
+        return `You are an Automated agent. ${AUTOMATED_FRAMING} Read it and answer it now.`;
+    }
+    return (
+        'You are a Manual agent, and this one is addressed to you directly: do what it asks now ' +
+        'rather than waiting to be asked. It is scoped to exactly that — nothing else about how ' +
+        'you work changes.'
+    );
+}
+
+/**
  * The boot prompt's clause.
  *
  * The one surface where a person HAS just asked for something: `runAgent`'s

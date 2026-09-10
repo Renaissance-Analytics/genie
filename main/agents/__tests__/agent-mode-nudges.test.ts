@@ -4,10 +4,11 @@ import {
     bootPromptMode,
     drainNudgeMode,
     inboxNoticeMode,
+    showstopperNoticeMode,
     upgradeNoticeMode,
     type AgentMode,
 } from '../agent-mode';
-import { drainNudgeText } from '../drain';
+import { drainNudge } from '../drain';
 import { announceAgentUpgrade, formatAgentUpgradeMessage } from '../upgrade-announcement';
 import { MANUAL_RECOVERY } from '../mcp-reconnect';
 import { agentBootPrompt } from '../boot-prompt';
@@ -43,7 +44,7 @@ const SURFACES: readonly {
     },
     {
         name: 'an AgentInbox notice',
-        render: (mode) => inboxNoticeText({ from: 'moic', priority: 'normal', mode }),
+        render: (mode) => inboxNoticeText({ from: 'moic', urgency: 'normal', mode }),
         clause: inboxNoticeMode,
     },
     {
@@ -67,8 +68,19 @@ const SURFACES: readonly {
         // agent answers, so silence is the failure. The mode still changes the
         // wording; what it changes here is the SCOPE.
         name: 'the upgrade drain nudge',
-        render: drainNudgeText,
+        render: (mode) => drainNudge(mode).text,
         clause: drainNudgeMode,
+    },
+    {
+        // genie#602. The SEVENTH, and the second where the Manual clause is an
+        // ask: the ENVELOPE around a showstopper. The drain's body already told
+        // a Manual agent to answer now; the notice announcing it still carried
+        // `inboxNoticeMode`'s "do not act unless a person asks", so the two
+        // halves of one delivery contradicted each other.
+        name: 'the AgentInbox notice for a SHOWSTOPPER',
+        render: (mode) =>
+            inboxNoticeText({ from: 'Genie (no reply)', urgency: 'showstopper', mode }),
+        clause: showstopperNoticeMode,
     },
 ];
 

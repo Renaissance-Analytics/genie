@@ -30,6 +30,7 @@ import {
     NUDGE_UNCHECKED_MS,
 } from './wake';
 import { containsHumanInput, inboxNoticeText } from './notify';
+import { messageUrgency, urgencyInterrupts, type InboxUrgency } from './urgency';
 import { DEFAULT_AGENT_MODE, type AgentMode } from '../agents/agent-mode';
 import { EMPTY_DRAFT, noteDraft, planNudge, type Draft, type NudgePlan } from './draft';
 
@@ -494,7 +495,7 @@ export class AgentInboxBroker {
         const isAnswer = this.ftqAnswerTerminals.delete(target.terminalId);
         const text = inboxNoticeText({
             from: msg.fromLabel,
-            priority: msg.interrupt ? 'high' : 'normal',
+            urgency: messageUrgency(msg),
             kind: isAnswer ? 'ftq-answer' : 'dm',
             mode: this.modeOf(target),
         });
@@ -1389,7 +1390,18 @@ export class AgentInboxBroker {
         source?: AgentInboxMachineSource;
         toAgentId?: string;
         text: string;
+        /** Shorthand for `urgency: 'urgent'` — the flag the MCP tool and the
+         *  human panel have always had. Ignored when `urgency` is given. */
         interrupt?: boolean;
+        /**
+         * How loud the notice announcing this must be (genie#602).
+         *
+         * `interrupt` is DERIVED from this, not set beside it, so a caller
+         * cannot declare a showstopper that then arrives without the attention
+         * mechanism behind it — nor the reverse, which is what shipped: a nudge
+         * that held an upgrade and announced itself as ordinary mail.
+         */
+        urgency?: InboxUrgency;
         /** The message this one ANSWERS. Declared by the sender; never inferred
          *  from who has talked to whom. Drives the `replied` lifecycle moment,
          *  and only when the sender is an AGENT. */
@@ -1400,6 +1412,11 @@ export class AgentInboxBroker {
     }): AgentInboxSendResult {
         const text = String(input.text ?? '');
         if (!text.trim()) return { ok: false, error: 'A message needs non-empty text.' };
+        // ONE fact, and `interrupt` is its consequence. `messageUrgency` is the
+        // same derivation the notice reads, so the wording an agent sees and the
+        // glow its terminal gets can never come from different answers.
+        const urgency = messageUrgency(input);
+        const interrupt = urgencyInterrupts(urgency);
 
         let from: string;
         let fromLabel: string;
@@ -1464,7 +1481,10 @@ export class AgentInboxBroker {
                 kind: 'dm',
                 to: target.agentId,
                 text,
-                ...(input.interrupt ? { interrupt: true } : {}),
+                ...(interrupt ? { interrupt: true } : {}),
+                // ABSENT at `normal`, so an ordinary message stays exactly the
+                // shape it has always been on the wire and in the store.
+                ...(urgency === 'normal' ? {} : { urgency }),
             };
             this.push(target, msg);
             // DELIVERED — emitted HERE and not inside `push`, deliberately.
@@ -1484,7 +1504,7 @@ export class AgentInboxBroker {
             this.deliverToHarness(target, msg);
             // The native harness transport owns live delivery. Failure leaves
             // the durable message queued; PTY input is never a fallback.
-            if (input.interrupt) {
+            if (interrupt) {
                 if (target.terminalId) {
                     this.emit({ type: 'interrupt', terminalId: target.terminalId });
                 }

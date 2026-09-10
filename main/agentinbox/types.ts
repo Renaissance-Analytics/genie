@@ -11,6 +11,7 @@
  * `terminal_specs.meta`), local-only — no relay, no cross-host.
  */
 import type { AgentTuiId } from '../agents/registry';
+import type { InboxUrgency } from './urgency';
 
 
 /**
@@ -330,8 +331,18 @@ export interface AgentInboxMessage {
     text: string;
     /** Epoch ms. */
     ts: number;
-    /** DM only: an urgent nudge was requested (glows the recipient's terminal). */
+    /** DM only: an urgent nudge was requested (glows the recipient's terminal).
+     *  DERIVED from {@link urgency} at send time — never set beside it. */
     interrupt?: boolean;
+    /**
+     * How loud the notice announcing this message must be (genie#602).
+     *
+     * ABSENT on an ordinary message, and absent on every message read back from
+     * the durable store: this is a property of the SEND, and `interrupt` is the
+     * half that persists. {@link messageUrgency} is the only thing that should
+     * read it, so the fallback lives in exactly one place.
+     */
+    urgency?: InboxUrgency;
     /**
      * The `id` of the message this one ANSWERS, when the sender said so.
      *

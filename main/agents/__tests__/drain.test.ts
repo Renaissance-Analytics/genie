@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { AgentDrain, DRAIN_STUCK_AFTER_MS, drainNudgeText, type DrainTarget } from '../drain';
+import { AgentDrain, DRAIN_STUCK_AFTER_MS, drainNudge, type DrainTarget } from '../drain';
 import { drainNudgeMode } from '../agent-mode';
 
 /**
@@ -39,12 +39,12 @@ const AGENTS: DrainTarget[] = [
 
 /** A drain whose clock and scheduler the test drives itself. */
 function drain(over: Partial<ConstructorParameters<typeof AgentDrain>[0]> = {}) {
-    const sent: Array<{ to: string; text: string }> = [];
+    const sent: Array<{ to: string; text: string; urgency: string }> = [];
     const fired: Array<{ run: () => void; delayMs: number }> = [];
     const changes: number[] = [];
     const d = new AgentDrain({
-        send: (to, text) => {
-            sent.push({ to, text });
+        send: (to, notice) => {
+            sent.push({ to, text: notice.text, urgency: notice.urgency });
             return true;
         },
         schedule: (run, delayMs) => {
@@ -281,7 +281,7 @@ describe('the stuck path — nothing hangs forever', () => {
 
 describe('the nudge text', () => {
     it('asks for the three things the drain needs, in order', () => {
-        const text = drainNudgeText('manual');
+        const text = drainNudge('manual').text;
         const stop = text.search(/stop/i);
         const handoff = text.search(/handoff/i);
         const thumbs = text.search(/thumbsUp/);

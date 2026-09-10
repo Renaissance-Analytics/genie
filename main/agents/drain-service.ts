@@ -17,7 +17,13 @@ import { devSiteManager } from '../dev-server/site-manager';
 import { getProcessStatuses, startProcess } from '../terminal/process-supervisor';
 import { startRegisteredAgent } from '../mcp/host-tools';
 import { agentModeFor } from './agent-mode-source';
-import { AgentDrain, drainableAgents, type DrainSnapshot, type DrainTarget } from './drain';
+import {
+    AgentDrain,
+    drainNudgeSender,
+    drainableAgents,
+    type DrainSnapshot,
+    type DrainTarget,
+} from './drain';
 import {
     drainRosterFrom,
     runDrainRestore,
@@ -38,8 +44,9 @@ import {
 export const DRAIN_CHANGED = 'drain:changed';
 
 export const agentUpgradeDrain = new AgentDrain({
-    send: (inboxAgentId, text) =>
-        agentInboxBroker.send({ system: true, toAgentId: inboxAgentId, text }).ok,
+    // The urgency comes from the notice, not from here — see `drainNudgeSender`
+    // and genie#602. This file is the binding; the decision is tested next door.
+    send: drainNudgeSender((input) => agentInboxBroker.send(input)),
     modeOf: (agentId) =>
         agentModeFor({
             agentId,
