@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHostBrowserReconciler } from '../host-browser-reconcile';
-import type { HostSiteRoute } from '../host-reconcile';
+import type { HostReconcilePlan, HostSiteRoute } from '../host-reconcile';
 
 /**
  * The desktop trigger for the external-browser host reconcile (story #238 P3).
@@ -17,12 +17,19 @@ import type { HostSiteRoute } from '../host-reconcile';
  */
 const route = (genName: string, port: number): HostSiteRoute => ({ genName, port });
 
+/** Configured names == running routes: the shape these trigger tests describe,
+ *  where the split of genie#624 is not what is under examination. */
+const planOf = (routes: HostSiteRoute[]): HostReconcilePlan => ({
+    names: routes.map((r) => r.genName),
+    routes,
+});
+
 afterEach(() => vi.useRealTimers());
 
 describe('createHostBrowserReconciler', () => {
     it('does NOTHING when no site is browser-exposed (no CA, no prompt)', async () => {
         const reconcile = vi.fn().mockResolvedValue({});
-        const r = createHostBrowserReconciler({ routes: () => [], reconcile });
+        const r = createHostBrowserReconciler({ plan: () => planOf([]), reconcile });
         await r.runNow();
         expect(reconcile).not.toHaveBeenCalled();
     });
@@ -30,15 +37,15 @@ describe('createHostBrowserReconciler', () => {
     it('reconciles to the current routes when at least one is exposed', async () => {
         const reconcile = vi.fn().mockResolvedValue({});
         const routes = [route('web.acme.gen', 8001)];
-        const r = createHostBrowserReconciler({ routes: () => routes, reconcile });
+        const r = createHostBrowserReconciler({ plan: () => planOf(routes), reconcile });
         await r.runNow();
-        expect(reconcile).toHaveBeenCalledWith(routes);
+        expect(reconcile).toHaveBeenCalledWith(planOf(routes));
     });
 
     it('never throws when the (privileged) reconcile fails — it logs', async () => {
         const log = vi.fn();
         const reconcile = vi.fn().mockRejectedValue(new Error('trust store denied'));
-        const r = createHostBrowserReconciler({ routes: () => [route('a.gen', 1)], reconcile, log });
+        const r = createHostBrowserReconciler({ plan: () => planOf([route('a.gen', 1)]), reconcile, log });
         await expect(r.runNow()).resolves.toBeUndefined();
         expect(log).toHaveBeenCalledWith(expect.stringContaining('trust store denied'));
     });
@@ -50,31 +57,31 @@ describe('createHostBrowserReconciler', () => {
         // block + Caddyfile drain to nothing.
         const reconcile = vi.fn().mockResolvedValue({});
         let routes = [route('web.acme.gen', 8001)];
-        const r = createHostBrowserReconciler({ routes: () => routes, reconcile });
+        const r = createHostBrowserReconciler({ plan: () => planOf(routes), reconcile });
         await r.runNow(); // non-empty → applied
         routes = [];
         await r.runNow(); // empty → MUST still reconcile (drain)
-        expect(reconcile).toHaveBeenNthCalledWith(2, []);
+        expect(reconcile).toHaveBeenNthCalledWith(2, planOf([]));
     });
 
     it('a never-opted-in machine with initiallyApplied stays FALSE untouched on empty', async () => {
         const reconcile = vi.fn().mockResolvedValue({});
-        const r = createHostBrowserReconciler({ routes: () => [], reconcile });
+        const r = createHostBrowserReconciler({ plan: () => planOf([]), reconcile });
         await r.runNow();
         expect(reconcile).not.toHaveBeenCalled();
     });
 
     it('initiallyApplied:true drains a leftover block at boot (a CA on disk ⇒ opted-in before)', async () => {
         const reconcile = vi.fn().mockResolvedValue({});
-        const r = createHostBrowserReconciler({ routes: () => [], reconcile, initiallyApplied: true });
+        const r = createHostBrowserReconciler({ plan: () => planOf([]), reconcile, initiallyApplied: true });
         await r.runNow();
-        expect(reconcile).toHaveBeenCalledWith([]);
+        expect(reconcile).toHaveBeenCalledWith(planOf([]));
     });
 
     it('debounces a burst of schedule() calls into a single reconcile (trailing edge)', () => {
         vi.useFakeTimers();
         const reconcile = vi.fn().mockResolvedValue({});
-        const r = createHostBrowserReconciler({ routes: () => [route('a.gen', 1)], reconcile, debounceMs: 400 });
+        const r = createHostBrowserReconciler({ plan: () => planOf([route('a.gen', 1)]), reconcile, debounceMs: 400 });
         r.schedule();
         r.schedule();
         r.schedule();
@@ -111,8 +118,8 @@ describe('reconciling while a reconcile is already running', () => {
         return {
             calls,
             release: () => release(),
-            fn: async (routes: HostSiteRoute[]) => {
-                calls.push(routes.length);
+            fn: async (p: HostReconcilePlan) => {
+                calls.push(p.routes.length);
                 await gate;
                 return { hostsChanged: true, caddyChanged: true } as never;
             },
@@ -125,7 +132,7 @@ describe('reconciling while a reconcile is already running', () => {
     it('does not start a second reconcile — that is the second UAC prompt', async () => {
         const blocking = blockingReconcile();
         const reconciler = createHostBrowserReconciler({
-            routes: () => [route('a')],
+            plan: () => planOf([route('a')]),
             reconcile: blocking.fn,
             debounceMs: 0,
         });
@@ -148,7 +155,7 @@ describe('reconciling while a reconcile is already running', () => {
         const blocking = blockingReconcile();
         let routes: HostSiteRoute[] = [route('a')];
         const reconciler = createHostBrowserReconciler({
-            routes: () => routes,
+            plan: () => planOf(routes),
             reconcile: blocking.fn,
             debounceMs: 0,
         });
@@ -170,7 +177,7 @@ describe('reconciling while a reconcile is already running', () => {
     it('does not schedule a trailing run when nothing was requested during it', async () => {
         const blocking = blockingReconcile();
         const reconciler = createHostBrowserReconciler({
-            routes: () => [route('a')],
+            plan: () => planOf([route('a')]),
             reconcile: blocking.fn,
             debounceMs: 0,
         });
@@ -196,9 +203,9 @@ describe('suspending reconciles while every site is restored', () => {
         const calls: number[] = [];
         let routes: HostSiteRoute[] = [];
         const reconciler = createHostBrowserReconciler({
-            routes: () => routes,
-            reconcile: async (r) => {
-                calls.push(r.length);
+            plan: () => planOf(routes),
+            reconcile: async (p) => {
+                calls.push(p.routes.length);
                 return { hostsChanged: true, caddyChanged: true } as never;
             },
             debounceMs: 0,
@@ -221,9 +228,9 @@ describe('suspending reconciles while every site is restored', () => {
     it('does not reconcile on resume when nothing asked for one', async () => {
         const calls: number[] = [];
         const reconciler = createHostBrowserReconciler({
-            routes: () => [route('a')],
-            reconcile: async (r) => {
-                calls.push(r.length);
+            plan: () => planOf([route('a')]),
+            reconcile: async (p) => {
+                calls.push(p.routes.length);
                 return { hostsChanged: true, caddyChanged: true } as never;
             },
             debounceMs: 0,
@@ -232,4 +239,71 @@ describe('suspending reconciles while every site is restored', () => {
         await reconciler.suspend()();
         expect(calls).toEqual([]);
     });
+});
+
+/**
+ * The opt-in floor after the genie#624 split. "Exposed" is now answered by the
+ * CONFIGURED names, not by what happens to be running: a machine whose only
+ * browser-exposed site is stopped has still opted in, and its hosts entry must
+ * survive the stop rather than being drained and re-added on the next start.
+ */
+describe('the opt-in floor reads the CONFIGURED half', () => {
+    it('reconciles a configured site that is not running — the opt-in is the config', async () => {
+        const reconcile = vi.fn().mockResolvedValue({});
+        const r = createHostBrowserReconciler({
+            plan: () => ({ names: ['web.acme.gen'], routes: [] }),
+            reconcile,
+        });
+        await r.runNow();
+        expect(reconcile).toHaveBeenCalledWith({ names: ['web.acme.gen'], routes: [] });
+    });
+
+    it('stopping the last RUNNING site does not drain — the name stays configured', async () => {
+        const reconcile = vi.fn().mockResolvedValue({});
+        let plan = { names: ['web.acme.gen'], routes: [route('web.acme.gen', 8001)] };
+        const r = createHostBrowserReconciler({ plan: () => plan, reconcile });
+        await r.runNow();
+        plan = { names: ['web.acme.gen'], routes: [] };
+        await r.runNow();
+        // The second pass still carries the name, so the brain finds the hosts file
+        // in sync and never elevates.
+        expect(reconcile).toHaveBeenNthCalledWith(2, { names: ['web.acme.gen'], routes: [] });
+    });
+
+    it('un-configuring the last site DOES drain, once anything has been applied', async () => {
+        const reconcile = vi.fn().mockResolvedValue({});
+        let plan: { names: string[]; routes: HostSiteRoute[] } = { names: ['web.acme.gen'], routes: [] };
+        const r = createHostBrowserReconciler({ plan: () => plan, reconcile });
+        await r.runNow();
+        plan = { names: [], routes: [] };
+        await r.runNow();
+        expect(reconcile).toHaveBeenNthCalledWith(2, { names: [], routes: [] });
+    });
+
+    it('a machine that never opted in stays untouched', async () => {
+        const reconcile = vi.fn().mockResolvedValue({});
+        const r = createHostBrowserReconciler({ plan: () => ({ names: [], routes: [] }), reconcile });
+        await r.runNow();
+        expect(reconcile).not.toHaveBeenCalled();
+    });
+});
+
+it('never throws when READING the plan fails — it logs (rule 2 covers the whole pass)', async () => {
+    // The plan is no longer a read of an in-memory map: since genie#624 its
+    // `names` half asks the workspace store what is configured, and that read can
+    // fail. It is taken inside the same guard as the reconcile, because a boot
+    // where the store is briefly unreadable must not surface an unhandled
+    // rejection from `void runNow()`.
+    const log = vi.fn();
+    const reconcile = vi.fn().mockResolvedValue({});
+    const r = createHostBrowserReconciler({
+        plan: () => {
+            throw new Error('workspace store is locked');
+        },
+        reconcile,
+        log,
+    });
+    await expect(r.runNow()).resolves.toBeUndefined();
+    expect(reconcile).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('workspace store is locked'));
 });

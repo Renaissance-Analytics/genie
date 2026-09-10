@@ -96,7 +96,7 @@ import {
     devServiceHostEnvReportFor,
 } from './dev-server/services/service-manager';
 import { resolveContainerRuntime } from './dev-server';
-import { devServerHostBrowserRoutes } from './dev-server/site-manager';
+import { devServerHostBrowserNames, devServerHostBrowserRoutes } from './dev-server/site-manager';
 import { createDesktopHostBrowserReconciler } from './dev-server/host-browser-desktop';
 import { waitForHttp } from './dev-server/port-probe';
 import { preferredServicePort } from './dev-server/services/service-ports';
@@ -1704,10 +1704,19 @@ app.whenReady().then(async () => {
         userDataDir: app.getPath('userData'),
         caddyBin: hostCaddyBin,
         platform: process.platform,
-        routes: () => [
-            ...devServerHostBrowserRoutes(),
-            ...(hostingHandles?.services.hostBrowserRoutes() ?? []),
-        ],
+        // ONE snapshot, two halves (genie#624): the CONFIGURED names the hosts file
+        // carries, and the RUNNING routes the host Caddyfile proxies. Sites and
+        // services each answer both questions; the reconcile unions them.
+        plan: () => ({
+            names: [
+                ...devServerHostBrowserNames(),
+                ...(hostingHandles?.services.hostBrowserNames() ?? []),
+            ],
+            routes: [
+                ...devServerHostBrowserRoutes(),
+                ...(hostingHandles?.services.hostBrowserRoutes() ?? []),
+            ],
+        }),
         log: (m) => console.warn('[host-browser]', m),
     });
     // A workspace as the hosting managers see it. `appKind` travels with it so a

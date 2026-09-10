@@ -319,6 +319,9 @@ describe('one engine, two workspaces', () => {
         expect(manager.hostBrowserRoutes()).toEqual([
             { genName: 'websockets.ws-a.gen', port: 49_123 },
         ]);
+        // The HOSTS-FILE half is read from CONFIG, so it says the same thing
+        // whether or not the engine is up (genie#624).
+        expect(manager.hostBrowserNames()).toEqual(['websockets.ws-a.gen']);
         expect(manager.genSites()).toEqual([
             {
                 workspaceId: 'a',
@@ -2037,5 +2040,50 @@ describe('a failure is evidence about a MOMENT (genie#558)', () => {
         await manager.refresh();
 
         expect(manager.runtimeSeen()).not.toBeNull();
+    });
+});
+
+/**
+ * genie#624 — the service side of the same split. `hostBrowserRoutes()` reads the
+ * LIVE map, so a WebSocket engine coming up or going down moved the `.gen` name
+ * set and, with it, the Administrator-owned hosts file. The names are now read
+ * from configuration, which does not move when a service starts, becomes ready,
+ * or is released.
+ */
+describe('the hosts-file names a websockets service is entitled to (genie#624)', () => {
+    const wsConfig = {
+        engine: 'websockets' as const,
+        version: '1',
+        dedicated: false,
+        password: 'workspace_websocket_password_0123456789',
+        enabled: true,
+    };
+
+    it('names an enabled host-native websockets service before it is acquired', () => {
+        const manager = createDevServiceManager(deps(fakeRuntime(), { a: { 'ws-a': wsConfig } }));
+        expect(manager.hostBrowserNames()).toEqual(['websockets.ws-a.gen']);
+        expect(manager.hostBrowserRoutes()).toEqual([]); // nothing live ⇒ no vhost
+    });
+
+    it('does NOT name a disabled one — `enabled` is the configured ask', () => {
+        const manager = createDevServiceManager(
+            deps(fakeRuntime(), { a: { 'ws-a': { ...wsConfig, enabled: false } } }),
+        );
+        expect(manager.hostBrowserNames()).toEqual([]);
+    });
+
+    it('does NOT name a CONTAINER engine — only the host-native one is fronted at :443', () => {
+        const manager = createDevServiceManager(deps(fakeRuntime(), { a: pgFor('pg-a') }));
+        expect(manager.hostBrowserNames()).toEqual([]);
+    });
+
+    it('names one per workspace, sorted and deduplicated', () => {
+        const manager = createDevServiceManager(
+            deps(fakeRuntime(), {
+                b: { 'ws-b': wsConfig },
+                a: { 'ws-a': wsConfig, 'ws-a2': wsConfig },
+            }),
+        );
+        expect(manager.hostBrowserNames()).toEqual(['websockets.ws-a.gen', 'websockets.ws-b.gen']);
     });
 });

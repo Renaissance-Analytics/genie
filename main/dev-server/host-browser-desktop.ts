@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { awaitCaddyStart } from './host-caddy';
 import { buildHostReconcileEffects, type HostEffectIo, type HostEffectPaths } from './host-effects';
-import { reconcileHostSites, type HostReconcileResult, type HostSiteRoute } from './host-reconcile';
+import { reconcileHostSites, type HostReconcilePlan, type HostReconcileResult } from './host-reconcile';
 import { createHostBrowserReconciler, type HostBrowserReconciler } from './host-browser-reconcile';
 
 /**
@@ -132,8 +132,8 @@ export function hostBrowserIo(platform: NodeJS.Platform): HostEffectIo {
 }
 
 export interface DesktopHostBrowserOpts extends HostBrowserPathOpts {
-    /** The live browser-exposed host-native routes (devServerHostBrowserRoutes). */
-    routes: () => HostSiteRoute[];
+    /** The pass's CONFIGURED names + RUNNING routes (genie#624). */
+    plan: () => HostReconcilePlan;
     log?: (msg: string) => void;
     debounceMs?: number;
 }
@@ -142,13 +142,14 @@ export interface DesktopHostBrowserOpts extends HostBrowserPathOpts {
 export function createDesktopHostBrowserReconciler(opts: DesktopHostBrowserOpts): HostBrowserReconciler {
     const paths = hostBrowserPaths(opts);
     const io = hostBrowserIo(opts.platform);
-    const reconcile = (routes: HostSiteRoute[]): Promise<HostReconcileResult> =>
-        reconcileHostSites(routes, buildHostReconcileEffects(paths, io));
-    // A Genie CA on disk ⇒ this machine opted in before, so a boot with zero live
-    // sites must still DRAIN a `.gen` hosts line left over from a previous session.
+    const reconcile = (plan: HostReconcilePlan): Promise<HostReconcileResult> =>
+        reconcileHostSites(plan, buildHostReconcileEffects(paths, io));
+    // A Genie CA on disk ⇒ this machine opted in before, so a boot with nothing
+    // configured must still DRAIN a `.gen` hosts line left over from a previous
+    // session.
     const initiallyApplied = existsSync(paths.caCertPath);
     return createHostBrowserReconciler({
-        routes: opts.routes,
+        plan: opts.plan,
         reconcile,
         initiallyApplied,
         ...(opts.log ? { log: opts.log } : {}),

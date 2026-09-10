@@ -17,7 +17,10 @@ import {
 import { composeHostSiteEnv, describeHostServiceEnvGap } from './host-site-process';
 import { serveCaddyfile, caddyServeArgv, phpFastcgiWorkerCommand } from './serve-config';
 import type { HostEnvReport } from './services/service-manager';
-import { hostBrowserRoutes as selectHostBrowserRoutes } from './host-browser-routes';
+import {
+    hostBrowserNames as selectHostBrowserNames,
+    hostBrowserRoutes as selectHostBrowserRoutes,
+} from './host-browser-routes';
 import type { HostSiteRoute } from './host-reconcile';
 import { ensureWorkspaceSandbox, HOST_GATEWAY_HOSTNAME } from './workspace-sandbox';
 import { effectiveCommand, hostNativeRoute, sandboxCommandFor, type HostNativeRoute } from './sites-config';
@@ -599,9 +602,15 @@ export interface DevSiteManager {
     resumeEnabledSites(): Promise<void>;
     /** RUNNING http sites as Testing-Browser rows. Synchronous. */
     genSites(): DevGenSite[];
-    /** The browser-exposed HOST-NATIVE routes across all workspaces — the input to
-     *  the external-browser host reconcile (story #238). Synchronous. */
+    /** The browser-exposed HOST-NATIVE routes across all workspaces — the RUNNING
+     *  half of the external-browser host reconcile (story #238), and the input to
+     *  its Caddyfile. Synchronous. */
     hostBrowserRoutes(): HostSiteRoute[];
+    /** The `.gen` names of every CONFIGURED browser-exposed site across all
+     *  workspaces — the input to the reconcile's HOSTS FILE (genie#624). Read from
+     *  config, so it does not move when a site starts or stops and the elevated
+     *  write does not fire. Synchronous. */
+    hostBrowserNames(): string[];
     stopAll(): Promise<void>;
 }
 
@@ -2240,6 +2249,15 @@ ${hint}` : main;
             );
         },
 
+        hostBrowserNames() {
+            // Every workspace's CONFIGURED sites, not `live` — that is the whole
+            // point (genie#624). A site is named the moment it is opted in and
+            // stays named until it is un-opted-in or removed.
+            return selectHostBrowserNames(
+                deps.listWorkspaces().flatMap((w) => Object.values(deps.devSitesFor(w.id))),
+            );
+        },
+
         async stopAll() {
             for (const siteId of [...live.keys()]) await stop(siteId);
         },
@@ -2277,6 +2295,12 @@ export function devServerGenSites(): DevGenSite[] {
  *  (story #238). `[]` when the dev server was never initialised. */
 export function devServerHostBrowserRoutes(): HostSiteRoute[] {
     return instance?.hostBrowserRoutes() ?? [];
+}
+
+/** The CONFIGURED browser-exposed `.gen` names for that reconcile's hosts file
+ *  (genie#624). `[]` when the dev server was never initialised. */
+export function devServerHostBrowserNames(): string[] {
+    return instance?.hostBrowserNames() ?? [];
 }
 
 /** Test-only: drop the process-wide instance. */

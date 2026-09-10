@@ -59,7 +59,7 @@ describe('one elevation per reconcile pass (genie#604)', () => {
         const host = fakeHost();
         const fx = buildHostReconcileEffects(PATHS, host.io);
 
-        const res = await reconcileHostSites([{ genName: 'moic.gen', port: 8080 }], fx);
+        const res = await reconcileHostSites({ names: ['moic.gen'], routes: [{ genName: 'moic.gen', port: 8080 }] }, fx);
 
         expect(res.caCreated).toBe(true); // a CA was minted ⇒ a trust install is owed
         expect(res.hostsChanged).toBe(true); // the hosts file gained the name
@@ -73,7 +73,7 @@ describe('one elevation per reconcile pass (genie#604)', () => {
             host.io,
         );
 
-        await reconcileHostSites([{ genName: 'moic.gen', port: 8080 }], fx);
+        await reconcileHostSites({ names: ['moic.gen'], routes: [{ genName: 'moic.gen', port: 8080 }] }, fx);
 
         const shields = host.spawn.mock.calls.filter((c) => String(c[0]).toLowerCase().includes('powershell'));
         expect(shields).toHaveLength(1);
@@ -88,12 +88,12 @@ describe('one elevation per reconcile pass (genie#604)', () => {
     it('prompts for NOTHING on a second pass that is already in sync', async () => {
         const host = fakeHost();
         const fx = buildHostReconcileEffects(PATHS, host.io);
-        await reconcileHostSites([{ genName: 'moic.gen', port: 8080 }], fx);
+        await reconcileHostSites({ names: ['moic.gen'], routes: [{ genName: 'moic.gen', port: 8080 }] }, fx);
         // The first pass wrote the hosts file for real (the fake copies it through).
         host.files.set('/etc/hosts', host.files.get('/tmp/hosts.new')!);
         host.spawn.mockClear();
 
-        const res = await reconcileHostSites([{ genName: 'moic.gen', port: 8080 }], fx);
+        const res = await reconcileHostSites({ names: ['moic.gen'], routes: [{ genName: 'moic.gen', port: 8080 }] }, fx);
 
         expect(res.caCreated).toBe(false);
         expect(res.hostsChanged).toBe(false);
@@ -111,7 +111,7 @@ describe('one elevation per reconcile pass (genie#604)', () => {
         });
         const fx = buildHostReconcileEffects(PATHS, host.io);
 
-        await expect(reconcileHostSites([{ genName: 'moic.gen', port: 8080 }], fx)).rejects.toThrow(
+        await expect(reconcileHostSites({ names: ['moic.gen'], routes: [{ genName: 'moic.gen', port: 8080 }] }, fx)).rejects.toThrow(
             /Genie could not update the hosts file: cp: read-only file system/,
         );
     });

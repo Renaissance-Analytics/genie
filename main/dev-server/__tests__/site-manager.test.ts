@@ -1086,6 +1086,75 @@ describe('service env injection (#234 P3)', () => {
         expect(m.hostBrowserRoutes()).toEqual([]);
     });
 
+    it('names a CONFIGURED browser-exposed site for the hosts file before anything starts (genie#624)', async () => {
+        // The hosts block is the only artifact whose write costs an administrator
+        // prompt, so its input is read from CONFIG — the site is named the moment it
+        // is opted in, with no port and no live entry anywhere.
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const sites: DevSites = {
+            [SITE_ID]: {
+                name: 'web',
+                genName: 'web.acme.gen',
+                repo: 'app',
+                runMode: 'explicit',
+                hostPort: 8001,
+                kind: 'http',
+                enabled: true,
+                browserExposed: true,
+            },
+        };
+        const m = manager(runtime, sites, { probeReady: async () => true });
+        expect(m.hostBrowserNames()).toEqual(['web.acme.gen']);
+        expect(m.hostBrowserRoutes()).toEqual([]); // …and Caddy has nothing to proxy yet
+    });
+
+    it('holds the hosts-file names STILL across a start and a stop, while the Caddy routes move (genie#624)', async () => {
+        // The bug: both artifacts were built from the RUNNING set, so a start added a
+        // name and a stop removed one, the hosts file genuinely differed every time,
+        // and the elevated write — the whole reason there is a prompt at all — fired
+        // on every lifecycle event.
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const sites: DevSites = {
+            [SITE_ID]: {
+                name: 'web',
+                genName: 'web.acme.gen',
+                repo: 'app',
+                runMode: 'explicit',
+                hostPort: 8001,
+                kind: 'http',
+                enabled: true,
+                browserExposed: true,
+            },
+        };
+        const m = manager(runtime, sites, { probeReady: async () => true });
+        const configured = m.hostBrowserNames();
+
+        await m.start('acme', SITE_ID);
+        expect(m.hostBrowserNames()).toEqual(configured);
+        expect(m.hostBrowserRoutes()).toEqual([{ genName: 'web.acme.gen', port: 8001 }]);
+
+        await m.stop(SITE_ID);
+        expect(m.hostBrowserNames()).toEqual(configured);
+        expect(m.hostBrowserRoutes()).toEqual([]);
+    });
+
+    it('does NOT name a site that is configured but not enabled', async () => {
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const sites: DevSites = {
+            [SITE_ID]: {
+                name: 'web',
+                genName: 'web.acme.gen',
+                repo: 'app',
+                runMode: 'explicit',
+                hostPort: 8001,
+                kind: 'http',
+                enabled: false,
+                browserExposed: true,
+            },
+        };
+        expect(manager(runtime, sites, { probeReady: async () => true }).hostBrowserNames()).toEqual([]);
+    });
+
     it('runs a MANAGED HOST-NATIVE site (runMode=host) as a HOST process — no container, host-form env, routed (story #238)', async () => {
         const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
         const spawned: Array<{ siteId: string; command: string[]; cwd: string; env: Record<string, string> }> = [];

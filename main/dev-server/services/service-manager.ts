@@ -435,8 +435,14 @@ export interface DevServiceManager {
      *  host-native site can log an actionable line instead of silently serving
      *  DB-less when its services are up but unreachable from the host. */
     hostEnvReportFor(workspaceId: string): HostEnvReport;
-    /** Trusted browser-facing WSS routes terminated by Genie's Host Caddy. */
+    /** Trusted browser-facing WSS routes terminated by Genie's Host Caddy — the
+     *  LIVE half, and the input to that Caddy's config. */
     hostBrowserRoutes(): HostSiteRoute[];
+    /** The `.gen` names those routes are entitled to, read from CONFIGURATION —
+     *  the input to the reconcile's HOSTS FILE (genie#624). Unmoved by a service
+     *  starting, becoming ready, or being released, so its elevated write is not
+     *  triggered by the engine's lifecycle. */
+    hostBrowserNames(): string[];
     /** The same endpoint carried through local/remote Genie browser sessions. */
     genSites(): DevGenSite[];
     /** Acquire every enabled service; release everything that no longer is. */
@@ -1667,6 +1673,22 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
                 routes.set(genName, { genName, port: endpoint.hostPort });
             }
             return [...routes.values()].sort((a, b) => a.genName.localeCompare(b.genName));
+        },
+
+        hostBrowserNames() {
+            // CONFIGURED, not `live` (genie#624). Everything the name depends on is
+            // in the config: the engine decides whether it is fronted at all and
+            // whether it runs on the host, and the workspace id decides the label.
+            // Readiness and the published port belong to the Caddyfile's half.
+            const names = new Set<string>();
+            for (const workspace of deps.listWorkspaces()) {
+                for (const config of Object.values(deps.devServicesFor(workspace.id))) {
+                    if (!config.enabled || config.engine !== 'websockets') continue;
+                    if (engineSpecFor(config.engine).runtime !== 'host') continue;
+                    names.add(`websockets.${workspaceDnsName(workspace.id)}.gen`);
+                }
+            }
+            return [...names].sort((a, b) => a.localeCompare(b));
         },
 
         genSites() {

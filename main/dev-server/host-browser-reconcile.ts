@@ -1,4 +1,4 @@
-import type { HostSiteRoute, HostReconcileResult } from './host-reconcile';
+import type { HostReconcilePlan, HostReconcileResult } from './host-reconcile';
 
 /**
  * The DESKTOP trigger for the external-browser host reconcile (story #238 P3).
@@ -7,23 +7,29 @@ import type { HostSiteRoute, HostReconcileResult } from './host-reconcile';
  *
  *   1. **Opt-in floor** — no browser-exposed site ⇒ do nothing (no CA mint, no
  *      hosts edit, no Caddy, no admin prompt). This is what keeps a machine that
- *      never opts in completely untouched.
+ *      never opts in completely untouched. Since genie#624 the question is asked
+ *      of the CONFIGURED names, so a machine whose only exposed site is stopped is
+ *      still opted in and keeps its hosts entry.
  *   2. **Never throw** — it runs from boot and from a change event; a failed
  *      privileged step is logged, not propagated.
  *   3. **Debounce** — `onChanged` fires on every site mutation; coalesce a burst.
  */
 
 export interface HostBrowserReconcilerDeps {
-    /** The current browser-exposed host-native routes (from the site manager). */
-    routes: () => HostSiteRoute[];
-    /** Build effects + reconcile the host to `routes`. Assembled by the desktop. */
-    reconcile: (routes: HostSiteRoute[]) => Promise<HostReconcileResult>;
+    /**
+     * The pass's inputs: the CONFIGURED browser-exposed names and the RUNNING
+     * routes (genie#624). Read fresh on every pass, and read TOGETHER — a plan is
+     * one snapshot of the machine, not two answers taken at different moments.
+     */
+    plan: () => HostReconcilePlan;
+    /** Build effects + reconcile the host to `plan`. Assembled by the desktop. */
+    reconcile: (plan: HostReconcilePlan) => Promise<HostReconcileResult>;
     /** Trailing-edge debounce window for {@link HostBrowserReconciler.schedule}. */
     debounceMs?: number;
     /**
      * Seed the "have we ever applied?" latch from durable state (a Genie CA on
-     * disk ⇒ this machine opted in before), so a boot with zero live sites still
-     * DRAINS a leftover `.gen` hosts line from a previous session.
+     * disk ⇒ this machine opted in before), so a boot with nothing configured
+     * still DRAINS a leftover `.gen` hosts line from a previous session.
      */
     initiallyApplied?: boolean;
     log?: (msg: string) => void;
@@ -51,20 +57,30 @@ export function createHostBrowserReconciler(deps: HostBrowserReconcilerDeps): Ho
     const debounceMs = deps.debounceMs ?? 400;
     const log = deps.log ?? (() => {});
     let timer: ReturnType<typeof setTimeout> | null = null;
-    // Have we ever reconciled a non-empty set (or opted in a prior session)? Until
-    // then, an empty set means "never touched this machine" and we stay silent. Once
-    // true, an empty set is a real DRAIN (clear the hosts block + Caddyfile).
+    // Have we ever reconciled a non-empty plan (or opted in a prior session)? Until
+    // then, an empty plan means "never touched this machine" and we stay silent. Once
+    // true, an empty plan is a real DRAIN (clear the hosts block + Caddyfile).
     let applied = deps.initiallyApplied ?? false;
 
-    /** One pass: read the current routes and reconcile the host to them. */
+    /** One pass: read the current plan and reconcile the host to it. */
     async function execute(): Promise<void> {
-        const routes = deps.routes();
-        // Opt-in floor, but NOT a teardown floor: skip only when nothing is exposed
-        // AND we have never applied — otherwise removing the last site must drain.
-        if (routes.length === 0 && !applied) return;
         try {
-            await deps.reconcile(routes);
-            if (routes.length > 0) applied = true;
+            // Inside the guard: reading the plan is no longer free. Its `names` half
+            // asks the workspace store what is CONFIGURED (genie#624), and a store
+            // that is briefly unreadable at boot must log like any other failure
+            // rather than reject out of `void runNow()`.
+            const plan = deps.plan();
+            // "Exposed" means EITHER half is non-empty. `names` is the real opt-in
+            // signal; `routes` is kept in the test because a route with no configured
+            // name still has a live vhost to serve, and the floor must not silently
+            // drop it.
+            const exposed = plan.names.length > 0 || plan.routes.length > 0;
+            // Opt-in floor, but NOT a teardown floor: skip only when nothing is
+            // exposed AND we have never applied — otherwise removing the last site
+            // must drain.
+            if (!exposed && !applied) return;
+            await deps.reconcile(plan);
+            if (exposed) applied = true;
         } catch (e) {
             log(`host-browser reconcile failed: ${e instanceof Error ? e.message : String(e)}`);
         }
