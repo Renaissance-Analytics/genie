@@ -80,4 +80,57 @@ describe('relaunchOptions', () => {
         expect(o.execPath).toBeUndefined();
         expect(o.args).toEqual(['--verbose']);
     });
+
+    /**
+     * genie#588 — carrying argv forward only preserves a flag that is THERE. On
+     * the reporting machine an upgrade re-execs the AppImage with an empty argv
+     * (electron-updater's own `spawn(destination, [], env)`), so the flag is
+     * gone for good and every relaunch after it faithfully carries nothing.
+     * Once Genie knows which backend works on this machine, it puts it back.
+     */
+    it('re-asserts the remembered password store when argv no longer carries one', () => {
+        const o = relaunchOptions({
+            platform: 'linux',
+            env: { APPIMAGE },
+            argv: [MOUNT_EXEC],
+            execPath: MOUNT_EXEC,
+            passwordStore: 'gnome-libsecret',
+        });
+        expect(o.args).toEqual(['--password-store=gnome-libsecret']);
+        // Negative control: the identical relaunch with nothing remembered is
+        // the flagless one this fixes.
+        expect(
+            relaunchOptions({
+                platform: 'linux',
+                env: { APPIMAGE },
+                argv: [MOUNT_EXEC],
+                execPath: MOUNT_EXEC,
+            }).args,
+        ).toEqual([]);
+    });
+
+    it('does not duplicate or override a --password-store argv already carries', () => {
+        for (const flag of ['--password-store=basic', '--password-store']) {
+            const o = relaunchOptions({
+                platform: 'linux',
+                env: {},
+                argv: ['/usr/bin/genie', flag, ...(flag === '--password-store' ? ['kwallet6'] : [])],
+                execPath: '/usr/bin/genie',
+                passwordStore: 'gnome-libsecret',
+            });
+            expect(o.args.filter((a) => a.startsWith('--password-store'))).toEqual([flag]);
+            expect(o.args).not.toContain('--password-store=gnome-libsecret');
+        }
+    });
+
+    it('never adds the Linux flag off Linux', () => {
+        const o = relaunchOptions({
+            platform: 'win32',
+            env: {},
+            argv: ['C:\\Program Files\\Genie\\Genie.exe'],
+            execPath: 'C:\\Program Files\\Genie\\Genie.exe',
+            passwordStore: 'gnome-libsecret',
+        });
+        expect(o.args).toEqual([]);
+    });
 });

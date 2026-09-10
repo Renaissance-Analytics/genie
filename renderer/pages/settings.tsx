@@ -1585,6 +1585,10 @@ function GitHubSection() {
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [storageOk, setStorageOk] = useState(true);
     const [storageHint, setStorageHint] = useState<string | null>(null);
+    // Which Chromium password store this process actually landed on. Shown
+    // whether or not it is working: genie#588 cost six days of guessing at a
+    // value Electron will hand over in one call.
+    const [keychainBackend, setKeychainBackend] = useState<string | null>(null);
     const [needsReauth, setNeedsReauth] = useState(false);
     const [reauthFailure, setReauthFailure] = useState<{
         code: string;
@@ -1619,6 +1623,7 @@ function GitHubSection() {
         setActiveClientId(st.activeClientId);
         setStorageOk(st.storageOk);
         setStorageHint(st.storageHint ?? null);
+        setKeychainBackend(st.keychainBackend ?? null);
         setNeedsReauth(st.needsReauth);
         setReauthFailure(st.reauthFailure);
         // Where the App is installed — drives the zero-install prompt + the
@@ -1762,6 +1767,19 @@ function GitHubSection() {
                         on a machine that had them installed (genie#379). */}
                     OS keychain unavailable. Genie won't store a GitHub token
                     unencrypted.{storageHint ? ` ${storageHint}` : ''}
+                </div>
+            )}
+
+            {/* Linux only. The one fact that turns "the keychain is broken" into
+                a ten-second diagnosis: which store this process is on.
+                `basic_text` is Chromium's plaintext fallback and means no
+                backend was selected — not that the machine lacks a keyring. */}
+            {keychainBackend && (
+                <div className="set-note">
+                    Password store in use: <code>{keychainBackend}</code>
+                    {keychainBackend === 'basic_text'
+                        ? ' — Chromium’s plaintext fallback, so secrets are not saved at all.'
+                        : ''}
                 </div>
             )}
 

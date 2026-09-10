@@ -1,4 +1,4 @@
-import { ipcMain, safeStorage } from 'electron';
+import { ipcMain } from 'electron';
 import { genieInstallUrl } from '../config';
 import {
     DeviceCodeResponse,
@@ -20,11 +20,8 @@ import {
     reauthFailureMessage,
     saveTokenSet,
 } from './storage';
-import {
-    SECRET_SERVICE_NAME,
-    keychainUnavailableHint,
-    probeOwnedBusNames,
-} from '../secrets/linux-password-store';
+import { keychainUnavailableHint } from '../secrets/linux-password-store';
+import { currentKeychainState, selectedKeychainBackend } from '../secrets/keychain-state';
 import {
     createRepo,
     forkRepo,
@@ -72,48 +69,15 @@ type FlowStatus =
 let status: FlowStatus = { kind: 'idle' };
 let abortCtl: AbortController | null = null;
 
-let hintCache: { at: number; hint: string } | null = null;
-const HINT_TTL_MS = 10_000;
-
 /**
  * Why secrets-at-rest is unavailable RIGHT NOW, or null while it works
- * (genie#379). Probes the session bus only in the broken case, so the healthy
- * path costs nothing.
+ * (genie#379). Reads the session bus only in the broken case, so the healthy
+ * path costs nothing; `currentKeychainState` caches, so polling this during a
+ * device flow does not shell out on every tick.
  */
 function keychainStorageHint(): string | null {
     if (isStorageAvailable()) return null;
-    // `github:status` is polled every few seconds during a device flow, and the
-    // probe below spawns a process. The session's bus state does not change on
-    // that timescale, so a short TTL keeps the broken path from shelling out on
-    // every poll while still noticing a keyring the user just started.
-    if (hintCache && Date.now() - hintCache.at < HINT_TTL_MS) return hintCache.hint;
-    let selectedBackend: string | null = null;
-    try {
-        // Linux-only Electron API; absent on other platforms and older builds.
-        const get = (safeStorage as { getSelectedStorageBackend?: () => string })
-            .getSelectedStorageBackend;
-        if (process.platform === 'linux' && typeof get === 'function') {
-            selectedBackend = get.call(safeStorage) ?? null;
-        }
-    } catch {
-        /* a diagnostic must never throw into the status handler */
-    }
-    let secretServiceOwned = false;
-    try {
-        secretServiceOwned =
-            process.platform === 'linux' &&
-            probeOwnedBusNames([SECRET_SERVICE_NAME]).includes(SECRET_SERVICE_NAME);
-    } catch {
-        /* no bus / no tooling — treated as "nothing is answering" */
-    }
-    const hint = keychainUnavailableHint({
-        platform: process.platform,
-        desktop: process.env.XDG_CURRENT_DESKTOP,
-        secretServiceOwned,
-        selectedBackend,
-    });
-    hintCache = { at: Date.now(), hint };
-    return hint;
+    return keychainUnavailableHint(currentKeychainState());
 }
 
 export function registerGithubIpc(): void {
@@ -133,6 +97,10 @@ export function registerGithubIpc(): void {
         storageOk: boolean;
         /** Why storage is unavailable, when it is — null while it works. */
         storageHint: string | null;
+        /** Which Chromium password store this process is on (Linux only, null
+         *  elsewhere). Shown ALWAYS, working or not: genie#588 took six days to
+         *  diagnose a value Electron will hand over in one call. */
+        keychainBackend: string | null;
         flow: FlowStatus;
     }> => {
         const override = getClientIdOverride();
@@ -168,6 +136,7 @@ export function registerGithubIpc(): void {
             // which was confidently wrong on a machine that had them. Say what is
             // actually true of THIS session instead.
             storageHint: keychainStorageHint(),
+            keychainBackend: selectedKeychainBackend(),
             flow: status,
         };
     });

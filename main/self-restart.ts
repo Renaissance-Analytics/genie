@@ -12,8 +12,17 @@
  *     squashfs, which is unmounted when this process exits. `$APPIMAGE` is the
  *     durable path, and it is the one to relaunch.
  *
- * PURE, so both branches are unit-tested without an AppImage.
+ * genie#588 added a third: carrying argv forward only preserves a flag that is
+ * still THERE. Genie's relaunches are not the only ones — an update re-execs
+ * through electron-updater, whose AppImage install spawns the new binary with an
+ * EMPTY argv — so once a `--password-store` is lost it stays lost, and every
+ * relaunch after that faithfully carries nothing. When Genie knows which backend
+ * this machine uses (see ./secrets/password-store-memo.ts), it puts the flag
+ * back rather than propagating the loss.
+ *
+ * PURE, so all of it is unit-tested without an AppImage.
  */
+import { hasPasswordStoreArg, isRememberablePasswordStore } from './secrets/linux-password-store';
 
 export interface RelaunchInput {
     platform: NodeJS.Platform;
@@ -21,6 +30,9 @@ export interface RelaunchInput {
     /** `process.argv` — argv[0] is the executable. */
     argv: string[];
     execPath: string;
+    /** The `--password-store` value Genie has seen working here, when there is
+     *  one. Re-asserted only when argv carries no choice of its own. */
+    passwordStore?: string | null;
 }
 
 export interface RelaunchOptions {
@@ -46,6 +58,15 @@ function isOneShotArg(arg: string): boolean {
  */
 export function relaunchOptions(input: RelaunchInput): RelaunchOptions {
     const args = input.argv.slice(1).filter((a) => !isOneShotArg(a));
+    // Put back a keychain backend an earlier re-exec dropped — but never over a
+    // choice this launch was actually given, which is the user's.
+    if (
+        input.platform === 'linux' &&
+        !hasPasswordStoreArg(args) &&
+        isRememberablePasswordStore(input.passwordStore)
+    ) {
+        args.push(`--password-store=${input.passwordStore}`);
+    }
     const appImage = input.platform === 'linux' ? input.env.APPIMAGE?.trim() : undefined;
     return appImage ? { execPath: appImage, args } : { args };
 }

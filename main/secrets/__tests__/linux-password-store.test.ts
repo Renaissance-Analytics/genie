@@ -2,11 +2,13 @@ import { describe, it, expect } from 'vitest';
 import {
     SECRET_SERVICE_NAME,
     chooseLinuxPasswordStore,
+    classifyKeychainFault,
     keychainUnavailableHint,
     parseBusctlNames,
     parseDbusSendBoolean,
     passwordStoreBusNames,
     probeOwnedBusNames,
+    switchValueForSelectedBackend,
 } from '../linux-password-store';
 
 /**
@@ -96,6 +98,157 @@ describe('chooseLinuxPasswordStore', () => {
     });
 });
 
+/**
+ * genie#588 — the probe was the ONLY thing selecting a backend, and it is the
+ * one impure part of this module. On the reporting machine the keyring is
+ * provably healthy (busctl shows the default collection unlocked, secret-tool
+ * round-trips, gh keeps its token there) and Genie still lands on the plaintext
+ * store on every self-restart — so on that machine the probe finds nothing,
+ * whatever the reason, and there is no second opinion.
+ *
+ * The second opinion is what Electron itself reported on a launch that worked.
+ */
+describe('chooseLinuxPasswordStore — the remembered backend (genie#588)', () => {
+    /** A self-restarted process: no argv flag (electron-updater re-execs the
+     *  AppImage with an EMPTY argv), and a probe that came back empty. */
+    const RESTARTED = { platform: 'linux' as const, argv: ['/tmp/.mount_Genie/genie'], ownedBusNames: [] };
+
+    it('falls back to the backend that worked last time when the probe finds nothing', () => {
+        expect(chooseLinuxPasswordStore({ ...RESTARTED, remembered: 'gnome-libsecret' })).toBe(
+            'gnome-libsecret',
+        );
+        // Negative control: WITHOUT the memo the same launch selects nothing —
+        // which is the bug, and proves the memo is what is doing the work here.
+        expect(chooseLinuxPasswordStore({ ...RESTARTED, remembered: null })).toBeNull();
+    });
+
+    it('lets a live probe overrule a stale memo — the session bus is the truth', () => {
+        // Moved from GNOME to KDE: the memo says libsecret, the bus says kwallet.
+        expect(
+            chooseLinuxPasswordStore({
+                platform: 'linux',
+                argv: [],
+                ownedBusNames: ['org.kde.kwalletd6', SECRET_SERVICE_NAME],
+                remembered: 'gnome-libsecret',
+            }),
+        ).toBe('kwallet6');
+    });
+
+    it('still lets an explicit --password-store win over the memo', () => {
+        expect(
+            chooseLinuxPasswordStore({
+                platform: 'linux',
+                argv: ['/usr/bin/genie', '--password-store=basic'],
+                ownedBusNames: [],
+                remembered: 'gnome-libsecret',
+            }),
+        ).toBeNull();
+    });
+
+    it('ignores a memo naming a store Chromium does not know', () => {
+        // A value off disk reaches Chromium's command line; an unknown one makes
+        // it log "Unknown password store" and fall back to plaintext anyway.
+        expect(chooseLinuxPasswordStore({ ...RESTARTED, remembered: 'gnome-libsecret; rm -rf' })).toBeNull();
+        expect(chooseLinuxPasswordStore({ ...RESTARTED, remembered: 'basic_text' })).toBeNull();
+    });
+
+    it('is still Linux-only, memo or not', () => {
+        expect(
+            chooseLinuxPasswordStore({
+                platform: 'win32',
+                argv: [],
+                ownedBusNames: [],
+                remembered: 'gnome-libsecret',
+            }),
+        ).toBeNull();
+    });
+});
+
+describe('switchValueForSelectedBackend — Electron reports it one way, Chromium takes it another', () => {
+    it('maps every backend Electron can report to its --password-store value', () => {
+        expect(switchValueForSelectedBackend('gnome_libsecret')).toBe('gnome-libsecret');
+        expect(switchValueForSelectedBackend('kwallet')).toBe('kwallet');
+        expect(switchValueForSelectedBackend('kwallet5')).toBe('kwallet5');
+        expect(switchValueForSelectedBackend('kwallet6')).toBe('kwallet6');
+    });
+
+    it('maps the "nothing was selected" reports to null', () => {
+        // `basic_text` is the FAILURE this whole module exists to prevent, and
+        // `unknown` only means we asked before app-ready. Neither is worth
+        // remembering, and writing either one down would make the bug sticky.
+        expect(switchValueForSelectedBackend('basic_text')).toBeNull();
+        expect(switchValueForSelectedBackend('unknown')).toBeNull();
+        expect(switchValueForSelectedBackend(null)).toBeNull();
+        expect(switchValueForSelectedBackend(undefined)).toBeNull();
+        expect(switchValueForSelectedBackend('something-new')).toBeNull();
+    });
+});
+
+/**
+ * genie#588 ask 3: "Do not report 'this computer's keychain is unavailable' when
+ * the process simply lacks a backend flag." Three faults wear the same face —
+ * `safeStorage.isEncryptionAvailable()` is false — and they have three different
+ * remedies, one of which is not the user's problem at all.
+ */
+describe('classifyKeychainFault', () => {
+    it('separates "no service on the bus" from "Genie is on the plaintext store"', () => {
+        expect(
+            classifyKeychainFault({
+                platform: 'linux',
+                desktop: 'Hyprland:GNOME',
+                secretServiceOwned: false,
+                selectedBackend: 'basic_text',
+            }),
+        ).toBe('no-service');
+        expect(
+            classifyKeychainFault({
+                platform: 'linux',
+                desktop: 'Hyprland:GNOME',
+                secretServiceOwned: true,
+                selectedBackend: 'basic_text',
+            }),
+        ).toBe('not-selected');
+    });
+
+    it('separates "no backend selected" from "backend selected and it REFUSED"', () => {
+        // The reported machine: gnome-libsecret is in use and encryption is
+        // still unavailable would be a real keyring fault (a locked collection),
+        // and must not be described as a store Genie failed to pick.
+        expect(
+            classifyKeychainFault({
+                platform: 'linux',
+                desktop: 'Hyprland:GNOME',
+                secretServiceOwned: true,
+                selectedBackend: 'gnome_libsecret',
+            }),
+        ).toBe('refused');
+    });
+
+    it('treats a missing/unknown backend report as "not selected", not as a refusal', () => {
+        for (const selectedBackend of [null, 'unknown']) {
+            expect(
+                classifyKeychainFault({
+                    platform: 'linux',
+                    desktop: 'sway',
+                    secretServiceOwned: true,
+                    selectedBackend,
+                }),
+            ).toBe('not-selected');
+        }
+    });
+
+    it('is not a Linux diagnosis off Linux', () => {
+        expect(
+            classifyKeychainFault({
+                platform: 'darwin',
+                desktop: undefined,
+                secretServiceOwned: false,
+                selectedBackend: null,
+            }),
+        ).toBe('not-linux');
+    });
+});
+
 describe('parseBusctlNames', () => {
     it('takes the NAME column off `busctl --user list --no-legend`', () => {
         const stdout = [
@@ -154,6 +307,31 @@ describe('keychainUnavailableHint — say what is ACTUALLY wrong (genie#379)', (
         expect(hint).toMatch(/gnome-keyring|KWallet/);
         // …and says how it knows, so the user can check the same thing.
         expect(hint).toContain(SECRET_SERVICE_NAME);
+    });
+
+    it('does NOT tell the user to restart when the backend WAS selected and refused (genie#588)', () => {
+        // Same "encryption unavailable", different fault: gnome-libsecret is in
+        // use, so the remedy is the keyring (a locked collection), not a
+        // relaunch that would select exactly the same backend again.
+        const refused = keychainUnavailableHint({
+            platform: 'linux',
+            desktop: 'Hyprland:GNOME',
+            secretServiceOwned: true,
+            selectedBackend: 'gnome_libsecret',
+        });
+        const notSelected = keychainUnavailableHint({
+            platform: 'linux',
+            desktop: 'Hyprland:GNOME',
+            secretServiceOwned: true,
+            selectedBackend: 'basic_text',
+        });
+        // The two must not be the same sentence — that conflation is the bug.
+        expect(refused).not.toBe(notSelected);
+        expect(refused).toContain('gnome_libsecret');
+        expect(refused).toMatch(/unlock|locked/i);
+        expect(refused).not.toMatch(/restart Genie/i);
+        // And the not-selected one still names the store it is stuck on.
+        expect(notSelected).toContain('basic_text');
     });
 
     it('says something sane off Linux rather than Linux package advice', () => {

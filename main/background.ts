@@ -52,6 +52,11 @@ import {
     passwordStoreBusNames,
     probeOwnedBusNames,
 } from './secrets/linux-password-store';
+import {
+    readRememberedPasswordStore,
+    rememberPasswordStore,
+} from './secrets/password-store-memo';
+import { selectedKeychainBackend } from './secrets/keychain-state';
 import crypto from 'node:crypto';
 import os from 'node:os';
 import {
@@ -474,12 +479,18 @@ function notifyImDone(terminalId: string): void {
 // it from what actually owns the session bus, and do it on EVERY launch rather
 // than through a flag a self-restart can drop. Must run before app-ready:
 // Chromium reads this switch when OSCrypt initialises.
+//
+// genie#588: the bus probe is a subprocess and it is not infallible — on the
+// reporting machine it selects nothing while the keyring is provably healthy.
+// So the backend a launch was SEEN using is written down (below, after ready)
+// and used here when the probe comes back empty. A live probe still wins.
 try {
     if (process.platform === 'linux') {
         const backend = chooseLinuxPasswordStore({
             platform: process.platform,
             argv: process.argv,
             ownedBusNames: probeOwnedBusNames(passwordStoreBusNames()),
+            remembered: readRememberedPasswordStore(app.getPath('userData')),
         });
         if (backend) app.commandLine?.appendSwitch?.('password-store', backend);
     }
@@ -1819,6 +1830,14 @@ app.whenReady().then(async () => {
     // safeStorage-backed impl; genie-cloud injects its KMS one. Fail-closed: if
     // unavailable, those stores keep secrets in memory only (never plaintext).
     setSecretEncryptor(electronEncryptor());
+    // Write down which Chromium password store this launch actually ended up on
+    // (genie#588). Only meaningful now that the app is ready, and only ever
+    // recorded when it is a REAL backend — so a launch that reached the keyring
+    // teaches every later one, including the ones an updater re-execs with an
+    // empty argv, and a launch stuck on plaintext records nothing.
+    if (process.platform === 'linux') {
+        rememberPasswordStore(app.getPath('userData'), selectedKeychainBackend());
+    }
     // …and open the pairing journal beside those stores, so the next time a
     // pairing is dropped there is a record of WHICH way it happened — the thing
     // nobody could answer in genie#578. Non-secret, bounded, local-only.

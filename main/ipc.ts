@@ -75,6 +75,7 @@ import { validateSimpleWorkspace } from './workspace/create-simple';
 import { openWorkspace } from './workspace/open';
 import { cloneRepo } from './workspace/clone';
 import { relaunchOptions } from './self-restart';
+import { readRememberedPasswordStore } from './secrets/password-store-memo';
 import { genieOsWorkspacePath, listGenieOsEntries, syncGenieOsWorkspace } from './agents/os-workspace';
 import {
     listEnvelopeRepos,
@@ -2586,13 +2587,16 @@ export function registerIpcHandlers(): void {
         (app as any).isQuiting = true;
         // Carry this process's own launch flags into the relaunch, and on an
         // AppImage relaunch $APPIMAGE rather than the /tmp/.mount_* execPath
-        // that is about to be unmounted (genie#379).
+        // that is about to be unmounted (genie#379). If an earlier re-exec has
+        // already dropped the keychain backend flag, put it back instead of
+        // faithfully carrying the loss forward (genie#588).
         app.relaunch(
             relaunchOptions({
                 platform: process.platform,
                 env: process.env,
                 argv: process.argv,
                 execPath: process.execPath,
+                passwordStore: readRememberedPasswordStore(app.getPath('userData')),
             }),
         );
         app.quit();
