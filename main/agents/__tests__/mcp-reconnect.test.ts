@@ -179,6 +179,16 @@ describe('the reconnect covers EVERY server the upgrade replaced (genie#613)', (
         expect(ran).toMatch(/person|someone|human/i);
     });
 
+    it('a HELD-BACK command does not imply the first server was restored', () => {
+        // "Genie could not ALSO restore the channel" reads as though it had
+        // restored `genie` — and when the wake was refused it restored NEITHER.
+        // The leftover clause has to survive that case without smuggling in a
+        // success that did not happen.
+        const held = recoveryInstruction({ strategy: reconnectStrategy('claude'), applied: false });
+        expect(held).toContain(AGENTINBOX_CLAUDE_CHANNEL_NAME);
+        expect(held).not.toMatch(/Genie ran|could not also/);
+    });
+
     it('a codex RESTART honestly claims all of them; a notice claims none', () => {
         // A resumed session re-reads its launch config, so the restart really
         // does repair every server — unlike a typed command, which repairs one.

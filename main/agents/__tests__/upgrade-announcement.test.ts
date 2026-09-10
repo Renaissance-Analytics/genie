@@ -60,7 +60,7 @@ describe('agent upgrade announcement', () => {
             'nothing else — a delivery channel that is down reads exactly like an empty inbox. ' +
             'Genie ran `/mcp reconnect genie` in this terminal to restore `genie`. If it still ' +
             'does not answer, ask for that command to be run again. Genie could not also restore ' +
-            '`genie-agentinbox-channel` — it gets one typed command per upgrade, and a built-in ' +
+            '`genie-agentinbox-channel` — Genie gets one typed command per upgrade, and a built-in ' +
             'slash command is not something an agent can run for itself. That server supervises ' +
             'itself and usually comes back on its own; if AgentInbox goes quiet, a person has to ' +
             'run `/mcp reconnect genie-agentinbox-channel` in this terminal.\n\n' +

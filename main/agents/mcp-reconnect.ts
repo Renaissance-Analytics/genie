@@ -281,15 +281,22 @@ export const MANUAL_RECOVERY: McpRecovery = {
  * commands, so an agent cannot run this for itself. Telling it to would be the
  * same silence in a more helpful tone: an instruction nobody can act on.
  */
-function leftoverSentence(strategy: ReconnectStrategy): string {
+function leftoverSentence(strategy: ReconnectStrategy, applied: boolean): string {
     const missing = strategy.servers.filter((name) => !strategy.restores.includes(name));
     if (missing.length === 0) return '';
     const commands = missing.map((name) => `\`${claudeReconnectCommand(name)}\``).join(', ');
+    // "could not ALSO restore" is only true once something WAS restored. A
+    // command Genie held back restored nothing, and a leftover clause that
+    // implies otherwise is the same class of lie as the notice this file
+    // already refuses to write.
+    const opener = applied
+        ? `Genie could not also restore ${namedServers(missing)}`
+        : `${namedServers(missing)} is not covered by that command either`;
     return (
-        ` Genie could not also restore ${namedServers(missing)} — it gets one typed command per ` +
-        `upgrade, and a built-in slash command is not something an agent can run for itself. That ` +
-        `server supervises itself and usually comes back on its own; if AgentInbox goes quiet, ` +
-        `a person has to run ${commands} in this terminal.`
+        ` ${opener} — Genie gets one typed command per upgrade, and a built-in slash command is ` +
+        'not something an agent can run for itself. That server supervises itself and usually ' +
+        'comes back on its own; if AgentInbox goes quiet, a person has to run ' +
+        `${commands} in this terminal.`
     );
 }
 
@@ -309,7 +316,7 @@ export function recoveryInstruction(recovery: McpRecovery): string {
     const { strategy, applied } = recovery;
     const restored = namedServers(strategy.restores);
     const all = namedServers(strategy.servers);
-    const leftover = leftoverSentence(strategy);
+    const leftover = leftoverSentence(strategy, applied);
     if (strategy.kind === 'command') {
         return applied
             ? `Genie ran \`${strategy.text}\` in this terminal to restore ${restored}. If it still does not answer, ask for that command to be run again.${leftover}`
