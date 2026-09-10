@@ -4,14 +4,17 @@ import { AgentShutdownReadiness } from '../shutdown-readiness';
 describe('AMS shutdown readiness', () => {
     it('messages every running agent through AgentInbox and completes on shutdown thumbs-up', async () => {
         const send = vi.fn(() => true);
-        const readiness = new AgentShutdownReadiness(send);
+        const readiness = new AgentShutdownReadiness({ send });
         const waiting = readiness.begin([
             { agentId: 'a', inboxAgentId: 'inbox-a', terminalId: 't-a' },
             { agentId: 'b', inboxAgentId: 'inbox-b', terminalId: 't-b' },
         ], 1_000);
 
         expect(send).toHaveBeenCalledTimes(2);
-        expect(send).toHaveBeenCalledWith('inbox-a', expect.stringMatching(/shutdown/i));
+        expect(send).toHaveBeenCalledWith(
+            'inbox-a',
+            expect.objectContaining({ text: expect.stringMatching(/shutdown/i) }),
+        );
         readiness.acknowledge('a', 'shutdown');
         readiness.acknowledge('b', 'boot');
         expect(readiness.pendingAgentIds()).toEqual(['b']);
@@ -23,7 +26,7 @@ describe('AMS shutdown readiness', () => {
     it('is bounded and reports agents that did not acknowledge', async () => {
         vi.useFakeTimers();
         try {
-            const readiness = new AgentShutdownReadiness(() => true);
+            const readiness = new AgentShutdownReadiness({ send: () => true });
             const waiting = readiness.begin([
                 { agentId: 'a', inboxAgentId: 'inbox-a', terminalId: 't-a' },
             ], 250);

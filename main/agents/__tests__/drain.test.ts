@@ -39,12 +39,12 @@ const AGENTS: DrainTarget[] = [
 
 /** A drain whose clock and scheduler the test drives itself. */
 function drain(over: Partial<ConstructorParameters<typeof AgentDrain>[0]> = {}) {
-    const sent: Array<{ to: string; text: string; urgency: string }> = [];
+    const sent: Array<{ to: string; text: string; deadlineSeconds: number | null }> = [];
     const fired: Array<{ run: () => void; delayMs: number }> = [];
     const changes: number[] = [];
     const d = new AgentDrain({
         send: (to, notice) => {
-            sent.push({ to, text: notice.text, urgency: notice.urgency });
+            sent.push({ to, text: notice.text, deadlineSeconds: notice.ask.deadlineSeconds });
             return true;
         },
         schedule: (run, delayMs) => {

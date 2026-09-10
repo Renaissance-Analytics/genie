@@ -11,7 +11,7 @@
  * `terminal_specs.meta`), local-only — no relay, no cross-host.
  */
 import type { AgentTuiId } from '../agents/registry';
-import type { InboxUrgency } from './urgency';
+import type { AgentAsk } from './urgency';
 
 
 /**
@@ -335,14 +335,17 @@ export interface AgentInboxMessage {
      *  DERIVED from {@link urgency} at send time — never set beside it. */
     interrupt?: boolean;
     /**
-     * How loud the notice announcing this message must be (genie#602).
+     * Set when Genie is ASKING this agent for something and waiting on the
+     * answer (genie#602, genie#606). Drives the notice's rung AND its mode
+     * clause, so the two cannot be chosen separately.
      *
-     * ABSENT on an ordinary message, and absent on every message read back from
-     * the durable store: this is a property of the SEND, and `interrupt` is the
-     * half that persists. {@link messageUrgency} is the only thing that should
-     * read it, so the fallback lives in exactly one place.
+     * ABSENT on ordinary mail, and absent on every message read back from the
+     * durable store: an ask asserts a wait that is happening RIGHT NOW, and a
+     * copy rehydrated after a restart would be asserting one that has ended.
+     * `interrupt` is the half that persists. {@link messageUrgency} is the only
+     * thing that should read this, so the fallback lives in exactly one place.
      */
-    urgency?: InboxUrgency;
+    ask?: AgentAsk;
     /**
      * The `id` of the message this one ANSWERS, when the sender said so.
      *
