@@ -12,6 +12,25 @@ on:
 permissions:
   contents: read
 
+# Cancel a PR run the moment a newer push replaces the commit it was testing.
+# Measured over 2026-09-07..09: 52 CI/E2E runs kept going after a newer run on
+# the same branch had already started, burning 418 runner-minutes (1353 weighted
+# at Windows x2 / macOS x10) — 16% of all CI+E2E spend — to answer questions
+# about commits nobody would ever merge. On a squash-merged PR those intermediate
+# commits do not survive into `main` at all, so no coverage is lost.
+#
+# `cancel-in-progress` is `pull_request` ONLY. A push to `main` runs to
+# completion: main's per-commit green is the record of WHICH merged commit was
+# good, and cancelling it would trade a real fact for runner minutes.
+#
+# `github.event_name` is IN the group key, not only in the condition. Two runs in
+# one group with different `cancel-in-progress` values resolve to the newest
+# run's value — so a PR run sharing a group with a main run could cancel it.
+# Keying on the event makes that unrepresentable rather than merely unlikely.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -107,6 +126,38 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.25'
+          # Off, explicitly. This repository has no `go.sum` — Go is here solely
+          # so xcaddy can build Caddy — so setup-go's own cache has nothing to
+          # key on and every run logged
+          #   `Restore cache failed: Dependencies file is not found … go.sum`
+          # before compiling the whole graph from source anyway. The keyed cache
+          # below does the job the warning was pretending to.
+          cache: false
+      # Measured on run 34414872469: `go install xcaddy` 11.5s + `xcaddy build`
+      # 45.6s = 57s of EVERY hosting run spent re-downloading and re-compiling
+      # the same pinned dependency graph.
+      #
+      # Speed is the smaller half of the reason. It also deletes a dependency on
+      # proxy.golang.org from every run — and an external service deciding
+      # whether this gate runs is not hypothetical here: an unreachable apt
+      # mirror silently CANCELLED this job for three merges running (see the
+      # php-cgi step above). One less network in the critical path.
+      #
+      # Correctness does not rest on the key. Go's module and build caches are
+      # content-addressed, so a partially-matching restore is reused only where
+      # the inputs genuinely match and a miss just builds from source, exactly as
+      # today. The key hashes build-service-runtime.mjs because every pinned
+      # version xcaddy resolves — Caddy, replace-response, xcaddy itself — is
+      # declared in that file, so a bump misses by construction.
+      - name: Cache Go module + build caches (xcaddy's inputs)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-caddy-${{ runner.os }}-go1.25-${{ hashFiles('scripts/build-service-runtime.mjs') }}
+          restore-keys: |
+            go-caddy-${{ runner.os }}-go1.25-
       - name: Build the service runtime (bundled Caddy)
         run: npm run build:runtime
       - name: Real hosting tests (bundled Caddy + php-cgi)

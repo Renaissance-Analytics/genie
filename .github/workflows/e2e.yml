@@ -24,6 +24,24 @@ on:
 permissions:
   contents: read
 
+# See the same block in ci.yml for the measurement. This workflow is where the
+# waste concentrated: 30 of the 52 superseded runs were E2E, and because macOS
+# bills at 10x it accounted for the great majority of the weighted cost.
+#
+# `cancel-in-progress` is `pull_request` ONLY — a push to `main` runs to
+# completion so main keeps a per-commit result.
+#
+# `workflow_dispatch` gets a group of its OWN PER RUN (`github.run_id`), which is
+# to say no grouping at all. Not an oversight: grouping manual runs by ref with
+# `cancel-in-progress: false` would make a second dispatch on the same ref QUEUE
+# behind the first instead of running beside it — and firing several dispatches at
+# one ref simultaneously is exactly how an E2E flake gets measured (genie#542,
+# where `e2e-542-control` was dispatched repeatedly at one SHA). Serialising that
+# would make the diagnosis slower, which is the opposite of the point.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   e2e:
     name: E2E (${{ matrix.os }})

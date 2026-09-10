@@ -1,0 +1,97 @@
+name: CI queued
+
+# Makes "no CI ran" impossible to mistake for "CI passed".
+#
+# genie#574: a conflicted PR (`mergeable_state: "dirty"`) gets NO
+# `pull_request`-triggered run at all — GitHub cannot compute a merge ref, so
+# `ci.yml` and `e2e.yml` never queue, silently. Meanwhile the workflows that
+# need no merge ref keep passing: `flag` (via `pull_request_target`, evaluated
+# against the base) and CodeQL's default setup (evaluated against the head
+# regardless of mergeability). The head SHA carried SIX green check runs and
+# zero CI, which reads like a small CI configuration rather than an absent one.
+# About an hour went by before anyone noticed the suite had never executed.
+#
+# WHY `pull_request_target`, and why that is safe here:
+#   `pull_request` cannot work — it is precisely the trigger that does not fire
+#   on the PRs this needs to catch. `pull_request_target` evaluates the BASE
+#   branch and needs no merge ref, so it fires on every PR including a dirty
+#   one. It was `flag`, on this same trigger, that proved that on #574.
+#
+#   The usual `pull_request_target` danger is running submitted code with a
+#   privileged token. This job never does: it checks out the BASE branch (the
+#   default ref for this trigger — the submitted head is deliberately NOT
+#   fetched), reads two API endpoints, and compares check-run NAMES. No
+#   `npm ci`, no build, nothing from the PR is executed.
+#
+# The decision logic lives in `scripts/ci-queued-verdict.mjs` + the polling loop
+# in `scripts/assert-ci-queued.mjs`, both unit-tested, because YAML is not.
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+  # So the guard can be pointed at any PR on demand — including one that has
+  # ALREADY gone wrong. A check that only ever runs automatically can never be
+  # demonstrated to work on the case it was built for; this one can be aimed at
+  # #574 and watched go red.
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: 'PR number to check'
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+
+# A newer push supersedes this answer as surely as it supersedes CI's. A manual
+# dispatch gets its own group (`run_id`), so aiming the guard at a PR by hand
+# never cancels, or is cancelled by, the automatic run on that same PR.
+concurrency:
+  group: ci-queued-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event.pull_request.number }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
+
+jobs:
+  ci-queued:
+    name: ci-queued
+    runs-on: ubuntu-latest
+    # The script's own budget is 3 minutes; this is the outer bound if the API
+    # itself hangs. A guard against silent non-execution must not become one.
+    timeout-minutes: 8
+    steps:
+      # BASE branch, deliberately. `actions/checkout` with no `ref:` under
+      # `pull_request_target` checks out the base — that is what makes this
+      # trigger safe, and it is why there is no `ref:` line here to "fix".
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      # On `pull_request_target` the SHA comes from the EVENT — the commit that
+      # actually triggered this — not from a re-read, which could already have
+      # moved on. Only the manual path has to look it up.
+      - name: Resolve the PR under test
+        id: target
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          PR='${{ github.event.pull_request.number || inputs.pr }}'
+          SHA='${{ github.event.pull_request.head.sha }}'
+          if [ -z "$SHA" ]; then
+            SHA=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq .head.sha)
+          fi
+          echo "PR #$PR at $SHA"
+          echo "pr=$PR"   >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      # No dependency install: the script uses only Node builtins + global
+      # fetch, so the whole job is seconds, not minutes.
+      - name: Assert CI was queued for this commit
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.target.outputs.pr }}
+          PR_HEAD_SHA: ${{ steps.target.outputs.sha }}
+        run: node scripts/assert-ci-queued.mjs
