@@ -57,10 +57,10 @@ const PRIORITY_META: Record<
     NonNullable<PendingItem['priority']>,
     { label: string; color: string }
 > = {
-    urgent: { label: 'Urgent', color: 'var(--red-500)' },
+    urgent: { label: 'Urgent', color: 'var(--rose-400)' },
     high: { label: 'High', color: 'var(--amber-500)' },
     normal: { label: '', color: '' },
-    low: { label: 'Low', color: 'var(--zinc-500)' },
+    low: { label: 'Low', color: 'var(--fg-3)' },
 };
 
 export default function AskPage() {
@@ -365,7 +365,7 @@ export default function AskPage() {
                             gap: 6,
                             flexWrap: 'wrap',
                             padding: '8px 14px',
-                            borderBottom: '1px solid var(--zinc-800, #27272a)',
+                            borderBottom: '1px solid var(--border-1)',
                         }}
                     >
                         {pending.map((p) => {
@@ -385,8 +385,8 @@ export default function AskPage() {
                                         borderRadius: 999,
                                         border: on
                                             ? '1px solid var(--violet-500, #8b5cf6)'
-                                            : '1px solid var(--zinc-700, #3f3f46)',
-                                        background: on ? 'var(--violet-500-a, rgba(139,92,246,.12))' : 'transparent',
+                                            : '1px solid var(--border-2)',
+                                        background: on ? 'color-mix(in srgb, var(--violet-500) 12%, transparent)' : 'transparent',
                                         color: 'inherit',
                                         cursor: 'pointer',
                                         fontSize: 12,

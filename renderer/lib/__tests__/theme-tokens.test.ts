@@ -44,24 +44,71 @@ import { join } from 'node:path';
  *
  * …and Tailwind's, because `globals.css` opens with `@import 'tailwindcss'` and
  * its `@theme default` block compiles to `:root`. Those tokens are as real as
- * Genie's own. Two names overlap today — `--shadow-lg` and `--shadow-xs` — and
- * that overlap is not academic: `var(--shadow-lg, 0 12px 32px …)` in the Flow
- * editor looked orphaned, but Tailwind's much lighter `--shadow-lg` was
- * resolving, so the fallback the author wrote had never once painted.
+ * Genie's own, and what Tailwind quietly supplies has now caught two changes
+ * out:
+ *
+ *   · `var(--shadow-lg, 0 12px 32px …)` in the Flow editor looked orphaned. It
+ *     was not — Tailwind's much lighter `--shadow-lg` was resolving, so the
+ *     fallback the author wrote had never once painted (genie#589).
+ *   · `--radius-sm` and `--ease-out` looked like they needed moving out of
+ *     `.gwrap` alongside `--radius-full`. They did not, and re-declaring
+ *     `--ease-out` would have swapped Tailwind's curve for Genie's in every
+ *     non-master window — a regression introduced BY a bug fix, in a property
+ *     nobody would think to check (genie#595).
+ *
+ * **When in doubt, grep the BUILT stylesheet, not the source.** Tailwind's
+ * contribution does not appear anywhere in `renderer/styles/`; the only place it
+ * is visible is `renderer/.next/static/css/*.css` after `npx next build
+ * renderer`. Both findings above came from reading that file, not this one.
  *
  * Test files are deliberately NOT scanned for definitions: a guard a test can
  * satisfy by mentioning a token is not a guard.
  *
- * ## What this does NOT watch, and it is not a small gap
+ * ## Reads come from BOTH surfaces (genie#592)
  *
- * READS are collected from `renderer/styles/*.css` only. Components read `var()`
- * inline too — `style={{ color: 'var(--zinc-500)' }}` — and 35 of those
- * declarations name a token nothing defines, 17 of them with no fallback. The
- * Question-inbox flyout, the first-run wizard, Workspace settings, the Ask modal
- * and Settings are all affected, and `--zinc-*` is among them, which is the very
- * thing the check below exists to stop: it evaded that check by not being in a
- * stylesheet. Inventoried in genie#592; widening `reads` to TSX is part of
- * fixing it, because the widened parse fails until the call sites are decided.
+ * Components read `var()` inline — `style={{ color: 'var(--zinc-500)' }}` — and
+ * for a while this file did not look there. 35 such declarations named a token
+ * nothing defines, 17 with no fallback, across the Question-inbox flyout, the
+ * first-run wizard, Workspace settings, the Ask modal and Settings. Six were
+ * `--zinc-*`, which the check below has guarded against since the toolchain
+ * wizard: they evaded it purely by living in a `.tsx`. So `reads` now walks
+ * `renderer/**` and `main/**` as well as the stylesheets.
+ *
+ * ## Being DEFINED is not the same as being IN SCOPE (genie#595)
+ *
+ * Everything above compares flat sets, and custom properties INHERIT. A token
+ * declared on `.agentinbox-flyout` does not exist for an element outside one,
+ * and reading it there fails exactly like reading an undeclared token. Two
+ * checks below cover the two shapes this takes:
+ *
+ *   · a scope-local family read from outside the family that owns it — how
+ *     `.repo-panel-error` came to read `--ai-red`, so the repo panel's error
+ *     text was never red and its notice never green;
+ *   · `globals.css` reading a token only `master.css` declares — `globals.css`
+ *     styles every window, `.gwrap` is only the master one, so `.site-dot`'s
+ *     `border-radius: var(--radius-full)` was dropped in Settings and its status
+ *     dots rendered as SQUARES there while drawing circles in the master window.
+ *
+ * Neither is visible to a "is this token defined anywhere?" check, and both fail
+ * the way this whole file is about: the declaration is dropped, silently.
+ *
+ * ### The rule, which is what generalises — not the two instances
+ *
+ * **`master.css` styles the MASTER window. `globals.css` styles EVERY window.**
+ * `.gwrap` is `pages/master.tsx`'s wrapper, and Ask, Settings, Docs, Capture,
+ * GApp and Mobile mount no `.gwrap` — so a token declared there does not exist
+ * for them. Two ways to get this wrong, and this repo has now shipped both:
+ *
+ *   · `.gwrap` SHADOWING a `globals.css` pair, so the token stops flipping —
+ *     `--card` was `#17171d` under `--fg-1` `#18181b`, 1.01:1, invisible text on
+ *     31 declarations (genie#591);
+ *   · `globals.css` READING a `.gwrap`-only token, so the declaration is dropped
+ *     in every other window — `.site-dot` drew circles in master and 8×8 squares
+ *     in Settings (genie#595).
+ *
+ * They are mirror images of one seam. Both were invisible while everyone ran
+ * dark, and neither degrades — each drops a declaration outright. A token that
+ * belongs to more than the master window belongs in `globals.css`.
  *
  * ## Deliberately NOT asserted
  *
@@ -135,14 +182,39 @@ describe('Genie stylesheet tokens', () => {
 
     const defined = new Set([...definedInCss, ...definedInSource, ...definedByTailwind]);
 
-    /** Every read, everywhere, tagged with the token, the site, and whether it can degrade. */
-    const reads = sheets.flatMap(({ name, css }) =>
-        [...css.matchAll(/var\(\s*(--[\w-]+)\s*([,)])/g)].map((m) => ({
+    const varRead = /var\(\s*(--[\w-]+)\s*([,)])/g;
+
+    /** Every read in a stylesheet. */
+    const cssReads = sheets.flatMap(({ name, css }) =>
+        [...css.matchAll(varRead)].map((m) => ({
             token: m[1] as string,
             where: `${name}:${lineOf(css, m.index as number)}`,
             hasFallback: m[2] === ',',
         })),
     );
+
+    /**
+     * …and every read in a COMPONENT — `style={{ color: 'var(--zinc-500)' }}`.
+     *
+     * genie#592: leaving these out made the guard narrower than its name. 35
+     * declarations named a token nothing defines, 17 with NO fallback, and six
+     * of them were `--zinc-*` — the exact thing the check below has guarded
+     * against since the toolchain-wizard fix. They evaded it purely by living in
+     * a `.tsx` rather than a `.css`.
+     */
+    const sourceReads = SOURCE_ROOTS.flatMap((root) =>
+        walk(join(ROOT, root), (f) => f.endsWith('.ts') || f.endsWith('.tsx')).flatMap((file) => {
+            const src = stripTsComments(readFileSync(file, 'utf8'));
+            return [...src.matchAll(varRead)].map((m) => ({
+                token: m[1] as string,
+                where: `${file.slice(ROOT.length + 1).replace(/\\/g, '/')}:${lineOf(src, m.index as number)}`,
+                hasFallback: m[2] === ',',
+            }));
+        }),
+    );
+
+    /** Every read, everywhere, tagged with the token, the site, and whether it can degrade. */
+    const reads = [...cssReads, ...sourceReads];
 
     it('reads the palette it actually defines', () => {
         // The positive control: every assertion below is only meaningful if the
@@ -153,6 +225,13 @@ describe('Genie stylesheet tokens', () => {
         expect(definedInCss).toContain('--border-1');
         expect(reads.map((r) => r.token)).toContain('--bg-0');
         expect(reads.length).toBeGreaterThan(200);
+
+        // …and that BOTH read surfaces were walked. A stylesheet-only parse is
+        // what let genie#592's 35 declarations through, so an empty component
+        // side has to fail here rather than silently narrow the checks below.
+        expect(cssReads.length).toBeGreaterThan(200);
+        expect(sourceReads.length).toBeGreaterThan(50);
+        expect(sourceReads.map((r) => r.token)).toContain('--fg-3');
 
         // …and that the TSX half of the parse works, or a token set only from a
         // component reads as undefined and gets "fixed" into the stylesheet.
@@ -311,6 +390,150 @@ describe('Genie stylesheet tokens', () => {
             }
         }
         expect(failures).toEqual([]);
+    });
+
+    it('never reads a SCOPE-LOCAL token from outside the family that owns it', () => {
+        // genie#595. Everything above compares two flat sets — "is this token
+        // declared anywhere?" — and CSS custom properties do not work that way.
+        // They INHERIT, so a token declared on `.agentinbox-flyout` does not
+        // exist for an element that is not inside one, and reading it there
+        // fails exactly like reading an undeclared token: the declaration goes
+        // invalid at computed-value time and is dropped.
+        //
+        // That is how `.repo-panel-error` came to read `--ai-red`. Both tokens
+        // were defined, so every check above passed, and the repo panel's error
+        // text was never red and its notice never green — for as long as the
+        // panel has existed. `master.css` even carries a comment warning that
+        // these tokens "resolve to nothing" outside the AgentInbox; the rule was
+        // documented and then broken by a component reaching over the fence.
+        //
+        // ## Why ownership, and not ancestry
+        //
+        // The obvious check — "does the reading selector look like a descendant
+        // of a declaring one?" — cannot be computed from a stylesheet. Tried
+        // against this repo it flags 85 false positives: `.agentinbox-brand` IS
+        // inside `.agentinbox-flyout`, and no amount of string comparison
+        // between those two selectors knows it.
+        //
+        // So the rule is OWNERSHIP, declared here: a scope-local token belongs
+        // to a family, and only that family may read it. One line per family,
+        // no DOM model, and the convention already held everywhere except the
+        // bug. A new scope-local family with no entry FAILS — which is the point:
+        // it makes someone say who owns the token instead of letting it drift.
+        const OWNERS: Record<string, string> = {
+            // `--ai-*` are the AgentInbox's local palette (master.css ~5356).
+            '--ai-': '.agentinbox',
+            // Set by `.agent-panel-shell.agent-provider-*`, read by the panel
+            // and its head — all `.agent-panel*`.
+            '--agent-accent': '.agent-panel',
+            // Per-item index on the nudge dots, set on the element that uses it.
+            '--nq': '.agent-nudge-questions',
+        };
+
+        /**
+         * Scopes every element inherits from, so a token declared in one of them
+         * is reachable anywhere and is NOT scope-local. `.gwrap` and the overlay
+         * host are here because genie#114 made them a matched pair on purpose.
+         */
+        const GLOBAL = new Set([':root', '.dark', 'html', 'body', '.gwrap', '.genie-overlay-root', '.m-app', '.m-pair']);
+
+        /** Top-level rules of a sheet as `{ selectors, body }`. */
+        const rulesOf = (css: string) => {
+            const out: { selectors: string[]; body: string; line: number }[] = [];
+            const re = /^([^@\s}][^{}]*)\{([^{}]*)\}/gm;
+            for (let m = re.exec(css); m; m = re.exec(css)) {
+                out.push({
+                    selectors: m[1].split(',').map((s) => s.trim()),
+                    body: m[2],
+                    line: lineOf(css, m.index as number),
+                });
+            }
+            return out;
+        };
+
+        const rules = sheets.flatMap(({ name, css }) => rulesOf(css).map((r) => ({ ...r, file: name })));
+
+        /** token -> the selectors that declare it. */
+        const declaredOn = new Map<string, Set<string>>();
+        for (const r of rules) {
+            for (const m of r.body.matchAll(/(--[\w-]+)\s*:/g)) {
+                if (!declaredOn.has(m[1])) declaredOn.set(m[1], new Set());
+                for (const s of r.selectors) declaredOn.get(m[1])!.add(s);
+            }
+        }
+
+        /** Declared, but nowhere every element can see. */
+        const scopeLocal = [...declaredOn].filter(([, sels]) => ![...sels].some((s) => GLOBAL.has(s))).map(([t]) => t);
+
+        const ownerOf = (token: string) =>
+            Object.entries(OWNERS).find(([prefix]) => token === prefix || token.startsWith(prefix))?.[1];
+
+        // Resolved ONCE. The trespass scan runs per `var()` across every rule in
+        // an 8,000-line sheet, and this test lives in the default `npm test` run.
+        const owners = new Map(scopeLocal.map((t) => [t, ownerOf(t)] as const));
+
+        // Positive control: the parse found rules, found declarations, and found
+        // the scope-local family this test exists for. Without it a regex that
+        // matched nothing would make every assertion below vacuously true.
+        expect(rules.length).toBeGreaterThan(500);
+        expect(scopeLocal).toContain('--ai-red');
+        expect(scopeLocal).not.toContain('--bg-0');
+
+        // Every scope-local token names an owner. This is what fails when a new
+        // component invents a local palette and says nothing about it.
+        expect(scopeLocal.filter((t) => !ownerOf(t)).sort()).toEqual([]);
+
+        const trespass = rules.flatMap((r) =>
+            [...r.body.matchAll(/var\(\s*(--[\w-]+)\s*[,)]/g)].flatMap((m) => {
+                const owner = owners.get(m[1]);
+                if (!owner) return [];
+                return r.selectors
+                    .filter((sel) => !sel.includes(owner))
+                    .map((sel) => `${r.file}:${r.line}  ${sel} reads ${m[1]}, which only ${owner}* may read`);
+            }),
+        );
+        expect([...new Set(trespass)].sort()).toEqual([]);
+    });
+
+    it('never lets globals.css read a token only master.css declares', () => {
+        // The same scope bug as above, one level up, and it is live.
+        //
+        // `master.css` styles the MASTER window: `.gwrap` is `pages/master.tsx`'s
+        // wrapper and `.genie-overlay-root` is its portal host. `globals.css`
+        // styles EVERY window — Ask, Settings, Docs, Capture, GApp, Mobile — none
+        // of which mount `.gwrap`. So a `globals.css` rule that reads a token
+        // only `.gwrap` declares works in the master window and is DROPPED
+        // everywhere else, which is why it survives review: whoever added it saw
+        // it working.
+        //
+        // Found by this test: `.site-dot` reads `border-radius:
+        // var(--radius-full)`, and Settings renders three of them — so the status
+        // dots beside the runtime, the probe and the engine were 8×8 SQUARES
+        // there while being round in the master window. `.gh-code`'s transition
+        // read `--dur-fast` / `--ease-out` and did not animate.
+        //
+        // Fallbacks are excluded on purpose: `var(--x, 6px)` cannot go blank, so
+        // it is not a scope dependency. Same reasoning overlay-layers.test.ts
+        // uses for genie#114, which is this bug in the other direction.
+        const globals = sheets.find((s) => s.name.endsWith('globals.css'))!.css;
+        const master = sheets.find((s) => s.name.endsWith('master.css'))!.css;
+        const declaredIn = (css: string) => new Set([...css.matchAll(/(--[\w-]+)\s*:/g)].map((m) => m[1] as string));
+
+        const inGlobals = declaredIn(globals);
+        const inMaster = declaredIn(master);
+        const reachable = new Set([...inGlobals, ...definedInSource, ...definedByTailwind]);
+
+        // Positive control: both sheets parsed, and they really do declare
+        // different things — otherwise "nothing is master-only" is trivially true.
+        expect(inGlobals.has('--bg-0')).toBe(true);
+        expect(inMaster.has('--term-bg')).toBe(true);
+        expect([...inMaster].some((t) => !reachable.has(t))).toBe(true);
+
+        const escaped = [...globals.matchAll(/var\(\s*(--[\w-]+)\s*\)/g)]
+            .map((m) => ({ token: m[1] as string, line: lineOf(globals, m.index as number) }))
+            .filter((r) => !reachable.has(r.token))
+            .map((r) => `renderer/styles/globals.css:${r.line} reads ${r.token}, declared only in master.css`);
+        expect([...new Set(escaped)].sort()).toEqual([]);
     });
 
     it('pins the tokens master.css redefines OUT of the light/dark mechanism', () => {

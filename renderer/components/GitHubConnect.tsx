@@ -735,7 +735,7 @@ export function OwnerSelect({
             <Select value={value} onValueChange={onChange} list={options} />
             {account.installationsLoaded && !chosenInstalled && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
-                    <Text size="xs" style={{ color: 'var(--amber-600)', flex: 1 }}>
+                    <Text size="xs" style={{ color: 'var(--amber-400)', flex: 1 }}>
                         Genie isn't installed on <strong>{chosenLabel}</strong> — install
                         it there to create/fork under this account.
                     </Text>
@@ -774,7 +774,7 @@ export function InstallOnOrgLink({ account }: { account: GitHubAccount }) {
                     account.markInstallSurfaced();
                     void account.openInstall();
                 }}
-                style={{ color: 'var(--blue-400)' }}
+                style={{ color: 'var(--blue-500)' }}
             >
                 Install Genie on another account/org…
             </a>

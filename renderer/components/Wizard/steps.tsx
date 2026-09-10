@@ -111,7 +111,7 @@ function FormStep({ step, engine, ctx }: { step: FormStepSpec; engine: RecipeEng
                                             cursor: 'pointer',
                                             border: checked
                                                 ? '1px solid var(--blue-500)'
-                                                : '1px solid var(--zinc-700)',
+                                                : '1px solid var(--border-2)',
                                             background: checked
                                                 ? 'color-mix(in srgb, var(--blue-500) 12%, transparent)'
                                                 : 'transparent',
@@ -207,7 +207,7 @@ function ChoiceStep({ step, engine }: { step: ChoiceStepSpec; engine: RecipeEngi
                             textAlign: 'left',
                             borderRadius: 8,
                             cursor: 'pointer',
-                            border: on ? '1px solid var(--blue-500)' : '1px solid var(--zinc-700)',
+                            border: on ? '1px solid var(--blue-500)' : '1px solid var(--border-2)',
                             background: on ? 'color-mix(in srgb, var(--blue-500) 12%, transparent)' : 'transparent',
                         }}
                     >
@@ -367,7 +367,7 @@ function TerminalStep({ step, engine, ctx, active, defaultCwd, onTerminalCreated
                     enter it there.
                 </Text>
             )}
-            <div style={{ height: 280, borderRadius: 8, overflow: 'hidden', border: '1px solid var(--zinc-800)' }}>
+            <div style={{ height: 280, borderRadius: 8, overflow: 'hidden', border: '1px solid var(--border-1)' }}>
                 {active && specReady ? (
                     <Terminal
                         key={termIdRef.current}
@@ -515,7 +515,7 @@ function TaskStep({ step, engine, ctx, active }: {
                 </Text>
             )}
             {state === 'success' && (
-                <Text size="sm" style={{ color: 'var(--green-500)' }}>
+                <Text size="sm" style={{ color: 'var(--emerald-400)' }}>
                     <Icon name="check" size="sm" /> Done.
                 </Text>
             )}

@@ -154,7 +154,7 @@ export default function TynnProvisionPanel({ workspaceId }: { workspaceId?: stri
                     Open a workspace to manage its Tynn agent.
                 </Text>
             ) : status === 'signed-out' ? (
-                <Text size="xs" style={{ color: 'var(--amber-600)', paddingTop: 4 }}>
+                <Text size="xs" style={{ color: 'var(--amber-400)', paddingTop: 4 }}>
                     Linked, but not signed in — sign in on the{' '}
                     <strong>Connections</strong> tab.
                 </Text>

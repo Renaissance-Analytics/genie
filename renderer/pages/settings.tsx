@@ -1016,8 +1016,8 @@ function HostBadge() {
                 padding: '2px 8px',
                 borderRadius: 999,
                 color: 'var(--blue-600, #2563eb)',
-                background: 'var(--blue-50, rgba(37,99,235,0.10))',
-                border: '1px solid var(--blue-200, rgba(37,99,235,0.25))',
+                background: 'color-mix(in srgb, var(--blue-500) 10%, transparent)',
+                border: '1px solid color-mix(in srgb, var(--blue-500) 25%, transparent)',
                 whiteSpace: 'nowrap',
             }}
         >
@@ -2223,7 +2223,7 @@ function UpdaterSection() {
                                 'https://github.com/Renaissance-Analytics/genie/releases',
                             );
                         }}
-                        style={{ color: 'var(--blue-400)' }}
+                        style={{ color: 'var(--blue-500)' }}
                     >
                         the canonical Genie releases page
                     </a>
@@ -4114,7 +4114,7 @@ function TailscaleSection() {
                 ? 'var(--rose-500)'
                 : view.tone === 'ok'
                     ? 'var(--emerald-600)'
-                    : 'var(--amber-600)';
+                    : 'var(--amber-400)';
 
     return (
         <SetSection

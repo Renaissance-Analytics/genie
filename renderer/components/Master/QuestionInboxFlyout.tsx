@@ -40,7 +40,7 @@ import { formatQuestionAge } from '../../lib/question-age';
 const PRIORITY_COLOR: Record<string, string> = {
     urgent: 'var(--rose-500, #f43f5e)',
     high: 'var(--amber-500, #f59e0b)',
-    normal: 'var(--indigo-400, #818cf8)',
+    normal: 'var(--agent)',
     low: 'var(--fg-3, #9aa0aa)',
 };
 
@@ -362,7 +362,7 @@ export default function QuestionInboxFlyout({
                                 style={{
                                     background: 'transparent',
                                     border: 'none',
-                                    color: 'var(--indigo-400, #818cf8)',
+                                    color: 'var(--agent)',
                                     cursor: 'pointer',
                                     fontSize: 12,
                                     textAlign: 'left',
@@ -409,8 +409,8 @@ const hostChipStyle: React.CSSProperties = {
     fontSize: 10,
     padding: '1px 6px',
     borderRadius: 999,
-    background: 'color-mix(in srgb, var(--indigo-500, #6366f1) 16%, transparent)',
-    color: 'var(--indigo-400, #818cf8)',
+    background: 'color-mix(in srgb, var(--agent) 16%, transparent)',
+    color: 'var(--agent)',
     whiteSpace: 'nowrap',
 };
 
@@ -585,9 +585,9 @@ export function PendingCard({
                                         padding: '5px 10px',
                                         borderRadius: 7,
                                         cursor: 'pointer',
-                                        border: `1px solid ${on ? 'var(--indigo-500, #6366f1)' : 'var(--bg-3, rgba(120,120,120,0.3))'}`,
+                                        border: `1px solid ${on ? 'var(--agent)' : 'var(--bg-3, rgba(120,120,120,0.3))'}`,
                                         background: on
-                                            ? 'color-mix(in srgb, var(--indigo-500, #6366f1) 22%, transparent)'
+                                            ? 'color-mix(in srgb, var(--agent) 22%, transparent)'
                                             : 'transparent',
                                         color: 'var(--fg-1, #e8e8ea)',
                                     }}
@@ -647,8 +647,8 @@ export function PendingCard({
                     borderRadius: 8,
                     border: 'none',
                     cursor: busy || !gate.canAnswer ? 'default' : 'pointer',
-                    background: 'var(--indigo-500, #6366f1)',
-                    color: '#fff',
+                    background: 'var(--agent)',
+                    color: '#09090b',
                     opacity: busy || !gate.canAnswer ? 0.6 : 1,
                 }}
             >

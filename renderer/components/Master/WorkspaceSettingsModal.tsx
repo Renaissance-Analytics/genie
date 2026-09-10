@@ -387,7 +387,7 @@ export default function WorkspaceSettingsModal({
                         />
                         <Text size="xs" style={{ color: 'var(--fg-3)' }}>
                             {iconError ? (
-                                <span style={{ color: 'var(--red-500, #f48771)' }}>
+                                <span style={{ color: 'var(--rose-400)' }}>
                                     {iconError}
                                 </span>
                             ) : iconSaved ? (
@@ -1354,7 +1354,7 @@ function WorkspaceDocsPanel({ workspaceId }: { workspaceId: string }) {
                                     fontSize: 12.5,
                                     color: docHealth.healthy
                                         ? 'var(--emerald-600)'
-                                        : 'var(--amber-600)',
+                                        : 'var(--amber-400)',
                                 }}
                             >
                                 <Icon
@@ -1902,7 +1902,7 @@ function OpsReposPanel({ workspacePath }: { workspacePath: string }) {
             )}
 
             {plan.missingLocally.length > 0 && (
-                <Text size="xs" style={{ color: 'var(--amber-600)' }}>
+                <Text size="xs" style={{ color: 'var(--amber-400)' }}>
                     {plan.missingLocally.length} governed project(s) aren&apos;t open in Genie
                     ({plan.missingLocally.map((m) => m.name).join(', ')}) — open them so Genie
                     can resolve their repos.
