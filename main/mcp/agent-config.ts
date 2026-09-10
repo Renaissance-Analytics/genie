@@ -6,6 +6,14 @@ import { upsertEnvLine } from '../env-file';
 import { ensureEnvGitignored, loadWorkspaceEnvVars } from '../env-store';
 import { pluginAgentSkills, type PluginSkill } from '../plugins/registry';
 import { PROVIDER_IDS, TUI_REGISTRY } from '../agents/registry';
+/* Re-exporting below does NOT bind these locally, and this module uses all
+   three in its own writers. */
+import {
+    AGENTINBOX_CLAUDE_CHANNEL_NAME,
+    GENIE_ENDPOINT_SERVERS,
+    GENIE_SERVER_NAME,
+    type GenieEndpointServer,
+} from './genie-servers';
 
 /**
  * Write/remove the Genie MCP server entry in a workspace's agent config files
@@ -26,12 +34,25 @@ import { PROVIDER_IDS, TUI_REGISTRY } from '../agents/registry';
  * `terminalId` arg (read from GENIE_TERMINAL_ID) with a last-active fallback.
  *
  * Merges into existing config (never clobbers other servers); on disable it
- * removes only the `genie` key.
+ * removes only the keys Genie wrote — every server in
+ * {@link GENIE_ENDPOINT_SERVERS} for that config, and nothing else.
  */
 
-export const GENIE_SERVER_NAME = 'genie';
+/* The Genie-endpoint server NAMES are declared in `./genie-servers` — a
+   zero-import leaf — because `agents/mcp-reconnect.ts` needs the same list to
+   tell an agent what an upgrade replaced, and it is PURE (this module reaches
+   `node:fs`, `../db` and the plugin registry). Re-exported here so the many
+   existing importers are unaffected: there is one declaration, in the file both
+   sides can reach. See that file's header for genie#613. */
+export {
+    GENIE_SERVER_NAME,
+    AGENTINBOX_CLAUDE_CHANNEL_NAME,
+    GENIE_ENDPOINT_SERVERS,
+} from './genie-servers';
+/** Tynn's MCP server. NOT a Genie-endpoint server — it points at Tynn
+ *  production, so a Genie upgrade does not replace the process behind it and
+ *  the reconnect notice must not claim it did. */
 export const TYNN_SERVER_NAME = 'tynn';
-export const AGENTINBOX_CLAUDE_CHANNEL_NAME = 'genie-agentinbox-channel';
 const CODEX_SESSION_HOOK_BEGIN = '# BEGIN GENIE CODEX SESSION HOOK';
 const CODEX_SESSION_HOOK_END = '# END GENIE CODEX SESSION HOOK';
 
@@ -59,6 +80,30 @@ export function claudeChannelEntry(workspacePath: string, url: string): JsonObj 
         },
     };
 }
+
+/**
+ * HOW each Genie-endpoint server is written into a JSON agent config.
+ *
+ * Keyed by `GenieEndpointServer<…>`, so the keys are exactly the names
+ * `GENIE_ENDPOINT_SERVERS` declares: add a server to that list and this table
+ * stops compiling until the writer actually writes it. That is what stops the
+ * writer and the post-upgrade reconnect notice from drifting — the notice reads
+ * the same declaration, and it named one server too few because the two lived
+ * apart (genie#613).
+ */
+const GENIE_ENDPOINT_ENTRY: {
+    claude: Record<GenieEndpointServer<'claude'>, (workspacePath: string, url: string) => JsonObj>;
+    cursor: Record<GenieEndpointServer<'cursor'>, (workspacePath: string, url: string) => JsonObj>;
+} = {
+    claude: {
+        [GENIE_SERVER_NAME]: (_workspacePath, url) => claudeEntry(url),
+        [AGENTINBOX_CLAUDE_CHANNEL_NAME]: (workspacePath, url) =>
+            claudeChannelEntry(workspacePath, url),
+    },
+    cursor: {
+        [GENIE_SERVER_NAME]: (_workspacePath, url) => cursorEntry(url),
+    },
+};
 
 /**
  * The DEVELOPMENT-channel flag — the only one that registers a channel of ours.
@@ -1894,24 +1939,22 @@ export function writeWorkspaceAgentMcp(
     // existing genie entry from the configs — but keep AGENTS.md in sync, since
     // the workspace is still MCP-enabled; only the endpoint is down right now.
     if (enabled && !url) {
+        // `applyServer` ignores the entry when removing, so none is built here.
         if (sync.claude) {
-            upsert(path.join(workspacePath, '.mcp.json'), GENIE_SERVER_NAME, claudeEntry(''), false);
-            upsert(
-                path.join(workspacePath, '.mcp.json'),
-                AGENTINBOX_CLAUDE_CHANNEL_NAME,
-                {},
-                false,
-            );
+            for (const name of GENIE_ENDPOINT_SERVERS.claude) {
+                upsert(path.join(workspacePath, '.mcp.json'), name, {}, false);
+            }
         }
         if (sync.cursor) {
-            upsert(
-                path.join(workspacePath, '.cursor', 'mcp.json'),
-                GENIE_SERVER_NAME,
-                cursorEntry(''),
-                false,
-            );
+            for (const name of GENIE_ENDPOINT_SERVERS.cursor) {
+                upsert(path.join(workspacePath, '.cursor', 'mcp.json'), name, {}, false);
+            }
         }
-        if (sync.codex) syncCodexServer(workspacePath, GENIE_SERVER_NAME, '', null, false);
+        if (sync.codex) {
+            for (const name of GENIE_ENDPOINT_SERVERS.codex) {
+                syncCodexServer(workspacePath, name, '', null, false);
+            }
+        }
         // Skills stay in sync even with the endpoint down — the workspace is still
         // MCP-enabled, so the guidance is still correct; only the URL is missing.
         if (sync.codex) syncAgentSkills(workspacePath, 'codex', true);
@@ -1920,28 +1963,33 @@ export function writeWorkspaceAgentMcp(
         return;
     }
     if (sync.claude) {
-        upsert(path.join(workspacePath, '.mcp.json'), GENIE_SERVER_NAME, claudeEntry(url ?? ''), enabled);
-        upsert(
-            path.join(workspacePath, '.mcp.json'),
-            AGENTINBOX_CLAUDE_CHANNEL_NAME,
-            claudeChannelEntry(workspacePath, url ?? ''),
-            enabled,
-        );
+        for (const name of GENIE_ENDPOINT_SERVERS.claude) {
+            upsert(
+                path.join(workspacePath, '.mcp.json'),
+                name,
+                GENIE_ENDPOINT_ENTRY.claude[name](workspacePath, url ?? ''),
+                enabled,
+            );
+        }
         if (enabled) {
             writeIfChanged(claudeChannelBridgePath(workspacePath), claudeChannelBridge());
         }
         syncAgentSkills(workspacePath, 'claude', enabled);
     }
     if (sync.cursor) {
-        upsert(
-            path.join(workspacePath, '.cursor', 'mcp.json'),
-            GENIE_SERVER_NAME,
-            cursorEntry(url ?? ''),
-            enabled,
-        );
+        for (const name of GENIE_ENDPOINT_SERVERS.cursor) {
+            upsert(
+                path.join(workspacePath, '.cursor', 'mcp.json'),
+                name,
+                GENIE_ENDPOINT_ENTRY.cursor[name](workspacePath, url ?? ''),
+                enabled,
+            );
+        }
     }
     if (sync.codex) {
-        syncCodexServer(workspacePath, GENIE_SERVER_NAME, url ?? '', null, enabled);
+        for (const name of GENIE_ENDPOINT_SERVERS.codex) {
+            syncCodexServer(workspacePath, name, url ?? '', null, enabled);
+        }
         syncAgentSkills(workspacePath, 'codex', enabled);
     }
     if (sync.agents) syncAgentsMd(workspacePath, enabled);

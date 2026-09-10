@@ -1318,8 +1318,8 @@ function reportWorkstationResetFailures(failures: ResetFailure[]): void {
  *
  * MUST be called AFTER `startMcpServer`. It used to run in the AgentInbox
  * wiring block, hundreds of lines earlier, which meant the reconnect was
- * performed against an endpoint that was not listening yet: `/mcp reconnect
- * genie` was typed into a Claude terminal before there was anything to connect
+ * performed against an endpoint that was not listening yet: the reconnect
+ * command was typed into a Claude terminal before there was anything to connect
  * to, and no harness channel could possibly have re-bound, so every notice was
  * composed as "not attached" and typed at a prompt. Ordering it here is the
  * structural half of the fix; `AGENT_UPGRADE_TRANSPORT_GRACE_MS` is the other,
@@ -2334,10 +2334,11 @@ app.whenReady().then(async () => {
     // cannot be established by reading code. Inert in a normal run.
     if (isE2E()) registerAppsE2E();
     await startMcpServer(mcpDeps).catch((e) => console.error('[mcp] failed to start', e));
-    // genie#346 — ONLY now. Every agent's `genie` connection died with the old
-    // process, and both halves of the repair need a listening endpoint: the
-    // typed `/mcp reconnect genie` has nothing to connect to without one, and a
-    // harness channel cannot re-register itself against a port nobody is on.
+    // genie#346 — ONLY now. Every Genie MCP connection an agent holds died with
+    // the old process (`genie` AND its AgentInbox channel, genie#613), and both
+    // halves of the repair need a listening endpoint: the typed reconnect has
+    // nothing to connect to without one, and a harness channel cannot
+    // re-register itself against a port nobody is on.
     // Fire-and-forget: it schedules its own work and never blocks boot.
     announceUpgradeToAgents();
 
