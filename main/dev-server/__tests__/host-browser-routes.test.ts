@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hostBrowserRoutes } from '../host-browser-routes';
+import { hostBrowserNames, hostBrowserRoutes } from '../host-browser-routes';
 import type { DevSiteConfig } from '../sites-config';
 
 /**
@@ -70,5 +70,53 @@ describe('hostBrowserRoutes', () => {
             { genName: 'a.gen', port: 1 },
             { genName: 'b.gen', port: 3 },
         ]);
+    });
+});
+
+/**
+ * The other half of the split (genie#624): which `.gen` names the OS HOSTS FILE
+ * carries. That question is answered from CONFIG alone — no port, no live entry —
+ * because the hosts file is the one artifact whose write costs an administrator
+ * prompt, and it must therefore not move when a site merely starts or stops.
+ *
+ * A name resolving to 127.0.0.1 with nothing listening is a connection refused,
+ * which is a better error than a DNS failure and was never a claim that the
+ * service was up.
+ */
+describe('hostBrowserNames', () => {
+    it('names a browser-exposed http site from CONFIG — no port, nothing running', () => {
+        expect(hostBrowserNames([base({ genName: 'moic.gen', browserExposed: true })])).toEqual(['moic.gen']);
+    });
+
+    it('names container and host-native sites alike — the hosts file does not care how it is served', () => {
+        const container = base({ genName: 'shop.gen', runMode: 'explicit', command: ['npm', 'run', 'dev'], browserExposed: true });
+        const native = base({ genName: 'api.gen', runMode: 'explicit', hostPort: 8001, browserExposed: true });
+        expect(hostBrowserNames([container, native])).toEqual(['api.gen', 'shop.gen']);
+    });
+
+    it('EXCLUDES a site that was not browser-opted-in', () => {
+        expect(hostBrowserNames([base({ browserExposed: false })])).toEqual([]);
+        expect(hostBrowserNames([base({})])).toEqual([]); // undefined ⇒ off
+    });
+
+    it('EXCLUDES a non-http (tcp) site', () => {
+        expect(hostBrowserNames([base({ kind: 'tcp', browserExposed: true })])).toEqual([]);
+    });
+
+    it('EXCLUDES a site that is not enabled — `enabled` is the ask that it be SERVED at all', () => {
+        // `enabled` is the CONFIGURED axis (genie#407): persisted in the git-tracked
+        // envelope, and explicitly not "running right now". So it belongs on this
+        // side of the split, where a stop does not.
+        expect(hostBrowserNames([base({ browserExposed: true, enabled: false })])).toEqual([]);
+    });
+
+    it('dedupes and sorts, so an unchanged configuration yields a byte-identical block', () => {
+        expect(
+            hostBrowserNames([
+                base({ genName: 'b.gen', browserExposed: true }),
+                base({ genName: 'a.gen', browserExposed: true }),
+                base({ genName: 'b.gen', browserExposed: true }),
+            ]),
+        ).toEqual(['a.gen', 'b.gen']);
     });
 });

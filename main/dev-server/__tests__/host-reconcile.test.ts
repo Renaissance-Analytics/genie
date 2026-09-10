@@ -75,6 +75,12 @@ function fakeEffects(over: Partial<HostReconcileEffects> & { hostsIo?: ReturnTyp
     return fx;
 }
 
+/** A plan whose CONFIGURED names are exactly its RUNNING routes — the shape every
+ *  test below the genie#624 block describes, where the two sets coincide. */
+function plan(routes: Array<{ genName: string; port: number }>) {
+    return { names: routes.map((r) => r.genName), routes };
+}
+
 /** The steps handed to the single `applyPrivileged` call, by id. */
 function batched(fx: HostReconcileEffects): string[] {
     const calls = (fx.applyPrivileged as ReturnType<typeof vi.fn>).mock.calls;
@@ -85,7 +91,7 @@ function batched(fx: HostReconcileEffects): string[] {
 describe('reconcileHostSites', () => {
     it('mints + trusts a CA, issues a leaf, writes hosts + a Caddyfile that uses the leaf', async () => {
         const fx = fakeEffects();
-        const res = await reconcileHostSites([{ genName: 'moic.gen', port: 8080 }], fx);
+        const res = await reconcileHostSites(plan([{ genName: 'moic.gen', port: 8080 }]), fx);
 
         expect(res.caCreated).toBe(true);
         expect(fx.prepareCaTrust).toHaveBeenCalledOnce(); // new CA ⇒ install into trust store
@@ -106,7 +112,7 @@ describe('reconcileHostSites', () => {
 
     it('takes ONE elevation carrying BOTH the trust install and the hosts write (genie#604)', async () => {
         const fx = fakeEffects();
-        await reconcileHostSites([{ genName: 'moic.gen', port: 8080 }], fx);
+        await reconcileHostSites(plan([{ genName: 'moic.gen', port: 8080 }]), fx);
         expect(batched(fx)).toEqual(['ca-trust', 'hosts-file']);
     });
 
@@ -119,7 +125,7 @@ describe('reconcileHostSites', () => {
                 write: vi.fn(),
             },
         });
-        const res = await reconcileHostSites([{ genName: 'app.gen', port: 5173 }], fx);
+        const res = await reconcileHostSites(plan([{ genName: 'app.gen', port: 5173 }]), fx);
         expect(res.caCreated).toBe(false);
         expect(fx.prepareCaTrust).not.toHaveBeenCalled();
         expect(fx.caStore.write).not.toHaveBeenCalled();
@@ -134,7 +140,7 @@ describe('reconcileHostSites', () => {
         const fx = fakeEffects({
             hostsIo: fakeHostsIo(upsertGenHostsBlock('127.0.0.1\tlocalhost\n', ['moic.gen'])),
         });
-        const res = await reconcileHostSites([{ genName: 'moic.gen', port: 8080 }], fx);
+        const res = await reconcileHostSites(plan([{ genName: 'moic.gen', port: 8080 }]), fx);
         expect(res.caCreated).toBe(true);
         expect(res.hostsChanged).toBe(false);
         expect(fx.hostsIo.prepareWrite).not.toHaveBeenCalled();
@@ -147,7 +153,7 @@ describe('reconcileHostSites', () => {
                 '127.0.0.1\tlocalhost\n# BEGIN GENIE SITES\n127.0.0.1\told.gen\n::1\told.gen\n# END GENIE SITES\n',
             ),
         });
-        const res = await reconcileHostSites([], fx);
+        const res = await reconcileHostSites(plan([]), fx);
         expect(fx.writeLeaf).not.toHaveBeenCalled();
         expect(res.genNames).toEqual([]);
         const cf = (fx.writeCaddyfileAndReload as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
@@ -164,11 +170,11 @@ describe('reconcileHostSites', () => {
     it('dedupes + sorts sites so the Caddyfile is deterministic', async () => {
         const fx = fakeEffects();
         const res = await reconcileHostSites(
-            [
+            plan([
                 { genName: 'b.gen', port: 2 },
                 { genName: 'a.gen', port: 1 },
                 { genName: 'b.gen', port: 2 },
-            ],
+            ]),
             fx,
         );
         expect(res.genNames).toEqual(['a.gen', 'b.gen']);
@@ -180,12 +186,12 @@ describe('reconcileHostSites', () => {
         // First reconcile syncs the file; a second identical run must not rewrite it
         // and must not elevate at all.
         const fx = fakeEffects();
-        await reconcileHostSites([{ genName: 'moic.gen', port: 8080 }], fx);
+        await reconcileHostSites(plan([{ genName: 'moic.gen', port: 8080 }]), fx);
         (fx.hostsIo.prepareWrite as ReturnType<typeof vi.fn>).mockClear();
         (fx.applyPrivileged as ReturnType<typeof vi.fn>).mockClear();
         (fx.prepareCaTrust as ReturnType<typeof vi.fn>).mockClear();
 
-        const res2 = await reconcileHostSites([{ genName: 'moic.gen', port: 8080 }], fx);
+        const res2 = await reconcileHostSites(plan([{ genName: 'moic.gen', port: 8080 }]), fx);
         expect(res2.hostsChanged).toBe(false);
         expect(fx.hostsIo.prepareWrite).not.toHaveBeenCalled();
         expect(fx.prepareCaTrust).not.toHaveBeenCalled();
@@ -196,10 +202,116 @@ describe('reconcileHostSites', () => {
         const fx = fakeEffects({
             applyPrivileged: vi.fn().mockRejectedValue(new Error('Genie could not update the hosts file: read-only')),
         });
-        await expect(reconcileHostSites([{ genName: 'moic.gen', port: 8080 }], fx)).rejects.toThrow(
+        await expect(reconcileHostSites(plan([{ genName: 'moic.gen', port: 8080 }]), fx)).rejects.toThrow(
             /could not update the hosts file/,
         );
         // A failed elevation must not leave a half-configured Caddy serving the name.
         expect(fx.writeCaddyfileAndReload).not.toHaveBeenCalled();
+    });
+});
+
+/**
+ * genie#624 — the elevated artifact must hold still while the unprivileged one moves.
+ *
+ * Both artifacts used to be built from the RUNNING set: a start added a name, a
+ * stop removed one, so the hosts file genuinely differed on every lifecycle event
+ * and its Administrator write fired every time. `hostsBlockNeedsUpdate` was right
+ * all along — the content really had changed. The fix is upstream of it: the hosts
+ * block tracks what is CONFIGURED, and only the Caddyfile tracks what is running.
+ */
+describe('the hosts file follows CONFIGURED sites; the Caddyfile follows RUNNING ones', () => {
+    it('a site STARTING rewrites the Caddyfile and does not touch the hosts file', async () => {
+        const fx = fakeEffects();
+        // Configured, nothing running: the name is already resolvable.
+        await reconcileHostSites({ names: ['moic.gen'], routes: [] }, fx);
+        expect(fx.hostsIo.prepareWrite).toHaveBeenCalledOnce();
+        (fx.applyPrivileged as ReturnType<typeof vi.fn>).mockClear();
+
+        // …and now it starts.
+        const res = await reconcileHostSites(
+            { names: ['moic.gen'], routes: [{ genName: 'moic.gen', port: 8080 }] },
+            fx,
+        );
+
+        expect(res.hostsChanged).toBe(false);
+        expect(fx.hostsIo.prepareWrite).toHaveBeenCalledOnce(); // still just the first one
+        expect(fx.applyPrivileged).not.toHaveBeenCalled(); // ⇒ no administrator prompt
+        // The Caddyfile, which costs nothing to write, DID move — it has to, since
+        // the port only exists while the site is up.
+        const cf = (fx.writeCaddyfileAndReload as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0] as string;
+        expect(cf).toContain('reverse_proxy 127.0.0.1:8080');
+    });
+
+    it('a site STOPPING drops its Caddy vhost and leaves the hosts entry alone', async () => {
+        const fx = fakeEffects();
+        await reconcileHostSites(
+            { names: ['moic.gen'], routes: [{ genName: 'moic.gen', port: 8080 }] },
+            fx,
+        );
+        (fx.hostsIo.prepareWrite as ReturnType<typeof vi.fn>).mockClear();
+        (fx.applyPrivileged as ReturnType<typeof vi.fn>).mockClear();
+
+        const res = await reconcileHostSites({ names: ['moic.gen'], routes: [] }, fx);
+
+        expect(res.hostsChanged).toBe(false);
+        expect(fx.hostsIo.prepareWrite).not.toHaveBeenCalled();
+        expect(fx.applyPrivileged).not.toHaveBeenCalled();
+        // `moic.gen` still resolves to 127.0.0.1 with nothing listening — a
+        // connection refused, which beats a DNS failure and never claimed the
+        // service was up.
+        expect(res.genNames).toEqual(['moic.gen']);
+        const cf = (fx.writeCaddyfileAndReload as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0] as string;
+        expect(cf).not.toContain('reverse_proxy');
+    });
+
+    it('a RESTART — stop then start — costs no elevation at all', async () => {
+        const fx = fakeEffects();
+        await reconcileHostSites({ names: ['moic.gen'], routes: [] }, fx);
+        (fx.applyPrivileged as ReturnType<typeof vi.fn>).mockClear();
+
+        for (const routes of [
+            [{ genName: 'moic.gen', port: 8080 }],
+            [],
+            [{ genName: 'moic.gen', port: 8081 }],
+        ]) {
+            await reconcileHostSites({ names: ['moic.gen'], routes }, fx);
+        }
+        expect(fx.applyPrivileged).not.toHaveBeenCalled();
+    });
+
+    it('names a configured site in the hosts block and the LEAF before it ever runs', async () => {
+        const fx = fakeEffects();
+        const res = await reconcileHostSites({ names: ['moic.gen', 'api.gen'], routes: [] }, fx);
+        expect(res.genNames).toEqual(['api.gen', 'moic.gen']);
+        expect((fx.hostsIo.prepareWrite as ReturnType<typeof vi.fn>).mock.calls[0][0]).toContain('127.0.0.1\tmoic.gen');
+        // The leaf is issued over the configured set, so the certificate is already
+        // right the moment a site comes up — the cert never lags the start.
+        expect(fx.writeLeaf).toHaveBeenCalledOnce();
+        // No vhost yet: nothing is listening, so there is no port to proxy to.
+        const cf = (fx.writeCaddyfileAndReload as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+        expect(cf).not.toContain('reverse_proxy');
+    });
+
+    it('un-configuring the last site DRAINS the block — that prompt is the one a person expects', async () => {
+        const fx = fakeEffects();
+        await reconcileHostSites({ names: ['moic.gen'], routes: [] }, fx);
+        (fx.hostsIo.prepareWrite as ReturnType<typeof vi.fn>).mockClear();
+
+        const res = await reconcileHostSites({ names: [], routes: [] }, fx);
+        expect(res.hostsChanged).toBe(true);
+        expect((fx.hostsIo.prepareWrite as ReturnType<typeof vi.fn>).mock.calls[0][0]).not.toContain('moic.gen');
+        expect(res.genNames).toEqual([]);
+    });
+
+    it('covers a RUNNING route the configured set has lost, so Caddy never serves a name with no SAN', async () => {
+        // The one case the two sets can disagree: a site deleted from the envelope
+        // while its process is still up. The union keeps the invariant that every
+        // vhost Caddy serves has a hosts entry and a SAN; the alternative is a TLS
+        // error with no explanation. It costs a prompt in a state that is already
+        // anomalous, and resolves the moment the site stops.
+        const fx = fakeEffects();
+        const res = await reconcileHostSites({ names: [], routes: [{ genName: 'orphan.gen', port: 9000 }] }, fx);
+        expect(res.genNames).toEqual(['orphan.gen']);
+        expect((fx.hostsIo.prepareWrite as ReturnType<typeof vi.fn>).mock.calls[0][0]).toContain('orphan.gen');
     });
 });

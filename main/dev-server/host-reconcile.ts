@@ -16,6 +16,12 @@ import { stageHostsFile } from './hosts-file';
  * Order matters: a trusted CA + a leaf must exist BEFORE Caddy is told to serve
  * with it, and the hosts entry must exist for the name to resolve at all.
  *
+ * It takes a {@link HostReconcilePlan} rather than one list because its two
+ * artifacts have different lifetimes (genie#624): the hosts block follows the
+ * CONFIGURED sites, the Caddyfile follows the RUNNING ones. Building both from the
+ * running set is what made every site start and stop rewrite an Administrator-owned
+ * file, and so prompt.
+ *
  * It also owns the pass's ELEVATION BUDGET (genie#604). The two privileged
  * actions — the trust-store install and the hosts write — used to elevate
  * separately, so enabling one browser-exposed site cost the user two
@@ -35,6 +41,29 @@ export interface HostSiteRoute {
     /** `https-insecure` for a container site (reach its self-signed sandbox Caddy);
      *  omitted/`http` for a host-native dev server. */
     upstreamScheme?: 'http' | 'https-insecure';
+}
+
+/**
+ * What ONE pass must make true on the host. Its two halves have deliberately
+ * DIFFERENT lifetimes (genie#624).
+ *
+ * `names` is the CONFIGURED set: every `.gen` name the machine is set up to serve
+ * to a real browser, whether or not anything is running behind it. `routes` is the
+ * RUNNING set, and carries the live loopback port — which is precisely why it
+ * cannot answer for the hosts file: a stopped site has no port.
+ *
+ * The split exists because exactly one artifact here is privileged. The hosts file
+ * needs Administrator/root, so its content must move only when a person changes
+ * the CONFIGURATION — adding or removing a browser-exposed site, which is a moment
+ * they expect a prompt. The Caddyfile is written unprivileged and may therefore
+ * churn freely with every start, stop and restart, which is what it must do to
+ * point at a port that only exists while the site is up.
+ */
+export interface HostReconcilePlan {
+    /** CONFIGURED browser-exposed `.gen` names → the hosts block and the leaf SANs. */
+    names: string[];
+    /** RUNNING routes (name + live port) → the Caddyfile, and nothing else. */
+    routes: HostSiteRoute[];
 }
 
 export interface HostReconcileEffects {
@@ -61,7 +90,9 @@ export interface HostReconcileEffects {
 export interface HostReconcileResult {
     /** A new CA was minted this run (⇒ the trust-store install ran). */
     caCreated: boolean;
-    /** The sorted, de-duplicated `.gen` names now served. */
+    /** The sorted, de-duplicated `.gen` names now RESOLVABLE — the hosts block and
+     *  the leaf's SANs. Configured, not running: most of these have a Caddy vhost,
+     *  and a stopped one deliberately does not. */
     genNames: string[];
     /** The Caddyfile handed to {@link HostReconcileEffects.writeCaddyfileAndReload}. */
     caddyfile: string;
@@ -70,20 +101,31 @@ export interface HostReconcileResult {
 }
 
 /**
- * Reconcile the host to `sites`. Idempotent: an unchanged set re-issues the leaf
+ * Reconcile the host to `plan`. Idempotent: an unchanged plan re-issues the leaf
  * and rewrites the (byte-identical) Caddyfile but does NOT rewrite the hosts file
- * or re-prompt for CA trust.
+ * or re-prompt for CA trust. A plan whose `routes` changed while its `names` did
+ * not — every start, stop and restart — rewrites only the unprivileged Caddyfile.
  */
 export async function reconcileHostSites(
-    sites: HostSiteRoute[],
+    plan: HostReconcilePlan,
     fx: HostReconcileEffects,
 ): Promise<HostReconcileResult> {
     // Dedupe by name (last wins) + sort, so the leaf SANs and the Caddyfile are
     // deterministic and a no-op run is a true no-op.
     const bySite = new Map<string, HostSiteRoute>();
-    for (const s of sites) bySite.set(s.genName, s);
+    for (const s of plan.routes) bySite.set(s.genName, s);
     const routes = [...bySite.values()].sort((a, b) => a.genName.localeCompare(b.genName));
-    const genNames = routes.map((r) => r.genName);
+
+    // The NAME set — the hosts block and the leaf SANs — is the CONFIGURED set
+    // (genie#624), which is why a start or a stop no longer moves it and no longer
+    // costs an administrator prompt. `routes` is unioned in only to keep one
+    // invariant: every vhost Caddy serves must have a hosts entry and a SAN. The
+    // two sets differ in exactly one situation — a site deleted from the envelope
+    // while its process is still up — and there the alternative to the union is a
+    // browser TLS error with nothing to explain it.
+    const genNames = [...new Set([...plan.names, ...routes.map((r) => r.genName)])].sort((a, b) =>
+        a.localeCompare(b),
+    );
 
     // The privileged work this pass owes, collected rather than performed: every
     // step runs under ONE elevation at step 3½, so enabling a browser-exposed site
