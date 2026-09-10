@@ -72,6 +72,31 @@ export type GenieEndpointServer<S extends McpConfigSource> =
     (typeof GENIE_ENDPOINT_SERVERS)[S][number];
 
 /**
+ * Every name Genie OWNS, across all three configs — the union of the lists
+ * above, de-duplicated.
+ *
+ * This is the membership test behind both guards in `agents/agent-mcp.ts`: a
+ * human may not add a server under one of these names, and may not remove one.
+ * Derived rather than listed, because listing is exactly what went wrong
+ * (genie#618) — the ADD guard was written when there was one name and never
+ * learned the second, so a hand-added `genie-agentinbox-channel` was accepted
+ * straight over the push-delivery path.
+ *
+ * Deliberately source-agnostic. A name Genie owns anywhere is a name a human
+ * should not be typing into any of these files; the alternative is a guard that
+ * answers differently depending on which TUI the agent happens to run, for a
+ * question that is really about who owns the word.
+ */
+export const GENIE_OWNED_SERVERS: readonly string[] = [
+    ...new Set(Object.values(GENIE_ENDPOINT_SERVERS).flat()),
+];
+
+/** Whether Genie writes and owns this server name — {@link GENIE_OWNED_SERVERS}. */
+export function isGenieOwnedServer(name: string): boolean {
+    return GENIE_OWNED_SERVERS.includes(name);
+}
+
+/**
  * Which config an agent's TUI actually reads.
  *
  * A registered-but-never-started agent has `tui: null`, and it will almost

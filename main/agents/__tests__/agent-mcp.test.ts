@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
     agentMcpServers,
     codexServerNames,
+    mcpAddGuard,
     mcpConfigDrift,
     mcpRemovalGuard,
     mcpSourceForTui,
 } from '../agent-mcp';
+import { GENIE_OWNED_SERVERS } from '../../mcp/genie-servers';
 
 /**
  * "See and manage which MCP servers the agent gets" (Tynn #709).
@@ -168,6 +170,59 @@ describe('removing a server', () => {
 
     it('refuses the AgentInbox channel too — it is the same lifeline', () => {
         expect(mcpRemovalGuard('genie-agentinbox-channel').allowed).toBe(false);
+    });
+
+    /**
+     * genie#618 — the guards named servers ONE AT A TIME, so each new
+     * Genie-owned server had to be remembered in two places or it went
+     * unprotected. `addAgentMcpServer` had already lost that race: it refused
+     * `genie` and let `genie-agentinbox-channel` through.
+     *
+     * Both guards now read `GENIE_OWNED_SERVERS`, the same declaration the
+     * writer writes from, so the next one is covered on the day it is declared.
+     */
+    it('refuses EVERY server Genie owns, derived from the declaration', () => {
+        // POSITIVE CONTROL. "All of them are refused" is trivially true of an
+        // empty list, and the bug was a list that was too SHORT — so assert the
+        // declaration is plural before asserting anything about the guards.
+        expect(GENIE_OWNED_SERVERS.length).toBeGreaterThan(1);
+        for (const name of GENIE_OWNED_SERVERS) {
+            expect(mcpRemovalGuard(name).allowed, `remove ${name}`).toBe(false);
+            expect(mcpAddGuard(name).allowed, `add ${name}`).toBe(false);
+        }
+    });
+});
+
+/**
+ * The ADD side of the same question (genie#618).
+ *
+ * This lived inline in `addAgentMcpServer`, behind a registered agent and a
+ * workspace row, so nothing could reach it to test — which is how it kept a
+ * hard-coded `genie` while its sibling grew a second name.
+ */
+describe('mcpAddGuard', () => {
+    it('refuses a hand-added `genie`, and says why a hand-written one loses', () => {
+        const guard = mcpAddGuard('genie');
+        expect(guard.allowed).toBe(false);
+        expect(guard.allowed === false && guard.reason).toMatch(/overwritten on the next sync/);
+    });
+
+    it('refuses the AgentInbox channel — the name genie#618 was filed about', () => {
+        const guard = mcpAddGuard('genie-agentinbox-channel');
+        expect(guard.allowed).toBe(false);
+        // Not the `genie` sentence: a collision with the channel bridge is a
+        // different failure — it is the push-delivery path, and a colliding
+        // entry there is silent.
+        expect(guard.allowed === false && guard.reason).toMatch(/channel/i);
+    });
+
+    it('POSITIVE CONTROL: allows an ordinary server, and `tynn`', () => {
+        // A guard that refused everything would pass both tests above. `tynn` is
+        // the sharpest case: Genie writes it, but a human adding it by hand is
+        // not colliding with the endpoint an upgrade replaces.
+        expect(mcpAddGuard('playwright').allowed).toBe(true);
+        expect(mcpAddGuard('tynn').allowed).toBe(true);
+        expect(mcpAddGuard('my-own-server').allowed).toBe(true);
     });
 });
 

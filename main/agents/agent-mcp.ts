@@ -1,8 +1,10 @@
+import { TYNN_SERVER_NAME } from '../mcp/agent-config';
 import {
     AGENTINBOX_CLAUDE_CHANNEL_NAME,
+    GENIE_OWNED_SERVERS,
     GENIE_SERVER_NAME,
-    TYNN_SERVER_NAME,
-} from '../mcp/agent-config';
+    isGenieOwnedServer,
+} from '../mcp/genie-servers';
 
 /**
  * Which MCP servers an agent actually gets — and what a human may do about it.
@@ -38,15 +40,14 @@ export type { AgentMcpServer, McpConfigSource } from './agent-manager-types';
 // its own signatures.
 import type { AgentMcpServer, McpConfigSource } from './agent-manager-types';
 
-/** The entries Genie writes and re-writes. */
-const MANAGED = new Set<string>([
-    GENIE_SERVER_NAME,
-    TYNN_SERVER_NAME,
-    AGENTINBOX_CLAUDE_CHANNEL_NAME,
-]);
+/** The entries Genie writes and re-writes — everything it owns, plus `tynn`,
+ *  which Genie writes but which points at Tynn rather than at Genie's endpoint. */
+const MANAGED = new Set<string>([...GENIE_OWNED_SERVERS, TYNN_SERVER_NAME]);
 
-/** The entries an agent cannot function without. */
-const REQUIRED = new Set<string>([GENIE_SERVER_NAME, AGENTINBOX_CLAUDE_CHANNEL_NAME]);
+/** The entries an agent cannot function without. Every server Genie points at
+ *  its OWN endpoint qualifies: the tool channel and the delivery channel are
+ *  both lifelines, and a third would be too (genie#618). */
+const REQUIRED = new Set<string>(GENIE_OWNED_SERVERS);
 
 /* `mcpSourceForTui` now lives in `mcp/genie-servers.ts` — a zero-import leaf —
    because the post-upgrade reconnect needs the same TUI→config mapping to work
@@ -147,31 +148,72 @@ export function agentMcpServers(input: {
 export type McpRemovalGuard = { allowed: true } | { allowed: false; reason: string };
 
 /**
+ * WHY each Genie-owned server is not a human's to add or remove.
+ *
+ * Structured so that {@link GENIE_OWNED_SERVERS} membership is the ONLY gate
+ * and these are only the wording (genie#618). The obvious shape — an `if` per
+ * name, with a derived check last — reads the same and tests as a lie: with
+ * every declared name carrying its own branch, a test asserting "every owned
+ * server is refused" passes just as well with the derived check DELETED, so it
+ * proves nothing about the case it exists for. Here, deleting the membership
+ * test breaks every refusal at once.
+ *
+ * A name with no entry still gets refused, with the generic sentence below. It
+ * is the third server nobody has written prose for yet, and the whole point is
+ * that it is covered on the day it is declared rather than the day someone
+ * notices.
+ */
+const OWNED_SERVER_REASONS: Record<string, { add: string; remove: string }> = {
+    [GENIE_SERVER_NAME]: {
+        add: 'Genie writes its own server entry. Toggle Agent MCP on the workspace instead of adding it by hand — a hand-written one is overwritten on the next sync.',
+        remove:
+            'The genie server is how this agent reports it has finished, asks you a question, and reaches every host tool. An agent without it still starts and still looks healthy — it just cannot reach you. Genie will not remove it.',
+    },
+    [AGENTINBOX_CLAUDE_CHANNEL_NAME]: {
+        add: 'That name belongs to the AgentInbox channel bridge, which Genie writes and rewrites. A hand-written entry there is overwritten on the next sync — and until it is, it sits on the push-delivery path, where a broken server drops messages to this agent with no error.',
+        remove:
+            'This is the AgentInbox channel — the same lifeline as the genie server, on the delivery side. Removing it drops messages sent to this agent with no error. Genie will not remove it.',
+    },
+};
+
+function ownedServerGuard(name: string, kind: 'add' | 'remove'): McpRemovalGuard {
+    if (!isGenieOwnedServer(name)) return { allowed: true };
+    const written = OWNED_SERVER_REASONS[name]?.[kind];
+    if (written) return { allowed: false, reason: written };
+    return {
+        allowed: false,
+        reason:
+            kind === 'add'
+                ? `Genie writes and owns the "${name}" entry. A hand-written one is overwritten on the next sync — add your server under a different name.`
+                : `Genie writes and owns the "${name}" entry, and rewrites it on the next workspace sync. Removing it here would not stick. Genie will not remove it.`,
+    };
+}
+
+/**
+ * Whether a human may ADD a server under this name.
+ *
+ * The mirror of {@link mcpRemovalGuard}, and pure for the same reason: this
+ * decision was inline in `addAgentMcpServer`, which needs a registered agent and
+ * a workspace row before it can be reached — so the one branch worth testing was
+ * the one nothing could call. It had also fallen a name behind: it refused
+ * `genie` and accepted `genie-agentinbox-channel`, which is genie#618.
+ */
+export function mcpAddGuard(name: string): McpRemovalGuard {
+    return ownedServerGuard(name, 'add');
+}
+
+/**
  * Whether a human may remove this server.
  *
- * `genie` and its AgentInbox channel are refused. This is the one place in the
- * surface that says no, and it says no because the alternative is silent: an
- * agent whose `genie` server is gone still starts, still draws a square, still
- * looks fine — and can no longer report that it finished or ask the human
- * anything. That is not a preference to respect; it is a footgun, and the
- * instruction was to say so rather than allow it quietly.
+ * Every server Genie points at its own endpoint is refused. This is the one
+ * place in the surface that says no, and it says no because the alternative is
+ * silent: an agent whose `genie` server is gone still starts, still draws a
+ * square, still looks fine — and can no longer report that it finished or ask
+ * the human anything. That is not a preference to respect; it is a footgun, and
+ * the instruction was to say so rather than allow it quietly.
  */
 export function mcpRemovalGuard(name: string): McpRemovalGuard {
-    if (name === GENIE_SERVER_NAME) {
-        return {
-            allowed: false,
-            reason:
-                'The genie server is how this agent reports it has finished, asks you a question, and reaches every host tool. An agent without it still starts and still looks healthy — it just cannot reach you. Genie will not remove it.',
-        };
-    }
-    if (name === AGENTINBOX_CLAUDE_CHANNEL_NAME) {
-        return {
-            allowed: false,
-            reason:
-                'This is the AgentInbox channel — the same lifeline as the genie server, on the delivery side. Removing it drops messages sent to this agent with no error. Genie will not remove it.',
-        };
-    }
-    return { allowed: true };
+    return ownedServerGuard(name, 'remove');
 }
 
 /**
