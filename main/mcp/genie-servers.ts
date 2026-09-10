@@ -45,9 +45,11 @@ export const GENIE_SERVER_NAME = 'genie';
  *
  * A stdio server Claude Code spawns (`claudeChannelEntry`), talking to the same
  * Genie endpoint over HTTP. It supervises its own connection and retries with
- * capped backoff, so an upgrade it survives heals itself — but when the bridge
- * PROCESS dies (a fatal 401/403, a crash), Claude Code marks the server failed
- * and only a reconnect brings it back. That is the case genie#613 was filed on.
+ * capped backoff, so an upgrade heals itself — EVERY error retries since
+ * genie#619; the 401/403 that used to be fatal is not something Genie's server
+ * can even produce. If the bridge process dies anyway, Claude Code marks the
+ * server failed and only a reconnect brings it back — the case genie#613 was
+ * filed on, and still the reason the notice has to name this server.
  */
 export const AGENTINBOX_CLAUDE_CHANNEL_NAME = 'genie-agentinbox-channel';
 

@@ -297,21 +297,53 @@ describe('the AgentInbox channel bridge survives an upgrade (genie#346)', () => 
         expect([...stub.acks, ...replacement.acks]).toEqual([]);
     }, 40_000);
 
-    it('does NOT retry an endpoint that refuses it — that is config, not an upgrade', async () => {
-        // NO BANDAIDS: retrying forever is how a wrong token becomes an
-        // invisible hot loop. A 401 means the endpoint is up and has said no, so
-        // the bridge reports it and stops, which is what makes the harness show
-        // a failed server instead of a zombie pretending to be a channel.
+    /**
+     * genie#619 — this test asserted the OPPOSITE, and it was wrong in a way
+     * worth recording.
+     *
+     * It read *"does NOT retry an endpoint that refuses it"*, and its own
+     * comment said the bridge "reports it and stops, which is what makes the
+     * harness show a failed server instead of a zombie pretending to be a
+     * channel". The bridge did not stop. `process.exitCode = 1` names the code a
+     * NATURAL exit will use and causes no exit at all, so with stdin flowing the
+     * process lived on with no delivery loop, still answering `ping` and
+     * `tools/list` — the exact zombie the comment claims it prevents.
+     *
+     * It passed anyway, because all it checked was that `401` appeared in stderr
+     * ONCE. A zombie produces exactly that. It never asked whether the process
+     * had ended, which is the only thing that would have told the two apart.
+     *
+     * The premise was wrong too. Genie's MCP server has no 401/403 path — an
+     * unresolvable token gets 404, a server still binding gets 503 — so a 401
+     * never meant "Genie refused this token". It meant something that is NOT
+     * Genie was answering the configured port, which `mcp/server.ts` anticipates:
+     * on EADDRINUSE it falls back to an ephemeral port and leaves every baked
+     * URL pointing at whatever took the old one. That condition clears.
+     */
+    it('RECOVERS when a refusing squatter on the port gives way to Genie', async () => {
         const port = await freePort();
-        const stub = await startStub(port, { status: 401 });
-        cleanup.push(() => void stub.kill());
+        const squatter = await startStub(port, { status: 401 });
+        cleanup.push(() => void squatter.kill());
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'genie-bridge-'));
         const bridge = startBridge(dir, port);
         cleanup.push(() => bridge.proc.kill());
 
-        await until(() => bridge.stderr.includes('401'));
-        // Give a retrying bridge time to prove itself wrong.
-        await new Promise((resolve) => setTimeout(resolve, 1_500));
-        expect(bridge.stderr.match(/401/g)?.length).toBe(1);
+        // Keeps trying rather than parking — and is still alive to do so. The
+        // liveness assertion is the one the old test was missing.
+        await until(() => (bridge.stderr.match(/401/g)?.length ?? 0) >= 2);
+        expect(bridge.proc.exitCode).toBeNull();
+
+        // The squatter goes away and Genie gets its port back.
+        await squatter.kill();
+        const genie = await startStub(port);
+        cleanup.push(() => void genie.kill());
+
+        // POSITIVE CONTROL, and the whole point of the change: the channel is
+        // not merely alive, it is BACK. Only a bridge that kept retrying could
+        // send this registration; under the old fatal it never arrived.
+        await until(() => genie.registrations >= 1);
+        genie.push({ id: 'm1', seq: 1, text: 'the squatter is gone' });
+        await until(() => bridge.delivered.length === 1);
+        expect(bridge.delivered[0]).toBe('the squatter is gone');
     }, 40_000);
 });
