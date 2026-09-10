@@ -1,4 +1,5 @@
 import type { AgentMode } from './agent-manager-types';
+import type { AgentAsk } from '../agentinbox/urgency';
 
 /**
  * Whether an agent acts unattended — and how Genie WORDS what it tells it
@@ -204,8 +205,8 @@ export function drainNudgeMode(mode: AgentMode): string {
 }
 
 /**
- * A SHOWSTOPPER notice's clause (genie#602) — the second surface where a Manual
- * agent is asked to act, and for the same structural reason as the first.
+ * A GENIE ASK's clause (genie#602, extended in genie#606) — the surfaces where a
+ * Manual agent is asked to act, and the structural reason it is asked.
  *
  * {@link inboxNoticeMode} tells a Manual agent that what just arrived is for its
  * awareness and not to act on it unless a person asks. That is right for mail.
@@ -215,23 +216,52 @@ export function drainNudgeMode(mode: AgentMode): string {
  * now rather than waiting to be asked"*, while the envelope wrapped around it
  * still said the opposite.
  *
- * A person HAS asked, in the only way a blocking surface has: whatever they did
- * is what is now waiting. Both modes are told to answer; what the mode changes
- * is the SCOPE, exactly as it does for the drain nudge.
+ * A person HAS asked, in the only way a lifecycle surface has: whatever they
+ * did — starting an upgrade, quitting Genie — is what is now waiting. Both
+ * modes are told to answer; what the mode changes is the SCOPE, exactly as it
+ * does for the drain nudge.
  *
- * The notice this closes says HELD rather than *blocked*, deliberately. To an
+ * The scoping sentence is not a softener. Both asks are self-scoped — tidy your
+ * own state before the machine goes away — and the failure they must rule out is
+ * genie#407's mis-inference, an agent reading "prepare for shutdown" as licence
+ * to go and restart or migrate things. *"Nothing else about how you work
+ * changes"* is what carries that, and it is why one clause serves both.
+ *
+ * The notices this closes say HELD rather than *blocked*, deliberately. To an
  * agent being told what it may do unattended, "blocked" reads as a permission
  * verdict — the register `agent-mode-is-guidance.test.ts` exists to keep out of
  * these strings. What is true is simpler than that: Genie is waiting.
+ *
+ * ## The deadline is a parameter, not a second function (genie#606)
+ *
+ * The drain holds until the last agent answers; the quit-time barrier goes ahead
+ * after about thirty seconds. Those differ in exactly one fact, and taking it as
+ * an argument means a caller cannot add a clocked ask that silently claims the
+ * drain's indefinite hold — the overstatement that would spend what genie#602
+ * bought.
+ *
+ * What the clause carries is the FRAMING, not the number. Whether an agent's
+ * answer is a GATE or its LAST CHANCE changes what it should do first — finish
+ * the thought, or save the state — and that is mode guidance. The seconds
+ * themselves belong to the surfaces, which say them once each: the notice's
+ * headline, and the body of the ask. Putting them here as well is how one
+ * sentence ended up in the same string three times.
  */
-export function showstopperNoticeMode(mode: AgentMode): string {
+export function genieAskMode(mode: AgentMode, ask: AgentAsk): string {
+    // NOT a gate: Genie proceeds either way, so the answer is worth less than
+    // the checkpoint that should come before it.
+    const notAGate =
+        ask.deadlineSeconds === null
+            ? ''
+            : ' Your answer is not a gate — Genie goes ahead regardless — so save your state ' +
+              'first and answer second.';
     if (mode === 'automated') {
-        return `You are an Automated agent. ${AUTOMATED_FRAMING} Read it and answer it now.`;
+        return `You are an Automated agent. ${AUTOMATED_FRAMING} Read it and answer it now.${notAGate}`;
     }
     return (
         'You are a Manual agent, and this one is addressed to you directly: do what it asks now ' +
-        'rather than waiting to be asked. It is scoped to exactly that — nothing else about how ' +
-        'you work changes.'
+        `rather than waiting to be asked.${notAGate} It is scoped to exactly that — nothing ` +
+        'else about how you work changes.'
     );
 }
 

@@ -3,12 +3,13 @@ import {
     attentionNudgeMode,
     bootPromptMode,
     drainNudgeMode,
+    genieAskMode,
     inboxNoticeMode,
-    showstopperNoticeMode,
     upgradeNoticeMode,
     type AgentMode,
 } from '../agent-mode';
 import { drainNudge } from '../drain';
+import { shutdownAsk } from '../shutdown-readiness';
 import { announceAgentUpgrade, formatAgentUpgradeMessage } from '../upgrade-announcement';
 import { MANUAL_RECOVERY } from '../mcp-reconnect';
 import { agentBootPrompt } from '../boot-prompt';
@@ -79,8 +80,23 @@ const SURFACES: readonly {
         // halves of one delivery contradicted each other.
         name: 'the AgentInbox notice for a SHOWSTOPPER',
         render: (mode) =>
-            inboxNoticeText({ from: 'Genie (no reply)', urgency: 'showstopper', mode }),
-        clause: showstopperNoticeMode,
+            inboxNoticeText({ from: 'Genie (no reply)', ask: { deadlineSeconds: null }, mode }),
+        clause: (mode) => genieAskMode(mode, { deadlineSeconds: null }),
+    },
+    {
+        // genie#606. The EIGHTH and NINTH: the quit-time ask, and the envelope
+        // around it. Same clause as the drain's, one fact different — Genie
+        // goes ahead in thirty seconds either way, and an agent that does not
+        // know that finishes its thought instead of saving its state.
+        name: 'the AgentInbox notice for a CLOCKED ask',
+        render: (mode) =>
+            inboxNoticeText({ from: 'Genie (no reply)', ask: { deadlineSeconds: 30 }, mode }),
+        clause: (mode) => genieAskMode(mode, { deadlineSeconds: 30 }),
+    },
+    {
+        name: 'the full-shutdown ask',
+        render: (mode) => shutdownAsk(mode, 30).text,
+        clause: (mode) => genieAskMode(mode, { deadlineSeconds: 30 }),
     },
 ];
 

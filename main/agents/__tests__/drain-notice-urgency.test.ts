@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AgentInboxBroker } from '../../agentinbox/broker';
 import type { AgentInboxJoinInput } from '../../agentinbox/types';
-import { messageUrgency } from '../../agentinbox/urgency';
+import { askUrgency, messageUrgency } from '../../agentinbox/urgency';
 import { AgentDrain, drainNudge, drainNudgeSender, type DrainTarget } from '../drain';
 
 /**
@@ -121,24 +121,28 @@ describe('the drain nudge announces itself as the showstopper it is', () => {
 });
 
 describe('the urgency is minted WITH the body, not beside it', () => {
-    it('the drain’s own nudge declares itself a showstopper', () => {
-        expect(drainNudge('manual').urgency).toBe('showstopper');
-        expect(drainNudge('automated').urgency).toBe('showstopper');
+    it('the drain’s own nudge EARNS the showstopper rung', () => {
+        // It does not assert a severity. It declares that nothing proceeds until
+        // this agent answers — which is exactly what `AgentDrain.begin` does —
+        // and the rung follows from that (genie#606).
+        expect(drainNudge('manual').ask).toEqual({ deadlineSeconds: null });
+        expect(askUrgency(drainNudge('manual').ask)).toBe('showstopper');
+        expect(askUrgency(drainNudge('automated').ask)).toBe('showstopper');
     });
 
     it('the wiring cannot forward the body without the urgency', () => {
         // The exact line that shipped genie#602 lived in `drain-service.ts`,
         // which no test can import. This is that line, lifted somewhere it can
         // be asserted against.
-        const sends: { text: string; urgency: string }[] = [];
+        const sends: { text: string; deadlineSeconds: number | null }[] = [];
         const send = drainNudgeSender((input) => {
-            sends.push({ text: input.text, urgency: input.urgency });
+            sends.push({ text: input.text, deadlineSeconds: input.ask.deadlineSeconds });
             return { ok: true };
         });
 
         expect(send('inbox-moic', drainNudge('manual'))).toBe(true);
         expect(sends).toHaveLength(1);
-        expect(sends[0]!.urgency).toBe('showstopper');
+        expect(sends[0]!.deadlineSeconds).toBeNull();
         expect(sends[0]!.text).toBe(drainNudge('manual').text);
     });
 
@@ -161,12 +165,12 @@ describe('a showstopper carries the attention mechanism it needs', () => {
             system: true,
             toAgentId: 'inbox-moic',
             text: 'stop',
-            urgency: 'showstopper',
+            ask: { deadlineSeconds: null },
         });
 
         expect(sent.ok).toBe(true);
         if (!sent.ok) return;
-        expect(sent.message?.urgency).toBe('showstopper');
+        expect(sent.message?.ask).toEqual({ deadlineSeconds: null });
         expect(sent.message?.interrupt).toBe(true);
     });
 
@@ -178,7 +182,7 @@ describe('a showstopper carries the attention mechanism it needs', () => {
 
         expect(sent.ok).toBe(true);
         if (!sent.ok) return;
-        expect(sent.message?.urgency).toBeUndefined();
+        expect(sent.message?.ask).toBeUndefined();
         expect(sent.message?.interrupt).toBeUndefined();
     });
 
@@ -189,6 +193,8 @@ describe('a showstopper carries the attention mechanism it needs', () => {
         // it must never do is come back as ordinary mail.
         expect(messageUrgency({ interrupt: true })).toBe('urgent');
         expect(messageUrgency({})).toBe('normal');
-        expect(messageUrgency({ urgency: 'showstopper', interrupt: true })).toBe('showstopper');
+        expect(messageUrgency({ ask: { deadlineSeconds: null }, interrupt: true })).toBe(
+            'showstopper',
+        );
     });
 });

@@ -30,7 +30,7 @@ import {
     NUDGE_UNCHECKED_MS,
 } from './wake';
 import { containsHumanInput, inboxNoticeText } from './notify';
-import { messageUrgency, urgencyInterrupts, type InboxUrgency } from './urgency';
+import { messageUrgency, noticeLoudness, urgencyInterrupts, type AgentAsk } from './urgency';
 import { DEFAULT_AGENT_MODE, type AgentMode } from '../agents/agent-mode';
 import { EMPTY_DRAFT, noteDraft, planNudge, type Draft, type NudgePlan } from './draft';
 
@@ -495,9 +495,12 @@ export class AgentInboxBroker {
         const isAnswer = this.ftqAnswerTerminals.delete(target.terminalId);
         const text = inboxNoticeText({
             from: msg.fromLabel,
-            urgency: messageUrgency(msg),
             kind: isAnswer ? 'ftq-answer' : 'dm',
             mode: this.modeOf(target),
+            // Both arms of the union are valid notices, so picking the wrong one
+            // here would type-check and quietly wrap an ask in ordinary mail.
+            // `noticeLoudness` is the only thing that chooses (genie#606).
+            ...noticeLoudness(msg),
         });
         const plan = planNudge(target.draft);
         if (plan.mode === 'defer') {
@@ -1394,14 +1397,17 @@ export class AgentInboxBroker {
          *  human panel have always had. Ignored when `urgency` is given. */
         interrupt?: boolean;
         /**
-         * How loud the notice announcing this must be (genie#602).
+         * Set when GENIE is asking this agent for something and waiting on the
+         * answer (genie#602, genie#606).
          *
-         * `interrupt` is DERIVED from this, not set beside it, so a caller
-         * cannot declare a showstopper that then arrives without the attention
-         * mechanism behind it — nor the reverse, which is what shipped: a nudge
-         * that held an upgrade and announced itself as ordinary mail.
+         * Both the rung and the mode clause are DERIVED from it, and `interrupt`
+         * with them, so a caller cannot declare an ask that then arrives without
+         * the attention mechanism behind it — nor the reverse, which is what
+         * shipped: a nudge that held an upgrade and announced itself as ordinary
+         * mail. It is a claim about BEHAVIOUR, not a severity: say what is
+         * waiting and the wording follows.
          */
-        urgency?: InboxUrgency;
+        ask?: AgentAsk;
         /** The message this one ANSWERS. Declared by the sender; never inferred
          *  from who has talked to whom. Drives the `replied` lifecycle moment,
          *  and only when the sender is an AGENT. */
@@ -1482,9 +1488,9 @@ export class AgentInboxBroker {
                 to: target.agentId,
                 text,
                 ...(interrupt ? { interrupt: true } : {}),
-                // ABSENT at `normal`, so an ordinary message stays exactly the
-                // shape it has always been on the wire and in the store.
-                ...(urgency === 'normal' ? {} : { urgency }),
+                // ABSENT on mail, so an ordinary message stays exactly the shape
+                // it has always been on the wire and in the store.
+                ...(input.ask ? { ask: input.ask } : {}),
             };
             this.push(target, msg);
             // DELIVERED — emitted HERE and not inside `push`, deliberately.

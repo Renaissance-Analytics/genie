@@ -1,5 +1,5 @@
 import { DEFAULT_AGENT_MODE, drainNudgeMode, type AgentMode } from './agent-mode';
-import type { InboxUrgency } from '../agentinbox/urgency';
+import type { AgentAsk } from '../agentinbox/urgency';
 import { NEVER_NUDGED_AGENT_NAME } from './reserved-names';
 
 /**
@@ -119,18 +119,21 @@ export function drainRowIsGreen(state: DrainRowState): boolean {
  * it. That is the whole point: the reason those two could disagree is that a
  * caller could hold one and forget the other.
  *
- * `showstopper` is not decoration. It is the SAME FACT that makes {@link
- * AgentDrain.begin} hold: this promise does not resolve until the last row is
- * green, so the upgrade really is blocked on this agent, for everyone.
+ * The ask is not decoration, and it is not a severity. `deadlineSeconds: null`
+ * is the SAME FACT that makes {@link AgentDrain.begin} hold: this promise does
+ * not resolve until the last row is green, so nothing proceeds until this agent
+ * answers. The `showstopper` rung is derived from that (genie#606) rather than
+ * asserted, which is what stops the next ask claiming it by feel.
  */
 export interface DrainNotice {
     text: string;
-    urgency: InboxUrgency;
+    ask: AgentAsk;
 }
 
 /** The drain's ask — see {@link DrainNotice} for why it is one value. */
 export function drainNudge(mode: AgentMode): DrainNotice {
-    return { text: drainNudgeBody(mode), urgency: 'showstopper' };
+    // No deadline: the drain waits for the last row, however long that takes.
+    return { text: drainNudgeBody(mode), ask: { deadlineSeconds: null } };
 }
 
 /**
@@ -185,7 +188,7 @@ export function drainNudgeSender(
         system: true;
         toAgentId: string;
         text: string;
-        urgency: InboxUrgency;
+        ask: AgentAsk;
     }) => { ok: boolean },
 ): AgentDrainDeps['send'] {
     return (inboxAgentId, notice) =>

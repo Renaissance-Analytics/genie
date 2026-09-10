@@ -25,8 +25,8 @@
  * jammed the guard that used to live here.
  */
 
-import { inboxNoticeMode, showstopperNoticeMode, type AgentMode } from '../agents/agent-mode';
-import type { InboxUrgency } from './urgency';
+import { genieAskMode, inboxNoticeMode, type AgentMode } from '../agents/agent-mode';
+import { askUrgency, type NoticeLoudness } from './urgency';
 
 /**
  * Split a `terminal:write` chunk into the LITERAL bytes (what a person's
@@ -131,7 +131,9 @@ export function containsHumanInput(data: string): boolean {
     return escapes.some(isHumanKey);
 }
 
-export interface InboxNotice {
+export type InboxNotice = InboxNoticeBase & NoticeLoudness;
+
+interface InboxNoticeBase {
     /** The sender's label. */
     from: string;
     /**
@@ -146,15 +148,6 @@ export interface InboxNotice {
     /** Set when the message was posted to a channel rather than DMed. */
     channel?: string;
     /**
-     * How loud this notice is — {@link InboxUrgency}.
-     *
-     * REQUIRED, and named for what it is rather than for a scale, because the
-     * thing that produced genie#602 was a caller that simply did not pass one:
-     * the drain's `send` left it off and the notice defaulted to the gentlest
-     * wording there is, over a body that said *"Stop work now"*.
-     */
-    urgency: InboxUrgency;
-    /**
      * `ftq-answer` = the human answering a question THIS agent asked.
      *
      * It used to arrive as an ordinary DM notice — "You just received a message
@@ -164,6 +157,7 @@ export interface InboxNotice {
      */
     kind?: 'dm' | 'ftq-answer';
 }
+
 
 /**
  * The notice submitted to the agent's TUI.
@@ -176,19 +170,22 @@ export interface InboxNotice {
  */
 export function inboxNoticeText(n: InboxNotice): string {
     const read = 'read it with the agentinbox tool (action: "receive")';
+    // ONE fact decides both halves. An ask announces itself at the rung it has
+    // EARNED and takes the clause that tells a Manual agent to answer; mail
+    // keeps the clause that tells it not to act unasked. Choosing those
+    // separately is what let an envelope contradict the letter it was carrying
+    // (genie#602, genie#606).
+    const urgency = n.ask ? askUrgency(n.ask) : n.urgency;
     // The mode clause CLOSES the notice: it is a rider on what was just said,
     // and putting it first would read as the headline.
-    //
-    // A showstopper takes a DIFFERENT clause, and must: the ordinary one tells a
-    // Manual agent not to act unless a person asks, which is the same
-    // contradiction as "it is not urgent" wearing different words (genie#602).
-    const mode = ` ${(n.urgency === 'showstopper' ? showstopperNoticeMode : inboxNoticeMode)(n.mode)}`;
+    const mode = ` ${n.ask ? genieAskMode(n.mode, n.ask) : inboxNoticeMode(n.mode)}`;
+
     // An answer to YOUR question is not "a message from you". It is the user
     // unblocking a decision you asked for and are waiting on, and it must be
     // distinguishable at a glance from ordinary mail.
     if (n.kind === 'ftq-answer') {
         const what = 'The user answered a question you asked';
-        switch (n.urgency) {
+        switch (urgency) {
             case 'showstopper':
                 return `[Genie] ${what} — SHOWSTOPPER. Stop work now and read it before anything else; Genie is holding until you act on it: ${read}.${mode}`;
             case 'urgent':
@@ -200,11 +197,18 @@ export function inboxNoticeText(n: InboxNotice): string {
         // block would land in the DM path and announce an answer to the agent's
         // own question as "a message from You as a DM" — the note-to-self
         // reading `ftq-answer` exists to remove.
-        return unhandledUrgency(n.urgency, what, read, mode);
+        return unhandledUrgency(urgency, what, read, mode);
     }
     const source = n.channel ? `in the #${n.channel} channel` : 'as a DM';
     const what = `You just received a message from ${n.from} ${source}`;
-    switch (n.urgency) {
+    // A CLOCKED ask is not "high priority mail". It shares the `urgent` rung with
+    // a peer's interrupt DM because nothing is held — but a peer pinging you and
+    // Genie about to quit out from under you are not the same sentence, and the
+    // half that decides what an agent does next is the deadline (genie#606).
+    if (n.ask && n.ask.deadlineSeconds !== null) {
+        return `[Genie] ${what} — Genie is ASKING and waiting on your answer, and goes ahead in about ${n.ask.deadlineSeconds} seconds either way. Stop what you are doing, read it now and answer it: ${read}.${mode}`;
+    }
+    switch (urgency) {
         case 'showstopper':
             return `[Genie] ${what} — SHOWSTOPPER. Stop work now: do not start anything new, read it before anything else, and answer it. Genie is holding until your answer arrives — for everyone, not just for you: ${read}.${mode}`;
         case 'urgent':
@@ -216,7 +220,7 @@ export function inboxNoticeText(n: InboxNotice): string {
     // that is genie#602 arriving a second time, by omission instead of by
     // default. The `never` makes it a COMPILE error; this is what happens if one
     // reaches here anyway, from JavaScript that was never typechecked.
-    return unhandledUrgency(n.urgency, what, read, mode);
+    return unhandledUrgency(urgency, what, read, mode);
 }
 
 /** @see inboxNoticeText — the exhaustiveness guard, and its fail-LOUD landing. */

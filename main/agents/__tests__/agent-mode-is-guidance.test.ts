@@ -90,13 +90,24 @@ describe('the agent mode is guidance, not enforcement', () => {
     it('exposes nothing to gate on — every exported decision returns text', () => {
         // There is no `isAllowed(mode)` here, and there is nowhere to add one
         // without this failing: a boolean is what a caller would reach for.
+        //
+        // The second argument is for `genieAskMode(mode, ask)` (genie#606), the
+        // one clause whose wording depends on more than the mode. A function
+        // that takes only the mode ignores it, so every export is still called
+        // — and what is asserted is unchanged: none of them answers yes or no.
+        let called = 0;
         for (const [name, value] of Object.entries(agentModeModule)) {
             if (typeof value !== 'function') continue;
             for (const mode of ['manual', 'automated'] as const) {
-                const out = (value as (m: unknown) => unknown)(mode);
+                const out = (value as (m: unknown, extra: unknown) => unknown)(mode, {
+                    deadlineSeconds: 30,
+                });
                 expect(typeof out, `${name}(${mode})`).not.toBe('boolean');
+                called += 1;
             }
         }
+        // POSITIVE CONTROL: a scan that walked nothing would assert nothing.
+        expect(called).toBeGreaterThan(10);
     });
 
     it('withholds NOTHING from a Manual agent — it is told the same things', () => {
