@@ -711,6 +711,34 @@ open the moment you hand back; call \`checkIssues\` for the full list. Anything
 still open on your **AgentList** (see \`lists\`) is appended too — an empty list
 adds nothing, so this costs you nothing if you keep none.
 
+**Leave a \`handoff\` — the note for the NEXT run of this agent.** This is the one
+statement of the rule; the protocol block points here.
+
+- **WHEN — every time you stop.** Not "at shutdown": restarts are constant (an
+  upgrade, a crash, a killed terminal), and from the next run's side being
+  restarted and being handed back to the user mid-task are indistinguishable —
+  both start from nothing. Genie cannot write it for you, because it knows the
+  terminal ended, not what you were in the middle of.
+- **WHAT — what that run cannot reconstruct:** what you were doing, what is
+  unfinished, what it should pick up. Not a summary of what you achieved — the
+  user has already seen that.
+- **HOW — pass \`handoff\` to \`imDone\`. Never write \`.ai/handoff/<agent>.md\`
+  yourself.** The path is derived from a normalised agent NAME that has to stay
+  in step with \`.agents/<name>/\` (a terminal id is re-minted every launch, which
+  is exactly the identity that fails to survive the gap), and the file is
+  rendered with a header and a timestamp. Writing it by hand gets the name or the
+  shape wrong, and the next run is handed something Genie will overwrite.
+- **WHAT NOT TO DO — do not send an empty one, and do not treat it as a log.**
+  Omit the argument when there is genuinely nothing to carry forward: an empty
+  handoff is worse than none, because it reads as "the last run had nothing to
+  report". It REPLACES the previous note rather than appending, so what you write
+  is the current state, not an entry.
+- **READ THE RESPONSE.** The note cannot always be saved — a terminal attached to
+  no Genie workspace has no folder to write into, a terminal with no agent name
+  has no key to file it under, and a write can fail — so the response says
+  whether it landed and, when it did not, why. A dropped handoff means the next
+  run starts from nothing: say so rather than assuming it was kept.
+
 ### lists
 **Two short, LOCAL to-do lists per workspace.** Neither is ever synced to Tynn —
 they stay on this machine; roadmap and project-management work belongs in Tynn
@@ -1042,11 +1070,15 @@ and still works.)
 
 **Two tools stop work from stalling. Reach for them instead of printing:**
 
-- **Finished, or handing back? → \`imDone\`, ALWAYS.** The instant you stop —
-  done, blocked, or handing off — call it, or your result sits unseen. Pass
-  \`terminalId\` = your \`GENIE_TERMINAL_ID\` (required once the workspace has more
-  than one terminal — Genie refuses to guess rather than glow the wrong one).
-  NEVER end a turn by just printing "done".
+- **Finished, or handing back? → \`imDone\`, ALWAYS — WITH a \`handoff\` note.**
+  The instant you stop — done, blocked, or handing off — call it, or your result
+  sits unseen. Pass \`terminalId\` = your \`GENIE_TERMINAL_ID\` (required once the
+  workspace has more than one terminal — Genie refuses to guess rather than glow
+  the wrong one). Pass \`handoff\` EVERY time you stop, not just at a shutdown:
+  what you were doing, what is unfinished, what the next run of this agent picks
+  up — it starts from nothing without it. Never write \`.ai/handoff/\` yourself;
+  \`imDone\` files it and its response says whether it landed. Full rules:
+  \`genieGuide\` topic \`imdone\`. NEVER end a turn by just printing "done".
 - **Need a decision, or blocked? → \`ForceTheQuestion\`, NEVER a plaintext
   question.** A printed question is invisible. ONE call carries 1–4 questions,
   each with 2–4 options plus free text, so batch every open question together.

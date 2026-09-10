@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { GENIE_AGENTS_BRIEF, GENIE_MCP_GUIDE } from '../guide';
 import { agentRef, isAgentTui } from '../../agents/identity';
+import { planHandoff } from '../../agents/handoff';
+import { agentBootPrompt } from '../../agents/boot-prompt';
 import { guideTopics } from '../guide-topics';
 import { handleMcpMessage, type McpContext } from '../protocol';
 
@@ -750,5 +752,165 @@ describe('the protocol names AgentInbox as the only way to reach another agent',
     it('says it in the MCP instructions too, which is what a fresh agent reads first', () => {
         expect(GENIE_MCP_GUIDE).toContain('connectToGenie');
         expect(GENIE_MCP_GUIDE).toMatch(/agentinbox/i);
+    });
+});
+
+/**
+ * A HANDOFF IS PROTOCOL, NOT AN OPTIONAL PARAMETER (genie#614).
+ *
+ * `imDone`'s `handoff` was documented in exactly one place: the tool schema.
+ * The protocol block pushed at every agent on connect never mentioned it, and
+ * neither did the guide's own `### imDone` section — so an agent learned about
+ * handoffs only by reading a schema closely enough to notice an optional
+ * argument. Predictably every agent did something different: some never wrote
+ * one, some wrote one only at shutdown, some wrote an essay, some wrote "done",
+ * and some wrote `.ai/handoff/<name>.md` by hand under a name that does not
+ * match the one Genie files under.
+ *
+ * The content was never the problem — the schema states it well. Its REACH was.
+ * So this pins the three surfaces to each other:
+ *
+ *  - the PROTOCOL block must name it, folded into the `imDone` bullet, because
+ *    that block's power is that it is short enough to be read;
+ *  - the GUIDE holds the full rules, one statement of them, beside the rest of
+ *    what `imDone` does;
+ *  - and the two must not contradict the SCHEMA, which is the third place the
+ *    same facts are written down and therefore the third place they can rot.
+ */
+
+/** The `imDone` tool exactly as the server ADVERTISES it, read back through
+ *  `tools/list` rather than from the source constant — so what is compared is
+ *  what an agent is actually handed. */
+async function imDoneAdvertised(): Promise<{ description: string; handoff: string }> {
+    const listed = await listTools();
+    const tool = (listed as Array<{ name: string; description?: string; inputSchema?: unknown }>)
+        .find((t) => t.name === 'imDone');
+    if (!tool) throw new Error('imDone tool not advertised');
+    const props = (tool.inputSchema as { properties?: Record<string, { description?: string }> })
+        .properties;
+    return { description: tool.description ?? '', handoff: props?.handoff?.description ?? '' };
+}
+
+/** The guide's own `### imDone` section, split by the same code `genieGuide`
+ *  serves topics with — this is the text an agent asking for the topic reads. */
+function imDoneTopic(): string {
+    const topic = guideTopics(GENIE_MCP_GUIDE).find((t) => t.id === 'imdone');
+    if (!topic) throw new Error('the guide has no `imDone` topic');
+    return topic.body;
+}
+
+/** The protocol block, as `initialize` hands it to every agent at connect. */
+async function protocolBrief(): Promise<string> {
+    const res = await handle({ jsonrpc: '2.0', id: 1, method: 'initialize' });
+    return (res?.result as { instructions: string }).instructions;
+}
+
+describe('the protocol states the handoff rule (genie#614)', () => {
+    it('POSITIVE CONTROL — all three surfaces are real and non-empty', async () => {
+        // Every assertion below reads one of these three strings. Asserting they
+        // exist first means a failure underneath is a MISSING RULE, not a helper
+        // that quietly returned `''` and made every `toMatch` fail at once.
+        const { description, handoff } = await imDoneAdvertised();
+        expect(description.length).toBeGreaterThan(200);
+        expect(handoff.length).toBeGreaterThan(200);
+        expect(imDoneTopic().length).toBeGreaterThan(500);
+        expect(await protocolBrief()).toContain('imDone');
+    });
+
+    it('names `handoff` in the block every agent gets at connect', async () => {
+        // The whole bug: an agent that never calls `genieGuide` and never reads
+        // the schema closely still has to know the rule exists.
+        expect(await protocolBrief()).toContain('handoff');
+    });
+
+    it('folds it into the `imDone` bullet instead of growing a fifth one', async () => {
+        // The block earns its readership by being short. It says "Two tools" and
+        // lists two; a handoff bullet would make that sentence a lie and the
+        // block one item longer for every agent, forever.
+        const bullets = (await protocolBrief()).split('\n- **').slice(1);
+        expect(bullets).toHaveLength(2);
+        const imDone = bullets.find((b) => b.includes('imDone'));
+        expect(imDone).toBeDefined();
+        expect(imDone).toContain('handoff');
+    });
+
+    it('keeps the block short enough that being read is still plausible', async () => {
+        expect((await protocolBrief()).length).toBeLessThan(5_000);
+    });
+
+    it('says WHEN — every stop, not a shutdown ritual', async () => {
+        // The misreading the owner is actually seeing. From the next run's side
+        // an upgrade restart and a hand-back mid-task are indistinguishable:
+        // both start from nothing. "At shutdown" is the wrong trigger.
+        expect(await protocolBrief()).toMatch(/every (time you )?stop/i);
+        expect(imDoneTopic()).toMatch(/every (time you )?stop/i);
+    });
+
+    it('states the full rules in the guide, beside the rest of `imDone`', () => {
+        const topic = imDoneTopic();
+        // WHAT goes in it — the next run's needs, not a victory summary.
+        expect(topic).toMatch(/unfinished|half-finished/i);
+        // ...and READ THE RESPONSE, because it cannot always be saved.
+        expect(topic).toMatch(/response/i);
+    });
+
+    it('forbids writing `.ai/handoff/` by hand, where both surfaces state it', async () => {
+        // The path comes from a normalised agent name that must stay in step
+        // with `.agents/<name>/`, and the file is rendered with a header and a
+        // timestamp. An agent writing it directly gets one or the other wrong —
+        // one of the "different ways" being reported.
+        expect(await protocolBrief()).toMatch(/never write [^\n]*\.ai\/handoff/i);
+        expect(imDoneTopic()).toMatch(/never write [^\n]*\.ai\/handoff/i);
+    });
+
+    it('does not let the guide and the tool schema drift apart', async () => {
+        // Three copies of the same facts is three places to rot. This is the
+        // guard: what the schema says and what the guide says are checked
+        // against each other, fact by fact, rather than trusted to stay equal.
+        const { description, handoff } = await imDoneAdvertised();
+        const schema = `${description}\n${handoff}`;
+        const topic = imDoneTopic();
+        const facts: Array<[string, RegExp]> = [
+            ['where the note is filed', /\.ai\/handoff\//],
+            ['that it REPLACES rather than appends', /replac/i],
+            ['that saving can fail', /(cannot|can not|not always)[\s\S]{0,40}sav/i],
+            ['that an empty note is worse than none', /worse than none/i],
+        ];
+        for (const [what, re] of facts) {
+            expect(schema, `the imDone SCHEMA no longer states ${what}`).toMatch(re);
+            expect(topic, `the GUIDE never states ${what}`).toMatch(re);
+        }
+    });
+
+    it('agrees with the boot prompt, which is the FOURTH place this is said', () => {
+        // A Genie-launched agent is told at launch to leave one. That line and
+        // the protocol have to name the same mechanism: if either ever drifts
+        // into "write the file", an agent obeys whichever it read last. Written
+        // after the boot-prompt line, so its non-vacuity was proved by breaking
+        // that line and watching this go red.
+        const boot = agentBootPrompt({ genieAvailable: true, mode: 'manual' });
+        expect(boot).toMatch(/`handoff`/);
+        expect(boot).toContain('`imDone`');
+        expect(boot).not.toMatch(/\.ai\/handoff/);
+    });
+
+    it('does not name a refusal the code stopped making', async () => {
+        // The schema listed "a System-workspace terminal has no project folder"
+        // among the reasons a note is dropped. It was true when written and is
+        // not any more: the operator got `~/.gosa`, `planHandoff` files its note
+        // there like anyone else's, and the sentence became an instruction to
+        // expect a failure that cannot happen.
+        //
+        // POSITIVE CONTROL first — without it this asserts an absence, which any
+        // corpse of a string would satisfy.
+        const plan = planHandoff({ workspace_id: '__system__', meta: { whisper_purpose: 'genie' } }, () => ({
+            path: '/home/w/.gosa',
+        }));
+        expect(plan.ok).toBe(true);
+
+        const { description, handoff } = await imDoneAdvertised();
+        const stale = /system[- ]workspace[^.]{0,40}no project folder/i;
+        expect(`${description}\n${handoff}`).not.toMatch(stale);
+        expect(imDoneTopic()).not.toMatch(stale);
     });
 });
