@@ -40,6 +40,18 @@ import type { TeardownResult } from './workspace-sandbox';
  * that shell. It is a no-op (not even a runtime probe) when boot went normally,
  * which is what keeps a read from re-acquiring engines other workspaces share.
  *
+ * Open is ALSO where the HOST-NATIVE services start (genie#573) — the same
+ * ordering argument, plus one boot cannot answer. `adopt()` re-attaches to a
+ * CONTAINER Docker kept running; the bundled Sockudo is a child of Genie's own
+ * process, so it dies with the app and leaves nothing to find. Adoption skipped
+ * it after every restart and the workspace's WebSockets stayed dark until some
+ * site start happened to spawn one as a side effect. Starting them at BOOT would
+ * fix that and give the gate away — one Reverb per enabled workspace, opened or
+ * not. Starting them HERE keeps it, because this hook is already gated on the
+ * workspace using the dev server, and it happens BEFORE the runtime is resolved:
+ * a host-native service needs no container runtime and must not be skipped for
+ * the absence of one.
+ *
  * **REMOVE — release, stop, then sweep, in that order.** The order is the whole
  * point. `teardownWorkspaceSandbox` removes exactly what carries
  * `genie.workspace`, which is correct and is also why it cannot be the only
@@ -167,6 +179,21 @@ export function createDevServerLifecycle(deps: DevServerLifecycleDeps): DevServe
             if (!usesDevServer(workspaceId)) return { ensured: false, reason: 'not-used-here' };
             const workspace = deps.workspaceFor(workspaceId);
             if (!workspace) return { ensured: false, reason: 'unknown-workspace' };
+
+            // BEFORE the runtime is even resolved (genie#573): a HOST-NATIVE
+            // service needs no container runtime, and asking for one first is
+            // exactly how the bundled Sockudo ended up skipped on a machine with
+            // no Docker — for the absence of something it does not use. These
+            // are the engines boot adoption structurally cannot reach: they are
+            // children of Genie's process, so nothing survives to re-attach to
+            // and "adopting" one would mean starting it. Open is where they
+            // start, so the workspace's WebSockets is up before its first
+            // terminal — and a workspace nobody opens still starts nothing.
+            try {
+                await deps.services()?.acquireHostNative(workspaceId);
+            } catch {
+                /* a service that could not start must not fail the open */
+            }
 
             const { runtime } = await deps.resolveRuntime();
             // The ordinary first-run state, and the reason this returns a result

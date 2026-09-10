@@ -344,6 +344,11 @@ export interface DevServiceManager {
      * A pass that could not ASK — no container runtime, or a runtime that failed
      * to list its engines — leaves the pass OWED rather than done. See
      * {@link adoptIfDeferred}.
+     *
+     * HOST-NATIVE engines are outside this entirely, and cannot be brought in:
+     * there is no container to re-attach to, so "adopting" one would mean
+     * STARTING it — the thing this promises never to do. They are acquired at
+     * workspace OPEN instead. See {@link acquireHostNative}.
      */
     adopt(): Promise<void>;
     /**
@@ -363,6 +368,40 @@ export interface DevServiceManager {
      * a container five workspaces share is never churned by a caller reading.
      */
     adoptIfDeferred(): Promise<void>;
+    /**
+     * Acquire this workspace's enabled HOST-NATIVE services (genie#573).
+     *
+     * The counterpart of {@link adopt} for the engines adoption structurally
+     * cannot reach. A container engine survives Genie by policy
+     * (`restart: unless-stopped`), so boot re-attaches to it and that is the
+     * whole answer. The bundled Sockudo is a CHILD PROCESS of Genie: it dies
+     * with the app, there is nothing left to find, and `adopt()` — which looks
+     * for a container named `genie-svc-websockets-1` and never finds one, on a
+     * machine that may have no container runtime at all — left every such
+     * service dark after every restart. `live` then had no entry for it, so
+     * terminals spawned in that workspace composed no `REVERB_*`, and it came
+     * back only as a side effect of a SITE being started (`serviceEnvFor`
+     * acquires everything enabled before it serves).
+     *
+     * So this STARTS things, and is deliberately not part of adoption for that
+     * reason. It belongs to workspace OPEN, which is a different moment with a
+     * different contract: open already ensures a whole container sandbox, gated
+     * on the workspace actually using the dev server. Two properties come from
+     * putting it there rather than at boot:
+     *
+     *  - **The gate survives.** A workspace nobody opened starts nothing — one
+     *    Reverb per enabled workspace at launch is the same accumulation
+     *    `adopt()`'s contract exists to prevent, wearing a different hat.
+     *  - **It lands before the first terminal.** A pty's environment is fixed at
+     *    spawn, so a repair that arrives afterwards is too late for that shell —
+     *    the same ordering argument genie#559 made for the deferred pass.
+     *
+     * Idempotent: a service already live is skipped, so opening a workspace
+     * twice acquires once and does not re-announce a `.env` that did not move.
+     * CONTAINER services are untouched — those are adoption's, and open must not
+     * become a back door into starting databases.
+     */
+    acquireHostNative(workspaceId: string): Promise<void>;
     /**
      * The runtime verdict this manager last OBSERVED, or null before its first
      * resolve (genie#558).
@@ -1393,6 +1432,28 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
         await adoptPass();
     }
 
+    /**
+     * The engines adoption cannot reach, acquired at workspace OPEN (genie#573).
+     *
+     * Deliberately the same shape as {@link adoptPass}'s inner loop, minus the
+     * container lookup that has no meaning here — enabled, not already live, and
+     * then acquire. `live.has` is what makes a second open free: it is the guard
+     * adoption uses for the same reason, and without it every open would
+     * re-announce a `.env` whose values had not moved.
+     *
+     * NO runtime is resolved. That is the point of the branch rather than an
+     * omission: `adopt()` asked the container runtime first and returned when
+     * there was none, so on a machine with no Docker the one service needing no
+     * Docker was the one guaranteed never to come up.
+     */
+    async function acquireHostNative(workspaceId: string): Promise<void> {
+        for (const [serviceId, config] of Object.entries(deps.devServicesFor(workspaceId))) {
+            if (!config.enabled || live.has(serviceId)) continue;
+            if (engineSpecFor(config.engine).runtime !== 'host') continue;
+            await acquire(workspaceId, serviceId);
+        }
+    }
+
     return {
         acquire,
         release,
@@ -1400,6 +1461,7 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
 
         adopt: adoptPass,
         adoptIfDeferred,
+        acquireHostNative,
 
         runtimeSeen: () => seenRuntime,
 
