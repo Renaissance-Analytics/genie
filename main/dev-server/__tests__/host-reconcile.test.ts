@@ -303,6 +303,24 @@ describe('the hosts file follows CONFIGURED sites; the Caddyfile follows RUNNING
         expect(res.genNames).toEqual([]);
     });
 
+    it('a boot that restores fifteen sites stages ONE hosts write, on the first pass', async () => {
+        // The worst instance of the bug, and the one the owner counted: an upgrade
+        // restores every enabled site, each start fires `onChanged`, and each pass
+        // used to find one more name in the block than the last. genie#225 stopped
+        // those passes STACKING their prompts; this stops them owing one. The names
+        // are all configured before the first site is up, so pass 1 writes the block
+        // and passes 2-15 find it already right.
+        const fx = fakeEffects();
+        const names = Array.from({ length: 15 }, (_, i) => `site-${i}.gen`);
+        const routes: Array<{ genName: string; port: number }> = [];
+        for (let i = 0; i < 15; i++) {
+            routes.push({ genName: `site-${i}.gen`, port: 4000 + i });
+            await reconcileHostSites({ names, routes: [...routes] }, fx);
+        }
+        expect(fx.applyPrivileged).toHaveBeenCalledOnce();
+        expect(batched(fx)).toEqual(['ca-trust', 'hosts-file']);
+    });
+
     it('covers a RUNNING route the configured set has lost, so Caddy never serves a name with no SAN', async () => {
         // The one case the two sets can disagree: a site deleted from the envelope
         // while its process is still up. The union keeps the invariant that every
