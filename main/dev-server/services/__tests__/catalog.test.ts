@@ -95,7 +95,12 @@ describe('the catalog', () => {
         expect(ref('mysql')).toBe('mysql:8.4');
         expect(ref('redis')).toBe('redis:7-alpine');
         expect(ref('meilisearch')).toBe('getmeili/meilisearch:v1');
-        expect(ref('minio')).toBe('minio/minio:latest');
+        // QUAY for MinIO. Docker Hub's `minio/minio` answers every anonymous
+        // pull with 401 — measured against the registry API on 2026-09-11, for
+        // `latest` and for a dated RELEASE tag, while `library/redis:7-alpine`
+        // returned 200 from the same probe. The registry is part of the ref, and
+        // getting it wrong breaks provisioning on every user's machine.
+        expect(ref('minio')).toBe('quay.io/minio/minio:latest');
         expect(ref('mailpit')).toBe('axllent/mailpit:v1.30');
     });
 
@@ -118,7 +123,22 @@ describe('the catalog', () => {
         // The engines whose upstream has no stable major to pin offer `latest`.
         // A naive `v${version}` template would turn it into `vlatest`.
         expect(engineSpecFor('mailpit').image('latest')).toBe('axllent/mailpit:latest');
-        expect(engineSpecFor('minio').image('latest')).toBe('minio/minio:latest');
+        expect(engineSpecFor('minio').image('latest')).toBe('quay.io/minio/minio:latest');
+    });
+
+    it('names a REGISTRY for images Docker Hub will not serve anonymously', () => {
+        // Genie pulls as an anonymous client on a user's machine. `minio/minio`
+        // on Hub returns "pull access denied … repository does not exist or may
+        // require 'docker login'" for every tag, so a bare `minio/minio:…` ref
+        // fails for every user — which is how genie#636 surfaced, as four
+        // unrelated CI assertions rather than as a registry error.
+        //
+        // Pinned as a NEGATIVE as well as a positive: shortening it back to the
+        // Docker Hub form is the plausible future edit, and it reads like a
+        // tidy-up.
+        const minio = engineSpecFor('minio').image('latest');
+        expect(minio).toContain('quay.io/');
+        expect(minio.startsWith('minio/')).toBe(false);
     });
 
     it('keys an engine by (engine, version) — that pair IS the sharing unit', () => {

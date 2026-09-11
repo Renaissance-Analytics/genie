@@ -264,7 +264,17 @@ const MINIO: EngineSpec = {
     // major to pin the way every other engine here is pinned. `latest` is the
     // honest default; pass an exact `RELEASE.…` tag as the version to pin.
     versions: ['latest'],
-    image: (version) => `minio/minio:${version}`,
+    // QUAY, not Docker Hub. `minio/minio` on Hub answers every anonymous pull
+    // with "pull access denied … repository does not exist or may require
+    // 'docker login'" — measured 2026-09-11 against the registry API: 401 for
+    // `latest` AND for a dated RELEASE tag, while `library/redis:7-alpine`
+    // returned 200 from the same probe, so it is MinIO specifically and not Hub
+    // being down. quay.io serves the same tags anonymously (200 for both).
+    //
+    // This is a USER-FACING break, not a CI one: provisioning MinIO fails on
+    // every machine, and it surfaced only because CI happened to run the real
+    // test. See genie#636.
+    image: (version) => `quay.io/minio/minio:${version}`,
     ports: [
         { name: 's3', container: 9000, kind: 'http', primary: true },
         { name: 'console', container: 9001, kind: 'http' },

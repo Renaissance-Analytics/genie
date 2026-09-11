@@ -188,7 +188,7 @@ jobs:
       - name: Pull the images the real tests run
         timeout-minutes: 8
         run: |
-          for image in redis:7-alpine pgvector/pgvector:pg17 minio/minio:latest; do
+          for image in redis:7-alpine pgvector/pgvector:pg17 quay.io/minio/minio:latest; do
             for attempt in 1 2 3; do
               if docker pull "$image"; then
                 break
