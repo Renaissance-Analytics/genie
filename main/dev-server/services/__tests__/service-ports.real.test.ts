@@ -9,7 +9,7 @@ import { createDevServiceManager } from '../service-manager';
 import { preferredServicePort } from '../service-ports';
 import { createServiceEnvSync } from '../env-sync';
 import { engineKeyFor } from '../catalog';
-import { serviceContainerNameFor, serviceVolumeNameFor } from '../../argv';
+import { networkNameFor, serviceContainerNameFor, serviceVolumeNameFor } from '../../argv';
 import { applyEnvBlock } from '../../../env-store';
 import { cleanupTmpRoot, makeTmpDir } from '../../../../test/helpers';
 import type { DevServiceManager } from '../service-manager';
@@ -64,6 +64,8 @@ const WS = `svcports${Date.now().toString(36)}`;
 const RECORD_KEY = `${ENGINE_KEY}@${WS}`;
 const CONTAINER = serviceContainerNameFor(ENGINE_KEY, WS);
 const DERIVED = preferredServicePort(RECORD_KEY, 'redis');
+/** The network `ensureNetwork` will create for this run's workspace id. */
+const NETWORK = networkNameFor(WS);
 
 const runtime = createDockerRuntime();
 
@@ -132,6 +134,17 @@ async function destroyEngine(): Promise<void> {
         await runtime.remove(found.id).catch(() => {});
     }
     await runtime.volumeRemove(serviceVolumeNameFor(ENGINE_KEY, 'data', WS)).catch(() => {});
+    // THE NETWORK TOO (genie#634). `WS` is a fresh timestamp every run, so this
+    // test creates a NEW `genie-ws-svcports<ts>` network each time — deliberate,
+    // because isolation is the point of the unique id. Leaving it behind is not:
+    // Docker's default address pool holds about 31 networks, and on a machine
+    // that had run this test a dozen times EVERY `manageService add` began
+    // failing with "all predefined address pools have been fully subnetted" —
+    // for unrelated engines, in unrelated workspaces, with nothing pointing here.
+    //
+    // Beside the volume on purpose: this is the symmetric place, so an engine
+    // added to this test later inherits the cleanup instead of re-learning it.
+    await runtime.networkRemove(WS).catch(() => {});
 }
 
 afterAll(async () => {
@@ -148,7 +161,7 @@ describe.skipIf(!hasDocker)('REAL Docker: a service port that does not move', ()
 
             const status = await h.manager.acquire(WS, 'svc-redis');
 
-            expect(status.state).toBe('running');
+            expect(status.state, status.error ?? 'no error reported').toBe('running');
             const endpoint = status.endpoints?.find((e) => e.name === 'redis');
             // Docker was ASKED for this number and gave it — not "some port appeared".
             expect(endpoint?.hostPort).toBe(DERIVED);
@@ -171,7 +184,7 @@ describe.skipIf(!hasDocker)('REAL Docker: a service port that does not move', ()
             await destroyEngine();
             const first = harness();
             const before = await first.manager.acquire(WS, 'svc-redis');
-            expect(before.state).toBe('running');
+            expect(before.state, before.error ?? 'no error reported').toBe('running');
 
             // A fresh Genie: new manager, EMPTY ledger, container gone. Nothing but
             // the derivation carries the number across.
@@ -179,7 +192,7 @@ describe.skipIf(!hasDocker)('REAL Docker: a service port that does not move', ()
             const second = harness();
             const after = await second.manager.acquire(WS, 'svc-redis');
 
-            expect(after.state).toBe('running');
+            expect(after.state, after.error ?? 'no error reported').toBe('running');
             expect(after.endpoints?.find((e) => e.name === 'redis')?.hostPort).toBe(
                 before.endpoints?.find((e) => e.name === 'redis')?.hostPort,
             );
@@ -201,12 +214,12 @@ describe.skipIf(!hasDocker)('REAL Docker: a service port that does not move', ()
             const h = harness();
 
             const first = await h.manager.acquire(WS, 'svc-redis');
-            expect(first.state).toBe('running');
+            expect(first.state, first.error ?? 'no error reported').toBe('running');
             const id = first.containerId;
 
             const second = await h.manager.acquire(WS, 'svc-redis');
 
-            expect(second.state).toBe('running');
+            expect(second.state, second.error ?? 'no error reported').toBe('running');
             // The SAME container, still up, on the same port.
             expect(second.containerId).toBe(id);
             expect(second.endpoints?.find((e) => e.name === 'redis')?.hostPort).toBe(DERIVED);
@@ -232,7 +245,7 @@ describe.skipIf(!hasDocker)('REAL Docker: a service port that does not move', ()
                 const status = await h.manager.acquire(WS, 'svc-redis');
 
                 // It came up. A collision is a move, not an outage.
-                expect(status.state).toBe('running');
+                expect(status.state, status.error ?? 'no error reported').toBe('running');
                 const moved = status.endpoints?.find((e) => e.name === 'redis')?.hostPort;
                 expect(moved).toBeDefined();
                 expect(moved).not.toBe(DERIVED);
@@ -249,4 +262,36 @@ describe.skipIf(!hasDocker)('REAL Docker: a service port that does not move', ()
         },
         180_000,
     );
+});
+
+/**
+ * The teardown is itself under test (genie#634).
+ *
+ * Every removal in `destroyEngine` is `.catch(() => {})`, which is right — a
+ * teardown must not fail a passing run — and is exactly how the missing network
+ * removal hid for so long: a swallowed failure and a silent leak are the same
+ * thing from outside. So the network's absence is ASSERTED rather than assumed.
+ *
+ * It runs as a test rather than inside `afterAll` for two reasons: an assertion
+ * in `afterAll` reports against the whole file instead of naming itself, and
+ * it is declared LAST and vitest runs describes in order, so by the time it runs
+ * the engine above really has been created and destroyed — an empty machine
+ * would let this pass without the teardown ever having been exercised.
+ */
+describe.skipIf(!hasDocker)('the test cleans up after itself', () => {
+    it('leaves no Docker network behind', async () => {
+        await destroyEngine();
+        const listed = spawnSync(
+            'docker',
+            ['network', 'ls', '--format', '{{.Name}}', '--filter', `name=${NETWORK}`],
+            { encoding: 'utf8' },
+        );
+        // `--filter name=` is a SUBSTRING match, so compare exactly — the same
+        // trap `ensureNetwork` documents in cli-runtime.ts.
+        const names = (listed.stdout ?? '')
+            .split(/\r?\n/)
+            .map((l) => l.trim())
+            .filter(Boolean);
+        expect(names).not.toContain(NETWORK);
+    });
 });
