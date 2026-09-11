@@ -1368,13 +1368,40 @@ async function boxOf(selector: string): Promise<{ x: number; right: number; bott
     }, selector);
 }
 
+/**
+ * Every box the header shift could involve, in one round trip.
+ *
+ * `icons` is the whole titlebar row, keyed by class, because the first VM run
+ * showed the lists button moving 22px while the dock is 340 wide — so the cause
+ * is something INSIDE the header changing width, not the gutter reserve, and a
+ * single box cannot say which neighbour did it.
+ */
+async function headerGeometry() {
+    return page.evaluate(() => {
+        const box = (sel: string) => {
+            const el = document.querySelector(sel);
+            if (!el) return null;
+            const r = el.getBoundingClientRect();
+            return { x: Math.round(r.x), right: Math.round(r.right), w: Math.round(r.width), bottom: Math.round(r.bottom) };
+        };
+        const icons: Record<string, { x: number; w: number }> = {};
+        document.querySelectorAll('.titlebar .gicon').forEach((el, i) => {
+            const r = el.getBoundingClientRect();
+            icons[`${i}:${el.className.replace(/\s+/g, '.')}`] = { x: Math.round(r.x), w: Math.round(r.width) };
+        });
+        return {
+            button: box('.gicon.lists-btn'),
+            titlebar: box('.titlebar'),
+            toolbar: box('.gtoolbar'),
+            body: box('.gbody'),
+            gright: box('.gright'),
+            icons,
+        };
+    });
+}
+
 test('docking the lists panel leaves the header exactly where it was', async () => {
-    const before = {
-        button: await boxOf('.gicon.lists-btn'),
-        titlebar: await boxOf('.titlebar'),
-        toolbar: await boxOf('.gtoolbar'),
-        body: await boxOf('.gbody'),
-    };
+    const before = await headerGeometry();
     expect(before.button, 'the lists button must be on screen to measure it').not.toBeNull();
     expect(before.toolbar).not.toBeNull();
 
@@ -1387,16 +1414,19 @@ test('docking the lists panel leaves the header exactly where it was', async () 
     await listsPin().click();
     await expect(listsDock()).toBeVisible();
 
-    const after = {
-        button: await boxOf('.gicon.lists-btn'),
-        titlebar: await boxOf('.titlebar'),
-        toolbar: await boxOf('.gtoolbar'),
-        body: await boxOf('.gbody'),
-    };
+    const after = await headerGeometry();
 
     // THE REGRESSION, in one number. Pre-fix the reserve was on `.gwrap`, so
     // both header rows narrowed and every icon in them shifted left.
-    expect(after.button!.x).toBeCloseTo(before.button!.x, 0);
+    //
+    // The whole header geometry rides on the message. A bare "891 became 869"
+    // says something moved and leaves the cause to guesswork; the run that
+    // produced exactly that had to be re-dispatched to learn anything. This
+    // file already makes the point about `getAnimations()` — report WHAT, not
+    // only THAT.
+    expect(after.button!.x, `header geometry:
+${JSON.stringify({ before, after }, null, 2)}`)
+        .toBeCloseTo(before.button!.x, 0);
     expect(after.titlebar!.right).toBeCloseTo(before.titlebar!.right, 0);
     expect(after.toolbar!.right).toBeCloseTo(before.toolbar!.right, 0);
 
