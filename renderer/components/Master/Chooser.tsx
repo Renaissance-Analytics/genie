@@ -3,7 +3,6 @@ import { createPortal } from 'react-dom';
 import { useOverlayRoot } from '../../lib/use-overlay-root';
 import {
     anchoredPopoverPosition,
-    anchoredPopoverTop,
     clampPopoverToViewport,
 } from '../../lib/anchored-popover';
 import { pickPath } from '../FilePickerModal';
@@ -29,7 +28,6 @@ import {
     IconPlus,
     IconRefresh,
     IconSearch,
-    IconServer,
     IconTerminal,
     IconTrash,
     IconTynn,
@@ -2910,109 +2908,45 @@ function WorkspaceRuntimePill({
     onProcesses: () => void;
     onSites: () => void;
 }) {
-    // Portal target: NEVER document.body -- Genie's surface tokens live on
-    // .gwrap/.genie-overlay-root, and a portal outside that subtree resolves
-    // them to nothing and paints transparent (genie #114).
-    const overlayRoot = useOverlayRoot();
-    const anchor = useRef<HTMLSpanElement>(null);
-    const menu = useRef<HTMLDivElement>(null);
-    const [open, setOpen] = useState(false);
-    const [position, setPosition] = useState<{ top: number; right: number } | null>(null);
-
-    const toggle = () => {
-        const rect = anchor.current?.getBoundingClientRect();
-        if (rect) setPosition({ top: rect.bottom + 5, right: window.innerWidth - rect.right });
-        setOpen((current) => !current);
+    // Each box IS its control (owner): the upper one opens background processes,
+    // the lower one opens the Site Manager. One click, not two.
+    //
+    // This replaced a single pill that opened a portalled menu naming the two
+    // destinations. The menu was the whole interaction cost — it made two
+    // always-visible, already-distinct targets cost a click and a read each, and
+    // it carried the machinery to match: an overlay-root portal, viewport
+    // clamping (genie#416), outside-click and Escape handling, and a position
+    // recomputed on every open. All of it existed to answer a question the two
+    // boxes answer by being in different places.
+    //
+    // `stopPropagation` stays: the row underneath selects the workspace, and
+    // these sit inside it.
+    const stop = (event: React.MouseEvent, run: () => void) => {
+        event.stopPropagation();
+        run();
     };
-
-    // `right` keeps the menu inside the right edge by construction; `top` was
-    // the anchor's bottom with no check, so the pill sitting low in a short
-    // window put the menu's items below it (genie#416). Corrected after mount
-    // because the item count -- and so the height -- depends on the workspace.
-    useLayoutEffect(() => {
-        const el = menu.current;
-        const rect = anchor.current?.getBoundingClientRect();
-        if (!open || !el || !rect) return;
-        el.style.top = `${anchoredPopoverTop({
-            anchorTop: rect.top,
-            anchorBottom: rect.bottom,
-            popoverHeight: el.getBoundingClientRect().height,
-            viewportHeight: window.innerHeight,
-            gap: 5,
-        })}px`;
-    }, [open]);
-
-    useEffect(() => {
-        if (!open) return;
-        const close = (event: MouseEvent) => {
-            const target = event.target as Node;
-            if (anchor.current?.contains(target) || menu.current?.contains(target)) return;
-            setOpen(false);
-        };
-        const escape = (event: KeyboardEvent) => {
-            if (event.key === 'Escape') setOpen(false);
-        };
-        document.addEventListener('mousedown', close);
-        document.addEventListener('keydown', escape);
-        return () => {
-            document.removeEventListener('mousedown', close);
-            document.removeEventListener('keydown', escape);
-        };
-    }, [open]);
-
-    const choose = (action: () => void) => {
-        setOpen(false);
-        action();
-    };
-
     return (
-        <>
-            <span
-                ref={anchor}
-                className={`runtime-pill${open ? ' open' : ''}${processOpen ? ' processes-open' : ''}`}
-                role="button"
-                tabIndex={0}
-                aria-label="Workspace runtime managers"
-                aria-expanded={open}
-                title={`${processTitle} · ${siteTitle}`}
-                onClick={(event) => {
-                    event.stopPropagation();
-                    toggle();
-                }}
-                onKeyDown={(event) => {
-                    if (event.key !== 'Enter' && event.key !== ' ') return;
-                    event.preventDefault();
-                    event.stopPropagation();
-                    toggle();
-                }}
-            >
-                <i className={`runtime-half runtime-process proc-${processTone}`} />
-                <i className={`runtime-half runtime-site sites-${siteAvailable ? siteTone : 'none'}`} />
-            </span>
-            {open && position && overlayRoot && createPortal(
-                <div
-                    ref={menu}
-                    className="runtime-pill-menu"
-                    role="menu"
-                    style={{ top: position.top, right: position.right }}
-                >
-                    <button type="button" role="menuitem" onClick={() => choose(onProcesses)}>
-                        <IconCpu size={13} />
-                        <span>Background processes</span>
-                    </button>
-                    <button
-                        type="button"
-                        role="menuitem"
-                        disabled={!siteAvailable}
-                        onClick={() => choose(onSites)}
-                    >
-                        <IconServer size={13} />
-                        <span>Site Manager</span>
-                    </button>
-                </div>,
-                overlayRoot,
-            )}
-        </>
+        <span className={`runtime-pill${processOpen ? ' processes-open' : ''}`}>
+            <button
+                type="button"
+                className={`runtime-half runtime-process proc-${processTone}`}
+                title={processTitle}
+                aria-label={processTitle}
+                aria-pressed={processOpen}
+                onClick={(event) => stop(event, onProcesses)}
+            />
+            <button
+                type="button"
+                className={`runtime-half runtime-site sites-${siteAvailable ? siteTone : 'none'}`}
+                title={siteAvailable ? siteTitle : `${siteTitle} — no sites configured`}
+                aria-label={siteTitle}
+                // Unavailable is DISABLED rather than hidden: the box keeps its
+                // place, so the process box never moves under the pointer
+                // depending on whether a workspace happens to host sites.
+                disabled={!siteAvailable}
+                onClick={(event) => stop(event, onSites)}
+            />
+        </span>
     );
 }
 

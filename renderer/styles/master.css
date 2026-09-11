@@ -4275,9 +4275,9 @@ body.gutter-dragging .grid-gutter {
     color: var(--term-warn, #e2c08d);
 }
 
-/* One compact runtime control replaces the two process/site glyph buttons.
-   Left half = background processes; right half = hosted sites. The halves carry
-   status by colour only; the menu names the destinations after a click. */
+/* TWO runtime controls, stacked: the upper box opens background processes, the
+   lower one opens the Site Manager. Each box IS its control (owner) — there is
+   no menu. The colour carries status; the tooltip names the destination. */
 .tproj-head .runtime-pill {
     /* TWO BOXES, STACKED, flush to the row's right edge and to its top and
        bottom (owner). Two earlier passes got this wrong in different ways: a
@@ -4298,14 +4298,8 @@ body.gutter-dragging .grid-gutter {
     grid-template-rows: 1fr 1fr;
     padding: 3px;
     gap: 3px;
-    cursor: pointer;
     border: 0;
     background: transparent;
-}
-.tproj-head .runtime-pill:hover,
-.tproj-head .runtime-pill.open {
-    border-color: var(--fg-4);
-    background: rgba(255, 255, 255, 0.08);
 }
 /* Each half is a BOX in its own right -- bordered, with the tone as its fill.
    As bars they read as a progress meter; as boxes they read as two controls,
@@ -4314,10 +4308,32 @@ body.gutter-dragging .grid-gutter {
     display: block;
     min-width: 0;
     min-height: 0;
+    /* A real <button> now, so the UA's own box has to be undone before the tone
+       fills below can mean anything. */
+    padding: 0;
+    font: inherit;
+    appearance: none;
+    cursor: pointer;
     border-radius: var(--radius-sm);
     border: 1px solid var(--border-1);
     background: var(--bg-2);
     opacity: 0.85;
+    transition: opacity 120ms ease, box-shadow 120ms ease;
+}
+/* Hover/focus land on the BOX the pointer is actually over — which is the whole
+   point of splitting them. A ring rather than a background change, so it reads
+   over every tone fill below. */
+.runtime-half:hover:not(:disabled),
+.runtime-half:focus-visible {
+    opacity: 1;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--fg-1) 45%, transparent);
+    outline: none;
+}
+/* Unavailable keeps its PLACE rather than disappearing, so the process box never
+   moves under the pointer depending on whether a workspace hosts sites. */
+.runtime-half:disabled {
+    cursor: default;
+    opacity: 0.4;
 }
 .runtime-half.proc-idle,
 .runtime-half.sites-starting,
@@ -4338,42 +4354,6 @@ body.gutter-dragging .grid-gutter {
 .runtime-pill.processes-open .runtime-process {
     box-shadow: 0 0 0 1px color-mix(in srgb, currentColor 65%, white);
 }
-.runtime-pill-menu {
-    position: fixed;
-    z-index: 10020;
-    display: flex;
-    flex-direction: column;
-    min-width: 190px;
-    padding: 4px;
-    border: 1px solid var(--border-1);
-    border-radius: var(--radius-md, 7px);
-    background: var(--bg-1);
-    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.42);
-}
-.runtime-pill-menu button {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    padding: 7px 8px;
-    border: 0;
-    border-radius: var(--radius-sm, 4px);
-    background: transparent;
-    color: var(--fg-2);
-    font: inherit;
-    font-size: 12px;
-    text-align: left;
-    cursor: pointer;
-}
-.runtime-pill-menu button:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.08);
-    color: var(--fg-1);
-}
-.runtime-pill-menu button:disabled {
-    opacity: 0.4;
-    cursor: default;
-}
-
 /* Inline process manager, revealed under the row when the indicator is clicked. */
 .tproj-procs {
     display: flex;
