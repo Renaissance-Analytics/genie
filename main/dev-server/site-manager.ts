@@ -667,11 +667,42 @@ interface Live {
      * only ask Caddy, which answers 502 for a dead backend and reads as ready.
      */
     fcgiPort?: number;
+    /**
+     * How to START THAT WORKER AGAIN — the whole point of genie#305's second
+     * half. Noticing the backend died only stops Genie lying about it; the
+     * owner's requirement is that something brings it back, because a site left
+     * honestly 502ing still blocks every agent trying to test against it.
+     *
+     * The recipe is CAPTURED at start rather than recomputed, so a revival is
+     * the same process that was running. Recomputing would quietly pick up a
+     * different toolchain resolution mid-session, which is a different site, not
+     * a restart.
+     *
+     * `attempts` is what keeps a broken install from becoming a spawn loop: a
+     * worker whose PHP is broken dies again immediately, and restarting it
+     * forever competes with the agents the revival exists to unblock.
+     */
+    fcgiRevive?: {
+        command: string[];
+        cwd: string;
+        env: Record<string, string>;
+        port?: number;
+        attempts: number;
+    };
     ready: boolean;
     /** The `.gen` rows this site contributes (its own). Resolved at start so
      *  `genSites()` stays synchronous. */
     routes: DevGenSite[];
 }
+
+/**
+ * How many times Genie will restart one site's FastCGI worker before leaving it
+ * dead. Small on purpose: a worker that survives comes back on the first try,
+ * and one that does not is broken in a way more spawning cannot fix. The
+ * counter is per-live-entry, so stopping and starting the site clears it — which
+ * is exactly the gesture a person makes after fixing the install.
+ */
+const FCGI_REVIVE_LIMIT = 5;
 
 const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
@@ -1287,6 +1318,8 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         probeTimeoutMs: number = readyTimeoutMs,
         /** The `php-cgi` FastCGI port, for a `hostServe: php` site. See {@link Live.fcgiPort}. */
         fcgiPort?: number,
+        /** How to respawn that worker if it dies. See {@link Live.fcgiRevive}. */
+        fcgiRevive?: Live['fcgiRevive'],
     ): Promise<DevSiteStatus> {
         const routes: DevGenSite[] = [
             {
@@ -1306,6 +1339,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             config,
             caddyHostPort: route.port,
             ...(fcgiPort === undefined ? {} : { fcgiPort }),
+            ...(fcgiRevive === undefined ? {} : { fcgiRevive }),
             ready: false,
             routes,
         });
@@ -1373,6 +1407,48 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         if (!deps.hostSpawn) return true;
         // Unanswerable is not the same as dead.
         return deps.hostSpawn.alive(fcgiSiteId(entry.siteId)).catch(() => true);
+    }
+
+    /**
+     * BRING THE WORKER BACK (genie#305, genie#626).
+     *
+     * `php-cgi` is a supervised child with no restart policy: it starts, it is
+     * confirmed alive once, and after that nothing watches it. When it dies the
+     * site keeps answering 502 until a person notices — and the reporter's
+     * workstation had dozens of orphaned workers, so this is routine.
+     *
+     * Returns true when a worker was actually started, so the caller can re-probe
+     * instead of leaving a site marked dead that is now alive.
+     *
+     * BOUNDED on purpose. A worker whose PHP install is broken dies again
+     * immediately, and an unconditional restart turns one dead site into a spawn
+     * loop competing with the agents this exists to unblock. At the cap Genie
+     * stops and leaves the site honestly not-ready, which is a state a person can
+     * act on; a loop is not.
+     */
+    async function reviveFcgi(entry: Live): Promise<boolean> {
+        const recipe = entry.fcgiRevive;
+        if (!recipe || !deps.hostSpawn) return false;
+        if (recipe.attempts >= FCGI_REVIVE_LIMIT) return false;
+        recipe.attempts += 1;
+        const workerId = fcgiSiteId(entry.siteId);
+        try {
+            // Clear any husk first: a wedged process still holds the port, and
+            // starting a second one against a held port fails for a reason that
+            // has nothing to do with the fault being repaired.
+            await deps.hostSpawn.stop(workerId).catch(() => {});
+            const started = await deps.hostSpawn.start({
+                siteId: workerId,
+                workspaceId: entry.workspaceId,
+                command: recipe.command,
+                cwd: recipe.cwd,
+                env: recipe.env,
+                ...(recipe.port === undefined ? {} : { port: recipe.port }),
+            });
+            return started.ok === true;
+        } catch {
+            return false;
+        }
     }
 
     /**
@@ -1751,6 +1827,15 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             buildRoute(port),
             readyTimeoutMs,
             fcgiPort,
+            worker === undefined
+                ? undefined
+                : {
+                      command: worker,
+                      cwd,
+                      env,
+                      ...(fcgiPort === undefined ? {} : { port: fcgiPort }),
+                      attempts: 0,
+                  },
         );
     }
 
@@ -2057,7 +2142,13 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             const verdicts = await Promise.all(
                 entries.map(async (entry) => {
                     try {
-                        return await probeLiveReady(entry);
+                        const ready = await probeLiveReady(entry);
+                        // A php site that is NOT ready has one repairable cause:
+                        // its FastCGI worker is gone. Restart it and ask again,
+                        // so a status that could be true becomes true instead of
+                        // merely being reported accurately (genie#305).
+                        if (ready || !(await reviveFcgi(entry))) return ready;
+                        return await probeLiveReady(entry).catch(() => false);
                     } catch {
                         // Unanswerable is not the same as dead: leave what we knew.
                         return entry.ready;
