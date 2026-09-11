@@ -296,6 +296,11 @@
        their top by this so they sit BELOW the header (never over the drag
        region / window controls). Keep in sync with .titlebar height. */
     --titlebar-h: 46px;
+    /* Height of the workspace toolbar, the SECOND header row. A token for the
+       same reason --titlebar-h is one: the lists dock offsets its top by both,
+       and two numbers for one row is a dock that overlaps the header by however
+       much they differ. Keep in sync with .gtoolbar height. */
+    --gtoolbar-h: 50px;
 }
 .titlebar {
     display: flex;
@@ -1029,7 +1034,7 @@
     display: flex;
     align-items: center;
     gap: 12px;
-    height: 50px;
+    height: var(--gtoolbar-h);
     padding: 0 14px;
     flex: 0 0 auto;
     background: var(--bg-0);
@@ -7770,8 +7775,10 @@ body.gutter-dragging .grid-gutter {
    Two shapes for one panel. UNPINNED it reuses the Docs flyout chrome
    (`.docs-flyout-root` / `.docs-flyout`), so it inherits the titlebar offset,
    the scrim and the slide. PINNED it becomes a DOCK: a fixed column at the
-   right edge, with `.gwrap.lists-docked` reserving exactly that width so the
-   Floor shrinks beside it instead of being covered.
+   right edge, below BOTH header rows, with `.gwrap.lists-docked .gright`
+   reserving exactly that width so the Floor shrinks beside it instead of being
+   covered. The two header rows are pulled back to full width, because pinning
+   must not move the header icons.
 
    The reserve and the dock read their width from ONE token. Two numbers here
    is a panel that overlaps the grid by however much they differ.
@@ -7784,12 +7791,29 @@ body.gutter-dragging .grid-gutter {
 :root {
     --lists-dock-w: 340px;
 }
-.gwrap.lists-docked {
+.gwrap.lists-docked .gright {
     padding-right: var(--lists-dock-w);
+}
+/* ...but the two HEADER rows are pulled back out to full width. Docking must
+   not move the header icons: the panel pins UNDER the header, it does not
+   reformat it. The reserve was on `.gwrap` and so narrowed everything inside
+   it, titlebar and toolbar included, which slid every header control left the
+   moment the panel was pinned.
+
+   Negative margin rather than reserving `.gbody`/`.gstatus` individually:
+   `.gbody` is `position: relative` and hosts absolutely-positioned children
+   that size to its PADDING box, so padding there would leave them running on
+   under the dock. Narrowing the parent moves .gbody's border box instead, and
+   everything inside it follows. */
+.gwrap.lists-docked .titlebar,
+.gwrap.lists-docked .gtoolbar {
+    margin-right: calc(-1 * var(--lists-dock-w));
 }
 .lists-dock {
     position: fixed;
-    top: var(--titlebar-h);
+    /* Below BOTH header rows — the titlebar and the toolbar — plus the
+       toolbar's 1px bottom border. */
+    top: calc(var(--titlebar-h) + var(--gtoolbar-h) + 1px);
     right: 0;
     bottom: 0;
     width: var(--lists-dock-w);

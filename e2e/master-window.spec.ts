@@ -1330,3 +1330,89 @@ test('no upgrade is in progress, so no modal covers the window', async () => {
     await expect(page.locator('.winframe')).toBeVisible();
     await expect(page.locator('.glogo')).toBeVisible();
 });
+
+/**
+ * PINNING THE LISTS PANEL MUST NOT MOVE THE HEADER ICONS.
+ *
+ * Reported with two screenshots: pin the Agent/User lists panel and every
+ * header control slides left. The cause was that `.gwrap.lists-docked` put the
+ * gutter reserve on the WHOLE app shell, so the titlebar and the workspace
+ * toolbar were narrowed along with the Floor. The panel is meant to dock UNDER
+ * the header, not reformat it.
+ *
+ * ## Why this can only be answered here
+ *
+ * `renderer/components/__tests__/lists-dock-layout.test.ts` asserts which
+ * selector carries the reserve, which is all a Node test can do — the renderer
+ * suite has no DOM. But "the icons did not move" is a question about computed
+ * layout, and the same trap as genie#114 applies: a rule can be present in the
+ * stylesheet and still not apply, or apply to an element that is not the one on
+ * screen. Only a real compositor knows where the button actually is.
+ *
+ * So the measurement is a BEFORE/AFTER of the same element's box, not a class
+ * check and not a screenshot. A screenshot would go red for a font change; this
+ * goes red for exactly one thing.
+ */
+const listsButton = () => page.locator('.gicon.lists-btn');
+const listsDock = () => page.locator('.lists-dock');
+const listsPin = () => page.locator('[aria-label="Pin lists to the right"]');
+const listsUnpin = () => page.locator('[aria-label="Unpin lists"]');
+
+/** One element's box, or null when it is not on screen. */
+async function boxOf(selector: string): Promise<{ x: number; right: number; bottom: number } | null> {
+    return page.evaluate((sel) => {
+        const el = document.querySelector(sel);
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { x: r.x, right: r.right, bottom: r.bottom };
+    }, selector);
+}
+
+test('docking the lists panel leaves the header exactly where it was', async () => {
+    const before = {
+        button: await boxOf('.gicon.lists-btn'),
+        titlebar: await boxOf('.titlebar'),
+        toolbar: await boxOf('.gtoolbar'),
+        body: await boxOf('.gbody'),
+    };
+    expect(before.button, 'the lists button must be on screen to measure it').not.toBeNull();
+    expect(before.toolbar).not.toBeNull();
+
+    await listsButton().click();
+    await expect(page.locator('[aria-label="Lists"]')).toBeVisible();
+    await listsPin().click();
+    await expect(listsDock()).toBeVisible();
+
+    const after = {
+        button: await boxOf('.gicon.lists-btn'),
+        titlebar: await boxOf('.titlebar'),
+        toolbar: await boxOf('.gtoolbar'),
+        body: await boxOf('.gbody'),
+    };
+
+    // THE REGRESSION, in one number. Pre-fix the reserve was on `.gwrap`, so
+    // both header rows narrowed and every icon in them shifted left.
+    expect(after.button!.x).toBeCloseTo(before.button!.x, 0);
+    expect(after.titlebar!.right).toBeCloseTo(before.titlebar!.right, 0);
+    expect(after.toolbar!.right).toBeCloseTo(before.toolbar!.right, 0);
+
+    // THE POSITIVE CONTROL. Without this the test would also pass if pinning
+    // did nothing at all: the Floor MUST give up the gutter, or the dock is
+    // covering content instead of sitting beside it.
+    expect(after.body!.right).toBeLessThan(before.body!.right - 100);
+
+    // And the dock sits UNDER the header rather than beside or over it.
+    const dock = await page.evaluate(() => {
+        const r = document.querySelector('.lists-dock')!.getBoundingClientRect();
+        return { top: r.top, right: r.right, width: r.width };
+    });
+    expect(dock.top).toBeGreaterThanOrEqual(after.toolbar!.bottom - 1);
+    // Flush to the window's right edge, and the Floor gave up exactly its width.
+    expect(Math.abs(dock.right - after.titlebar!.right)).toBeLessThanOrEqual(1);
+    expect(Math.abs((before.body!.right - after.body!.right) - dock.width)).toBeLessThanOrEqual(1);
+
+    // Leave the floor as it was found — every test after this one sees it.
+    await listsUnpin().click();
+    await listsButton().click();
+    await expect(listsDock()).toHaveCount(0);
+});

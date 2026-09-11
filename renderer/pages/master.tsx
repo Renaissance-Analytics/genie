@@ -2595,8 +2595,10 @@ function MasterInner() {
             />
             {/* Renders in one of two shapes, chosen inside the component:
                 floating over the Floor, or docked in the right-hand gutter that
-                `.gwrap.lists-docked` reserves — so a pinned panel covers
-                nothing. */}
+                `.gwrap.lists-docked .gright` reserves — so a pinned panel covers
+                nothing. The gutter starts BELOW both header rows and the header
+                is pulled back out of it, so pinning never moves the header
+                icons. */}
             <ListsFlyout
                 open={listsOpen}
                 onClose={() => setListsOpen(false)}
