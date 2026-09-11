@@ -324,7 +324,13 @@ export function buildHostServerDeps(
                         ...(terminalId ? { terminal_id: terminalId } : {}),
                     },
                 );
-                return { ok: true, id: result.id };
+                // NAME the destination (genie#335). This tool says it is for
+                // feedback about GENIE and routes by WORKSPACE, so a Genie
+                // defect raised from a client envelope lands in the client's
+                // queue. Which project it SHOULD reach is an open decision;
+                // until then the caller is at least told where it went, so a
+                // misfile is visible instead of silent.
+                return { ok: true, id: result.id, project: ws.project_name };
             } catch (e) {
                 return { ok: false, error: e instanceof Error ? e.message : String(e) };
             }

@@ -336,6 +336,51 @@ describe('handleMcpMessage', () => {
         });
     });
 
+    /**
+     * genie#335 — `submitFeedback` files into the WORKSPACE's Tynn project, so
+     * Genie feedback raised from a client envelope lands in the CLIENT's queue.
+     * Where it should go is an open product decision; that it must SAY where it
+     * went is not, and it is the half that makes the misfile self-reporting.
+     *
+     * Today the confirmation is "Feedback filed in Tynn. A human will see it in
+     * the project feedback list" — true, and useless to an agent trying to tell
+     * anyone WHICH list.
+     */
+    describe('submitFeedback names the project it filed into (genie#335)', () => {
+        const fileFeedback = async (result: Record<string, unknown>) =>
+            handleMcpMessage(
+                {
+                    jsonrpc: '2.0',
+                    id: 30,
+                    method: 'tools/call',
+                    params: { name: 'submitFeedback', arguments: { message: 'a rough edge' } },
+                },
+                ctx({ submitFeedback: vi.fn().mockResolvedValue(result) }),
+            );
+
+        const textOf = (res: Awaited<ReturnType<typeof handleMcpMessage>>) =>
+            (res?.result as { content: Array<{ text: string }> }).content[0].text;
+
+        it('says which project, when the host reports one', async () => {
+            const text = textOf(await fileFeedback({ ok: true, id: 'fb-1', project: 'Moic Suite' }));
+            expect(text).toContain('Moic Suite');
+        });
+
+        it('does not invent a project when the host does not report one', async () => {
+            // POSITIVE CONTROL on the honesty rather than the wording: an older
+            // host wires a `submitFeedback` with no `project`, and a
+            // confirmation naming "undefined" would be worse than the vague one.
+            const text = textOf(await fileFeedback({ ok: true, id: 'fb-1' }));
+            expect(text).toMatch(/filed/i);
+            expect(text).not.toMatch(/undefined|null/);
+        });
+
+        it('still reports a refusal as a refusal', async () => {
+            const text = textOf(await fileFeedback({ ok: false, error: 'not connected' }));
+            expect(text).toContain('not connected');
+        });
+    });
+
     it('prompts/get errors on an unknown prompt name', async () => {
         const res = await handleMcpMessage(
             { jsonrpc: '2.0', id: 24, method: 'prompts/get', params: { name: 'nope' } },
