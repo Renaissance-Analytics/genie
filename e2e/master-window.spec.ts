@@ -1486,3 +1486,78 @@ ${JSON.stringify({ before, after }, null, 2)}`)
     await listsButton().click();
     await expect(listsDock()).toHaveCount(0);
 });
+
+/**
+ * EACH RUNTIME BOX IS ITS OWN CONTROL — NO MENU (owner).
+ *
+ * The two status boxes on a workspace row (background processes above, hosted
+ * sites below) used to be ONE button that opened a portalled menu naming those
+ * same two destinations. The owner's instruction was to delete the menu and make
+ * each box open its own surface.
+ *
+ * ## Why this is an E2E and not a render test
+ *
+ * The regression is a NEGATIVE — "no menu opens" — and a negative about a
+ * PORTAL. The menu never rendered inside the row: it portalled to the overlay
+ * root and was positioned with a viewport clamp. A component test that renders
+ * the row would report the menu absent whether or not the code still opened one,
+ * because it was never in that subtree to begin with. Only a real window has
+ * both the row and the portal target in it.
+ *
+ * The negative therefore carries a POSITIVE CONTROL: the process box must
+ * actually DO its job. Otherwise "no menu appeared" would pass just as well for
+ * a box that is now inert.
+ */
+const runtimeProcessBox = (name: string) =>
+    railRow(name).locator('.runtime-half.runtime-process');
+const runtimeSiteBox = (name: string) => railRow(name).locator('.runtime-half.runtime-site');
+/** The whole project block. `railRow` is `.tproj-head` — the header ROW — and the
+ *  process list is its SIBLING inside `.tproj`, not its child. The first version
+ *  of this looked for `.tproj-procs` under the header and could never match. */
+const railProject = (name: string) => page.locator('.tproj').filter({ hasText: name }).first();
+
+test('clicking a runtime box opens its surface directly, with no menu in between', async () => {
+    const ws = seed.workspaceName;
+
+    // Both boxes are their own focusable controls, each with its own accessible
+    // name — the shape the change is FOR. Pre-change there was one control here.
+    await expect(runtimeProcessBox(ws)).toBeVisible();
+    await expect(runtimeSiteBox(ws)).toBeVisible();
+    await expect(runtimeProcessBox(ws)).toHaveAttribute('aria-label', /process/i);
+
+    await runtimeProcessBox(ws).click();
+
+    // THE REGRESSION, as a negative: nothing portals a menu any more.
+    await expect(page.locator('.runtime-pill-menu')).toHaveCount(0);
+    await expect(page.getByRole('menuitem', { name: 'Background processes' })).toHaveCount(0);
+
+    // THE POSITIVE CONTROL. Without it, "no menu appeared" also passes for a box
+    // that stopped doing anything at all — which is the more likely way to break
+    // this than the menu coming back.
+    await expect(railProject(ws).locator('.tproj-procs')).toBeVisible();
+    await expect(runtimeProcessBox(ws)).toHaveAttribute('aria-pressed', 'true');
+
+    // Leave the row as it was found — later tests in this file share the floor.
+    await runtimeProcessBox(ws).click();
+    await expect(railProject(ws).locator('.tproj-procs')).toHaveCount(0);
+});
+
+test('the sites box is a separate target, and says so when there is nothing to open', async () => {
+    const ws = seed.workspaceName;
+    const site = runtimeSiteBox(ws);
+
+    // Whether the fixture workspace hosts sites is not this test's business —
+    // what matters is that the box is EITHER a live control for the Site Manager
+    // or an honestly disabled one, never a dead target that silently does
+    // nothing. Asserting "it opens the manager" would make this test a hostage
+    // to the fixture's site list.
+    if (await site.isDisabled()) {
+        await expect(site).toHaveAttribute('title', /no sites configured/i);
+        return;
+    }
+
+    await site.click();
+    await expect(page.getByRole('heading', { name: /^Hosting —/ })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('heading', { name: /^Hosting —/ })).toHaveCount(0);
+});
