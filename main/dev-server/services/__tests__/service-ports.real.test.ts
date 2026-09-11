@@ -9,7 +9,7 @@ import { createDevServiceManager } from '../service-manager';
 import { preferredServicePort } from '../service-ports';
 import { createServiceEnvSync } from '../env-sync';
 import { engineKeyFor } from '../catalog';
-import { serviceContainerNameFor, serviceVolumeNameFor } from '../../argv';
+import { networkNameFor, serviceContainerNameFor, serviceVolumeNameFor } from '../../argv';
 import { applyEnvBlock } from '../../../env-store';
 import { cleanupTmpRoot, makeTmpDir } from '../../../../test/helpers';
 import type { DevServiceManager } from '../service-manager';
@@ -64,6 +64,8 @@ const WS = `svcports${Date.now().toString(36)}`;
 const RECORD_KEY = `${ENGINE_KEY}@${WS}`;
 const CONTAINER = serviceContainerNameFor(ENGINE_KEY, WS);
 const DERIVED = preferredServicePort(RECORD_KEY, 'redis');
+/** The network `ensureNetwork` will create for this run's workspace id. */
+const NETWORK = networkNameFor(WS);
 
 const runtime = createDockerRuntime();
 
@@ -132,11 +134,53 @@ async function destroyEngine(): Promise<void> {
         await runtime.remove(found.id).catch(() => {});
     }
     await runtime.volumeRemove(serviceVolumeNameFor(ENGINE_KEY, 'data', WS)).catch(() => {});
+    // THE NETWORK TOO (genie#634). `WS` is a fresh timestamp every run, so this
+    // test creates a NEW `genie-ws-svcports<ts>` network each time — deliberate,
+    // because isolation is the point of the unique id. Leaving it behind is not:
+    // Docker's default address pool holds about 31 networks, and on a machine
+    // that had run this test a dozen times EVERY `manageService add` began
+    // failing with "all predefined address pools have been fully subnetted" —
+    // for unrelated engines, in unrelated workspaces, with nothing pointing here.
+    //
+    // Beside the volume on purpose: this is the symmetric place, so an engine
+    // added to this test later inherits the cleanup instead of re-learning it.
+    await runtime.networkRemove(WS).catch(() => {});
 }
 
 afterAll(async () => {
     if (hasDocker) await destroyEngine();
     cleanupTmpRoot();
+});
+
+/**
+ * The teardown is itself under test (genie#634).
+ *
+ * Every removal in `destroyEngine` is `.catch(() => {})`, which is right — a
+ * teardown must not fail a passing run — and is exactly how the missing network
+ * removal hid for so long: a swallowed failure and a silent leak are the same
+ * thing from outside. So the network's absence is ASSERTED rather than assumed.
+ *
+ * It runs as a test rather than inside `afterAll` for two reasons: an assertion
+ * in `afterAll` reports against the whole file instead of naming itself, and
+ * vitest runs these in order, so by the time this one runs the engine from the
+ * case above has been created and destroyed at least once.
+ */
+describe.skipIf(!hasDocker)('the test cleans up after itself', () => {
+    it('leaves no Docker network behind', async () => {
+        await destroyEngine();
+        const listed = spawnSync(
+            'docker',
+            ['network', 'ls', '--format', '{{.Name}}', '--filter', `name=${NETWORK}`],
+            { encoding: 'utf8' },
+        );
+        // `--filter name=` is a SUBSTRING match, so compare exactly — the same
+        // trap `ensureNetwork` documents in cli-runtime.ts.
+        const names = (listed.stdout ?? '')
+            .split(/\r?\n/)
+            .map((l) => l.trim())
+            .filter(Boolean);
+        expect(names).not.toContain(NETWORK);
+    });
 });
 
 describe.skipIf(!hasDocker)('REAL Docker: a service port that does not move', () => {
