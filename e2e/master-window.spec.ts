@@ -1330,3 +1330,159 @@ test('no upgrade is in progress, so no modal covers the window', async () => {
     await expect(page.locator('.winframe')).toBeVisible();
     await expect(page.locator('.glogo')).toBeVisible();
 });
+
+/**
+ * PINNING THE LISTS PANEL MUST NOT MOVE THE HEADER ICONS.
+ *
+ * Reported with two screenshots: pin the Agent/User lists panel and every
+ * header control slides left. The cause was that `.gwrap.lists-docked` put the
+ * gutter reserve on the WHOLE app shell, so the titlebar and the workspace
+ * toolbar were narrowed along with the Floor. The panel is meant to dock UNDER
+ * the header, not reformat it.
+ *
+ * ## Why this can only be answered here
+ *
+ * `renderer/components/__tests__/lists-dock-layout.test.ts` asserts which
+ * selector carries the reserve, which is all a Node test can do — the renderer
+ * suite has no DOM. But "the icons did not move" is a question about computed
+ * layout, and the same trap as genie#114 applies: a rule can be present in the
+ * stylesheet and still not apply, or apply to an element that is not the one on
+ * screen. Only a real compositor knows where the button actually is.
+ *
+ * So the measurement is a BEFORE/AFTER of the same element's box, not a class
+ * check and not a screenshot. A screenshot would go red for a font change; this
+ * goes red for exactly one thing.
+ */
+const listsButton = () => page.locator('.gicon.lists-btn');
+const listsDock = () => page.locator('.lists-dock');
+const listsPin = () => page.locator('[aria-label="Pin lists to the right"]');
+const listsUnpin = () => page.locator('[aria-label="Unpin lists"]');
+
+/** One element's box, or null when it is not on screen. */
+async function boxOf(selector: string): Promise<{ x: number; right: number; bottom: number } | null> {
+    return page.evaluate((sel) => {
+        const el = document.querySelector(sel);
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { x: r.x, right: r.right, bottom: r.bottom };
+    }, selector);
+}
+
+/**
+ * Every box the header shift could involve, in one round trip.
+ *
+ * `icons` is the whole titlebar row, keyed by class, because the first VM run
+ * showed the lists button moving 22px while the dock is 340 wide — so the cause
+ * is something INSIDE the header changing width, not the gutter reserve, and a
+ * single box cannot say which neighbour did it.
+ */
+async function headerGeometry() {
+    return page.evaluate(() => {
+        // DOCUMENT space, not viewport space. The header icons overflow their
+        // row at this window size, so the page can scroll horizontally — and
+        // opening the dock scrolls it. Measured: every box, the titlebar
+        // INCLUDED, shifted by exactly -137 while the button's offset within
+        // the titlebar was 586 both times. Viewport coordinates would report
+        // that scroll as "the icons moved", which is the opposite of the truth.
+        const sx = window.scrollX;
+        const box = (sel: string) => {
+            const el = document.querySelector(sel);
+            if (!el) return null;
+            const r = el.getBoundingClientRect();
+            return { x: Math.round(r.x + sx), right: Math.round(r.right + sx), w: Math.round(r.width), bottom: Math.round(r.bottom) };
+        };
+        const icons: Record<string, { x: number; w: number }> = {};
+        document.querySelectorAll('.titlebar .gicon').forEach((el, i) => {
+            const r = el.getBoundingClientRect();
+            icons[`${i}:${el.className.replace(/\s+/g, '.')}`] = { x: Math.round(r.x + sx), w: Math.round(r.width) };
+        });
+        return {
+            button: box('.gicon.lists-btn'),
+            titlebar: box('.titlebar'),
+            toolbar: box('.gtoolbar'),
+            body: box('.gbody'),
+            gright: box('.gright'),
+            scrollX: sx,
+            icons,
+        };
+    });
+}
+
+test('docking the lists panel leaves the header exactly where it was', async () => {
+    const before = await headerGeometry();
+    expect(before.button, 'the lists button must be on screen to measure it').not.toBeNull();
+    expect(before.toolbar).not.toBeNull();
+
+    await listsButton().click();
+    // The PIN, not `[aria-label="Lists"]` — that label is on the header button
+    // AND on the panel, so waiting on it is a strict-mode violation rather than
+    // a wait. The pin only exists once the panel has rendered, which is the
+    // thing actually being waited for.
+    await expect(listsPin()).toBeVisible();
+    await listsPin().click();
+    await expect(listsDock()).toBeVisible();
+
+    const after = await headerGeometry();
+
+    // THE REGRESSION, in one number. Pre-fix the reserve was on `.gwrap`, so
+    // both header rows narrowed and every icon in them shifted left.
+    //
+    // The whole header geometry rides on the message. A bare "891 became 869"
+    // says something moved and leaves the cause to guesswork; the run that
+    // produced exactly that had to be re-dispatched to learn anything. This
+    // file already makes the point about `getAnimations()` — report WHAT, not
+    // only THAT.
+    // RELATIVE TO ITS OWN HEADER, which is the question actually asked — "the
+    // pinned panel should not move the header icons" — and the only form of it
+    // that survives this window.
+    //
+    // Absolute x cannot answer it here. The header icons OVERFLOW their row at
+    // this size (they run to x=1021 in an 884px-wide window), so the shell
+    // scrolls horizontally and opening the dock scrolls it. Measured: every box
+    // INCLUDING the titlebar shifted by -137 while this offset was 586 both
+    // times — nothing moved, the view slid. `window.scrollX` does not correct
+    // it either, because the scroller is an inner container, not the document,
+    // so scrollX reads 0 while the content has plainly moved.
+    //
+    // An offset within the parent has no such dependency: it is the same number
+    // whatever is scrolled. That overflow is a real and separate defect, filed
+    // on its own; it is not this bug, and this assertion must not be hostage to
+    // it.
+    const offset = (g: typeof before) => g.button!.x - g.titlebar!.x;
+    expect(offset(after), `header geometry:
+${JSON.stringify({ before, after }, null, 2)}`)
+        .toBeCloseTo(offset(before), 0);
+
+    // Neither header row may change SIZE. (Together with the offset above, that
+    // is "the header is untouched": same box, same contents in the same place.)
+    expect(after.titlebar!.w).toBeCloseTo(before.titlebar!.w, 0);
+    expect(after.toolbar!.w).toBeCloseTo(before.toolbar!.w, 0);
+
+    // The RAIL must not pay for the gutter either. The second failed shape kept
+    // the header's width and still moved it, because `padding-right` on
+    // `.gright` (flex: 1) grew the column's outer box and squeezed `.gleft` from
+    // 300px to 163px. `.gright`'s WIDTH is the scroll-proof way to see that.
+    expect(after.gright!.w).toBeCloseTo(before.gright!.w, 0);
+
+    // THE POSITIVE CONTROL. Without this the test would also pass if pinning
+    // did nothing at all: the Floor MUST give up the gutter, or the dock is
+    // covering content instead of sitting beside it.
+    expect(before.body!.w - after.body!.w).toBeGreaterThan(100);
+
+    // And the dock sits UNDER the header rather than beside or over it.
+    const dock = await page.evaluate(() => {
+        const r = document.querySelector('.lists-dock')!.getBoundingClientRect();
+        return { top: r.top, right: r.right, width: r.width };
+    });
+    expect(dock.top).toBeGreaterThanOrEqual(after.toolbar!.bottom - 1);
+    // The Floor gave up exactly the dock's width. (Not "flush with the titlebar's
+    // right edge": the dock is position:fixed so it is in VIEWPORT space, while
+    // the header is in a scrolled container — comparing the two compares two
+    // different coordinate systems, which is what this spec kept getting wrong.)
+    expect(Math.abs((before.body!.w - after.body!.w) - dock.width)).toBeLessThanOrEqual(1);
+
+    // Leave the floor as it was found — every test after this one sees it.
+    await listsUnpin().click();
+    await listsButton().click();
+    await expect(listsDock()).toHaveCount(0);
+});

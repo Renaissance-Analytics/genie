@@ -12,7 +12,7 @@ import {
 /**
  * The AgentList + UserList panel (genie#556). Right-side slide-in reusing the
  * Docs flyout chrome, with a PIN that docks it to the right edge — pinned, the
- * app shell reserves the width (`.gwrap.lists-docked`) so the panel sits beside
+ * app shell reserves the width (`.gwrap.lists-docked .gright`) so the panel sits beside
  * the Floor rather than over it.
  *
  * Two lists, two audiences, so two TABS rather than one scrolling stack: what is
@@ -400,8 +400,9 @@ export default function ListsFlyout({
     );
 
     // Docked, it is part of the layout: no scrim (the Floor stays usable beside
-    // it) and no slide transform. `.gwrap.lists-docked` reserves the width, so
-    // this covers nothing.
+    // it) and no slide transform. `.gwrap.lists-docked .gright` reserves the
+    // width, so this covers nothing — and the header rows are pulled back out
+    // of that reserve, so docking never moves the header icons.
     //
     // `open` still gates it. The two flags mean different things — `open` is
     // "the panel is showing", `pinned` is "when it shows, dock it" — and
