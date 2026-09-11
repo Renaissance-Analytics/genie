@@ -1511,6 +1511,10 @@ ${JSON.stringify({ before, after }, null, 2)}`)
 const runtimeProcessBox = (name: string) =>
     railRow(name).locator('.runtime-half.runtime-process');
 const runtimeSiteBox = (name: string) => railRow(name).locator('.runtime-half.runtime-site');
+/** The whole project block. `railRow` is `.tproj-head` — the header ROW — and the
+ *  process list is its SIBLING inside `.tproj`, not its child. The first version
+ *  of this looked for `.tproj-procs` under the header and could never match. */
+const railProject = (name: string) => page.locator('.tproj').filter({ hasText: name }).first();
 
 test('clicking a runtime box opens its surface directly, with no menu in between', async () => {
     const ws = seed.workspaceName;
@@ -1530,12 +1534,12 @@ test('clicking a runtime box opens its surface directly, with no menu in between
     // THE POSITIVE CONTROL. Without it, "no menu appeared" also passes for a box
     // that stopped doing anything at all — which is the more likely way to break
     // this than the menu coming back.
-    await expect(railRow(ws).locator('.tproj-procs')).toBeVisible();
+    await expect(railProject(ws).locator('.tproj-procs')).toBeVisible();
     await expect(runtimeProcessBox(ws)).toHaveAttribute('aria-pressed', 'true');
 
     // Leave the row as it was found — later tests in this file share the floor.
     await runtimeProcessBox(ws).click();
-    await expect(railRow(ws).locator('.tproj-procs')).toHaveCount(0);
+    await expect(railProject(ws).locator('.tproj-procs')).toHaveCount(0);
 });
 
 test('the sites box is a separate target, and says so when there is nothing to open', async () => {
