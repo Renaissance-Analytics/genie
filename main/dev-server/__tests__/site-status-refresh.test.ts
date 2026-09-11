@@ -350,3 +350,88 @@ describe('the 502 false-negative guard — a healthy app that answers 502 is STI
         expect(m.list('acme')[0]?.ready).toBe(true);
     });
 });
+
+/**
+ * NOTICING IS NOT ENOUGH — THE WORKER HAS TO COME BACK (genie#305, genie#626).
+ *
+ * Everything above proves Genie stops LYING about a dead FastCGI worker. It does
+ * not bring it back, and the owner's requirement is the other half:
+ *
+ *   "nothing should ever crash that, and if that is an inevitable thing, then
+ *    something needs to be able to bring it back when it crashed. This keeps
+ *    jamming up agents trying to test their work."
+ *
+ * An honest `ready:false` still leaves the site 502ing until a person notices, and
+ * the reporter's workstation had accumulated DOZENS of orphaned php-cgi processes
+ * — so the failure is routine, not exotic. A supervised child with no restart
+ * policy is the whole defect.
+ *
+ * ## Why a bounded restart, and not an unconditional one
+ *
+ * A worker that dies because its PHP install is broken dies again immediately.
+ * Restarting it forever turns one dead site into a spawn loop that competes with
+ * the agents it was meant to unblock — which is the same resource failure, with
+ * more processes. So revival is capped, and when the cap is reached the site is
+ * left honestly not-ready with the reason recorded, which is the state a person
+ * can actually act on.
+ */
+describe('a dead FastCGI worker is brought back', () => {
+    /** The worker's spawn id for the site under test. */
+    const WORKER = `${SITE_ID}-fcgi`;
+
+    it('respawns the worker when the backend has gone', async () => {
+        const spawn = fakeHostSpawn();
+        let fcgiUp = true;
+        const m = phpManager(
+            async (req) => (req.port === FCGI_PORT ? fcgiUp : true),
+            { hostSpawn: spawn },
+        );
+
+        await m.start('acme', SITE_ID);
+        const before = spawn.started.filter((id) => id === WORKER).length;
+        expect(before).toBe(1);
+
+        // The worker dies the way it actually dies: the process is gone and the
+        // port refuses. Caddy is untouched and still answers.
+        fcgiUp = false;
+        spawn.started.splice(spawn.started.indexOf(WORKER), 1);
+
+        await m.refresh('acme');
+
+        expect(
+            spawn.started.filter((id) => id === WORKER).length,
+            'the worker must be started again, not merely reported dead',
+        ).toBe(1);
+    });
+
+    it('stops restarting a worker that will not stay up, instead of looping', async () => {
+        const spawn = fakeHostSpawn();
+        const m = phpManager(async (req) => req.port !== FCGI_PORT, { hostSpawn: spawn });
+
+        await m.start('acme', SITE_ID).catch(() => {});
+        const startsAfterBoot = spawn.started.filter((id) => id === WORKER).length;
+
+        // Ten refreshes against a backend that never comes up.
+        for (let i = 0; i < 10; i += 1) {
+            spawn.started = spawn.started.filter((id) => id !== WORKER);
+            await m.refresh('acme');
+        }
+
+        const attempts = spawn.started.filter((id) => id === WORKER).length + startsAfterBoot;
+        expect(attempts, 'a flapping worker must not be respawned once per refresh forever')
+            .toBeLessThanOrEqual(6);
+    });
+
+    it('POSITIVE CONTROL: a healthy worker is left alone', async () => {
+        // Without this, "respawns when dead" would also pass for an
+        // implementation that restarts the worker on every single refresh.
+        const spawn = fakeHostSpawn();
+        const m = phpManager(async () => true, { hostSpawn: spawn });
+
+        await m.start('acme', SITE_ID);
+        await m.refresh('acme');
+        await m.refresh('acme');
+
+        expect(spawn.started.filter((id) => id === WORKER).length).toBe(1);
+    });
+});
