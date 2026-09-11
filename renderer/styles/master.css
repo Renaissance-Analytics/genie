@@ -6857,7 +6857,11 @@ body.gutter-dragging .grid-gutter {
 .genie-os-layer.is-open .genie-os-backdrop { opacity: 1; }
 .genie-os-flyout { position: absolute; z-index: 1; top: 12px; right: 12px; bottom: 12px; width: min(760px, calc(100vw - 48px)); padding: 2px; border-radius: 14px; overflow: hidden; background: conic-gradient(from var(--genie-os-angle, 0deg), #111318 0 78%, #35f2a3 84%, #8b5cf6 91%, #111318 97%); transform: translateX(calc(100% + 24px)); opacity: 0; transition: transform 280ms cubic-bezier(.22,.8,.3,1), opacity 220ms ease; }
 .genie-os-flyout > * { height: 100%; border-radius: 12px; background: var(--bg-0); }
-.genie-os-layer.is-open .genie-os-flyout { transform: translateX(0); opacity: 1; animation: genie-os-chase 1.45s linear infinite; }
+/* OPEN is the slide-in. ACTIVE is the shimmer. They were one rule, so the
+   chase ran for as long as the panel was up — an activity animation that
+   actually meant "you opened this", which the user could already see. */
+.genie-os-layer.is-open .genie-os-flyout { transform: translateX(0); opacity: 1; }
+.genie-os-layer.is-open.is-active .genie-os-flyout { animation: genie-os-chase 1.45s linear infinite; }
 .genie-os-button.is-active { animation: genie-os-pulse 1.4s ease-in-out infinite; }
 @property --genie-os-angle { syntax: '<angle>'; initial-value: 0deg; inherits: false; }
 @keyframes genie-os-chase { to { --genie-os-angle: 360deg; } }

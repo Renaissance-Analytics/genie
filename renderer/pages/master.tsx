@@ -19,6 +19,7 @@ import WorkspaceSettingsModal, {
     WorkspaceAgentsModal,
 } from '../components/Master/WorkspaceSettingsModal';
 import WorkspaceSiteManager from '../components/Master/WorkspaceSiteManager';
+import { useStreamingTerminals } from '../lib/use-streaming-terminals';
 import SpecContextMenu from '../components/Master/SpecContextMenu';
 import { PromptHost, showPrompt } from '../components/Master/Prompt';
 import QuitTerminalsModal, {
@@ -337,6 +338,10 @@ function MasterInner() {
     // render (activeWorkspaceId still null) can't overwrite a saved layout.
     const viewRestoredRef = useRef(false);
     const [activeIds, setActiveIds] = useState<Set<string>>(() => new Set());
+    // Bytes in the last 1200ms — what the Genie OS surfaces animate on. See
+    // `use-streaming-terminals` for why this is NOT `activeIds` above it: that
+    // one is "the pty is alive", which stays true for as long as a panel is open.
+    const streamingTerms = useStreamingTerminals();
     // Agent-integration MCP: terminals that called imDone and want attention.
     // Cleared when the terminal gets focus.
     const [attentionIds, setAttentionIds] = useState<Set<string>>(() => new Set());
@@ -2464,7 +2469,12 @@ function MasterInner() {
                         ).unknown}
                         githubNeedsResolve={githubNeedsResolve}
                         onShowGithubCaps={() => setGithubCapsOpen((o) => !o)}
-                        genieOsActive={!!genieOsSpec && activeIds.has(genieOsSpec.id)}
+                        // STREAMING, not `activeIds`. `activeIds` is "this spec
+                        // has a live pty", which is true for the whole time the
+                        // OSA is open — so the icon pulsed at being OPEN, which
+                        // the user can already see. It now pulses only while the
+                        // agent is actually producing output.
+                        genieOsActive={!!genieOsSpec && streamingTerms.has(genieOsSpec.id)}
                         genieOsOpen={genieOsOpen}
                         onShowGenieOs={() => setGenieOsOpen((open) => !open)}
                         setupIncomplete={onboardingOpen}
@@ -2539,7 +2549,15 @@ function MasterInner() {
             </div>
 
             {!isStage && genieOsSpec && systemWorkspace && (
-                <div className={`genie-os-layer${genieOsOpen ? ' is-open' : ''}`} aria-hidden={!genieOsOpen}>
+                <div
+                    // `is-active` is the SHIMMER; `is-open` is only the slide-in.
+                    // The chase used to key on is-open, so it ran for as long as
+                    // the panel was up — an activity animation that meant "open".
+                    className={`genie-os-layer${genieOsOpen ? ' is-open' : ''}${
+                        genieOsSpec && streamingTerms.has(genieOsSpec.id) ? ' is-active' : ''
+                    }`}
+                    aria-hidden={!genieOsOpen}
+                >
                     <button className="genie-os-backdrop" aria-label="Close Genie OS" onClick={() => setGenieOsOpen(false)} />
                     <aside className="genie-os-flyout" aria-label="Genie OS agent">
                         <AgentPanel

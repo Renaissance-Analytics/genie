@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { useOverlayRoot } from '../../lib/use-overlay-root';
+import { useStreamingTerminals } from '../../lib/use-streaming-terminals';
 import {
     anchoredPopoverPosition,
     clampPopoverToViewport,
@@ -792,43 +793,12 @@ export default function Chooser({
     // AgentPulse per-terminal LIGHT: the sparkline above is workspace-level and
     // only draws for a COLLAPSED workspace (see the render below); an EXPANDED
     // workspace instead lights a small dot on each terminal ROW for that
-    // terminal's OWN activity. Reuses the exact `terminal:data` push
-    // Terminal.tsx already consumes to feed its own xterm — no new IPC/polling.
-    // `streamingTerms` briefly holds a spec id, cleared TERM_LIGHT_MS after its
-    // last byte (a fresh byte resets the timer), so the dot reads as "receiving
-    // bytes right now", distinct from `activeIds` (the pty is alive/live).
-    const TERM_LIGHT_MS = 1200;
-    const [streamingTerms, setStreamingTerms] = useState<Set<string>>(
-        () => new Set(),
-    );
-    const termLightTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(
-        new Map(),
-    );
-    useEffect(() => {
-        const timers = termLightTimers.current;
-        const off = api().on.terminalData(({ id }) => {
-            setStreamingTerms((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
-            const existing = timers.get(id);
-            if (existing) clearTimeout(existing);
-            timers.set(
-                id,
-                setTimeout(() => {
-                    timers.delete(id);
-                    setStreamingTerms((prev) => {
-                        if (!prev.has(id)) return prev;
-                        const next = new Set(prev);
-                        next.delete(id);
-                        return next;
-                    });
-                }, TERM_LIGHT_MS),
-            );
-        });
-        return () => {
-            off();
-            for (const t of timers.values()) clearTimeout(t);
-            timers.clear();
-        };
-    }, []);
+    // Extracted to `useStreamingTerminals` so the Genie OS surfaces ask the same
+    // question of the same source (bytes in the last 1200ms), rather than each
+    // panel growing its own idea of "active". See that file for why this is not
+    // `activeIds`.
+    const streamingTerms = useStreamingTerminals();
+
 
     // New-workspace ENTRY animation: when a genuinely-new workspace id appears in
     // the (host-sourced) list — e.g. one a workstation auto-provisioned and

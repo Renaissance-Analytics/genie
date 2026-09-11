@@ -1561,3 +1561,66 @@ test('the sites box is a separate target, and says so when there is nothing to o
     await page.keyboard.press('Escape');
     await expect(page.getByRole('heading', { name: /^Hosting —/ })).toHaveCount(0);
 });
+
+/**
+ * GENIE OS ANIMATES ON WORK, NOT ON BEING OPEN (owner).
+ *
+ * Genie OS has no AgentPulse, so its activity read-outs are the flyout's
+ * conic-gradient chase and the header icon's pulse. Both were keyed on being
+ * open — the chase on `.is-open`, the icon on `activeIds`, which is "this spec
+ * has a live pty" and therefore true for the whole time the panel exists.
+ *
+ * This fixture PROVED it: a header-geometry dump from an earlier run on these
+ * VMs recorded the icon as `gicon.genie-os-button.is-active` with no agent doing
+ * anything at all.
+ *
+ * ## Why the compositor, and not the class
+ *
+ * `renderer/components/__tests__/genie-os-activity.test.ts` pins which selector
+ * carries the animation, which is all a DOM-less env can do. It cannot tell
+ * whether the rule APPLIES — genie#114 is this repo's standing reminder that a
+ * present rule and an applied rule are different claims. `getAnimations()` asks
+ * the compositor what is actually running, so a selector that stopped matching
+ * comes back as zero rather than as a passing assertion.
+ *
+ * Filtered to the chase by NAME: `getAnimations()` returns transitions too, and
+ * the flyout transitions `transform` and `opacity` on open — counting everything
+ * would report the slide-in as activity, which is the very conflation under test.
+ */
+async function chaseAnimationsRunning(): Promise<string[]> {
+    return page.evaluate(() => {
+        const el = document.querySelector('.genie-os-flyout');
+        if (!el) return ['NO FLYOUT'];
+        return el
+            .getAnimations()
+            .map((a) => (a as unknown as { animationName?: string }).animationName ?? '')
+            .filter((name) => name.includes('genie-os-chase'));
+    });
+}
+
+test('the Genie OS shimmer does not run just because the panel is open', async () => {
+    const button = page.locator('.gicon.genie-os-button');
+    const layer = page.locator('.genie-os-layer');
+    await expect(button).toHaveCount(1);
+
+    // IDLE AND OPEN — the state the owner reported. Nothing is streaming into
+    // the OSA terminal in this fixture, so neither read-out may be running.
+    await button.click();
+    await expect(layer).toHaveClass(/\bis-open\b/);
+
+    expect(
+        await chaseAnimationsRunning(),
+        'the flyout chase must not run while the panel merely sits open',
+    ).toEqual([]);
+    await expect(layer).not.toHaveClass(/\bis-active\b/);
+    await expect(button).not.toHaveClass(/\bis-active\b/);
+
+    // POSITIVE CONTROL: the panel really did open. Without it, every assertion
+    // above passes for a flyout that never rendered — and "no animation" on a
+    // missing element is the emptiest possible green.
+    await expect(page.locator('.genie-os-flyout')).toBeVisible();
+
+    // Leave the floor as it was found.
+    await button.click();
+    await expect(layer).not.toHaveClass(/\bis-open\b/);
+});

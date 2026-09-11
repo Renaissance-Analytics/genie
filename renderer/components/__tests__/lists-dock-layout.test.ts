@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import { declarationsFor, stripCssComments } from '../../lib/css-rules';
 
 /**
  * Pinning the lists panel must not move the header icons.
@@ -32,28 +33,6 @@ import { join } from 'path';
  * comment and reports the opposite of the truth. A line-based strip would also
  * be inert here, because this file is checked out CRLF on Windows.
  */
-
-/** Strip `/* … *\/` blocks, including multi-line ones, CRLF or LF. */
-export function stripCssComments(css: string): string {
-    return css.replace(/\/\*[\s\S]*?\*\//g, '');
-}
-
-/**
- * The declarations inside the first block whose selector list is exactly
- * `selector`, or null when no such rule exists. Exact match on the trimmed
- * prelude, so `.gwrap.lists-docked` does not accidentally answer for
- * `.gwrap.lists-docked .gright`.
- */
-export function declarationsFor(css: string, selector: string): string | null {
-    const body = stripCssComments(css);
-    const rule = /([^{}]+)\{([^{}]*)\}/g;
-    let m: RegExpExecArray | null;
-    while ((m = rule.exec(body)) !== null) {
-        const prelude = m[1]!.split(',').map((s) => s.trim().replace(/\s+/g, ' ')).join(', ');
-        if (prelude === selector) return m[2]!.trim();
-    }
-    return null;
-}
 
 const BROKEN = `
 .gwrap.lists-docked {
