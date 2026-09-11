@@ -1432,23 +1432,42 @@ test('docking the lists panel leaves the header exactly where it was', async () 
     // produced exactly that had to be re-dispatched to learn anything. This
     // file already makes the point about `getAnimations()` — report WHAT, not
     // only THAT.
-    expect(after.button!.x, `header geometry:
+    // RELATIVE TO ITS OWN HEADER, which is the question actually asked — "the
+    // pinned panel should not move the header icons" — and the only form of it
+    // that survives this window.
+    //
+    // Absolute x cannot answer it here. The header icons OVERFLOW their row at
+    // this size (they run to x=1021 in an 884px-wide window), so the shell
+    // scrolls horizontally and opening the dock scrolls it. Measured: every box
+    // INCLUDING the titlebar shifted by -137 while this offset was 586 both
+    // times — nothing moved, the view slid. `window.scrollX` does not correct
+    // it either, because the scroller is an inner container, not the document,
+    // so scrollX reads 0 while the content has plainly moved.
+    //
+    // An offset within the parent has no such dependency: it is the same number
+    // whatever is scrolled. That overflow is a real and separate defect, filed
+    // on its own; it is not this bug, and this assertion must not be hostage to
+    // it.
+    const offset = (g: typeof before) => g.button!.x - g.titlebar!.x;
+    expect(offset(after), `header geometry:
 ${JSON.stringify({ before, after }, null, 2)}`)
-        .toBeCloseTo(before.button!.x, 0);
-    expect(after.titlebar!.right).toBeCloseTo(before.titlebar!.right, 0);
-    expect(after.toolbar!.right).toBeCloseTo(before.toolbar!.right, 0);
+        .toBeCloseTo(offset(before), 0);
+
+    // Neither header row may change SIZE. (Together with the offset above, that
+    // is "the header is untouched": same box, same contents in the same place.)
+    expect(after.titlebar!.w).toBeCloseTo(before.titlebar!.w, 0);
+    expect(after.toolbar!.w).toBeCloseTo(before.toolbar!.w, 0);
 
     // The RAIL must not pay for the gutter either. The second failed shape kept
     // the header's width and still moved it, because `padding-right` on
     // `.gright` (flex: 1) grew the column's outer box and squeezed `.gleft` from
-    // 300px to 163px. Width alone cannot see that; position can.
-    expect(after.gright!.x).toBeCloseTo(before.gright!.x, 0);
-    expect(after.titlebar!.w).toBeCloseTo(before.titlebar!.w, 0);
+    // 300px to 163px. `.gright`'s WIDTH is the scroll-proof way to see that.
+    expect(after.gright!.w).toBeCloseTo(before.gright!.w, 0);
 
     // THE POSITIVE CONTROL. Without this the test would also pass if pinning
     // did nothing at all: the Floor MUST give up the gutter, or the dock is
     // covering content instead of sitting beside it.
-    expect(after.body!.right).toBeLessThan(before.body!.right - 100);
+    expect(before.body!.w - after.body!.w).toBeGreaterThan(100);
 
     // And the dock sits UNDER the header rather than beside or over it.
     const dock = await page.evaluate(() => {
@@ -1456,9 +1475,11 @@ ${JSON.stringify({ before, after }, null, 2)}`)
         return { top: r.top, right: r.right, width: r.width };
     });
     expect(dock.top).toBeGreaterThanOrEqual(after.toolbar!.bottom - 1);
-    // Flush to the window's right edge, and the Floor gave up exactly its width.
-    expect(Math.abs(dock.right - after.titlebar!.right)).toBeLessThanOrEqual(1);
-    expect(Math.abs((before.body!.right - after.body!.right) - dock.width)).toBeLessThanOrEqual(1);
+    // The Floor gave up exactly the dock's width. (Not "flush with the titlebar's
+    // right edge": the dock is position:fixed so it is in VIEWPORT space, while
+    // the header is in a scrolled container — comparing the two compares two
+    // different coordinate systems, which is what this spec kept getting wrong.)
+    expect(Math.abs((before.body!.w - after.body!.w) - dock.width)).toBeLessThanOrEqual(1);
 
     // Leave the floor as it was found — every test after this one sees it.
     await listsUnpin().click();
