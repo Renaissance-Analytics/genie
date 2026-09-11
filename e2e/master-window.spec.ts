@@ -1378,16 +1378,23 @@ async function boxOf(selector: string): Promise<{ x: number; right: number; bott
  */
 async function headerGeometry() {
     return page.evaluate(() => {
+        // DOCUMENT space, not viewport space. The header icons overflow their
+        // row at this window size, so the page can scroll horizontally — and
+        // opening the dock scrolls it. Measured: every box, the titlebar
+        // INCLUDED, shifted by exactly -137 while the button's offset within
+        // the titlebar was 586 both times. Viewport coordinates would report
+        // that scroll as "the icons moved", which is the opposite of the truth.
+        const sx = window.scrollX;
         const box = (sel: string) => {
             const el = document.querySelector(sel);
             if (!el) return null;
             const r = el.getBoundingClientRect();
-            return { x: Math.round(r.x), right: Math.round(r.right), w: Math.round(r.width), bottom: Math.round(r.bottom) };
+            return { x: Math.round(r.x + sx), right: Math.round(r.right + sx), w: Math.round(r.width), bottom: Math.round(r.bottom) };
         };
         const icons: Record<string, { x: number; w: number }> = {};
         document.querySelectorAll('.titlebar .gicon').forEach((el, i) => {
             const r = el.getBoundingClientRect();
-            icons[`${i}:${el.className.replace(/\s+/g, '.')}`] = { x: Math.round(r.x), w: Math.round(r.width) };
+            icons[`${i}:${el.className.replace(/\s+/g, '.')}`] = { x: Math.round(r.x + sx), w: Math.round(r.width) };
         });
         return {
             button: box('.gicon.lists-btn'),
@@ -1395,6 +1402,7 @@ async function headerGeometry() {
             toolbar: box('.gtoolbar'),
             body: box('.gbody'),
             gright: box('.gright'),
+            scrollX: sx,
             icons,
         };
     });
