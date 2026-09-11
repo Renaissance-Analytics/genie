@@ -1379,7 +1379,11 @@ test('docking the lists panel leaves the header exactly where it was', async () 
     expect(before.toolbar).not.toBeNull();
 
     await listsButton().click();
-    await expect(page.locator('[aria-label="Lists"]')).toBeVisible();
+    // The PIN, not `[aria-label="Lists"]` — that label is on the header button
+    // AND on the panel, so waiting on it is a strict-mode violation rather than
+    // a wait. The pin only exists once the panel has rendered, which is the
+    // thing actually being waited for.
+    await expect(listsPin()).toBeVisible();
     await listsPin().click();
     await expect(listsDock()).toBeVisible();
 
