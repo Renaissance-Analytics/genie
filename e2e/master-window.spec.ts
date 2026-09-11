@@ -1430,6 +1430,13 @@ ${JSON.stringify({ before, after }, null, 2)}`)
     expect(after.titlebar!.right).toBeCloseTo(before.titlebar!.right, 0);
     expect(after.toolbar!.right).toBeCloseTo(before.toolbar!.right, 0);
 
+    // The RAIL must not pay for the gutter either. The second failed shape kept
+    // the header's width and still moved it, because `padding-right` on
+    // `.gright` (flex: 1) grew the column's outer box and squeezed `.gleft` from
+    // 300px to 163px. Width alone cannot see that; position can.
+    expect(after.gright!.x).toBeCloseTo(before.gright!.x, 0);
+    expect(after.titlebar!.w).toBeCloseTo(before.titlebar!.w, 0);
+
     // THE POSITIVE CONTROL. Without this the test would also pass if pinning
     // did nothing at all: the Floor MUST give up the gutter, or the dock is
     // covering content instead of sitting beside it.

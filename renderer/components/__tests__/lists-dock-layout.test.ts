@@ -64,12 +64,9 @@ const BROKEN = `
 
 const FIXED = `
 /* A comment naming .gwrap.lists-docked, which must not be mistaken for a rule. */
-.gwrap.lists-docked .gright {
-    padding-right: var(--lists-dock-w);
-}
-.gwrap.lists-docked .titlebar,
-.gwrap.lists-docked .gtoolbar {
-    margin-right: calc(-1 * var(--lists-dock-w));
+.gwrap.lists-docked .gbody,
+.gwrap.lists-docked .gstatus {
+    margin-right: var(--lists-dock-w);
 }
 `;
 
@@ -84,7 +81,9 @@ describe('the guard can actually tell the two apart', () => {
 
     it('does not find it there in the FIXED css, and is not fooled by the comment', () => {
         expect(declarationsFor(FIXED, '.gwrap.lists-docked')).toBeNull();
-        expect(declarationsFor(FIXED, '.gwrap.lists-docked .gright')).toContain('padding-right');
+        expect(
+            declarationsFor(FIXED, '.gwrap.lists-docked .gbody, .gwrap.lists-docked .gstatus'),
+        ).toContain('margin-right');
     });
 
     it('strips a multi-line comment whole, not line by line', () => {
@@ -99,18 +98,24 @@ describe('docking reserves the gutter without touching the header', () => {
         expect(declarationsFor(css, '.gwrap.lists-docked')).toBeNull();
     });
 
-    it('reserves the gutter on the content column instead', () => {
-        expect(declarationsFor(css, '.gwrap.lists-docked .gright')).toContain(
-            'padding-right: var(--lists-dock-w)',
-        );
+    it('reserves the gutter on the CONTENT rows instead', () => {
+        expect(
+            declarationsFor(css, '.gwrap.lists-docked .gbody, .gwrap.lists-docked .gstatus'),
+        ).toContain('margin-right: var(--lists-dock-w)');
     });
 
-    it('pulls BOTH header rows back out of the reserve, so the icons do not move', () => {
-        const decls = declarationsFor(
-            css,
-            '.gwrap.lists-docked .titlebar, .gwrap.lists-docked .gtoolbar',
-        );
-        expect(decls).toContain('margin-right: calc(-1 * var(--lists-dock-w))');
+    it('does not put the reserve on .gright either — padding grows a flex item', () => {
+        // Measured on the VMs: `padding-right` on `.gright` (flex: 1) kept the
+        // header's WIDTH but grew the column's outer box, so the row overflowed
+        // and squeezed `.gleft` from 300px to 163px. The rail shrank instead of
+        // the Floor, and the whole header still moved.
+        expect(declarationsFor(css, '.gwrap.lists-docked .gright')).toBeNull();
+    });
+
+    it('names neither header row, so neither can be moved by the rule', () => {
+        expect(
+            declarationsFor(css, '.gwrap.lists-docked .titlebar, .gwrap.lists-docked .gtoolbar'),
+        ).toBeNull();
     });
 
     it('starts the dock below both header rows', () => {
