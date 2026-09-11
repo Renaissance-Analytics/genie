@@ -160,5 +160,45 @@ jobs:
             go-caddy-${{ runner.os }}-go1.25-
       - name: Build the service runtime (bundled Caddy)
         run: npm run build:runtime
+      # THE JOB HAD NO WAY TO GET ITS IMAGES (genie#636).
+      #
+      # `*.real.test.ts` runs REAL containers, and this job had no `docker pull`
+      # and no `docker login` — it depended entirely on whatever the runner image
+      # happened to cache, plus anonymous Docker Hub pulls. On 2026-09-11 both
+      # moved at once: `redis:7-alpine` was not cached and `minio/minio` answered
+      # anonymous clients with "pull access denied". Six tests failed, four of
+      # them as `expected 'failed' to be 'running'`, which reads as a product bug
+      # and cost two CI rounds before the cause was visible.
+      #
+      # Pulling them HERE, by name, is what makes a registry problem fail AS a
+      # registry problem, at a named step, before any test runs. The alternative
+      # — leaving it to the tests — is what produced the misdiagnosis.
+      #
+      # These are the Docker Hub images the real suite runs. The Genie Postgres
+      # image is NOT listed: `postgres-image.real.test.ts` builds it from the
+      # pgvector base below, which is the thing that needs fetching.
+      #
+      # Retried, because a registry blip is not a code failure and a one-shot
+      # pull turns one into the other. Still bounded: three attempts, then a
+      # loud, named failure.
+      #
+      # NOT THE WHOLE FIX. Anonymous pull limits are the root cause and they only
+      # tighten; `docker/login-action` with a Hub token would remove the class.
+      # That needs a repository secret, so it is the owner's to add — see #636.
+      - name: Pull the images the real tests run
+        timeout-minutes: 8
+        run: |
+          for image in redis:7-alpine pgvector/pgvector:pg17 minio/minio:latest; do
+            for attempt in 1 2 3; do
+              if docker pull "$image"; then
+                break
+              fi
+              if [ "$attempt" = 3 ]; then
+                echo "::error::Could not pull $image after 3 attempts. The real hosting tests cannot run without it; this is a registry/auth problem, not a code failure."
+                exit 1
+              fi
+              sleep $((attempt * 10))
+            done
+          done
       - name: Real hosting tests (bundled Caddy + php-cgi)
         run: npm run test:hosting
