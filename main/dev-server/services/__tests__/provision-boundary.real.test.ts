@@ -27,7 +27,7 @@ import type { EngineAdmin, WorkspaceSlice } from '../provision';
  * failure — it was the documented behaviour.
  */
 
-const MINIO_IMAGE = 'minio/minio:latest';
+const MINIO_IMAGE = 'quay.io/minio/minio:latest';
 const REDIS_IMAGE = 'redis:7-alpine';
 const LABEL = { 'genie.realtest': '1' };
 
