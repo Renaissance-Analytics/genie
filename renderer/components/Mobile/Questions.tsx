@@ -18,7 +18,7 @@ import {
  * desktop modal (same `finish()` path `ask:answer` uses).
  *
  * `index 0` is the request currently shown on the desktop; we badge it so the
- * user knows the desktop is mirroring it. Lives via `question:changed` from the
+ * user knows the desktop is mirroring it. Lives via `questions:changed` from the
  * shared event stream (refetch on any change — answered-elsewhere included).
  */
 export default function Questions({
@@ -48,7 +48,7 @@ export default function Questions({
 
     useEffect(() => {
         const off = subscribe((e: MobileEvent) => {
-            if (e.type === 'question:changed') void refetch();
+            if (e.type === 'questions:changed') void refetch();
         });
         return off;
     }, [subscribe]);

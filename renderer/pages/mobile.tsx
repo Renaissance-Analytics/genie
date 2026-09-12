@@ -140,7 +140,7 @@ export default function MobilePage() {
     // The questions tab UNMOUNTS when you leave it, so the shell owns the
     // authoritative list — otherwise a question arriving while you're on another
     // tab is missed (badge never updates, the list stays at the stale bootstrap)
-    // until a manual reload. Refresh on every `question:changed` push AND whenever
+    // until a manual reload. Refresh on every `questions:changed` push AND whenever
     // the Questions tab is opened (covers a push missed during a WS reconnect).
     // The baton moved: the host pushes each client ITS OWN view, so this is both
     // "am I view-only now" and "who took over" — no polling, no guessing why a
@@ -159,7 +159,7 @@ export default function MobilePage() {
     useEffect(() => {
         if (!token || !booted) return;
         const off = subscribe((e) => {
-            if (e.type !== 'question:changed') return;
+            if (e.type !== 'questions:changed') return;
             void listQuestions()
                 .then((qs) => {
                     setQuestions(qs);
