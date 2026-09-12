@@ -1839,11 +1839,25 @@ process.stdin.on('end', async () => {
 /** Render a plugin's guidance as a SKILL.md. */
 export function pluginSkillBody(skill: PluginSkill): string {
     const tools = skill.tools.map((t) => `- \`${t.name}\` — ${t.description}`).join('\n');
-    // The description drives WHEN an agent loads this skill, so it names the
-    // plugin, its purpose, and its tools rather than restating the guide.
+    // THE DESCRIPTION IS THE TRIGGER, so it leads with WHAT THIS IS FOR.
+    //
+    // It used to open "Use when working with <Plugin> or its Genie tools (…)" —
+    // keyed on the plugin's NAME, which only an agent that already knows the
+    // plugin can match. The agent this exists for is the one about to hand-roll
+    // an equivalent, and it has never heard of the plugin. Owner: "Claude agents
+    // keep trying to do their own internal msging and artboards and we need to
+    // encourage using Genie's tools." The skill was there; nothing made it fire.
+    //
+    // So: the plugin's own summary of its PURPOSE first — that is the sentence
+    // an agent can recognise its situation in — then the steer, then the tools.
+    // The steer matters as much as the availability: a description that says a
+    // capability exists, without saying to prefer it, loses to the agent's
+    // instinct to build something.
+    const toolNames = skill.tools.map((t) => t.name).join(', ');
     const description =
-        `Use when working with ${skill.name} or its Genie tools ` +
-        `(${skill.tools.map((t) => t.name).join(', ')}). ${skill.description}`;
+        `${skill.description} Use ${toolNames} for this instead of building your ` +
+        `own — contributed by the ${skill.name} Genie plugin, and only available ` +
+        `while it is enabled here.`;
     return `---
 name: ${PLUGIN_SKILL_PREFIX}${skill.namespace}
 description: ${description.replace(/\s+/g, ' ').trim()}

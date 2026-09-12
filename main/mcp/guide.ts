@@ -1096,9 +1096,23 @@ and it is not durable, where AgentInbox queues for an agent that is away.
 \`agentinbox list\`, and your harness's own messaging is the right way to reach
 them.
 
+**Genie already owns the surfaces you would otherwise improvise, and an
+improvised one is invisible to the human, unreviewable, and dies with your
+session.** Same rule as AgentInbox above, restated because the same thing keeps
+happening. Use \`lists\` for your own checklist and for things a PERSON has to do —
+your AgentList is filed under your agent NAME, so it survives a restart and
+rides along on every \`imDone\`, while a UserList item is the NON-BLOCKING
+counterpart to \`ForceTheQuestion\`: it lets you carry on, and nudges you when they
+tick it off. Use \`knowledge\` for anything worth remembering after this session —
+it files into your workspace by default, so say \`scope: 'system'\` for what every
+agent on this machine should find. Use \`manageFlows\` for work that repeats or
+fires on a schedule, never a shell loop you leave running or a cron line of your
+own. A plugin that adds a surface brings its own instructions with it, so
+nothing here names a tool you may not have.
+
 **Everything else — hosting a site, background processes and cron, services,
-Genie Apps, driving terminals and other agents, workspaces, the knowledge graph
-— is in \`genieGuide\`.** Call it for the full usage of any of them; it reports
+Genie Apps, driving terminals and other agents, workspaces — is in
+\`genieGuide\`.** Call it for the full usage of any of them; it reports
 the running Genie version first. Harness-specific setup (your on-finish hook)
 is there too, not here.
 

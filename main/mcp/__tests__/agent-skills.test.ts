@@ -84,6 +84,40 @@ describe('agent skills sync', () => {
         expect(body).toContain('`presentation.createDeck`');
     });
 
+    /**
+     * THE DESCRIPTION IS THE TRIGGER, SO IT MUST DESCRIBE THE SITUATION.
+     *
+     * A skill is loaded on its `description` matching what the agent is about to
+     * do. The generated one used to open "Use when working with <Plugin> or its
+     * Genie tools (...)" — keyed on the plugin's NAME, which only an agent that
+     * already knows the plugin can match. The agent this exists for is the one
+     * about to hand-roll an equivalent, and it has never heard of the plugin.
+     *
+     * The owner's report is exactly that shape: "Claude agents keep trying to do
+     * their own internal msging and artboards and we need to encourage using
+     * Genie's tools." The skill was there the whole time; nothing made it fire.
+     */
+    it('leads the description with WHAT IT IS FOR, not the plugin name', () => {
+        const body = pluginSkillBody(PRESENTATION as never);
+        const description = /description: (.*)/.exec(body)?.[1] ?? '';
+
+        // The situation an agent can recognise, first.
+        expect(description.startsWith('Generate PowerPoint decks.')).toBe(true);
+        // And NOT the old name-first opener.
+        expect(description).not.toMatch(/^Use when working with/);
+    });
+
+    it('tells the agent to use the tool instead of building its own', () => {
+        // The steer, not just the availability. Without it the description says
+        // a capability exists and never says to prefer it, which is the whole
+        // failure being fixed.
+        const description =
+            /description: (.*)/.exec(pluginSkillBody(PRESENTATION as never))?.[1] ?? '';
+        expect(description).toMatch(/instead of building your own|rather than building your own/i);
+        // Still names the callable tool — a steer with no tool name is advice.
+        expect(description).toContain('presentation.createDeck');
+    });
+
     it('prunes a plugin skill once the plugin is gone', () => {
         skills = [PRESENTATION];
         writeWorkspaceAgentMcp(WS, true, URL);
