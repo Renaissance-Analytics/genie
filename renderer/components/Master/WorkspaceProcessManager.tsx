@@ -43,7 +43,6 @@ import {
 import { SCHEDULE_PRESETS } from '../../lib/schedule-view';
 import { useProcessRuntime } from '../../lib/use-process-runtime';
 import { pickPath } from '../FilePickerModal';
-import { showPrompt } from './Prompt';
 
 /**
  * THE PROCESSES MODAL — a workspace's background processes, built like the Site
@@ -114,6 +113,8 @@ export default function WorkspaceProcessManager({
     const [busy, setBusy] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [log, setLog] = useState<{ id: string; text: string } | null>(null);
+    /** The process whose delete is being confirmed. */
+    const [deleting, setDeleting] = useState<TerminalSpec | null>(null);
     const [now, setNow] = useState(() => Date.now());
 
     // "in 2 hr" / "Ran 5 min ago" are relative: refresh them once a minute rather
@@ -152,13 +153,10 @@ export default function WorkspaceProcessManager({
             return;
         }
         if (action === 'delete') {
-            const ok = await showPrompt({
-                title: 'Delete process',
-                body: `Delete “${spec.label}”? It is stopped and removed. Its files are untouched.`,
-                confirmLabel: 'Delete',
-                destructive: true,
-            });
-            if (ok !== null) onDelete(spec.id);
+            // A Fancy Modal, not the app-level `showPrompt`: that prompt's layer
+            // sits BELOW Fancy's overlay by design (overlay-layers.test.ts), so
+            // opened from inside this modal it rendered behind it, unclickable.
+            setDeleting(spec);
             return;
         }
         setBusy(spec.id);
@@ -246,6 +244,39 @@ export default function WorkspaceProcessManager({
                     </Tabs.Panels>
                 </Tabs>
             </div>
+
+            {deleting && (
+                <Modal open onClose={() => setDeleting(null)} size="sm">
+                    <Modal.Header>
+                        <Heading as="h3" size="xs">
+                            Delete process
+                        </Heading>
+                    </Modal.Header>
+                    <div className="ws-settings process-delete-confirm">
+                        <Text size="sm">
+                            Delete “{deleting.label}”? It is stopped and removed from this workspace. Its
+                            files are untouched.
+                        </Text>
+                        <div className="set-actions">
+                            <Action
+                                size="sm"
+                                color="red"
+                                icon="trash-2"
+                                onClick={() => {
+                                    onDelete(deleting.id);
+                                    if (log?.id === deleting.id) setLog(null);
+                                    setDeleting(null);
+                                }}
+                            >
+                                Delete process
+                            </Action>
+                            <Action size="sm" variant="ghost" onClick={() => setDeleting(null)}>
+                                Cancel
+                            </Action>
+                        </div>
+                    </div>
+                </Modal>
+            )}
 
             {form && (
                 <ProcessForm

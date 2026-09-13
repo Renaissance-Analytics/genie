@@ -1617,8 +1617,11 @@ test('the Processes modal adds, runs, shows, stops, renames and deletes a real p
     await expect(processForm()).toHaveCount(0);
     await expect(processCardNamed(renamed)).toBeVisible();
 
+    // The confirmation must be ABOVE the modal it was opened from. The first
+    // version used the app-level prompt, which rendered behind the modal: this
+    // click timed out on the VM with a CodeView in the way.
     await processCardNamed(renamed).getByRole('button', { name: 'Delete' }).click();
-    await page.locator('.prompt-card').getByRole('button', { name: 'Delete' }).click();
+    await page.locator('.process-delete-confirm').getByRole('button', { name: 'Delete process' }).click();
     await expect(processCardNamed(renamed)).toHaveCount(0);
 
     await page.keyboard.press('Escape');
@@ -1653,7 +1656,7 @@ test('a scheduled task can be paused and enabled again from its card', async () 
     await expect(card.locator('.site-card-status')).toHaveText('Scheduled');
 
     await card.getByRole('button', { name: 'Delete' }).click();
-    await page.locator('.prompt-card').getByRole('button', { name: 'Delete' }).click();
+    await page.locator('.process-delete-confirm').getByRole('button', { name: 'Delete process' }).click();
     await expect(card).toHaveCount(0);
 
     await page.keyboard.press('Escape');
