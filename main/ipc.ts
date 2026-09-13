@@ -4,7 +4,8 @@ import { readBoardForPanel, reviewBoardPost, type WireDeps } from './artboard/wi
 import { app, clipboard, dialog, ipcMain, shell, BrowserWindow } from 'electron';
 import os from 'node:os';
 import path from 'node:path';
-import { writeClipboardImagePng } from './clipboard-image';
+import { readClipboardImageDataUrl, writeClipboardImagePng } from './clipboard-image';
+import { dialogStartDir } from './dialog-start-dir';
 import {
     addWorkspace,
     AI_SYSTEM_MAX,
@@ -811,8 +812,10 @@ export function registerIpcHandlers(): void {
     // navigator.clipboard is unreliable in a sandboxed Electron window — it fails
     // SILENTLY (no permission / lost user-gesture), so terminal copy never reached
     // the OS clipboard. Routing through main is the reliable path.
-    ipcMain.handle('clipboard:write', (_e, text: unknown) => {
-        clipboard.writeText(typeof text === 'string' ? text : String(text ?? ''));
+    // Electron 44's clipboard is async (the W3C shape), so both are awaited: a
+    // write reports ok only once it has actually landed.
+    ipcMain.handle('clipboard:write', async (_e, text: unknown) => {
+        await clipboard.writeText(typeof text === 'string' ? text : String(text ?? ''));
         return { ok: true };
     });
     ipcMain.handle('clipboard:read', () => clipboard.readText());
@@ -825,10 +828,7 @@ export function registerIpcHandlers(): void {
     // it's a temp FILE whose `path` comes back so the caller pastes the path
     // instead (Claude Code can't reliably read a Linux clipboard image). Shared
     // with the bridge route via `writeClipboardImagePng`.
-    ipcMain.handle('clipboard:read-image', () => {
-        const img = clipboard.readImage();
-        return img.isEmpty() ? null : img.toDataURL();
-    });
+    ipcMain.handle('clipboard:read-image', () => readClipboardImageDataUrl());
     ipcMain.handle('clipboard:write-image', (_e, dataBase64: unknown) => {
         const b64 = typeof dataBase64 === 'string' ? dataBase64 : '';
         if (!b64) return { ok: false, supported: true };
@@ -837,21 +837,26 @@ export function registerIpcHandlers(): void {
     ipcMain.handle(
         'settings:choose-folder',
         async (_e, label?: string, defaultPath?: string) => {
-            const r = await dialog.showOpenDialog({
-                title: label ?? 'Choose folder',
-                // Seed the picker at a starting directory when one is given
-                // (e.g. ~/ for a System Workspace process). Ignored when absent.
-                ...(defaultPath ? { defaultPath } : {}),
-                properties: ['openDirectory', 'createDirectory'],
-            });
+            // Seed the picker at a starting directory when one is given (e.g. ~/
+            // for a System Workspace process); otherwise where the last pick was.
+            const r = dialogStartDir.remember(
+                await dialog.showOpenDialog(
+                    dialogStartDir.apply({
+                        title: label ?? 'Choose folder',
+                        ...(defaultPath ? { defaultPath } : {}),
+                        properties: ['openDirectory', 'createDirectory'],
+                    }),
+                ),
+            );
             return r.canceled ? null : r.filePaths[0];
         },
     );
     ipcMain.handle('settings:choose-file', async (_e, label?: string) => {
-        const r = await dialog.showOpenDialog({
-            title: label ?? 'Choose file',
-            properties: ['openFile'],
-        });
+        const r = dialogStartDir.remember(
+            await dialog.showOpenDialog(
+                dialogStartDir.apply({ title: label ?? 'Choose file', properties: ['openFile'] }),
+            ),
+        );
         return r.canceled ? null : r.filePaths[0];
     });
     // Read a sound file (custom alert sound) into a base64 data-URL so the

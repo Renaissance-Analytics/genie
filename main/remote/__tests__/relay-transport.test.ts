@@ -374,7 +374,7 @@ describe('relay transport — PoP challenge/proof (P4.5)', () => {
         expect(proof.jwk).toEqual(popJwk);
 
         // The signature verifies over SHA-256(nonce || workstationId || sid).
-        const pub = crypto.createPublicKey({ key: proof.jwk as crypto.JsonWebKey, format: 'jwk' });
+        const pub = crypto.createPublicKey({ key: proof.jwk as crypto.webcrypto.JsonWebKey, format: 'jwk' });
         const ok = crypto.verify(
             null,
             popSignedInput(nonce, WS_ID, 'sid-test-1'),

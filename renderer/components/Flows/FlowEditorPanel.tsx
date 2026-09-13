@@ -344,12 +344,13 @@ export default function FlowEditorPanel({ flowId, scope }: Props) {
                     // `flex: 1; min-height: 0` column.
                     //
                     // `gridTemplateColumns` names only the panes that are
-                    // DOCKED. It has to arrive inline for the same reason the
-                    // height does — `.ff-editor`'s own rule is a fixed
-                    // `216px 1fr 300px` whatever `showPalette`/`showPanel` say,
-                    // so turning a pane off without this leaves the canvas in a
-                    // 216px column and an empty 300px one beside it. Raised
-                    // upstream as Particle-Academy/fancy-flow#16.
+                    // DOCKED. fancy-flow's own columns follow `showPalette` /
+                    // `showPanel` (0.68+), but a pane Genie floats as an overlay
+                    // is shown AND absolutely positioned, so it leaves grid
+                    // placement: the canvas becomes the first in-flow child and
+                    // would land in the package's leading `auto` track instead
+                    // of `1fr`. Genie's measured layout lists the tracks the
+                    // in-flow children actually need.
                     style={{ height: '100%', gridTemplateColumns: panes.columns }}
                     showPalette={panes.showPalette}
                     showPanel={panes.showPanel}

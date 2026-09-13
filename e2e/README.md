@@ -29,17 +29,9 @@ npx playwright test
 
 - `npx playwright install` is **not** required — these tests launch Electron
   (already a dependency), not a browser download.
-- **Native module ABI.** The Electron main process loads `better-sqlite3`, a
-  native module. It must be built for **Electron's** ABI, not plain Node's:
-
-  ```bash
-  npx electron-rebuild -f -o better-sqlite3
-  ```
-
-  (`-o` rebuilds only that module, skipping `node-pty`, whose Windows build
-  needs a toolchain that isn't always present.) After running E2E, restore the
-  Node ABI for vitest with `npm rebuild better-sqlite3` (the `pretest` script
-  does this automatically before `npm test`).
+- **Native module ABI.** Nothing to do for `better-sqlite3`: from v13 it is an
+  N-API addon with prebuilt binaries in the package, which load under Electron
+  and Node alike, so E2E and `npm test` share one install.
 
 - **node-pty's ConPTY files (Windows).** The postinstall puts them back when a
   rebuild has taken them away, and `pretest:e2e` checks again — fatally, since a

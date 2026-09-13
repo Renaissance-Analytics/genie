@@ -2,7 +2,7 @@
   "compilerOptions": {
     "target": "ES2022",
     "module": "commonjs",
-    "moduleResolution": "node",
+    "moduleResolution": "bundler",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -11,10 +11,9 @@
     "isolatedModules": true,
     "jsx": "react-jsx",
     "lib": ["ES2022", "DOM"],
-    "baseUrl": ".",
     "paths": {
-      "@main/*": ["main/*"],
-      "@renderer/*": ["renderer/*"]
+      "@main/*": ["./main/*"],
+      "@renderer/*": ["./renderer/*"]
     }
   },
   "include": ["main/**/*", "renderer/**/*"],

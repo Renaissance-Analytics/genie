@@ -7599,11 +7599,10 @@ body.gutter-dragging .grid-gutter {
 /*
  * The canvas is not the element that yields.
  *
- * fancy-flow lays `.ff-editor` out as `grid-template-columns: 216px 1fr 300px`
- * -- two FIXED columns with the canvas as the `1fr` between them -- so the
- * canvas is the only thing that can give, and it gives all the way to nothing.
- * `FlowEditorPanel` names the columns inline from a MEASURED width instead
- * (`renderer/lib/flow-editor-layout.ts`), listing only the panes that are
+ * fancy-flow gives its panes fixed widths (shrunk by container queries), so with
+ * both docked the canvas is the only thing that can give, and it gives all the way
+ * to nothing. `FlowEditorPanel` names the columns inline from a MEASURED width
+ * instead (`renderer/lib/flow-editor-layout.ts`), listing only the panes that are
  * docked; what is left over is here.
  *
  * `.floweditor-shell` is the box the panel measures, and the box an undocked
@@ -7626,33 +7625,12 @@ body.gutter-dragging .grid-gutter {
 }
 
 /*
- * fancy-flow hides its own panes by VIEWPORT width:
- *
- *     @media (max-width: 1024px) { .ff-editor__panel-wrap { display: none } }
- *     @media (max-width:  720px) { .ff-editor__palette    { display: none } }
- *
- * Both are the wrong axis for Genie. The editor is never the viewport -- it is a
- * tab in a GApp window, or the body of its own window with chrome around it --
- * and `display: none` from a stylesheet outranks a host that asked for the pane,
- * so the toggle bringing a pane back would appear dead at exactly the widths it
- * exists for. Genie decides from the container instead; these put the decision
- * back in its hands.
- *
- * Raised upstream as Particle-Academy/fancy-flow#16. Pinned by
- * `flow-editor-responsive-css.test.ts`, whose positive control fails if
- * fancy-flow ever drops the rules -- at which point these two blocks, and the
- * inline `gridTemplateColumns` in `FlowEditorPanel`, should go with them.
+ * No rule here restores a pane. Until fancy-flow 0.68 its stylesheet hid them by
+ * VIEWPORT width with `display: none`, and Genie carried rules putting them back;
+ * upstream now sizes the panes with container queries and hides none
+ * (Particle-Academy/fancy-flow#16). `flow-editor-responsive-css.test.ts` fails if
+ * either half of that comes back.
  */
-@media (max-width: 1024px) {
-    .floweditor-shell .ff-editor__panel-wrap {
-        display: flex;
-    }
-}
-@media (max-width: 720px) {
-    .floweditor-shell .ff-editor__palette {
-        display: flex;
-    }
-}
 
 /* An undocked pane floats OVER the canvas rather than taking a column from it:
    `grid-template-columns` names only the docked panes, so a pane left in flow

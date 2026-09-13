@@ -7,9 +7,10 @@
  * the owner's screenshot: a graph squeezed to a sliver between a full palette
  * and a full config panel.
  *
- * The package's own answer is two media queries that `display: none` the panel
- * below 1024px and the palette below 720px. Genie cannot use them, for two
- * reasons that are both about the same mistake:
+ * The package's own answer used to be two media queries that `display: none` the
+ * panel below 1024px and the palette below 720px (fancy-flow 0.68 replaced them
+ * with container queries that shrink the panes instead — fancy-flow#16). Genie
+ * could not use them, for two reasons that are both about the same mistake:
  *
  *  - they measure the VIEWPORT. The editor is not the window. It is a tab inside
  *    a GApp window, or the body of its own window with chrome around it, so the
@@ -27,9 +28,9 @@
  * the part a test could only restate.
  */
 
-/** The palette column fancy-flow reserves. */
+/** The widest fancy-flow makes the palette. */
 export const FLOW_PALETTE_WIDTH = 216;
-/** The config panel column fancy-flow reserves. */
+/** The widest fancy-flow makes the config panel. */
 export const FLOW_PANEL_WIDTH = 300;
 /**
  * What the canvas keeps, always.
@@ -48,7 +49,15 @@ export type FlowPaneName = 'palette' | 'panel';
 export interface FlowEditorLayout {
     palette: FlowPaneFit;
     panel: FlowPaneFit;
-    /** `grid-template-columns` for `.ff-editor` — the DOCKED panes only. */
+    /**
+     * `grid-template-columns` for `.ff-editor` — the DOCKED panes only.
+     *
+     * A docked pane's track is `auto`, so it is exactly as wide as the pane.
+     * fancy-flow sizes the panes itself and shrinks them with container queries
+     * (0.68+); a pixel track would keep its width while the pane inside it shrank,
+     * leaving an empty strip beside the canvas. The widths above are the LARGEST a
+     * pane gets, which is what the canvas minimum has to budget for.
+     */
     columns: string;
     /** What the canvas is left with once the docked panes have taken theirs. */
     canvasWidth: number;
@@ -78,7 +87,7 @@ export function flowEditorLayout(width: number): FlowEditorLayout {
         return {
             palette: 'docked',
             panel: 'docked',
-            columns: `${FLOW_PALETTE_WIDTH}px 1fr ${FLOW_PANEL_WIDTH}px`,
+            columns: 'auto 1fr auto',
             canvasWidth: measured - FLOW_PALETTE_WIDTH - FLOW_PANEL_WIDTH,
         };
     }
@@ -86,7 +95,7 @@ export function flowEditorLayout(width: number): FlowEditorLayout {
         return {
             palette: 'docked',
             panel: 'overlay',
-            columns: `${FLOW_PALETTE_WIDTH}px 1fr`,
+            columns: 'auto 1fr',
             canvasWidth: measured - FLOW_PALETTE_WIDTH,
         };
     }

@@ -17,7 +17,7 @@ import {
 
 /**
  * Schema migrations are exercised against a real in-memory better-sqlite3
- * (the binary is NOT mocked — see vitest.config.ts). The v4 migration adds
+ * (the binary is NOT mocked — see vitest.config.mts). The v4 migration adds
  * `type`/`meta_json` to `terminal_specs` as idempotent ADD COLUMNs; the key
  * guarantee is that a row written under the v3 schema reads back with the
  * v4 defaults (`type='terminal'`, `meta={}`) without a rewrite.

@@ -35,7 +35,7 @@ import AskFilePreview, { isMarkdownPath } from '../Ask/AskFilePreview';
  * because that is what actually decides whether a line wraps, and an unwrapped
  * editor is rendered beside them so the assertion can be seen to fail.
  *
- * The renderer has no jsdom harness (see vitest.config.ts), so this renders
+ * The renderer has no jsdom harness (see vitest.config.mts), so this renders
  * through `react-dom/server`. Everything asserted is static markup — layout,
  * scroll position and the wrap TOGGLE are not observable here, which is why the
  * stylesheet test exists beside it.

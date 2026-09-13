@@ -21,7 +21,7 @@ import {
  * ## It does NOT run on `npm test`
  *
  * The unit suite must work on a plane. This file matches `*.live.test.ts`,
- * which `vitest.config.ts` excludes for the same reason it excludes
+ * which `vitest.config.mts` excludes for the same reason it excludes
  * `*.real.test.ts`; it runs under `npm run test:contract`, which CI schedules
  * daily and runs on any PR that touches a Tynn client. The offline half
  * (`tynn-contract.test.ts`) asserts that wiring still exists, because a check

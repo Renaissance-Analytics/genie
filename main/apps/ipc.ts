@@ -13,6 +13,7 @@
 import fs from 'fs';
 import path from 'path';
 import { ipcMain, dialog } from 'electron';
+import { dialogStartDir } from '../dialog-start-dir';
 import {
     addWorkspace,
     createTerminalSpec,
@@ -276,11 +277,15 @@ export function installIO(): AppInstallIO {
 
 
 async function pickFolder(title: string): Promise<string | null> {
-    const picked = await dialog.showOpenDialog({
-        title,
-        message: `Choose the folder containing ${APP_MANIFEST_FILENAME}`,
-        properties: ['openDirectory'],
-    });
+    const picked = dialogStartDir.remember(
+        await dialog.showOpenDialog(
+            dialogStartDir.apply({
+                title,
+                message: `Choose the folder containing ${APP_MANIFEST_FILENAME}`,
+                properties: ['openDirectory'],
+            }),
+        ),
+    );
     return picked.canceled ? null : (picked.filePaths[0] ?? null);
 }
 

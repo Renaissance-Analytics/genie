@@ -21,7 +21,7 @@ import { describe, expect, it } from 'vitest';
  *     showing through at all four corners.
  *
  * These are asserted against the STYLESHEET rather than a render because the
- * renderer has no jsdom harness (see vitest.config.ts). The layout claim the
+ * renderer has no jsdom harness (see vitest.config.mts). The layout claim the
  * stylesheet cannot make — that a LONG question grows instead of scrolling and a
  * SHORT one still renders — is proved against the real window in
  * `e2e/ask-modal.spec.ts`, at two sizes, because "it grows" passes just as well

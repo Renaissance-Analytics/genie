@@ -25,7 +25,7 @@ import { PROVIDER_IDS } from '../../../main/agents/registry';
  *
  * Extracted from AgentInboxFlyout so the ordering rule, the headcount pill and
  * the persisted client-side read state are testable without a DOM (the renderer
- * has no jsdom harness — see vitest.config.ts).
+ * has no jsdom harness — see vitest.config.mts).
  */
 
 describe('sortByActivityDesc', () => {

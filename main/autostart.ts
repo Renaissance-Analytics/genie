@@ -63,7 +63,9 @@ export function setAutostart(enabled: boolean): void {
     // macOS + Windows
     app.setLoginItemSettings({
         openAtLogin: enabled,
-        openAsHidden: true,
+        // No `openAsHidden`: Electron 44 removed it (it only ever worked on macOS 12
+        // and below). Staying tray-only at sign-in is decided at boot instead, by
+        // `launchedFromAutostart()` below, on every platform.
         // macOS handles the path automatically. On Windows we pass an
         // explicit `--autostart` arg so background.ts can detect it and
         // keep the master window closed (tray-only first run on boot).

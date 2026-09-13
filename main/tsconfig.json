@@ -2,18 +2,21 @@
   "extends": "../tsconfig.json",
   "compilerOptions": {
     "outDir": "../app",
+    // The main tree's tests import renderer, test and packages sources. TS 6+
+    // defaults rootDir to this file's folder once outDir is set, so it is named.
+    "rootDir": "..",
     "module": "commonjs",
     "target": "ES2022",
     "jsx": "react-jsx",
     "noEmit": false,
     "paths": {
-      "@main/*": ["main/*"],
-      "@renderer/*": ["renderer/*"],
+      "@main/*": ["../main/*"],
+      "@renderer/*": ["../renderer/*"],
       "@particle-academy/fancy-term-host/service": [
-        "node_modules/@particle-academy/fancy-term-host/dist/service.d.ts"
+        "../node_modules/@particle-academy/fancy-term-host/dist/service.d.ts"
       ],
       "@particle-academy/fancy-flow/engine": [
-        "node_modules/@particle-academy/fancy-flow/dist/engine.d.ts"
+        "../node_modules/@particle-academy/fancy-flow/dist/engine.d.ts"
       ]
     }
   },

@@ -3,7 +3,7 @@ import { defineConfig } from '@playwright/test';
 /**
  * Playwright config for Genie's Electron E2E suite.
  *
- * Scope: only the `e2e/` directory. Unit tests stay on vitest (vitest.config.ts
+ * Scope: only the `e2e/` directory. Unit tests stay on vitest (vitest.config.mts
  * only globs `__tests__/`), so the two suites never collide.
  *
  * These tests boot the REAL compiled Electron app (app/background.js) via

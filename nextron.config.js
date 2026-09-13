@@ -26,6 +26,13 @@ const path = require('path');
 
 module.exports = {
     webpack: (config /* , env */) => {
+        // nextron 10 names the main entry `main` and builds `main/main.ts` into
+        // `app/main.js`. Genie's main process is `main/background.ts`, and
+        // `package.json#main`, the E2E harness and the packaged app all load
+        // `app/background.js`. So the default entry is REPLACED rather than
+        // renamed around: dropping `main` also stops webpack looking for a
+        // `main/main.ts` that does not exist.
+        const { main: _nextronDefaultEntry, ...entries } = config.entry ?? {};
         // The GApp preload (Tynn #250) is a SECOND preload bundle, emitted beside
         // `preload.js` as `app-preload.js`. It must be its own entry rather than a
         // module inside the main bundle: it is loaded into a third-party app's
@@ -33,7 +40,8 @@ module.exports = {
         // contains only the two-call bridge surface — not Genie's own preload, and
         // not the main process it would otherwise be bundled with.
         config.entry = {
-            ...(config.entry ?? {}),
+            ...entries,
+            background: path.join(__dirname, 'main/background.ts'),
             'app-preload': path.join(__dirname, 'main/apps/app-preload.ts'),
         };
 

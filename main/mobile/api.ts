@@ -538,12 +538,12 @@ export interface MobileDataDeps {
      * the route reports `supported:false` — the client no-ops the image gracefully
      * and never breaks text paste. `supported:true, ok:false` means the host could
      * accept an image but the PNG was unusable. */
-    writeClipboardImage?: (png: Buffer) => {
+    writeClipboardImage?: (png: Buffer) => Promise<{
         ok: boolean;
         supported: boolean;
         /** Absolute HOST path to a temp PNG the client should paste (Linux). */
         path?: string;
-    };
+    }>;
 
     // --- force-question ---
     listPendingQuestions: () => PendingQuestion[];
@@ -1410,7 +1410,7 @@ export async function handleApi(
             sendJson(res, 413, { error: 'image too large' });
             return true;
         }
-        const result = deps.writeClipboardImage(buf);
+        const result = await deps.writeClipboardImage(buf);
         const how = result.supported
             ? result.ok
                 ? result.path

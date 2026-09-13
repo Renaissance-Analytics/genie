@@ -30,7 +30,7 @@ import path from 'node:path';
  * green. The spec behaves identically whether the overlay exists or not — that
  * is the whole defect — so the only place the two can be told apart is here,
  * against the source. Same argument the `e2e/helpers` vitest lane already makes
- * for the launch wait-for-exit in `vitest.config.ts`.
+ * for the launch wait-for-exit in `vitest.config.mts`.
  *
  * The third wait, `.whats-new-backdrop`, IS reachable and is the POSITIVE
  * CONTROL: it keeps this test honest. A module walk that silently resolved
