@@ -1,4 +1,4 @@
-import type { IssueWatchDeltaPush } from './workspace-assignment';
+import type { IssueWatchDeltaPush, TynnFeedbackItemPush } from './workspace-assignment';
 
 /**
  * PURE Pusher wire codec for the local workstation's private-channel subscription
@@ -130,6 +130,33 @@ export function toIssueWatchDelta(raw: unknown): IssueWatchDeltaPush | null {
             feedback: num(c.feedback),
         },
         items: Array.isArray(r.items) ? r.items : [],
+        // A Tynn that predates titles sends no key: that is "none", not undefined.
+        feedbackItems: Array.isArray(r.feedbackItems)
+            ? r.feedbackItems.map(toFeedbackItem).filter((i): i is TynnFeedbackItemPush => i !== null)
+            : [],
+    };
+}
+
+/**
+ * One titled open issue, or null for an entry the panel could neither show nor
+ * open. The link must be http(s): it is handed to the system browser, so a
+ * `javascript:` or `file:` value stops here even though Tynn is the sender.
+ */
+function toFeedbackItem(raw: unknown): TynnFeedbackItemPush | null {
+    if (!raw || typeof raw !== 'object') return null;
+    const r = raw as Record<string, unknown>;
+    const key = str(r.key);
+    const title = str(r.title);
+    const url = str(r.url);
+    if (!key || !title || !url || !/^https?:\/\//i.test(url)) return null;
+    return {
+        key,
+        number: typeof r.number === 'number' && Number.isFinite(r.number) ? r.number : null,
+        title,
+        source: str(r.source),
+        url,
+        createdAt: str(r.createdAt),
+        updatedAt: str(r.updatedAt),
     };
 }
 

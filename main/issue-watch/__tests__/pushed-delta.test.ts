@@ -49,6 +49,7 @@ vi.mock('../../mobile/bus', () => ({ mobileEmit: () => {} }));
 import {
     applyPushedDelta,
     clearPushedDelta,
+    getFeedbackItems,
     getOpenCounts,
     getWorkspaceFeed,
     getWorkspaceStatus,
@@ -254,5 +255,41 @@ describe('applyPushedDelta → agent pings', () => {
         );
         expect(notified).toEqual([]); // term-a not designated
         expect(woken).toEqual(['term-b']); // only designated + handle-enabled + wake
+    });
+});
+
+describe('the open issues’ titles (feedbackItems)', () => {
+    const titled = {
+        key: 'tynn-issue:01',
+        number: 12,
+        title: 'The billing screen loses my filter',
+        source: 'feedback',
+        url: 'https://tynn.ai/p/PRJ/issues?issue=01',
+        createdAt: '2026-09-01T10:00:00+00:00',
+        updatedAt: '2026-09-02T10:00:00+00:00',
+    };
+
+    it('serves the titles the delta carried, for the workspace it named', () => {
+        applyPushedDelta(delta({ counts: { issue: 1, pr: 0, security: 2, feedback: 1 }, feedbackItems: [titled] }));
+        expect(getFeedbackItems('ws-1')).toEqual([titled]);
+    });
+
+    it('replaces them on the next delta, rather than accumulating', () => {
+        applyPushedDelta(delta({ feedbackItems: [titled] }));
+        applyPushedDelta(delta({ feedbackItems: [] }));
+        expect(getFeedbackItems('ws-1')).toEqual([]);
+    });
+
+    it('treats a delta from a Tynn that sends no titles as none, not as the previous ones', () => {
+        applyPushedDelta(delta({ feedbackItems: [titled] }));
+        applyPushedDelta(delta());
+        expect(getFeedbackItems('ws-1')).toEqual([]);
+    });
+
+    it('forgets them when the snapshot is dropped, and knows none for an unknown workspace', () => {
+        applyPushedDelta(delta({ feedbackItems: [titled] }));
+        clearPushedDelta('ws-1');
+        expect(getFeedbackItems('ws-1')).toEqual([]);
+        expect(getFeedbackItems('nobody')).toEqual([]);
     });
 });

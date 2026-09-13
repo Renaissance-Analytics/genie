@@ -1,3 +1,4 @@
+import type { TynnFeedbackItemPush } from '../tynn/workspace-assignment';
 import { ipcMain } from 'electron';
 import { requestIssueWatchRefresh } from './force-refresh';
 import path from 'node:path';
@@ -161,6 +162,9 @@ export type WorkspaceFeedItem = WatchItem & {
  */
 export interface PushedIssueWatchDelta {
     workspaceId: string;
+    /** The most recently moved open Tynn issues, by name. Absent from a Tynn that
+     *  predates titles — read as none. */
+    feedbackItems?: TynnFeedbackItemPush[];
     /** Every bucket Tynn computed, `feedback` included — see {@link TypeCounts}. */
     counts: TypeCounts;
     items: Array<{
@@ -187,7 +191,10 @@ export interface PushedIssueWatchDelta {
  * entirely (the hard-cut to server-push, one service / two transports). Keyed by
  * workspace id.
  */
-const pushedByWorkspace = new Map<string, { counts: TypeCounts; feed: WorkspaceFeedItem[] }>();
+const pushedByWorkspace = new Map<
+    string,
+    { counts: TypeCounts; feed: WorkspaceFeedItem[]; feedbackItems: TynnFeedbackItemPush[] }
+>();
 
 /**
  * Per-workspace signature of the last applied feed (item key → updatedAt) — the
@@ -310,7 +317,12 @@ export function applyPushedDelta(delta: PushedIssueWatchDelta): void {
     // signature BEFORE overwriting it.
     const changed = hasNewOrChangedItems(iwSignatureByWorkspace.get(workspaceId), feed);
     iwSignatureByWorkspace.set(workspaceId, feedSignature(feed));
-    pushedByWorkspace.set(workspaceId, { counts: { ...delta.counts }, feed });
+    pushedByWorkspace.set(workspaceId, {
+        counts: { ...delta.counts },
+        feed,
+        // Replaced, never merged: each delta is the whole current list.
+        feedbackItems: [...(delta.feedbackItems ?? [])],
+    });
     serviceState = 'connected';
     // A live delta IS authoritative delivery — the feed is now in hand.
     reconcileDelivered = true;
@@ -330,6 +342,15 @@ export function clearPushedDelta(workspaceId: string): void {
     // first snapshot won't ping) instead of diffing against a stale signature.
     iwSignatureByWorkspace.delete(localId);
     if (pushedByWorkspace.delete(localId)) void broadcastUpdate();
+}
+
+/**
+ * The open Tynn issues a workspace's IssueWatch panel can name — the bounded list
+ * the last delta carried. Empty for a workspace Tynn has not fed, and for a Tynn
+ * that predates titles (the panel then still shows the count).
+ */
+export function getFeedbackItems(workspaceId: string): TynnFeedbackItemPush[] {
+    return pushedByWorkspace.get(workspaceId)?.feedbackItems ?? [];
 }
 
 /** Whether a workspace's IssueWatch is currently server-fed (skip local polling). */
@@ -948,6 +969,9 @@ export function registerIssueWatchIpc(): void {
         return { ok: true };
     });
     ipcMain.handle('issue-watch:counts', () => getOpenCounts());
+    ipcMain.handle('issue-watch:feedback-items', (_e, workspaceId: string) =>
+        getFeedbackItems(String(workspaceId ?? '')),
+    );
     // Force Tynn to re-read GitHub NOW. The whole path already existed for
     // `checkIssues(refresh)` -- an AGENT could force a refresh and the owner
     // could not, because nothing exposed it to the renderer.

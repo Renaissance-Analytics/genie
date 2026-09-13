@@ -2991,6 +2991,17 @@ export interface KnowledgeScopeFilter {
 
 /** What the Host reports for one scheduled task, for display only. The HOST owns
  *  the cron evaluator; the renderer never parses or evaluates an expression. */
+/** One open Tynn issue as IssueWatch names it (see `feedbackRows`). */
+export interface TynnFeedbackItem {
+    key: string;
+    number: number | null;
+    title: string;
+    source: string | null;
+    url: string;
+    createdAt: string | null;
+    updatedAt: string | null;
+}
+
 export interface ScheduleInfo {
     /** Epoch ms of the armed next occurrence; null when the task isn't armed
      *  (disabled, awaiting approval, or an expression that can never fire). */
@@ -3022,6 +3033,9 @@ export interface GenieApi {
             enabled: boolean,
         ) => Promise<{ ok: boolean }>;
         feed: (workspaceId: string) => Promise<WatchFeedItem[]>;
+        /** The open Tynn issues by name — the bounded list the stream carries
+         *  beside `counts.feedback`. */
+        feedbackItems: (workspaceId: string) => Promise<TynnFeedbackItem[]>;
         markSeen: (workspaceId: string) => Promise<{ ok: boolean }>;
         counts: () => Promise<Record<string, WatchTypeCounts>>;
         /** Why this workspace's feed is what it is (connected + worst read error). */

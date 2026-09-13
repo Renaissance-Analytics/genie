@@ -236,3 +236,50 @@ export function feedbackPathForWorkspace(
 
     return projectId ? `/p/${encodeURIComponent(projectId)}/feedback` : null;
 }
+
+export type { TynnFeedbackItem } from './genie';
+
+/** One row of the panel's feedback block. */
+export interface FeedbackRow {
+    key: string;
+    /** `#12`, or null when Tynn sent no number — never "#null". */
+    number: string | null;
+    title: string;
+    /** Where the issue came from, in words; null for an origin Genie does not know. */
+    origin: string | null;
+    url: string;
+    updatedAt: string | null;
+}
+
+const FEEDBACK_ORIGINS: Record<string, string> = {
+    feedback: 'Feedback',
+    wish: 'Wish',
+    issue: 'Issue',
+    github: 'GitHub',
+};
+
+/**
+ * The IssueWatch panel's feedback block: the open Tynn issues BY NAME, plus an
+ * honest count of the ones not listed.
+ *
+ * Tynn sends a bounded list of the most recently moved open issues beside the full
+ * count, so the list alone would read as the whole queue. `more` is what makes a
+ * bounded list truthful — and it stays correct for a Tynn that sends no titles at
+ * all (the rows are empty and `more` is the whole count).
+ */
+export function feedbackRows(
+    items: ReadonlyArray<import('./genie').TynnFeedbackItem>,
+    totalCount: number,
+): { rows: FeedbackRow[]; more: number } {
+    return {
+        rows: items.map((item) => ({
+            key: item.key,
+            number: item.number === null ? null : `#${item.number}`,
+            title: item.title,
+            origin: (item.source && FEEDBACK_ORIGINS[item.source]) ?? null,
+            url: item.url,
+            updatedAt: item.updatedAt,
+        })),
+        more: Math.max(0, totalCount - items.length),
+    };
+}

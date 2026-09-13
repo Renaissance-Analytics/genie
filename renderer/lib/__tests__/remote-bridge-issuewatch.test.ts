@@ -67,6 +67,17 @@ describe('makeRemoteBridge — host-sourced IssueWatch', () => {
         });
     });
 
+    it('routes the open issues’ titles to the HOST, unwrapped', async () => {
+        // A remote window shows the host's workspace, so its feedback titles are
+        // the host's too — not whatever the client window's own Tynn stream holds.
+        const request = vi.fn();
+        const api = makeRemoteBridge(fakeLocal(request));
+        const titled = [{ key: 'tynn-issue:01', number: 12, title: 'T', source: 'feedback', url: 'https://tynn.ai/x', createdAt: null, updatedAt: null }];
+        request.mockResolvedValueOnce({ items: titled });
+        expect(await api.issueWatch.feedbackItems('w 1')).toEqual(titled);
+        expect(request).toHaveBeenLastCalledWith('/api/desktop/issue-watch/feedback-items?workspaceId=w%201');
+    });
+
     it('returns the unwrapped payloads (counts/repos/feed/status)', async () => {
         const request = vi.fn();
         const api = makeRemoteBridge(fakeLocal(request));

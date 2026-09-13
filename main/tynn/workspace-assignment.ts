@@ -633,6 +633,26 @@ export interface IssueWatchDeltaPush {
      */
     counts: { issue: number; pr: number; security: number; feedback: number };
     items: unknown[];
+    /**
+     * The most recently moved open issues, by name (Tynn sends a bounded list
+     * beside `counts.feedback`). REQUIRED for the same reason every bucket is:
+     * the coercion rebuilds this object field by field, and an optional field
+     * could be dropped there with no error.
+     */
+    feedbackItems: TynnFeedbackItemPush[];
+}
+
+/** One open Tynn issue as the IssueWatch stream names it. No submitter identity
+ *  and no description — Tynn does not send them. */
+export interface TynnFeedbackItemPush {
+    key: string;
+    number: number | null;
+    title: string;
+    source: string | null;
+    /** Always http(s): the link is opened in the system browser. */
+    url: string;
+    createdAt: string | null;
+    updatedAt: string | null;
 }
 
 export interface AssignmentTransport {

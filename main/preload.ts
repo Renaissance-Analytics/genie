@@ -207,6 +207,8 @@ const api = {
             ipcRenderer.invoke('issue-watch:set', workspaceId, owner, repo, enabled),
         feed: (workspaceId: string) =>
             ipcRenderer.invoke('issue-watch:feed', workspaceId),
+        feedbackItems: (workspaceId: string) =>
+            ipcRenderer.invoke('issue-watch:feedback-items', workspaceId),
         markSeen: (workspaceId: string) =>
             ipcRenderer.invoke('issue-watch:mark-seen', workspaceId),
         counts: () =>

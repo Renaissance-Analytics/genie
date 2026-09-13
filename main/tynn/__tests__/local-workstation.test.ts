@@ -516,8 +516,8 @@ describe('startLocalWorkstation', () => {
         const { transport, handlers } = fakeTransport();
         const applyDelta = vi.fn();
         const snapshot: IssueWatchDeltaPush[] = [
-            { workspaceId: 'p1', projectId: 'p1', counts: { issue: 1, pr: 0, security: 0, feedback: 0 }, items: [] },
-            { workspaceId: 'p2', projectId: 'p2', counts: { issue: 0, pr: 3, security: 0, feedback: 0 }, items: [] },
+            { workspaceId: 'p1', projectId: 'p1', counts: { issue: 1, pr: 0, security: 0, feedback: 0 }, items: [], feedbackItems: [] },
+            { workspaceId: 'p2', projectId: 'p2', counts: { issue: 0, pr: 3, security: 0, feedback: 0 }, items: [], feedbackItems: [] },
         ];
 
         const handle = await startLocalWorkstation({
@@ -541,7 +541,7 @@ describe('startLocalWorkstation', () => {
         expect(applyDelta.mock.calls.map((c) => c[0].workspaceId)).toEqual(['p1', 'p2']);
 
         // A live push feeds the same store.
-        handlers.onIssueWatchDelta!({ workspaceId: 'p3', projectId: 'p3', counts: { issue: 5, pr: 0, security: 0, feedback: 0 }, items: [] });
+        handlers.onIssueWatchDelta!({ workspaceId: 'p3', projectId: 'p3', counts: { issue: 5, pr: 0, security: 0, feedback: 0 }, items: [], feedbackItems: [] });
         expect(applyDelta).toHaveBeenCalledTimes(3);
         expect(applyDelta.mock.calls[2][0].workspaceId).toBe('p3');
     });
