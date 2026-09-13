@@ -372,3 +372,99 @@ describe('the surface and the routes travel over the pipe', () => {
         expect(topologies[0]).toEqual(topology);
     });
 });
+
+describe('Genie sends its surface and routes (connectPublisher)', () => {
+    const surface = (generation: number) => ({
+        genieVersion: '0.7.0-beta.323',
+        generation,
+        protocolVersions: ['2024-11-05'],
+        serverInfo: { name: 'genie', version: '0.7.0-beta.323' },
+        instructions: 'The Genie protocol.',
+        capabilities: { tools: {} },
+        tools: [{ name: 'imDone', inputSchema: { type: 'object' } }],
+        prompts: [],
+        resources: [],
+    });
+    const routes = { endpoints: { wsTok: { kind: 'workspace' as const, workspaceId: 'w' } }, workspaces: { w: ['t1'] } };
+
+    async function recordingShuttle() {
+        const core = createShuttleCore({ now: () => 0 });
+        const published: Array<{ generation: number }> = [];
+        const topologies: unknown[] = [];
+        const gate = createPublisherGate({
+            secret: SECRET,
+            wireGeneration: WIRE,
+            core,
+            onPublish: (m) => void published.push(m),
+            onTopology: (t) => void topologies.push(t),
+        });
+        const server = net.createServer();
+        attachControlServer(server, { gate, codec: testCodec() });
+        const sockets = new Set<net.Socket>();
+        server.on('connection', (s) => {
+            sockets.add(s);
+            s.on('close', () => sockets.delete(s));
+        });
+        const address = pipePath();
+        await new Promise<void>((resolve) => server.listen(address, resolve));
+        cleanups.push(
+            () =>
+                new Promise<void>((resolve) => {
+                    for (const s of sockets) s.destroy();
+                    server.close(() => resolve());
+                }),
+        );
+        return { address, published, topologies };
+    }
+
+    it('holds what it is given before the welcome, and sends it once welcomed', async () => {
+        // Genie will publish at boot, before the pipe has even connected. Sent
+        // then, a publish would arrive BEFORE hello — and the gate closes any
+        // connection whose first message is not hello. Holding it is what keeps
+        // the boot-time publish from getting Genie thrown off its own shuttle.
+        const shuttle = await recordingShuttle();
+        const { publisher, events } = genie(shuttle.address);
+
+        publisher.publish(surface(1));
+        publisher.topology(routes);
+
+        await until(() => shuttle.published.length === 1 && shuttle.topologies.length === 1);
+        expect(events.welcomed).toBe(true);
+        expect(events.closed).toBeNull();
+        expect(shuttle.topologies[0]).toEqual(routes);
+    });
+
+    it('sends only the LATEST of what was given while it waited', async () => {
+        const shuttle = await recordingShuttle();
+        const { publisher, events } = genie(shuttle.address);
+
+        publisher.publish(surface(1));
+        publisher.publish(surface(2));
+        await until(() => events.welcomed && shuttle.published.length > 0);
+        await new Promise((r) => setTimeout(r, 50));
+
+        expect(shuttle.published.map((m) => m.generation)).toEqual([2]);
+    });
+
+    it('sends straight away once welcomed', async () => {
+        const shuttle = await recordingShuttle();
+        const { publisher, events } = genie(shuttle.address);
+        await until(() => events.welcomed);
+
+        publisher.publish(surface(3));
+
+        await until(() => shuttle.published.length === 1);
+        expect(shuttle.published[0]!.generation).toBe(3);
+    });
+
+    it('does nothing once closed, rather than throwing at the caller', async () => {
+        const shuttle = await recordingShuttle();
+        const { publisher, events } = genie(shuttle.address);
+        await until(() => events.welcomed);
+        publisher.close();
+        await until(() => events.closed !== null);
+
+        expect(() => publisher.publish(surface(4))).not.toThrow();
+        expect(shuttle.published).toEqual([]);
+    });
+});
