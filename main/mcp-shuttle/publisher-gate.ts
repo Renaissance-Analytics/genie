@@ -1,5 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import type { DispatchFrame, Publisher, ShuttleCore, ShuttleResponse } from './core';
+import type { ShuttleManifest } from './manifest-store';
+import type { ShuttleTopology } from './topology-store';
 
 /**
  * WHO MAY PUBLISH — the MCP shuttle's control-channel gate.
@@ -28,6 +30,10 @@ import type { DispatchFrame, Publisher, ShuttleCore, ShuttleResponse } from './c
  *    Genie is still running.
  * 5. **Only the publisher's own close detaches.** A late close from a connection
  *    that was already displaced must not detach the NEW Genie that replaced it.
+ * 6. **Only the publisher defines the surface and the routes.** A `publish`
+ *    (the manifest every agent is served) or a `topology` (where each URL leads)
+ *    counts only from the live publisher — never from a displaced Genie, and an
+ *    unauthenticated connection is refused before it can send one.
  *
  * Framing is not this file's job — it takes decoded messages. The wire itself is
  * `fancy-term-host`'s length-prefixed framing, which the spec asks the shuttle to
@@ -45,12 +51,18 @@ export type GateMessage =
     | { type: 'welcome'; wireGeneration: number }
     | { type: 'displaced'; reason: string }
     | { type: 'dispatch'; frame: DispatchFrame }
-    | { type: 'result'; correlationId: number; response: ShuttleResponse };
+    | { type: 'result'; correlationId: number; response: ShuttleResponse }
+    | { type: 'publish'; manifest: ShuttleManifest }
+    | { type: 'topology'; topology: ShuttleTopology };
 
 export interface PublisherGateOptions {
     secret: string;
     wireGeneration: number;
     core: ShuttleCore;
+    /** The live publisher published its surface. */
+    onPublish?: (manifest: ShuttleManifest) => void;
+    /** The live publisher published its routing topology. */
+    onTopology?: (topology: ShuttleTopology) => void;
 }
 
 export interface PublisherGate {
@@ -141,10 +153,14 @@ export function createPublisherGate(opts: PublisherGateOptions): PublisherGate {
                 return;
             }
 
+            // Everything below speaks for the live publisher, so nothing else may.
+            if (conn !== current) return;
             if (message.type === 'result') {
-                // Only the live publisher may answer a call.
-                if (conn !== current) return;
                 core.result(message.correlationId, message.response);
+            } else if (message.type === 'publish') {
+                opts.onPublish?.(message.manifest);
+            } else if (message.type === 'topology') {
+                opts.onTopology?.(message.topology);
             }
         },
 

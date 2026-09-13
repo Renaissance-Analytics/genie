@@ -240,3 +240,67 @@ describe('results only count from the publisher', () => {
         expect(answers).toEqual([{ result: 'real' }]);
     });
 });
+
+describe('publish and topology only count from the publisher', () => {
+    // The publisher defines what every agent on the machine can call (the
+    // manifest) and where each URL leads (the topology). Both must come only from
+    // the Genie that authenticated and is currently live.
+    const manifestMessage = (label: string): GateMessage =>
+        ({ type: 'publish', manifest: { label } }) as unknown as GateMessage;
+    const topologyMessage = (token: string): GateMessage => ({
+        type: 'topology',
+        topology: { endpoints: { [token]: { kind: 'workspace', workspaceId: 'w' } }, workspaces: { w: ['t'] } },
+    });
+
+    function wired() {
+        const core = createShuttleCore({ now: () => 0 });
+        const published: unknown[] = [];
+        const topologies: unknown[] = [];
+        const gate = createPublisherGate({
+            secret: SECRET,
+            wireGeneration: WIRE,
+            core,
+            onPublish: (m) => void published.push(m),
+            onTopology: (t) => void topologies.push(t),
+        });
+        return { gate, published, topologies };
+    }
+
+    it('applies a manifest and a topology from the live publisher', () => {
+        const { gate, published, topologies } = wired();
+        const genie = connection('genie');
+        gate.connected(genie.conn);
+        gate.message(genie.conn, hello());
+        gate.message(genie.conn, manifestMessage('live'));
+        gate.message(genie.conn, topologyMessage('tok'));
+
+        expect(published).toEqual([{ label: 'live' }]);
+        expect(topologies).toHaveLength(1);
+    });
+
+    it('refuses them from a connection that never authenticated', () => {
+        const { gate, published, topologies } = wired();
+        const intruder = connection('intruder');
+        gate.connected(intruder.conn);
+        gate.message(intruder.conn, manifestMessage('forged'));
+
+        expect(published).toEqual([]);
+        expect(topologies).toEqual([]);
+        expect(intruder.closed()).not.toBeNull();
+    });
+
+    it('ignores them from a Genie that has been displaced', () => {
+        const { gate, published } = wired();
+        const oldGenie = connection('old');
+        const newGenie = connection('new');
+        gate.connected(oldGenie.conn);
+        gate.message(oldGenie.conn, hello({ generation: 1 }));
+        gate.connected(newGenie.conn);
+        gate.message(newGenie.conn, hello({ generation: 2 }));
+
+        gate.message(oldGenie.conn, manifestMessage('stale'));
+        gate.message(newGenie.conn, manifestMessage('current'));
+
+        expect(published).toEqual([{ label: 'current' }]);
+    });
+});
