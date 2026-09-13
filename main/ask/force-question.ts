@@ -180,6 +180,14 @@ export interface DeferredAnswerDelivery {
     answers: ForceAnswer[];
     /** See {@link DeferralReason}. Absent ⇒ a plain, non-parked modal answer. */
     deferralReason?: DeferralReason;
+    /**
+     * Whether the person ANSWERED or DISMISSED it. Absent ⇒ answered.
+     *
+     * A dismissal used to travel as an answer with no picks, and arrived as
+     * "Your ForceTheQuestion was answered:" followed by nothing — which an agent
+     * can act on as "the person chose nothing", when they never chose at all.
+     */
+    outcome?: 'answered' | 'dismissed';
 }
 
 /**
@@ -245,6 +253,15 @@ export function forceQuestionRefusal(d: AskDeliverability): string | undefined {
 }
 
 export function formatDeferredAnswer(d: DeferredAnswerDelivery): string {
+    if (d.outcome === 'dismissed') {
+        const asked = d.questions.map((q, i) => `• ${q.question ?? q.header ?? `Q${i + 1}`}`);
+        return (
+            'Your ForceTheQuestion was DISMISSED without an answer — the person closed it and chose ' +
+            'nothing. Do not treat that as a decision. If you still need this decided, ask again, ' +
+            'and say what (if anything) has changed:\n\n' +
+            `${asked.join('\n')}\n\n(questionId: ${d.questionId})`
+        );
+    }
     const lines = d.answers.map((a, i) => {
         const q = d.questions[i]?.question ?? d.questions[i]?.header ?? `Q${i + 1}`;
         const picked = a.selected.length ? a.selected.join(', ') : '(no option selected)';
@@ -381,7 +398,9 @@ function deliverAnswer(d: DeferredAnswerDelivery): void {
     } catch {
         outcome = { delivered: false, reason: 'refused' };
     }
-    if (!outcome.delivered) notifyAnswerUndelivered(d);
+    // The notice tells the person their REPLY was lost. A dismissal carried no
+    // reply, so saying that would be false.
+    if (!outcome.delivered && d.outcome !== 'dismissed') notifyAnswerUndelivered(d);
 }
 
 /**
@@ -1407,11 +1426,14 @@ function raiseDesktopModal(
                     // bare try/catch that was right about never breaking the modal
                     // queue and wrong about never reporting: an answer the agent
                     // never received looked exactly like one it did.
+                    // `cancelled` is a dismissal — the modal's Dismiss, its cancel, or
+                    // the window being closed. It goes to the agent AS a dismissal.
                     deliverAnswer({
                         terminalId: askerTerminalId,
                         questionId: id,
                         questions,
-                        answers: lateResult.answers ?? [],
+                        answers: lateResult.cancelled ? [] : (lateResult.answers ?? []),
+                        outcome: lateResult.cancelled ? 'dismissed' : 'answered',
                     });
                 },
             });

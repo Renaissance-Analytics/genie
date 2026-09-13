@@ -300,3 +300,83 @@ describe('an undelivered answer is reported, not swallowed', () => {
         expect(state.notices[0]!.body).toMatch(/Ship/);
     });
 });
+
+/**
+ * A DISMISSED question must reach the agent as a dismissal, not as an answer.
+ *
+ * The owner dismissed a question before an upgrade, and the agent received
+ * "Your ForceTheQuestion was answered:" followed by nothing. The modal's resolve
+ * forwarded every result to the answer sink without looking at `cancelled`, so a
+ * dismissal was delivered as an empty answer — which an agent can act on as if
+ * the person had chosen nothing, when in fact they never chose at all.
+ */
+describe('a dismissed question is delivered as a dismissal', () => {
+    beforeEach(() => {
+        state.windows = [];
+        state.nextWcId = 1;
+        state.notices = [];
+        fq.setQuestionStore(fakeStore());
+        fq.registerForceQuestionIpc({ isDev: false, preloadPath: '/p.js', getMasterWindow: () => null });
+        fq.setAvailabilityReader(() => ({ availability: 'available', dndMessage: 'x' }));
+    });
+    afterEach(() => {
+        for (const w of state.windows) if (!w.destroyed) w.close();
+        fq.setDeferredAnswerSink(null);
+        fq.setQuestionStore(null);
+        fq.setAvailabilityReader(null);
+    });
+
+    const capture = () => {
+        const delivered: fq.DeferredAnswerDelivery[] = [];
+        fq.setDeferredAnswerSink((d) => {
+            delivered.push(d);
+            return { delivered: true };
+        });
+        return delivered;
+    };
+
+    it('says the question was dismissed, restates it, and asks the agent to ask again if it still needs it', async () => {
+        const delivered = capture();
+        await fq.forceQuestion(Q('Ship'), 'ws', 'normal', {}, 'T1');
+        const win = state.windows[0]!;
+
+        await state.ipc.get('ask:dismiss')!({ sender: { id: win.webContents.id } });
+
+        expect(delivered).toHaveLength(1);
+        expect(delivered[0]!.outcome).toBe('dismissed');
+        const message = fq.formatDeferredAnswer(delivered[0]!);
+        expect(message).not.toMatch(/was answered/i);
+        expect(message).toMatch(/dismissed/i);
+        expect(message).toMatch(/Ship\?/);
+        expect(message).toMatch(/ask again/i);
+        expect(message).not.toMatch(/no option selected/);
+    });
+
+    it('treats closing the question window the same way', async () => {
+        const delivered = capture();
+        await fq.forceQuestion(Q('Ship'), 'ws', 'normal', {}, 'T1');
+
+        state.windows[0]!.close();
+
+        expect(delivered.map((d) => d.outcome)).toEqual(['dismissed']);
+    });
+
+    it('does not tell the person their ANSWER was lost when they gave none', async () => {
+        // The undelivered-answer notice says the reply did not reach the agent.
+        // For a dismissal there was no reply, so that notice would be false.
+        fq.setDeferredAnswerSink(() => ({ delivered: false, reason: 'no-agent' }));
+        await fq.forceQuestion(Q('Ship'), 'ws', 'normal', {}, 'T1');
+        await state.ipc.get('ask:dismiss')!({ sender: { id: state.windows[0]!.webContents.id } });
+        expect(state.notices).toEqual([]);
+    });
+
+    it('POSITIVE CONTROL — a question the person answered is still delivered as answered', async () => {
+        const delivered = capture();
+        await fq.forceQuestion(Q('Ship'), 'ws', 'normal', {}, 'T1');
+        fq.answerPendingQuestion(fq.listPendingQuestions()[0]!.id, ANSWER);
+
+        expect(delivered).toHaveLength(1);
+        expect(delivered[0]!.outcome ?? 'answered').toBe('answered');
+        expect(fq.formatDeferredAnswer(delivered[0]!)).toMatch(/was answered/i);
+    });
+});
