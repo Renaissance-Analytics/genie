@@ -304,3 +304,71 @@ describe('message validation', () => {
         expect(parseOutboundGateMessage({ type: 'dispatch', frame: { correlationId: 'x' } })).toBeNull();
     });
 });
+
+describe('the surface and the routes travel over the pipe', () => {
+    const manifest = {
+        genieVersion: '0.7.0-beta.323',
+        generation: 1,
+        protocolVersions: ['2024-11-05'],
+        serverInfo: { name: 'genie', version: '0.7.0-beta.323' },
+        instructions: 'The Genie protocol.',
+        capabilities: { tools: {} },
+        tools: [{ name: 'imDone', inputSchema: { type: 'object' } }],
+        prompts: [],
+        resources: [],
+    };
+    const topology = { endpoints: { wsTok: { kind: 'workspace', workspaceId: 'w' } }, workspaces: { w: ['t1'] } };
+
+    it('accepts a well-formed publish and topology from a publisher', () => {
+        expect(parseInboundGateMessage({ type: 'publish', manifest })).toEqual({ type: 'publish', manifest });
+        expect(parseInboundGateMessage({ type: 'topology', topology })).toEqual({ type: 'topology', topology });
+    });
+
+    it('refuses a publish whose manifest could not be served, and a malformed topology', () => {
+        const { protocolVersions: _gone, ...unservable } = manifest;
+        expect(parseInboundGateMessage({ type: 'publish', manifest: unservable })).toBeNull();
+        expect(parseInboundGateMessage({ type: 'topology', topology: { endpoints: { 'bad/tok': topology.endpoints.wsTok }, workspaces: {} } })).toBeNull();
+    });
+
+    it('delivers a publisher’s manifest and topology to the shuttle, end to end', async () => {
+        const core = createShuttleCore({ now: () => 0 });
+        const published: unknown[] = [];
+        const topologies: unknown[] = [];
+        const gate = createPublisherGate({
+            secret: SECRET,
+            wireGeneration: WIRE,
+            core,
+            onPublish: (m) => void published.push(m),
+            onTopology: (t) => void topologies.push(t),
+        });
+        const server = net.createServer();
+        attachControlServer(server, { gate, codec: testCodec() });
+        const sockets = new Set<net.Socket>();
+        server.on('connection', (s) => {
+            sockets.add(s);
+            s.on('close', () => sockets.delete(s));
+        });
+        const address = pipePath();
+        await new Promise<void>((resolve) => server.listen(address, resolve));
+        cleanups.push(
+            () =>
+                new Promise<void>((resolve) => {
+                    for (const s of sockets) s.destroy();
+                    server.close(() => resolve());
+                }),
+        );
+
+        const socket = net.connect(address);
+        socket.on('error', () => {});
+        cleanups.push(() => void socket.destroy());
+        await new Promise<void>((resolve) => socket.on('connect', () => resolve()));
+        const codec = testCodec();
+        socket.write(codec.encode({ type: 'hello', wireGeneration: WIRE, secret: SECRET, generation: 1 }));
+        socket.write(codec.encode({ type: 'publish', manifest }));
+        socket.write(codec.encode({ type: 'topology', topology }));
+
+        await until(() => published.length === 1 && topologies.length === 1);
+        expect(published[0]).toEqual(manifest);
+        expect(topologies[0]).toEqual(topology);
+    });
+});

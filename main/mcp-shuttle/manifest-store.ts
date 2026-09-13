@@ -115,7 +115,7 @@ function canonical(value: unknown): string {
 const isRecord = (v: unknown): v is Record<string, unknown> =>
     !!v && typeof v === 'object' && !Array.isArray(v);
 
-function isManifest(value: unknown): value is ShuttleManifest {
+export function isManifest(value: unknown): value is ShuttleManifest {
     if (!isRecord(value)) return false;
     const m = value;
     return (
