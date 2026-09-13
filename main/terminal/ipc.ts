@@ -56,13 +56,15 @@ import type { AgentInboxAgentType } from '../agentinbox/types';
 import { withProviderStartupInstructions } from '../agents/startup';
 import { agentRelaunchPrompt } from '../agents/relaunch-prompt';
 import { launchBlockReason } from '../agents/availability';
+import { resolveSavedAgentLaunch } from '../agents/launch-command';
+import { isTuiId } from '../agents/registry';
 import { buildSubmitBytes } from './keystrokes';
 import {
     normalizePurpose,
     type AgentInboxJoinInput,
     type AgentInboxScope,
 } from '../agentinbox/types';
-import { withCodexGenieMcpLaunch } from '../mcp/agent-config';
+import { launchLoadsClaudeAgentInboxChannel, withCodexGenieMcpLaunch } from '../mcp/agent-config';
 import { buildTerminalEnv } from './terminal-env';
 import { computeOrphans } from './orphans';
 import { buildProcessArgs } from './process-spawn';
@@ -524,9 +526,9 @@ export function createAgentTerminal(opts: {
     let agentId: string | undefined;
     let meta: TerminalSpecMeta = {};
     if (reviving && opts.agentMeta?.agent === 'codex') {
-        launchCommand = typeof priorSpec?.meta?.agent_command === 'string'
-            ? priorSpec.meta.agent_command
-            : opts.agentMeta.command;
+        // Resolved, not just read: with the stored command gone this was '', which
+        // skipped the App Server entirely and relaunched a bare `codex resume`.
+        launchCommand = withSavedLaunchCommand(priorSpec)?.meta?.agent_command || opts.agentMeta.command;
         agentId = priorSpec?.meta?.agent_id;
         chatSessionId = priorSpec?.meta?.chat_session_id ?? null;
         strategy = 'hook';
@@ -843,6 +845,25 @@ export function agentSessionTranscriptExists(spec: TerminalSpecRow | null, sid: 
 export const AGENT_LAUNCH_SETTLE_MS = 500;
 
 /**
+ * Whether the agent process Genie last launched in each live pty was given the
+ * AgentInbox channel. Absent means Genie has not launched one in this pty's life
+ * (or this Genie process started after it did), which is "unknown", not "no".
+ */
+const launchedWithChannel = new Map<string, boolean>();
+
+/**
+ * Was the agent in this terminal launched WITH the Claude AgentInbox channel?
+ *
+ * `true`/`false` only for a launch this Genie typed into the current pty;
+ * `undefined` otherwise. A Claude Code session without the flag loads the bridge
+ * as a plain MCP server and silently drops its notifications, so a `false` here
+ * is what lets `registerTransport` refuse a binding that would swallow mail.
+ */
+export function agentLaunchLoadedChannel(terminalId: string): boolean | undefined {
+    return launchedWithChannel.get(terminalId);
+}
+
+/**
  * Submit an agent's boot command into its FRESH pty — the ONE host-side routine
  * that starts an agent CLI in a terminal.
  *
@@ -856,6 +877,7 @@ export const AGENT_LAUNCH_SETTLE_MS = 500;
  * Best-effort: a pty that died between spawn and submit is not an error here.
  */
 function deliverAgentLaunch(id: string, command: string): void {
+    launchedWithChannel.set(id, launchLoadsClaudeAgentInboxChannel(command));
     const bytes = buildSubmitBytes(command, true);
     const timer = setTimeout(() => {
         try {
@@ -870,7 +892,8 @@ function deliverAgentLaunch(id: string, command: string): void {
 }
 
 function maybeRelaunchAgent(id: string, existing: boolean): void {
-    const spec = getTerminalSpec(id);
+    if (existing) return;
+    const spec = withSavedLaunchCommand(getTerminalSpec(id));
     const decision = agentRelaunchDecision(spec, existing, (sid) =>
         agentSessionTranscriptExists(spec, sid),
     );
@@ -897,6 +920,32 @@ function maybeRelaunchAgent(id: string, existing: boolean): void {
         );
     }
     deliverAgentLaunch(id, command);
+}
+
+/**
+ * The spec with the launch command it will ACTUALLY relaunch with, stored.
+ *
+ * Every relaunch decision below reads `meta.agent_command`, and that command
+ * could be missing (migrations v59/v65 delete it so it is rebuilt) or older than
+ * the AgentInbox channel. Neither case reached the builder here, so an upgrade
+ * brought Claude agents back as a bare `claude --resume <id>`: no always-on
+ * flags and no channel, which is how every DM ended up typed into the prompt.
+ * See {@link resolveSavedAgentLaunch} for what is rebuilt and what is kept.
+ *
+ * Stored rather than applied in passing, so the restart tool, the agent ref and
+ * the next relaunch all read the command that was run.
+ */
+function withSavedLaunchCommand(spec: TerminalSpecRow | null): TerminalSpecRow | null {
+    const agent = spec?.meta?.agent;
+    if (!spec || !agent || !isTuiId(agent)) return spec;
+    const workspace = spec.workspace_id ? getWorkspace(spec.workspace_id) : null;
+    const command = resolveSavedAgentLaunch(
+        agent,
+        spec.meta?.agent_command,
+        workspace ? { id: workspace.id, path: workspace.path } : null,
+    );
+    if (!command || command === spec.meta?.agent_command) return spec;
+    return updateTerminalSpec(spec.id, { meta: { ...spec.meta, agent_command: command } }) ?? spec;
 }
 
 /**
@@ -1002,17 +1051,44 @@ function feedTerminalData(id: string, data: string): void {
 }
 
 /** Terminals whose development-channel warning we have already answered. One
- *  reply per pty: the dialog is drawn once, but Ink repaints it many times, and
- *  a second Enter would land in the session that follows it. */
+ *  reply per PTY: the dialog is drawn once, but Ink repaints it many times, and
+ *  a second Enter would land in the session that follows it.
+ *
+ *  Per pty, not per terminal id. A relaunched agent comes back into the SAME id
+ *  (revive, `runAgent start`, the restart tool), and while this was never
+ *  cleared its next warning went unanswered — the agent sat on it, never
+ *  started, and never loaded its channel. {@link endDevChannelLife} ends a pty's
+ *  entry. */
 const devChannelAnswered = new Set<string>();
+
+/** Where the CURRENT pty's output starts in the read buffer, for a terminal that
+ *  has had an earlier one. An exited pty leaves a tail behind (genie#217), and
+ *  its warning may be in it: scanning that would answer a dialog that is gone —
+ *  typing Enter into the shell before the agent starts, and spending the one
+ *  answer its real warning needs. */
+const devChannelScanFrom = new Map<string, number>();
+
+/** A pty's life is over: its warning was answered for, the next one's is not,
+ *  and whatever it was launched with went with it. */
+function endDevChannelLife(id: string): void {
+    launchedWithChannel.delete(id);
+    devChannelAnswered.delete(id);
+    devChannelScanFrom.set(id, agentReadBuffer.cursor(id));
+}
 
 function maybeAnswerDevChannelWarning(id: string): void {
     if (devChannelAnswered.has(id)) return;
     // Read from the SAME capped buffer `manageTerminals.read` uses, so the
     // decision sees the assembled frame rather than one arbitrary chunk — the
     // channel list routinely arrives split across writes.
-    const recent = agentReadBuffer.readTail(id, DEV_CHANNEL_SCAN_BYTES);
-    if (!recent.buffered || devChannelConsentReply(recent.data) !== 'accept') return;
+    const from = devChannelScanFrom.get(id);
+    // A cursor PAST the buffer means the buffer was dropped and restarted (a kill
+    // forgets it), so everything it now holds belongs to this pty.
+    const current = from !== undefined && from <= agentReadBuffer.cursor(id)
+        ? agentReadBuffer.readSince(id, from)
+        : agentReadBuffer.readTail(id);
+    const recent = current.data.slice(-DEV_CHANNEL_SCAN_BYTES);
+    if (!current.buffered || devChannelConsentReply(recent) !== 'accept') return;
     devChannelAnswered.add(id);
     try {
         // The confirm choice is already selected when the dialog opens, so a
@@ -1050,6 +1126,7 @@ function feedTerminalExit(id: string, payload: { exitCode: number; signal?: numb
     // an idle session. The buffer is released for real when the terminal is
     // killed (killTerminalById), which is also when its spec goes.
     agentReadBuffer.trimToTail(id, EXIT_TAIL_BYTES);
+    endDevChannelLife(id);
     // AgentInbox: the pty exited but the spec is retained (revivable) — mark the
     // agent `away` (no-op for a non-agent terminal).
     releaseHarnessPullTransport(id);
@@ -1491,6 +1568,7 @@ export function killTerminalById(id: string): boolean {
     ownersByTerminal.delete(id);
     // Drop the agent read buffer for this terminal.
     agentReadBuffer.forget(id);
+    endDevChannelLife(id);
     // Drop the per-terminal MCP endpoint so its token stops resolving.
     unregisterTerminalEndpoint(id);
     // AgentInbox: a killed terminal is a hard leave — drop the agent from the

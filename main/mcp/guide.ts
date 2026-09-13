@@ -588,7 +588,9 @@ For Codex, Genie automatically installs a SessionStart hook that sends Codex's g
   Being reachable is PROTOCOL, not a preference — there is no opt-out, because an
   agent that had silenced itself still looked reachable to everyone writing to it.
   While your hooks are engaged, mail reaches you natively and NOTHING is ever put
-  in your chat — you are expected to read it. If you are running in a terminal
+  in your chat — you are expected to read it. A reminder that some of it is still
+  unread comes the same way. Seeing a message there does not mark it read: call
+  \`agentinbox\` with \`action:"receive"\` once you have it. If you are running in a terminal
   that is NOT attached to Genie's services, Genie falls back to your input box:
   a new message is ANNOUNCED there immediately, carrying its urgency so you can
   decide whether to break off, and it waits only while the HUMAN is typing or has

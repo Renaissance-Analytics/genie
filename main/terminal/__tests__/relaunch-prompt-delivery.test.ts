@@ -194,3 +194,34 @@ describe('codex relaunch prompt — genie#434', () => {
         expect(delivered).toHaveLength(0);
     });
 });
+
+describe('a codex agent whose stored command is gone still comes back on its App Server', () => {
+    it('rebuilds the command rather than relaunching with none', async () => {
+        // `runAgent start` revives a saved agent with `spec.meta.agent_command ?? ''`.
+        // With that command missing, `launchCommand` was '' — so no App Server was
+        // prepared, the codex branch was skipped, and the agent went down the
+        // Claude-shaped relaunch as a bare `codex resume <id>`: back in its
+        // terminal, with no channel for its mail.
+        specs.set('codex-swept', {
+            id: 'codex-swept',
+            workspace_id: 'ws-1',
+            label: 'codex · swept',
+            cwd: process.cwd(),
+            type: 'terminal',
+            meta: { agent: 'codex', agent_id: 'codex-agent', chat_session_id: 'thread-xyz' },
+        });
+
+        createAgentTerminal({
+            id: 'codex-swept',
+            workspaceId: 'ws-1',
+            cwd: process.cwd(),
+            label: 'codex · swept',
+            agentMeta: { agent: 'codex', command: '' },
+        });
+
+        await vi.waitFor(() => {
+            expect(writes.map((w) => w.data).join('')).toContain('--remote ws://127.0.0.1:');
+        });
+        expect(String(delivered[0]?.text ?? '')).toContain('connectToGenie');
+    });
+});

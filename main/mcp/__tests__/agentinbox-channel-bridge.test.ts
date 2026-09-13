@@ -141,3 +141,145 @@ describe('the channel bridge cannot end up alive and deaf (genie#619)', () => {
         expect(bridge.stderr()).toContain('GENIE_MCP_URL');
     });
 });
+
+describe('the channel bridge names its terminal', () => {
+    /**
+     * The endpoint the bridge is given is the WORKSPACE's (`.mcp.json` is one
+     * file for every terminal in it), and Genie refuses to guess which terminal
+     * a workspace-scoped call is for once the workspace has more than one — it
+     * answers -32602 with AMBIGUOUS_TERMINAL_MESSAGE. The bridge never passed
+     * `terminalId`, so in every multi-terminal workspace `registerTransport` and
+     * `receive` were refused forever: no binding, no delivery, and every DM was
+     * typed into the agent's prompt instead. Measured against a live Genie with
+     * four terminals in the workspace before this was written.
+     *
+     * This stub answers the way that resolver does.
+     */
+    async function workspaceEndpoint(terminals: string[]): Promise<{
+        url: string;
+        calls: () => Array<{ action?: string; terminalId?: string; refused: boolean }>;
+    }> {
+        const calls: Array<{ action?: string; terminalId?: string; refused: boolean }> = [];
+        const server = http.createServer((req, res) => {
+            let body = '';
+            req.on('data', (c) => (body += c));
+            req.on('end', () => {
+                const rpc = JSON.parse(body || '{}');
+                const args = rpc.params?.arguments ?? {};
+                const named = typeof args.terminalId === 'string' ? args.terminalId : undefined;
+                const resolved = named ? terminals.includes(named) : terminals.length === 1;
+                calls.push({ action: args.action, terminalId: named, refused: !resolved });
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                if (!resolved) {
+                    res.end(JSON.stringify({
+                        jsonrpc: '2.0',
+                        id: rpc.id ?? null,
+                        error: { code: -32602, message: 'Could not determine which terminal to act on.' },
+                    }));
+                    return;
+                }
+                const payload = args.action === 'receive' ? { messages: [] } : { ok: true };
+                res.end(JSON.stringify({
+                    jsonrpc: '2.0',
+                    id: rpc.id ?? 1,
+                    result: { content: [{ type: 'text', text: JSON.stringify(payload) }] },
+                }));
+            });
+        });
+        servers.push(server);
+        await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+        const address = server.address();
+        const port = typeof address === 'object' && address ? address.port : 0;
+        return { url: `http://127.0.0.1:${port}/mcp/workspace-token`, calls: () => calls };
+    }
+
+    it('registers and polls AS its terminal in a workspace with several', async () => {
+        const endpoint = await workspaceEndpoint(['editor', 'ssr', 'term-1', 'other-agent']);
+        startBridge({ GENIE_MCP_URL: endpoint.url, GENIE_TERMINAL_ID: 'term-1' });
+
+        await settle(1500);
+
+        const calls = endpoint.calls();
+        const registered = calls.find((c) => c.action === 'registerTransport' && !c.refused);
+        const polled = calls.find((c) => c.action === 'receive' && !c.refused);
+        expect(registered?.terminalId, JSON.stringify(calls)).toBe('term-1');
+        expect(polled?.terminalId, JSON.stringify(calls)).toBe('term-1');
+        expect(calls.filter((c) => c.refused)).toEqual([]);
+    });
+
+    it('sends no terminalId when it has none, rather than an empty one', async () => {
+        // Outside a Genie terminal the variable expands to '' (`${GENIE_TERMINAL_ID:-}`).
+        // An empty id is not an id: sending it would make a one-terminal
+        // workspace refuse a call it can otherwise resolve.
+        const endpoint = await workspaceEndpoint(['only']);
+        startBridge({ GENIE_MCP_URL: endpoint.url, GENIE_TERMINAL_ID: '' });
+
+        await settle(1500);
+
+        const calls = endpoint.calls();
+        expect(calls.length, 'bridge made no calls').toBeGreaterThan(1);
+        expect(calls.every((c) => c.terminalId === undefined && !c.refused), JSON.stringify(calls)).toBe(true);
+    });
+});
+
+describe('the channel bridge handshake', () => {
+    /** Spawn the bridge, send `initialize` with `protocolVersion`, return its answer. */
+    async function handshake(protocolVersion: string): Promise<Record<string, any>> {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'genie-channel-bridge-'));
+        dirs.push(dir);
+        const file = path.join(dir, 'bridge.cjs');
+        fs.writeFileSync(file, claudeChannelBridge());
+        const child = spawn(process.execPath, [file], {
+            // Nothing listens here; the handshake is answered before any poll.
+            env: { ...process.env, GENIE_MCP_URL: 'http://127.0.0.1:9/mcp/none' } as NodeJS.ProcessEnv,
+            stdio: ['pipe', 'pipe', 'pipe'],
+        });
+        running.push(child);
+        let out = '';
+        const answer = new Promise<Record<string, any>>((resolve, reject) => {
+            const timer = setTimeout(() => reject(new Error(`no initialize answer: ${out}`)), 5000);
+            child.stdout.on('data', (c) => {
+                out += String(c);
+                const line = out.split('\n').find((l) => l.includes('"id":7'));
+                if (line) {
+                    clearTimeout(timer);
+                    resolve(JSON.parse(line).result);
+                }
+            });
+        });
+        child.stdin.write(
+            JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'initialize', params: { protocolVersion } }) + '\n',
+        );
+        return answer;
+    }
+
+    it('does not agree to a protocol revision whose connections carry no channel', async () => {
+        // Claude Code registers channel notifications only on a LEGACY-era
+        // connection: on a modern revision it skips them ("connection negotiated a
+        // modern protocol revision with no unsolicited notification path"), with
+        // no error. The bridge echoed whatever the client offered, so a client
+        // offering the modern revision would have negotiated the channel away.
+        const result = await handshake('2026-07-28');
+
+        expect(result.protocolVersion).toBe('2025-11-25');
+        expect(result.capabilities?.experimental?.['claude/channel']).toEqual({});
+    });
+
+    it('POSITIVE CONTROL: agrees to a legacy revision the client offers', async () => {
+        const result = await handshake('2025-06-18');
+
+        expect(result.protocolVersion).toBe('2025-06-18');
+    });
+
+    it('tells the agent what its channel events are and how to mark them read', async () => {
+        // Claude Code hands a channel server's `instructions` to the model when it
+        // connects. Without them a `<channel source="genie-agentinbox-channel">`
+        // event is an unexplained block of text, and nothing tells the agent that
+        // reading it here does not mark it read — so it stays unread, and Genie's
+        // unread deadline asks about it again.
+        const result = await handshake('2025-11-25');
+
+        expect(result.instructions).toContain('genie-agentinbox-channel');
+        expect(result.instructions).toMatch(/agentinbox.*receive/);
+    });
+});

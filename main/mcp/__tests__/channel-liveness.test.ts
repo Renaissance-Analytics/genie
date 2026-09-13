@@ -141,6 +141,11 @@ addWorkspace({
  * the actual `registerTransport` path rather than a hand-placed binding.
  */
 async function connectedChannelAgent(): Promise<{ specId: string; inboxId: string }> {
+    // A connected channel agent was LAUNCHED with the channel, and Genie adds the
+    // flag only where the workspace has its adapter — so the workspace has one.
+    const adapter = path.join(wsDir, '.agents', '_genie', 'agentinbox-claude-channel.cjs');
+    fs.mkdirSync(path.dirname(adapter), { recursive: true });
+    fs.writeFileSync(adapter, '// bridge');
     const registered = await registerAgentForMcp(CALLER_ID, {
         name: AGENT_NAME,
         purpose: 'Holds a Claude Channel',
@@ -295,4 +300,60 @@ function inboxIdSpec(inboxId: string): string {
 // Keep the broker's module-level state from leaking between files.
 afterEach(() => {
     agentInboxBroker.leaveByTerminal(CALLER_ID);
+});
+
+describe('a Claude Channel binds only for a session Genie started WITH the channel', () => {
+    /**
+     * Claude Code loads `genie-agentinbox-channel` as a channel only when the
+     * session was launched with `--dangerously-load-development-channels
+     * server:genie-agentinbox-channel`. Without the flag the bridge still starts —
+     * it is an ordinary MCP server in `.mcp.json` — still registers, and still
+     * polls, while Claude Code drops every notification it writes ("server … not
+     * in --channels list for this session"), with no error.
+     *
+     * Binding that session told AgentInbox the agent had its mail coming, which
+     * held back the notice in its terminal: the one delivery that could reach it.
+     * Genie typed the launch line, so it KNOWS whether the flag was on it.
+     */
+    const bridgeFile = path.join(wsDir, '.agents', '_genie', 'agentinbox-claude-channel.cjs');
+
+    async function startClaude(): Promise<{ specId: string; inboxId: string }> {
+        const registered = await registerAgentForMcp(CALLER_ID, {
+            name: 'launch-check',
+            purpose: 'Started with or without the channel',
+            agent: 'claude',
+        });
+        if (!registered.ok) throw new Error(`fixture failed to register: ${registered.error}`);
+        const started = await runAgentForMcp(CALLER_ID, { action: 'start', name: 'launch-check', command: 'echo agent' });
+        if (!started.ok || !started.id) throw new Error(`fixture failed to start: ${started.error}`);
+        const inboxId = getTerminalSpec(started.id)?.meta?.agent_id;
+        if (typeof inboxId !== 'string') throw new Error('fixture: no AgentInbox identity');
+        return { specId: started.id, inboxId };
+    }
+
+    // The fixture above leaves an adapter behind; each case here sets its own.
+    beforeEach(() => {
+        fs.rmSync(path.join(wsDir, '.agents'), { recursive: true, force: true });
+    });
+
+    it('refuses the handshake from a session launched without the channel', async () => {
+        const { specId, inboxId } = await startClaude();
+
+        const handshake = await agentInboxForMcp(specId, { action: 'registerTransport', transport: 'claude-channel' });
+
+        expect(handshake.ok).toBe(false);
+        expect(harnessTransportRegistry.isVerified(inboxId)).toBe(false);
+    });
+
+    it('POSITIVE CONTROL: binds the session whose launch carried the channel', async () => {
+        // The workspace has its channel adapter, so the launch line gets the flag.
+        fs.mkdirSync(path.dirname(bridgeFile), { recursive: true });
+        fs.writeFileSync(bridgeFile, '// bridge');
+        const { specId, inboxId } = await startClaude();
+
+        const handshake = await agentInboxForMcp(specId, { action: 'registerTransport', transport: 'claude-channel' });
+
+        expect(handshake.ok).toBe(true);
+        expect(harnessTransportRegistry.deliveryModeFor(inboxId)).toBe('pull');
+    });
 });

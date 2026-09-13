@@ -78,28 +78,97 @@ describe('the unread backstop arms on unread mail, not on an unbound keyboard (g
         vi.useRealTimers();
     });
 
-    it('recovers mail a bound channel never delivered, armed at DELIVERY', () => {
+    it('reminds a live channel THROUGH the channel, not at the prompt', async () => {
+        // The owner's rule: an agent with a live channel gets its mail — and its
+        // reminders — through that channel, never typed into its input, where
+        // nothing can tell Genie's words from the human's. The bridge's parked
+        // poll is where a channel's mail comes from, so that is where the
+        // reminder goes.
         vi.useFakeTimers();
         vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
         const { broker, registry, pty } = wired();
         liveChannel(registry);
 
-        // The agent finished a turn and is idle at its prompt — the state every
-        // agent on the reporting machine was in while six notices went missing.
-        // The turn ends BEFORE the message, deliberately: `markTurnEnd` is the
-        // only thing that used to arm a deadline, so an agent that is already
-        // idle when mail arrives had nothing left to ask again for it. Delivery
-        // has to arm it, or this scenario has no recovery path at all.
         broker.markTurnEnd('t-B');
         vi.advanceTimersByTime(20_000);
+        broker.send({ fromAgentId: 'A', toAgentId: 'B', text: 'read over the channel, never marked read' });
+        // The bridge took it and went back to waiting, as a working one does.
+        const handed = await broker.receive('B', { wait: true, acknowledge: false });
+        const poll: { result?: Awaited<ReturnType<typeof broker.receive>> } = {};
+        void broker
+            .receive('B', { cursor: handed.cursor, wait: true, timeoutMs: 600_000, acknowledge: false })
+            .then((r) => (poll.result = r));
 
-        broker.send({ fromAgentId: 'A', toAgentId: 'B', text: 'the channel swallowed this' });
-        // Nothing else happens: no turn ends, no poll, no read. Before the fix
-        // this was the end of the message's story.
+        await vi.advanceTimersByTimeAsync(300_000);
+
+        // Settled BY the reminder: the poll's own timeout is still minutes away.
+        const reminded = poll.result;
+        if (!reminded) throw new Error('the parked poll was never given the reminder');
+        expect(reminded.messages.map((m) => m.text).join('')).toMatch(/1 unread AgentInbox message/);
+        // A reminder is not mail: it moves no cursor and marks nothing read.
+        expect(reminded.cursor).toBe(handed.cursor);
+        expect(broker.unreadForTerminal('t-B').count).toBe(1);
+        expect(pty).not.toHaveBeenCalled();
+    });
+
+    it('holds a reminder for a bridge that is between polls, rather than typing it', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+        const { broker, registry, pty } = wired();
+        liveChannel(registry);
+
+        broker.markTurnEnd('t-B');
+        vi.advanceTimersByTime(20_000);
+        broker.send({ fromAgentId: 'A', toAgentId: 'B', text: 'handed over, then the poll returned' });
+        const handed = await broker.receive('B', { wait: true, acknowledge: false });
         vi.advanceTimersByTime(300_000);
 
+        const polled = broker.receive('B', { cursor: handed.cursor, wait: true, timeoutMs: 1_000, acknowledge: false });
+        await vi.advanceTimersByTimeAsync(1_000);
+        const next = await polled;
+
+        expect(next.messages.map((m) => m.text).join('')).toMatch(/unread AgentInbox message/);
+        expect(pty).not.toHaveBeenCalled();
+    });
+
+    it('reaches the prompt only when a reminded channel is STILL unread a full window later', () => {
+        // genie#549's recovery path, kept for the one case that needs it: a
+        // channel Claude Code silently declined. Six upgrade notices and a
+        // human's answer once sat unseen for five days behind one. A channel
+        // that works never gets here — the agent reads, or reads its reminder.
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+        const { broker, registry, pty } = wired();
+        liveChannel(registry);
+
+        broker.markTurnEnd('t-B');
+        vi.advanceTimersByTime(20_000);
+        broker.send({ fromAgentId: 'A', toAgentId: 'B', text: 'the channel swallowed this' });
+
+        vi.advanceTimersByTime(300_000);
+        expect(pty).not.toHaveBeenCalled();
+
+        vi.advanceTimersByTime(300_000);
         expect(typed(pty).some((t) => /unread AgentInbox message/.test(t))).toBe(true);
         expect(broker.unreadForTerminal('t-B').count).toBe(1);
+    });
+
+    it('POSITIVE CONTROL: an agent that reads after its channel reminder is never typed at', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+        const { broker, registry, pty } = wired();
+        liveChannel(registry);
+
+        broker.markTurnEnd('t-B');
+        vi.advanceTimersByTime(20_000);
+        broker.send({ fromAgentId: 'A', toAgentId: 'B', text: 'reminded, then read' });
+        vi.advanceTimersByTime(300_000);
+
+        await broker.receive('B', {});
+        vi.advanceTimersByTime(900_000);
+
+        expect(pty).not.toHaveBeenCalled();
+        expect(broker.unreadForTerminal('t-B').count).toBe(0);
     });
 
     it('POSITIVE CONTROL: the same mail with no channel reaches the agent at once', () => {
