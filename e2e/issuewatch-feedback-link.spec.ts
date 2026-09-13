@@ -93,3 +93,57 @@ test('no feedback means no notice at all', async () => {
     // notice being absent, not the panel failing to mount.
     await expect(page.getByTestId('e2e-root')).toBeVisible();
 });
+
+/**
+ * The entries BY NAME (owner: "Issue titles are supposed to be piped in with the
+ * IssueWatch stream, not just a thing saying I have x amount of feedbacks").
+ *
+ * The stream carries a bounded list of the most recently moved open issues beside
+ * the full count. The panel must name each one, open THAT issue when it is
+ * clicked, and say how many more wait rather than let a short list pass for the
+ * whole queue.
+ */
+test('the panel names the open issues, opens the one clicked, and says how many more wait', async () => {
+    await scriptFeedback(app, 5, { tynn_project_id: 'PRJ-E2E', backend: 'tynn' });
+    await app.evaluate(() => {
+        const state = (globalThis as Record<string, any>).__GENIE_E2E__.state;
+        state.issueWatch.feedbackItems = [
+            {
+                key: 'tynn-issue:A',
+                number: 12,
+                title: 'The billing screen loses my filter on refresh',
+                source: 'feedback',
+                url: 'https://tynn.ai/p/PRJ-E2E/issues?issue=A',
+                createdAt: null,
+                updatedAt: null,
+            },
+            {
+                key: 'tynn-issue:B',
+                number: 13,
+                title: 'Add a keyboard shortcut for search',
+                source: 'wish',
+                url: 'https://tynn.ai/p/PRJ-E2E/issues?issue=B',
+                createdAt: null,
+                updatedAt: null,
+            },
+        ];
+    });
+    await page.reload();
+
+    const list = page.getByRole('list', { name: 'Open issues in Tynn' });
+    await expect(list).toBeVisible();
+    await expect(list.getByRole('button', { name: /#12\s*The billing screen loses my filter on refresh/ })).toBeVisible();
+    await expect(list.getByRole('button', { name: /#13\s*Add a keyboard shortcut for search/ })).toBeVisible();
+    // Five open, two named: the other three are said, not hidden.
+    await expect(list).toContainText('and 3 more in Tynn');
+
+    await list.getByRole('button', { name: /Add a keyboard shortcut for search/ }).click();
+    await expect
+        .poll(async () => app.evaluate(() => (globalThis as any).__GENIE_E2E__.state.openedUrls))
+        .toEqual(['https://tynn.ai/p/PRJ-E2E/issues?issue=B']);
+
+    // Leave the shared state as the other tests expect it.
+    await app.evaluate(() => {
+        (globalThis as Record<string, any>).__GENIE_E2E__.state.issueWatch.feedbackItems = [];
+    });
+});

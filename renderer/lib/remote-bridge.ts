@@ -9,6 +9,7 @@ import type {
     GitStatusMap,
     WatchTypeCounts,
     WatchRepoView,
+    TynnFeedbackItem,
     WatchFeedItem,
     WorkspaceWatchStatus,
     AgentType,
@@ -99,6 +100,10 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
             ((await req(`/api/desktop/issue-watch/status${wsQ(workspaceId)}`)) as {
                 status: WorkspaceWatchStatus;
             }).status,
+        feedbackItems: async (workspaceId) =>
+            ((await req(`/api/desktop/issue-watch/feedback-items${wsQ(workspaceId)}`)) as {
+                items: TynnFeedbackItem[];
+            }).items,
         markSeen: async (workspaceId) =>
             (await req('/api/desktop/issue-watch/mark-seen', {
                 method: 'POST',

@@ -174,6 +174,16 @@ export interface E2EState {
         };
         repos: WatchRepoView[];
         feed: WatchFeedItem[];
+        /** The open Tynn issues by name, served to `issue-watch:feedback-items`. */
+        feedbackItems?: Array<{
+            key: string;
+            number: number | null;
+            title: string;
+            source: string | null;
+            url: string;
+            createdAt: string | null;
+            updatedAt: string | null;
+        }>;
         /**
          * Per-workspace bucket counts returned by `issue-watch:counts`. The
          * flyout's feedback notice is driven from `feedback` here, NOT from the
@@ -385,6 +395,7 @@ export function registerE2EMocks(): void {
     override('issue-watch:status', async () => e2eState.issueWatch.status);
     override('issue-watch:repos', async () => e2eState.issueWatch.repos);
     override('issue-watch:feed', async () => e2eState.issueWatch.feed);
+    override('issue-watch:feedback-items', async () => e2eState.issueWatch.feedbackItems ?? []);
     override('issue-watch:mark-seen', async () => ({ ok: true }));
     override('issue-watch:counts', async () => e2eState.issueWatch.counts);
     override('issue-watch:set', async () => ({ ok: true }));

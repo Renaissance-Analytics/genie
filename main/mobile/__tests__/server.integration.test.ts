@@ -1020,6 +1020,43 @@ describe('mobile server (integration, 127.0.0.1)', () => {
         expect(r.status).toBe(404);
     });
 
+    it('host IssueWatch feedback titles: serves the HOST workspace’s open issues by name, and nothing for another', async () => {
+        // A remote window's IssueWatch panel names the host's open Tynn issues
+        // through this route. It serves only a workspace the host serves, like
+        // every other issue-watch read.
+        const { initDatabase } = await import('../../db');
+        initDatabase(fs.mkdtempSync(path.join(os.tmpdir(), 'genie-mobile-db-')));
+        const { applyPushedDelta, clearPushedDelta } = await import('../../issue-watch');
+        const titled = {
+            key: 'tynn-issue:01',
+            number: 12,
+            title: 'The billing screen loses my filter',
+            source: 'feedback',
+            url: 'https://tynn.ai/p/PRJ/issues?issue=01',
+            createdAt: null,
+            updatedAt: null,
+        };
+        applyPushedDelta({
+            workspaceId: 'ws-1',
+            counts: { issue: 0, pr: 0, security: 0, feedback: 1 },
+            items: [],
+            feedbackItems: [titled],
+        });
+        try {
+            const port = await start();
+            const token = await pair(port);
+
+            const served = await req(port, 'GET', '/api/desktop/issue-watch/feedback-items?workspaceId=ws-1', { token });
+            expect(served.status).toBe(200);
+            expect(served.json).toEqual({ items: [titled] });
+
+            const other = await req(port, 'GET', '/api/desktop/issue-watch/feedback-items?workspaceId=ws-other', { token });
+            expect(other.status).toBe(404);
+        } finally {
+            clearPushedDelta('ws-1');
+        }
+    });
+
     it('host IssueWatch: 401s without a token', async () => {
         const port = await start();
         const noTok = await req(port, 'GET', '/api/desktop/issue-watch/repos?workspaceId=ws-1');

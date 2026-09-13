@@ -48,6 +48,7 @@ import {
 import {
     getOpenCounts,
     getWorkspaceRepoViews,
+    getFeedbackItems,
     getWorkspaceFeed,
     getWorkspaceStatus,
     markWorkspaceSeen,
@@ -1786,6 +1787,12 @@ export async function handleApi(
             const id = queryWs();
             if (denyUnserved(id)) return true;
             sendJson(res, 200, { feed: await getWorkspaceFeed(id) });
+            return true;
+        }
+        if (pathname === '/api/desktop/issue-watch/feedback-items' && method === 'GET') {
+            const id = queryWs();
+            if (denyUnserved(id)) return true;
+            sendJson(res, 200, { items: getFeedbackItems(id) });
             return true;
         }
         if (pathname === '/api/desktop/issue-watch/status' && method === 'GET') {

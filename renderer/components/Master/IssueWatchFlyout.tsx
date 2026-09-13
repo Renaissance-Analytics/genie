@@ -14,6 +14,7 @@ import {
     type WatchFeedItem,
     type WatchFetchError,
     type WatchRepoView,
+    type TynnFeedbackItem,
     type WatchTypeCounts,
 } from '../../lib/genie';
 import {
@@ -22,6 +23,7 @@ import {
 } from '../../lib/githubCapabilities';
 import {
     feedbackPathForWorkspace,
+    feedbackRows,
     feedItemByline,
     issueWatchGate,
     openCountForRepo,
@@ -173,6 +175,9 @@ export default function IssueWatchFlyout({
      * never mentions feedback, which is a dead end rather than a signal.
      */
     const [feedbackCount, setFeedbackCount] = useState(0);
+    /** The open Tynn issues BY NAME — the bounded list the stream carries beside
+     *  the count. Empty from a Tynn that predates titles; the count still shows. */
+    const [feedbackItems, setFeedbackItems] = useState<TynnFeedbackItem[]>([]);
     /**
      * Where the feedback notice opens — Tynn's id-addressed feedback page for
      * this workspace's project, or null when the workspace has no Tynn project
@@ -273,6 +278,11 @@ export default function IssueWatchFlyout({
                 .issueWatch.counts()
                 .catch((): Record<string, WatchTypeCounts> => ({}));
             setFeedbackCount(all[workspaceId]?.feedback ?? 0);
+            setFeedbackItems(
+                await api()
+                    .issueWatch.feedbackItems(workspaceId)
+                    .catch((): TynnFeedbackItem[] => []),
+            );
         } finally {
             setLoading(false);
             setLoaded(true);
@@ -606,6 +616,54 @@ export default function IssueWatchFlyout({
                                         project feedback in Tynn, waiting on triage.
                                     </div>
                                 ))}
+
+                            {/* The entries BY NAME (owner: "issue titles are supposed
+                                to be piped in with the IssueWatch stream"). Tynn sends
+                                the most recently moved; `more` keeps a bounded list
+                                from reading as the whole queue. Each row opens that
+                                issue in Tynn. */}
+                            {feedbackCount > 0 &&
+                                (() => {
+                                    const view = feedbackRows(feedbackItems, feedbackCount);
+                                    if (view.rows.length === 0) return null;
+                                    return (
+                                        <ul className="iw-feedback-list" aria-label="Open issues in Tynn">
+                                            {view.rows.map((row) => (
+                                                <li key={row.key}>
+                                                    <button
+                                                        type="button"
+                                                        className="iw-feedback-row"
+                                                        onClick={() => void api().tynn.openInBrowser(row.url)}
+                                                        title="Open this issue in Tynn"
+                                                    >
+                                                        {row.number && (
+                                                            <span className="iw-feedback-num">{row.number}</span>
+                                                        )}
+                                                        <span className="iw-feedback-title">{row.title}</span>
+                                                        {row.origin && (
+                                                            <span className="iw-feedback-origin">{row.origin}</span>
+                                                        )}
+                                                    </button>
+                                                </li>
+                                            ))}
+                                            {view.more > 0 && (
+                                                <li className="iw-feedback-more">
+                                                    {feedbackPath ? (
+                                                        <button
+                                                            type="button"
+                                                            className="iw-linkbtn"
+                                                            onClick={() => void api().tynn.openInBrowser(feedbackPath)}
+                                                        >
+                                                            and {view.more} more in Tynn
+                                                        </button>
+                                                    ) : (
+                                                        <>and {view.more} more in Tynn</>
+                                                    )}
+                                                </li>
+                                            )}
+                                        </ul>
+                                    );
+                                })()}
 
                             <div className="iw-section-head">Activity</div>
                             {feed.length === 0 ? (
