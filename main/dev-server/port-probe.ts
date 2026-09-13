@@ -106,6 +106,62 @@ function connectOnce(host: string, port: number, timeoutMs: number): Promise<boo
     });
 }
 
+/** How long a service connection must survive, silent, to count as live. Postgres
+ *  waits for the client's startup packet, so silence is normal; a dead forwarder
+ *  hangs up well inside this. */
+const SERVICE_HOLD_MS = 300;
+
+/**
+ * One service attempt. True iff the connection SURVIVES: the peer sent something,
+ * or it was still open after `holdMs`. False if it was refused, timed out, or was
+ * hung up on before either — which is what Docker Desktop's forwarder does to a
+ * published port whose forward has died.
+ */
+function connectAndHold(host: string, port: number, timeoutMs: number, holdMs: number): Promise<boolean> {
+    return new Promise((resolve) => {
+        const socket = net.connect({ host, port });
+        let settled = false;
+        let hold: ReturnType<typeof setTimeout> | undefined;
+        const done = (result: boolean) => {
+            if (settled) return;
+            settled = true;
+            if (hold) clearTimeout(hold);
+            socket.destroy();
+            resolve(result);
+        };
+        socket.setTimeout(timeoutMs, () => done(false));
+        socket.once('connect', () => {
+            hold = setTimeout(() => done(true), holdMs);
+        });
+        // Anything the peer says is proof of life, even if it closes afterwards.
+        socket.once('data', () => done(true));
+        // Hung up on before it said anything or held on: the accept was hollow.
+        socket.once('end', () => done(false));
+        socket.once('close', () => done(false));
+        socket.once('error', () => done(false));
+    });
+}
+
+/**
+ * Poll a SERVICE's published port until a connection to it survives (genie#644).
+ *
+ * `waitForPort` counts an accept, which a dead Docker Desktop forwarder still
+ * gives: after a Docker restart every `127.0.0.1:<hostPort>` accepted and dropped
+ * connections while the engines were healthy inside their containers, and every
+ * service stayed green. What an app needs from its database is a connection that
+ * stays up, so that is what this asks for.
+ *
+ * Asked of exactly `127.0.0.1`: that is the address the service's `.env` gives
+ * every app, so a listener on `::1` would not help one.
+ */
+export async function waitForTcpService(
+    port: number,
+    timeoutMs: number = DEFAULT_READY_TIMEOUT_MS,
+    holdMs: number = SERVICE_HOLD_MS,
+): Promise<boolean> {
+    return poll((attemptMs) => connectAndHold(DEFAULT_LOOPBACK, port, attemptMs, holdMs), timeoutMs);
+}
+
 /**
  * Poll a loopback port until something ACCEPTS a TCP connection.
  *

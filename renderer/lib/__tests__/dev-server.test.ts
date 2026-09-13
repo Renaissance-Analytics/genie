@@ -298,6 +298,20 @@ describe('service status', () => {
         ).toContain('never became ready');
         expect(serviceStatusTone({ ...PG, ready: false })).toBe('starting');
     });
+
+    it('says an engine that is up but UNREACHABLE is not "starting" — and names the address (genie#644)', () => {
+        const unreachable: DevServiceInfo = {
+            ...PG,
+            ready: false,
+            reachable: false,
+            endpoints: [{ name: 'postgres', kind: 'tcp', host: 'postgres', port: 5432, hostPort: 49321 }],
+        };
+        const label = serviceStatusLabel(unreachable);
+        expect(label).not.toMatch(/starting/i);
+        expect(label).toContain('127.0.0.1:49321');
+        expect(label).toMatch(/not reachable/i);
+        expect(serviceStatusTone(unreachable)).toBe('failed');
+    });
 });
 
 // --- the runtime ------------------------------------------------------------

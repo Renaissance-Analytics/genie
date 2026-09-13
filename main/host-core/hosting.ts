@@ -44,7 +44,7 @@ import { initDevLifecycle } from '../dev-server/lifecycle';
 import type { DevServerLifecycle, DevServerLifecycleDeps } from '../dev-server/lifecycle';
 import { registerDevSiteTools } from '../mcp/dev-site-tools';
 import type { DevSiteToolsDeps } from '../mcp/dev-site-tools';
-import { isPortFree, waitForHttp, waitForPort } from '../dev-server/port-probe';
+import { isPortFree, waitForHttp, waitForTcpService } from '../dev-server/port-probe';
 import type { DevSites } from '../dev-server/sites-config';
 import type { DevServices } from '../dev-server/services/services-config';
 import type { EngineAdmin } from '../dev-server/services/provision';
@@ -216,8 +216,10 @@ export function buildHostingDeps(ports: HostingPorts): HostingDeps {
         // REQUIRED for engines with no in-container check (Mailpit/Meilisearch/
         // MinIO): without a host-side probe `waitReady` answers "not ready"
         // immediately and every acquire of those fails.
+        // A TCP service must SURVIVE the probe, not merely be accepted: a dead
+        // Docker Desktop forwarder accepts and drops (genie#644).
         probeReady: ({ port, kind, timeoutMs }) =>
-            kind === 'http' ? waitForHttp(port, timeoutMs) : waitForPort(port, timeoutMs),
+            kind === 'http' ? waitForHttp(port, timeoutMs) : waitForTcpService(port, timeoutMs),
         // "Can I have this exact port?" — a BIND, not a connect, because Docker
         // Desktop's forwarder answers a connect for ports nothing serves. Always
         // available: it is a plain loopback probe with no host-shaped dependency.
