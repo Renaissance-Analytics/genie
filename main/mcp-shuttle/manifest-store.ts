@@ -18,6 +18,13 @@
  * describes. `null` lets the listener answer with a named state instead. A manifest
  * that genuinely declares no tools is `[]`, and the two are tested against each other.
  *
+ * ## initialize is part of the surface
+ *
+ * An agent that STARTS mid-swap, or against a shuttle that cold-booted with no Genie
+ * yet, must still be able to initialize. So the protocol versions Genie speaks, its
+ * server info, its instructions and its capabilities are published with the lists,
+ * and a manifest that could not answer `initialize` is refused outright.
+ *
  * ## list_changed only on a real change
  *
  * A routine swap republishes an identical surface under a new generation and a new
@@ -48,7 +55,17 @@ export interface ShuttleResource {
     [extra: string]: unknown;
 }
 
-export interface ShuttleManifest {
+/** Everything `initialize` answers with, as the publisher declared it. */
+export interface ShuttleServerSurface {
+    /** Every protocol revision Genie speaks, preferred first. Never empty. */
+    protocolVersions: string[];
+    serverInfo: { name: string; version: string; [extra: string]: unknown };
+    /** The Genie protocol brief — MCP's "how to use this server" channel. */
+    instructions: string;
+    capabilities: Record<string, unknown>;
+}
+
+export interface ShuttleManifest extends ShuttleServerSurface {
     genieVersion: string;
     /** Monotonic per Genie boot. Informational here: which publisher is live is
      *  decided by the publisher gate, not by comparing generations — a new Genie
@@ -77,6 +94,8 @@ export interface ManifestStore {
     /** Load the last persisted manifest. A missing or corrupt one is "none". */
     boot(): void;
     publish(manifest: ShuttleManifest): PublishOutcome;
+    /** What `initialize` answers with, or null when nothing was ever published. */
+    server(): ShuttleServerSurface | null;
     tools(): ShuttleTool[] | null;
     prompts(): ShuttlePrompt[] | null;
     resources(): ShuttleResource[] | null;
@@ -93,12 +112,24 @@ function canonical(value: unknown): string {
     );
 }
 
+const isRecord = (v: unknown): v is Record<string, unknown> =>
+    !!v && typeof v === 'object' && !Array.isArray(v);
+
 function isManifest(value: unknown): value is ShuttleManifest {
-    if (!value || typeof value !== 'object') return false;
-    const m = value as Record<string, unknown>;
+    if (!isRecord(value)) return false;
+    const m = value;
     return (
         typeof m.genieVersion === 'string' &&
         Number.isInteger(m.generation) &&
+        // Negotiation needs at least one revision to fall back to.
+        Array.isArray(m.protocolVersions) &&
+        m.protocolVersions.length > 0 &&
+        m.protocolVersions.every((v) => typeof v === 'string') &&
+        isRecord(m.serverInfo) &&
+        typeof m.serverInfo.name === 'string' &&
+        typeof m.serverInfo.version === 'string' &&
+        typeof m.instructions === 'string' &&
+        isRecord(m.capabilities) &&
         Array.isArray(m.tools) &&
         Array.isArray(m.prompts) &&
         Array.isArray(m.resources)
@@ -146,6 +177,15 @@ export function createManifestStore(disk: ManifestPersistence): ManifestStore {
             return { accepted: true, changed };
         },
 
+        server: () =>
+            current
+                ? {
+                      protocolVersions: current.protocolVersions,
+                      serverInfo: current.serverInfo,
+                      instructions: current.instructions,
+                      capabilities: current.capabilities,
+                  }
+                : null,
         tools: () => current?.tools ?? null,
         prompts: () => current?.prompts ?? null,
         resources: () => current?.resources ?? null,
