@@ -1,6 +1,8 @@
 import type net from 'node:net';
 import type { DispatchFrame, ShuttleResponse } from './core';
+import { isManifest } from './manifest-store';
 import type { GateConnection, GateMessage, PublisherGate } from './publisher-gate';
+import { isTopology } from './topology-store';
 
 /**
  * THE CONTROL CHANNEL — the pipe a Genie publishes through.
@@ -55,7 +57,7 @@ export type OutboundGateMessage =
     | ClosedMessage;
 
 /** What a publisher may send the shuttle. */
-export type InboundGateMessage = Extract<GateMessage, { type: 'hello' | 'result' }>;
+export type InboundGateMessage = Extract<GateMessage, { type: 'hello' | 'result' | 'publish' | 'topology' }>;
 
 const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const isInt = (v: unknown): v is number => Number.isInteger(v);
@@ -80,6 +82,14 @@ export function parseInboundGateMessage(raw: unknown): InboundGateMessage | null
     if (raw.type === 'result') {
         if (!isInt(raw.correlationId) || !isResponse(raw.response)) return null;
         return { type: 'result', correlationId: raw.correlationId, response: raw.response };
+    }
+    // The surface every agent is served, and where each URL leads. Validated by the
+    // same rules the stores apply, so a publish the store would refuse never reaches it.
+    if (raw.type === 'publish') {
+        return isManifest(raw.manifest) ? { type: 'publish', manifest: raw.manifest } : null;
+    }
+    if (raw.type === 'topology') {
+        return isTopology(raw.topology) ? { type: 'topology', topology: raw.topology } : null;
     }
     return null;
 }
