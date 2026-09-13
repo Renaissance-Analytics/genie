@@ -1,7 +1,7 @@
 import net from 'node:net';
 import https from 'node:https';
 import { afterEach, describe, expect, it } from 'vitest';
-import { allocateFreePort, isPortFree, waitForHttp, waitForHttpsSni, waitForPort } from '../port-probe';
+import { allocateFreePort, isPortFree, waitForHttp, waitForHttpsSni, waitForPort, waitForTcpService } from '../port-probe';
 
 /**
  * READINESS — and the Docker Desktop trap that makes the obvious probe lie.
@@ -417,5 +417,42 @@ describe('isPortFree', () => {
     it('is FALSE rather than throwing for a port that cannot be bound at all', async () => {
         expect(await isPortFree(0.5)).toBe(false);
         expect(await isPortFree(70000)).toBe(false);
+    });
+});
+
+/**
+ * waitForTcpService — the probe a DATABASE's published port needs (genie#644).
+ *
+ * `waitForPort` counts an accept as ready, which is right for "has a dev server
+ * bound yet" and wrong for "can my app reach its database". After a Docker Desktop
+ * restart its forwarder accepted every connection to 127.0.0.1:<hostPort> and
+ * dropped it, while Postgres, Redis and Mailpit were healthy inside their
+ * containers. Every service stayed green and every site returned 500.
+ *
+ * A live service connection is one that SURVIVES: the peer says something (Redis,
+ * MySQL greet or answer), or it holds the connection open waiting for the client
+ * to speak (Postgres does). A dead forwarder hangs up at once. That difference is
+ * what this probe measures.
+ */
+describe('waitForTcpService — a connection that survives, not one that was accepted', () => {
+    it('is FALSE for a port that accepts and immediately hangs up — the dead forwarder', async () => {
+        const port = await listen((socket) => socket.destroy());
+        expect(await waitForTcpService(port, 800)).toBe(false);
+    });
+
+    it('POSITIVE CONTROL — is true for a server that holds the connection open, waiting for the client', async () => {
+        // Postgres: accepts, then says nothing until the client sends a startup packet.
+        const port = await listen(() => {});
+        expect(await waitForTcpService(port, 2_000)).toBe(true);
+    });
+
+    it('is true for a server that greets first, even if it then closes', async () => {
+        // MySQL sends its handshake on connect. Anything the peer SAYS is proof of life.
+        const port = await listen((socket) => socket.end('greeting'));
+        expect(await waitForTcpService(port, 2_000)).toBe(true);
+    });
+
+    it('is false, not a throw, when nothing is listening', async () => {
+        expect(await waitForTcpService(await closedPort(), 300)).toBe(false);
     });
 });

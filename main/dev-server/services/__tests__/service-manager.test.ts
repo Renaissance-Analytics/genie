@@ -1164,6 +1164,36 @@ describe('a published port that changed underneath us', () => {
         expect(manager.list('a')[0]?.ready).toBe(false);
     });
 
+    it('says a RUNNING engine is UNREACHABLE when its published port stops answering (genie#644)', async () => {
+        // After a Docker Desktop restart the forwarder accepted and dropped every
+        // connection while the engines ran fine inside their containers. `ready:
+        // false` alone reads as "still starting", which it was not: the engine is
+        // up and the forward is dead. The status has to say which.
+        const runtime = fakeRuntime();
+        const reachable = new Set<number>();
+        const manager = createDevServiceManager({
+            ...deps(runtime, { a: pgFor('svc-a') }),
+            probeReady: async ({ port }) => reachable.has(port),
+        });
+        const acquired = await manager.acquire('a', 'svc-a');
+        const port = acquired.endpoints?.[0]?.hostPort ?? 0;
+
+        reachable.add(port);
+        await manager.refresh();
+        // POSITIVE CONTROL: a reachable engine carries no such flag.
+        expect(manager.list('a')[0]?.reachable).toBeUndefined();
+
+        reachable.clear();
+        await manager.refresh();
+        expect(manager.list('a')[0]?.state).toBe('running');
+        expect(manager.list('a')[0]?.reachable).toBe(false);
+
+        // And it clears the moment the forward answers again.
+        reachable.add(port);
+        await manager.refresh();
+        expect(manager.list('a')[0]?.reachable).toBeUndefined();
+    });
+
     it('leaves an engine alone when the runtime cannot be read', async () => {
         // A runtime hiccup must not blank out a working record — that would turn
         // a transient failure into a wrong answer, which is the whole complaint.

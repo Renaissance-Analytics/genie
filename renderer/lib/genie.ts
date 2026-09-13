@@ -733,6 +733,9 @@ export interface DevServiceEndpoint {
 
 /** One configured service plus whatever is currently true about it. */
 export interface DevServiceInfo {
+    /** `false` when the engine runs but its published port does not answer from
+     *  this machine (genie#644). Absent otherwise. */
+    reachable?: false;
     id: string;
     engine: string;
     version: string;

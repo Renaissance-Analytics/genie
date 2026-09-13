@@ -119,6 +119,17 @@ export interface DevServiceStatus {
     state: DevServiceState;
     /** True when the engine answered its own readiness check. */
     ready?: boolean;
+    /**
+     * `false` when the engine is running but its PUBLISHED port does not answer
+     * from this machine (genie#644) — distinct from still starting. Absent when
+     * it answers, or when nothing has probed it since it came up.
+     *
+     * After a Docker Desktop restart its forwarder accepted and dropped every
+     * connection to `127.0.0.1:<hostPort>` while each engine was healthy inside its
+     * container. `ready: false` alone read as "starting", which sent people to wait
+     * rather than to restart the forward.
+     */
+    reachable?: false;
     containerId?: string;
     containerName?: string;
     /** How many workspaces currently hold this engine. `1` on a dedicated one. */
@@ -525,6 +536,8 @@ interface Live {
     admin: EngineAdmin;
     endpoints: ServiceEndpoint[];
     ready: boolean;
+    /** The last host-side probe's answer, when one has run since acquire. */
+    reachable?: boolean;
     hostNative?: boolean;
 }
 
@@ -1276,9 +1289,14 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
 
             const primary = endpoints.find((e) => e.hostPort);
             if (primary?.hostPort && deps.probeReady) {
-                entry.ready = await deps
+                const answered = await deps
                     .probeReady({ port: primary.hostPort, kind: primary.kind, timeoutMs: 1_000 })
-                    .catch(() => entry.ready);
+                    .catch(() => null);
+                // A probe that could not run leaves both facts as they were.
+                if (answered !== null) {
+                    entry.ready = answered;
+                    entry.reachable = answered;
+                }
             }
         }
 
@@ -1296,6 +1314,7 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
             ...(entry.config.active ? { active: true } : {}),
             state: 'running',
             ready: entry.ready,
+            ...(entry.reachable === false ? { reachable: false as const } : {}),
             ...(entry.hostNative
                 ? {}
                 : { containerId: entry.containerId, containerName: entry.containerName }),

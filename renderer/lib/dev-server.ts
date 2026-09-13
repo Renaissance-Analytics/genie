@@ -402,6 +402,8 @@ export function serviceTitle(service: DevServiceInfo): string {
 export function serviceStatusTone(service: DevServiceInfo): DevTone {
     if (service.state === 'failed') return 'failed';
     if (service.state !== 'running') return 'idle';
+    // Up but unreachable is a fault a person has to act on, not a wait.
+    if (service.reachable === false) return 'failed';
     return service.ready === false ? 'starting' : 'running';
 }
 
@@ -413,6 +415,16 @@ export function serviceStatusLabel(service: DevServiceInfo): string {
         return service.enabled
             ? 'Not running. Start it to give this workspace its slice.'
             : 'Off. This workspace holds no slice of it.';
+    }
+    if (service.reachable === false) {
+        // Running, and unreachable — NOT starting (genie#644). Name the address,
+        // because it is the one the workspace's apps are dialling.
+        const published = service.endpoints?.find((e) => e.hostPort);
+        const where = published?.hostPort ? `127.0.0.1:${published.hostPort}` : 'its published port';
+        return (
+            `Not reachable at ${where} — the engine is running in its container, but its port ` +
+            'forward does not answer from this machine. Restart the service to re-create the forward.'
+        );
     }
     if (service.ready === false) return 'Starting — the engine has not answered its check yet.';
     return 'Running.';
