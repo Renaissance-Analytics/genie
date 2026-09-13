@@ -7,35 +7,23 @@ import { describe, expect, it } from 'vitest';
  *
  * `renderer/lib/flow-editor-layout.ts` decides which panes fit at a measured
  * width, and that decision is tested there. This file is about the half of the
- * answer that only exists in CSS, and about the package rule it has to overrule.
+ * answer that only exists in CSS, and about the package rules it has to agree with.
  *
- * ## The package rule
+ * ## What fancy-flow does now
  *
- * fancy-flow's own stylesheet already tries to be responsive:
+ * Until 0.68, fancy-flow hid its own panes by VIEWPORT width (`@media` +
+ * `display: none`), which outranked a host that asked for a pane, so Genie carried
+ * rules restoring them. Upstream fixed that (Particle-Academy/fancy-flow#16): the
+ * breakpoints are `@container` queries against the editor, and they make the panes
+ * SMALLER rather than hiding them. So:
  *
- *     @media (max-width: 1024px) { .ff-editor__panel-wrap { display: none } }
- *     @media (max-width:  720px) { .ff-editor__palette    { display: none } }
+ *  - Genie restores nothing. A restore rule for a pane nobody hides is CSS nobody
+ *    dares delete, and these tests fail if one comes back.
+ *  - Genie's docked tracks are `auto`, not pixel widths. A pane that shrinks inside
+ *    a fixed track leaves an empty strip beside the canvas.
  *
- * Both are wrong for Genie, in the same way. They measure the VIEWPORT, and the
- * editor is never the viewport — it is a tab inside a GApp window, or the body
- * of its own window with chrome around it. And `display: none` from a stylesheet
- * OUTRANKS a host that asks for the pane: `showPalette` renders it and the media
- * query hides it anyway, so the toggle that brings a pane back would appear to
- * do nothing at exactly the widths it exists for.
- *
- * So Genie restores them inside `.floweditor-shell` and decides for itself.
- *
- * ## Why the vendor sheet is read here
- *
- * Because the override is only justified while the rule it overrides is real. If
- * fancy-flow ever drops those media queries, the POSITIVE CONTROL below fails
- * and says so — which is the difference between a guard and a pile of CSS
- * nobody dares delete.
- *
- * Raised upstream as Particle-Academy/fancy-flow#16, together with the other
- * half of the same seam: `showPalette` / `showPanel` do not change
- * `grid-template-columns`, so turning a pane off leaves an empty column where it
- * was. That is why `FlowEditorPanel` names the columns inline.
+ * Both are read from the INSTALLED package, so a fancy-flow that changes either
+ * premise fails here and says which.
  */
 
 const ROOT = path.resolve(__dirname, '../../..');
@@ -46,73 +34,70 @@ const CSS = read('renderer/styles/master.css');
 const VENDOR = read('node_modules/@particle-academy/fancy-flow/dist/styles.css');
 
 /**
- * The `@media` prelude a selector sits inside, or null when it sits at the top
- * level of the sheet.
+ * The at-rule prelude (`@media` / `@container`) a selector sits inside, or null
+ * when it sits at the top level of the sheet.
  *
- * Walks back to the previous `@media` and refuses it if that block has already
- * closed — a `}` in column zero — so a rule that merely FOLLOWS a media block is
- * never credited with being inside it.
+ * Walks back to the previous at-rule and refuses it if that block has already
+ * closed — a `}` in column zero — so a rule that merely FOLLOWS a block is never
+ * credited with being inside it.
  */
-function mediaAround(css: string, needle: string): string | null {
-    const at = css.indexOf(needle);
+function atRuleAround(css: string, needle: string, from = 0): string | null {
+    const at = css.indexOf(needle, from);
     if (at < 0) return null;
     const before = css.slice(0, at);
-    const opened = before.lastIndexOf('@media');
+    const opened = Math.max(before.lastIndexOf('@media'), before.lastIndexOf('@container'));
     if (opened < 0) return null;
     if (before.slice(opened).includes('\n}')) return null;
     return css.slice(opened, css.indexOf('{', opened));
 }
 
-/** The declaration block of a selector, top-level or not. */
-function ruleAfter(css: string, selector: string): string | null {
-    const at = css.indexOf(selector);
-    if (at < 0) return null;
-    const open = css.indexOf('{', at);
-    const close = css.indexOf('}', open);
-    return open < 0 || close < 0 ? null : css.slice(open + 1, close);
+/** Every declaration block for a selector, wherever it appears. */
+function rulesFor(css: string, selector: string): Array<{ body: string; within: string | null }> {
+    const found: Array<{ body: string; within: string | null }> = [];
+    for (let at = css.indexOf(selector); at >= 0; at = css.indexOf(selector, at + 1)) {
+        const open = css.indexOf('{', at);
+        const close = css.indexOf('}', open);
+        if (open < 0 || close < 0) break;
+        found.push({ body: css.slice(open + 1, close), within: atRuleAround(css, selector, at) });
+    }
+    return found;
 }
 
-describe('the package hides panes on the wrong axis, and Genie takes them back', () => {
-    it('POSITIVE CONTROL: fancy-flow really does hide them by viewport width', () => {
-        // The premise of everything below. Asserted against the INSTALLED
-        // package, so a version that fixes this fails here and tells us to
-        // delete the override rather than carry it forever.
-        const panel = mediaAround(VENDOR, '.ff-editor__panel-wrap {\n    display: none');
-        const palette = mediaAround(VENDOR, '.ff-editor__palette {\n    display: none');
+/** The declaration block of a selector, top-level or not. */
+function ruleAfter(css: string, selector: string): string | null {
+    return rulesFor(css, selector)[0]?.body ?? null;
+}
 
-        expect(panel, 'fancy-flow no longer hides the config panel — drop the override').toContain(
-            'max-width: 1024px',
-        );
-        expect(palette, 'fancy-flow no longer hides the palette — drop the override').toContain(
-            'max-width: 720px',
-        );
+const PANES = ['.ff-editor__panel-wrap {', '.ff-editor__palette {'];
 
-        // ...and the reader is not simply saying "1024" to everything.
-        expect(mediaAround(VENDOR, '.ff-viewer {')).toBeNull();
+describe('fancy-flow sizes its panes by the editor, and hides none', () => {
+    it('PREMISE: no fancy-flow rule hides a pane', () => {
+        for (const pane of PANES) {
+            const rules = rulesFor(VENDOR, pane);
+            // Positive control: the reader finds the pane's rules at all, or
+            // "none of them hides it" would pass for a selector that moved.
+            expect(rules.length, `no ${pane} rules found in fancy-flow`).toBeGreaterThan(0);
+            for (const rule of rules) expect(rule.body).not.toMatch(/display:\s*none/);
+        }
     });
 
-    it('restores the config panel inside the shell at the same breakpoint', () => {
-        const at = mediaAround(CSS, '.floweditor-shell .ff-editor__panel-wrap');
-
-        expect(
-            at,
-            'nothing overrides fancy-flow’s 1024px rule — the config-panel toggle does ' +
-                'nothing on a narrow window',
-        ).not.toBeNull();
-        expect(at).toContain('max-width: 1024px');
-        expect(ruleAfter(CSS, '.floweditor-shell .ff-editor__panel-wrap')).toMatch(/display:\s*flex/);
+    it('PREMISE: its breakpoints are container queries that shrink the panes', () => {
+        // This is why Genie's docked tracks are `auto`. If fancy-flow went back to
+        // fixed pane widths, pixel tracks would be safe again — and this says so.
+        const shrunk = rulesFor(VENDOR, '.ff-editor__palette {').filter((r) =>
+            r.within?.startsWith('@container'),
+        );
+        expect(shrunk.length, 'fancy-flow no longer resizes the palette by container').toBeGreaterThan(0);
+        const widths = shrunk.map((r) => Number(r.body.match(/width:\s*(\d+)px/)?.[1]));
+        expect(Math.min(...widths)).toBeLessThan(216);
     });
 
-    it('restores the palette inside the shell at the same breakpoint', () => {
-        const at = mediaAround(CSS, '.floweditor-shell .ff-editor__palette');
-
-        expect(
-            at,
-            'nothing overrides fancy-flow’s 720px rule — the palette toggle does nothing ' +
-                'on a narrow window, which is where it is the only way to add a step',
-        ).not.toBeNull();
-        expect(at).toContain('max-width: 720px');
-        expect(ruleAfter(CSS, '.floweditor-shell .ff-editor__palette')).toMatch(/display:\s*flex/);
+    it('Genie carries no rule restoring a pane nobody hides', () => {
+        for (const pane of ['.floweditor-shell .ff-editor__panel-wrap {', '.floweditor-shell .ff-editor__palette {']) {
+            expect(rulesFor(CSS, pane), `${pane} is a restore rule for a pane fancy-flow no longer hides`).toEqual([]);
+        }
+        // Positive control: the reader does see Genie's shell rules.
+        expect(ruleAfter(CSS, ".floweditor-shell[data-overlay='panel'] .ff-editor__panel-wrap {")).not.toBeNull();
     });
 });
 

@@ -1,7 +1,7 @@
 /**
  * Minimal Electron stub for Vitest. Vitest runs in Node — `require('electron')`
  * normally points at the Electron binary path, which can't be imported as a
- * module. Aliasing `electron` to this file (see vitest.config.ts) gives every
+ * module. Aliasing `electron` to this file (see vitest.config.mts) gives every
  * `from 'electron'` import a no-op surface so the module graph loads cleanly.
  *
  * Tests that exercise specific Electron behavior should override locally via

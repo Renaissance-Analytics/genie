@@ -10,7 +10,7 @@ import {
 /**
  * genie #114 — the overlay host is the whole fix's load-bearing piece, so it is
  * tested as a pure function against a stub document (the suite runs in Node
- * with no DOM; see vitest.config.ts).
+ * with no DOM; see vitest.config.mts).
  *
  * What matters is not that it creates a div — it is that the div is a BODY
  * child (so its stacking answers to the root context and nothing else) and that

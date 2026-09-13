@@ -11,6 +11,11 @@ import {
 /**
  * The editor's panes, at whatever width the container turns out to be.
  *
+ * (History, kept because it explains the design: the package's viewport media
+ * queries described below were replaced upstream in fancy-flow 0.68 by container
+ * queries that SHRINK the panes rather than hide them — Particle-Academy/fancy-flow#16.
+ * The canvas-minimum rule and the overlays are still Genie's own.)
+ *
  * ## The bug this is the standing answer to
  *
  * fancy-flow lays `.ff-editor` out as `grid-template-columns: 216px 1fr 300px`
@@ -57,7 +62,10 @@ describe('what the editor keeps at a given width', () => {
 
         expect(at.palette).toBe('docked');
         expect(at.panel).toBe('docked');
-        expect(at.columns).toBe(`${FLOW_PALETTE_WIDTH}px 1fr ${FLOW_PANEL_WIDTH}px`);
+        // `auto`, not the pane widths: fancy-flow 0.68+ sizes its panes by the
+        // editor's container, so a fixed track would leave an empty strip beside a
+        // pane that has shrunk inside it. The track follows the pane.
+        expect(at.columns).toBe('auto 1fr auto');
         expect(at.canvasWidth).toBe(FLOW_CANVAS_MIN_WIDTH);
     });
 
@@ -71,7 +79,7 @@ describe('what the editor keeps at a given width', () => {
         // is not an editor.
         expect(at.panel).toBe('overlay');
         expect(at.palette).toBe('docked');
-        expect(at.columns).toBe(`${FLOW_PALETTE_WIDTH}px 1fr`);
+        expect(at.columns).toBe('auto 1fr');
     });
 
     it('drops the palette too once even that leaves the canvas short', () => {

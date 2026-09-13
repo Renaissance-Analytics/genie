@@ -21,7 +21,7 @@ import {
  * pure function asserted directly in renderer/lib/__tests__/add-workspace.test.ts,
  * and it was WRONG there in a way a unit test caught the moment one was written.
  * What no unit test in this repo can answer is whether the create route creates:
- * there is no DOM harness (see vitest.config.ts), so "the form appeared and a
+ * there is no DOM harness (see vitest.config.mts), so "the form appeared and a
  * workspace landed on disk" is only observable here.
  *
  * NOT MOCKED: `workspaces:create` really scaffolds the folder and commits it,

@@ -12,6 +12,7 @@
  */
 
 import { ipcMain, dialog } from 'electron';
+import { dialogStartDir } from '../dialog-start-dir';
 import {
     pluginsList,
     pluginsInstallRepo,
@@ -55,10 +56,14 @@ export function registerPluginsIpc(): void {
     ipcMain.handle('plugins:install-folder', async (_e, folder?: string) => {
         let dir = folder;
         if (!dir) {
-            const r = await dialog.showOpenDialog({
-                title: 'Choose a plugin folder (with genie-plugin.json)',
-                properties: ['openDirectory'],
-            });
+            const r = dialogStartDir.remember(
+                await dialog.showOpenDialog(
+                    dialogStartDir.apply({
+                        title: 'Choose a plugin folder (with genie-plugin.json)',
+                        properties: ['openDirectory'],
+                    }),
+                ),
+            );
             if (r.canceled || !r.filePaths[0]) return { ok: false as const, error: 'cancelled' };
             dir = r.filePaths[0];
         }

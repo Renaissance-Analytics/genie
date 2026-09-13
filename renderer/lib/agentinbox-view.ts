@@ -3,7 +3,7 @@
  *
  * Extracted from `AgentInboxFlyout.tsx` so the ordering rule, the headcount pill
  * and the persisted read state are unit-testable — the renderer has no jsdom
- * harness, so only framework-free helpers are covered (see vitest.config.ts).
+ * harness, so only framework-free helpers are covered (see vitest.config.mts).
  *
  * READ/UNREAD IS A CLIENT CONCEPT. The human panel's read state is the VIEWER's
  * own: which rows *this person on this device* has looked at. It is never

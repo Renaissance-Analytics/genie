@@ -8,7 +8,7 @@ import path from 'node:path';
  * every developer's machine, on a plane, in a container with no egress. So the
  * one check that can only be answered by the real Tynn — do the routes Genie
  * calls still exist? — lives in its own lane, exactly like the real-hosting
- * tests do (`vitest.hosting.config.ts`).
+ * tests do (`vitest.hosting.config.mts`).
  *
  * That separation is what genie#411 cost: Tynn retired `POST /api/v1/wishes`,
  * every quick capture 404'd, and neither repository's suite could see it —
@@ -16,7 +16,7 @@ import path from 'node:path';
  * which Tynn routes exist. A cross-repo integration is not testable from inside
  * either repo alone; something has to actually ask.
  *
- * Kept OUT of the fast unit run: `vitest.config.ts` excludes `*.live.test.ts`.
+ * Kept OUT of the fast unit run: `vitest.config.mts` excludes `*.live.test.ts`.
  * Run daily and on Tynn-client PRs by .github/workflows/tynn-contract.yml.
  * Point it elsewhere with `TYNN_CONTRACT_BASE` (a staging host, say).
  */
@@ -29,11 +29,11 @@ export default defineConfig({
         testTimeout: 120_000,
         hookTimeout: 180_000,
         pool: 'forks',
-        poolOptions: { forks: { singleFork: true } },
+        fileParallelism: false,
     },
     resolve: {
         alias: {
-            electron: path.resolve(__dirname, 'test/electron-mock.ts'),
+            electron: path.resolve(import.meta.dirname, 'test/electron-mock.ts'),
         },
     },
 });

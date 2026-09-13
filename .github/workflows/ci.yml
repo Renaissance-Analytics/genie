@@ -43,17 +43,20 @@ jobs:
           cache: npm
       - name: Install
         run: npm ci
+      # Through the npm scripts, which name the project's own TypeScript: nextron
+      # ships a TypeScript 6 `tsc` bin too, and a bare `tsc` is whichever npm
+      # linked last (scripts/__tests__/typecheck-uses-project-typescript.test.ts).
       - name: Typecheck (main)
-        run: npx tsc --noEmit -p main/tsconfig.json
+        run: npm run typecheck:main
       - name: Typecheck (renderer)
-        run: npx tsc --noEmit -p renderer/tsconfig.json
+        run: npm run typecheck:renderer
       # The E2E specs used to be the one tree nothing typechecked, and the cost
       # was not theoretical: a helper whose return type omitted a field made a
       # spec wait 15 seconds for something that could never arrive, and the
       # feature under test was working the whole time. Checked HERE (cheap,
       # seconds) rather than discovered in the E2E workflow (minutes, per OS).
       - name: Typecheck (e2e)
-        run: npx tsc --noEmit -p e2e/tsconfig.json
+        run: npm run typecheck:e2e
       - name: Vitest
         run: npm test
       - name: Build renderer (static export)

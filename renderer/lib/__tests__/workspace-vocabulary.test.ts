@@ -28,7 +28,7 @@ import { describe, expect, it } from 'vitest';
  *
  * ## Why it reads the source
  *
- * There is no DOM harness in this lane (see `vitest.config.ts`), so the strings
+ * There is no DOM harness in this lane (see `vitest.config.mts`), so the strings
  * are lifted out of the .tsx rather than off a rendered tree. The extractor is
  * itself tested below — a negative assertion whose scanner silently sees
  * nothing passes on a corpse, and this repo has been burned by exactly that

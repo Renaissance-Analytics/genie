@@ -121,12 +121,11 @@ jobs:
           # whether anything is missing, and it fails loudly on its own.
           npx playwright install-deps chromium ||             echo "::warning::playwright install-deps failed (likely an apt mirror outage) — continuing, the browser launch will catch a genuinely missing library"
 
-      # Refresh better-sqlite3's ELECTRON prebuild before the suite (Electron's
-      # Node ABI differs from the host Node). This is `pretest:e2e`, run
-      # explicitly so its output is visible even if `test:e2e`'s pre-hook is
-      # skipped; it uses prebuild-install (no node-gyp / VS Build Tools), so it
-      # works on a clean runner across all three OSes.
-      - name: Prepare native modules for Electron (better-sqlite3 prebuild)
+      # Check node-pty's ConPTY files before the suite. This is `pretest:e2e`,
+      # run explicitly so its output is visible even if `test:e2e`'s pre-hook is
+      # skipped. better-sqlite3 needs no step: from v13 it is an N-API addon whose
+      # bundled prebuild loads under Electron and Node alike.
+      - name: Prepare native modules for Electron (node-pty ConPTY)
         run: npm run pretest:e2e
 
       - name: Run E2E (Linux, under xvfb)

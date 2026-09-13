@@ -13,7 +13,7 @@ import { addPanelMainButton } from '../add-panel-button';
  * to a screen reader and shows no tooltip on hover, so the name is asserted
  * here for every mode — icon-only included — rather than left to review.
  *
- * There is no DOM harness in this lane (see vitest.config.ts), so the naming
+ * There is no DOM harness in this lane (see vitest.config.mts), so the naming
  * decision lives in a pure helper that is tested directly, and the two facts
  * that can only be seen in JSX — the header call site asking for the icon, and
  * the icon actually being a plus — are read out of the source the way

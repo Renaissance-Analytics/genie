@@ -71,7 +71,7 @@ describe('PopKeypair', () => {
         const proof = kp.prove('the-nonce', 'ws-1', 'sid-1');
 
         expect(proof.jwk).toEqual(kp.publicJwk);
-        const pub = crypto.createPublicKey({ key: proof.jwk as crypto.JsonWebKey, format: 'jwk' });
+        const pub = crypto.createPublicKey({ key: proof.jwk as crypto.webcrypto.JsonWebKey, format: 'jwk' });
         const ok = crypto.verify(
             null,
             popSignedInput('the-nonce', 'ws-1', 'sid-1'),
@@ -84,7 +84,7 @@ describe('PopKeypair', () => {
     it('signature does not verify for a different challenge', () => {
         const kp = PopKeypair.generate();
         const proof = kp.prove('nonce-A', 'ws-1', 'sid-1');
-        const pub = crypto.createPublicKey({ key: proof.jwk as crypto.JsonWebKey, format: 'jwk' });
+        const pub = crypto.createPublicKey({ key: proof.jwk as crypto.webcrypto.JsonWebKey, format: 'jwk' });
         const ok = crypto.verify(
             null,
             popSignedInput('nonce-B', 'ws-1', 'sid-1'),

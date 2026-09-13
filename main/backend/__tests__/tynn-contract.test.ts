@@ -1,9 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import ts from 'typescript';
+import { pathToFileURL } from 'node:url';
+import { parseSync } from 'oxc-parser';
 import { describe, expect, it } from 'vitest';
+import type { ViteUserConfig } from 'vitest/config';
 import { TYNN_ENDPOINTS, normalizePath } from '../tynn-contract';
-import unitConfig from '../../../vitest.config';
 
 /**
  * The OFFLINE half of Genie's Tynn contract check — it runs on every `npm test`
@@ -24,9 +25,10 @@ import unitConfig from '../../../vitest.config';
  * comment — and `tynn.ts` deliberately names the retired `/api/v1/wishes` in its
  * own doc block, to explain why it is gone. Stripping comments with a span regex
  * is the trap recorded in RULES.md: a block-comment opener inside a string
- * blinds the regex, and the guard then reports "clean". TypeScript's parser has
- * no such failure mode — string and template literals come off the AST, and
- * comments are not in it.
+ * blinds the regex, and the guard then reports "clean". A real parser has no such
+ * failure mode — string and template literals come off the AST, and comments are
+ * not in it. (It is oxc's: TypeScript 7 is a native compiler with no stable
+ * JavaScript API to parse with.)
  *
  * ## Non-vacuity
  *
@@ -55,30 +57,35 @@ const NAMESPACES = ['/api/v1', '/workstations'];
  * anything.
  */
 function literalsOf(file: string): string[] {
-    const source = ts.createSourceFile(
-        file,
-        fs.readFileSync(file, 'utf8'),
-        ts.ScriptTarget.Latest,
-        /* setParentNodes */ false,
-        file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
-    );
+    const { program, errors } = parseSync(file, fs.readFileSync(file, 'utf8'), {
+        lang: file.endsWith('.d.ts') ? 'dts' : file.endsWith('.tsx') ? 'tsx' : 'ts',
+    });
+    // A file that does not parse would contribute no literals at all and read as
+    // "calls nothing" — the vacuous pass this check exists to prevent.
+    if (errors.length > 0) throw new Error(`${file} did not parse: ${errors[0]!.message}`);
+
     const out: string[] = [];
-    const visit = (node: ts.Node): void => {
-        if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
-            out.push(node.text);
+    const visit = (node: unknown): void => {
+        if (Array.isArray(node)) {
+            for (const child of node) visit(child);
             return;
         }
-        if (ts.isTemplateExpression(node)) {
-            out.push(
-                node.head.text + node.templateSpans.map((s) => `{}${s.literal.text}`).join(''),
-            );
+        if (!node || typeof node !== 'object') return;
+        const n = node as { type?: string; value?: unknown; quasis?: Array<{ value: { cooked: string | null } }>; expressions?: unknown[] };
+        if (n.type === 'Literal' && typeof n.value === 'string') {
+            out.push(n.value);
+            return;
+        }
+        if (n.type === 'TemplateLiteral' && n.quasis) {
+            const [head, ...tail] = n.quasis;
+            out.push((head?.value.cooked ?? '') + tail.map((q) => `{}${q.value.cooked ?? ''}`).join(''));
             // The interpolated expressions can hold literals of their own.
-            for (const span of node.templateSpans) visit(span.expression);
+            visit(n.expressions);
             return;
         }
-        ts.forEachChild(node, visit);
+        for (const value of Object.values(node)) visit(value);
     };
-    ts.forEachChild(source, visit);
+    visit(program);
     return out;
 }
 
@@ -218,19 +225,26 @@ describe('the live half is wired to actually run', () => {
         fs.readFileSync(path.join(REPO, WORKFLOW), 'utf8'),
     );
 
+    // Loaded at run time rather than imported: the unit config is an ES module at
+    // the repository root, and importing it would pull it into the main tree's
+    // CommonJS typecheck, where `import.meta` is not allowed.
+    const loadUnitConfig = async (): Promise<ViteUserConfig> =>
+        ((await import(pathToFileURL(path.join(REPO, 'vitest.config.mts')).href)) as { default: ViteUserConfig })
+            .default;
+
     const pkg = JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8')) as {
         scripts: Record<string, string>;
     };
 
-    it('keeps the live probe OUT of the offline unit run', () => {
+    it('keeps the live probe OUT of the offline unit run', async () => {
         // Without this the unit suite would need the network, which is the one
         // thing the contract check is not allowed to cost.
-        expect(unitConfig.test?.exclude).toContain('**/*.live.test.ts');
+        expect((await loadUnitConfig()).test?.exclude).toContain('**/*.live.test.ts');
     });
 
     it('has a lane that includes the live probe', () => {
         expect(fs.existsSync(path.join(REPO, LIVE_TEST))).toBe(true);
-        expect(pkg.scripts['test:contract']).toContain('vitest.contract.config.ts');
+        expect(pkg.scripts['test:contract']).toContain('vitest.contract.config.mts');
     });
 
     it('runs that lane from CI, on a clock', () => {

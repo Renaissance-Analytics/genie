@@ -27,7 +27,7 @@ import { restartOptionsFor } from '../../../main/agents/restart-options';
  * answers both questions separately, and offers a FRESH restart to every agent.
  *
  * SOURCE-LEVEL for the component half: this lane has no DOM harness (see
- * `vitest.config.ts`), and the precedent for pinning a menu's decisions off its
+ * `vitest.config.mts`), and the precedent for pinning a menu's decisions off its
  * source is `spec-menu-language.test.ts` next door. It is deliberately the
  * WEAKER half — a rendered item proves nothing about whether the restart works,
  * which is what `main/mcp/__tests__/restart-fresh.test.ts` asserts on the pty.

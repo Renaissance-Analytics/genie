@@ -35,7 +35,11 @@ const cookieMint = vi.fn(async (projectId: string) => ({
     agent: { id: 'a1', name: 'Genie' },
 }));
 vi.mock('../../backend/tynn', () => ({
-    TynnBackend: vi.fn(() => ({ whoami: cookieWhoami, mintAgentToken: cookieMint })),
+    // A `function`, not an arrow: the code under test calls `new TynnBackend()`,
+    // and since Vitest 4 a mock is constructible only when its implementation is.
+    TynnBackend: vi.fn(function TynnBackend() {
+        return { whoami: cookieWhoami, mintAgentToken: cookieMint };
+    }),
     TynnAuthError: class TynnAuthError extends Error {},
 }));
 

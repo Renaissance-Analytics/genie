@@ -1,7 +1,7 @@
 /**
  * Presentation decisions for AgentInbox attachment CHIPS, kept out of the flyout
  * component so they are testable in the node-only suite (the renderer has no DOM
- * harness — see vitest.config.ts). The component wires these to Fancy markup;
+ * harness — see vitest.config.mts). The component wires these to Fancy markup;
  * everything that can actually be WRONG — a size that reads as "0.0009 MB", a
  * sender-supplied filename that still carries a path — lives here under test.
  */

@@ -20,7 +20,7 @@
  * quoted path into the pty and Claude Code attaches the image from the path, exactly
  * like a drag-drop / file-path reference — no OS image clipboard needed.
  */
-import { clipboard, nativeImage } from 'electron';
+import { ClipboardItem, clipboard, nativeImage } from 'electron';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -81,7 +81,7 @@ function writePngTempFile(png: Buffer): string {
  * the platform split. `png` is a decoded PNG buffer (the client always ships a
  * `nativeImage.toDataURL()` PNG); this validates it decodes before acting.
  */
-export function writeClipboardImagePng(png: Buffer): WriteClipboardImageResult {
+export async function writeClipboardImagePng(png: Buffer): Promise<WriteClipboardImageResult> {
     // Validate the payload decodes to a real image on every OS — a garbage buffer
     // must never become a temp file whose path we hand the CLI, nor a broken
     // clipboard write. `nativeImage` is pure image decoding (no display needed),
@@ -109,10 +109,41 @@ export function writeClipboardImagePng(png: Buffer): WriteClipboardImageResult {
 
     // Windows / macOS: the OS image clipboard is reliable and the CLI reads it
     // natively on Ctrl+V — keep the native clipboard paste (no temp file).
+    //
+    // Electron 44's clipboard is the W3C shape: `writeImage` is gone, and an image
+    // is written as an `image/png` ClipboardItem. The ORIGINAL bytes go on, as on
+    // Linux — they already decoded above, so re-encoding would only cost time.
     try {
-        clipboard.writeImage(img);
+        await clipboard.write([
+            new ClipboardItem({ 'image/png': new Blob([new Uint8Array(png)], { type: 'image/png' }) }),
+        ]);
         return { ok: true, supported: true };
     } catch {
         return { ok: false, supported: true };
+    }
+}
+
+/**
+ * The LOCAL clipboard image as a PNG data URL, or null when it holds no image or
+ * cannot be read. The terminal uses this to notice a copied image and sync it to
+ * the machine the terminal runs on.
+ *
+ * Any `image/*` item is accepted and normalised to PNG through `nativeImage`, which
+ * is what the removed `readImage().toDataURL()` returned — so callers see the same
+ * contract whatever format the copying application offered.
+ */
+export async function readClipboardImageDataUrl(): Promise<string | null> {
+    try {
+        const items = await clipboard.read();
+        for (const item of items) {
+            const type = item.types.find((t) => t.startsWith('image/'));
+            if (!type) continue;
+            const blob = (await item.getType(type)) as Blob;
+            const img = nativeImage.createFromBuffer(Buffer.from(await blob.arrayBuffer()));
+            if (!img.isEmpty()) return img.toDataURL();
+        }
+        return null;
+    } catch {
+        return null;
     }
 }

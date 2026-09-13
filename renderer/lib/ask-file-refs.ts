@@ -12,7 +12,7 @@
  * that isn't there, which is worse than missing one.
  *
  * DOM-free and framework-free on purpose — the renderer has no jsdom harness
- * (see vitest.config.ts), so the decision lives here where it can be tested.
+ * (see vitest.config.mts), so the decision lives here where it can be tested.
  */
 
 export interface AskFileRef {

@@ -10,7 +10,7 @@ import {
 /**
  * The AgentInbox attachment CHIP's presentation decisions, pulled out of the
  * flyout so they are testable in the node-only suite (the renderer has no DOM
- * harness — see vitest.config.ts). The component then only wires these to Fancy
+ * harness — see vitest.config.mts). The component then only wires these to Fancy
  * markup, which keeps the part that can be wrong under test.
  */
 

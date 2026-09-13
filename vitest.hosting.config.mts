@@ -15,7 +15,7 @@ import path from 'node:path';
  * curl them, so a broken hosting config fails CI rather than the owner's afternoon.
  * They need `npm run build:runtime` first (for the Caddy binary) and are Linux+Docker
  * on CI — see the `hosting` job in .github/workflows/ci.yml. Kept OUT of the fast
- * unit run (vitest.config.ts excludes `*.real.test.ts`).
+ * unit run (vitest.config.mts excludes `*.real.test.ts`).
  */
 export default defineConfig({
     test: {
@@ -26,11 +26,11 @@ export default defineConfig({
         testTimeout: 60_000,
         hookTimeout: 60_000,
         pool: 'forks',
-        poolOptions: { forks: { singleFork: true } },
+        fileParallelism: false,
     },
     resolve: {
         alias: {
-            electron: path.resolve(__dirname, 'test/electron-mock.ts'),
+            electron: path.resolve(import.meta.dirname, 'test/electron-mock.ts'),
         },
     },
 });

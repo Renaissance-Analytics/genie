@@ -169,7 +169,7 @@ const deps = (): MobileDataDeps => ({
     ...(clipboardMode === 'headless'
         ? {}
         : {
-              writeClipboardImage: (png: Buffer) => {
+              writeClipboardImage: async (png: Buffer) => {
                   clipboardImages.push(png);
                   return clipboardMode === 'linux'
                       ? { ok: true, supported: true, path: LINUX_PASTE_PATH }

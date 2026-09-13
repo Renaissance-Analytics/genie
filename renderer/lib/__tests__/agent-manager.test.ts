@@ -251,7 +251,7 @@ describe('personaIsDirty', () => {
  * config and the conversation survives (wish #88).
  *
  * SOURCE-LEVEL for the component half: this lane has no DOM harness (see
- * `vitest.config.ts`), and the precedent for pinning a component's decision off
+ * `vitest.config.mts`), and the precedent for pinning a component's decision off
  * its source is `agent-restart-gate.test.ts` next door. `e2e/agent-manager.spec.ts`
  * covers the behaviour.
  */

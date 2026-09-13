@@ -46,24 +46,31 @@ export default defineConfig({
         // `*.real.test.ts` are REAL hosting tests — they spawn the bundled Caddy /
         // php-cgi / Docker and bind real ports, and need `npm run build:runtime`
         // first. They run in their OWN lane (`npm run test:hosting`, see
-        // vitest.hosting.config.ts + the CI hosting job), NOT this fast unit run.
+        // vitest.hosting.config.mts + the CI hosting job), NOT this fast unit run.
         //
         // `*.live.test.ts` are the Tynn CONTRACT probes — they ask the real Tynn
         // whether the routes Genie calls still exist (genie#411). Excluded for a
         // different reason: this suite must run offline, on a plane, in a
         // container with no egress. Their lane is `npm run test:contract`
-        // (vitest.contract.config.ts), scheduled daily in CI.
+        // (vitest.contract.config.mts), scheduled daily in CI.
         exclude: [...configDefaults.exclude, '**/*.real.test.ts', '**/*.live.test.ts'],
-        // Every file shares ONE fork (below), so a file that swaps a global
-        // timer and doesn't restore it breaks whichever file runs next. This
-        // guard fails the file that LEAKED instead of the innocent one that
-        // trips over it — see test/timer-globals-guard.ts and genie#76.
+        // A file that swaps a global timer and doesn't restore it breaks
+        // whichever file runs after it in the same worker. This guard fails the
+        // file that LEAKED instead of the innocent one that trips over it — see
+        // test/timer-globals-guard.ts and genie#76.
         setupFiles: ['test/timer-globals-guard.ts'],
         // Run main-process tests serially. The git + filesystem fixtures
         // mutate cwd-adjacent state and the suite is small — parallelism
         // buys little and risks flakes from racing temp directories.
+        //
+        // `fileParallelism: false` says exactly that. It replaced Vitest 3's
+        // `poolOptions.forks.singleFork`, which Vitest 4 removed. The migration
+        // guide maps singleFork to `isolate: false`, which is NOT used here: it
+        // would also share the module graph between files, so one file's
+        // `vi.mock` would leak into the next. Serial is the requirement;
+        // shared modules never were.
         pool: 'forks',
-        poolOptions: { forks: { singleFork: true } },
+        fileParallelism: false,
         // The workspace suite spawns many git subprocesses (clone, submodule
         // add, commit). On Windows under machine load these routinely exceed a
         // 20s budget even though they pass on Linux CI — 60s reflects the real
@@ -86,7 +93,7 @@ export default defineConfig({
     },
     resolve: {
         alias: {
-            electron: path.resolve(__dirname, 'test/electron-mock.ts'),
+            electron: path.resolve(import.meta.dirname, 'test/electron-mock.ts'),
         },
     },
     // The AUTOMATIC JSX runtime, matching the root `tsconfig.json` (`"jsx":
@@ -95,6 +102,8 @@ export default defineConfig({
     // not happen to `import React` renders as "React is not defined" — a failure
     // about the test runner, in a test about the component. Renderer components
     // ARE tested here now (through `react-dom/server`, since the env has no
-    // DOM), so the two transforms have to agree.
-    esbuild: { jsx: 'automatic' },
+    // DOM), so the two transforms have to agree. Vite 8 transforms with oxc,
+    // whose default is also automatic; stated anyway, because it is a
+    // requirement rather than a default this suite happens to get.
+    oxc: { jsx: { runtime: 'automatic' } },
 });
