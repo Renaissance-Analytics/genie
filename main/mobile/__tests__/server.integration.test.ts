@@ -1026,7 +1026,9 @@ describe('mobile server (integration, 127.0.0.1)', () => {
         // every other issue-watch read.
         const { initDatabase } = await import('../../db');
         initDatabase(fs.mkdtempSync(path.join(os.tmpdir(), 'genie-mobile-db-')));
-        const { applyPushedDelta, clearPushedDelta } = await import('../../issue-watch');
+        const { applyPushedDelta, clearPushedDelta, setIssueWatchServiceState, setReconcileDelivered } = await import(
+            '../../issue-watch'
+        );
         const titled = {
             key: 'tynn-issue:01',
             number: 12,
@@ -1053,7 +1055,12 @@ describe('mobile server (integration, 127.0.0.1)', () => {
             const other = await req(port, 'GET', '/api/desktop/issue-watch/feedback-items?workspaceId=ws-other', { token });
             expect(other.status).toBe(404);
         } finally {
+            // A pushed delta also marks the stream connected and the reconcile
+            // delivered. Put all three back, or the next test in this file reads
+            // a connected IssueWatch it never set up.
             clearPushedDelta('ws-1');
+            setIssueWatchServiceState('connecting'); // its initial state
+            setReconcileDelivered(false);
         }
     });
 
