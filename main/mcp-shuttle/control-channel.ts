@@ -1,8 +1,8 @@
 import type net from 'node:net';
 import type { DispatchFrame, ShuttleResponse } from './core';
-import { isManifest } from './manifest-store';
+import { isManifest, type ShuttleManifest } from './manifest-store';
 import type { GateConnection, GateMessage, PublisherGate } from './publisher-gate';
-import { isTopology } from './topology-store';
+import { isTopology, type ShuttleTopology } from './topology-store';
 
 /**
  * THE CONTROL CHANNEL — the pipe a Genie publishes through.
@@ -197,12 +197,34 @@ export interface PublisherOptions {
     onClosed?: (reason: string) => void;
 }
 
+/** Genie's end of the control channel. */
+export interface PublisherConnection {
+    /**
+     * Send the surface every agent is served. Before the shuttle has welcomed
+     * this connection it is HELD and only the latest is sent, once welcomed — the
+     * gate closes a connection whose first message is not hello, so a boot-time
+     * publish sent straight away would get Genie thrown off its own shuttle.
+     */
+    publish(manifest: ShuttleManifest): void;
+    /** Send where each URL token leads. Held and sent like {@link publish}. */
+    topology(topology: ShuttleTopology): void;
+    close(): void;
+}
+
 /** Genie's end: publish into the shuttle until closed or displaced. */
-export function connectPublisher(opts: PublisherOptions): { close(): void } {
+export function connectPublisher(opts: PublisherOptions): PublisherConnection {
     const socket = opts.connect();
     const decoder = opts.codec.decoder();
     let reason: string | null = null;
     let finished = false;
+    let welcomed = false;
+    /** The latest of each, given before the welcome. */
+    const held: { manifest?: ShuttleManifest; topology?: ShuttleTopology } = {};
+
+    const sendManifest = (manifest: ShuttleManifest) =>
+        writeFrame(socket, opts.codec, { type: 'publish', manifest } satisfies InboundGateMessage);
+    const sendTopology = (topology: ShuttleTopology) =>
+        writeFrame(socket, opts.codec, { type: 'topology', topology } satisfies InboundGateMessage);
 
     socket.on('connect', () => {
         writeFrame(socket, opts.codec, {
@@ -229,6 +251,11 @@ export function connectPublisher(opts: PublisherOptions): { close(): void } {
             }
             switch (message.type) {
                 case 'welcome':
+                    welcomed = true;
+                    if (held.manifest) sendManifest(held.manifest);
+                    if (held.topology) sendTopology(held.topology);
+                    delete held.manifest;
+                    delete held.topology;
                     opts.onWelcome?.();
                     break;
                 case 'displaced':
@@ -278,6 +305,16 @@ export function connectPublisher(opts: PublisherOptions): { close(): void } {
     });
 
     return {
+        publish(manifest) {
+            if (finished) return;
+            if (welcomed) sendManifest(manifest);
+            else held.manifest = manifest;
+        },
+        topology(topology) {
+            if (finished) return;
+            if (welcomed) sendTopology(topology);
+            else held.topology = topology;
+        },
         close() {
             reason ??= 'Genie closed its connection to the MCP shuttle.';
             socket.destroy();
