@@ -1192,6 +1192,52 @@ textarea.input {
     color: var(--fg-4);
 }
 
+/* The Processes modal is the Site Manager's cards. These are the two states only a
+   scheduled task has: ARMED (it will fire — calm, not "running") and AWAITING an
+   approval before it may fire at all. */
+.site-dot.proc-armed {
+    background: var(--blue-500, #3b82f6);
+}
+.site-card-status.proc-armed {
+    color: var(--blue-500, #3b82f6);
+}
+.site-dot.proc-awaiting {
+    background: var(--amber-500, #f59e0b);
+}
+.site-card-status.proc-awaiting {
+    color: var(--amber-500, #f59e0b);
+}
+.process-behaviours {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.process-last-run {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+/* Last-run outcome dot: green ok · red failed · amber skipped · hidden when the
+   task has never run (nothing to report is not a status). */
+.sched-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex: 0 0 auto;
+}
+.sched-dot-ok {
+    background: #10b981;
+}
+.sched-dot-failed {
+    background: var(--term-err, #f48771);
+}
+.sched-dot-skipped {
+    background: var(--term-warn, #e2c08d);
+}
+.sched-dot-none {
+    display: none;
+}
+
 /* Narrow modal / small window: one column rather than two cramped ones. */
 @media (max-width: 640px) {
     .site-card-fields {

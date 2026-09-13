@@ -33,6 +33,9 @@ interface Props {
     /** Open the Workspace Site Manager (#232). Absent in a remote window, where
      *  hosting drives the CLIENT's runtime rather than the host's. */
     onSiteManager?: () => void;
+    /** Open this workspace's Processes modal — its background services and
+     *  scheduled tasks. */
+    onProcessManager?: () => void;
     /** Send feedback about GENIE to this workspace's Tynn project (Tynn #249). */
     onFeedback?: () => void;
     onRemove: () => void;
@@ -55,6 +58,7 @@ export default function ProjectContextMenu({
     onOpenInBrowser,
     onSettings,
     onSiteManager,
+    onProcessManager,
     onFeedback,
     onRemove,
 }: Props) {
@@ -164,6 +168,16 @@ export default function ProjectContextMenu({
                 {/* The Site Manager is its OWN surface, not a settings section
                     (owner decision) — so it gets its own entry, above settings,
                     beside the other "do something with this workspace" items. */}
+                {onProcessManager && (
+                    <CtxItem
+                        icon={<IconCpu size={14} />}
+                        label="Processes…"
+                        onClick={() => {
+                            onProcessManager();
+                            onClose();
+                        }}
+                    />
+                )}
                 {onSiteManager && (
                     <CtxItem
                         icon={<IconServer size={14} />}

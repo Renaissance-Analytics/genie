@@ -2,23 +2,15 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from
 import { createPortal } from 'react-dom';
 import { useOverlayRoot } from '../../lib/use-overlay-root';
 import { useStreamingTerminals } from '../../lib/use-streaming-terminals';
-import {
-    anchoredPopoverPosition,
-    clampPopoverToViewport,
-} from '../../lib/anchored-popover';
-import { pickPath } from '../FilePickerModal';
+import { anchoredPopoverPosition } from '../../lib/anchored-popover';
 import { AgentPulse } from './AgentPulse';
 import type { AgentPulseMarkerBucket } from '../../../main/terminal/agent-pulse';
-import { Input, Select } from '@particle-academy/react-fancy';
 import {
     IconAlert,
-    IconBox,
     IconChevronDown,
-    IconClock,
     IconCode,
     IconEye,
     IconEyeOff,
-    IconCpu,
     IconGlobe,
     IconHome,
     IconMonitorCog,
@@ -27,7 +19,6 @@ import {
     IconPause,
     IconPlay,
     IconPlus,
-    IconRefresh,
     IconSearch,
     IconTerminal,
     IconTrash,
@@ -67,13 +58,7 @@ import {
     workspaceKindClass,
     workspaceKindLabel,
 } from '../../lib/workspace-kind';
-import {
-    formatLastRun,
-    formatNextRun,
-    isScheduledSpec,
-    lastRunTone,
-    SCHEDULE_PRESETS,
-} from '../../lib/schedule-view';
+import { useProcessRuntime } from '../../lib/use-process-runtime';
 import { issueWatchBadge } from '../../lib/issuewatch';
 import { railSitesTitle, railSitesTone } from '../../lib/dev-server';
 import {
@@ -82,18 +67,13 @@ import {
 } from '../../lib/workspace-enter';
 import {
     api,
-    detectedShells,
     isSystemWorkspace,
     workspaceSurfaceSpecs,
-    processSpecWorkspace,
     SYSTEM_WORKSPACE_ID,
     type DevSiteInfo,
     type McpStatus,
     type PluginPanelView,
-    type ProcessStatus,
-    type ScheduleInfo,
     type WatchTypeCounts,
-    type ShellDetection,
     type StructureDocStatus,
     type TerminalSpec,
     type ViewType,
@@ -132,31 +112,8 @@ interface Props {
     onToggleSystemWorkspace?: () => void;
     /** Persist a new sidebar order (full ordered list of workspace ids). */
     onReorderWorkspaces: (ids: string[]) => void;
-    /** Create a Process (background service runner) for a workspace. `cwd`
-     *  targets a specific repo (or the envelope root when omitted); `shell`
-     *  picks the interpreter (empty → default shell). */
-    onAddProcess: (
-        workspaceId: string,
-        command: string,
-        label?: string,
-        cwd?: string,
-        shell?: string,
-        /** A 5-field cron expression makes it a SCHEDULED task; '' = a service. */
-        schedule?: string,
-    ) => void;
-    /** Edit an existing Process (right-click → Edit). Restarts it if running.
-     *  `schedule` is always sent: '' CLEARS a schedule (back to a service). */
-    onUpdateProcess: (
-        id: string,
-        patch: {
-            command: string;
-            label?: string;
-            cwd?: string;
-            shell?: string;
-            schedule?: string;
-        },
-        wasRunning: boolean,
-    ) => void;
+    /** Open a workspace's Processes modal (the process box's click). */
+    onShowProcessManager?: (workspaceId: string) => void;
     /** Issue Watch: per-workspace unread counts by type (the 3-dot pill). */
     issueWatchCounts?: Record<string, WatchTypeCounts>;
     /** Open the Issue Watch flyout for a specific workspace (the pill click). */
@@ -217,8 +174,7 @@ export default function Chooser({
     systemRevealed = false,
     onToggleSystemWorkspace,
     onReorderWorkspaces,
-    onAddProcess,
-    onUpdateProcess,
+    onShowProcessManager,
     issueWatchCounts = {},
     onShowIssueWatch,
     devSites = {},
@@ -282,11 +238,6 @@ export default function Chooser({
             });
         }, 1800);
     }), []);
-    // Inline Add-Process form: which workspace's form is open, its fields, and
-    // the cached repo list (root + repos/<name>) for the cwd picker. When
-    // editProcId is set the form edits that process instead of creating one.
-    const [addProcFor, setAddProcFor] = useState<string | null>(null);
-    const [editProcId, setEditProcId] = useState<string | null>(null);
     // Right-click menu for an AGENT square. Separate from the terminal menu
     // because it opens for an agent that has no terminal -- which is the whole
     // reason it exists: a paused agent's right-click did nothing at all.
@@ -324,174 +275,6 @@ export default function Chooser({
             mode,
         });
     };
-    // Right-click context menu for a process row.
-    const [procMenu, setProcMenu] = useState<{
-        spec: TerminalSpec;
-        x: number;
-        y: number;
-    } | null>(null);
-    const procMenuRef = useRef<HTMLDivElement>(null);
-    // Opened at the cursor with no clamp at all, so right-clicking a process
-    // near the bottom of the list ran its items off the screen (genie#416).
-    // Measured after mount: which items render depends on the process.
-    useLayoutEffect(() => {
-        const el = procMenuRef.current;
-        if (!procMenu || !el) return;
-        const rect = el.getBoundingClientRect();
-        const { top, left } = clampPopoverToViewport({
-            left: procMenu.x,
-            top: procMenu.y,
-            width: rect.width,
-            height: rect.height,
-            viewportWidth: window.innerWidth,
-            viewportHeight: window.innerHeight,
-        });
-        el.style.top = `${top}px`;
-        el.style.left = `${left}px`;
-    }, [procMenu]);
-    const [procLabel, setProcLabel] = useState('');
-    const [procCommand, setProcCommand] = useState('');
-    const [procCwd, setProcCwd] = useState(''); // '' = envelope root
-    const [procShell, setProcShell] = useState(''); // '' = default shell
-    const [procRepos, setProcRepos] = useState<string[]>([]);
-    const [procShells, setProcShells] = useState<ShellDetection[]>([]);
-    // System processes aren't tied to a repo — `procDir` holds the absolute
-    // directory the user picked (via the native picker). Only used when the
-    // open form belongs to the System Workspace; '' = not yet chosen.
-    const [procDir, setProcDir] = useState('');
-    // Scheduled task: the cron expression ('' = a plain long-running process).
-    // `procSchedPreset` drives the dropdown; 'custom' reveals the raw field.
-    const [procSchedule, setProcSchedule] = useState('');
-    const [procSchedPreset, setProcSchedPreset] = useState('');
-
-    const loadProcFormMeta = (ws: WorkspaceRow) => {
-        setProcRepos([]);
-        // The System Workspace has no repos — skip the (meaningless) repo fetch.
-        if (!isSystemWorkspace(ws)) {
-            void api()
-                .workspaces.repos(ws.id)
-                .then(setProcRepos)
-                .catch(() => setProcRepos([]));
-        }
-        void detectedShells()
-            .then(({ shells }) => setProcShells(shells))
-            .catch(() => setProcShells([]));
-    };
-
-    const openAddProcess = (ws: WorkspaceRow) => {
-        setEditProcId(null);
-        setAddProcFor(ws.id);
-        setProcLabel('');
-        setProcCommand('');
-        setProcCwd('');
-        // Default the picked dir to the System Workspace's home path.
-        setProcDir(isSystemWorkspace(ws) ? ws.path : '');
-        setProcShell('');
-        setProcSchedule('');
-        setProcSchedPreset('');
-        loadProcFormMeta(ws);
-    };
-
-    const openEditProcess = (ws: WorkspaceRow, s: TerminalSpec) => {
-        setEditProcId(s.id);
-        setAddProcFor(ws.id);
-        setProcLabel(s.label);
-        setProcCommand(s.meta?.command ?? '');
-        if (isSystemWorkspace(ws)) {
-            // System process: the cwd IS the absolute picked directory.
-            setProcCwd('');
-            setProcDir(s.cwd || ws.path);
-        } else {
-            // Reverse-map the absolute cwd back to a repo name (or '' = root).
-            const prefix = `${ws.path}/repos/`;
-            setProcCwd(s.cwd?.startsWith(prefix) ? s.cwd.slice(prefix.length) : '');
-            setProcDir('');
-        }
-        setProcShell(s.shell ?? '');
-        const expr = s.meta?.schedule ?? '';
-        setProcSchedule(expr);
-        // Show the matching preset when the expression IS one; otherwise the
-        // task was hand-written, so open straight into the custom field.
-        setProcSchedPreset(
-            !expr
-                ? ''
-                : SCHEDULE_PRESETS.some((p) => p.value === expr)
-                  ? expr
-                  : 'custom',
-        );
-        loadProcFormMeta(ws);
-    };
-
-    // Open the in-app directory picker for a System Workspace process, seeded at
-    // the System Workspace's home path. Keeps the current pick on cancel.
-    const pickProcDir = (ws: WorkspaceRow) => {
-        void pickPath({
-            mode: 'directory',
-            title: 'Choose a directory for this process',
-            initialPath: procDir || ws.path,
-        })
-            .then((dir) => {
-                if (dir) setProcDir(dir);
-            })
-            .catch(() => {});
-    };
-
-    // Arm / suspend a scheduled task WITHOUT deleting it. Main re-arms (or
-    // disarms) off the spec's `enabled` flag on every terminal-spec:update, so
-    // flipping the flag is the whole operation.
-    const setProcessEnabled = async (spec: TerminalSpec, enable: boolean) => {
-        await api()
-            .terminalSpec.update(spec.id, { enabled: enable })
-            .catch(() => {});
-    };
-
-    const submitAddProcess = (ws: WorkspaceRow) => {
-        const cmd = procCommand.trim();
-        if (!cmd) return;
-        const system = isSystemWorkspace(ws);
-        // System process: cwd is the picked absolute directory (required).
-        // Workspace process: procCwd holds a repo name → <root>/repos/<name>,
-        // or '' = envelope root (undefined lets the handler default to root).
-        if (system && !procDir) return;
-        const cwd = system
-            ? procDir
-            : procCwd
-              ? `${ws.path}/repos/${procCwd}`
-              : undefined;
-        const schedule = procSchedule.trim();
-        if (editProcId) {
-            // A SCHEDULED task has nothing running between fires, so the
-            // "restart it after an edit" rule only applies to services.
-            const wasRunning =
-                !schedule &&
-                ['running', 'restarting'].includes(
-                    processStatus.get(editProcId) ?? 'stopped',
-                );
-            onUpdateProcess(
-                editProcId,
-                {
-                    command: cmd,
-                    label: procLabel.trim() || undefined,
-                    cwd,
-                    shell: procShell || undefined,
-                    schedule,
-                },
-                wasRunning,
-            );
-        } else {
-            onAddProcess(
-                ws.id,
-                cmd,
-                procLabel.trim() || undefined,
-                cwd,
-                procShell || undefined,
-                schedule,
-            );
-        }
-        setAddProcFor(null);
-        setEditProcId(null);
-    };
-
     const [search, setSearch] = useState('');
     // Persisted sidebar expand/collapse. `null` = NOTHING RECORDED, which renders
     // as collapse-all (genie#580) — distinct from a recorded EMPTY list, which is
@@ -563,75 +346,9 @@ export default function Chooser({
         if (list) onReorderWorkspaces(list);
     };
 
-    // Background-process status (the headless supervisor in main is the source
-    // of truth). The workspace-row indicator + the inline manager read from
-    // this; processes keep running regardless of whether a row is expanded.
-    const [processStatus, setProcessStatus] = useState<
-        Map<string, ProcessStatus>
-    >(() => new Map());
-    const [expandedProcs, setExpandedProcs] = useState<Set<string>>(
-        () => new Set(),
-    );
-
-    useEffect(() => {
-        let alive = true;
-        void api()
-            .process.statuses()
-            .then((m) => {
-                if (alive)
-                    setProcessStatus(
-                        new Map(Object.entries(m) as [string, ProcessStatus][]),
-                    );
-            })
-            .catch(() => {});
-        const off = api().on.processStatus(({ id, status }) =>
-            setProcessStatus((prev) => {
-                const next = new Map(prev);
-                next.set(id, status);
-                return next;
-            }),
-        );
-        return () => {
-            alive = false;
-            off();
-        };
-    }, []);
-
-    // Scheduled-task display info (next run + the HOST-formatted description).
-    // The Host computes both — the renderer never parses a cron expression — and
-    // pushes `schedule:next` whenever a task is armed, fires, or is disarmed, so
-    // this stays live without polling.
-    const [scheduleInfo, setScheduleInfo] = useState<Map<string, ScheduleInfo>>(
-        () => new Map(),
-    );
-
-    useEffect(() => {
-        let alive = true;
-        const load = () =>
-            void api()
-                .schedule.info()
-                .then((m) => {
-                    if (alive) setScheduleInfo(new Map(Object.entries(m)));
-                })
-                .catch(() => {});
-        load();
-        const offNext = api().on.scheduleNext(({ id, nextAt, description }) =>
-            setScheduleInfo((prev) => {
-                const next = new Map(prev);
-                if (description === null) next.delete(id); // no longer a scheduled task
-                else next.set(id, { nextAt, description });
-                return next;
-            }),
-        );
-        // A spec set change can ADD a scheduled task created elsewhere (the MCP
-        // tool, another window) — re-read so its row shows a schedule immediately.
-        const offSpecs = api().on.terminalSpecsChanged(load);
-        return () => {
-            alive = false;
-            offNext();
-            offSpecs();
-        };
-    }, []);
+    // Background-process status, for the process box's colour. The same hook
+    // feeds the Processes modal, so the two never read different sources.
+    const { processStatus } = useProcessRuntime();
 
     // Agent-integration MCP: a terminal called imDone → briefly pulse its
     // WORKSPACE row (rail button + flyout row) as a sidebar-level "something
@@ -891,14 +608,6 @@ export default function Chooser({
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [agiPathsKey]);
 
-    const toggleProcs = (wsId: string) =>
-        setExpandedProcs((prev) => {
-            const next = new Set(prev);
-            if (next.has(wsId)) next.delete(wsId);
-            else next.add(wsId);
-            return next;
-        });
-
     /** Aggregate a workspace's process statuses into the row indicator colour. */
     const wsProcStatus = (
         procSpecs: TerminalSpec[],
@@ -912,133 +621,6 @@ export default function Chooser({
         }
         return running ? 'running' : 'idle';
     };
-
-    const deleteProcess = async (s: TerminalSpec) => {
-        const ok = await showPrompt({
-            title: 'Delete process',
-            body: `Delete "${s.label}"? It will be stopped and removed.`,
-            confirmLabel: 'Delete',
-            destructive: true,
-        });
-        if (ok !== null) onDestroySpec(s.id);
-    };
-
-    // Hover log popover for processes — fetch the recent output tail and show it
-    // anchored to the right of the hovered row. Cleared on mouse-leave.
-    const [procLog, setProcLog] = useState<{
-        id: string;
-        label: string;
-        command: string;
-        text: string;
-        top: number;
-        left: number;
-    } | null>(null);
-
-    // Delay-hide so the user can move the cursor INTO the (now interactive)
-    // popover to use its Copy/Download buttons without it vanishing.
-    const procLogHideRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const cancelProcLogHide = () => {
-        if (procLogHideRef.current) {
-            clearTimeout(procLogHideRef.current);
-            procLogHideRef.current = null;
-        }
-    };
-    // The popover displays only the last N lines (tail) — a chatty process would
-    // otherwise render tens of thousands of lines into one <pre>. Copy/Download
-    // still fetch the FULL buffer separately, so nothing is lost by capping the view.
-    const LOG_TAIL_LINES = 500;
-    const tailLines = (text: string): string => {
-        const lines = text.split('\n');
-        return lines.length > LOG_TAIL_LINES ? lines.slice(-LOG_TAIL_LINES).join('\n') : text;
-    };
-    const showProcLog = (e: React.MouseEvent, s: TerminalSpec) => {
-        cancelProcLogHide();
-        const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-        // The popover opens BESIDE the row, so either axis can run off: a row
-        // near the bottom loses the log, and a wide sidebar pushes the popover
-        // past the right edge. Sized from `.proc-log-pop` (420px wide; head + a
-        // 240px-max scrolling body + foot is ~340px tall) rather than measured,
-        // because it has not been rendered yet.
-        const { top, left } = clampPopoverToViewport({
-            left: r.right + 8,
-            top: r.top,
-            width: 420,
-            height: 340,
-            viewportWidth: window.innerWidth,
-            viewportHeight: window.innerHeight,
-            margin: 12,
-        });
-        setProcLog({
-            id: s.id,
-            label: s.label,
-            command: s.meta?.command ?? '',
-            text: '',
-            top,
-            left,
-        });
-        void api()
-            .process.log(s.id)
-            .then((text) =>
-                setProcLog((cur) =>
-                    cur && cur.id === s.id ? { ...cur, text: tailLines(text) } : cur,
-                ),
-            )
-            .catch(() => {});
-    };
-    const scheduleHideProcLog = (id: string) => {
-        cancelProcLogHide();
-        procLogHideRef.current = setTimeout(() => {
-            setProcLog((cur) => (cur && cur.id === id ? null : cur));
-        }, 250);
-    };
-    const copyProcLogTail = (text: string) => {
-        const tail = text.split('\n').slice(-100).join('\n');
-        void navigator.clipboard.writeText(tail).catch(() => {});
-    };
-    const downloadProcLog = (id: string, label: string) => {
-        void api()
-            .process.log(id)
-            .then((text) => {
-                const blob = new Blob([text], { type: 'text/plain' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `${(label || 'process').replace(/[^\w.-]+/g, '_')}.log`;
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
-                URL.revokeObjectURL(url);
-            })
-            .catch(() => {});
-    };
-    // Clear a process's recorded output — drop the backing buffer (main) AND the
-    // displayed text. New output refills as the process keeps running (next poll).
-    const clearProcLog = (id: string) => {
-        void api().process.clearLog(id).catch(() => {});
-        setProcLog((cur) => (cur && cur.id === id ? { ...cur, text: '' } : cur));
-    };
-
-    // Keep the open popover LIVE: while it's showing a process, re-fetch its tail
-    // on a short interval so output appears in place (the buffer only refreshed on
-    // hover before). Keyed on the open process id — NOT the whole procLog object,
-    // which changes each poll — so the interval isn't torn down and recreated every
-    // tick. Cleared on close/unmount / when a different row opens.
-    const openProcLogId = procLog?.id ?? null;
-    useEffect(() => {
-        if (!openProcLogId) return;
-        const iv = setInterval(() => {
-            void api()
-                .process.log(openProcLogId)
-                .then((text) =>
-                    setProcLog((cur) =>
-                        cur && cur.id === openProcLogId ? { ...cur, text: tailLines(text) } : cur,
-                    ),
-                )
-                .catch(() => {});
-        }, 1000);
-        return () => clearInterval(iv);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [openProcLogId]);
 
     const byWorkspace = new Map<string, TerminalSpec[]>();
     for (const ws of workspaces) byWorkspace.set(ws.id, []);
@@ -1528,11 +1110,11 @@ export default function Chooser({
                                         processTitle={wsProcs.length
                                             ? `Background processes (${wsProcs.length})`
                                             : 'Background processes'}
-                                        processOpen={expandedProcs.has(ws.id)}
                                         siteTone={railSitesTone(devSites[ws.id] ?? [], ws.id) ?? 'none'}
                                         siteTitle={railSitesTitle(devSites[ws.id] ?? [], ws.id)}
                                         siteAvailable={!!onShowSiteManager}
-                                        onProcesses={() => toggleProcs(ws.id)}
+                                        processAvailable={!!onShowProcessManager}
+                                        onProcesses={() => onShowProcessManager?.(ws.id)}
                                         onSites={() => onShowSiteManager?.(ws.id)}
                                     />
                                 </button>
@@ -1667,338 +1249,6 @@ export default function Chooser({
                                             includeFiles
                                         />
                                     </div>
-                                    {expandedProcs.has(ws.id) && (
-                                        <div className="tproj-procs">
-                                            <div className="tproj-subhead">
-                                                <IconCpu size={12} />
-                                                <span>Processes</span>
-                                            </div>
-                                            {wsProcs.length === 0 && (
-                                                <div className="proc-empty">
-                                                    No background processes yet.
-                                                </div>
-                                            )}
-                                            {wsProcs.map((s) => {
-                                                const st =
-                                                    processStatus.get(s.id) ?? 'stopped';
-                                                const live =
-                                                    st === 'running' ||
-                                                    st === 'restarting';
-                                                // A scheduled task swaps the
-                                                // service controls (start/stop/
-                                                // restart) for run-now + an
-                                                // enable/disable arm toggle.
-                                                const sched = isScheduledSpec(s);
-                                                const schedInfo = scheduleInfo.get(s.id);
-                                                const suspended = s.enabled === false;
-                                                const pendingApproval =
-                                                    s.meta?.schedule_pending_approval === true;
-                                                return (
-                                                    <div
-                                                        key={s.id}
-                                                        className="proc-row"
-                                                        onMouseEnter={(e) =>
-                                                            showProcLog(e, s)
-                                                        }
-                                                        onMouseLeave={() =>
-                                                            scheduleHideProcLog(s.id)
-                                                        }
-                                                        onContextMenu={(e) => {
-                                                            e.preventDefault();
-                                                            setProcLog(null);
-                                                            setProcMenu({
-                                                                spec: s,
-                                                                x: e.clientX,
-                                                                y: e.clientY,
-                                                            });
-                                                        }}
-                                                    >
-                                                        <span
-                                                            className={`proc-dot proc-${st}`}
-                                                        />
-                                                        <span className="proc-name">
-                                                            {s.label}
-                                                            {sched && (
-                                                                <span className="sched-line">
-                                                                    <IconClock size={10} />
-                                                                    <span className="sched-when">
-                                                                        {schedInfo?.description ??
-                                                                            s.meta?.schedule}
-                                                                    </span>
-                                                                    <span className="sched-sep">
-                                                                        ·
-                                                                    </span>
-                                                                    <span className="sched-next">
-                                                                        {formatNextRun(
-                                                                            schedInfo?.nextAt ??
-                                                                                null,
-                                                                        )}
-                                                                    </span>
-                                                                    <span
-                                                                        className={`sched-dot sched-dot-${lastRunTone(
-                                                                            s.meta
-                                                                                ?.last_run_status,
-                                                                        )}`}
-                                                                    />
-                                                                    <span className="sched-last">
-                                                                        {formatLastRun(
-                                                                            s.meta?.last_run_at,
-                                                                            s.meta
-                                                                                ?.last_run_status,
-                                                                        )}
-                                                                    </span>
-                                                                    {pendingApproval && (
-                                                                        <span className="sched-pending">
-                                                                            awaiting approval
-                                                                        </span>
-                                                                    )}
-                                                                </span>
-                                                            )}
-                                                        </span>
-                                                        {sched ? (
-                                                            <>
-                                                                <button
-                                                                    type="button"
-                                                                    className="proc-act proc-go"
-                                                                    title="Run now"
-                                                                    onClick={() =>
-                                                                        void api().schedule.runNow(
-                                                                            s.id,
-                                                                        )
-                                                                    }
-                                                                >
-                                                                    <IconPlay size={12} />
-                                                                </button>
-                                                                <button
-                                                                    type="button"
-                                                                    className="proc-act"
-                                                                    title={
-                                                                        suspended
-                                                                            ? 'Enable — arm this schedule'
-                                                                            : 'Disable — stop firing (keeps the task)'
-                                                                    }
-                                                                    onClick={() =>
-                                                                        void setProcessEnabled(
-                                                                            s,
-                                                                            suspended,
-                                                                        )
-                                                                    }
-                                                                >
-                                                                    {suspended ? (
-                                                                        <IconEye size={12} />
-                                                                    ) : (
-                                                                        <IconEyeOff size={12} />
-                                                                    )}
-                                                                </button>
-                                                            </>
-                                                        ) : live ? (
-                                                            <button
-                                                                type="button"
-                                                                className="proc-act"
-                                                                title="Stop"
-                                                                onClick={() =>
-                                                                    void api().process.stop(
-                                                                        s.id,
-                                                                    )
-                                                                }
-                                                            >
-                                                                <IconPause size={12} />
-                                                            </button>
-                                                        ) : (
-                                                            <button
-                                                                type="button"
-                                                                className="proc-act proc-go"
-                                                                title="Start"
-                                                                onClick={() =>
-                                                                    void api().process.start(
-                                                                        s.id,
-                                                                    )
-                                                                }
-                                                            >
-                                                                <IconPlay size={12} />
-                                                            </button>
-                                                        )}
-                                                        {!sched && (
-                                                            <button
-                                                                type="button"
-                                                                className="proc-act"
-                                                                title="Restart"
-                                                                onClick={() =>
-                                                                    void api().process.restart(
-                                                                        s.id,
-                                                                    )
-                                                                }
-                                                            >
-                                                                <IconRefresh size={12} />
-                                                            </button>
-                                                        )}
-                                                        <button
-                                                            type="button"
-                                                            className="proc-act proc-del"
-                                                            title="Delete process"
-                                                            onClick={() =>
-                                                                void deleteProcess(s)
-                                                            }
-                                                        >
-                                                            <IconTrash size={12} />
-                                                        </button>
-                                                    </div>
-                                                );
-                                            })}
-                                            {addProcFor === ws.id ? (
-                                                <div className="proc-add-form">
-                                                    <input
-                                                        className="input"
-                                                        autoFocus
-                                                        value={procCommand}
-                                                        onChange={(e) =>
-                                                            setProcCommand(e.target.value)
-                                                        }
-                                                        onKeyDown={(e) => {
-                                                            if (e.key === 'Enter')
-                                                                submitAddProcess(ws);
-                                                            if (e.key === 'Escape')
-                                                                setAddProcFor(null);
-                                                        }}
-                                                        placeholder="Command e.g. php artisan queue:work"
-                                                    />
-                                                    <input
-                                                        className="input"
-                                                        value={procLabel}
-                                                        onChange={(e) =>
-                                                            setProcLabel(e.target.value)
-                                                        }
-                                                        onKeyDown={(e) => {
-                                                            if (e.key === 'Enter')
-                                                                submitAddProcess(ws);
-                                                            if (e.key === 'Escape')
-                                                                setAddProcFor(null);
-                                                        }}
-                                                        placeholder="Label (optional)"
-                                                    />
-                                                    {system ? (
-                                                        // System process: no repo —
-                                                        // pick an arbitrary directory
-                                                        // (native picker, seeded at ~/).
-                                                        <button
-                                                            type="button"
-                                                            className="input proc-add-dir"
-                                                            onClick={() => pickProcDir(ws)}
-                                                            title={
-                                                                procDir ||
-                                                                'Choose a directory for this process'
-                                                            }
-                                                        >
-                                                            <IconBox size={12} />
-                                                            <span className="proc-add-dir-path">
-                                                                {procDir ||
-                                                                    'Choose directory…'}
-                                                            </span>
-                                                        </button>
-                                                    ) : (
-                                                        <select
-                                                            className="input proc-add-cwd"
-                                                            value={procCwd}
-                                                            onChange={(e) =>
-                                                                setProcCwd(e.target.value)
-                                                            }
-                                                            title="Where the process runs"
-                                                        >
-                                                            <option value="">
-                                                                Workspace root
-                                                            </option>
-                                                            {procRepos.map((r) => (
-                                                                <option key={r} value={r}>
-                                                                    repos/{r}
-                                                                </option>
-                                                            ))}
-                                                        </select>
-                                                    )}
-                                                    <select
-                                                        className="input proc-add-cwd"
-                                                        value={procShell}
-                                                        onChange={(e) =>
-                                                            setProcShell(e.target.value)
-                                                        }
-                                                        title="Which shell runs the command"
-                                                    >
-                                                        <option value="">
-                                                            Default shell
-                                                        </option>
-                                                        {procShells.map((sh) => (
-                                                            <option
-                                                                key={sh.id}
-                                                                value={sh.command}
-                                                            >
-                                                                {sh.label}
-                                                            </option>
-                                                        ))}
-                                                    </select>
-                                                    <Select
-                                                        value={procSchedPreset}
-                                                        onValueChange={(v) => {
-                                                            setProcSchedPreset(v);
-                                                            // A preset IS the
-                                                            // expression; 'custom'
-                                                            // hands the field over
-                                                            // to the user, and ''
-                                                            // clears the schedule
-                                                            // (back to a service).
-                                                            if (v !== 'custom') {
-                                                                setProcSchedule(v);
-                                                            }
-                                                        }}
-                                                        list={[...SCHEDULE_PRESETS]}
-                                                    />
-                                                    {procSchedPreset === 'custom' && (
-                                                        <Input
-                                                            value={procSchedule}
-                                                            onValueChange={setProcSchedule}
-                                                            placeholder="min hour day-of-month month day-of-week — e.g. 0 3 * * *"
-                                                            description="5 cron fields, in this machine's local time."
-                                                        />
-                                                    )}
-                                                    <div className="proc-add-actions">
-                                                        <button
-                                                            type="button"
-                                                            className="proc-add-btn"
-                                                            onClick={() => {
-                                                                setAddProcFor(null);
-                                                                setEditProcId(null);
-                                                            }}
-                                                        >
-                                                            Cancel
-                                                        </button>
-                                                        <button
-                                                            type="button"
-                                                            className="proc-add-btn proc-add-go"
-                                                            disabled={
-                                                                !procCommand.trim() ||
-                                                                (system && !procDir)
-                                                            }
-                                                            onClick={() =>
-                                                                submitAddProcess(ws)
-                                                            }
-                                                        >
-                                                            {editProcId ? 'Save' : 'Create'}
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                            ) : (
-                                                <button
-                                                    type="button"
-                                                    className="tterm tterm-add"
-                                                    onClick={() => openAddProcess(ws)}
-                                                >
-                                                    <span className="pick" />
-                                                    <IconPlus size={12} />
-                                                    <span className="tname">
-                                                        Add Process…
-                                                    </span>
-                                                </button>
-                                            )}
-                                        </div>
-                                    )}
                                 </div>
                             </div>
                         );
@@ -2048,53 +1298,6 @@ export default function Chooser({
                 </div>
             </aside>
         </div>
-        {procLog &&
-            overlayRoot &&
-            createPortal(
-                <div
-                    className="proc-log-pop"
-                    style={{ top: procLog.top, left: procLog.left }}
-                    role="tooltip"
-                    onMouseEnter={cancelProcLogHide}
-                    onMouseLeave={() => setProcLog(null)}
-                >
-                    <div className="proc-log-head">
-                        <span className="proc-log-name">{procLog.label}</span>
-                        {procLog.command && (
-                            <code className="proc-log-cmd">{procLog.command}</code>
-                        )}
-                    </div>
-                    <pre className="proc-log-body">
-                        {procLog.text.trim() || 'No output captured yet.'}
-                    </pre>
-                    <div className="proc-log-foot">
-                        <button
-                            type="button"
-                            className="proc-log-btn"
-                            onClick={() => copyProcLogTail(procLog.text)}
-                            disabled={!procLog.text.trim()}
-                        >
-                            Copy last 100 lines
-                        </button>
-                        <button
-                            type="button"
-                            className="proc-log-btn"
-                            onClick={() => downloadProcLog(procLog.id, procLog.label)}
-                        >
-                            Download log
-                        </button>
-                        <button
-                            type="button"
-                            className="proc-log-btn"
-                            onClick={() => clearProcLog(procLog.id)}
-                            disabled={!procLog.text.trim()}
-                        >
-                            Clear log
-                        </button>
-                    </div>
-                </div>,
-                overlayRoot,
-            )}
         {agentMenu &&
             overlayRoot &&
             createPortal(
@@ -2229,55 +1432,6 @@ export default function Chooser({
                         }
                     }}
                 />,
-                overlayRoot,
-            )}
-        {procMenu &&
-            overlayRoot &&
-            createPortal(
-                <>
-                    <div
-                        className="proc-menu-scrim"
-                        onMouseDown={() => setProcMenu(null)}
-                        onContextMenu={(e) => {
-                            e.preventDefault();
-                            setProcMenu(null);
-                        }}
-                    />
-                    <div
-                        ref={procMenuRef}
-                        className="proj-popover ctx-menu proc-ctx-menu"
-                        style={{ top: procMenu.y, left: procMenu.x }}
-                    >
-                        <button
-                            type="button"
-                            className="proj-popover-item"
-                            onMouseDown={(e) => {
-                                e.preventDefault();
-                                // Resolve the OWNING workspace — a system process
-                                // (reverb, a scheduled task) persists unattached
-                                // (workspace_id null), so a bare id lookup found
-                                // nothing and Edit silently did nothing.
-                                const ws = processSpecWorkspace(procMenu.spec, workspaces);
-                                if (ws) openEditProcess(ws, procMenu.spec);
-                                setProcMenu(null);
-                            }}
-                        >
-                            <span className="lbl">Edit process…</span>
-                        </button>
-                        <button
-                            type="button"
-                            className="proj-popover-item is-destructive"
-                            onMouseDown={(e) => {
-                                e.preventDefault();
-                                const s = procMenu.spec;
-                                setProcMenu(null);
-                                void deleteProcess(s);
-                            }}
-                        >
-                            <span className="lbl">Delete process</span>
-                        </button>
-                    </div>
-                </>,
                 overlayRoot,
             )}
         </>
@@ -2862,7 +2016,7 @@ function SpecRow({
 function WorkspaceRuntimePill({
     processTone,
     processTitle,
-    processOpen,
+    processAvailable,
     siteTone,
     siteTitle,
     siteAvailable,
@@ -2871,15 +2025,17 @@ function WorkspaceRuntimePill({
 }: {
     processTone: 'none' | 'idle' | 'running' | 'crashed';
     processTitle: string;
-    processOpen: boolean;
+    /** False in a window with nowhere to open the Processes modal. */
+    processAvailable: boolean;
     siteTone: 'none' | 'running' | 'failed' | 'starting' | 'idle';
     siteTitle: string;
     siteAvailable: boolean;
     onProcesses: () => void;
     onSites: () => void;
 }) {
-    // Each box IS its control (owner): the upper one opens background processes,
-    // the lower one opens the Site Manager. One click, not two.
+    // Each box IS its control (owner): the upper one opens the Processes modal,
+    // the lower one opens the Site Manager. One click, not two — and both open a
+    // dialog, so neither is a toggle any more.
     //
     // This replaced a single pill that opened a portalled menu naming the two
     // destinations. The menu was the whole interaction cost — it made two
@@ -2896,13 +2052,14 @@ function WorkspaceRuntimePill({
         run();
     };
     return (
-        <span className={`runtime-pill${processOpen ? ' processes-open' : ''}`}>
+        <span className="runtime-pill">
             <button
                 type="button"
                 className={`runtime-half runtime-process proc-${processTone}`}
                 title={processTitle}
                 aria-label={processTitle}
-                aria-pressed={processOpen}
+                aria-haspopup="dialog"
+                disabled={!processAvailable}
                 onClick={(event) => stop(event, onProcesses)}
             />
             <button
@@ -2910,6 +2067,7 @@ function WorkspaceRuntimePill({
                 className={`runtime-half runtime-site sites-${siteAvailable ? siteTone : 'none'}`}
                 title={siteAvailable ? siteTitle : `${siteTitle} — no sites configured`}
                 aria-label={siteTitle}
+                aria-haspopup="dialog"
                 // Unavailable is DISABLED rather than hidden: the box keeps its
                 // place, so the process box never moves under the pointer
                 // depending on whether a workspace happens to host sites.

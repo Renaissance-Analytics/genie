@@ -1511,10 +1511,6 @@ ${JSON.stringify({ before, after }, null, 2)}`)
 const runtimeProcessBox = (name: string) =>
     railRow(name).locator('.runtime-half.runtime-process');
 const runtimeSiteBox = (name: string) => railRow(name).locator('.runtime-half.runtime-site');
-/** The whole project block. `railRow` is `.tproj-head` — the header ROW — and the
- *  process list is its SIBLING inside `.tproj`, not its child. The first version
- *  of this looked for `.tproj-procs` under the header and could never match. */
-const railProject = (name: string) => page.locator('.tproj').filter({ hasText: name }).first();
 
 test('clicking a runtime box opens its surface directly, with no menu in between', async () => {
     const ws = seed.workspaceName;
@@ -1533,13 +1529,12 @@ test('clicking a runtime box opens its surface directly, with no menu in between
 
     // THE POSITIVE CONTROL. Without it, "no menu appeared" also passes for a box
     // that stopped doing anything at all — which is the more likely way to break
-    // this than the menu coming back.
-    await expect(railProject(ws).locator('.tproj-procs')).toBeVisible();
-    await expect(runtimeProcessBox(ws)).toHaveAttribute('aria-pressed', 'true');
+    // this than the menu coming back. The box opens the Processes modal.
+    await expect(page.getByRole('heading', { name: /^Processes —/ })).toBeVisible();
 
-    // Leave the row as it was found — later tests in this file share the floor.
-    await runtimeProcessBox(ws).click();
-    await expect(railProject(ws).locator('.tproj-procs')).toHaveCount(0);
+    // Leave the window as it was found — later tests in this file share the floor.
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('heading', { name: /^Processes —/ })).toHaveCount(0);
 });
 
 test('the sites box is a separate target, and says so when there is nothing to open', async () => {
@@ -1560,6 +1555,115 @@ test('the sites box is a separate target, and says so when there is nothing to o
     await expect(page.getByRole('heading', { name: /^Hosting —/ })).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(page.getByRole('heading', { name: /^Hosting —/ })).toHaveCount(0);
+});
+
+/**
+ * THE PROCESSES MODAL, END TO END (owner: "move the bg process listing out of the
+ * sidebar and into a modal just like the Site Manager … make sure all props are
+ * available … don't slop it").
+ *
+ * Every judgement the modal renders is unit-tested in
+ * `renderer/lib/__tests__/process-manager.test.ts`. What only a real window can
+ * prove is that the wiring does what the cards say: a process added in the form
+ * appears, STARTS as a real process whose output reaches the panel, stops, keeps
+ * its identity through a rename, and goes away — and that a scheduled task can be
+ * paused and re-enabled from its card. Each step is asserted on what the card
+ * SAYS, because that is what a person reads.
+ */
+const processesHeading = () => page.getByRole('heading', { name: /^Processes —/ });
+const processForm = () => page.locator('.process-form');
+const processCardNamed = (label: string) => page.locator('.process-card').filter({ hasText: label });
+
+test('the Processes modal adds, runs, shows, stops, renames and deletes a real process', async () => {
+    test.setTimeout(120_000);
+    const ws = seed.workspaceName;
+    const label = `E2E ticker ${Date.now()}`;
+
+    await runtimeProcessBox(ws).click();
+    await expect(processesHeading()).toBeVisible();
+
+    // The form says what is missing instead of silently refusing.
+    await page.getByRole('button', { name: 'Add a process…' }).first().click();
+    await expect(processForm()).toBeVisible();
+    await processForm().getByRole('button', { name: 'Add process' }).click();
+    await expect(processForm().getByRole('alert')).toContainText('Enter the command to run.');
+
+    // A command every CI runner has, that keeps running and says something.
+    // `exact`: on Windows the Shell select offers "Command Prompt", and a select's
+    // accessible name carries its option text, so a substring match on "Command"
+    // found two fields there and nowhere else.
+    await processForm()
+        .getByLabel('Command', { exact: true })
+        .fill(`node -e "setInterval(() => console.log('genie-e2e-tick'), 300)"`);
+    await processForm().getByLabel('Name (optional)', { exact: true }).fill(label);
+    await processForm().getByRole('button', { name: 'Add process' }).click();
+    await expect(processForm()).toHaveCount(0);
+
+    const card = processCardNamed(label);
+    await expect(card).toBeVisible();
+    await expect(card.locator('.site-card-status')).toHaveText('Stopped');
+
+    await card.getByRole('button', { name: 'Start' }).click();
+    await expect(card.locator('.site-card-status')).toHaveText('Running', { timeout: 30_000 });
+
+    await card.getByRole('button', { name: 'Output' }).click();
+    await expect(card.locator('.process-output')).toContainText('genie-e2e-tick', { timeout: 20_000 });
+
+    await card.getByRole('button', { name: 'Stop' }).click();
+    await expect(card.locator('.site-card-status')).toHaveText('Stopped', { timeout: 30_000 });
+
+    const renamed = `${label} renamed`;
+    await card.getByRole('button', { name: 'Edit' }).click();
+    await expect(processForm()).toBeVisible();
+    await processForm().getByLabel('Name (optional)', { exact: true }).fill(renamed);
+    await processForm().getByRole('button', { name: 'Save changes' }).click();
+    await expect(processForm()).toHaveCount(0);
+    await expect(processCardNamed(renamed)).toBeVisible();
+
+    // The confirmation must be ABOVE the modal it was opened from. The first
+    // version used the app-level prompt, which rendered behind the modal: this
+    // click timed out on the VM with a CodeView in the way.
+    await processCardNamed(renamed).getByRole('button', { name: 'Delete' }).click();
+    await page.locator('.process-delete-confirm').getByRole('button', { name: 'Delete process' }).click();
+    await expect(processCardNamed(renamed)).toHaveCount(0);
+
+    await page.keyboard.press('Escape');
+    await expect(processesHeading()).toHaveCount(0);
+});
+
+test('a scheduled task can be paused and enabled again from its card', async () => {
+    test.setTimeout(90_000);
+    const ws = seed.workspaceName;
+    const label = `E2E nightly ${Date.now()}`;
+
+    await runtimeProcessBox(ws).click();
+    await expect(processesHeading()).toBeVisible();
+    await page.getByRole('tab', { name: /^Scheduled/ }).click();
+
+    // Added from the Scheduled tab, the form already carries a schedule.
+    await page.getByRole('button', { name: 'Add a process…' }).last().click();
+    await expect(processForm()).toBeVisible();
+    await processForm().getByLabel('Command', { exact: true }).fill(`node -e "console.log('nightly')"`);
+    await processForm().getByLabel('Name (optional)', { exact: true }).fill(label);
+    await processForm().getByRole('button', { name: 'Add process' }).click();
+    await expect(processForm()).toHaveCount(0);
+
+    const card = processCardNamed(label);
+    await expect(card).toBeVisible();
+    await expect(card.locator('.site-card-status')).toHaveText('Scheduled');
+
+    await card.getByRole('button', { name: 'Pause schedule' }).click();
+    await expect(card.locator('.site-card-status')).toHaveText(/not firing/);
+    // POSITIVE CONTROL for the pause: the card now offers the opposite action.
+    await card.getByRole('button', { name: 'Enable schedule' }).click();
+    await expect(card.locator('.site-card-status')).toHaveText('Scheduled');
+
+    await card.getByRole('button', { name: 'Delete' }).click();
+    await page.locator('.process-delete-confirm').getByRole('button', { name: 'Delete process' }).click();
+    await expect(card).toHaveCount(0);
+
+    await page.keyboard.press('Escape');
+    await expect(processesHeading()).toHaveCount(0);
 });
 
 /**
