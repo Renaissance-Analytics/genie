@@ -43,6 +43,13 @@ module.exports = {
             ...entries,
             background: path.join(__dirname, 'main/background.ts'),
             'app-preload': path.join(__dirname, 'main/apps/app-preload.ts'),
+            // The MCP shuttle (genie#346) runs as its OWN process on the shipped
+            // standalone Node, and outlives the Electron process `background.js`
+            // is — so it is its own file, never a module inside the main bundle.
+            // Its import graph is held to Node built-ins by
+            // main/mcp-shuttle/__tests__/entry.test.ts, because plain Node has no
+            // `electron` and no app node_modules to resolve anything else from.
+            'mcp-shuttle': path.join(__dirname, 'main/mcp-shuttle/main.ts'),
         };
 
         config.optimization = {
