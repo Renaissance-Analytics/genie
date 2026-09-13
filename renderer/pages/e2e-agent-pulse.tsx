@@ -103,8 +103,6 @@ export default function E2EAgentPulse() {
                 onOpenProjectMenu={NOOP}
                 onAddWorkspace={NOOP}
                 onReorderWorkspaces={NOOP}
-                onAddProcess={NOOP}
-                onUpdateProcess={NOOP}
                 onShowIssueWatch={NOOP}
                 lastTerminalType={'regular'}
                 onLastTerminalType={NOOP}

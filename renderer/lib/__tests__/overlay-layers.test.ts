@@ -100,7 +100,7 @@ describe('Fancy portal overlay layer (genie #66)', () => {
     it('sits above every other Genie chrome layer that can host a Fancy dialog', () => {
         const overlay = tokenValue(CSS, '--z-fancy-overlay')!;
         // The scrims/menus a modal can be opened from or over.
-        for (const sel of ['.ctx-scrim', '.prompt-scrim', '.proc-ctx-menu']) {
+        for (const sel of ['.ctx-scrim', '.prompt-scrim']) {
             const z = zIndexOf(CSS, sel);
             expect(z, `${sel} should declare a z-index`).toBeTypeOf('number');
             expect(overlay, `--z-fancy-overlay must beat ${sel}`).toBeGreaterThan(z!);

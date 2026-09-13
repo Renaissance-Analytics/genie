@@ -19,6 +19,8 @@ import WorkspaceSettingsModal, {
     WorkspaceAgentsModal,
 } from '../components/Master/WorkspaceSettingsModal';
 import WorkspaceSiteManager from '../components/Master/WorkspaceSiteManager';
+import WorkspaceProcessManager from '../components/Master/WorkspaceProcessManager';
+import { processSpecsOf, type ProcessCreate, type ProcessPatch } from '../lib/process-manager';
 import { useStreamingTerminals } from '../lib/use-streaming-terminals';
 import SpecContextMenu from '../components/Master/SpecContextMenu';
 import { PromptHost, showPrompt } from '../components/Master/Prompt';
@@ -446,6 +448,8 @@ function MasterInner() {
     // routes to the HOST over the bridge, so the rail indicator reflects the HOST's
     // sites and the `dev-server:changed` push arrives via PASSTHROUGH_EVENTS.
     const [siteManagerWsId, setSiteManagerWsId] = useState<string | null>(null);
+    /** The workspace whose Processes modal is open. */
+    const [processManagerWsId, setProcessManagerWsId] = useState<string | null>(null);
     const [newAgentWsId, setNewAgentWsId] = useState<string | null>(null);
     const [devSites, setDevSites] = useState<Record<string, DevSiteInfo[]>>({});
 
@@ -1532,103 +1536,37 @@ function MasterInner() {
     );
 
     /**
-     * Create a Process (background service runner). Headless — it does NOT
-     * surface in the main grid; it's managed from the workspace's inline
-     * process panel in the nav. Autostart is OFF by default (starts idle);
-     * auto-restart-on-crash is on.
-     *
-     * For a real workspace the `cwd` targets the envelope root or a repo. For
-     * the System Workspace it's a SYSTEM PROCESS: not tied to any project, so
-     * the cwd is an arbitrary directory the user picked (required) and the spec
-     * persists unattached (workspace_id: null + meta.system).
+     * Create a Process (background service runner). Headless — it does NOT surface
+     * in the main grid; it is managed from the workspace's Processes modal. The
+     * spec is built by `lib/process-manager.ts` (`draftToCreate`), which owns every
+     * rule about it: a System process runs unattached in its picked directory, and a
+     * scheduled one has the service behaviours off.
      */
-    const addProcess = useCallback(
-        async (
-            workspaceId: string,
-            command: string,
-            label?: string,
-            cwd?: string,
-            shell?: string,
-            schedule?: string,
-        ) => {
-            const ws = workspacesById.get(workspaceId);
-            if (!ws || !command.trim()) return;
-            const system = isSystemWorkspace(ws);
-            // A system process MUST have a picked directory — there's no
-            // workspace root to fall back to. Bail rather than silently run in
-            // the home dir.
-            if (system && !cwd?.trim()) return;
-            const cmd = command.trim();
-            const fallback = cmd.split(/\s+/).slice(0, 3).join(' ');
-            const created = await api().terminalSpec.create({
-                id: ulid(),
-                workspace_id: system ? null : workspaceId,
-                label: (label?.trim() || fallback).slice(0, 60),
-                // cwd defaults to the envelope root; the Add Process UX can point
-                // it at a specific repo (e.g. <root>/repos/tynn). A system
-                // process always carries an explicit picked directory.
-                cwd: cwd?.trim() || ws.path,
-                // shell lets the user pick the interpreter the command runs in —
-                // e.g. pwsh, where `php` is on PATH, vs Git Bash where it isn't.
-                // Empty → the supervisor falls back to the default shell.
-                shell: shell?.trim() || null,
-                type: 'process',
-                meta: {
-                    command: cmd,
-                    // A SCHEDULED task is one-shot per fire, so the service
-                    // behaviours are off: its schedule (not the supervisor)
-                    // decides when it runs again.
-                    autostart: false,
-                    restart_on_exit: !schedule?.trim(),
-                    ...(schedule?.trim() ? { schedule: schedule.trim() } : {}),
-                    ...(system ? { system: true } : {}),
-                },
-            });
-            // Not added to `selected` — processes aren't grid panels.
-            setSpecs((prev) => [...prev, created]);
-        },
-        [workspacesById],
-    );
+    const createProcess = useCallback(async (spec: ProcessCreate & { id: string }) => {
+        const created = await api().terminalSpec.create(spec as TerminalSpec);
+        // Not added to `selected` — processes aren't grid panels.
+        setSpecs((prev) => [...prev, created]);
+    }, []);
 
-    // Edit an existing Process in place (right-click → Edit). Updates the spec,
-    // then restarts it if it's currently running so the new shell/command/cwd
-    // take effect immediately (the supervisor reads these at (re)start).
-    const editProcess = useCallback(
-        async (
-            id: string,
-            patch: {
-                command: string;
-                label?: string;
-                cwd?: string;
-                shell?: string;
-                schedule?: string;
-            },
-            wasRunning: boolean,
-        ) => {
-            const spec = specs.find((s) => s.id === id);
-            if (!spec) return;
-            // An EMPTY schedule clears one (the task becomes a service again),
-            // so this is written unconditionally rather than merged — and main
-            // re-arms or disarms off the updated spec.
-            const schedule = patch.schedule?.trim() ?? '';
-            const updated = await api().terminalSpec.update(id, {
-                label: (patch.label?.trim() || spec.label).slice(0, 60),
-                cwd: patch.cwd?.trim() || spec.cwd,
-                shell: patch.shell?.trim() || null,
-                meta: {
-                    ...spec.meta,
-                    command: patch.command.trim(),
-                    schedule: schedule || undefined,
-                    restart_on_exit: schedule ? false : spec.meta?.restart_on_exit,
-                },
-            });
-            if (updated) {
-                setSpecs((prev) => prev.map((s) => (s.id === id ? updated : s)));
-            }
-            if (wasRunning) await api().process.restart(id).catch(() => {});
-        },
-        [specs],
-    );
+    /**
+     * Save an edit from the Processes modal. `restart` is decided by
+     * `restartAfterSave`: a running service whose command, directory, shell or
+     * environment changed is restarted so the change takes effect, and nothing
+     * else is interrupted.
+     */
+    const updateProcess = useCallback(async (id: string, patch: ProcessPatch, restart: boolean) => {
+        const updated = await api().terminalSpec.update(id, patch);
+        if (updated) setSpecs((prev) => prev.map((s) => (s.id === id ? updated : s)));
+        if (restart) await api().process.restart(id).catch(() => {});
+    }, []);
+
+    /** Arm or pause a scheduled task. The window's spec list is updated from the
+     *  result: main re-arms off the flag but does not broadcast this edit back. */
+    const setProcessEnabled = useCallback(async (id: string, enabled: boolean) => {
+        const updated = await api().terminalSpec.update(id, { enabled });
+        if (updated) setSpecs((prev) => prev.map((s) => (s.id === id ? updated : s)));
+        return !!updated;
+    }, []);
 
     const closeSelected = useCallback((id: string) => {
         setSelected((prev) => {
@@ -2410,12 +2348,7 @@ function MasterInner() {
                         }
                         onAddWorkspace={() => setAddingWorkspace(true)}
                         onReorderWorkspaces={reorderWorkspaces}
-                        onAddProcess={(wsId, command, label, cwd, shell, schedule) =>
-                            void addProcess(wsId, command, label, cwd, shell, schedule)
-                        }
-                        onUpdateProcess={(id, patch, wasRunning) =>
-                            void editProcess(id, patch, wasRunning)
-                        }
+                        onShowProcessManager={setProcessManagerWsId}
                         lastTerminalType={lastTerminalType}
                         onLastTerminalType={setLastTerminalType}
                         onAgentCreated={selectAgentSpec}
@@ -2700,6 +2633,7 @@ function MasterInner() {
                         onOpenInBrowser={() => openProjectInBrowser(ws.id)}
                         onSettings={() => setSettingsWorkspaceId(ws.id)}
                         onSiteManager={() => setSiteManagerWsId(ws.id)}
+                        onProcessManager={() => setProcessManagerWsId(ws.id)}
                         onFeedback={() => setFeedbackWsId(ws.id)}
                         onRemove={() => void removeWorkspaceRow(ws.id)}
                     />
@@ -2770,6 +2704,21 @@ function MasterInner() {
                     void api().terminal.write(terminalId, text);
                 }}
             />
+            {processManagerWsId && (() => {
+                const ws = workspacesById.get(processManagerWsId);
+                if (!ws) return null;
+                return (
+                    <WorkspaceProcessManager
+                        workspace={ws}
+                        specs={processSpecsOf(specs, ws)}
+                        onCreate={createProcess}
+                        onUpdate={updateProcess}
+                        onSetEnabled={setProcessEnabled}
+                        onDelete={(id) => void destroySpec(id)}
+                        onClose={() => setProcessManagerWsId(null)}
+                    />
+                );
+            })()}
             {siteManagerWsId && (() => {
                 const ws = workspacesById.get(siteManagerWsId);
                 if (!ws) return null;
