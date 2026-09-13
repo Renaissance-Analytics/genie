@@ -2,10 +2,6 @@ import { decideWorkspaceAdd } from './workspace-add';
 import { resolveAgentAddress } from '../agentinbox/address';
 import { requestIssueWatchRefresh } from '../issue-watch/force-refresh';
 import fs from 'fs';
-import {
-    resolveAgentCommand as resolveProviderCommand,
-    resolveAgentFlags as resolveProviderFlags,
-} from '../agents/command';
 import path from 'path';
 import crypto from 'crypto';
 import { workspaceIdOfTerminal } from '../terminal/workspace-of-terminal';
@@ -50,7 +46,6 @@ import { devLifecycle } from '../dev-server/lifecycle';
 import { getKnowledgeStore } from '../knowledge/store';
 import type { GenieScope } from '../genie-scope';
 import { workspaceSlug } from '../agentinbox/slug';
-import { appendLaunchFlags } from '../agentinbox/session-capture';
 import { registerAgentInboxSession } from '../agentinbox/session-registration';
 import {
     normalizePurpose,
@@ -71,6 +66,7 @@ import {
     writeToTerminal,
     readTerminalOutput,
     agentSessionTranscriptExists,
+    agentLaunchLoadedChannel,
     isTerminalLive,
 } from '../terminal/ipc';
 import { agentName, agentRef, savedAgentKey, type AgentTui } from '../agents/identity';
@@ -147,11 +143,6 @@ export { callerWorkspaceIdFor, resolveCallerFor } from './caller-workspace';
 import { callerWorkspaceIdFor, callerWorkspaceDescriptor, resolveCallerFor } from './caller-workspace';
 import { gappDevStatusFor } from './gapp-dev-tools';
 import { readTynnLink } from '../tynn/provision';
-import {
-    readTynnMcpUrl,
-    withClaudeAgentInboxChannelLaunch,
-    withCodexMcpLaunch,
-} from './agent-config';
 import { TynnBackend } from '../backend/tynn';
 import {
     computeOpsProvisionPlan,
@@ -1694,60 +1685,10 @@ export async function manageTerminalsForMcp(
     return { ok: false, error: 'Unhandled action.', terminals: listAgentTerminals(ws) };
 }
 
-/**
- * Resolve the CLI command for an agent type from the configurable settings, or
- * an explicit override. `custom` has no default — it needs an explicit command
- * (here or in Settings). Returns null when nothing resolves.
- */
-export function resolveAgentCommand(agent: AgentType, override?: string): string | null {
-    // The DECISION lives in `agents/command.ts`, driven by TUI_REGISTRY
-    // (genie#261). This is only the settings read.
-    return resolveProviderCommand(agent, override, getAllSettings());
-}
-
-/**
- * Resolve an agent's FULL launch command: the base command
- * ({@link resolveAgentCommand}) plus the user's ALWAYS-ON flags for that agent
- * type (`agent_flags_<agent>` in Settings), appended after the command. Both
- * launch paths (specialized-terminal create + runAgent start) go through this so
- * the flags apply everywhere. The session-id flag is injected LATER (in
- * createAgentTerminal's `renderAgentLaunch`), giving the order
- * `<command> <flags> --session-id <uuid>` — and that injection already skips
- * adding a second `--session-id` if the user's flags happen to include one.
- * Returns null when no base command resolves (same contract as
- * resolveAgentCommand).
- */
-export function resolveAgentLaunch(
-    agent: AgentType,
-    override?: string,
-    workspace?: { id: string; path: string },
-): string | null {
-    const base = resolveAgentCommand(agent, override);
-    if (!base) return null;
-    const s = getAllSettings();
-    const withFlags = appendLaunchFlags(base, resolveProviderFlags(agent, s));
-    // Without a workspace there are no URLs to resolve; the gate (Codex + sync-on)
-    // itself lives in withCodexMcpLaunch so it's unit-tested off host-tools.
-    if (!workspace) {
-        return withFlags;
-    }
-    // Only the WORKSPACE-scoped Tynn override is baked here. The genie endpoint is
-    // deliberately NOT: it must be the TERMINAL's own per-terminal URL so its token
-    // self-identifies the terminal (genie #35) — a workspace-scoped genie URL makes
-    // the server REFUSE every multi-terminal call lacking `terminalId`. The terminal
-    // id doesn't exist yet at this point, so the genie `-c` override is woven in
-    // later, at terminal-create time, via withCodexGenieMcpLaunch (see terminal/ipc).
-    const withNativeInbox = withClaudeAgentInboxChannelLaunch(withFlags, {
-        agent,
-        mcpSyncClaudeOff: s.mcp_sync_claude === 'off',
-        workspacePath: workspace.path,
-    });
-    return withCodexMcpLaunch(withNativeInbox, {
-        agent,
-        mcpSyncCodexOff: s.mcp_sync_codex === 'off',
-        tynnUrl: readTynnMcpUrl(workspace.path),
-    });
-}
+// Moved to `agents/launch-command.ts`, so the relaunch path in `terminal/ipc.ts`
+// (which this module imports) resolves a saved agent's command the same way.
+export { resolveAgentCommand, resolveAgentLaunch } from '../agents/launch-command';
+import { resolveAgentLaunch, resolveSavedAgentLaunch } from '../agents/launch-command';
 
 /**
  * Create a SPECIALIZED (AI-TUI) terminal from the UI — the shared path behind
@@ -1980,8 +1921,9 @@ export function restartAgentTerminal(
     // <id>` — without the owner's always-on flags, without
     // `--dangerously-skip-permissions`, and without the AgentInbox channel. The
     // agent came back visibly crippled and the sweep looked like the culprit.
-    // Re-resolve, and PERSIST it so the reopen path (maybeRelaunchAgent, which
-    // has no access to settings) gets the same command.
+    // Re-resolve, and PERSIST it. The reopen path (maybeRelaunchAgent) resolves
+    // through the same `resolveSavedAgentLaunch`, so the two cannot disagree —
+    // including about a stored command older than the AgentInbox channel.
     //
     // The operator re-resolves EVERY time, because its provider follows the
     // WORKSTATION's configured TUI (`restartProviderForSpec`) rather than
@@ -1994,10 +1936,10 @@ export function restartAgentTerminal(
         updateTerminalSpec(spec.id, {
             meta: { ...spec.meta, agent: provider, agent_command: rebuilt },
         });
-    } else if (!spec.meta?.agent_command?.trim() && ws) {
-        const rebuilt = resolveAgentLaunch(provider, undefined, ws);
-        if (rebuilt) {
-            updateTerminalSpec(spec.id, { meta: { ...spec.meta, agent_command: rebuilt } });
+    } else {
+        const resolved = resolveSavedAgentLaunch(provider, spec.meta?.agent_command, ws ?? null);
+        if (resolved && resolved !== spec.meta?.agent_command) {
+            updateTerminalSpec(spec.id, { meta: { ...spec.meta, agent_command: resolved } });
         }
     }
     const current = getTerminalSpec(spec.id) ?? spec;
@@ -3041,6 +2983,24 @@ export async function agentInboxForMcp(
                 const configured = listWorkspaceAgents(ws.id).find(
                     (candidate) => candidate.terminal_spec_id === spec.id,
                 );
+                // A Claude Code session loads this bridge as a CHANNEL only when it
+                // was launched with the channel flag. Without it the bridge still
+                // starts, registers and polls — and Claude Code drops every
+                // notification it writes, with no error. Binding that session would
+                // tell AgentInbox the agent has its mail coming and hold back the
+                // notice in its terminal, the only delivery that reaches it. Genie
+                // typed the launch line, so this is known, not guessed; a session
+                // Genie did not launch in this pty stays as it was.
+                if (required === 'claude-channel' && agentLaunchLoadedChannel(spec.id) === false) {
+                    const error =
+                        'This Claude Code session was started without Genie’s AgentInbox channel, so ' +
+                        'it cannot receive channel events. Its messages are announced in its terminal ' +
+                        'instead; restarting the agent from Genie gives it the channel.';
+                    if (configured) {
+                        markWorkspaceAgentTransportState(getDb(), configured.id, required, { ok: false, error });
+                    }
+                    return { ok: false, error };
+                }
                 // Each adapter proves liveness from its own end — Codex's
                 // binding is made by Genie before the agent speaks, Claude's is
                 // made by this very call. `completeTransportHandshake` holds

@@ -177,7 +177,12 @@ describe('writeWorkspaceAgentMcp — per-target sync gating', () => {
         expect(config.mcpServers['genie-agentinbox-channel']).toEqual({
             command: process.execPath,
             args: [claudeChannelBridge],
-            env: { GENIE_MCP_URL: URL },
+            // The URL is the WORKSPACE's, shared by every terminal in it, so the
+            // bridge also needs to know which terminal it is. Claude Code expands
+            // `${VAR:-default}` in `env` (documented), per process, so each agent's
+            // bridge gets its own GENIE_TERMINAL_ID — and '' outside Genie, where
+            // an unset variable must not become the literal `${GENIE_TERMINAL_ID}`.
+            env: { GENIE_MCP_URL: URL, GENIE_TERMINAL_ID: '${GENIE_TERMINAL_ID:-}' },
         });
         const bridge = files.get(claudeChannelBridge)!;
         expect(bridge).toContain("'claude/channel'");

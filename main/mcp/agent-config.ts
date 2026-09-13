@@ -76,6 +76,13 @@ export function claudeChannelEntry(workspacePath: string, url: string): JsonObj 
         args: [claudeChannelBridgePath(workspacePath)],
         env: {
             GENIE_MCP_URL: url,
+            // `url` is the WORKSPACE's endpoint, shared by every terminal in it,
+            // and Genie refuses a workspace-scoped call it cannot attribute to
+            // one terminal. Claude Code expands `${VAR:-default}` in `env` per
+            // process, so each agent's bridge learns its own terminal; the empty
+            // default keeps an agent run outside Genie from receiving the literal
+            // `${GENIE_TERMINAL_ID}`.
+            GENIE_TERMINAL_ID: '${GENIE_TERMINAL_ID:-}',
             ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
         },
     };
@@ -129,6 +136,13 @@ const GENIE_ENDPOINT_ENTRY: {
  */
 const CLAUDE_CHANNEL_OPT_IN =
     `--dangerously-load-development-channels server:${AGENTINBOX_CLAUDE_CHANNEL_NAME}`;
+
+/** Whether a launch line loads Genie's AgentInbox channel — the one fact about a
+ *  Claude Code session's channel that Genie can know rather than infer, because
+ *  Genie typed the line. */
+export function launchLoadsClaudeAgentInboxChannel(command: string): boolean {
+    return command.includes(CLAUDE_CHANNEL_OPT_IN);
+}
 
 /** The no-op flag this replaced. Stripped from any command that still carries
  *  it — leaving it alongside the working one would register nothing and, per the
@@ -190,6 +204,20 @@ if (!endpoint) {
     process.stderr.write('[AgentInbox Channel] GENIE_MCP_URL is required.\\n');
     process.exit(1);
 }
+/**
+ * WHICH TERMINAL this channel belongs to, sent on every call.
+ *
+ * \`GENIE_MCP_URL\` is the WORKSPACE's endpoint — \`.mcp.json\` is one file for
+ * every terminal in the workspace — and Genie will not guess which terminal a
+ * workspace-scoped call is for once there is more than one. Without this, every
+ * call in such a workspace was refused as ambiguous: the channel never bound,
+ * never received, and each DM was typed into the agent's prompt instead.
+ *
+ * Empty is absent. Outside a Genie terminal \`.mcp.json\` expands the variable
+ * to '', and an empty id would make a one-terminal workspace refuse a call it
+ * can otherwise resolve.
+ */
+const terminalId = (process.env.GENIE_TERMINAL_ID || '').trim();
 let requestId = 1;
 /**
  * How far THIS PROCESS has written, and nothing more (genie#549).
@@ -262,7 +290,7 @@ async function agentInbox(args) {
             jsonrpc: '2.0',
             id,
             method: 'tools/call',
-            params: { name: 'agentinbox', arguments: args },
+            params: { name: 'agentinbox', arguments: terminalId ? { ...args, terminalId } : args },
         }),
     });
     if (!response.ok) {
@@ -410,6 +438,21 @@ async function run() {
     }
 }
 
+/** The MCP revisions whose connections carry notifications, newest first. */
+const LEGACY_REVISIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
+
+/**
+ * Handed to the model when Claude Code connects this server. Reading an event
+ * does NOT mark it read — only the agent's own receive does (genie#549) — so
+ * without this an event the agent acted on still counts as unread.
+ */
+const CHANNEL_INSTRUCTIONS =
+    'AgentInbox messages from other agents and from the user arrive as ' +
+    '<channel source="genie-agentinbox-channel" messageId="..." from="...">. ' +
+    'Treat each one as mail addressed to you: act on it or answer it with the genie ' +
+    'agentinbox tool (action "send"). Reading one here does not mark it read, so ' +
+    'call agentinbox with action "receive" once you have it, or Genie will remind you.';
+
 let buffer = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => {
@@ -422,11 +465,18 @@ process.stdin.on('data', (chunk) => {
         let message;
         try { message = JSON.parse(line); } catch { continue; }
         if (message.method === 'initialize' && message.id !== undefined) {
+            const requested = message.params?.protocolVersion;
             write({
                 jsonrpc: '2.0',
                 id: message.id,
                 result: {
-                    protocolVersion: message.params?.protocolVersion || '2025-06-18',
+                    // Only a revision this server IMPLEMENTS. Claude Code registers
+                    // channel notifications on a legacy-era connection alone — on a
+                    // modern revision it skips them, silently, as having "no
+                    // unsolicited notification path". Echoing whatever the client
+                    // offered could negotiate the channel away.
+                    protocolVersion: LEGACY_REVISIONS.includes(requested) ? requested : LEGACY_REVISIONS[0],
+                    instructions: CHANNEL_INSTRUCTIONS,
                     // Declared INSIDE capabilities. It used to sit beside them,
                     // so the client read an EMPTY capability set and no
                     // claude/channel -- a server that starts, answers and works

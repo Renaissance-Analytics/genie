@@ -121,6 +121,12 @@ interface AgentInboxAgent extends Omit<AgentInboxAgentInfo, 'reachable' | 'ref'>
     draft: Draft;
     /** Epoch ms of the last HUMAN keystroke at this terminal, or null. */
     lastUserInputAt: number | null;
+    /** Epoch ms Genie last reminded this agent of unread mail THROUGH its
+     *  channel, or null. Cleared the moment the agent reads. */
+    channelRemindedAt: number | null;
+    /** A channel reminder with no parked poll to carry it yet — handed to the
+     *  bridge's next one. */
+    pendingChannelReminder: AgentInboxMessage | null;
 }
 
 /**
@@ -617,14 +623,65 @@ export class AgentInboxBroker {
         target.nudgeTimer = null;
     }
 
+    /**
+     * Remind an attached agent of its unread mail over its channel. Returns
+     * false when the channel has had its chance: reminded a full unchecked
+     * window ago and still unread, which is the caller's cue for the prompt.
+     *
+     * The reminder rides the bridge's parked long-poll, the way the channel's
+     * mail does. It is NOT mail: it is never stored, and it carries the poll's
+     * own cursor as its `seq`, so it moves no cursor and a bridge that records
+     * its position from it stays exactly where it was.
+     */
+    private remindThroughChannel(target: AgentInboxAgent): boolean {
+        const now = this.now();
+        if (target.channelRemindedAt !== null) {
+            if (now - target.channelRemindedAt >= NUDGE_UNCHECKED_MS) return false;
+            // Already reminded and still inside its window: the timer below is
+            // what comes back for it.
+            return true;
+        }
+        const unread = target.inbox.filter((m) => m.seq > target.cursor).length;
+        const reminder: AgentInboxMessage = {
+            seq: target.cursor,
+            id: crypto.randomUUID(),
+            from: 'genie:system',
+            fromLabel: 'Genie',
+            kind: 'dm',
+            to: target.agentId,
+            text: wakeNudgeText(unread, this.modeOf(target)),
+            ts: now,
+        };
+        target.channelRemindedAt = now;
+        const w = target.waiter;
+        if (w) {
+            target.waiter = null;
+            if (w.timer) clearTimeout(w.timer);
+            w.resolve([{ ...reminder, seq: w.cursor }]);
+        } else {
+            target.pendingChannelReminder = reminder;
+        }
+        // Come back once, a window from now. If the agent has read by then its
+        // cursor moved and cleared this; if not, the channel is not reaching it.
+        this.clearNudge(target);
+        target.nudgeTimer = setTimeout(() => {
+            target.nudgeTimer = null;
+            if (target.inbox.some((m) => m.seq > target.cursor)) this.fireNudge(target);
+        }, NUDGE_UNCHECKED_MS);
+        return true;
+    }
+
     /** Warranted AND safe: put the nudge in the box. Best-effort by design — a
      *  failed inject leaves the mail queued for the next deadline. */
     private fireNudge(target: AgentInboxAgent): void {
         if (!this.wakeSink || !target.terminalId) return;
-        // No transport check here either, and for the same reason as in
-        // {@link scheduleNudge}: a channel that came up in between is a route
-        // this mail has demonstrably not travelled, since the cursor would have
-        // moved and cleared the deadline if it had.
+        // An agent with a live channel is reminded THROUGH it (owner, genie#656):
+        // its mail came that way, and a reminder typed into its input is
+        // indistinguishable from the human. The prompt is reached only when a
+        // channel that has ALREADY been reminded is still unread a full window
+        // later — the recovery genie#549 exists for, a channel Claude Code
+        // silently declined. One that works never gets there: its agent reads.
+        if (this.harnessOwnsDelivery(target) && this.remindThroughChannel(target)) return;
         const safe = shouldWakeAgent({
             lastTurnEndAt: target.lastTurnEndAt,
             lastOutputAt: target.lastOutputAt,
@@ -905,8 +962,11 @@ export class AgentInboxBroker {
             // there would say "it looked at the message" when there was none.
             this.emitLifecycle('checked', agent);
             // It looked. Whatever deadline was counting is moot -- and leaving it
-            // armed would nudge an agent that is up to date.
+            // armed would nudge an agent that is up to date. A reminder it has
+            // not collected yet is moot for the same reason.
             this.clearNudge(agent);
+            agent.channelRemindedAt = null;
+            agent.pendingChannelReminder = null;
             this.store.setCursor(agent.agentId, cursor);
             this.resolveEscalations(agent.agentId, cursor);
             // The agent just caught up — the header's agent-lag level dropped.
@@ -1052,6 +1112,8 @@ export class AgentInboxBroker {
             // across a re-join like the idle timestamps.
             draft: existing?.draft ?? EMPTY_DRAFT,
             lastUserInputAt: existing?.lastUserInputAt ?? null,
+            channelRemindedAt: existing?.channelRemindedAt ?? null,
+            pendingChannelReminder: existing?.pendingChannelReminder ?? null,
         };
         this.agents.set(agent.agentId, agent);
         this.byTerminal.set(agent.terminalId, agent.agentId);
@@ -1576,6 +1638,14 @@ export class AgentInboxBroker {
         const nextCursor = (msgs: AgentInboxMessage[]): number =>
             msgs.length ? msgs[msgs.length - 1].seq : cursor;
 
+        // A reminder that found no parked poll goes to the next one. Only to a
+        // WAITING receive: that is the channel collecting its mail, and an
+        // agent reading by hand needs no reminder of what it is reading.
+        if (pending.length === 0 && opts.wait && agent.pendingChannelReminder) {
+            const reminder = { ...agent.pendingChannelReminder, seq: cursor };
+            agent.pendingChannelReminder = null;
+            return Promise.resolve({ messages: [reminder], cursor });
+        }
         if (pending.length > 0 || !opts.wait) {
             const c = nextCursor(pending);
             if (opts.acknowledge !== false) this.ackCursor(agent, c);
