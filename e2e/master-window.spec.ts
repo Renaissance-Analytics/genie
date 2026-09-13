@@ -1589,10 +1589,13 @@ test('the Processes modal adds, runs, shows, stops, renames and deletes a real p
     await expect(processForm().getByRole('alert')).toContainText('Enter the command to run.');
 
     // A command every CI runner has, that keeps running and says something.
+    // `exact`: on Windows the Shell select offers "Command Prompt", and a select's
+    // accessible name carries its option text, so a substring match on "Command"
+    // found two fields there and nowhere else.
     await processForm()
-        .getByLabel('Command')
+        .getByLabel('Command', { exact: true })
         .fill(`node -e "setInterval(() => console.log('genie-e2e-tick'), 300)"`);
-    await processForm().getByLabel('Name (optional)').fill(label);
+    await processForm().getByLabel('Name (optional)', { exact: true }).fill(label);
     await processForm().getByRole('button', { name: 'Add process' }).click();
     await expect(processForm()).toHaveCount(0);
 
@@ -1612,7 +1615,7 @@ test('the Processes modal adds, runs, shows, stops, renames and deletes a real p
     const renamed = `${label} renamed`;
     await card.getByRole('button', { name: 'Edit' }).click();
     await expect(processForm()).toBeVisible();
-    await processForm().getByLabel('Name (optional)').fill(renamed);
+    await processForm().getByLabel('Name (optional)', { exact: true }).fill(renamed);
     await processForm().getByRole('button', { name: 'Save changes' }).click();
     await expect(processForm()).toHaveCount(0);
     await expect(processCardNamed(renamed)).toBeVisible();
@@ -1640,8 +1643,8 @@ test('a scheduled task can be paused and enabled again from its card', async () 
     // Added from the Scheduled tab, the form already carries a schedule.
     await page.getByRole('button', { name: 'Add a process…' }).last().click();
     await expect(processForm()).toBeVisible();
-    await processForm().getByLabel('Command').fill(`node -e "console.log('nightly')"`);
-    await processForm().getByLabel('Name (optional)').fill(label);
+    await processForm().getByLabel('Command', { exact: true }).fill(`node -e "console.log('nightly')"`);
+    await processForm().getByLabel('Name (optional)', { exact: true }).fill(label);
     await processForm().getByRole('button', { name: 'Add process' }).click();
     await expect(processForm()).toHaveCount(0);
 
