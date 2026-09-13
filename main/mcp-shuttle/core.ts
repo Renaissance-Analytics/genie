@@ -72,7 +72,19 @@ export interface ShuttleRequest {
 
 export interface ShuttleResponse {
     result?: unknown;
-    error?: { code: number; message: string };
+    error?: { code: number; message: string; data?: unknown };
+}
+
+/**
+ * Which endpoint a call arrived on and which terminal it acts for. Resolved by the
+ * listener, not sent by the client, so it travels BESIDE the request rather than
+ * inside it — the request itself stays exactly what the client sent.
+ */
+export interface DispatchRoute {
+    /** The endpoint token from the URL baked into `.mcp.json`. */
+    token: string;
+    /** The resolved terminal, or '' where server.ts would also resolve none. */
+    terminalId: string;
 }
 
 /** What the core hands the publisher. `correlationId` is the shuttle's own, so a
@@ -81,6 +93,7 @@ export interface DispatchFrame {
     correlationId: number;
     generation: number;
     request: ShuttleRequest;
+    route?: DispatchRoute;
 }
 
 export interface Publisher {
@@ -92,6 +105,7 @@ type Respond = (response: ShuttleResponse) => void;
 interface Pending {
     request: ShuttleRequest;
     respond: Respond;
+    route?: DispatchRoute;
 }
 
 export interface ShuttleCoreOptions {
@@ -106,8 +120,8 @@ export interface ShuttleCore {
     attach(publisher: Publisher, generation: number): void;
     /** The publisher went away. In-flight calls are answered as interrupted. */
     detach(): void;
-    /** A tools/call arrived on the listener. */
-    call(request: ShuttleRequest, respond: Respond): void;
+    /** A request arrived on the listener that only Genie can answer. */
+    call(request: ShuttleRequest, respond: Respond, route?: DispatchRoute): void;
     /** The publisher answered a dispatched frame. */
     result(correlationId: number, response: ShuttleResponse): void;
     /** Advance time-based transitions (detached → orphaned). */
@@ -157,7 +171,7 @@ export function createShuttleCore(opts: ShuttleCoreOptions): ShuttleCore {
     const dispatch = (p: Pending): void => {
         const correlationId = nextCorrelation++;
         inFlight.set(correlationId, p);
-        publisher!.dispatch({ correlationId, generation, request: p.request });
+        publisher!.dispatch({ correlationId, generation, request: p.request, route: p.route });
     };
 
     return {
@@ -186,16 +200,16 @@ export function createShuttleCore(opts: ShuttleCoreOptions): ShuttleCore {
             inFlight.clear();
         },
 
-        call(request, respond) {
+        call(request, respond, route) {
             if (publisher) {
-                dispatch({ request, respond });
+                dispatch({ request, respond, route });
                 return;
             }
             if (isOrphaned) {
                 respond(orphaned(Math.floor((opts.now() - detachedAt) / 1000)));
                 return;
             }
-            parked.push({ request, respond });
+            parked.push({ request, respond, route });
             if (parked.length > parkCap) parked.shift()!.respond(detached());
         },
 

@@ -57,6 +57,11 @@ import {
     type ImDoneDelivery,
     type HandoffOutcome,
 } from './protocol';
+import {
+    AMBIGUOUS_TERMINAL_MESSAGE,
+    resolveTerminal as resolveTerminalForRoute,
+    type EndpointRoute,
+} from './terminal-resolution';
 
 /**
  * Genie's local MCP server — a tiny HTTP/JSON-RPC endpoint that lets agents
@@ -572,36 +577,25 @@ async function sendBlockingViaSse(
 
 /**
  * Resolve which terminal a tool call should act on for a request that arrived
- * on a token. A per-terminal (legacy) token IS the terminal. A per-workspace
- * token resolves to the explicit `terminalId` arg if it's a valid member of
- * the workspace, else the workspace's most-recently-active terminal, else null.
+ * on a token. The rule lives in `terminal-resolution.ts`, shared with the MCP
+ * shuttle so the two can never resolve the same call differently.
  */
 function resolveTerminal(
     token: string,
     argTerminalId: string | undefined,
 ): string | null {
-    const direct = tokens.get(token);
-    if (direct) return direct; // legacy per-terminal endpoint — unambiguous
-
+    const legacy = tokens.get(token);
     const workspaceId = workspaceTokens.get(token);
-    if (!workspaceId || !deps) return null;
-    const { ids } = deps.workspaceTerminals(workspaceId);
-
-    // An explicit id must be a MEMBER of this token's workspace. A stale id from
-    // elsewhere resolves to nothing rather than silently landing on a local
-    // terminal — that would be the same wrong-pane bug by another route.
-    if (argTerminalId) return ids.includes(argTerminalId) ? argTerminalId : null;
-
-    // Exactly one terminal is not a guess; keep working for the common case.
-    if (ids.length === 1) return ids[0];
-
-    // Otherwise REFUSE. This used to fall back to the workspace's last-active
-    // terminal, which is nondeterministic precisely when orchestration is busy —
-    // "last active" is whatever some other agent touched most recently. Since
-    // `agentinbox` mints an agent's durable identity onto whatever resolves here,
-    // that fallback could attach identity to a stranger's pane (genie#17). Every
-    // pty carries GENIE_TERMINAL_ID, so a caller that lands here needs fixing.
-    return null;
+    const route: EndpointRoute | null = legacy
+        ? { kind: 'terminal', terminalId: legacy }
+        : workspaceId && deps
+          ? { kind: 'workspace', workspaceId }
+          : null;
+    return resolveTerminalForRoute(
+        route,
+        (id) => deps?.workspaceTerminals(id).ids ?? [],
+        argTerminalId,
+    );
 }
 
 async function handle(
@@ -667,11 +661,7 @@ async function handle(
             id: msg.id ?? null,
             error: {
                 code: -32602,
-                message:
-                    'Could not determine which terminal to act on. Pass `terminalId` — ' +
-                    'its value is in your GENIE_TERMINAL_ID environment variable. ' +
-                    '(This workspace has several terminals, or the id given is not one ' +
-                    'of them, so Genie will not guess.)',
+                message: AMBIGUOUS_TERMINAL_MESSAGE,
             },
         });
         return;

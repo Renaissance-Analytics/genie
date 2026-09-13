@@ -78,6 +78,36 @@ describe('attached — calls are forwarded', () => {
     });
 });
 
+describe('the route travels with the call', () => {
+    // The shuttle resolves WHICH terminal a call acts for (the listener does it,
+    // exactly as server.ts does). Genie cannot run the call without that answer,
+    // and it is not part of the client's request, so it rides beside it.
+    const route = { token: 'ws-token', terminalId: 'term-2' };
+
+    it('hands the publisher the route it was given, beside the untouched request', () => {
+        const core = createShuttleCore({ now: clock().now });
+        const pub = publisher();
+        core.attach(pub, 1);
+        core.call(call(1), responses().respond(1), route);
+
+        expect(pub.frames[0]!.route).toEqual(route);
+        expect(pub.frames[0]!.request).toEqual(call(1));
+    });
+
+    it('keeps the route of a call that was PARKED until a Genie attached', () => {
+        // Parking must not lose it: a parked call delivered with no terminal
+        // would act on nothing, or on the wrong pane.
+        const core = createShuttleCore({ now: clock().now });
+        core.call(call(1), responses().respond(1), route);
+        core.call(call(2), responses().respond(2), { token: 'ws-token', terminalId: 'term-9' });
+
+        const pub = publisher();
+        core.attach(pub, 1);
+
+        expect(pub.frames.map((f) => f.route?.terminalId)).toEqual(['term-2', 'term-9']);
+    });
+});
+
 describe('the swap — the common case is invisible', () => {
     it('PARKS a call that arrives while Genie is away, and delivers it on re-attach', () => {
         // §5.2 case 2: "Within the grace window the agent sees a slow call and

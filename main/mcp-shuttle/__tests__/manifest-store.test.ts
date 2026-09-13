@@ -28,6 +28,10 @@ function memoryDisk(initial: string | null = null) {
 const manifest = (over: Partial<ShuttleManifest> = {}): ShuttleManifest => ({
     genieVersion: '0.7.0-beta.322',
     generation: 1,
+    protocolVersions: ['2024-11-05'],
+    serverInfo: { name: 'genie', version: '0.7.0-beta.322' },
+    instructions: 'The Genie protocol.',
+    capabilities: { tools: { listChanged: false }, prompts: { listChanged: false } },
     tools: [
         { name: 'imDone', description: 'Signal completion.', inputSchema: { type: 'object' } },
         { name: 'agentinbox', description: 'Message agents.', inputSchema: { type: 'object' } },
@@ -60,6 +64,53 @@ describe('discovery is answered from the manifest, never from Genie', () => {
         coldShuttle.boot();
 
         expect(coldShuttle.tools()?.map((t) => t.name)).toEqual(['imDone', 'agentinbox']);
+    });
+});
+
+describe('initialize is answered from the manifest too', () => {
+    // An agent that STARTS while Genie is being replaced, or against a shuttle that
+    // cold-booted with no Genie yet, must still be able to initialize. If only
+    // Genie could answer initialize, the swap would be invisible to agents already
+    // connected and fatal to every one that connects during it.
+    it('serves what the publisher declared for initialize', () => {
+        const store = createManifestStore(memoryDisk());
+        store.publish(manifest());
+        expect(store.server()).toEqual({
+            protocolVersions: ['2024-11-05'],
+            serverInfo: { name: 'genie', version: '0.7.0-beta.322' },
+            instructions: 'The Genie protocol.',
+            capabilities: { tools: { listChanged: false }, prompts: { listChanged: false } },
+        });
+    });
+
+    it('serves it on a cold boot from disk', () => {
+        const disk = memoryDisk();
+        createManifestStore(disk).publish(manifest());
+        const cold = createManifestStore(disk);
+        cold.boot();
+        expect(cold.server()?.serverInfo.name).toBe('genie');
+    });
+
+    it('reports it as null when nothing was ever published', () => {
+        const store = createManifestStore(memoryDisk());
+        store.boot();
+        expect(store.server()).toBeNull();
+    });
+
+    it('rejects a manifest that could not answer initialize, and keeps the last good one', () => {
+        const store = createManifestStore(memoryDisk());
+        store.publish(manifest());
+        const { protocolVersions: _dropped, ...incomplete } = manifest({ generation: 2 });
+
+        expect(store.publish(incomplete as unknown as ShuttleManifest).accepted).toBe(false);
+        expect(store.server()?.protocolVersions).toEqual(['2024-11-05']);
+    });
+
+    it('rejects a manifest that names NO protocol version it can speak', () => {
+        // Negotiation needs at least one to fall back to.
+        const store = createManifestStore(memoryDisk());
+        expect(store.publish(manifest({ protocolVersions: [] })).accepted).toBe(false);
+        expect(store.server()).toBeNull();
     });
 });
 
