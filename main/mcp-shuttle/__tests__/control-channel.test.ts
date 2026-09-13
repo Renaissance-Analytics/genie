@@ -39,7 +39,7 @@ const testCodec = (maxFrame = 1024 * 1024): FrameCodec => ({
         return Buffer.concat([head, body]);
     },
     decoder() {
-        let buffer = Buffer.alloc(0);
+        let buffer: Buffer = Buffer.alloc(0);
         const self = {
             desynced: false,
             push(chunk: Buffer): unknown[] {
