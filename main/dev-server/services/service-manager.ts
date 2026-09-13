@@ -756,7 +756,11 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
                 // initdb, and binds again, so a connect can succeed against a
                 // cluster that is about to go away.
                 const result = await runtime.exec(containerId, readyExec).catch(() => null);
-                if (result?.code === 0) return true;
+                // The REPLY where the engine's client exits 0 regardless of it
+                // (genie#643) — otherwise `LOADING` or `NOAUTH` reads as ready.
+                if (result?.code === 0 && (!spec.readyReply || spec.readyReply.test(result.stdout ?? ''))) {
+                    return true;
+                }
             } else if (primary?.hostPort && deps.probeReady) {
                 if (
                     await deps.probeReady({

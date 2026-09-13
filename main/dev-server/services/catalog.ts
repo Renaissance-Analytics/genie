@@ -125,6 +125,11 @@ export interface EngineSpec {
     /** An in-container readiness check (exit 0 = ready). Absent means "probe
      *  the published port", which is all a generic image affords. */
     readyExec?: (adminPassword: string) => string[];
+    /** What `readyExec` prints when the engine is ready, for a client whose exit
+     *  code does not carry the server's answer. `redis-cli` exits 0 on an error
+     *  reply, so a Redis still `LOADING` its data "passed" a bare exit-code check
+     *  (genie#643). */
+    readyReply?: RegExp;
     /** A caller-supplied image can have no shared story. */
     alwaysDedicated?: boolean;
 }
@@ -238,6 +243,7 @@ const REDIS: EngineSpec = {
     // so a restart does not silently empty every workspace's cache.
     command: (password) => ['redis-server', '--requirepass', password, '--appendonly', 'yes'],
     readyExec: (password) => ['redis-cli', '-a', password, '--no-auth-warning', 'ping'],
+    readyReply: /^PONG$/m,
 };
 
 const MEILISEARCH: EngineSpec = {

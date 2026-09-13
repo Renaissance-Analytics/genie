@@ -290,4 +290,27 @@ describe('REAL Redis — the key prefix, and the commands it cannot scope', () =
         expect((await asAcme('swapdb', '0', '1')).stdout).toContain('NOPERM');
         expect((await asAcme('function', 'flush')).stdout).toContain('NOPERM');
     }, 180_000);
+
+    it.skipIf(!hasDocker)('fails provisioning Redis ANSWERS with an error, though redis-cli exits 0 (genie#643)', async () => {
+        // The real client, not a fake: `redis-cli` exits 0 on an error reply. A
+        // wrong admin password gets `NOAUTH` for the `ACL SETUSER`, creates no
+        // user, and used to count as provisioned — the same shape as the
+        // `LOADING` reply that left a real workspace with WRONGPASS.
+        const ref = await run(REDIS_IMAGE, `genie-realtest-redis-noauth-${nonce()}`, {
+            command: ['redis-server', '--requirepass', REDIS_ADMIN.password, '--appendonly', 'yes'],
+        });
+        const ping = () =>
+            rt.exec(ref.id, ['redis-cli', '-a', REDIS_ADMIN.password, '--no-auth-warning', 'ping']);
+        await waitFor(async () => (await ping()).stdout.includes('PONG'));
+
+        const wrongAdmin: EngineAdmin = { user: 'default', password: 'admin_pw_not-this-one' };
+        const refused = await rt.exec(ref.id, ['redis-cli', '-a', wrongAdmin.password, '--no-auth-warning', 'ping']);
+        // The premise, measured here rather than assumed.
+        expect(refused.code).toBe(0);
+
+        const result = await runProvisionSteps(rt, ref.id, provisionSteps('redis', wrongAdmin, sliceFor('acme-1a2b3c4d')));
+
+        expect(result.ok).toBe(false);
+        expect(result.error).toMatch(/NOAUTH|WRONGPASS/);
+    }, 180_000);
 });
