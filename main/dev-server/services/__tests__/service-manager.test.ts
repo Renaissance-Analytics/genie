@@ -60,6 +60,13 @@ function fakeRuntime(
     opts: {
         detection?: RuntimeDetection;
         execFails?: string;
+        /**
+         * What `redis-cli` prints. It exits 0 whatever the server REPLIES — an
+         * error reply (`NOAUTH`, `LOADING`, `WRONGPASS`) included; measured on
+         * redis-cli 7.4.7 (genie#643). So the reply is the only verdict, and this
+         * fake answers the way a healthy server does unless a test says otherwise.
+         */
+        redisReply?: (argv: string[]) => string | undefined;
         publishNothing?: boolean;
         /** No image is on this machine — the pre-install (#242 P3) case. */
         imageMissing?: boolean;
@@ -180,6 +187,15 @@ function fakeRuntime(
             execs.push({ id, argv });
             if (opts.execFails && argv.join(' ').includes(opts.execFails)) {
                 return { code: 1, stdout: '', stderr: 'engine said no' };
+            }
+            if (argv[0] === 'redis-cli') {
+                const healthy = argv.includes('SETUSER')
+                    ? 'OK'
+                    : argv.some((a) => a.toLowerCase() === 'ping')
+                      ? 'PONG'
+                      : '';
+                return { code: 0, stdout: `${opts.redisReply?.(argv) ?? healthy}
+`, stderr: '' };
             }
             return { code: 0, stdout: '', stderr: '' };
         },
@@ -2115,5 +2131,71 @@ describe('the hosts-file names a websockets service is entitled to (genie#624)',
             }),
         );
         expect(manager.hostBrowserNames()).toEqual(['websockets.ws-a.gen', 'websockets.ws-b.gen']);
+    });
+});
+
+/**
+ * genie#643 — a dedicated Redis reported `ready` while the workspace credential
+ * it handed out failed with WRONGPASS.
+ *
+ * `redis-cli` exits 0 on an error REPLY (measured, redis-cli 7.4.7: `NOAUTH` and
+ * an unknown command both exit 0). Readiness and provisioning both judged it by
+ * exit code alone. A Redis started with `appendonly yes` answers every command
+ * with `LOADING` while it replays its file — which is what a stop/start after a
+ * Docker Desktop restart meets — so the `ping` "passed", the `ACL SETUSER`
+ * "passed" while creating nothing, and the service came back ready with no
+ * workspace user. The second stop/start, once loading had finished, worked.
+ */
+describe('a Redis is ready only when the credential it hands out authenticates (genie#643)', () => {
+    const LOADING = 'LOADING Redis is loading the dataset in memory';
+
+    it('is not ready while Redis is still loading, however cleanly redis-cli exits', async () => {
+        const runtime = fakeRuntime({ redisReply: () => LOADING });
+        const manager = createDevServiceManager(deps(runtime, { a: { redis: REDIS7 } }));
+
+        const status = await manager.acquire('a', 'redis');
+
+        expect(status.state).toBe('failed');
+        expect(runtime.execs.some((e) => e.argv.includes('SETUSER'))).toBe(false);
+    });
+
+    it('fails the acquire when the ACL write is answered with an error', async () => {
+        const runtime = fakeRuntime({
+            redisReply: (argv) => (argv.includes('SETUSER') ? LOADING : undefined),
+        });
+        const manager = createDevServiceManager(deps(runtime, { a: { redis: REDIS7 } }));
+
+        const status = await manager.acquire('a', 'redis');
+
+        expect(status.state).toBe('failed');
+        expect(status.error).toContain('LOADING');
+    });
+
+    it('fails the acquire when the workspace credential does not authenticate', async () => {
+        const runtime = fakeRuntime({
+            redisReply: (argv) =>
+                argv.includes('--user') ? 'WRONGPASS invalid username-password pair or user is disabled.' : undefined,
+        });
+        const manager = createDevServiceManager(deps(runtime, { a: { redis: REDIS7 } }));
+
+        const status = await manager.acquire('a', 'redis');
+
+        expect(status.state).toBe('failed');
+        expect(status.error).toContain('WRONGPASS');
+    });
+
+    it('POSITIVE CONTROL: ready once the workspace user itself answers PONG', async () => {
+        const runtime = fakeRuntime();
+        const config = { ...REDIS7, password: 'pw-Workspace_1' };
+        const manager = createDevServiceManager(deps(runtime, { a: { redis: config } }));
+
+        const status = await manager.acquire('a', 'redis');
+
+        expect(status.state).toBe('running');
+        // Proven AS the workspace user, with the password this service hands out.
+        const check = runtime.execs.find((e) => e.argv.includes('--user'))?.argv ?? [];
+        expect(check).toContain(workspaceSqlIdentifier('a'));
+        expect(check).toContain('pw-Workspace_1');
+        expect(check.map((a) => a.toLowerCase())).toContain('ping');
     });
 });

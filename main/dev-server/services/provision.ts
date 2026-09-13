@@ -44,6 +44,13 @@ export interface ProvisionStep {
     argv: string[];
     /** Engine output that means the postcondition already holds. */
     tolerate?: RegExp;
+    /**
+     * Output the step must PRINT to count as done, for a client whose exit code
+     * does not carry the server's answer. `redis-cli` exits 0 on an error reply
+     * (measured, 7.4.7), so an `ACL SETUSER` answered `LOADING` created nothing
+     * and still "succeeded" (genie#643).
+     */
+    expect?: RegExp;
 }
 
 /** The engine's superuser, as the manager holds it. */
@@ -366,6 +373,26 @@ function redisSteps(
                 '+@all',
                 ...REDIS_DENIED.filter((command) => !(options.dedicated && command === '-flushdb')),
             ],
+            expect: /^OK$/m,
+        },
+        {
+            // The postcondition itself: the credential this service hands out
+            // authenticates. Without it, "provisioned" meant only "the admin's
+            // command was sent" — which is how a Redis came back ready while
+            // every client got WRONGPASS (genie#643).
+            label: 'workspace credential',
+            argv: [
+                'redis-cli',
+                '-h',
+                '127.0.0.1',
+                '--user',
+                name,
+                '--pass',
+                password,
+                '--no-auth-warning',
+                'PING',
+            ],
+            expect: /^PONG$/m,
         },
     ];
 }
@@ -507,7 +534,7 @@ export async function runProvisionSteps(
     for (const step of steps) {
         try {
             const result = await runtime.exec(containerId, step.argv);
-            if (result.code === 0) continue;
+            if (result.code === 0 && (!step.expect || step.expect.test(result.stdout ?? ''))) continue;
             const detail = (result.stderr || result.stdout || '').trim();
             if (step.tolerate?.test(detail)) continue;
             return {
