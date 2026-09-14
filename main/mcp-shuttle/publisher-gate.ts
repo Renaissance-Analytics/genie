@@ -91,6 +91,14 @@ function secretMatches(presented: unknown, expected: string): boolean {
     return timingSafeEqual(a, b);
 }
 
+/**
+ * How a wire-generation refusal begins. Genie's supervisor matches on it: of all
+ * the reasons a shuttle can refuse a publisher, this is the only one that means
+ * "an older shuttle of ours is running, replace it". Every shuttle that has ever
+ * shipped words it this way, which is what makes it safe to match on.
+ */
+export const WIRE_MISMATCH_PREFIX = 'Wire generation mismatch:';
+
 export function createPublisherGate(opts: PublisherGateOptions): PublisherGate {
     const { core, wireGeneration } = opts;
     /** Connections that have presented a valid hello. Only these may ever publish. */
@@ -123,7 +131,7 @@ export function createPublisherGate(opts: PublisherGateOptions): PublisherGate {
                 if (message.wireGeneration !== wireGeneration) {
                     refuse(
                         conn,
-                        `Wire generation mismatch: this shuttle speaks ${wireGeneration}, the publisher ` +
+                        `${WIRE_MISMATCH_PREFIX} this shuttle speaks ${wireGeneration}, the publisher ` +
                             `speaks ${message.wireGeneration}. That is a deep upgrade; the shuttle must be ` +
                             'replaced alongside Genie.',
                     );

@@ -109,3 +109,35 @@ test('the built shuttle refuses a taken port, says so, and exits with its refusa
     expect(await firstLine).toMatchObject({ event: 'refused', reason: 'port-in-use' });
     expect(await exited).toBe(3);
 });
+
+test('Genie’s spawner starts the built shuttle detached and hears back over IPC', async () => {
+    // What Genie itself will do: the standalone runtime, the built bundle, output
+    // to a log file, and the outcome as one IPC message rather than a pipe the
+    // shuttle could die of EPIPE on once Genie exits.
+    const { spawnShuttleProcess } = await import('../main/mcp-shuttle/spawn');
+    const port = await freePort();
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'genie-shuttle-spawned-'));
+    dirs.push(stateDir);
+
+    const outcome = await spawnShuttleProcess({
+        nodePath: process.execPath,
+        scriptPath: BUNDLE,
+        env: {
+            ...(process.env as Record<string, string>),
+            GENIE_SHUTTLE_STATE_DIR: stateDir,
+            GENIE_SHUTTLE_PORT: String(port),
+            GENIE_SHUTTLE_WIRE_GENERATION: '1',
+            GENIE_SHUTTLE_VERSION: 'e2e',
+        },
+        logFile: path.join(stateDir, 'shuttle.log'),
+    });
+
+    expect(outcome.kind, JSON.stringify(outcome)).toBe('started');
+    if (outcome.kind !== 'started') return;
+    try {
+        const record = JSON.parse(fs.readFileSync(path.join(stateDir, 'shuttle.json'), 'utf8'));
+        expect(record).toMatchObject({ pid: outcome.pid, port });
+    } finally {
+        process.kill(outcome.pid);
+    }
+});
