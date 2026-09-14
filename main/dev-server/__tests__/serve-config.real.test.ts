@@ -3,7 +3,12 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { serveCaddyfile, caddyServeArgv, phpFastcgiWorkerCommand } from '../serve-config';
+import {
+    serveCaddyfile,
+    caddyServeArgv,
+    phpFastcgiWorkerCommand,
+    PHP_FASTCGI_WORKER_ENV,
+} from '../serve-config';
 import { allocateFreePort, waitForHttp } from '../port-probe';
 
 /**
@@ -171,6 +176,56 @@ describe('REAL php serve mode — the bundled Caddy + php-cgi actually EXECUTE P
         expect(body, 'PHP must have EXECUTED, not been served as source').toMatch(/\d+\.\d+\.\d+/);
         expect(body).not.toContain('<?php');
     });
+
+    /**
+     * THE REQUEST LIMIT, on the real binary. `php-cgi` in FastCGI mode exits by
+     * itself after `PHP_FCGI_MAX_REQUESTS` requests — 500 by default — and Genie's
+     * worker has no supervisor to respawn it, so every PHP `.gen` site went to 502
+     * a few minutes into an agent testing it.
+     *
+     * Both halves run, because either alone proves nothing: the worker WITHOUT the
+     * setting must stop answering inside the same budget (otherwise this many
+     * requests never reached the limit, and the green half is vacuous), and the
+     * worker with Genie's env must answer every one of them.
+     */
+    it.skipIf(!phpCgiExe)('keeps serving past php-cgi\'s 500-request limit with Genie\'s worker env', async () => {
+        const REQUESTS = 520;
+        const dir = mkdtempSync(path.join(tmpdir(), 'genie-real-php-limit-'));
+        dirs.push(dir);
+        const root = path.join(dir, 'public');
+        mkdirSync(root);
+        writeFileSync(path.join(root, 'index.php'), '<?php echo "alive";');
+
+        /** Serve the docroot through a real Caddy + php-cgi pair and count the
+         *  requests answered by PHP before the first one that is not. */
+        const answered = async (workerEnv: Record<string, string>): Promise<number> => {
+            const sitePort = await allocateFreePort();
+            const fcgiPort = await allocateFreePort(new Set([sitePort]));
+            const [wbin, ...wargs] = phpFastcgiWorkerCommand(phpCgiExe, fcgiPort, uploadDirIn(dir));
+            const env = { ...process.env };
+            // The runner's own environment must not decide the result either way.
+            delete env.PHP_FCGI_MAX_REQUESTS;
+            procs.push(spawn(wbin!, wargs, { stdio: 'ignore', env: { ...env, ...workerEnv } }));
+
+            const configPath = path.join(dir, `Caddyfile-${sitePort}`);
+            writeFileSync(configPath, serveCaddyfile({ sitePort, serve: { kind: 'php', root, fcgiPort } }));
+            const [bin, ...args] = caddyServeArgv(caddyBin, configPath);
+            procs.push(spawn(bin!, args, { stdio: 'ignore' }));
+            expect(await waitForHttp(sitePort, 15_000), 'Caddy + php-cgi must answer').toBe(true);
+
+            for (let i = 0; i < REQUESTS; i += 1) {
+                const res = await fetch(`http://127.0.0.1:${sitePort}/`);
+                const body = await res.text();
+                if (res.status !== 200 || !body.includes('alive')) return i;
+            }
+            return REQUESTS;
+        };
+
+        // waitForHttp's own probe is a request too, so the bare worker runs out a
+        // request early — anything short of the budget is the limit firing.
+        expect(await answered({}), 'without the setting php-cgi must hit its limit here').toBeLessThan(REQUESTS);
+        expect(await answered({ ...PHP_FASTCGI_WORKER_ENV })).toBe(REQUESTS);
+    }, 120_000);
 
     it.skipIf(!phpCgiExe)('serves STATIC assets with a real Content-Type (genie#225)', async () => {
         // The gap that let #225 ship: the test above proves PHP executes, and stops

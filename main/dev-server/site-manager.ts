@@ -15,7 +15,12 @@ import {
     stopSiteProcess,
 } from './site-process';
 import { composeHostSiteEnv, describeHostServiceEnvGap } from './host-site-process';
-import { serveCaddyfile, caddyServeArgv, phpFastcgiWorkerCommand } from './serve-config';
+import {
+    serveCaddyfile,
+    caddyServeArgv,
+    phpFastcgiWorkerCommand,
+    PHP_FASTCGI_WORKER_ENV,
+} from './serve-config';
 import type { HostEnvReport } from './services/service-manager';
 import {
     hostBrowserNames as selectHostBrowserNames,
@@ -680,7 +685,9 @@ interface Live {
      *
      * `attempts` is what keeps a broken install from becoming a spawn loop: a
      * worker whose PHP is broken dies again immediately, and restarting it
-     * forever competes with the agents the revival exists to unblock.
+     * forever competes with the agents the revival exists to unblock. It counts
+     * revivals IN A ROW that did not bring the site back, and a revival that does
+     * clears it — see {@link FCGI_REVIVE_LIMIT}.
      */
     fcgiRevive?: {
         command: string[];
@@ -696,11 +703,16 @@ interface Live {
 }
 
 /**
- * How many times Genie will restart one site's FastCGI worker before leaving it
- * dead. Small on purpose: a worker that survives comes back on the first try,
- * and one that does not is broken in a way more spawning cannot fix. The
- * counter is per-live-entry, so stopping and starting the site clears it — which
- * is exactly the gesture a person makes after fixing the install.
+ * How many revivals IN A ROW may fail to bring a site back before Genie leaves its
+ * FastCGI worker dead. Small on purpose: a worker that survives comes back on the
+ * first try, and one that does not is broken in a way more spawning cannot fix.
+ *
+ * CONSECUTIVE, not a lifetime count. A revival that brings the site back resets
+ * it, because that worker was not broken — it exited and came back, which is what
+ * revival is for. Counting those too made the flapping-install guard fire on a
+ * healthy site after its fifth ordinary exit and leave it 502ing for the rest of
+ * the session. Stopping and starting the site also clears it — the gesture a
+ * person makes after fixing the install.
  */
 const FCGI_REVIVE_LIMIT = 5;
 
@@ -1478,6 +1490,50 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
     }
 
     /**
+     * A `hostServe: php` site that survived a Genie restart is REPLACED, not
+     * re-attached.
+     *
+     * Adopting its processes as they stand leaves a site Genie cannot keep up. The
+     * worker a previous Genie started may be carrying `php-cgi`'s default request
+     * limit (every Genie before {@link PHP_FASTCGI_WORKER_ENV}), so it is due to
+     * exit on its own; and this Genie holds no recipe to revive it, because that
+     * recipe is the start-time command and env, which died with the process that
+     * captured them. `resumeEnabledSites` skips a site that is already live, so
+     * nothing later would repair either. A worker that did not survive is worse
+     * still — Caddy answering 502 with no way back.
+     *
+     * The cost is a site that blinks for the length of one start. The one-start
+     * path is used rather than rebuilding just the worker: the worker's command,
+     * env and upload directory are all planned there, and a second copy of that
+     * plan is the kind that drifts.
+     *
+     * The old pair is stopped FIRST, and asked afterwards whether it went: the new
+     * processes take the same spawn ids, so a stop that landed after the start
+     * would kill the replacement, and a survivor has to be remembered as an orphan
+     * so its port is never handed out again.
+     */
+    async function restartAdoptedPhp(
+        workspaceId: string,
+        workspacePath: string,
+        siteId: string,
+        config: DevSiteConfig,
+        port: number,
+        ports: Map<string, number>,
+    ): Promise<void> {
+        try {
+            const fcgiPort = ports.get(fcgiSiteId(siteId));
+            const survivors = await stopEach([
+                { spawnId: siteId, port },
+                { spawnId: fcgiSiteId(siteId), ...(fcgiPort === undefined ? {} : { port: fcgiPort }) },
+            ]);
+            if (survivors.length > 0) orphans.set(siteId, survivors);
+            await startHostNativeManaged(workspaceId, siteId, config, workspacePath);
+        } catch {
+            /* one site that will not come back must not abandon the rest */
+        }
+    }
+
+    /**
      * Re-attach every HOST-NATIVE dev server that outlived the last Genie (#190).
      *
      * The spawn is deliberately detached, so a restart — and above all an UPDATE,
@@ -1487,6 +1543,9 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
      * here does is turn each of those into the live entry + `.gen` route the rest
      * of Genie reads. A run whose process is gone is simply absent from that list,
      * so it stays reported as stopped and nothing is invented.
+     *
+     * The exception is a `hostServe: php` site, which is restarted rather than
+     * re-attached — see {@link restartAdoptedPhp} (genie#664).
      *
      * Never throws: adoption runs once at boot and gets no second chance, so one
      * unreadable site must not abandon the others.
@@ -1507,6 +1566,10 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                 if (config.runMode !== 'host' || live.has(siteId)) continue;
                 const port = ports.get(siteId);
                 if (port === undefined) continue;
+                if (config.hostServe?.mode === 'php') {
+                    await restartAdoptedPhp(workspace.id, workspace.path, siteId, config, port, ports);
+                    continue;
+                }
                 try {
                     // A SHORT probe, like the container pass: the dev server is
                     // already up, so a healthy one answers at once.
@@ -1668,6 +1731,8 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         if (existing && (await hostSpawn.alive(siteId))) {
             // Carry the FastCGI port forward: this path allocates nothing, and
             // losing it would leave the site's readiness answerable only by Caddy.
+            // The revive recipe travels with it for the same reason — dropping it
+            // here left a site whose worker could never be brought back.
             return await recordHostNativeLive(
                 workspaceId,
                 siteId,
@@ -1675,6 +1740,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                 buildRoute(existing.caddyHostPort),
                 readyTimeoutMs,
                 existing.fcgiPort,
+                existing.fcgiRevive,
             );
         }
         live.delete(siteId);
@@ -1749,6 +1815,9 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         }
         const note = notes.length ? notes.join('\n') : undefined;
         const env = { ...composeHostSiteEnv(config, command, serviceHostEnv), ...portEnv };
+        // The worker's own settings go on LAST: a site env that set a request limit
+        // would bring back the exit-after-500 this exists to stop.
+        const workerEnv = { ...env, ...PHP_FASTCGI_WORKER_ENV };
 
         // PHP (nginx model): bring up the FastCGI worker — a companion process keyed
         // `<siteId>-fcgi` — BEFORE the Caddy that proxies to it, in the repo cwd with
@@ -1761,7 +1830,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                 workspaceId,
                 command: worker,
                 cwd,
-                env,
+                env: workerEnv,
                 // The FastCGI port travels with the run, exactly as the site's own
                 // port does — so a Genie that restarts can re-learn WHICH port the
                 // adopted worker holds and go on answering "is the backend there?"
@@ -1832,7 +1901,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                 : {
                       command: worker,
                       cwd,
-                      env,
+                      env: workerEnv,
                       ...(fcgiPort === undefined ? {} : { port: fcgiPort }),
                       attempts: 0,
                   },
@@ -2148,7 +2217,11 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                         // so a status that could be true becomes true instead of
                         // merely being reported accurately (genie#305).
                         if (ready || !(await reviveFcgi(entry))) return ready;
-                        return await probeLiveReady(entry).catch(() => false);
+                        const revived = await probeLiveReady(entry).catch(() => false);
+                        // It came back, so it was not the broken install the cap
+                        // guards against: the next exit starts a fresh count.
+                        if (revived && entry.fcgiRevive) entry.fcgiRevive.attempts = 0;
+                        return revived;
                     } catch {
                         // Unanswerable is not the same as dead: leave what we knew.
                         return entry.ready;
