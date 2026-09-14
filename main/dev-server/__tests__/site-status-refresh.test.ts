@@ -197,71 +197,6 @@ describe('refresh — status re-asks, instead of replaying the start-time answer
         expect(status.ready).toBe(false);
     });
 
-    it('ADOPTS a php site whose worker did NOT survive the restart as NOT ready', async () => {
-        // Genie restarts (an update is a quit), the detached Caddy outlives it and
-        // is re-attached — but the php-cgi worker is gone. Its port died with the
-        // last process, so there is nothing to connect to; the worker is still a
-        // process Genie TRACKS, though, so the registry can answer instead. Asking
-        // Caddy here would report a serving site: it answers 502 either way.
-        const sites: DevSites = { [SITE_ID]: PHP_SITE };
-        const m = createDevSiteManager({
-            resolveRuntime: async () => ({ runtime: null, detection: NO_RUNTIME }),
-            listWorkspaces: () => [WS],
-            devSitesFor: () => sites,
-            platform: 'linux',
-            hostIds: null,
-            hostSpawn: {
-                start: async () => ({ ok: true as const, pid: 1 }),
-                stop: async () => {},
-                // The Caddy survived; the worker did not.
-                alive: async (id: string) => id === SITE_ID,
-                readLog: async () => '',
-                // Only the run whose pid is still alive comes back, so the worker's
-                // recorded port is not among them.
-                running: async () => [{ siteId: SITE_ID, port: SITE_PORT }],
-            },
-            probeReady: async () => true,
-        });
-
-        await m.adopt();
-
-        expect(m.list('acme')[0]?.state).toBe('running');
-        expect(m.list('acme')[0]?.ready).toBe(false);
-    });
-
-    it('ADOPTS a php site whose worker DID survive as ready — re-learning its FastCGI port from the run', async () => {
-        // The positive control for the case above, and the reason the worker's port
-        // travels with its run: a restart must not cost the site its readiness.
-        const probes: ProbeReq[] = [];
-        const sites: DevSites = { [SITE_ID]: PHP_SITE };
-        const m = createDevSiteManager({
-            resolveRuntime: async () => ({ runtime: null, detection: NO_RUNTIME }),
-            listWorkspaces: () => [WS],
-            devSitesFor: () => sites,
-            platform: 'linux',
-            hostIds: null,
-            hostSpawn: {
-                start: async () => ({ ok: true as const, pid: 1 }),
-                stop: async () => {},
-                alive: async () => true,
-                readLog: async () => '',
-                running: async () => [
-                    { siteId: SITE_ID, port: SITE_PORT },
-                    { siteId: `${SITE_ID}-fcgi`, port: FCGI_PORT },
-                ],
-            },
-            probeReady: async (req) => {
-                probes.push(req);
-                return true;
-            },
-        });
-
-        await m.adopt();
-
-        expect(probes.some((p) => p.kind === 'tcp' && p.port === FCGI_PORT)).toBe(true);
-        expect(m.list('acme')[0]?.ready).toBe(true);
-    });
-
     it('re-probes a NON-hostServe host-native site over PLAIN http with no servername (genie#160)', async () => {
         // The repo's own dev server speaks plain http on the host port. A
         // servername would route the probe to the HTTPS-SNI path, whose handshake
@@ -433,5 +368,170 @@ describe('a dead FastCGI worker is brought back', () => {
         await m.refresh('acme');
 
         expect(spawn.started.filter((id) => id === WORKER).length).toBe(1);
+    });
+});
+
+/**
+ * A WORKER THAT IS NOT BROKEN IS NEVER LEFT DEAD (genie#664).
+ *
+ * `php-cgi` in FastCGI mode EXITS ON ITS OWN after `PHP_FCGI_MAX_REQUESTS`
+ * requests — 500 unless something says otherwise. Measured against a real
+ * `php-cgi`, started exactly the way Genie starts it: it served 500 requests,
+ * exited with status 0, and refused the 501st. With `PHP_FCGI_MAX_REQUESTS=0` it
+ * served 700 of 700 and was still running.
+ *
+ * One Laravel page load is dozens of FastCGI requests, and an agent testing its
+ * work reloads constantly, so every PHP `.gen` site crossed 500 within minutes.
+ * That is not a crash anyone can fix in the app: it is the worker's own recycling
+ * policy, which exists for a supervisor that respawns it — and Genie's worker
+ * has none, because it is a single `php-cgi -b` with no parent to restart it.
+ *
+ * Three things together left sites dead instead of briefly blinking:
+ *
+ *  1. **The limit itself.** Genie never set it, so the default 500 applied.
+ *  2. **The revival cap was a LIFETIME count.** Five routine exits — five hundred
+ *     requests each — and Genie stopped bringing the worker back for good, which
+ *     is the flapping-install guard firing on a healthy worker.
+ *  3. **An ADOPTED php site had no way back at all.** A Genie that restarts (every
+ *     update) re-attaches the surviving processes but holds no recipe for the
+ *     worker, and `resumeEnabledSites` skips anything already live — so after an
+ *     update the worker a PREVIOUS Genie started (limit and all) was the last one
+ *     that site would ever get.
+ */
+describe('a php-cgi worker is never left dead by its own request limit', () => {
+    const WORKER = `${SITE_ID}-fcgi`;
+
+    /** A hostSpawn that remembers each start's env, and whose processes are up
+     *  until they are stopped or killed — optionally already running at boot. */
+    function recordingHostSpawn(running: Array<{ siteId: string; port: number }> = []) {
+        const spawns: Array<{ siteId: string; env: Record<string, string> }> = [];
+        const up = new Set(running.map((r) => r.siteId));
+        const log: string[] = [];
+        return {
+            spawns,
+            up,
+            log,
+            start: async (i: { siteId: string; env: Record<string, string> }) => {
+                spawns.push({ siteId: i.siteId, env: i.env });
+                log.push(`start ${i.siteId}`);
+                up.add(i.siteId);
+                return { ok: true as const, pid: 4242 };
+            },
+            stop: async (id: string) => {
+                log.push(`stop ${id}`);
+                up.delete(id);
+            },
+            alive: async (id: string) => up.has(id),
+            readLog: async () => '',
+            running: async () => running.filter((r) => up.has(r.siteId)),
+        };
+    }
+
+    it('starts the worker with PHP_FCGI_MAX_REQUESTS=0, so it does not exit after 500 requests', async () => {
+        const spawn = recordingHostSpawn();
+        const m = phpManager(async () => true, { hostSpawn: spawn });
+
+        await m.start('acme', SITE_ID);
+
+        const worker = spawn.spawns.find((s) => s.siteId === WORKER);
+        expect(worker?.env.PHP_FCGI_MAX_REQUESTS).toBe('0');
+        // The Caddy in front of it is not php-cgi and has no such limit: the
+        // setting is the worker's, not blanket noise in every site's env.
+        expect(spawn.spawns.find((s) => s.siteId === SITE_ID)?.env.PHP_FCGI_MAX_REQUESTS).toBeUndefined();
+    });
+
+    it('a REVIVED worker is started with the same setting', async () => {
+        const spawn = recordingHostSpawn();
+        const m = phpManager(async (req) => (req.port === FCGI_PORT ? spawn.up.has(WORKER) : true), {
+            hostSpawn: spawn,
+        });
+
+        await m.start('acme', SITE_ID);
+        spawn.up.delete(WORKER);
+        await m.refresh('acme');
+
+        const workers = spawn.spawns.filter((s) => s.siteId === WORKER);
+        expect(workers).toHaveLength(2);
+        expect(workers[1]?.env.PHP_FCGI_MAX_REQUESTS).toBe('0');
+    });
+
+    it('keeps bringing back a worker that comes back HEALTHY — the cap counts consecutive failures, not a lifetime', async () => {
+        const spawn = recordingHostSpawn();
+        const m = phpManager(async (req) => (req.port === FCGI_PORT ? spawn.up.has(WORKER) : true), {
+            hostSpawn: spawn,
+        });
+        await m.start('acme', SITE_ID);
+
+        // More exits than the flapping guard allows in a row. Each revival WORKS —
+        // the worker comes back and the site answers — so none of them is the
+        // broken install that guard exists for.
+        for (let death = 1; death <= 8; death += 1) {
+            spawn.up.delete(WORKER);
+            await m.refresh('acme');
+            expect(m.list('acme')[0]?.ready, `the site must be serving again after exit #${death}`).toBe(true);
+        }
+        expect(spawn.spawns.filter((s) => s.siteId === WORKER)).toHaveLength(9);
+    });
+
+    it('RESTARTS an adopted php site into one this Genie can bring back', async () => {
+        // A previous Genie started this pair, and both survived its exit. Genie
+        // cannot see the env that worker runs with — it may be carrying the 500
+        // request limit — and holds no recipe to revive it. So it is replaced.
+        const spawn = recordingHostSpawn([
+            { siteId: SITE_ID, port: 6101 },
+            { siteId: WORKER, port: 6102 },
+        ]);
+        const m = phpManager(async (req) => (req.port === FCGI_PORT ? spawn.up.has(WORKER) : true), {
+            hostSpawn: spawn,
+        });
+
+        await m.adopt();
+
+        // The old pair is stopped BEFORE the new one starts: they share spawn ids,
+        // so the other order would stop the replacement.
+        expect(spawn.log.indexOf(`stop ${WORKER}`)).toBeGreaterThanOrEqual(0);
+        expect(spawn.log.indexOf(`stop ${WORKER}`)).toBeLessThan(spawn.log.indexOf(`start ${WORKER}`));
+        expect(spawn.log.indexOf(`stop ${SITE_ID}`)).toBeLessThan(spawn.log.indexOf(`start ${SITE_ID}`));
+        expect(spawn.spawns.find((s) => s.siteId === WORKER)?.env.PHP_FCGI_MAX_REQUESTS).toBe('0');
+        expect(m.list('acme')[0]?.state).toBe('running');
+        expect(m.list('acme')[0]?.ready).toBe(true);
+        expect(m.genSites()[0]?.port).toBe(SITE_PORT);
+
+        // …and it is now a site whose worker comes back.
+        spawn.up.delete(WORKER);
+        await m.refresh('acme');
+        expect(spawn.spawns.filter((s) => s.siteId === WORKER)).toHaveLength(2);
+        expect(m.list('acme')[0]?.ready).toBe(true);
+    });
+
+    it('RESTARTS an adopted php site whose worker did NOT survive, instead of leaving it answering 502', async () => {
+        // Caddy outlived the last Genie; the worker did not. Adopting that pair as
+        // it stands is a site that 502s with nothing able to bring it back.
+        const spawn = recordingHostSpawn([{ siteId: SITE_ID, port: 6101 }]);
+        const m = phpManager(async (req) => (req.port === FCGI_PORT ? spawn.up.has(WORKER) : true), {
+            hostSpawn: spawn,
+        });
+
+        await m.adopt();
+
+        expect(spawn.spawns.filter((s) => s.siteId === WORKER)).toHaveLength(1);
+        expect(m.list('acme')[0]?.ready).toBe(true);
+    });
+
+    it('a start on an already-running php site keeps its way back', async () => {
+        // A reconcile, or a second start, re-records the running site. That used to
+        // drop the revive recipe — the same dead end as adoption, one call later.
+        const spawn = recordingHostSpawn();
+        const m = phpManager(async (req) => (req.port === FCGI_PORT ? spawn.up.has(WORKER) : true), {
+            hostSpawn: spawn,
+        });
+        await m.start('acme', SITE_ID);
+        await m.start('acme', SITE_ID);
+        expect(spawn.spawns.filter((s) => s.siteId === WORKER), 'a running pair is not respawned').toHaveLength(1);
+
+        spawn.up.delete(WORKER);
+        await m.refresh('acme');
+        expect(spawn.spawns.filter((s) => s.siteId === WORKER)).toHaveLength(2);
+        expect(m.list('acme')[0]?.ready).toBe(true);
     });
 });

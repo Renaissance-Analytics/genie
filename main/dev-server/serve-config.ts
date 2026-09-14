@@ -251,6 +251,28 @@ export function phpFastcgiWorkerCommand(
 }
 
 /**
+ * The environment every `php-cgi` FastCGI worker runs with, on top of the site's.
+ *
+ * `PHP_FCGI_MAX_REQUESTS=0` — NEVER EXIT ON A REQUEST COUNT. `php-cgi` in FastCGI
+ * mode exits by itself after this many requests, and the default is 500. The limit
+ * is a recycling policy for a SUPERVISOR that respawns workers (a process manager
+ * forking `PHP_FCGI_CHILDREN`); Genie's worker is one `php-cgi -b` with no parent,
+ * so reaching it is not a recycle, it is the site going down.
+ *
+ * MEASURED against a real `php-cgi`, started with this file's argv: 500 requests
+ * served, a clean exit with status 0, and the 501st connection refused. With the
+ * variable at 0 it served 700 of 700 and was still running. One Laravel page load
+ * is dozens of FastCGI requests, so every PHP `.gen` site hit it within minutes of
+ * an agent testing its work — and Caddy answered 502 from then on.
+ *
+ * An env var rather than a `-d` define because it is not an ini setting: the CGI
+ * SAPI reads it from the process environment at startup, on every OS.
+ */
+export const PHP_FASTCGI_WORKER_ENV: Readonly<Record<string, string>> = Object.freeze({
+    PHP_FCGI_MAX_REQUESTS: '0',
+});
+
+/**
  * Run Genie's bundled Caddy in the FOREGROUND against a per-site config. `run`
  * (not the front door's detached `start`): this Caddy IS the host process Genie
  * tracks for the site, so hostSpawn owns its lifecycle exactly like a repo's own
