@@ -24,7 +24,11 @@
 /** The servers `octane:start --server=` accepts. Open Swoole runs as `swoole`. */
 export type OctaneServer = 'frankenphp' | 'roadrunner' | 'swoole';
 
-const OCTANE_SERVERS: readonly OctaneServer[] = ['frankenphp', 'roadrunner', 'swoole'];
+export const OCTANE_SERVERS: readonly OctaneServer[] = ['frankenphp', 'roadrunner', 'swoole'];
+
+export function isOctaneServer(v: unknown): v is OctaneServer {
+    return typeof v === 'string' && (OCTANE_SERVERS as readonly string[]).includes(v);
+}
 
 export interface OctaneServeInput {
     /** The resolved php CLI — an absolute path, never a bare name (genie#207). */
@@ -62,7 +66,7 @@ function assertPort(port: number | undefined, which: string): asserts port is nu
 /** The argv that starts an Octane site. Throws on anything it cannot state honestly. */
 export function octaneServeCommand(input: OctaneServeInput): string[] {
     const { phpExe, server, port, watch } = input;
-    if (!OCTANE_SERVERS.includes(server)) {
+    if (!isOctaneServer(server)) {
         throw new Error(`octane-serve: unknown Octane server ${JSON.stringify(server)}`);
     }
     if (typeof phpExe !== 'string' || !/[\\/]/.test(phpExe)) {

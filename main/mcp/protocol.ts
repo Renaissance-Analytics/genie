@@ -877,6 +877,24 @@ export interface ProvisionWorkspacesResult {
 // --- manageSite (the Hosting Manager's sites) --------------------------------
 
 /** One hosted site as the `manageSite` tool reports it. */
+/** A site's stored serve mode, as reported. Mirrors `HostServeConfig`. */
+export type DevSiteHostServe =
+    | { mode: 'static'; root: string; spa?: boolean }
+    | { mode: 'php'; root: string; version?: string }
+    | { mode: 'octane'; server: 'frankenphp' | 'roadrunner' | 'swoole'; version?: string };
+
+/**
+ * A serve mode as a CALLER sends it — loose, because it arrives as JSON. The host
+ * narrows it to {@link DevSiteHostServe} and refuses what it cannot narrow.
+ */
+export interface ManageSiteHostServe {
+    mode: 'static' | 'php' | 'octane';
+    root?: string;
+    spa?: boolean;
+    version?: string;
+    server?: string;
+}
+
 export interface DevSiteInfo {
     /** The opaque id every non-create action takes back. */
     id: string;
@@ -948,9 +966,9 @@ export interface DevSiteInfo {
     env?: Record<string, string>;
     /** The Host header sent upstream, when overridden from the `.gen` name. */
     upstreamHost?: string;
-    /** How Genie serves this host-native site (static/php), when it does — so the
-     *  Edit form's serve-mode picker prefills. Absent ⇒ the repo's own dev server. */
-    hostServe?: { mode: 'static' | 'php'; root: string; spa?: boolean; version?: string };
+    /** How Genie serves this host-native site (static/php/octane), when it does — so
+     *  the Edit form's serve-mode picker prefills. Absent ⇒ the repo's own dev server. */
+    hostServe?: DevSiteHostServe;
     /** The transient start stage, present ONLY while a start is in flight:
      *  `pulling` → `building` → `starting` → `ready`|`failed`. A settled row omits
      *  it — read `state`/`ready` then. Surfaces observable startup (Gap 2). */
@@ -1048,10 +1066,13 @@ export interface ManageSiteRequest {
      * machine default and moves with it; pinned to something Genie does not manage,
      * the start FAILS naming it rather than serving on a different runtime.
      *
-     * update: pass `null` to CLEAR it — switch a static/php site back to running the
+     * `octane` (genie#668) starts the Laravel app under Octane on `server` — no
+     * `root`, since Octane's server is the web server.
+     *
+     * update: pass `null` to CLEAR it — switch a served site back to running the
      * repo's own dev server (proxy). Omit the field to leave the serve mode untouched.
      */
-    hostServe?: { mode: 'static' | 'php'; root: string; spa?: boolean; version?: string } | null;
+    hostServe?: ManageSiteHostServe | null;
     /** create: extra BROWSER-FACING surfaces. Backend services never go here. */
     exposed?: Array<{ name: string; port: number; protocol: string; reason: string }>;
     env?: Record<string, string>;
@@ -2412,14 +2433,20 @@ const MANAGE_SITE_TOOL = {
                 properties: {
                     mode: {
                         type: 'string',
-                        enum: ['static', 'php'],
+                        enum: ['static', 'php', 'octane'],
                         description:
-                            '`static` serves a built directory (SPA-aware); `php` serves `public/` via a FastCGI worker.',
+                            '`static` serves a built directory (SPA-aware); `php` serves `public/` via a FastCGI worker; `octane` starts a Laravel app under Laravel Octane on `server` (needs `laravel/octane` in the app) — no `root`.',
+                    },
+                    server: {
+                        type: 'string',
+                        enum: ['frankenphp', 'roadrunner', 'swoole'],
+                        description:
+                            'octane only, and REQUIRED for it: the Octane server to start. Genie allocates every port it binds — the site port and FrankenPHP\'s admin / RoadRunner\'s RPC port — so Octane never derives one that collides. Swoole needs the swoole (or openswoole) PHP extension.',
                     },
                     root: {
                         type: 'string',
                         description:
-                            'The repo-RELATIVE DOCUMENT ROOT — served exactly as given. A built front end (`dist`, `dashboard/dist`) for static; for php the web root, which for Laravel and most PHP apps is `public/` and NOT the app root — pointing it at the app root would publish `.env` and `.git`.',
+                            'static/php (required for those): the repo-RELATIVE DOCUMENT ROOT — served exactly as given. A built front end (`dist`, `dashboard/dist`) for static; for php the web root, which for Laravel and most PHP apps is `public/` and NOT the app root — pointing it at the app root would publish `.env` and `.git`.',
                     },
                     spa: {
                         type: 'boolean',
@@ -2429,10 +2456,10 @@ const MANAGE_SITE_TOOL = {
                     version: {
                         type: 'string',
                         description:
-                            'php only: PIN the engine version this site runs on (`8.3`, or an exact `8.3.33`) — one Genie manages, as listed in Settings → Toolchain → Languages. OMITTED = the machine default, and the site MOVES with it when the default changes. A pinned version Genie does not manage FAILS the start naming what to install — never a silent fallback to another runtime.',
+                            'php/octane: PIN the PHP version this site runs on (`8.3`, or an exact `8.3.33`) — one Genie manages, as listed in Settings → Toolchain → Languages. OMITTED = the machine default, and the site MOVES with it when the default changes. A pinned version Genie does not manage FAILS the start naming what to install — never a silent fallback to another runtime.',
                     },
                 },
-                required: ['mode', 'root'],
+                required: ['mode'],
                 description:
                     'create: THE PREFERRED WAY to host a site. GENIE serves it with its own web server — you point at a repo and a ROOT, declare the mode, and Genie writes the config (no hand-rolled nginx/Caddy), owns the port and answers on `<name>.gen`. No `command`/`port` needed. A PHP/Laravel app points at its WEB ROOT — `public/`, not the app root, which would publish `.env` and `.git`; a built front end points at `dist`. Use a repo dev server (`command`+`port`) or an already-running one (`hostPort`) only when Genie cannot serve that stack, or you want HMR against live source. update: pass `null` to CLEAR it — switch back to the repo’s own dev server.',
             },

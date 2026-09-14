@@ -21,6 +21,7 @@ import {
     phpFastcgiWorkerCommand,
     PHP_FASTCGI_WORKER_ENV,
 } from './serve-config';
+import { octaneServeCommand, OCTANE_SERVE_ENV } from './octane-serve';
 import type { HostEnvReport } from './services/service-manager';
 import {
     hostBrowserNames as selectHostBrowserNames,
@@ -460,6 +461,13 @@ export interface DevSiteManagerDeps {
      */
     caddyBin?: string;
     /**
+     * Can this repo run Octane with `--watch` (genie#668)? Octane keeps the app in
+     * memory, so without it an edit is invisible until a restart — and `--watch`
+     * needs chokidar installed in the repo, or Octane refuses to start at all.
+     * Default: `node_modules/chokidar` exists in the repo.
+     */
+    octaneCanWatch?: (cwd: string) => boolean;
+    /**
      * Write a per-site generated web-server config (a Caddyfile) and return its
      * absolute path — so `startHostNativeManaged` can point Genie's Caddy at it.
      * Injectable so the serve orchestration is unit-tested without touching disk.
@@ -672,6 +680,13 @@ interface Live {
      * only ask Caddy, which answers 502 for a dead backend and reads as ready.
      */
     fcgiPort?: number;
+    /**
+     * The ports a `hostServe: octane` site's server binds BESIDES the site port —
+     * FrankenPHP's admin API, RoadRunner's RPC listener (genie#668). Genie
+     * allocates them, so they are held out of every later allocation for as long
+     * as the site is live, exactly as its site port is.
+     */
+    serverPorts?: number[];
     /**
      * How to START THAT WORKER AGAIN — the whole point of genie#305's second
      * half. Noticing the backend died only stops Genie lying about it; the
@@ -964,6 +979,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
     const livePortSet = () =>
         new Set([
             ...[...live.values()].map((e) => e.caddyHostPort),
+            ...[...live.values()].flatMap((e) => e.serverPorts ?? []),
             ...[...orphans.values()].flatMap((list) =>
                 list.map((o) => o.port).filter((p): p is number => p !== undefined),
             ),
@@ -1332,6 +1348,8 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         fcgiPort?: number,
         /** How to respawn that worker if it dies. See {@link Live.fcgiRevive}. */
         fcgiRevive?: Live['fcgiRevive'],
+        /** An Octane server's other ports. See {@link Live.serverPorts}. */
+        serverPorts?: number[],
     ): Promise<DevSiteStatus> {
         const routes: DevGenSite[] = [
             {
@@ -1352,6 +1370,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             caddyHostPort: route.port,
             ...(fcgiPort === undefined ? {} : { fcgiPort }),
             ...(fcgiRevive === undefined ? {} : { fcgiRevive }),
+            ...(serverPorts === undefined ? {} : { serverPorts }),
             ready: false,
             routes,
         });
@@ -1619,9 +1638,60 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         sitePort: number,
         siteId: string,
     ): Promise<
-        | { ok: true; command: string[]; worker?: string[]; workerRuns?: string; fcgiPort?: number }
+        | {
+              ok: true;
+              command: string[];
+              worker?: string[];
+              workerRuns?: string;
+              fcgiPort?: number;
+              /** Env the serve mode itself needs, stamped over the site's. */
+              env?: Readonly<Record<string, string>>;
+              /** Ports the server binds besides the site port. See {@link Live.serverPorts}. */
+              serverPorts?: number[];
+          }
         | { ok: false; error: string }
     > {
+        if (hostServe.mode === 'octane') {
+            // OCTANE (genie#668): the Octane server IS the web server, so none of
+            // the Caddy machinery below applies — a build with no bundled Caddy
+            // still serves these. Resolved first, like php: a site that cannot
+            // name its runtime fails having allocated nothing.
+            if (!deps.resolveEngine) {
+                return {
+                    ok: false,
+                    error: 'Octane serving is not available in this build (Genie cannot resolve a managed PHP here).',
+                };
+            }
+            const engine = await deps.resolveEngine({
+                tool: 'php',
+                bin: 'php',
+                ...(hostServe.version ? { version: hostServe.version } : {}),
+            });
+            if (!engine.ok) return { ok: false, error: engine.error };
+            // The second port Octane would otherwise DERIVE from the site port —
+            // `2019 + (port - 8000)` for FrankenPHP's admin API, `port - 1999` for
+            // RoadRunner's RPC — which nothing checks is free. Swoole binds none.
+            const serverPort =
+                hostServe.server === 'swoole'
+                    ? undefined
+                    : await allocateFreePort(new Set([...livePortSet(), sitePort]));
+            const canWatch = deps.octaneCanWatch
+                ? deps.octaneCanWatch(cwd)
+                : fs.existsSync(path.join(cwd, 'node_modules', 'chokidar'));
+            return {
+                ok: true,
+                command: octaneServeCommand({
+                    phpExe: engine.exe,
+                    server: hostServe.server,
+                    port: sitePort,
+                    ...(hostServe.server === 'frankenphp' ? { adminPort: serverPort } : {}),
+                    ...(hostServe.server === 'roadrunner' ? { rpcPort: serverPort } : {}),
+                    watch: canWatch,
+                }),
+                env: OCTANE_SERVE_ENV,
+                ...(serverPort === undefined ? {} : { serverPorts: [serverPort] }),
+            };
+        }
         if (!deps.caddyBin || !deps.writeServeConfig) {
             const which = hostServe.mode === 'php' ? 'PHP' : 'Static';
             return {
@@ -1741,6 +1811,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                 readyTimeoutMs,
                 existing.fcgiPort,
                 existing.fcgiRevive,
+                existing.serverPorts,
             );
         }
         live.delete(siteId);
@@ -1764,6 +1835,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         let workerRuns: string | undefined;
         /** The FastCGI port the worker binds, for a `hostServe: php` site. */
         let fcgiPort: number | undefined;
+        let serverPorts: number[] | undefined;
         let portEnv: Record<string, string> = {};
         if (config.hostServe) {
             const planned = await planHostServe(config.hostServe, cwd, port, siteId);
@@ -1772,6 +1844,10 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             worker = planned.worker;
             workerRuns = planned.workerRuns;
             fcgiPort = planned.fcgiPort;
+            serverPorts = planned.serverPorts;
+            // Stamped with the host-owned port env: the serve mode's own settings
+            // are not the repo's to override.
+            portEnv = { ...(planned.env ?? {}) };
         } else {
             const baseCommand = effectiveCommand(config);
             if (!baseCommand) {
@@ -1905,6 +1981,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                       ...(fcgiPort === undefined ? {} : { port: fcgiPort }),
                       attempts: 0,
                   },
+            serverPorts,
         );
     }
 

@@ -28,9 +28,11 @@ import { devCommandForRecipe, unrunnableRunModeReason } from '../dev-server/serv
 import type { BuildStep, HostingOption } from '../dev-server/serve-recipe';
 import type { DevSiteRow } from '../dev-server/site-manager';
 import type { DevSiteConfig, HostServeConfig } from '../dev-server/sites-config';
+import { isOctaneServer, OCTANE_SERVERS } from '../dev-server/octane-serve';
 import type {
     DevSiteInfo,
     DevSiteRunOption,
+    ManageSiteHostServe,
     ManageSiteRequest,
     ManageSiteResult,
 } from './protocol';
@@ -271,15 +273,34 @@ function pendingNote(action: string, siteId: string): string {
  * or nothing detected) is `undefined`; the store re-validates the `root` through
  * `sanitizeDevSitePatch`, so this only picks the branch.
  */
-function narrowHostServe(
-    hs: { mode: 'static' | 'php'; root: string; spa?: boolean; version?: string } | null | undefined,
-): HostServeConfig | undefined {
+function narrowHostServe(hs: ManageSiteHostServe | null | undefined): HostServeConfig | undefined {
     if (!hs) return undefined;
+    if (hs.mode === 'octane') {
+        // No root: Octane's server is the web server. An unknown server narrows to
+        // nothing — {@link hostServeRefusal} is what turns that into an answer.
+        return isOctaneServer(hs.server)
+            ? { mode: 'octane', server: hs.server, ...(hs.version ? { version: hs.version } : {}) }
+            : undefined;
+    }
     return hs.mode === 'php'
         ? // The pin rides through as given; `sanitizeDevSitePatch` is what decides a
           // string is a version, so one validator owns that rule (genie#207).
-          { mode: 'php', root: hs.root, ...(hs.version ? { version: hs.version } : {}) }
-        : { mode: 'static', root: hs.root, ...(hs.spa ? { spa: true } : {}) };
+          { mode: 'php', root: hs.root ?? '', ...(hs.version ? { version: hs.version } : {}) }
+        : { mode: 'static', root: hs.root ?? '', ...(hs.spa ? { spa: true } : {}) };
+}
+
+/**
+ * Why a caller's `hostServe` cannot be stored, or null when it can be.
+ *
+ * Narrowing drops what it cannot type, and a dropped `hostServe` is not a no-op:
+ * on create, a site with none falls through to detection and gets whatever the
+ * repo looks like — a different serving architecture from the one asked for,
+ * reported as success. So an Octane request with no usable server is REFUSED,
+ * naming the servers that exist (genie#668).
+ */
+function hostServeRefusal(hs: ManageSiteHostServe | null | undefined): string | null {
+    if (!hs || hs.mode !== 'octane' || isOctaneServer(hs.server)) return null;
+    return `\`hostServe: {mode:'octane'}\` needs a \`server\` Octane can start: ${OCTANE_SERVERS.map((s) => `\`${s}\``).join(', ')}. Got ${hs.server === undefined ? 'none' : JSON.stringify(hs.server)}.`;
 }
 
 /** Normalize a caller-supplied build list — a step with no label still runs. */
@@ -562,6 +583,8 @@ export async function runManageSite(
                 // while reporting a production build+serve.
                 const cannotRun = unrunnableRunModeReason(req.runMode);
                 if (cannotRun) return fail(cannotRun);
+                const badServe = hostServeRefusal(req.hostServe);
+                if (badServe) return fail(badServe);
                 const repo = resolveRepoDir(req.repo);
                 if ('error' in repo) return fail(repo.error);
 
@@ -816,6 +839,8 @@ export async function runManageSite(
                 // recorded the image, and built nothing (genie#191).
                 const cannotRun = unrunnableRunModeReason(req.runMode);
                 if (cannotRun) return fail(cannotRun);
+                const badServe = hostServeRefusal(req.hostServe);
+                if (badServe) return fail(badServe);
 
                 // A patch of ONLY the fields the caller named — anything omitted
                 // is left exactly as stored (see setWorkspaceDevSite's merge).

@@ -330,6 +330,7 @@ function checkFrontend(
     ran: string[],
 ): void {
     const root = documentRoot(folder, layout, plan);
+    const serve = plan.site.hostServe;
 
     if (root && probe.exists(root)) {
         ran.push('frontend.no-index');
@@ -342,7 +343,7 @@ function checkFrontend(
                 severity: 'error',
                 where: index,
                 problem:
-                    `The site is served from "${plan.site.hostServe?.root}" and there is no ` +
+                    `The site is served from "${serve && 'root' in serve ? serve.root : ''}" and there is no ` +
                     '`index.html` in it. Genie serves files from that directory, so the app window ' +
                     'would open on an empty page with no error on it — which reads as a broken app ' +
                     'rather than a missing file.',
