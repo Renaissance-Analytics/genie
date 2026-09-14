@@ -28,7 +28,7 @@ const nextronDefault = () => ({
 describe('nextron main entry', () => {
     it('builds background.ts as `background`, and drops nextron’s default `main` entry', () => {
         const { entry } = nextronConfig.webpack(nextronDefault(), 'production');
-        expect(Object.keys(entry).sort()).toEqual(['app-preload', 'background']);
+        expect(Object.keys(entry).sort()).toEqual(['app-preload', 'background', 'mcp-shuttle']);
         expect(entry.background).toBe(path.join(REPO, 'main', 'background.ts'));
         expect(fs.existsSync(entry.background!)).toBe(true);
     });
@@ -38,5 +38,16 @@ describe('nextron main entry', () => {
         const { entry } = nextronConfig.webpack(nextronDefault(), 'production');
         expect(pkg.main).toBe('app/background.js');
         expect(entry).toHaveProperty(path.basename(pkg.main, '.js'));
+    });
+});
+
+describe('the MCP shuttle bundle (genie#346)', () => {
+    it('is built as its own file, `app/mcp-shuttle.js`, from the shuttle entry', () => {
+        // Its own entry, not a module inside `background.js`: the shuttle runs on
+        // the shipped standalone Node, outside Electron, and must outlive the
+        // process `background.js` is. A file it can be started from is the point.
+        const { entry } = nextronConfig.webpack(nextronDefault(), 'production');
+        expect(entry['mcp-shuttle']).toBe(path.join(REPO, 'main', 'mcp-shuttle', 'main.ts'));
+        expect(fs.existsSync(entry['mcp-shuttle']!)).toBe(true);
     });
 });

@@ -46,6 +46,9 @@ afterPack: build/after-pack.js
 asarUnpack:
   - node_modules/@particle-academy/fancy-term-host/**
   - node_modules/node-pty/**/*
+  # The MCP shuttle (genie#346) runs on the standalone Node runtime, which cannot
+  # read inside app.asar — packed, it would never start for anyone.
+  - app/mcp-shuttle.js
 
 # Tier 3+ — per-user OS-service pty-host runtime (fancy-term-host@0.2.0 /service).
 #
