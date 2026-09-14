@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -207,6 +208,69 @@ describe('at boot', () => {
 
         expect(status.mode).toBe('in-process');
         expect(stopStaleShuttle).not.toHaveBeenCalled();
+    });
+});
+
+describe('a Genie whose event loop is busy booting', () => {
+    /** Hold the event loop, the way a Genie's own boot does on a slow machine. */
+    const block = (ms: number) => {
+        const until = Date.now() + ms;
+        while (Date.now() < until) {
+            /* busy */
+        }
+    };
+
+    it('does not give up on a welcome that ARRIVED while the loop was busy', async () => {
+        // Measured on Windows CI: the welcome was already in the socket, but the
+        // loop came back to its timer first — timers run before I/O — so Genie
+        // closed a connection the shuttle had just welcomed and dispatched to,
+        // and the call waiting for a Genie was answered "interrupted".
+        //
+        // The shuttle has to answer from ANOTHER process for the welcome to land
+        // while this one is held, so it is a minimal one: welcome, 50ms after hello.
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'genie-ensure-stall-'));
+        dirs.push(dir);
+        const controlPath = shuttleControlPath(dir);
+        const fixture = path.join(dir, 'slow-shuttle.cjs');
+        fs.writeFileSync(
+            fixture,
+            `const net = require('net');
+             net.createServer((sock) => {
+                 sock.once('data', () => setTimeout(() => {
+                     const body = Buffer.from(JSON.stringify({ type: 'welcome', wireGeneration: ${WIRE} }));
+                     const head = Buffer.alloc(4);
+                     head.writeUInt32BE(body.length);
+                     sock.write(Buffer.concat([head, body]));
+                 }, 50));
+                 sock.on('error', () => {});
+             }).listen(${JSON.stringify(controlPath)}, () => process.send('ready'));`,
+        );
+        const child = spawn(process.execPath, [fixture], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
+        await new Promise<void>((r) => child.once('message', () => r()));
+        try {
+            const s = createShuttleSupervisor({
+                connect: () => net.connect(controlPath),
+                codec: lengthPrefixedJsonCodec(),
+                secret: () => 'irrelevant',
+                wireGeneration: WIRE,
+                generation: 1,
+                run: async () => ({ result: {} }),
+                spawnShuttle: async () => ({ kind: 'failed', error: 'must not be needed' }),
+                stopStaleShuttle: async () => {},
+                welcomeTimeoutMs: 100,
+                retryDelaysMs: [],
+            });
+            supervisors.push(s);
+
+            const started = s.start();
+            await new Promise((r) => setTimeout(r, 20));
+            // Held from the CHECK phase, so the next iteration begins at the timers.
+            await new Promise<void>((r) => setImmediate(() => (block(500), r())));
+
+            expect(await started).toEqual({ mode: 'shuttle', how: 'attached' });
+        } finally {
+            child.kill();
+        }
     });
 });
 

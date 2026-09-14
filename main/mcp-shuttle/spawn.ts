@@ -98,14 +98,22 @@ export function spawnShuttleProcess(opts: SpawnShuttleOptions): Promise<SpawnedS
             resolve(outcome);
         };
 
-        const timer = setTimeout(() => {
-            try {
-                child.kill();
-            } catch {
-                /* already gone */
-            }
-            settle({ kind: 'failed', error: `The MCP shuttle did not report within ${timeoutMs}ms; see ${opts.logFile}.` });
-        }, timeoutMs);
+        // Decided after the I/O already waiting has been read: a Genie busy booting
+        // comes back to its timers before its IPC channel, and would otherwise
+        // kill a shuttle whose report was already waiting to be read.
+        const timer = setTimeout(
+            () =>
+                setImmediate(() => {
+                    if (settled) return;
+                    try {
+                        child.kill();
+                    } catch {
+                        /* already gone */
+                    }
+                    settle({ kind: 'failed', error: `The MCP shuttle did not report within ${timeoutMs}ms; see ${opts.logFile}.` });
+                }),
+            timeoutMs,
+        );
 
         child.on('message', (raw) => {
             const event = raw as Partial<ShuttleEvent> | null;

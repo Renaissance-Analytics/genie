@@ -159,10 +159,20 @@ export function createShuttleSupervisor(
                     settle(connected ? { kind: 'refused', reason } : { kind: 'absent', reason });
                 },
             });
-            const timer = setTimeout(() => {
-                publisher.close();
-                settle({ kind: 'refused', reason: `The MCP shuttle did not answer within ${welcomeTimeoutMs}ms.` });
-            }, welcomeTimeoutMs);
+            // Decided AFTER the I/O already waiting has been read. A Genie busy
+            // booting comes back to its timers before its sockets, so a bare
+            // timeout gave up on a welcome sitting in the buffer — closing a
+            // connection the shuttle had just dispatched a waiting call to, which
+            // answered that call "interrupted" (measured on Windows CI).
+            const timer = setTimeout(
+                () =>
+                    setImmediate(() => {
+                        if (settled) return;
+                        publisher.close();
+                        settle({ kind: 'refused', reason: `The MCP shuttle did not answer within ${welcomeTimeoutMs}ms.` });
+                    }),
+                welcomeTimeoutMs,
+            );
             timer.unref?.();
         });
 

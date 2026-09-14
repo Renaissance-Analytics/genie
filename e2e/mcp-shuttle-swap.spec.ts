@@ -51,6 +51,15 @@ function record(): { pid: number; port: number } | null {
     }
 }
 
+/** How many times a shuttle has reported starting in this state directory. */
+function starts(): number {
+    try {
+        return fs.readFileSync(path.join(STATE_DIR, 'shuttle.log'), 'utf8').split('"event":"started"').length - 1;
+    } catch {
+        return 0;
+    }
+}
+
 const alive = (pid: number) => {
     try {
         process.kill(pid, 0);
@@ -202,10 +211,15 @@ test('a quit that leaves no terminal running takes the shuttle with it', async (
         const shuttle = record()!;
         expect(alive(shuttle.pid)).toBe(true);
 
+        const startsBefore = starts();
         await step('quit Genie', 60_000, () => closeGenieE2E(app));
         app = undefined;
 
         await step('the shuttle stops', 15_000, () => expect.poll(() => alive(shuttle.pid), { timeout: 15_000 }).toBe(false));
+        // And none took its place: a quitting Genie's watchdog once started a fresh
+        // shuttle as it exited, which kept running with nothing to serve.
+        await new Promise((r) => setTimeout(r, 2_000));
+        expect(starts(), 'no shuttle was started on the way out').toBe(startsBefore);
     });
 });
 

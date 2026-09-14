@@ -2946,6 +2946,12 @@ app.whenReady().then(async () => {
     // Returns a promise so the before-quit second phase can AWAIT the bounded
     // host kill before letting the quit proceed.
     const teardownTerminals = async (): Promise<void> => {
+        // FIRST: stop watching the MCP shuttle. Its watchdog brings a shuttle back
+        // when its connection closes — and on the way out that connection closes,
+        // or the quit rule below stops the shuttle on purpose. Left watching, a
+        // quitting Genie started a fresh shuttle as it exited (measured on every OS
+        // in CI), leaving one running that nothing had asked for.
+        mcpEndpoint?.stop();
         // Cancel every armed schedule timer first — a fire mid-teardown would
         // spawn a pty we're in the middle of tearing down. The schedules
         // themselves live in the DB and are re-armed by startSchedules() on the
