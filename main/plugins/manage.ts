@@ -56,6 +56,7 @@ import { listPluginRecipes, type ResolvedPluginRecipe } from './recipes';
 import { listPluginPanels, type ResolvedPluginPanel } from './panels';
 import { userTrustedKeys, addUserTrustedKey, removeUserTrustedKey } from './trust';
 import { pluginSides, type PluginSides } from './side';
+import { notifyPluginToolsChanged } from './tools-changed';
 
 /** One toggleable granular permission for the Settings UI (§12.1). */
 export interface PluginPermissionView {
@@ -123,6 +124,16 @@ export interface PluginDeveloperModeState {
 export type PluginActionResult<T = { id: string; name: string; version: string }> =
     | { ok: true; value: T }
     | { ok: false; error: string };
+
+/**
+ * A successful change that can move the set of plugin tools. The MCP shuttle
+ * serves `tools/list` from the manifest Genie last published, so the change is
+ * announced — or every agent that connects after it sees the old tools (genie#346).
+ */
+function changedTools<T>(value: T): { ok: true; value: T } {
+    notifyPluginToolsChanged();
+    return ok(value);
+}
 
 function ok<T>(value: T): { ok: true; value: T } {
     return { ok: true, value };
@@ -238,7 +249,7 @@ export async function pluginsInstallRepo(
 ): Promise<PluginActionResult<InstalledPluginSummary>> {
     try {
         const s = await installPluginFromRepo(String(url ?? '').trim(), ref?.trim() || undefined);
-        return ok(s);
+        return changedTools(s);
     } catch (e) {
         return fail((e as Error).message);
     }
@@ -248,7 +259,7 @@ export async function pluginsInstallRepo(
 export async function pluginsInstallFolder(dir: string): Promise<PluginActionResult<InstalledPluginSummary>> {
     try {
         const s = await installPluginFromFolder(dir);
-        return ok(s);
+        return changedTools(s);
     } catch (e) {
         return fail((e as Error).message);
     }
@@ -263,11 +274,11 @@ export async function pluginsEnable(id: string, enabled: boolean): Promise<Plugi
             // presents the plugin's DECLARED capabilities, records only the
             // GRANTED subset, and enables. A dismissed modal enables nothing.
             const r = await consentAndEnablePlugin(row.id);
-            return r.ok ? ok(true) : fail(r.error ?? 'Enabling was cancelled.');
+            return r.ok ? changedTools(true) : fail(r.error ?? 'Enabling was cancelled.');
         }
         setPluginEnabled(row.id, false);
         disposePlugin(row.id); // disable = instant fail-closed revoke
-        return ok(true);
+        return changedTools(true);
     } catch (e) {
         return fail((e as Error).message);
     }
@@ -299,7 +310,7 @@ export function pluginsSetGrant(
 export function pluginsUninstall(id: string): PluginActionResult<boolean> {
     try {
         uninstallPlugin(String(id));
-        return ok(true);
+        return changedTools(true);
     } catch (e) {
         return fail((e as Error).message);
     }
@@ -362,7 +373,7 @@ export async function pluginsInstallMarketplacePlugin(
 ): Promise<PluginActionResult> {
     try {
         const s = await installMarketplacePluginLib(String(marketplaceId), String(pluginId));
-        return ok(s);
+        return changedTools(s);
     } catch (e) {
         return fail((e as Error).message);
     }
@@ -399,7 +410,7 @@ export async function pluginsInstallBundled(id: string): Promise<PluginActionRes
         // Bundled plugins are FIRST-PARTY (materialised from Genie's own signed
         // app bundle) → trusted by construction.
         const s = await installPluginFromFolder(src.path, true);
-        return ok(s);
+        return changedTools(s);
     } catch (e) {
         return fail((e as Error).message);
     }
@@ -420,7 +431,7 @@ export function pluginsSetDeveloperMode(enabled: boolean): PluginActionResult<bo
         // A trust-policy change re-evaluates every plugin (turning dev mode OFF must
         // instantly stop unsigned plugins surfacing — fail-closed).
         revalidateAllPluginTrust();
-        return ok(true);
+        return changedTools(true);
     } catch (e) {
         return fail((e as Error).message);
     }
@@ -430,7 +441,7 @@ export function pluginsAddTrustedKey(publicKeyPem: string, label?: string): Plug
     try {
         const keyId = addUserTrustedKey(String(publicKeyPem ?? ''), label?.toString());
         revalidateAllPluginTrust(); // a newly-trusted key may promote plugins
-        return ok({ keyId });
+        return changedTools({ keyId });
     } catch (e) {
         return fail((e as Error).message);
     }
@@ -442,7 +453,7 @@ export function pluginsRemoveTrustedKey(keyId: string): PluginActionResult<boole
         // Removing a key REVOKES: any plugin that verified against it flips to
         // untrusted + is auto-disabled.
         revalidateAllPluginTrust();
-        return ok(true);
+        return changedTools(true);
     } catch (e) {
         return fail((e as Error).message);
     }
