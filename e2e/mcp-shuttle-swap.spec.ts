@@ -51,14 +51,16 @@ function record(): { pid: number; port: number } | null {
     }
 }
 
-/** How many times a shuttle has reported starting in this state directory. */
-function starts(): number {
+/** How many times the shuttle log records `event` in this state directory. */
+function logged(event: 'started' | 'detached'): number {
     try {
-        return fs.readFileSync(path.join(STATE_DIR, 'shuttle.log'), 'utf8').split('"event":"started"').length - 1;
+        return fs.readFileSync(path.join(STATE_DIR, 'shuttle.log'), 'utf8').split(`"event":"${event}"`).length - 1;
     } catch {
         return 0;
     }
 }
+
+const starts = () => logged('started');
 
 const alive = (pid: number) => {
     try {
@@ -159,12 +161,26 @@ async function bootWithShuttle(label: string): Promise<{ url: string; shuttle: {
     return { url, shuttle };
 }
 
-/** What the installer does to Genie during an update. */
+/**
+ * What the installer does to Genie during an update — and then the moment the
+ * SHUTTLE knows it happened, not just the moment the OS does.
+ *
+ * Measured on Windows CI: the process was gone before the shuttle had read the
+ * end of its pipe, so a call sent in between was dispatched to the dead Genie and
+ * answered "interrupted" — correctly: it was in flight, and it is never replayed.
+ * That is a real window an agent can land in, but it is not the case this spec
+ * names, which is a call made while no Genie is attached. The shuttle's log is
+ * where "detached" becomes an observable fact.
+ */
 async function killGenie(label: string): Promise<void> {
     const pid = await app!.evaluate(() => process.pid);
+    const detachedBefore = logged('detached');
     process.kill(pid, 'SIGKILL');
     await step(`${label} is gone`, 15_000, () => expect.poll(() => alive(pid), { timeout: 15_000 }).toBe(false));
     app = undefined;
+    await step(`the shuttle notices ${label} is gone`, 15_000, () =>
+        expect.poll(() => logged('detached'), { timeout: 15_000 }).toBeGreaterThan(detachedBefore),
+    );
 }
 
 test.describe.configure({ mode: 'serial' });
