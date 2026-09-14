@@ -203,6 +203,7 @@ import { genieShuttleSupervisorFactory, shuttleStateDir, stopShuttleIfRunning } 
 import { buildManifest } from './mcp-shuttle/publisher';
 import { SHUTTLE_WIRE_GENERATION } from './updater/system-generation';
 import { onPluginToolsChanged } from './plugins/tools-changed';
+import { shuttleOutlivesQuit } from './mcp-shuttle/quit-rule';
 import { startControlServer } from './control';
 import { startMobileServer, DEFAULT_MOBILE_PORT } from './mobile/server';
 import {
@@ -2987,6 +2988,9 @@ app.whenReady().then(async () => {
             );
             await agentShutdownReadiness.begin(targets, 30_000);
         }
+        /** Terminals still running once this teardown is done — what decides whether
+         *  the MCP shuttle goes too (genie#346, §3.3). */
+        let survivingTerminals = 0;
         if (isHostBacked()) {
             // UPDATE-quit teardown branches on the ACTIVE BACKEND KIND, because
             // only ONE kind pins Genie's binary:
@@ -3013,10 +3017,19 @@ app.whenReady().then(async () => {
             } else {
                 // Normal quit (any host kind) OR update quit with a service-backed
                 // host → leave the host running so the next launch reattaches.
+                // Counted BEFORE the disconnect, which ends this client's view.
+                survivingTerminals = liveHostTerminals().length;
                 disconnectHostLeaveRunning();
             }
         } else {
             stopAllTerminals();
+        }
+        // The shuttle outlives an update, and any quit that keeps a terminal
+        // running; a quit that leaves nothing running takes it too.
+        if (!shuttleOutlivesQuit({ forUpdate, forReset, survivingTerminals })) {
+            await stopShuttleIfRunning(shuttleStateDir(app.getPath('userData'))).catch((e) =>
+                console.error('[mcp] could not stop the MCP shuttle on quit', e),
+            );
         }
     };
     // The teardown+re-quit tail, shared by every path that proceeds to actually
