@@ -264,6 +264,25 @@ describe('startShuttle — a Genie that does not come back (§9.1)', () => {
     });
 });
 
+describe('startShuttle — what it says about itself (§9.1)', () => {
+    it('logs each Genie that attaches and each that goes, with the generation', async () => {
+        // A shuttle is a process nobody watches. When agents' calls start failing,
+        // its log is the only account of whether a Genie was attached at the time.
+        const dir = stateDir();
+        const events: Array<Record<string, unknown>> = [];
+        const opts = await options(dir, { log: (event) => void events.push(event) });
+        await start(opts);
+
+        const socket = await publishOver(opts.controlPath, opts.secret, []);
+        await until(() => events.some((e) => e.event === 'attached'));
+        socket.destroy();
+        await until(() => events.some((e) => e.event === 'detached'));
+
+        expect(events.find((e) => e.event === 'attached')).toMatchObject({ generation: 1 });
+        expect(events.map((e) => e.event)).toEqual(['attached', 'detached']);
+    });
+});
+
 describe('the publisher secret', () => {
     it('is created once and read back unchanged', () => {
         const dir = stateDir();

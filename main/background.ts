@@ -192,7 +192,23 @@ import {
     serverPushDiagnostics,
     DEFAULT_MCP_PORT,
     registerTerminalEndpoint,
+    adoptShuttleListener,
+    mcpContextFor,
+    mcpTopology,
+    noteShuttleFallback,
+    onMcpTopologyChanged,
 } from './mcp/server';
+import { startMcpEndpoint } from './mcp-shuttle/genie-endpoint';
+import {
+    genieShuttleSupervisorFactory,
+    shuttleStateDir,
+    stopShuttleIfRunning,
+    stopShuttleOnOtherPort,
+} from './mcp-shuttle/genie-launch';
+import { buildManifest } from './mcp-shuttle/publisher';
+import { SHUTTLE_WIRE_GENERATION } from './updater/system-generation';
+import { onPluginToolsChanged } from './plugins/tools-changed';
+import { shuttleOutlivesQuit } from './mcp-shuttle/quit-rule';
 import { startControlServer } from './control';
 import { startMobileServer, DEFAULT_MOBILE_PORT } from './mobile/server';
 import {
@@ -300,6 +316,7 @@ import {
     wireHostLossRecovery,
     recoverFromHostLoss,
     resolveShippedCaddyBin,
+    resolveShippedRuntime,
 } from './terminal/host-service';
 import { runBackendSelection as runBackendSelectionCore } from './host-core/backend-selection';
 import {
@@ -2361,7 +2378,56 @@ app.whenReady().then(async () => {
     // negative -- `window.genie` is absent inside a GApp's page -- and a negative
     // cannot be established by reading code. Inert in a normal run.
     if (isE2E()) registerAppsE2E();
-    await startMcpServer(mcpDeps).catch((e) => console.error('[mcp] failed to start', e));
+    // WHO SERVES THE AGENT MCP PORT (genie#346): the MCP shuttle — a separate
+    // process on the standalone Node that outlives this one, so an upgrade never
+    // drops an agent's connection — or, when it is off or cannot run, this process
+    // exactly as before. `startMcpEndpoint` never resolves with the port unserved.
+    const mcpGeneration = Date.now();
+    const mcpEndpoint = await startMcpEndpoint({
+        shuttleEnabled:
+            getAllSettings().mcp_shuttle === 'on' || (isE2E() && process.env.GENIE_E2E_MCP_SHUTTLE === '1'),
+        server: {
+            adoptShuttleListener: () => adoptShuttleListener(mcpDeps),
+            bindInProcess: () => startMcpServer(mcpDeps),
+            topology: mcpTopology,
+            onTopologyChanged: onMcpTopologyChanged,
+            contextFor: mcpContextFor,
+        },
+        createSupervisor: genieShuttleSupervisorFactory({
+            userDataDir: app.getPath('userData'),
+            // Webpack emits the shuttle bundle beside this one.
+            mainBundleDir: __dirname,
+            packaged: app.isPackaged,
+            version: app.getVersion(),
+            port: mcpDeps.configuredPort(),
+            wireGeneration: SHUTTLE_WIRE_GENERATION,
+            generation: mcpGeneration,
+            nodePath: () => resolveShippedRuntime()?.nodePath ?? null,
+            env: process.env,
+            log: (line) => console.log(line),
+        }),
+        manifest: () =>
+            buildManifest(mcpContextFor(''), { genieVersion: app.getVersion(), generation: mcpGeneration }),
+        stopRunningShuttle: () => stopShuttleIfRunning(shuttleStateDir(app.getPath('userData'))),
+        prepareShuttle: () => stopShuttleOnOtherPort(shuttleStateDir(app.getPath('userData')), mcpDeps.configuredPort()),
+        // §9.1: agents keep working in-process, but lose what the shuttle was turned
+        // on for — so the owner is told, in Settings and as it happens.
+        onFallback: (reason) => {
+            noteShuttleFallback(reason);
+            broadcastToWindows('terminal:host-status', {
+                level: 'warn',
+                message: `Agent MCP is served by Genie itself this session, so an update will drop agents' connections. ${reason}`,
+            });
+        },
+        log: (line) => console.log(line),
+    }).catch(async (e) => {
+        console.error('[mcp] the endpoint failed to start; serving in-process', e);
+        await startMcpServer(mcpDeps).catch((err) => console.error('[mcp] failed to start', err));
+        return null;
+    });
+    // The shuttle serves `tools/list` from the surface it was last given, so a
+    // plugin turned on or off has to reach it (a no-op when serving in-process).
+    onPluginToolsChanged(() => void mcpEndpoint?.republishManifest());
     // genie#346 — ONLY now. Every Genie MCP connection an agent holds died with
     // the old process (`genie` AND its AgentInbox channel, genie#613), and both
     // halves of the repair need a listening endpoint: the typed reconnect has
@@ -2886,6 +2952,12 @@ app.whenReady().then(async () => {
     // Returns a promise so the before-quit second phase can AWAIT the bounded
     // host kill before letting the quit proceed.
     const teardownTerminals = async (): Promise<void> => {
+        // FIRST: stop watching the MCP shuttle. Its watchdog brings a shuttle back
+        // when its connection closes — and on the way out that connection closes,
+        // or the quit rule below stops the shuttle on purpose. Left watching, a
+        // quitting Genie started a fresh shuttle as it exited (measured on every OS
+        // in CI), leaving one running that nothing had asked for.
+        mcpEndpoint?.stop();
         // Cancel every armed schedule timer first — a fire mid-teardown would
         // spawn a pty we're in the middle of tearing down. The schedules
         // themselves live in the DB and are re-armed by startSchedules() on the
@@ -2928,6 +3000,9 @@ app.whenReady().then(async () => {
             );
             await agentShutdownReadiness.begin(targets, 30_000);
         }
+        /** Terminals still running once this teardown is done — what decides whether
+         *  the MCP shuttle goes too (genie#346, §3.3). */
+        let survivingTerminals = 0;
         if (isHostBacked()) {
             // UPDATE-quit teardown branches on the ACTIVE BACKEND KIND, because
             // only ONE kind pins Genie's binary:
@@ -2954,10 +3029,19 @@ app.whenReady().then(async () => {
             } else {
                 // Normal quit (any host kind) OR update quit with a service-backed
                 // host → leave the host running so the next launch reattaches.
+                // Counted BEFORE the disconnect, which ends this client's view.
+                survivingTerminals = liveHostTerminals().length;
                 disconnectHostLeaveRunning();
             }
         } else {
             stopAllTerminals();
+        }
+        // The shuttle outlives an update, and any quit that keeps a terminal
+        // running; a quit that leaves nothing running takes it too.
+        if (!shuttleOutlivesQuit({ forUpdate, forReset, survivingTerminals })) {
+            await stopShuttleIfRunning(shuttleStateDir(app.getPath('userData'))).catch((e) =>
+                console.error('[mcp] could not stop the MCP shuttle on quit', e),
+            );
         }
     };
     // The teardown+re-quit tail, shared by every path that proceeds to actually

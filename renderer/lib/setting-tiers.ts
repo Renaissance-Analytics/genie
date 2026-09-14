@@ -160,6 +160,9 @@ export const SETTING_TIERS: Record<keyof Settings, SettingTier> = {
     mcp_sync_cursor: 'workstation',
     mcp_sync_codex: 'workstation',
     mcp_sync_agents: 'workstation',
+    // Whether THIS machine serves agent MCP through the shuttle (genie#346) — a
+    // process on this workstation, like the port it listens on.
+    mcp_shuttle: 'workstation',
     mobile_enabled: 'workstation',
     mobile_port: 'workstation',
     remote_enabled: 'workstation',

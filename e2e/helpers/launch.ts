@@ -282,6 +282,8 @@ export async function warmElectronRuntime(
 
 export async function launchGenieE2E(
     harness: E2EHarnessPage = 'issuewatch',
+    /** Extra environment for this launch only — e.g. `GENIE_E2E_MCP_SHUTTLE`. */
+    extraEnv: Record<string, string> = {},
 ): Promise<{
     app: ElectronApplication;
     page: Page;
@@ -296,6 +298,7 @@ export async function launchGenieE2E(
             // Containers are mocked ONLY for the hosting harness — every other
             // spec keeps the real `dev:*` handlers (main/e2e/hosting.ts).
             GENIE_E2E_HOSTING: harness === 'hosting' ? '1' : '',
+            ...extraEnv,
         },
     });
     // The harness window is opened on app.whenReady(); wait for it.

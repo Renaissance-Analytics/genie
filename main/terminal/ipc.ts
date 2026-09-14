@@ -92,6 +92,7 @@ import {
 } from './process-supervisor';
 import { getScheduleInfo, runScheduleNow } from './process-scheduler';
 import {
+    notifyMcpTopologyChanged,
     registerTerminalEndpoint,
     unregisterTerminalEndpoint,
     workspaceEndpointUrl,
@@ -1918,6 +1919,9 @@ export function broadcastTerminalSpecsChanged(): void {
     // a local spec mutation must not trigger a redundant remote round-trip there.
     broadcastLocal('terminal-spec:changed');
     mobileEmit('terminal-spec:changed');
+    // A workspace's terminal list is part of how the MCP shuttle resolves a
+    // workspace-scoped call to a terminal (genie#346) — it must hear this too.
+    notifyMcpTopologyChanged();
 }
 
 /**

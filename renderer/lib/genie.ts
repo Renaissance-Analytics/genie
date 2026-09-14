@@ -1425,6 +1425,8 @@ export interface Settings extends ProviderLaunchSettings, SoundSettingKeys {
     mcp_sync_codex?: 'on' | 'off';
     /** Keep the Genie brief synced into AGENTS.md. Default 'on'. */
     mcp_sync_agents?: 'on' | 'off';
+    /** Serve agent MCP through the shuttle, which outlives Genie updates. Default 'off'. */
+    mcp_shuttle?: 'on' | 'off';
     /** Terminal copy/paste behaviour: 'contextmenu' (default) | 'linux'
      *  (highlight-to-copy, right/middle-click paste) | 'winmac' (Ctrl/Cmd+C / +V). */
     terminal_copy_paste?: 'contextmenu' | 'linux' | 'winmac';
@@ -1485,6 +1487,10 @@ export interface McpServerState {
     configuredPort: number;
     /** True when the configured port was taken and the server fell back. */
     conflict: boolean;
+    /** Who serves the port: Genie itself, or the MCP shuttle (genie#346). */
+    mode?: 'in-process' | 'shuttle';
+    /** Why the shuttle, though turned on, is not serving — absent when it is. */
+    shuttleFallback?: string;
 }
 
 /**

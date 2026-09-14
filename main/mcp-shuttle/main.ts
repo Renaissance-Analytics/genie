@@ -32,6 +32,7 @@ void runShuttle(process.env, {
             }
         });
     },
+    log: (line) => void process.stdout.write(`${line}\n`),
     onSignal: (handler) => {
         process.once('SIGTERM', handler);
         process.once('SIGINT', handler);

@@ -3294,6 +3294,11 @@ export interface Settings extends ProviderSettingKeys, SoundSettingKeys {
      *  Default 'on'; 'off' means Genie never touches that file (manual edits
      *  stick). */
     mcp_sync_claude?: 'on' | 'off';
+    /** Serve the agent MCP port through the MCP shuttle — a separate process that
+     *  outlives a Genie upgrade, so agents' connections are never dropped by one
+     *  (genie#346). Default 'off' until the swap is proven end to end; when the
+     *  shuttle cannot run, Genie serves in-process exactly as before. */
+    mcp_shuttle?: 'on' | 'off';
     /** Keep the Genie endpoint synced into a workspace's Cursor
      *  `.cursor/mcp.json`. Default 'on'; 'off' leaves it alone. */
     mcp_sync_cursor?: 'on' | 'off';
@@ -3468,6 +3473,7 @@ export function getAllSettings(): Settings {
         genie_browser_enabled:
             (out['genie_browser_enabled'] as 'on' | 'off') ?? 'on',
         mcp_sync_claude: (out['mcp_sync_claude'] as 'on' | 'off') ?? 'on',
+        mcp_shuttle: (out['mcp_shuttle'] as 'on' | 'off') ?? 'off',
         mcp_sync_cursor: (out['mcp_sync_cursor'] as 'on' | 'off') ?? 'on',
         mcp_sync_codex: (out['mcp_sync_codex'] as 'on' | 'off') ?? 'on',
         mcp_sync_agents: (out['mcp_sync_agents'] as 'on' | 'off') ?? 'on',

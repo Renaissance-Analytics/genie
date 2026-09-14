@@ -121,6 +121,36 @@ describe('spawnShuttleProcess', () => {
         expect(alive(pid)).toBe(false);
     });
 
+    it('does not give up on a report that ARRIVED while the loop was busy', async () => {
+        // The same trap as the welcome: a timer that fires when the loop comes
+        // back from a long boot, before the message already waiting behind it.
+        const { dir, file } = script(`
+            process.send({ event: 'refused', reason: 'port-in-use', error: 'taken' }, () => process.exit(3));
+        `);
+
+        const pending = spawnShuttleProcess({
+            nodePath: process.execPath,
+            scriptPath: file,
+            env: {},
+            logFile: path.join(dir, 'shuttle.log'),
+            timeoutMs: 400,
+        });
+        // Held from the CHECK phase — long enough for the child to start and report,
+        // and past the deadline — so the next loop iteration begins at the timers.
+        await new Promise((r) => setTimeout(r, 5));
+        await new Promise<void>((r) =>
+            setImmediate(() => {
+                const until = Date.now() + 2_500;
+                while (Date.now() < until) {
+                    /* busy */
+                }
+                r();
+            }),
+        );
+
+        expect(await pending).toMatchObject({ kind: 'refused', reason: 'port-in-use' });
+    });
+
     it('reports a runtime that does not exist rather than throwing', async () => {
         const { dir, file } = script('');
 
