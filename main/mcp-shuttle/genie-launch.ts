@@ -50,23 +50,28 @@ const BUNDLE = 'mcp-shuttle.js';
 /**
  * The shuttle bundle to run, or null when this build has none.
  *
+ * Located beside the main bundle that is running — webpack emits
+ * `mcp-shuttle.js` next to `background.js` — rather than from `app.getAppPath()`,
+ * which names the project root under nextron's dev runner and the `app` folder
+ * when Electron is started on `app/background.js` directly.
+ *
  * Packaged: `app.asar` cannot be read by plain Node, so the source is the unpacked
  * copy beside it, and what runs is the user-data copy of that.
  * Dev: the bundle webpack wrote, in place — there is no installer to survive, and a
  * copy would only hide a rebuild.
  */
 export function resolveShuttleScript(opts: {
-    appPath: string;
+    /** The directory the running `background.js` is in. */
+    mainBundleDir: string;
     packaged: boolean;
     userDataDir: string;
     version: string;
 }): string | null {
     if (!opts.packaged) {
-        const dev = path.join(opts.appPath, 'app', BUNDLE);
+        const dev = path.join(opts.mainBundleDir, BUNDLE);
         return fs.existsSync(dev) ? dev : null;
     }
-    const unpackedRoot = opts.appPath.replace(/app\.asar$/, 'app.asar.unpacked');
-    const source = path.join(unpackedRoot, 'app', BUNDLE);
+    const source = path.join(opts.mainBundleDir.replace(/app\.asar(?=$|[\\/])/, 'app.asar.unpacked'), BUNDLE);
     if (!fs.existsSync(source)) return null;
 
     const key = opts.version.replace(/[^A-Za-z0-9._-]/g, '_') || 'unknown';
@@ -146,7 +151,8 @@ export async function stopStaleShuttle(opts: { stateDir: string; controlPath: st
 
 export interface GenieShuttleOptions {
     userDataDir: string;
-    appPath: string;
+    /** The directory the running `background.js` is in. */
+    mainBundleDir: string;
     packaged: boolean;
     version: string;
     port: number;

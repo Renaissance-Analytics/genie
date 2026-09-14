@@ -192,7 +192,15 @@ import {
     serverPushDiagnostics,
     DEFAULT_MCP_PORT,
     registerTerminalEndpoint,
+    adoptShuttleListener,
+    mcpContextFor,
+    mcpTopology,
+    onMcpTopologyChanged,
 } from './mcp/server';
+import { startMcpEndpoint } from './mcp-shuttle/genie-endpoint';
+import { genieShuttleSupervisorFactory } from './mcp-shuttle/genie-launch';
+import { buildManifest } from './mcp-shuttle/publisher';
+import { SHUTTLE_WIRE_GENERATION } from './updater/system-generation';
 import { startControlServer } from './control';
 import { startMobileServer, DEFAULT_MOBILE_PORT } from './mobile/server';
 import {
@@ -300,6 +308,7 @@ import {
     wireHostLossRecovery,
     recoverFromHostLoss,
     resolveShippedCaddyBin,
+    resolveShippedRuntime,
 } from './terminal/host-service';
 import { runBackendSelection as runBackendSelectionCore } from './host-core/backend-selection';
 import {
@@ -2361,7 +2370,41 @@ app.whenReady().then(async () => {
     // negative -- `window.genie` is absent inside a GApp's page -- and a negative
     // cannot be established by reading code. Inert in a normal run.
     if (isE2E()) registerAppsE2E();
-    await startMcpServer(mcpDeps).catch((e) => console.error('[mcp] failed to start', e));
+    // WHO SERVES THE AGENT MCP PORT (genie#346): the MCP shuttle — a separate
+    // process on the standalone Node that outlives this one, so an upgrade never
+    // drops an agent's connection — or, when it is off or cannot run, this process
+    // exactly as before. `startMcpEndpoint` never resolves with the port unserved.
+    const mcpGeneration = Date.now();
+    await startMcpEndpoint({
+        shuttleEnabled:
+            getAllSettings().mcp_shuttle === 'on' || (isE2E() && process.env.GENIE_E2E_MCP_SHUTTLE === '1'),
+        server: {
+            adoptShuttleListener: () => adoptShuttleListener(mcpDeps),
+            bindInProcess: () => startMcpServer(mcpDeps),
+            topology: mcpTopology,
+            onTopologyChanged: onMcpTopologyChanged,
+            contextFor: mcpContextFor,
+        },
+        createSupervisor: genieShuttleSupervisorFactory({
+            userDataDir: app.getPath('userData'),
+            // Webpack emits the shuttle bundle beside this one.
+            mainBundleDir: __dirname,
+            packaged: app.isPackaged,
+            version: app.getVersion(),
+            port: mcpDeps.configuredPort(),
+            wireGeneration: SHUTTLE_WIRE_GENERATION,
+            generation: mcpGeneration,
+            nodePath: () => resolveShippedRuntime()?.nodePath ?? null,
+            env: process.env,
+            log: (line) => console.log(line),
+        }),
+        manifest: () =>
+            buildManifest(mcpContextFor(''), { genieVersion: app.getVersion(), generation: mcpGeneration }),
+        log: (line) => console.log(line),
+    }).catch(async (e) => {
+        console.error('[mcp] the endpoint failed to start; serving in-process', e);
+        await startMcpServer(mcpDeps).catch((err) => console.error('[mcp] failed to start', err));
+    });
     // genie#346 — ONLY now. Every Genie MCP connection an agent holds died with
     // the old process (`genie` AND its AgentInbox channel, genie#613), and both
     // halves of the repair need a listening endpoint: the typed reconnect has

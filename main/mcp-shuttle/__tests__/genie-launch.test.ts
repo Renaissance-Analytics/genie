@@ -50,7 +50,7 @@ describe('resolveShuttleScript', () => {
         fs.writeFileSync(path.join(unpacked, 'mcp-shuttle.js'), '// bundle v1');
 
         const script = resolveShuttleScript({
-            appPath: path.join(install, 'resources', 'app.asar'),
+            mainBundleDir: path.join(install, 'resources', 'app.asar', 'app'),
             packaged: true,
             userDataDir: userData,
             version: '0.7.0-beta.324',
@@ -68,7 +68,7 @@ describe('resolveShuttleScript', () => {
         const unpacked = path.join(install, 'resources', 'app.asar.unpacked', 'app');
         fs.mkdirSync(unpacked, { recursive: true });
         fs.writeFileSync(path.join(unpacked, 'mcp-shuttle.js'), '// bundle v1');
-        const opts = { appPath: path.join(install, 'resources', 'app.asar'), packaged: true, userDataDir: userData, version: '1.0.0' };
+        const opts = { mainBundleDir: path.join(install, 'resources', 'app.asar', 'app'), packaged: true, userDataDir: userData, version: '1.0.0' };
         const first = resolveShuttleScript(opts)!;
         fs.writeFileSync(path.join(unpacked, 'mcp-shuttle.js'), '// changed in place');
 
@@ -84,7 +84,7 @@ describe('resolveShuttleScript', () => {
         const unpacked = path.join(install, 'resources', 'app.asar.unpacked', 'app');
         fs.mkdirSync(unpacked, { recursive: true });
         fs.writeFileSync(path.join(unpacked, 'mcp-shuttle.js'), '// whole bundle');
-        const opts = { appPath: path.join(install, 'resources', 'app.asar'), packaged: true, userDataDir: userData, version: '1.0.0' };
+        const opts = { mainBundleDir: path.join(install, 'resources', 'app.asar', 'app'), packaged: true, userDataDir: userData, version: '1.0.0' };
         const script = resolveShuttleScript(opts)!;
         // A crash mid-copy: a half file, and no completion marker.
         fs.writeFileSync(script, '// half');
@@ -98,13 +98,13 @@ describe('resolveShuttleScript', () => {
         fs.mkdirSync(path.join(repo, 'app'), { recursive: true });
         fs.writeFileSync(path.join(repo, 'app', 'mcp-shuttle.js'), '// dev');
 
-        expect(resolveShuttleScript({ appPath: repo, packaged: false, userDataDir: tmp(), version: 'dev' })).toBe(
+        expect(resolveShuttleScript({ mainBundleDir: path.join(repo, 'app'), packaged: false, userDataDir: tmp(), version: 'dev' })).toBe(
             path.join(repo, 'app', 'mcp-shuttle.js'),
         );
     });
 
     it('is null when there is no bundle to run', () => {
-        expect(resolveShuttleScript({ appPath: tmp(), packaged: false, userDataDir: tmp(), version: 'dev' })).toBeNull();
+        expect(resolveShuttleScript({ mainBundleDir: tmp(), packaged: false, userDataDir: tmp(), version: 'dev' })).toBeNull();
     });
 });
 
