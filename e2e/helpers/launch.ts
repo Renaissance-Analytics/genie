@@ -377,7 +377,7 @@ export interface E2ESeedSite {
     ready?: boolean;
     port?: number;
     hostPort?: number;
-    hostServe?: { mode: 'static' | 'php'; root: string; spa?: boolean; version?: string };
+    hostServe?: { mode: 'static' | 'php' | 'octane'; root?: string; spa?: boolean; version?: string; server?: string };
     browserExposed?: boolean;
 }
 
@@ -403,7 +403,7 @@ export async function readHostingSites(app: ElectronApplication): Promise<
         name: string;
         runMode: string;
         hostPort?: number;
-        hostServe?: { mode: 'static' | 'php'; root: string; spa?: boolean };
+        hostServe?: { mode: 'static' | 'php' | 'octane'; root?: string; spa?: boolean; version?: string; server?: string };
         browserExposed?: boolean;
     }>
 > {
@@ -414,9 +414,7 @@ export async function readHostingSites(app: ElectronApplication): Promise<
             name: s.name as string,
             runMode: s.runMode as string,
             hostPort: s.hostPort as number | undefined,
-            hostServe: s.hostServe as
-                | { mode: 'static' | 'php'; root: string; spa?: boolean }
-                | undefined,
+            hostServe: s.hostServe as { mode: 'static' | 'php' | 'octane'; root?: string; spa?: boolean; version?: string; server?: string } | undefined,
             browserExposed: s.browserExposed as boolean | undefined,
         }));
     });

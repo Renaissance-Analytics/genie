@@ -24,6 +24,7 @@ import {
     type DevSitePhase,
     type DevSiteRunOption,
     type LanguageTool,
+    type OctaneServer,
     type ToolchainInstallsInfo,
     type WorkspaceRow,
 } from '../../lib/genie';
@@ -43,6 +44,7 @@ import {
     serveConfigIncomplete,
     serveModeOf,
     type ServeMode,
+    OCTANE_SERVER_LABELS,
     serviceStatusLabel,
     serviceStatusTone,
     serviceTitle,
@@ -730,13 +732,19 @@ function EditSiteForm({
     // a port — on any container site that happened to be up, and offered the
     // external-browser toggle that does nothing for one.
     const isHostNative = runMode === 'host' || serveMode !== 'proxy';
-    const [serveRoot, setServeRoot] = useState(row.hostServe?.root ?? '');
+    const [serveRoot, setServeRoot] = useState(
+        row.hostServe && 'root' in row.hostServe ? row.hostServe.root : '',
+    );
+    // The Octane server (genie#668). FrankenPHP is what Laravel's docs lead with.
+    const [serveServer, setServeServer] = useState<OctaneServer>(
+        row.hostServe?.mode === 'octane' ? row.hostServe.server : 'frankenphp',
+    );
     const [serveSpa, setServeSpa] = useState(
         row.hostServe?.mode === 'static' ? Boolean(row.hostServe.spa) : true,
     );
     // The PINNED php version, '' = follow the machine default (genie#207).
     const [serveVersion, setServeVersion] = useState(
-        row.hostServe?.mode === 'php' ? (row.hostServe.version ?? '') : '',
+        row.hostServe?.mode === 'php' || row.hostServe?.mode === 'octane' ? (row.hostServe.version ?? '') : '',
     );
     const php = usePinnableVersions('php');
     // The USER-CONTROLLED startup argv — the canonical way to start a site.
@@ -774,7 +782,7 @@ function EditSiteForm({
         if (isHostNative) {
             const servePatch = hostServePatch(
                 row.hostServe,
-                buildHostServe(serveMode, serveRoot, serveSpa, serveVersion),
+                buildHostServe(serveMode, serveRoot, serveSpa, serveVersion, serveServer),
             );
             if (servePatch !== undefined) patch.hostServe = servePatch;
         }
@@ -819,7 +827,8 @@ function EditSiteForm({
     // and the change is silently dropped on save — the exact bug where switching a
     // site to "run PHP app" appeared to do nothing (genie #198). The Add form
     // already guarded this; the Edit form did not.
-    const serveIncomplete = isHostNative && serveConfigIncomplete(serveMode, serveRoot, serveSpa);
+    const serveIncomplete =
+        isHostNative && serveConfigIncomplete(serveMode, serveRoot, serveSpa, serveServer);
 
     return (
         <Modal open onClose={onCancel} size="lg">
@@ -866,12 +875,14 @@ function EditSiteForm({
                             root={serveRoot}
                             spa={serveSpa}
                             version={serveVersion}
+                            server={serveServer}
                             versions={php.versions}
                             {...(php.defaultVersion ? { defaultVersion: php.defaultVersion } : {})}
                             onMode={setServeMode}
                             onRoot={setServeRoot}
                             onSpa={setServeSpa}
                             onVersion={setServeVersion}
+                            onServer={setServeServer}
                         />
                     )}
                     {/* A host-native site's port is host-owned (allocated at start),
@@ -998,8 +1009,13 @@ function EditSiteForm({
 const SERVE_MODES: { value: ServeMode; label: string }[] = [
     { value: 'php', label: 'Genie serves a PHP app (point at public/) — recommended' },
     { value: 'static', label: 'Genie serves a built folder (static / SPA) — recommended' },
+    { value: 'octane', label: 'Genie runs a Laravel Octane app (FrankenPHP, RoadRunner or Swoole)' },
     { value: 'proxy', label: "Run the repo's own dev server (Genie proxies it)" },
 ];
+
+const OCTANE_SERVER_CHOICES: { value: OctaneServer; label: string }[] = (
+    ['frankenphp', 'roadrunner', 'swoole'] as const
+).map((value) => ({ value, label: OCTANE_SERVER_LABELS[value] }));
 
 /**
  * The engine versions a site may pin, read once when a form opens.
@@ -1041,12 +1057,17 @@ function ServeModeFields({
     onRoot,
     onSpa,
     onVersion,
+    server,
+    onServer,
 }: {
     mode: ServeMode;
     root: string;
     spa: boolean;
-    /** php only: the PINNED engine version, '' = follow the machine default. */
+    /** php/octane: the PINNED engine version, '' = follow the repo's composer.json. */
     version: string;
+    /** octane only: which Octane server Genie starts. */
+    server: OctaneServer;
+    onServer: (server: OctaneServer) => void;
     /** The versions Genie manages for php, newest first. */
     versions: string[];
     defaultVersion?: string;
@@ -1073,7 +1094,23 @@ function ServeModeFields({
                     aria-label="How Genie serves this site"
                 />
             </label>
-            {mode !== 'proxy' && (
+            {mode === 'octane' && (
+                <label className="site-field">
+                    <span>Octane server</span>
+                    <Select
+                        value={server}
+                        onValueChange={(v) => onServer(v as OctaneServer)}
+                        list={OCTANE_SERVER_CHOICES}
+                        aria-label="Which Laravel Octane server Genie starts"
+                    />
+                    <small className="site-field-hint">
+                        Genie starts <code>php artisan octane:start</code> on this server and allocates
+                        every port it binds. The app needs <code>laravel/octane</code> installed.
+                        Swoole needs the swoole PHP extension and cannot run on Windows.
+                    </small>
+                </label>
+            )}
+            {mode !== 'proxy' && mode !== 'octane' && (
                 <label className="site-field">
                     <span>Directory to serve</span>
                     <Input
@@ -1089,7 +1126,7 @@ function ServeModeFields({
                     </small>
                 </label>
             )}
-            {mode === 'php' && versionField.show && (
+            {(mode === 'php' || mode === 'octane') && versionField.show && (
                 <label className="site-field">
                     <span>PHP version</span>
                     <Select
@@ -1099,10 +1136,11 @@ function ServeModeFields({
                         aria-label="Which PHP version this site runs on"
                     />
                     <small className="site-field-hint">
-                        Which PHP Genie runs the FastCGI worker on. Following the machine default
-                        means this site moves with it (Settings → Toolchain); pinning a version
-                        keeps it where it is — and if that version is ever removed, the site says
-                        so instead of quietly running on another one.
+                        Which PHP this site runs on. Left unpinned, the repo decides: Genie reads the
+                        PHP its composer.json requires, and uses the machine default only when it
+                        states none (Settings → Toolchain). Pin a version only to override the repo —
+                        and if that version is ever removed, the site says so instead of quietly
+                        running on another one.
                     </small>
                 </label>
             )}
@@ -1158,12 +1196,13 @@ function AddSiteForm({
     const [serveSpa, setServeSpa] = useState(true);
     // A NEW site follows the machine default unless the human picks a version.
     const [serveVersion, setServeVersion] = useState('');
+    const [serveServer, setServeServer] = useState<OctaneServer>('frankenphp');
     const php = usePinnableVersions('php');
-    const hostServe = buildHostServe(serveMode, serveRoot, serveSpa, serveVersion);
+    const hostServe = buildHostServe(serveMode, serveRoot, serveSpa, serveVersion, serveServer);
     // A chosen static/php mode with no directory yet is not startable — Genie has
     // nothing to serve. Guard submit rather than ship an empty root (the same
     // predicate the Edit form uses — genie #198).
-    const serveIncomplete = serveConfigIncomplete(serveMode, serveRoot, serveSpa);
+    const serveIncomplete = serveConfigIncomplete(serveMode, serveRoot, serveSpa, serveServer);
 
     useEffect(() => {
         void api()
@@ -1218,12 +1257,14 @@ function AddSiteForm({
                     root={serveRoot}
                     spa={serveSpa}
                     version={serveVersion}
+                    server={serveServer}
                     versions={php.versions}
                     {...(php.defaultVersion ? { defaultVersion: php.defaultVersion } : {})}
                     onMode={setServeMode}
                     onRoot={setServeRoot}
                     onSpa={setServeSpa}
                     onVersion={setServeVersion}
+                    onServer={setServeServer}
                 />
                 {/* A CONTAINER site only. The host-native path allocates a free port
                     at start and rewrites the command to bind it, ignoring anything

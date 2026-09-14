@@ -428,11 +428,13 @@ describe('the serve-mode picker (proxy | static | php)', () => {
         // same rule as the "in use" badge, don't decorate a machine with one PHP.
         expect(opts([]).show).toBe(false);
         expect(opts(['8.4.24']).show).toBe(false);
-        // Two or more: a real choice, led by following the machine default.
+        // Two or more: a real choice, led by NOT pinning — which follows what the
+        // repo's composer.json requires, and the machine default only when it
+        // states nothing (genie#668). The label says both, in that order.
         const two = opts(['8.4.24', '8.3.33']);
         expect(two.show).toBe(true);
         expect(two.options).toEqual([
-            { value: '', label: 'Machine default (8.4.24)' },
+            { value: '', label: 'From composer.json, else machine default (8.4.24)' },
             { value: '8.4.24', label: '8.4.24' },
             { value: '8.3.33', label: '8.3.33' },
         ]);
@@ -488,6 +490,38 @@ describe('the serve-mode picker (proxy | static | php)', () => {
         // static/php → proxy ⇒ an EXPLICIT null: a plain omit would leave the site
         // static forever, because the store merges the patch OVER the stored row.
         expect(hostServePatch({ mode: 'static', root: 'dist' }, undefined)).toBeNull();
+    });
+});
+
+describe('the serve-mode picker — Laravel Octane (genie#668)', () => {
+    it('reads an Octane site as octane', () => {
+        expect(serveModeOf({ ...SITE, hostServe: { mode: 'octane', server: 'roadrunner' } })).toBe('octane');
+    });
+
+    it('builds an Octane hostServe from the chosen server — no directory, since Octane serves the app itself', () => {
+        expect(buildHostServe('octane', '', false, '', 'frankenphp')).toEqual({
+            mode: 'octane',
+            server: 'frankenphp',
+        });
+        // A directory left in form state from another mode never rides along.
+        expect(buildHostServe('octane', 'public', true, '', 'swoole')).toEqual({ mode: 'octane', server: 'swoole' });
+        // The PHP pin is the same override it is for a php site.
+        expect(buildHostServe('octane', '', false, '8.4', 'roadrunner')).toEqual({
+            mode: 'octane',
+            server: 'roadrunner',
+            version: '8.4',
+        });
+    });
+
+    it('is incomplete without a server, and complete with one whatever the directory says', () => {
+        expect(buildHostServe('octane', '', false, '')).toBeUndefined();
+        expect(serveConfigIncomplete('octane', '', false)).toBe(true);
+        expect(serveConfigIncomplete('octane', '', false, 'frankenphp')).toBe(false);
+    });
+
+    it('a server left in form state never rides along on another mode', () => {
+        expect(buildHostServe('php', 'public', false, '', 'frankenphp')).toEqual({ mode: 'php', root: 'public' });
+        expect(buildHostServe('static', 'dist', false, '', 'swoole')).toEqual({ mode: 'static', root: 'dist' });
     });
 });
 
@@ -683,6 +717,16 @@ describe('siteRunLine', () => {
         );
         expect(siteRunLine(site({ hostServe: { mode: 'static', root: 'dist', spa: true } }))).toMatch(
             /SPA|single-page/i,
+        );
+    });
+
+    it('describes an Octane site by its server, not by a directory it does not have (genie#668)', () => {
+        const line = siteRunLine(site({ hostServe: { mode: 'octane', server: 'frankenphp' } }));
+        expect(line).toMatch(/Octane/);
+        expect(line).toMatch(/FrankenPHP/);
+        expect(line).not.toMatch(/undefined|\.\//);
+        expect(siteRunLine(site({ hostServe: { mode: 'octane', server: 'roadrunner', version: '8.4' } }))).toMatch(
+            /RoadRunner.*8\.4|8\.4.*RoadRunner/,
         );
     });
 
