@@ -156,6 +156,24 @@ export async function stopShuttleIfRunning(stateDir: string): Promise<void> {
     await stopStaleShuttle(paths);
 }
 
+/**
+ * Stop the running shuttle if it is bound to a port other than `port`.
+ *
+ * The port is fixed for a shuttle's life, and every `.mcp.json` names the one
+ * configured now. A shuttle still listening on the old one would take this Genie's
+ * attach and serve nobody: agents dial the new port, where nothing listens.
+ */
+export async function stopShuttleOnOtherPort(stateDir: string, port: number): Promise<void> {
+    let recorded: unknown;
+    try {
+        recorded = JSON.parse(fs.readFileSync(path.join(stateDir, 'shuttle.json'), 'utf8')).port;
+    } catch {
+        return;
+    }
+    if (recorded === port) return;
+    await stopShuttleIfRunning(stateDir);
+}
+
 export interface GenieShuttleOptions {
     userDataDir: string;
     /** The directory the running `background.js` is in. */

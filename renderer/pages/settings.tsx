@@ -2575,6 +2575,14 @@ function AgentMcpSection({
                     Saved to the host. A port change takes effect when the host&apos;s
                     Agent MCP server restarts.
                 </Text>
+            ) : state?.mode === 'shuttle' ? (
+                // Agents are connected through the background service, which keeps
+                // its port for as long as it runs — restarting the server here would
+                // fight it for the port. A new port is picked up on the next start.
+                <Text size="xs" className="text-zinc-500">
+                    Agents stay connected through Genie updates, so a port change
+                    takes effect the next time Genie starts.
+                </Text>
             ) : (
                 <div className="set-actions">
                     <Action

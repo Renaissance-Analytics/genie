@@ -4,7 +4,14 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { resolveShuttleScript, shuttleEnv, shuttlePaths, stopShuttleIfRunning, stopStaleShuttle } from '../genie-launch';
+import {
+    resolveShuttleScript,
+    shuttleEnv,
+    shuttlePaths,
+    stopShuttleIfRunning,
+    stopShuttleOnOtherPort,
+    stopStaleShuttle,
+} from '../genie-launch';
 
 /**
  * WHERE GENIE FINDS THE SHUTTLE TO START, AND HOW IT STOPS AN OLD ONE.
@@ -133,7 +140,7 @@ describe('shuttleEnv', () => {
 
 describe('stopStaleShuttle', () => {
     /** A stand-in for an old shuttle: holds the control path, records itself. */
-    async function staleShuttle(stateDir: string, controlPath: string, recordedPath = controlPath) {
+    async function staleShuttle(stateDir: string, controlPath: string, recordedPath = controlPath, port = 51717) {
         const script = path.join(stateDir, 'stale.cjs');
         fs.writeFileSync(
             script,
@@ -141,7 +148,7 @@ describe('stopStaleShuttle', () => {
              const server = net.createServer(() => {});
              server.listen(${JSON.stringify(controlPath)}, () => {
                  require('fs').writeFileSync(${JSON.stringify(path.join(stateDir, 'shuttle.json'))},
-                     JSON.stringify({ pid: process.pid, controlPath: ${JSON.stringify(recordedPath)} }));
+                     JSON.stringify({ pid: process.pid, port: ${port}, controlPath: ${JSON.stringify(recordedPath)} }));
                  process.send('ready');
              });`,
         );
@@ -197,6 +204,26 @@ describe('stopStaleShuttle', () => {
 
     it('stopShuttleIfRunning does nothing, and needs no record, when none is running', async () => {
         await expect(stopShuttleIfRunning(tmp())).resolves.toBeUndefined();
+    });
+
+    it('stopShuttleOnOtherPort stops a running shuttle bound to a port Genie no longer uses', async () => {
+        const stateDir = tmp();
+        const { controlPath } = shuttlePaths(stateDir);
+        await staleShuttle(stateDir, controlPath, controlPath, 51717);
+
+        await stopShuttleOnOtherPort(stateDir, 52000);
+
+        expect(await answers(controlPath)).toBe(false);
+    });
+
+    it('POSITIVE CONTROL: stopShuttleOnOtherPort leaves a shuttle on the configured port alone', async () => {
+        const stateDir = tmp();
+        const { controlPath } = shuttlePaths(stateDir);
+        await staleShuttle(stateDir, controlPath, controlPath, 51717);
+
+        await stopShuttleOnOtherPort(stateDir, 51717);
+
+        expect(await answers(controlPath)).toBe(true);
     });
 
     it('refuses without a record, rather than guessing what to stop', async () => {

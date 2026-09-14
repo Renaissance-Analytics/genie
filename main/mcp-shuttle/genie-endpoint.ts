@@ -49,6 +49,12 @@ export interface McpEndpointDeps {
      * back to a temporary port that no `.mcp.json` names.
      */
     stopRunningShuttle?(): Promise<void>;
+    /**
+     * Before attaching: deal with a running shuttle that is wrong for this Genie —
+     * one listening on a port the owner has since changed would be attached to,
+     * while every URL this Genie mints names the new port.
+     */
+    prepareShuttle?(): Promise<void>;
     log?(line: string): void;
 }
 
@@ -153,6 +159,11 @@ export async function startMcpEndpoint(deps: McpEndpointDeps): Promise<McpEndpoi
         debounce.unref?.();
     });
 
+    try {
+        await deps.prepareShuttle?.();
+    } catch (e) {
+        log(`could not replace a shuttle on another port: ${(e as Error).message}`);
+    }
     const status = await supervisor.start();
     if (status.mode === 'shuttle') {
         mode = 'shuttle';

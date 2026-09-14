@@ -125,6 +125,23 @@ describe('startMcpEndpoint', () => {
         expect(h.server.bindInProcess).not.toHaveBeenCalled();
     });
 
+    it('lets a shuttle that is wrong for this Genie be dealt with BEFORE it attaches', async () => {
+        // A shuttle from an earlier session listening on a port the owner has since
+        // changed would be attached to happily — and every URL this Genie mints
+        // names the NEW port, where nothing listens.
+        const h = harness();
+        const order: string[] = [];
+        h.deps.prepareShuttle = vi.fn(async () => void order.push('prepare'));
+        h.supervisor.start.mockImplementation(async () => {
+            order.push('start');
+            return { mode: 'shuttle', how: 'spawned' };
+        });
+
+        await start(h);
+
+        expect(order).toEqual(['prepare', 'start']);
+    });
+
     it('gives the supervisor the surface and the routes BEFORE it starts', async () => {
         // Held by the supervisor and sent on attach — so a shuttle this Genie
         // attaches to never serves a moment of the previous Genie's surface.
