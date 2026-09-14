@@ -56,12 +56,14 @@ import {
     type McpToolCallResult,
     type ImDoneDelivery,
     type HandoffOutcome,
+    type McpContext,
 } from './protocol';
 import {
     AMBIGUOUS_TERMINAL_MESSAGE,
     resolveTerminal as resolveTerminalForRoute,
     type EndpointRoute,
 } from './terminal-resolution';
+import type { ShuttleTopology } from '../mcp-shuttle/topology-store';
 
 /**
  * Genie's local MCP server — a tiny HTTP/JSON-RPC endpoint that lets agents
@@ -244,6 +246,25 @@ let port: number | null = null;
 /** True when the configured port was taken and we fell back to ephemeral. */
 let conflict = false;
 let deps: ServerDeps | null = null;
+/**
+ * WHO LISTENS ON THE PORT (genie#346). `in-process` is this module's own HTTP
+ * server, as it has always been. `shuttle` is the MCP shuttle process: it owns
+ * the port and forwards every call here, and this module does everything else —
+ * mints and persists the tokens, and runs the calls through {@link mcpContextFor}.
+ */
+let mode: 'in-process' | 'shuttle' = 'in-process';
+
+/** Told whenever the routing table the shuttle serves ({@link mcpTopology}) changes. */
+const topologyListeners = new Set<() => void>();
+function topologyChanged(): void {
+    for (const listener of topologyListeners) {
+        try {
+            listener();
+        } catch {
+            /* a listener must not be able to break token minting */
+        }
+    }
+}
 
 /**
  * Persisted MCP endpoint state (`<userData>/genie-mcp.json`). Holds the port
@@ -598,6 +619,55 @@ function resolveTerminal(
     );
 }
 
+/**
+ * The context a call runs in, for the terminal it resolved to. ONE builder for
+ * both listeners: a request on the in-process server and a call the MCP shuttle
+ * forwards (genie#346) reach exactly the same implementations.
+ */
+export function mcpContextFor(terminalId: string): McpContext {
+    if (!deps) throw new Error('The MCP server has not been started.');
+    const d = deps;
+    return {
+        terminalId,
+        serverName: SERVER_NAME,
+        serverVersion: d.serverVersion,
+        onImDone: d.onImDone,
+        onHandoff: d.onHandoff,
+        agentUpgradeCaller: d.agentUpgradeCaller,
+        onThumbsUp: d.onThumbsUp,
+        checkIssues: d.checkIssues,
+        agentInboxMailLine: d.agentInboxMailLine,
+        onForceQuestion: d.onForceQuestion,
+        // genie#321 — resolved HERE rather than in the pure protocol module,
+        // which does no DB access. A caller with no workspace, or with no agent
+        // row to deliver to, must be refused at ask time instead of having the
+        // user's answer accepted and then dropped.
+        askDeliverability: d.askDeliverability,
+        describeWorkspace: d.describeWorkspace,
+        manageProcess: d.manageProcess,
+        manageSite: d.manageSite,
+        manageService: d.manageService,
+        manageGappDev: d.manageGappDev,
+        manageFlows: d.manageFlows,
+        devServerAvailable: d.devServerAvailable,
+        provisionWorkspaces: d.provisionWorkspaces,
+        manageTerminals: d.manageTerminals,
+        registerAgent: d.registerAgent,
+        runAgent: d.runAgent,
+        manageWorkspaces: d.manageWorkspaces,
+        agentInbox: d.agentInbox,
+        knowledge: d.knowledge,
+        lists: d.lists,
+        openFileForUser: d.openFileForUser,
+        setEnv: d.setEnv,
+        checkEnv: d.checkEnv,
+        submitFeedback: d.submitFeedback,
+        isOpsProject: d.isOpsProject,
+        pluginTools: d.pluginTools,
+        dispatchPluginTool: d.dispatchPluginTool,
+    };
+}
+
 async function handle(
     req: http.IncomingMessage,
     res: http.ServerResponse,
@@ -682,45 +752,7 @@ async function handle(
         }
     }
 
-    const mcpCtx = {
-        terminalId,
-        serverName: SERVER_NAME,
-        serverVersion: deps.serverVersion,
-        onImDone: deps.onImDone,
-        onHandoff: deps.onHandoff,
-        agentUpgradeCaller: deps.agentUpgradeCaller,
-        onThumbsUp: deps.onThumbsUp,
-        checkIssues: deps.checkIssues,
-        agentInboxMailLine: deps.agentInboxMailLine,
-        onForceQuestion: deps.onForceQuestion,
-        // genie#321 — resolved HERE rather than in the pure protocol module,
-        // which does no DB access. A caller with no workspace, or with no agent
-        // row to deliver to, must be refused at ask time instead of having the
-        // user's answer accepted and then dropped.
-        askDeliverability: deps.askDeliverability,
-        describeWorkspace: deps.describeWorkspace,
-        manageProcess: deps.manageProcess,
-        manageSite: deps.manageSite,
-        manageService: deps.manageService,
-        manageGappDev: deps.manageGappDev,
-        manageFlows: deps.manageFlows,
-        devServerAvailable: deps.devServerAvailable,
-        provisionWorkspaces: deps.provisionWorkspaces,
-        manageTerminals: deps.manageTerminals,
-        registerAgent: deps.registerAgent,
-        runAgent: deps.runAgent,
-        manageWorkspaces: deps.manageWorkspaces,
-        agentInbox: deps.agentInbox,
-        knowledge: deps.knowledge,
-        lists: deps.lists,
-        openFileForUser: deps.openFileForUser,
-        setEnv: deps.setEnv,
-        checkEnv: deps.checkEnv,
-        submitFeedback: deps.submitFeedback,
-        isOpsProject: deps.isOpsProject,
-        pluginTools: deps.pluginTools,
-        dispatchPluginTool: deps.dispatchPluginTool,
-    };
+    const mcpCtx = mcpContextFor(terminalId);
 
     // A blocking call (ForceTheQuestion) can sit pending indefinitely while the
     // user decides. Answer it over an SSE stream with a heartbeat so the MCP
@@ -751,7 +783,8 @@ async function handle(
  * flagging a conflict) if it's taken. Resolves once listening (or once we've
  * given up — best-effort feature). Restores persisted tokens first.
  */
-function bind(wantPort: number): Promise<void> {
+/** Load the persisted token maps, so every URL already handed out keeps its token. */
+function restoreTokens(): void {
     const prev = loadState();
     tokens.clear();
     byTerminal.clear();
@@ -765,6 +798,10 @@ function bind(wantPort: number): Promise<void> {
         workspaceTokens.set(t, id);
         byWorkspace.set(id, t);
     }
+}
+
+function bind(wantPort: number): Promise<void> {
+    restoreTokens();
 
     const makeServer = () =>
         http.createServer((req, res) => {
@@ -816,8 +853,70 @@ function bind(wantPort: number): Promise<void> {
 export function startMcpServer(d: ServerDeps): Promise<void> {
     deps = d;
     if (server) return Promise.resolve();
+    mode = 'in-process';
     conflict = false;
     return bind(d.configuredPort());
+}
+
+/**
+ * Serve through the MCP shuttle: it owns the configured port, so nothing is bound
+ * here. The token maps are restored exactly as a bind would, and URLs are minted on
+ * the configured port — the one every `.mcp.json` names — so they are byte-identical
+ * to the in-process server's (genie#346, §9.2).
+ */
+export function adoptShuttleListener(d: ServerDeps): void {
+    deps = d;
+    if (server) {
+        server.close();
+        server = null;
+    }
+    restoreTokens();
+    port = d.configuredPort();
+    mode = 'shuttle';
+    conflict = false;
+    persistState();
+    topologyChanged();
+}
+
+/**
+ * Leave shuttle mode and listen here after all — the shuttle could not start, or
+ * died and could not be brought back. Tokens are restored, so the URLs already
+ * handed out keep answering, now in-process.
+ */
+export async function bindInProcess(): Promise<void> {
+    if (!deps) return;
+    if (mode === 'in-process' && server) return;
+    mode = 'in-process';
+    port = null;
+    conflict = false;
+    await bind(deps.configuredPort());
+}
+
+/** The routing table the shuttle serves: every token, and each workspace's terminals. */
+export function mcpTopology(): ShuttleTopology {
+    const endpoints: ShuttleTopology['endpoints'] = {};
+    for (const [token, workspaceId] of workspaceTokens) endpoints[token] = { kind: 'workspace', workspaceId };
+    for (const [token, terminalId] of tokens) endpoints[token] = { kind: 'terminal', terminalId };
+    const workspaces: ShuttleTopology['workspaces'] = {};
+    for (const workspaceId of byWorkspace.keys()) {
+        try {
+            workspaces[workspaceId] = [...(deps?.workspaceTerminals(workspaceId).ids ?? [])];
+        } catch {
+            workspaces[workspaceId] = [];
+        }
+    }
+    return { endpoints, workspaces };
+}
+
+/** Hear when {@link mcpTopology} may have changed. Returns the unsubscribe. */
+export function onMcpTopologyChanged(listener: () => void): () => void {
+    topologyListeners.add(listener);
+    return () => topologyListeners.delete(listener);
+}
+
+/** A workspace's terminals changed — which changes which terminal a call resolves to. */
+export function notifyMcpTopologyChanged(): void {
+    topologyChanged();
 }
 
 /**
@@ -828,6 +927,9 @@ export function startMcpServer(d: ServerDeps): Promise<void> {
  */
 export async function restartMcpServer(): Promise<void> {
     if (!deps) return;
+    // The shuttle owns the port. Binding it here as well would fight the process
+    // every agent is connected through.
+    if (mode === 'shuttle') return;
     if (server) {
         await new Promise<void>((r) => server!.close(() => r()));
         server = null;
@@ -843,6 +945,7 @@ export function stopMcpServer(): void {
     server = null;
     port = null;
     conflict = false;
+    mode = 'in-process';
     tokens.clear();
     byTerminal.clear();
     workspaceTokens.clear();
@@ -864,6 +967,7 @@ export function workspaceEndpointUrl(workspaceId: string): string | null {
         workspaceTokens.set(token, workspaceId);
         byWorkspace.set(workspaceId, token);
         persistState();
+        topologyChanged();
     }
     return `http://127.0.0.1:${port}/mcp/${token}`;
 }
@@ -881,6 +985,7 @@ export function registerTerminalEndpoint(terminalId: string): string | null {
         tokens.set(token, terminalId);
         byTerminal.set(terminalId, token);
         persistState(); // so the endpoint survives the next Genie restart
+        topologyChanged();
     }
     return `http://127.0.0.1:${port}/mcp/${token}`;
 }
@@ -891,6 +996,7 @@ export function unregisterTerminalEndpoint(terminalId: string): void {
     if (token) tokens.delete(token);
     byTerminal.delete(terminalId);
     persistState();
+    if (token) topologyChanged();
 }
 
 /** Test/diagnostic accessor. */
@@ -907,10 +1013,13 @@ export interface McpServerState {
     configuredPort: number;
     /** True when the configured port was taken and we fell back to ephemeral. */
     conflict: boolean;
+    /** Who listens on the port — this process, or the MCP shuttle. */
+    mode: 'in-process' | 'shuttle';
 }
 export function mcpServerState(): McpServerState {
     return {
-        running: server !== null,
+        mode,
+        running: server !== null || (mode === 'shuttle' && port !== null),
         port,
         configuredPort: deps?.configuredPort() ?? DEFAULT_MCP_PORT,
         conflict,
