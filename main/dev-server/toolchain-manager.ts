@@ -15,6 +15,7 @@ import {
     type ToolchainPathReport,
 } from './toolchain-primitives';
 import { writeCaBundle } from './toolchain-ca';
+import type { ComposerPhp } from './composer-php';
 import { createToolchainPerformDeps } from './toolchain-effects';
 import { createPerformInstall } from './toolchain-perform';
 import { runInstallPlan, type PerformInstall } from './toolchain-install';
@@ -350,8 +351,8 @@ export async function toolchainInstallsInfo(
 /**
  * The resolver a SITE START uses to decide which runtime it spawns (genie#207).
  *
- * The site manager owns no machine facts, so it asks this: pin → machine default
- * → a failure naming what to install. The judgement is `resolveEngineExe`; all
+ * The site manager owns no machine facts, so it asks this: pin → what the repo
+ * requires → machine default → a failure naming what to install. The judgement is `resolveEngineExe`; all
  * that happens here is handing it the scan and the stored defaults.
  *
  * A MISS re-scans once before failing. The in-process cache is dropped by every
@@ -362,13 +363,19 @@ export async function toolchainInstallsInfo(
  */
 export function createSiteEngineResolver(
     readDefaults: () => string | undefined,
-): (req: { tool: LanguageTool; bin: string; version?: string }) => Promise<EngineResolution> {
+): (req: {
+    tool: LanguageTool;
+    bin: string;
+    version?: string;
+    requires?: ComposerPhp;
+}) => Promise<EngineResolution> {
     return async (req) => {
         const ask = async (force: boolean): Promise<EngineResolution> =>
             resolveEngineExe({
                 tool: req.tool,
                 bin: req.bin,
                 ...(req.version ? { pinned: req.version } : {}),
+                ...(req.requires ? { requires: req.requires } : {}),
                 installs: await machineInstalls(force ? { force: true } : {}),
                 defaults: parseToolchainDefaults(readDefaults()),
                 platform: process.platform,

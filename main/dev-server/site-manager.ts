@@ -22,6 +22,7 @@ import {
     PHP_FASTCGI_WORKER_ENV,
 } from './serve-config';
 import { octaneServeCommand, OCTANE_SERVE_ENV } from './octane-serve';
+import { composerPhpRequirement, type ComposerPhp } from './composer-php';
 import type { HostEnvReport } from './services/service-manager';
 import {
     hostBrowserNames as selectHostBrowserNames,
@@ -437,9 +438,19 @@ export interface DevSiteManagerDeps {
         tool: LanguageTool;
         /** The binary inside the install to spawn — `php-cgi` for the worker. */
         bin: string;
-        /** The site's pin. Omitted ⇒ the machine default. */
+        /** The site's pin. Omitted ⇒ what the repo requires, else the machine default. */
         version?: string;
+        /** What the repo's `composer.json` requires, when the site pins nothing and
+         *  the repo says (genie#668). */
+        requires?: ComposerPhp;
     }) => Promise<EngineResolution>;
+    /**
+     * Read a repo's `composer.json`, parsed — null when there is none or it does
+     * not parse. The PHP a site runs on is the repo's to state (genie#668): "read
+     * directly from composer setting in the repo, so not something an agent has to
+     * provide". Default: real fs.
+     */
+    readComposerJson?: (cwd: string) => unknown;
     /**
      * Run a HOST-NATIVE site's dev server as a real HOST process (story #238).
      * Absent ⇒ a `runMode: 'host'` site fails with a clear "not available" status
@@ -1632,6 +1643,25 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
      * starts the worker as a companion process. Returns a clear failure rather than
      * spawning nothing.
      */
+    /**
+     * The resolver ask for a php site's runtime: its pin when it has one (the
+     * explicit override), else what the repo's composer.json requires, else
+     * nothing — the machine default.
+     */
+    function phpEngineAsk(bin: string, cwd: string, pinned: string | undefined) {
+        if (pinned) return { tool: 'php' as const, bin, version: pinned };
+        let composer: unknown = null;
+        try {
+            composer = deps.readComposerJson
+                ? deps.readComposerJson(cwd)
+                : JSON.parse(fs.readFileSync(path.join(cwd, 'composer.json'), 'utf8'));
+        } catch {
+            composer = null;
+        }
+        const requires = composerPhpRequirement(composer);
+        return { tool: 'php' as const, bin, ...(requires ? { requires } : {}) };
+    }
+
     async function planHostServe(
         hostServe: HostServeConfig,
         cwd: string,
@@ -1671,11 +1701,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                     error: 'Octane serving is not available in this build (Genie cannot resolve a managed PHP here).',
                 };
             }
-            const engine = await deps.resolveEngine({
-                tool: 'php',
-                bin: 'php',
-                ...(hostServe.version ? { version: hostServe.version } : {}),
-            });
+            const engine = await deps.resolveEngine(phpEngineAsk('php', cwd, hostServe.version));
             if (!engine.ok) return { ok: false, error: engine.error };
             // The second port Octane would otherwise DERIVE from the site port —
             // `2019 + (port - 8000)` for FrankenPHP's admin API, `port - 1999` for
@@ -1723,11 +1749,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                     error: 'PHP serving is not available in this build (Genie cannot resolve a managed PHP here).',
                 };
             }
-            const engine = await deps.resolveEngine({
-                tool: 'php',
-                bin: 'php-cgi',
-                ...(hostServe.version ? { version: hostServe.version } : {}),
-            });
+            const engine = await deps.resolveEngine(phpEngineAsk('php-cgi', cwd, hostServe.version));
             if (!engine.ok) return { ok: false, error: engine.error };
             // WHERE an upload is spooled (genie#534), resolved on the same terms and
             // for the same reason: a worker left to inherit Genie's temp directory

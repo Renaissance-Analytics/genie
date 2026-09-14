@@ -11,6 +11,7 @@ import {
     type LanguageTool,
     type ToolchainDefaults,
 } from './toolchain-versions';
+import { pickComposerPhp, type ComposerPhp } from './composer-php';
 
 /**
  * PURE. WHICH runtime a site spawns — the half of the Toolchain page that was
@@ -27,11 +28,15 @@ import {
  * ## The order, and why there is no fourth step
  *
  *   1. the site's PIN, when it has one;
- *   2. otherwise the MACHINE DEFAULT (`defaultVersionFor`, which already drops a
+ *   2. otherwise what the REPO requires (genie#668) — its `composer.json`, read
+ *      as the machine default when that satisfies it, else the newest managed
+ *      version that does, else a failure naming the requirement;
+ *   3. otherwise the MACHINE DEFAULT (`defaultVersionFor`, which already drops a
  *      stale default rather than pointing at something that was removed);
- *   3. otherwise FAIL, naming what to install.
+ *   4. otherwise FAIL, naming what to install.
  *
- * There is deliberately no "…or whatever PATH says". A site quietly running on a
+ * There is deliberately no "…or whatever PATH says", and no "…or the default"
+ * after a requirement nothing satisfies. A site quietly running on a
  * different runtime than the one it names is the failure this whole feature
  * exists to prevent — it produces a bug report about the APP, days later, from
  * someone with no reason to suspect the PHP version.
@@ -55,8 +60,10 @@ export interface ResolveEngineOptions {
     /** Which binary inside the install to spawn — `php-cgi` for the FastCGI
      *  worker. Defaults to the language's primary binary. */
     bin?: string;
-    /** The site's pinned version. Absent ⇒ follow the machine default. */
+    /** The site's pinned version. Absent ⇒ what the repo requires, else the machine default. */
     pinned?: string;
+    /** What the repo's own manifest requires (`composer.json`), when it says. */
+    requires?: ComposerPhp;
     /** Everything on the machine, from `scanToolchain`. */
     installs: EngineInstall[];
     defaults: ToolchainDefaults;
@@ -107,6 +114,32 @@ export function resolveEngineExe(opts: ResolveEngineOptions): EngineResolution {
     }
 
     const mine = selectableInstalls(installs.filter((i) => i.tool === tool));
+
+    if (!opts.pinned && opts.requires) {
+        const { constraint, source } = opts.requires;
+        const picked = pickComposerPhp(
+            constraint,
+            mine.map((i) => i.version),
+            defaultVersionFor(tool, installs, defaults),
+        );
+        const install = picked ? mine.find((i) => i.version === picked) : undefined;
+        if (!install) {
+            const choices = [...mine]
+                .sort((a, b) => compareVersionsDesc(a.version, b.version))
+                .map((i) => i.version);
+            return {
+                ok: false,
+                error:
+                    `This repo's composer.json requires ${label} ${constraint} (\`${source}\`), and Genie manages no ${label} on this machine that satisfies it.` +
+                    foreignNote(tool, installs) +
+                    (choices.length
+                        ? ` Genie manages ${choices.join(', ')}. Add a version that satisfies it in ${WHERE}, then start the site again.`
+                        : ` Add a version that satisfies it in ${WHERE}, then start the site again.`),
+            };
+        }
+        return { ok: true, install, version: install.version, exe: joinFor(platform, binDirOf(install), fileName) };
+    }
+
     const found = opts.pinned
         ? [...mine].sort((a, b) => compareVersionsDesc(a.version, b.version)).find((i) =>
               satisfiesPin(i.version, opts.pinned!),

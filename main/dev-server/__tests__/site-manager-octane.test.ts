@@ -29,11 +29,15 @@ const octaneSite = (name: string, server: OctaneServer, version?: string): DevSi
     hostServe: { mode: 'octane', server, ...(version ? { version } : {}) },
 });
 
-function harness(sites: DevSites, opts: { canWatch?: boolean; firstPort?: number; platform?: NodeJS.Platform } = {}) {
+function harness(
+    sites: DevSites,
+    opts: { canWatch?: boolean; firstPort?: number; platform?: NodeJS.Platform; composer?: unknown } = {},
+) {
     const spawns: Array<{ siteId: string; command: string[]; cwd: string; env: Record<string, string> }> = [];
     const up = new Set<string>();
     const allocations: Array<{ exclude: number[]; got: number }> = [];
-    const engineAsks: Array<{ tool: string; bin: string; version?: string }> = [];
+    const engineAsks: Array<{ tool: string; bin: string; version?: string; requires?: unknown }> = [];
+    const composerReads: string[] = [];
     let next = opts.firstPort ?? 5300;
     const m = createDevSiteManager({
         resolveRuntime: async () => ({ runtime: null as ContainerRuntime | null, detection: NO_RUNTIME }),
@@ -84,10 +88,14 @@ function harness(sites: DevSites, opts: { canWatch?: boolean; firstPort?: number
             gaps: [],
         }),
         octaneCanWatch: () => opts.canWatch ?? false,
+        readComposerJson: (cwd: string) => {
+            composerReads.push(cwd.replace(/\\/g, '/'));
+            return opts.composer ?? null;
+        },
         // Deliberately NO caddyBin / writeServeConfig: Octane's server is the web
         // server, so an Octane site must start in a build with no Caddy at all.
     });
-    return { m, spawns, up, allocations, engineAsks };
+    return { m, spawns, up, allocations, engineAsks, composerReads };
 }
 
 describe('hostServe octane — start', () => {
@@ -230,5 +238,101 @@ describe('hostServe octane — start', () => {
         const status = await m.start('acme', id);
         expect(status.state).toBe('failed');
         expect(status.error).toMatch(/PHP/);
+    });
+});
+
+describe('the PHP a site runs on comes from the REPO (genie#668, owner decision)', () => {
+    it('hands the resolver what composer.json requires when the site pins nothing', async () => {
+        const id = devSiteIdFor('acme', 'shop');
+        const h = harness({ [id]: octaneSite('shop', 'frankenphp') }, { composer: { require: { php: '^8.3' } } });
+
+        await h.m.start('acme', id);
+
+        expect(h.composerReads).toEqual(['/work/acme/repos/shop']);
+        expect(h.engineAsks).toEqual([
+            { tool: 'php', bin: 'php', requires: { constraint: '^8.3', source: 'require.php' } },
+        ]);
+    });
+
+    it('prefers config.platform.php, the platform the lock file was resolved for', async () => {
+        const id = devSiteIdFor('acme', 'shop');
+        const h = harness(
+            { [id]: octaneSite('shop', 'roadrunner') },
+            { composer: { require: { php: '^8.2' }, config: { platform: { php: '8.3.4' } } } },
+        );
+        await h.m.start('acme', id);
+        expect(h.engineAsks[0]?.requires).toEqual({ constraint: '8.3.*', source: 'config.platform.php' });
+    });
+
+    it('asks for nothing extra when the repo states no PHP — the machine default applies', async () => {
+        const id = devSiteIdFor('acme', 'shop');
+        const h = harness({ [id]: octaneSite('shop', 'swoole') }, { composer: { require: {} } });
+        await h.m.start('acme', id);
+        expect(h.engineAsks).toEqual([{ tool: 'php', bin: 'php' }]);
+    });
+
+    it('an explicit pin is the override: composer.json is not consulted', async () => {
+        const id = devSiteIdFor('acme', 'shop');
+        const h = harness({ [id]: octaneSite('shop', 'swoole', '8.4') }, { composer: { require: { php: '^8.2' } } });
+        await h.m.start('acme', id);
+        expect(h.engineAsks).toEqual([{ tool: 'php', bin: 'php', version: '8.4' }]);
+    });
+
+    it('does the same for a php-cgi site', async () => {
+        const id = devSiteIdFor('acme', 'moic');
+        const asks: unknown[] = [];
+        const sites: DevSites = {
+            [id]: {
+                name: 'moic',
+                genName: 'moic.acme.gen',
+                repo: 'moic',
+                runMode: 'host',
+                kind: 'http',
+                enabled: true,
+                hostServe: { mode: 'php', root: 'public' },
+            },
+        };
+        let port = 5400;
+        const m = createDevSiteManager({
+            resolveRuntime: async () => ({ runtime: null, detection: NO_RUNTIME }),
+            listWorkspaces: () => [WS],
+            devSitesFor: () => sites,
+            platform: 'linux',
+            hostIds: null,
+            hostSpawn: {
+                start: async () => ({ ok: true as const, pid: 1 }),
+                stop: async () => {},
+                alive: async () => true,
+                readLog: async () => '',
+            },
+            probeReady: async () => true,
+            allocateFreePort: async () => (port += 1),
+            caddyBin: '/opt/genie/caddy',
+            writeServeConfig: (siteId: string) => `/cfg/${siteId}.caddyfile`,
+            prepareUploadTmpDir: (siteId: string) => `/gd/uploads/${siteId}`,
+            readComposerJson: () => ({ require: { php: '>=8.2 <8.4' } }),
+            resolveEngine: async (req) => {
+                asks.push(req);
+                return {
+                    ok: true as const,
+                    version: '8.3.33',
+                    install: {
+                        tool: 'php' as const,
+                        version: '8.3.33',
+                        dir: '/gd/toolchain/php/8.3.33',
+                        exe: '/gd/toolchain/php/8.3.33/bin/php',
+                        source: 'genie' as const,
+                        removable: true,
+                    },
+                    exe: '/gd/toolchain/php/8.3.33/bin/php-cgi',
+                };
+            },
+        });
+
+        await m.start('acme', id);
+
+        expect(asks).toEqual([
+            { tool: 'php', bin: 'php-cgi', requires: { constraint: '>=8.2 <8.4', source: 'require.php' } },
+        ]);
     });
 });

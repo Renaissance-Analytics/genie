@@ -202,3 +202,68 @@ describe('resolveEngineExe', () => {
         expect(res.ok).toBe(false);
     });
 });
+
+describe('resolveEngineExe — what the REPO requires (genie#668)', () => {
+    const GENIE_82: EngineInstall = {
+        ...GENIE_83,
+        version: '8.2.33',
+        dir: 'C:\\gd\\toolchain\\php\\8.2.33',
+        exe: 'C:\\gd\\toolchain\\php\\8.2.33\\php.exe',
+    };
+
+    it('keeps the machine default when composer.json allows it', () => {
+        const res = resolveEngineExe({
+            tool: 'php',
+            bin: 'php-cgi',
+            requires: { constraint: '^8.2', source: 'require.php' },
+            installs: [GENIE_84, GENIE_83, GENIE_82],
+            defaults: { php: '8.3.33' },
+            ...WIN,
+        });
+        expect(res.ok && res.version).toBe('8.3.33');
+    });
+
+    it('runs the newest PHP composer.json allows when the default is outside it', () => {
+        const res = resolveEngineExe({
+            tool: 'php',
+            bin: 'php',
+            requires: { constraint: '>=8.2 <8.4', source: 'require.php' },
+            installs: [GENIE_84, GENIE_83, GENIE_82],
+            defaults: { php: '8.4.24' },
+            ...WIN,
+        });
+        expect(res.ok && res.version).toBe('8.3.33');
+        expect(res.ok && res.exe).toBe('C:\\gd\\toolchain\\php\\8.3.33\\php.exe');
+    });
+
+    it('FAILS when nothing managed satisfies composer.json — naming the constraint, its key, and what IS installed', () => {
+        const res = resolveEngineExe({
+            tool: 'php',
+            bin: 'php-cgi',
+            requires: { constraint: '^8.5', source: 'require.php' },
+            installs: [GENIE_84, GENIE_83, HERD_84],
+            defaults: { php: '8.4.24' },
+            ...WIN,
+        });
+        expect(res.ok).toBe(false);
+        const error = res.ok ? '' : res.error;
+        expect(error).toContain('^8.5');
+        expect(error).toContain('require.php');
+        expect(error).toContain('composer.json');
+        expect(error).toContain('8.4.24');
+        expect(error).toContain('Settings → Toolchain');
+    });
+
+    it('a site PIN still wins over composer.json — the explicit override', () => {
+        const res = resolveEngineExe({
+            tool: 'php',
+            bin: 'php-cgi',
+            pinned: '8.4',
+            requires: { constraint: '~8.2.0', source: 'require.php' },
+            installs: [GENIE_84, GENIE_83, GENIE_82],
+            defaults: { php: '8.3.33' },
+            ...WIN,
+        });
+        expect(res.ok && res.version).toBe('8.4.24');
+    });
+});
