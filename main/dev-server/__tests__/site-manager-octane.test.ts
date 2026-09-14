@@ -29,7 +29,7 @@ const octaneSite = (name: string, server: OctaneServer, version?: string): DevSi
     hostServe: { mode: 'octane', server, ...(version ? { version } : {}) },
 });
 
-function harness(sites: DevSites, opts: { canWatch?: boolean; firstPort?: number } = {}) {
+function harness(sites: DevSites, opts: { canWatch?: boolean; firstPort?: number; platform?: NodeJS.Platform } = {}) {
     const spawns: Array<{ siteId: string; command: string[]; cwd: string; env: Record<string, string> }> = [];
     const up = new Set<string>();
     const allocations: Array<{ exclude: number[]; got: number }> = [];
@@ -39,7 +39,7 @@ function harness(sites: DevSites, opts: { canWatch?: boolean; firstPort?: number
         resolveRuntime: async () => ({ runtime: null as ContainerRuntime | null, detection: NO_RUNTIME }),
         listWorkspaces: () => [WS],
         devSitesFor: () => sites,
-        platform: 'linux',
+        platform: opts.platform ?? 'linux',
         hostIds: null,
         hostSpawn: {
             start: async (i: { siteId: string; command: string[]; cwd: string; env: Record<string, string> }) => {
@@ -178,6 +178,35 @@ describe('hostServe octane — start', () => {
         await h.m.start('acme', b);
 
         expect(h.allocations.at(-1)!.exclude).not.toContain(adminPort);
+    });
+
+    it('REFUSES Swoole on Windows — naming why, what runs here, and the container route — and starts nothing', async () => {
+        // Swoole is a PHP extension with no native Windows build. The site
+        // definition travels in the git-tracked envelope, so a teammate on macOS
+        // may rightly use it; the refusal belongs to THIS machine's start.
+        const id = devSiteIdFor('acme', 'shop');
+        const h = harness({ [id]: octaneSite('shop', 'swoole') }, { platform: 'win32' });
+
+        const status = await h.m.start('acme', id);
+
+        expect(status.state).toBe('failed');
+        expect(status.error).toMatch(/Swoole/);
+        expect(status.error).toMatch(/Windows/);
+        expect(status.error).toMatch(/FrankenPHP/);
+        expect(status.error).toMatch(/RoadRunner/);
+        expect(status.error).toMatch(/container/i);
+        expect(h.spawns).toHaveLength(0);
+    });
+
+    it('POSITIVE CONTROL: FrankenPHP and RoadRunner DO start on Windows, and Swoole does elsewhere', async () => {
+        for (const server of ['frankenphp', 'roadrunner'] as const) {
+            const id = devSiteIdFor('acme', 'shop');
+            const h = harness({ [id]: octaneSite('shop', server) }, { platform: 'win32' });
+            expect((await h.m.start('acme', id)).state).toBe('running');
+        }
+        const id = devSiteIdFor('acme', 'shop');
+        const h = harness({ [id]: octaneSite('shop', 'swoole') }, { platform: 'darwin' });
+        expect((await h.m.start('acme', id)).state).toBe('running');
     });
 
     it('FAILS, saying why, when this build cannot resolve a managed PHP', async () => {

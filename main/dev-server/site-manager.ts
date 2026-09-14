@@ -1656,6 +1656,15 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             // the Caddy machinery below applies — a build with no bundled Caddy
             // still serves these. Resolved first, like php: a site that cannot
             // name its runtime fails having allocated nothing.
+            if (hostServe.server === 'swoole' && platform === 'win32') {
+                // Refused HERE, at this machine's start, not when the site is
+                // defined: the definition travels in the git-tracked envelope, and
+                // a teammate on macOS or Linux may rightly run it on Swoole.
+                return {
+                    ok: false,
+                    error: "Swoole can't run natively on Windows: it is a PHP extension built only for Linux and macOS, so Genie cannot start this site here. Switch the site to FrankenPHP or RoadRunner, which both run natively on Windows. If the app has to be tested on Swoole, run it in a Linux container yourself (Docker with the swoole extension installed, or WSL); Genie does not provide that container on Windows.",
+                };
+            }
             if (!deps.resolveEngine) {
                 return {
                     ok: false,
