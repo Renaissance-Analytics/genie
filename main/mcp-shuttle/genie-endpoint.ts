@@ -43,6 +43,12 @@ export interface McpEndpointDeps {
     topologyDebounceMs?: number;
     /** A shuttle that was turned on is not serving, and why — once. */
     onFallback?(reason: string): void;
+    /**
+     * Stop a shuttle an earlier session left running, when the shuttle is now off.
+     * It would otherwise keep the port: this Genie's bind would lose to it and fall
+     * back to a temporary port that no `.mcp.json` names.
+     */
+    stopRunningShuttle?(): Promise<void>;
     log?(line: string): void;
 }
 
@@ -103,6 +109,11 @@ export async function startMcpEndpoint(deps: McpEndpointDeps): Promise<McpEndpoi
     };
 
     if (!deps.shuttleEnabled) {
+        try {
+            await deps.stopRunningShuttle?.();
+        } catch (e) {
+            log(`could not stop the MCP shuttle left running by an earlier session: ${(e as Error).message}`);
+        }
         await inProcess(null);
         return endpoint;
     }

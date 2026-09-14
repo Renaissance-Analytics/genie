@@ -1,7 +1,6 @@
 import { test, expect, type ElectronApplication } from '@playwright/test';
 import fs from 'node:fs';
 import http from 'node:http';
-import net from 'node:net';
 import path from 'node:path';
 import { closeGenieE2E, E2E_USERDATA, launchGenieE2E, readMcpPushHandle } from './helpers/launch';
 
@@ -132,41 +131,23 @@ test('an agent’s MCP call survives Genie being replaced underneath it', async 
     expect(record()?.pid, 'the new Genie must attach, not start a second shuttle').toBe(first.pid);
 });
 
-test('with the shuttle off, Genie serves the port itself, as before', async () => {
-    // POSITIVE CONTROL for the spec above: nothing about the default changed.
+test('turning the shuttle off stops the one left running, and Genie serves the port itself', async () => {
+    // A shuttle from the session above is still running and holding the port.
+    // Booting with the setting off must stop it — otherwise this Genie loses the
+    // bind, falls back to a temporary port no .mcp.json names, and every agent
+    // dials a shuttle with no Genie behind it.
     await closeGenieE2E(app);
     app = undefined;
-    if (shuttlePid) {
-        try {
-            process.kill(shuttlePid);
-        } catch {
-            /* gone */
-        }
-        const port = record()?.port;
-        shuttlePid = null;
-        if (port) {
-            await expect
-                .poll(
-                    () =>
-                        new Promise<boolean>((resolve) => {
-                            const s = net.connect(port, '127.0.0.1');
-                            s.once('connect', () => {
-                                s.destroy();
-                                resolve(true);
-                            });
-                            s.once('error', () => resolve(false));
-                        }),
-                    { timeout: 10_000 },
-                )
-                .toBe(false);
-        }
-    }
-    fs.rmSync(STATE_DIR, { recursive: true, force: true });
+    const leftover = record();
+    expect(leftover && alive(leftover.pid), 'the previous test must leave its shuttle running').toBe(true);
 
     ({ app } = await launchGenieE2E('issuewatch'));
     const url = await endpointUrl(app);
 
+    await expect.poll(() => alive(leftover!.pid), { timeout: 15_000 }).toBe(false);
+    shuttlePid = null;
     const answered = await call(url, prompt(1));
     expect(answered.status).toBe(200);
-    expect(record(), 'no shuttle was started').toBeNull();
+    expect(answered.json.error, JSON.stringify(answered.json)).toBeUndefined();
+    expect(new URL(url).port).toBe(String(leftover!.port));
 });

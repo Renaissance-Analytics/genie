@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { resolveShuttleScript, shuttleEnv, shuttlePaths, stopStaleShuttle } from '../genie-launch';
+import { resolveShuttleScript, shuttleEnv, shuttlePaths, stopShuttleIfRunning, stopStaleShuttle } from '../genie-launch';
 
 /**
  * WHERE GENIE FINDS THE SHUTTLE TO START, AND HOW IT STOPS AN OLD ONE.
@@ -183,6 +183,20 @@ describe('stopStaleShuttle', () => {
         await expect(stopStaleShuttle({ stateDir, controlPath })).rejects.toThrow(/control channel/);
 
         expect(() => process.kill(pid, 0)).not.toThrow();
+    });
+
+    it('stopShuttleIfRunning stops a running one', async () => {
+        const stateDir = tmp();
+        const { controlPath } = shuttlePaths(stateDir);
+        await staleShuttle(stateDir, controlPath);
+
+        await stopShuttleIfRunning(stateDir);
+
+        expect(await answers(controlPath)).toBe(false);
+    });
+
+    it('stopShuttleIfRunning does nothing, and needs no record, when none is running', async () => {
+        await expect(stopShuttleIfRunning(tmp())).resolves.toBeUndefined();
     });
 
     it('refuses without a record, rather than guessing what to stop', async () => {

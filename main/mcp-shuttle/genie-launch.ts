@@ -149,6 +149,13 @@ export async function stopStaleShuttle(opts: { stateDir: string; controlPath: st
     }
 }
 
+/** Stop the shuttle holding this state directory's control channel, if one is. */
+export async function stopShuttleIfRunning(stateDir: string): Promise<void> {
+    const paths = shuttlePaths(stateDir);
+    if (!(await answers(paths.controlPath))) return;
+    await stopStaleShuttle(paths);
+}
+
 export interface GenieShuttleOptions {
     userDataDir: string;
     /** The directory the running `background.js` is in. */

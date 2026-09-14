@@ -88,6 +88,33 @@ describe('startMcpEndpoint', () => {
         expect(h.deps.createSupervisor).not.toHaveBeenCalled();
     });
 
+    it('stops a shuttle left running by an earlier session BEFORE binding, when the shuttle is off', async () => {
+        // Turning the setting off must not leave a shuttle from the last session
+        // holding the port: this Genie would lose the bind to it, fall back to a
+        // temporary port no .mcp.json names, and every agent would dial a shuttle
+        // with no Genie behind it.
+        const h = harness({ shuttleEnabled: false });
+        const order: string[] = [];
+        h.deps.stopRunningShuttle = vi.fn(async () => void order.push('stop'));
+        h.server.bindInProcess.mockImplementation(async () => void order.push('bind'));
+
+        await start(h);
+
+        expect(order).toEqual(['stop', 'bind']);
+    });
+
+    it('still binds when stopping a leftover shuttle fails, and says why', async () => {
+        const log = vi.fn();
+        const h = harness({ shuttleEnabled: false });
+        h.deps.log = log;
+        h.deps.stopRunningShuttle = vi.fn(async () => Promise.reject(new Error('still holding the pipe')));
+
+        await start(h);
+
+        expect(h.server.bindInProcess).toHaveBeenCalledOnce();
+        expect(log.mock.calls.flat().join('\n')).toContain('still holding the pipe');
+    });
+
     it('hands the port to the shuttle and does NOT bind it here', async () => {
         const h = harness();
 

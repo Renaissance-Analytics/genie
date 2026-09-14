@@ -199,7 +199,7 @@ import {
     onMcpTopologyChanged,
 } from './mcp/server';
 import { startMcpEndpoint } from './mcp-shuttle/genie-endpoint';
-import { genieShuttleSupervisorFactory } from './mcp-shuttle/genie-launch';
+import { genieShuttleSupervisorFactory, shuttleStateDir, stopShuttleIfRunning } from './mcp-shuttle/genie-launch';
 import { buildManifest } from './mcp-shuttle/publisher';
 import { SHUTTLE_WIRE_GENERATION } from './updater/system-generation';
 import { onPluginToolsChanged } from './plugins/tools-changed';
@@ -2402,6 +2402,7 @@ app.whenReady().then(async () => {
         }),
         manifest: () =>
             buildManifest(mcpContextFor(''), { genieVersion: app.getVersion(), generation: mcpGeneration }),
+        stopRunningShuttle: () => stopShuttleIfRunning(shuttleStateDir(app.getPath('userData'))),
         // §9.1: agents keep working in-process, but lose what the shuttle was turned
         // on for — so the owner is told, in Settings and as it happens.
         onFallback: (reason) => {
