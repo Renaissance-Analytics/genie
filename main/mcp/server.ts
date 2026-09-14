@@ -849,7 +849,13 @@ function bind(wantPort: number): Promise<void> {
     });
 }
 
-/** Start the loopback MCP server (idempotent). Resolves once listening. */
+/**
+ * Start the loopback MCP server (idempotent). Resolves once listening.
+ *
+ * Also how Genie leaves shuttle mode (genie#346) when the shuttle could not start
+ * or died for good: the tokens are restored, so every URL already handed out keeps
+ * answering — now here.
+ */
 export function startMcpServer(d: ServerDeps): Promise<void> {
     deps = d;
     if (server) return Promise.resolve();
@@ -876,20 +882,6 @@ export function adoptShuttleListener(d: ServerDeps): void {
     conflict = false;
     persistState();
     topologyChanged();
-}
-
-/**
- * Leave shuttle mode and listen here after all — the shuttle could not start, or
- * died and could not be brought back. Tokens are restored, so the URLs already
- * handed out keep answering, now in-process.
- */
-export async function bindInProcess(): Promise<void> {
-    if (!deps) return;
-    if (mode === 'in-process' && server) return;
-    mode = 'in-process';
-    port = null;
-    conflict = false;
-    await bind(deps.configuredPort());
 }
 
 /** The routing table the shuttle serves: every token, and each workspace's terminals. */

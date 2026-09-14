@@ -7,7 +7,6 @@ import path from 'node:path';
 import { handleMcpMessage } from '../protocol';
 import {
     adoptShuttleListener,
-    bindInProcess,
     mcpContextFor,
     mcpServerState,
     mcpTopology,
@@ -150,10 +149,11 @@ describe('shuttle mode', () => {
 
     it('serves in-process on the configured port when the shuttle cannot', async () => {
         const port = await freePort();
-        adoptShuttleListener(deps(userDir(), port));
+        const d = deps(userDir(), port);
+        adoptShuttleListener(d);
         const url = workspaceEndpointUrl('ws-1')!;
 
-        await bindInProcess();
+        await startMcpServer(d);
 
         expect(mcpServerState()).toMatchObject({ running: true, mode: 'in-process', port, conflict: false });
         // The URL already handed out now answers in-process.
