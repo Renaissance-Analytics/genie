@@ -40,6 +40,8 @@ export type ShuttleEvent =
 export interface ShuttleIo {
     /** One line to whoever spawned the process. */
     write(line: string): void;
+    /** A line for the shuttle's own log, after it has started. */
+    log?(line: string): void;
     /** Register the handler for a request to stop (SIGTERM / SIGINT). */
     onSignal(handler: () => void): void;
     exit(code: number): void;
@@ -96,7 +98,10 @@ export async function runShuttle(env: ShuttleEnv, io: ShuttleIo): Promise<void> 
         return;
     }
 
-    const result = await (io.start ?? startShuttle)(parsed.options);
+    const result = await (io.start ?? startShuttle)({
+        ...parsed.options,
+        ...(io.log ? { log: (event: Record<string, unknown>) => io.log?.(JSON.stringify(event)) } : {}),
+    });
     if (!result.ok) {
         say({ event: 'refused', reason: result.reason, error: result.error });
         io.exit(SHUTTLE_EXIT.refused);

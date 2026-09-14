@@ -54,6 +54,8 @@ export interface StartShuttleOptions {
     graceMs?: number;
     now?: () => number;
     codec?: FrameCodec;
+    /** One event per lifecycle change — a Genie attaching or going (§9.1). */
+    log?: (event: Record<string, unknown>) => void;
 }
 
 export type ShuttleRefusal = 'port-in-use' | 'control-in-use' | 'failed';
@@ -226,15 +228,24 @@ export async function startShuttle(opts: StartShuttleOptions): Promise<StartShut
         }, graceMs);
         orphanTimer.unref?.();
     };
+    const say = (event: Record<string, unknown>) => {
+        try {
+            opts.log?.({ ...event, at: now() });
+        } catch {
+            /* a log must never be able to break routing */
+        }
+    };
     const core: ShuttleCore = {
         ...inner,
         attach(publisher, generation) {
             disarm();
             inner.attach(publisher, generation);
+            say({ event: 'attached', generation });
         },
         detach() {
             inner.detach();
             arm();
+            say({ event: 'detached' });
         },
     };
 
