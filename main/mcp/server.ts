@@ -253,6 +253,14 @@ let deps: ServerDeps | null = null;
  * mints and persists the tokens, and runs the calls through {@link mcpContextFor}.
  */
 let mode: 'in-process' | 'shuttle' = 'in-process';
+/** Why the shuttle, though wanted, is not serving this session — null when it is,
+ *  or was never wanted. Shown in Settings → Agent MCP. */
+let shuttleFallback: string | null = null;
+
+/** Record why a wanted shuttle is not serving (genie#346, §9.1). */
+export function noteShuttleFallback(reason: string | null): void {
+    shuttleFallback = reason;
+}
 
 /** Told whenever the routing table the shuttle serves ({@link mcpTopology}) changes. */
 const topologyListeners = new Set<() => void>();
@@ -938,6 +946,7 @@ export function stopMcpServer(): void {
     port = null;
     conflict = false;
     mode = 'in-process';
+    shuttleFallback = null;
     tokens.clear();
     byTerminal.clear();
     workspaceTokens.clear();
@@ -1007,10 +1016,13 @@ export interface McpServerState {
     conflict: boolean;
     /** Who listens on the port — this process, or the MCP shuttle. */
     mode: 'in-process' | 'shuttle';
+    /** Why the shuttle, though turned on, is not serving — absent when it is. */
+    shuttleFallback?: string;
 }
 export function mcpServerState(): McpServerState {
     return {
         mode,
+        ...(shuttleFallback ? { shuttleFallback } : {}),
         running: server !== null || (mode === 'shuttle' && port !== null),
         port,
         configuredPort: deps?.configuredPort() ?? DEFAULT_MCP_PORT,

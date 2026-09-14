@@ -195,6 +195,7 @@ import {
     adoptShuttleListener,
     mcpContextFor,
     mcpTopology,
+    noteShuttleFallback,
     onMcpTopologyChanged,
 } from './mcp/server';
 import { startMcpEndpoint } from './mcp-shuttle/genie-endpoint';
@@ -2401,6 +2402,15 @@ app.whenReady().then(async () => {
         }),
         manifest: () =>
             buildManifest(mcpContextFor(''), { genieVersion: app.getVersion(), generation: mcpGeneration }),
+        // §9.1: agents keep working in-process, but lose what the shuttle was turned
+        // on for — so the owner is told, in Settings and as it happens.
+        onFallback: (reason) => {
+            noteShuttleFallback(reason);
+            broadcastToWindows('terminal:host-status', {
+                level: 'warn',
+                message: `Agent MCP is served by Genie itself this session, so an update will drop agents' connections. ${reason}`,
+            });
+        },
         log: (line) => console.log(line),
     }).catch(async (e) => {
         console.error('[mcp] the endpoint failed to start; serving in-process', e);

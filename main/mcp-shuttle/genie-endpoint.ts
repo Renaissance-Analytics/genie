@@ -41,6 +41,8 @@ export interface McpEndpointDeps {
     manifest(): Promise<ShuttleManifest>;
     /** How long a burst of routing changes is gathered before it is sent. */
     topologyDebounceMs?: number;
+    /** A shuttle that was turned on is not serving, and why — once. */
+    onFallback?(reason: string): void;
     log?(line: string): void;
 }
 
@@ -70,7 +72,10 @@ export async function startMcpEndpoint(deps: McpEndpointDeps): Promise<McpEndpoi
     const inProcess = (reason: string | null): Promise<void> =>
         (portTaken ??= (async () => {
             mode = 'in-process';
-            if (reason) log(`serving in-process: ${reason}`);
+            if (reason) {
+                log(`serving in-process: ${reason}`);
+                deps.onFallback?.(reason);
+            }
             unsubscribe?.();
             unsubscribe = null;
             supervisor?.stop();

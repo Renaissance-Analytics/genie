@@ -10,6 +10,7 @@ import {
     mcpContextFor,
     mcpServerState,
     mcpTopology,
+    noteShuttleFallback,
     onMcpTopologyChanged,
     registerTerminalEndpoint,
     startMcpServer,
@@ -166,6 +167,18 @@ describe('shuttle mode', () => {
             req.end(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }));
         });
         expect(status).toBe(200);
+    });
+
+    it('reports why a wanted shuttle is not serving, for Settings to show', async () => {
+        const d = deps(userDir(), await freePort());
+        adoptShuttleListener(d);
+        noteShuttleFallback('No standalone Node runtime is shipped with this build.');
+        await startMcpServer(d);
+
+        expect(mcpServerState()).toMatchObject({
+            mode: 'in-process',
+            shuttleFallback: 'No standalone Node runtime is shipped with this build.',
+        });
     });
 
     it('POSITIVE CONTROL: the ordinary start still reports in-process', async () => {

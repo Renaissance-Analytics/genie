@@ -154,6 +154,33 @@ describe('startMcpEndpoint', () => {
         expect(h.server.bindInProcess).toHaveBeenCalledOnce();
     });
 
+    it('tells the user when a WANTED shuttle could not run — once, with the reason', async () => {
+        // §9.1: a fallback nobody can see is the silence the design forbids. Agents
+        // keep working, but lose exactly what the owner turned the shuttle on for.
+        const onFallback = vi.fn();
+        const h = harness({ start: async () => ({ mode: 'in-process', reason: 'No standalone Node runtime.' }) });
+        h.deps.onFallback = onFallback;
+
+        await start(h);
+        h.emit({ mode: 'in-process', reason: 'again' });
+
+        expect(onFallback).toHaveBeenCalledOnce();
+        expect(onFallback).toHaveBeenCalledWith('No standalone Node runtime.');
+    });
+
+    it('POSITIVE CONTROL: says nothing when the shuttle is simply off, or attached', async () => {
+        const off = harness({ shuttleEnabled: false });
+        off.deps.onFallback = vi.fn();
+        const on = harness();
+        on.deps.onFallback = vi.fn();
+
+        await start(off);
+        await start(on);
+
+        expect(off.deps.onFallback).not.toHaveBeenCalled();
+        expect(on.deps.onFallback).not.toHaveBeenCalled();
+    });
+
     it('binds in-process when its surface cannot even be built', async () => {
         const h = harness({ manifest: async () => Promise.reject(new Error('tools/list answered an error')) });
 
