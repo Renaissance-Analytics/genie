@@ -345,6 +345,7 @@ export async function describeWorkspaceForMcp(
         'genie-workspaces',
         'genie-knowledge',
         'genie-issuewatch',
+        'genie-handoff',
     ];
     const installedSkills = coreSkillNames.filter((name) =>
         fs.existsSync(path.join(skillRoot, name, 'SKILL.md')),

@@ -68,6 +68,7 @@ const coreSkillNames = [
     'genie-knowledge',
     'genie-issuewatch',
     'genie-new-project',
+    'genie-handoff',
 ];
 const URL = 'http://127.0.0.1:51717/mcp/tok';
 
@@ -166,6 +167,52 @@ describe('writeWorkspaceAgentMcp — per-target sync gating', () => {
         // prove the skill still says the thing it exists to say.
         expect(orientation).toContain('numbered plan');
         expect(JSON.parse(files.get(mcpJson)!).mcpServers.genie.url).toBe(URL);
+    });
+
+    it('installs genie-handoff: a user-run skill that makes the agent hand off through imDone and stop (genie#670)', () => {
+        settings = { mcp_sync_claude: 'on', mcp_sync_agents: 'on' };
+        writeWorkspaceAgentMcp(WS, true, URL);
+
+        const claude = files.get(path.join(WS, '.claude', 'skills', 'genie-handoff', 'SKILL.md'));
+        const codex = files.get(path.join(WS, '.agents', 'skills', 'genie-handoff', 'SKILL.md'));
+        // Positive control: the neighbouring skill landed in both roots, so an
+        // absence below is this skill missing, not the roots not being written.
+        expect(files.get(path.join(WS, '.claude', 'skills', 'genie-attention', 'SKILL.md'))).toBeDefined();
+        expect(files.get(path.join(WS, '.agents', 'skills', 'genie-attention', 'SKILL.md'))).toBeDefined();
+        expect(claude).toBeDefined();
+        expect(codex).toBeDefined();
+
+        for (const body of [claude!, codex!]) {
+            expect(body).toMatch(/^---\nname: genie-handoff\n/);
+            // The handoff goes through imDone, to THIS terminal, and the rules for
+            // its content are pointed at rather than restated.
+            expect(body).toContain('`imDone`');
+            expect(body).toContain('`handoff`');
+            expect(body).toContain('GENIE_TERMINAL_ID');
+            expect(body).toMatch(/`genieGuide` topic `imdone`/);
+            // It is a stop, not one more task.
+            expect(body).toMatch(/do not start new work/i);
+            expect(body).toMatch(/end your turn/i);
+        }
+
+        // A restart is the USER's gesture. Claude Code must not load the skill on
+        // its own — every imDone asks for a handoff, and an agent that matched
+        // that to this skill would stop mid-task. Codex skills take only name and
+        // description, so the flag is written for Claude Code alone.
+        expect(claude).toMatch(/^---\n[^]*?\ndisable-model-invocation: true\n[^]*?---\n/);
+        expect(codex).not.toContain('disable-model-invocation');
+        expect(codex).toMatch(/only when the user/i);
+
+        // Frontmatter is YAML. An unquoted value containing `: ` is not a plain
+        // scalar, so a harness that parses it strictly drops the skill.
+        for (const root of ['.claude', '.agents']) {
+            for (const name of coreSkillNames) {
+                const body = files.get(path.join(WS, root, 'skills', name, 'SKILL.md'))!;
+                const description = /\ndescription: (.*)\n/.exec(body)?.[1];
+                expect(description, `${root} ${name}`).toBeTruthy();
+                expect(description, `${root} ${name}`).not.toMatch(/: |^[&*!|>'"%@`#]/);
+            }
+        }
     });
 
     it('installs AgentInbox as a Claude Code Channel without terminal-input delivery', () => {
