@@ -69,7 +69,7 @@ function soundSettingTiers(): Record<
  *
  *   - Every host-sourced key is a workstation setting. (Pinned by test.)
  *   - NOT every workstation setting is host-sourced. Startup, updates and the
- *     quick-capture hotkey configure the client's own machine and are *hidden*
+ *     feedback hotkey configure the client's own machine and are *hidden*
  *     in a remote window rather than streamed — still workstation-tier.
  *   - "Client-local" is NOT the user tier. In a LOCAL window the client IS the
  *     workstation, so client-local today holds user preferences (sounds, DND,

@@ -51,6 +51,7 @@ import type { MobileDataDeps } from '../mobile/api';
 import { listWorkspaces } from '../db';
 import { isE2EHosting, registerHostingE2EMocks } from './hosting';
 import { isE2ETynnImport, registerTynnImportE2EMocks } from './tynn-import';
+import { isE2EFeedback, registerFeedbackE2EMocks } from './feedback';
 import {
     isE2EWorkspaceCreate,
     registerWorkspaceCreateE2EMocks,
@@ -457,6 +458,11 @@ export function registerE2EMocks(): void {
     // a connected account means the new workspace also gets its container repo,
     // and that is a real network call. See ./workspace-create.ts.
     if (isE2EWorkspaceCreate()) registerWorkspaceCreateE2EMocks();
+
+    // --- Feedback hotkey (the master page with GENIE_E2E_FEEDBACK=1) ------
+    // Fakes the project list and RECORDS feedback instead of filing it into a
+    // real Tynn project. See ./feedback.ts.
+    if (isE2EFeedback()) registerFeedbackE2EMocks();
 }
 
 // ===========================================================================

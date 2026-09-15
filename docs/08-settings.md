@@ -86,11 +86,12 @@ Add Files buttons until you raise it or close a view.
 - **Start command** — a default start command for new workspaces.
 - **Env file name** — the default env-file name for new workspaces.
 
-## Quick capture hotkey
+## Feedback hotkey
 
-**Accelerator** — a global hotkey to pop the quick-capture window, given as an
-Electron accelerator string, e.g. `CommandOrControl+Shift+W`. See
-**[Sign in & integrations → Quick capture](10-sign-in-and-integrations.md)**.
+**Accelerator** — a global hotkey that opens **Send feedback** for the active
+workspace, given as an Electron accelerator string, e.g.
+`CommandOrControl+Shift+W`. See
+**[Sign in & integrations → Feedback](10-sign-in-and-integrations.md)**.
 
 ## Startup
 
@@ -147,7 +148,7 @@ The Settings window also hosts the **Tynn** and **GitHub** sign-in
 sections, the **Updater** configuration, and more — covered on their own pages:
 
 - **[Sign in & integrations](10-sign-in-and-integrations.md)** — Tynn,
-  GitHub, and quick capture.
+  GitHub, and feedback.
 - **[Updates](09-updates.md)** — the Updater section.
 - **[Plugins & marketplaces](11-plugins.md)** — the **Plugins** section
   (installed plugins, capability grants, the Official + Marketplaces tabs, and

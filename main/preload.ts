@@ -3,6 +3,7 @@ import type {
     AgentPulseMarkerKind,
 } from './terminal/agent-pulse';
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import { OPEN_FEEDBACK_CHANNEL } from './feedback-open';
 import type { TailscaleStatus } from './tailscale';
 import type { AgentInboxScope } from './agentinbox/types';
 import type { AgentInboxIncomingPayload } from './terminal/ipc';
@@ -1007,17 +1008,6 @@ const api = {
             backendKind: 'tynn' = 'tynn',
         ) =>
             ipcRenderer.invoke('tynn:submit-feedback', projectId, message, meta, backendKind),
-        captureIssue: (
-            projectId: string,
-            content: string,
-            backendKind: 'tynn' = 'tynn',
-        ) =>
-            ipcRenderer.invoke(
-                'tynn:capture-issue',
-                projectId,
-                content,
-                backendKind,
-            ),
         inbox: () => ipcRenderer.invoke('tynn:inbox'),
         openInBrowser: (
             path: string,
@@ -1075,8 +1065,8 @@ const api = {
     },
 
     app: {
-        hideCapture: () => ipcRenderer.invoke('app:hide-capture'),
-        getCurrentProject: () => ipcRenderer.invoke('app:get-current-project'),
+        /** True once when the Feedback hotkey fired while this page was loading. */
+        claimPendingFeedback: () => ipcRenderer.invoke('app:claim-pending-feedback') as Promise<boolean>,
         /** The user's home directory (the System Workspace row's fallback path). */
         homeDir: () => ipcRenderer.invoke('app:home-dir') as Promise<string>,
         genieOsWorkspace: () => ipcRenderer.invoke('app:genie-os-workspace') as Promise<{ path: string }>,
@@ -1806,6 +1796,13 @@ const api = {
             const handler = () => cb();
             ipcRenderer.on('open-task-manager', handler);
             return () => ipcRenderer.off('open-task-manager', handler);
+        },
+        // The global Feedback hotkey and the tray's "Send feedback…" ask the
+        // master window to open Feedback for its active workspace (genie#675).
+        openFeedback: (cb: () => void) => {
+            const handler = () => cb();
+            ipcRenderer.on(OPEN_FEEDBACK_CHANNEL, handler);
+            return () => ipcRenderer.off(OPEN_FEEDBACK_CHANNEL, handler);
         },
         // Issue Watch: per-workspace unread counts (by type) + per-workspace
         // worst read detail + whether the GitHub session is dead, changed.

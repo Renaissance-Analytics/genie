@@ -12,20 +12,17 @@ On macOS use **⌘ (Command)**; on Windows and Linux use **Ctrl**.
 |----------|----------------|--------|
 | **⌘/Ctrl + ,** | Anywhere in the window | Open **Settings**. Works even while a terminal is focused. |
 | **⌘/Ctrl + S** | A focused **Files** panel | Save the active file (or plugin tab). |
-| **Quick-capture hotkey** | System-wide (global) | Pop the **Capture an issue** window. Default **Ctrl + Shift + W** (⌘ + Shift + W on macOS); change it in Settings. |
+| **Feedback hotkey** | System-wide (global) | Open **Send feedback** for the active workspace. Default **Ctrl + Shift + W** (⌘ + Shift + W on macOS); change it in Settings. |
 | **Esc** | An open flyout / dialog | Close the flyout (Docs, AgentInbox, Task Manager, Issue Watch…) or dismiss the current dialog. |
 
-## The quick-capture hotkey
+## The feedback hotkey
 
 The one **global** shortcut — it works even when Genie is hidden in the tray. It
-opens a small always-on-top window to file an issue against a project without
-switching context. Inside that window:
+brings Genie forward and opens **Send feedback** for the workspace you're in,
+with that workspace's Tynn project already selected. **Esc** closes it.
 
-- **Enter** files the issue (**Shift + Enter** for a newline).
-- **Esc** cancels and hides the window.
-
-Set the accelerator in **Settings → Quick capture hotkey** (an Electron
-accelerator string such as `CommandOrControl+Shift+W`). See
+Set the accelerator in **Settings → Feedback hotkey** (an Electron accelerator
+string such as `CommandOrControl+Shift+W`). See
 **[Sign in & integrations](10-sign-in-and-integrations.md)**.
 
 ## Saving files

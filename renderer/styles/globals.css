@@ -237,23 +237,6 @@ textarea.input {
     min-height: 100vh;
 }
 
-.capture-frame {
-    background: var(--bg-0);
-    color: var(--fg-1);
-    border: 1px solid var(--border-1);
-    border-radius: var(--radius-2xl);
-    box-shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.4);
-    padding: 14px;
-    margin: 6px;
-    height: calc(100vh - 12px);
-    display: flex;
-    flex-direction: column;
-    -webkit-app-region: drag;
-}
-.capture-frame .no-drag {
-    -webkit-app-region: no-drag;
-}
-
 /* ForceTheQuestion modal (pages/ask.tsx) — frameless always-on-top window an
    agent raises via the MCP.
 

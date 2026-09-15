@@ -109,22 +109,10 @@ export interface Backend {
     listProjects(): Promise<BackendProject[]>;
 
     /**
-     * File what the global quick-capture hotkey caught.
-     *
-     * It makes an ISSUE. Tynn used to keep Wishes and Issues apart and this
-     * posted to the Wish intake; that intake is retired, and the one thing a
-     * captured idea can become now is an Issue.
-     */
-    captureIssue(projectId: string, content: string): Promise<BackendCaptureResult>;
-
-    /**
      * File FEEDBACK about the product against a project (Tynn #249).
      *
-     * Distinct from {@link captureIssue} at the WIRE, which is the only place
-     * they still differ: quick capture posts to `/api/v1/issues`, feedback to
-     * `/api/v1/feedback`. Both make an Issue Tynn-side, but the paths are a
-     * contract with desktops already installed, so neither may be folded into
-     * the other.
+     * It posts to `/api/v1/feedback` and makes an Issue Tynn-side. The path is
+     * a contract with desktops already installed, so it may not move.
      *
      * `meta` carries the context that makes a report actionable later — Genie
      * version, workspace, and for an agent its terminal. The SOURCE is stamped by

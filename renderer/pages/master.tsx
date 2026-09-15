@@ -7,6 +7,7 @@ import { ftqNudgeDelivery } from '../lib/ftq-nudge';
 import { pairingPrompt } from '../../main/remote/pairing-reason';
 import GenieCommandWindow, { type SavedPrompt } from '../components/Master/GenieCommandWindow';
 import FeedbackModal from '../components/Master/FeedbackModal';
+import { feedbackWorkspaceFor } from '../lib/feedback-target';
 import Chooser from '../components/Master/Chooser';
 import ProjectContextMenu from '../components/Master/ProjectContextMenu';
 import NewAgentModal from '../components/Master/NewAgentModal';
@@ -338,6 +339,8 @@ function MasterInner() {
     // Gate persistence until the launch restore has run, so the pre-restore
     // render (activeWorkspaceId still null) can't overwrite a saved layout.
     const viewRestoredRef = useRef(false);
+    // The same moment as render state, for what must wait on it to re-run.
+    const [launchRestored, setLaunchRestored] = useState(false);
     const [activeIds, setActiveIds] = useState<Set<string>>(() => new Set());
     // Bytes in the last 1200ms — what the Genie OS surfaces animate on. See
     // `use-streaming-terminals` for why this is NOT `activeIds` above it: that
@@ -402,6 +405,21 @@ function MasterInner() {
 
     const [commandWindowFor, setCommandWindowFor] = useState<string | null>(null);
     const [feedbackWsId, setFeedbackWsId] = useState<string | null>(null);
+    // The global Feedback hotkey / tray item asked for Feedback (genie#675). Held
+    // until the launch restore has settled which workspace is active, so a
+    // hotkey that opened this window does not file against a guess.
+    const [feedbackRequested, setFeedbackRequested] = useState(false);
+    useEffect(() => {
+        const off = api().on.openFeedback?.(() => setFeedbackRequested(true));
+        // A hotkey that fired while this page was still loading is parked in main.
+        void api()
+            .app.claimPendingFeedback?.()
+            .then((pending) => {
+                if (pending) setFeedbackRequested(true);
+            })
+            .catch(() => {});
+        return off;
+    }, []);
     const [prompts, setPrompts] = useState<SavedPrompt[]>([]);
 
     useGenieHotkeys(
@@ -977,6 +995,15 @@ function MasterInner() {
         return m;
     }, [workspaces, systemWorkspace]);
 
+    // Resolve a Feedback request against the ACTIVE workspace once it is known.
+    useEffect(() => {
+        if (!feedbackRequested || !launchRestored) return;
+        const ws = feedbackWorkspaceFor(activeWorkspaceId, workspacesById);
+        if (!ws) return;
+        setFeedbackRequested(false);
+        setFeedbackWsId(ws.id);
+    }, [feedbackRequested, launchRestored, activeWorkspaceId, workspacesById]);
+
     /**
      * LAUNCH THE APP A GApp DEVELOPMENT WORKSPACE BUILDS (genie#245).
      *
@@ -1224,6 +1251,7 @@ function MasterInner() {
         }
         // The launch restore has run — subsequent view changes may now persist.
         viewRestoredRef.current = true;
+        setLaunchRestored(true);
     }, [isStage, stageSeedWorkspace, persistView]);
 
     /**

@@ -9,7 +9,7 @@ import {
 } from 'electron';
 import {
     showSettingsWindow,
-    showCaptureWindow,
+    openFeedbackWindow,
     showTerminalWindow,
     showMasterWindow,
     openTaskManagerWindow,
@@ -102,12 +102,12 @@ export function rebuildMenu(): void {
     }
 
     items.push({
-        label: 'Quick capture…',
+        label: 'Send feedback…',
         accelerator:
             process.platform === 'darwin'
                 ? 'Cmd+Shift+W'
                 : 'Ctrl+Shift+W',
-        click: () => showCaptureWindow(),
+        click: () => openFeedbackWindow(),
     });
     items.push({
         // "TheFloor" is an internal codename — never user-facing.

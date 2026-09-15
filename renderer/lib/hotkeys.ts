@@ -16,7 +16,7 @@
  * PANEL has focus. Not with Genie in the background, not with another application
  * focused, and not inside Genie's own settings, editors, modals or site manager.
  *
- * `globalShortcut` (main/shortcuts.ts, quick-capture) cannot express that — it is
+ * `globalShortcut` (main/shortcuts.ts, the feedback hotkey) cannot express that — it is
  * an OS-wide grab that fires with Genie minimised. `before-input-event` is
  * window-scoped, which removes the background case, but still fires for every
  * focused surface in the window. Hence this predicate, kept pure so the renderer's

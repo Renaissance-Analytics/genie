@@ -346,9 +346,9 @@ import {
 } from './testing-browser';
 import QRCode from 'qrcode';
 import { registerShortcuts } from './shortcuts';
+import { claimPendingFeedback } from './feedback-open';
 import { startSignIn, redeemCode } from './auth';
 import {
-    hideCaptureWindow,
     showSettingsWindow,
     showDocsWindow,
     showFlowEditorWindow,
@@ -2319,11 +2319,8 @@ export function registerIpcHandlers(): void {
             },
         ) => getTynnBackend().createProject(input),
     );
-    // FEEDBACK about Genie itself (Tynn #249). A separate channel from
-    // capture-issue because they post to separate PATHS — `/api/v1/feedback` vs
-    // `/api/v1/issues` — and those paths are a wire contract with desktops
-    // already installed, which we do not control the release of. Both make an
-    // Issue Tynn-side; that is not a reason to merge them.
+    // FEEDBACK (Tynn #249), posted to `/api/v1/feedback` — a wire contract with
+    // desktops already installed, which we do not control the release of.
     ipcMain.handle(
         'tynn:submit-feedback',
         async (
@@ -2343,18 +2340,6 @@ export function registerIpcHandlers(): void {
             } catch (e) {
                 return { ok: false, error: e instanceof Error ? e.message : String(e) };
             }
-        },
-    );
-    ipcMain.handle(
-        'tynn:capture-issue',
-        async (
-            _e,
-            projectId: string,
-            content: string,
-            backendKind: BackendKind = 'tynn',
-        ) => {
-            const backend = backendOfKind(backendKind);
-            return backend.captureIssue(projectId, content);
         },
     );
     ipcMain.handle('tynn:inbox', async () => fetchMergedInbox());
@@ -2475,10 +2460,9 @@ export function registerIpcHandlers(): void {
     ipcMain.handle('tynn-host:get', () => getTynnBackend().host());
 
     // --- App lifecycle --------------------------------------------------
-    ipcMain.handle('app:hide-capture', () => {
-        hideCaptureWindow();
-        return { ok: true };
-    });
+    // The page claims a Feedback open the hotkey requested while it was still
+    // loading (genie#675).
+    ipcMain.handle('app:claim-pending-feedback', () => claimPendingFeedback());
     // The user's home directory — the synthetic "System Workspace" roots its
     // terminals/editors here, and the directory picker for system processes
     // defaults to it. Surfaced from main (renderer has no `os` access).
