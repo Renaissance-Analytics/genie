@@ -60,6 +60,14 @@ export interface McpEndpointDeps {
 
 export interface McpEndpoint {
     mode(): 'shuttle' | 'in-process' | 'displaced';
+    /**
+     * Did this Genie take over an endpoint that never went down? True only when the
+     * boot ATTACHED to a shuttle already serving — then every agent's `genie`
+     * connection lived through the swap, and the upgrade notice must not repair
+     * it (genie#346). A shuttle this Genie had to start or replace, or serving
+     * in-process, means the previous endpoint went away with the previous Genie.
+     */
+    keptAgentConnections(): boolean;
     /** Build the surface again and send it — the tool list changed. */
     republishManifest(): Promise<void>;
     stop(): void;
@@ -70,6 +78,7 @@ const DEFAULT_TOPOLOGY_DEBOUNCE_MS = 50;
 export async function startMcpEndpoint(deps: McpEndpointDeps): Promise<McpEndpoint> {
     const log = (line: string) => deps.log?.(`[mcp-endpoint] ${line}`);
     let mode: 'shuttle' | 'in-process' | 'displaced' = 'in-process';
+    let attachedAtBoot = false;
     let supervisor: ShuttleSupervisor | null = null;
     let unsubscribe: (() => void) | null = null;
     let debounce: ReturnType<typeof setTimeout> | null = null;
@@ -96,6 +105,7 @@ export async function startMcpEndpoint(deps: McpEndpointDeps): Promise<McpEndpoi
 
     const endpoint: McpEndpoint = {
         mode: () => mode,
+        keptAgentConnections: () => attachedAtBoot,
         async republishManifest() {
             if (!supervisor || mode !== 'shuttle') return;
             try {
@@ -167,6 +177,7 @@ export async function startMcpEndpoint(deps: McpEndpointDeps): Promise<McpEndpoi
     const status = await supervisor.start();
     if (status.mode === 'shuttle') {
         mode = 'shuttle';
+        attachedAtBoot = status.how === 'attached';
         log(`serving through the MCP shuttle (${status.how})`);
     } else if (status.mode === 'in-process') {
         await inProcess(status.reason);

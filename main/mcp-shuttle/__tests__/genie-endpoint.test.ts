@@ -304,3 +304,28 @@ describe('startMcpEndpoint', () => {
         expect(h.supervisor.topology).not.toHaveBeenCalled();
     });
 });
+
+describe('keptAgentConnections — did this Genie take over an endpoint that never went down? (genie#346)', () => {
+    // The upgrade notice decides what to repair from this. ATTACHED means a shuttle
+    // was already serving when this Genie booted: every agent's `genie` connection
+    // lived through the swap. Anything else — a shuttle this Genie had to start or
+    // replace, or serving in-process — means the previous endpoint went away.
+    it('is true only when the boot ATTACHED to a shuttle that was already running', async () => {
+        const attached = await start(harness({ start: async () => ({ mode: 'shuttle', how: 'attached' }) }));
+        expect(attached.keptAgentConnections()).toBe(true);
+    });
+
+    it('is false for a shuttle this Genie started or replaced', async () => {
+        for (const how of ['spawned', 'replaced'] as const) {
+            const endpoint = await start(harness({ start: async () => ({ mode: 'shuttle', how }) }));
+            expect(endpoint.keptAgentConnections(), how).toBe(false);
+        }
+    });
+
+    it('is false when serving in-process, enabled or not', async () => {
+        const fellBack = await start(harness({ start: async () => ({ mode: 'in-process', reason: 'no runtime' }) }));
+        expect(fellBack.keptAgentConnections()).toBe(false);
+        const disabled = await start(harness({ shuttleEnabled: false }));
+        expect(disabled.keptAgentConnections()).toBe(false);
+    });
+});

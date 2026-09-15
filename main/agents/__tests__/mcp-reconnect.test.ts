@@ -127,7 +127,7 @@ describe('the reconnect covers EVERY server the upgrade replaced (genie#613)', (
         for (const provider of PROVIDER_IDS) {
             const strategy = reconnectStrategy(provider);
             expect(strategy.servers, `provider ${provider}`).not.toContain('tynn');
-            if (strategy.kind !== 'restart') {
+            if (strategy.kind === 'command' || strategy.kind === 'notice') {
                 expect(strategy.text, `provider ${provider}`).not.toContain('tynn');
             }
         }
@@ -228,9 +228,12 @@ describe('every provider has a recovery path (genie#346)', () => {
         for (const provider of PROVIDER_IDS) {
             const strategy = reconnectStrategy(provider);
             expect(strategy.kind, `provider ${provider}`).not.toBe('none');
+            // `kept` is only ever the answer when Genie KNOWS the endpoint survived;
+            // with no such context every provider must still get a repair.
+            expect(strategy.kind, `provider ${provider}`).not.toBe('kept');
             // An actionable path, not an empty shell: a `command`/`notice` whose
             // text is blank is `none` wearing a different tag.
-            if (strategy.kind !== 'restart') {
+            if (strategy.kind === 'command' || strategy.kind === 'notice') {
                 expect(strategy.text.trim().length, `provider ${provider}`).toBeGreaterThan(0);
             }
         }

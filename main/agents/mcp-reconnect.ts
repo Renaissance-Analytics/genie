@@ -64,7 +64,11 @@ import { PROVIDER_IDS, type AgentTuiId } from './registry';
    PRIMARY: the single typed command goes to the tool channel, because imDone,
    ForceTheQuestion and every host tool run through it. The LIST is still
    derived — see `claudeReconnectCommand`. */
-import { GENIE_SERVER_NAME, genieEndpointServers } from '../mcp/genie-servers';
+import {
+    AGENTINBOX_CLAUDE_CHANNEL_NAME,
+    GENIE_SERVER_NAME,
+    genieEndpointServers,
+} from '../mcp/genie-servers';
 
 /** `` `a` ``, `` `a` and `b` ``, `` `a`, `b` and `c` `` — the servers, named. */
 export function namedServers(servers: readonly string[]): string {
@@ -145,7 +149,12 @@ export type ReconnectAction =
      * Nothing Genie can safely perform — so SAY so, out of band. The caller
      * renders this into the upgrade notice and flags the terminal for attention.
      */
-    | { kind: 'notice'; text: string };
+    | { kind: 'notice'; text: string }
+    /**
+     * Nothing to repair: the endpoint was KEPT through the upgrade (the shuttle
+     * carried it) and every connection this agent has is up (genie#346).
+     */
+    | { kind: 'kept' };
 
 /**
  * The action, plus WHAT it is for — and, separately, what it actually reaches.
@@ -161,10 +170,28 @@ export type ReconnectStrategy = ReconnectAction & {
     servers: readonly string[];
     /**
      * The subset this action actually restores — always a subset of `servers`.
-     * Whatever is missing from it is what the notice has to name as still down.
+     * Whatever is missing from it, and from `kept`, is what the notice has to name
+     * as still down.
      */
     restores: readonly string[];
+    /**
+     * The servers that needed no repair because the upgrade never cut them — the
+     * endpoint was kept by the shuttle (genie#346). Absent means none: a replaced
+     * endpoint keeps nothing.
+     */
+    kept?: readonly string[];
 };
+
+/** What Genie knows about THIS upgrade and THIS agent when choosing a repair. */
+export interface ReconnectContext {
+    /**
+     * The new Genie ATTACHED to a shuttle that was already serving: the process
+     * behind the endpoint was never replaced, so every `genie` connection was kept.
+     */
+    endpointKept?: boolean;
+    /** This agent's AgentInbox channel has re-registered with the new Genie. */
+    channelBound?: boolean;
+}
 
 /**
  * A recovery path for EVERY registered provider.
@@ -202,11 +229,15 @@ const RECONNECT_ACTIONS: Partial<
 
 const KNOWN_PROVIDERS = new Set<string>(PROVIDER_IDS);
 
-export function reconnectStrategy(provider: string | null | undefined): ReconnectStrategy {
+export function reconnectStrategy(
+    provider: string | null | undefined,
+    context: ReconnectContext = {},
+): ReconnectStrategy {
     // Resolved whatever happens next, because an unknown provider still HAS an
     // MCP config: `genieEndpointServers` falls back to the `.mcp.json` set, the
     // same default the rest of the MCP surface uses for a TUI it cannot place.
     const servers = genieEndpointServers(typeof provider === 'string' ? provider : null);
+    if (context.endpointKept) return keptEndpointStrategy(provider, servers, context.channelBound === true);
     // An unknown or absent provider — a terminal from a newer build, or one
     // whose `meta.agent` never got written — must not fall off the end of the
     // table into silence. It is exactly the case the notice exists for.
@@ -223,6 +254,43 @@ export function reconnectStrategy(provider: string | null | undefined): Reconnec
         restores: [] as readonly string[],
     };
     return { ...action, servers };
+}
+
+/**
+ * The repair after an upgrade the SHUTTLE carried (genie#346): the endpoint was
+ * kept, so nothing that talks to it over HTTP was cut. The one connection that can
+ * still be down is the AgentInbox channel bridge — a stdio process of its own —
+ * and only when it has not re-registered.
+ *
+ * So Genie's one typed command goes to the channel, never to `genie`, and a Codex
+ * agent is not restarted: its only server is `genie`, and it was kept.
+ */
+function keptEndpointStrategy(
+    provider: string | null | undefined,
+    servers: readonly string[],
+    channelBound: boolean,
+): ReconnectStrategy {
+    const channelDown = servers.includes(AGENTINBOX_CLAUDE_CHANNEL_NAME) && !channelBound;
+    if (!channelDown) return { kind: 'kept', servers, restores: [], kept: servers };
+    const kept = servers.filter((name) => name !== AGENTINBOX_CLAUDE_CHANNEL_NAME);
+    if (provider === 'claude') {
+        return {
+            kind: 'command',
+            text: claudeReconnectCommand(AGENTINBOX_CLAUDE_CHANNEL_NAME),
+            servers,
+            restores: [AGENTINBOX_CLAUDE_CHANNEL_NAME],
+            kept,
+        };
+    }
+    // A harness whose grammar Genie does not know, carrying the channel anyway:
+    // say which one server is down, and type nothing.
+    return {
+        kind: 'notice',
+        text: manualReconnectNotice([AGENTINBOX_CLAUDE_CHANNEL_NAME]),
+        servers,
+        restores: [],
+        kept,
+    };
 }
 
 /**
@@ -282,7 +350,10 @@ export const MANUAL_RECOVERY: McpRecovery = {
  * same silence in a more helpful tone: an instruction nobody can act on.
  */
 function leftoverSentence(strategy: ReconnectStrategy, applied: boolean): string {
-    const missing = strategy.servers.filter((name) => !strategy.restores.includes(name));
+    const kept = strategy.kept ?? [];
+    const missing = strategy.servers.filter(
+        (name) => !strategy.restores.includes(name) && !kept.includes(name),
+    );
     if (missing.length === 0) return '';
     const commands = missing.map((name) => `\`${claudeReconnectCommand(name)}\``).join(', ');
     // "could not ALSO restore" is only true once something WAS restored. A
@@ -314,6 +385,9 @@ function leftoverSentence(strategy: ReconnectStrategy, applied: boolean): string
  */
 export function recoveryInstruction(recovery: McpRecovery): string {
     const { strategy, applied } = recovery;
+    // Every connection is up — there is nothing to instruct, and saying anything
+    // would send an agent to repair something that works.
+    if (strategy.kind === 'kept') return '';
     const restored = namedServers(strategy.restores);
     const all = namedServers(strategy.servers);
     const leftover = leftoverSentence(strategy, applied);

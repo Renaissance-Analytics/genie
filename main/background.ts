@@ -1357,7 +1357,7 @@ function reportWorkstationResetFailures(failures: ResetFailure[]): void {
  *
  * Best-effort throughout: an upgrade notice must never be able to block boot.
  */
-function announceUpgradeToAgents(): void {
+function announceUpgradeToAgents(opts: { endpointKept: boolean }): void {
     try {
         const currentVersion = app.getVersion();
         const previousVersion = getAllSettings().agent_upgrade_announced_version;
@@ -1416,11 +1416,26 @@ function announceUpgradeToAgents(): void {
                     // then landed in the same box, the two sharing one line.
                     const info = agentInboxBroker.getInfo(agentId);
                     const terminalId = info?.terminalId;
+                    // What the repair depends on (genie#346): whether the shuttle
+                    // carried the endpoint through the upgrade, and whether THIS
+                    // agent's channel has already re-registered with this process.
+                    const context = {
+                        endpointKept: opts.endpointKept,
+                        channelBound: harnessTransportRegistry.isVerified(agentId),
+                    };
                     // No terminal to reach: the agent is still told how to
-                    // reconnect itself rather than left to discover dead tools.
-                    if (!terminalId) return MANUAL_RECOVERY;
+                    // reconnect itself rather than left to discover dead tools —
+                    // unless nothing was cut, which is then what it is told.
+                    if (!terminalId) {
+                        return opts.endpointKept
+                            ? { strategy: reconnectStrategy(null, context), applied: false }
+                            : MANUAL_RECOVERY;
+                    }
                     const spec = getTerminalSpec(terminalId);
-                    const strategy = reconnectStrategy(spec?.meta?.agent as string | undefined);
+                    const strategy = reconnectStrategy(spec?.meta?.agent as string | undefined, context);
+                    // Every connection this agent has lived through the upgrade:
+                    // type nothing, restart nothing.
+                    if (strategy.kind === 'kept') return { strategy, applied: true };
                     if (strategy.kind === 'command') {
                         // Through the nudge machinery: it holds the keyboard,
                         // submits properly, replays anything typed during the
@@ -2448,7 +2463,7 @@ app.whenReady().then(async () => {
     // nothing to connect to without one, and a harness channel cannot
     // re-register itself against a port nobody is on.
     // Fire-and-forget: it schedules its own work and never blocks boot.
-    announceUpgradeToAgents();
+    announceUpgradeToAgents({ endpointKept: mcpEndpoint?.keptAgentConnections() ?? false });
 
     // Wire the operator's OWN workspace the way every other workspace is wired.
     // Without this it had no `.mcp.json`, no `.agents/skills/` and no Codex
