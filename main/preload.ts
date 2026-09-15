@@ -156,6 +156,8 @@ interface MobileStatus {
         emoji: string;
         isOwner: boolean;
         holdsControl: boolean;
+        /** A read-only guest: on the list, never driving. */
+        readonly?: boolean;
     }>;
     /** The desktop's view of the baton (who is driving, with which emoji). */
     control: {
@@ -175,7 +177,15 @@ interface MobileStatus {
         reason: 'keychain-unavailable' | 'decrypt-failed' | 'malformed' | 'read-failed';
         preservedPath: string | null;
     } | null;
+    /** Whether this computer is reachable over Tynn, and why not (genie#680). */
+    relay: RelayHostStatus;
 }
+/** Mirrors `RelayHostPublicStatus` in main/tynn/relay-host-controller.ts. */
+type RelayHostStatus =
+    | { state: 'off' }
+    | { state: 'connecting' }
+    | { state: 'connected'; relay: string }
+    | { state: 'unavailable'; reason: string; message: string };
 /** Who holds the host's baton, as this driver sees it (mirrors main/remote). */
 interface RemoteControlState {
     /** True when SOMEBODY ELSE is driving and this window is view-only. */
@@ -422,6 +432,17 @@ const api = {
             ipcRenderer.invoke('mobile:give-control', principalId) as Promise<
                 MobileStatus & { ok: boolean; error?: string }
             >,
+        /** End one guest's live session and close their sockets; nobody else's. */
+        disconnectGuest: (principalId: string) =>
+            ipcRenderer.invoke('mobile:disconnect-guest', principalId) as Promise<
+                MobileStatus & { ok: boolean; dropped: number }
+            >,
+        /** Live changes to whether this computer is reachable over Tynn. */
+        onRelay: (cb: (s: RelayHostStatus) => void) => {
+            const handler = (_e: unknown, payload: RelayHostStatus) => cb(payload);
+            ipcRenderer.on('mobile:relay', handler);
+            return () => ipcRenderer.off('mobile:relay', handler);
+        },
     },
 
     // Work Mode — Tailscale lifecycle management (status / bring online / install).

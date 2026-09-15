@@ -9,6 +9,7 @@ import {
 import { recordPairingEvent, setPairingJournalDir } from '../pairing-journal';
 import { assignEmoji } from './emoji';
 import type { BatonPrincipal } from './baton';
+import type { HostAccessPolicy } from '../host-core/access-policy';
 
 /**
  * Pairing PIN + session-token store for the mobile remote-control server.
@@ -69,6 +70,19 @@ export interface MobileSession {
     label: string;
     /** Who is behind this session (see SessionIdentity). Absent ⇒ the host owner. */
     identity?: SessionIdentity;
+    /**
+     * What a GUEST may reach — present only on a session minted for someone this
+     * host was SHARED with (see {@link mintGuestSession}). Its presence is what
+     * makes a session a guest's: every route, socket and push is then judged by it
+     * (`guest-access.ts`). Absent ⇒ a paired device, which is the owner's own.
+     */
+    access?: HostAccessPolicy;
+    /**
+     * Minted for ONE relay session and never written to disk (the relay host sets
+     * it for the owner's own grant; every guest session is ephemeral already). A
+     * persisted copy would outlive the session and the grant that admitted it.
+     */
+    ephemeral?: boolean;
 }
 
 /**
@@ -187,7 +201,10 @@ function persist(): void {
     if (!state?.userDataDir) return;
     const payload = {
         pin: state.pin,
-        sessions: [...state.sessions.values()],
+        // Paired devices only. A guest session lives exactly as long as the relay
+        // session that minted it; written down, it would survive the revocation
+        // that is supposed to end it, and come back on the next boot.
+        sessions: [...state.sessions.values()].filter((s) => !s.access && !s.ephemeral),
     };
     const enc = encryptSecretResult(JSON.stringify(payload));
     if (!enc.ok) {
@@ -463,6 +480,87 @@ export function sessionFromAuthHeader(
     return m ? validateSession(m[1]) : null;
 }
 
+/**
+ * Mint a session for a GUEST — someone this host was shared with, admitted by a
+ * validated access grant (the relay host does this per member session). The
+ * session carries the grant's policy, so the server judges every request by what
+ * the grant reaches rather than treating the guest as the owner.
+ *
+ * NOT persisted (see `persist`), and never an owner: the identity's role is
+ * `member`, so the baton only ever GIVES a guest control.
+ */
+export function mintGuestSession(opts: {
+    policy: HostAccessPolicy;
+    name: string;
+    emoji?: string;
+    ip?: string;
+}): MobileSession {
+    if (!state) throw new Error('mobile auth is not initialised');
+    const token = crypto.randomBytes(32).toString('hex');
+    const session: MobileSession = {
+        id: crypto.randomUUID(),
+        token,
+        ip: opts.ip ?? '',
+        createdAt: Date.now(),
+        label: opts.name,
+        identity: {
+            userId: opts.policy.principalId,
+            name: opts.name,
+            ...(opts.emoji ? { emoji: opts.emoji } : {}),
+            role: 'member',
+        },
+        access: opts.policy,
+    };
+    state.sessions.set(token, session);
+    return session;
+}
+
+/**
+ * Mint a session for the host OWNER arriving over the relay with their own Tynn
+ * grant (`src: owner`) — the owner's own device, so no access policy, but minted
+ * for this one relay session and never persisted (genie#680).
+ */
+export function mintRelayOwnerSession(opts: { userId: string; name: string }): MobileSession {
+    if (!state) throw new Error('mobile auth is not initialised');
+    const token = crypto.randomBytes(32).toString('hex');
+    const session: MobileSession = {
+        id: crypto.randomUUID(),
+        token,
+        ip: '',
+        createdAt: Date.now(),
+        label: opts.name,
+        identity: { userId: opts.userId, name: opts.name, role: 'owner' },
+        ephemeral: true,
+    };
+    state.sessions.set(token, session);
+    return session;
+}
+
+/** Drop one session by its token (a relay session closed). Returns whether it existed. */
+export function revokeSessionToken(token: string): boolean {
+    if (!state) return false;
+    const existed = state.sessions.delete(token);
+    if (existed) persist();
+    return existed;
+}
+
+/**
+ * Drop every session belonging to one guest principal (their grant was revoked, or
+ * the host owner disconnected them). Paired devices are never touched. Returns how
+ * many sessions were dropped.
+ */
+export function revokeGuestSessions(principalId: string): number {
+    if (!state) return 0;
+    let dropped = 0;
+    for (const [token, s] of state.sessions) {
+        if (s.access && s.access.principalId === principalId) {
+            state.sessions.delete(token);
+            dropped += 1;
+        }
+    }
+    return dropped;
+}
+
 /** Drop EVERY session (Settings → Disconnect all). The PIN is left intact. */
 export function revokeAllSessions(): number {
     if (!state) return 0;
@@ -536,7 +634,10 @@ export function sessionPrincipal(session: MobileSession): BatonPrincipal {
         id: resolved.userId ?? session.id,
         name: resolved.name ?? session.label,
         emoji: resolved.emoji ?? assignEmoji(session.id),
-        isOwner: (resolved.role ?? 'owner') === 'owner',
+        // A guest is never an owner, whatever its identity says.
+        isOwner: !session.access && (resolved.role ?? 'owner') === 'owner',
+        // Read-only guests are on the roster but never drive (baton.ts).
+        readonly: session.access?.capability === 'readonly',
         since: session.createdAt,
     };
 }

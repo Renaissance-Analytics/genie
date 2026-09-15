@@ -19,6 +19,7 @@ import type { SoundSettingKeys } from '../../main/notify-sound-kinds';
 import type { RestartMode } from '../../main/agents/restart-options';
 import type { AgentCliToolId } from '../../main/agents/agent-cli-catalog';
 import type { PinReason } from '../../main/remote/pairing-reason';
+import type { RelayHostStatus } from './relay-status-note';
 /* The agent MANAGER's wire types (Tynn #709 / story #263).
  *
  * From `agent-manager-types.ts` — a ZERO-IMPORT leaf — and from NOTHING else,
@@ -1589,6 +1590,8 @@ export interface MobileStatus {
         /** Where the unreadable store was moved so it can still be recovered. */
         preservedPath: string | null;
     } | null;
+    /** Whether this computer is reachable over Tynn, and why not (genie#680). */
+    relay: RelayHostStatus;
 }
 
 /** A remote/phone currently connected to THIS host. */
@@ -1603,6 +1606,15 @@ export interface MobilePeer {
     emoji: string;
     /** True for the one user currently driving. */
     holdsControl: boolean;
+    /** What a guest reaches (genie#681); null for the owner's own device. */
+    access: PeerAccess | null;
+}
+
+/** What a connected guest reaches (mirrors `PeerAccess` in main/mobile/guest-access.ts). */
+export interface PeerAccess {
+    capability: 'control' | 'readonly';
+    /** `all` for every workspace on this host; otherwise their names. */
+    workspaces: 'all' | string[];
 }
 
 /** One row of the connected-users list (everyone who could drive). */
@@ -1613,6 +1625,8 @@ export interface BatonParticipant {
     /** Owners may TAKE the baton; everyone else can only be GIVEN it. */
     isOwner: boolean;
     holdsControl: boolean;
+    /** A read-only guest: on the list, never driving. */
+    readonly?: boolean;
 }
 
 /** Who holds the HOST's baton, as a remote driver window sees it. */
@@ -3392,6 +3406,10 @@ export interface GenieApi {
         giveControl: (
             principalId: string,
         ) => Promise<MobileStatus & { ok: boolean; error?: string }>;
+        /** End one guest's live session and close their sockets; nobody else's. */
+        disconnectGuest: (principalId: string) => Promise<MobileStatus & { ok: boolean; dropped: number }>;
+        /** Live changes to whether this computer is reachable over Tynn. */
+        onRelay: (cb: (s: RelayHostStatus) => void) => () => void;
     };
     tailscale: {
         status: () => Promise<TailscaleStatus>;
