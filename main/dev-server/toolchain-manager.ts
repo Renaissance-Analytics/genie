@@ -18,6 +18,8 @@ import { writeCaBundle } from './toolchain-ca';
 import type { ComposerPhp } from './composer-php';
 import { FRANKENPHP_VERSION } from './frankenphp';
 import { ensureFrankenphp, type FrankenphpInstallEffects, type FrankenphpResolution } from './frankenphp-install';
+import { ROADRUNNER_VERSION } from './roadrunner';
+import { ensureRoadrunner, type RoadrunnerInstallEffects, type RoadrunnerResolution } from './roadrunner-install';
 import { createToolchainPerformDeps } from './toolchain-effects';
 import { createPerformInstall } from './toolchain-perform';
 import { runInstallPlan, type PerformInstall } from './toolchain-install';
@@ -724,6 +726,54 @@ export function createFrankenphpResolver(deps: ToolchainManagerDeps): () => Prom
             });
         }
         return frankenphpInFlight;
+    };
+}
+
+/**
+ * The RoadRunner `rr` an Octane site on RoadRunner runs (genie#668): the pinned
+ * release, downloaded into the toolchain the first time a site needs it. One
+ * download at a time, shared, for the same reason as FrankenPHP's.
+ */
+let roadrunnerInFlight: Promise<RoadrunnerResolution> | null = null;
+
+export function createRoadrunnerResolver(): () => Promise<RoadrunnerResolution> {
+    return () => {
+        if (!roadrunnerInFlight) {
+            roadrunnerInFlight = ensureRoadrunner({
+                dir: join(toolchainRoot(), 'roadrunner', ROADRUNNER_VERSION),
+                platform: process.platform,
+                arch: process.arch,
+                effects: roadrunnerInstallEffects(),
+            }).finally(() => {
+                roadrunnerInFlight = null;
+            });
+        }
+        return roadrunnerInFlight;
+    };
+}
+
+function roadrunnerInstallEffects(): RoadrunnerInstallEffects {
+    return {
+        exists: (file) => fsSync.existsSync(file),
+        async download(url) {
+            const res = await download(url);
+            return res.ok && res.path ? { ok: true, path: res.path } : { ok: false, error: res.error ?? 'download failed' };
+        },
+        async extract(archive, artifact, dest) {
+            await mkdir(dest, { recursive: true });
+            return extractArchive(archive, artifact, dest);
+        },
+        async makeExecutable(file) {
+            await chmod(file, 0o755);
+        },
+        async version(exe) {
+            const res = await defaultCommandRunner.run(exe, ['--version'], { timeoutMs: 30_000 });
+            if (res.code !== 0) throw new Error((res.stderr || res.stdout || `exited ${res.code}`).trim());
+            return res.stdout;
+        },
+        async removeDir(dir) {
+            await rm(dir, { recursive: true, force: true }).catch(() => {});
+        },
     };
 }
 

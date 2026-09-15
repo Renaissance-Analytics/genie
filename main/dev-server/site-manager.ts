@@ -30,6 +30,7 @@ import {
     frankenphpRunArgv,
 } from './frankenphp';
 import type { FrankenphpResolution } from './frankenphp-install';
+import type { RoadrunnerResolution } from './roadrunner-install';
 import type { HostEnvReport } from './services/service-manager';
 import {
     hostBrowserNames as selectHostBrowserNames,
@@ -464,6 +465,13 @@ export interface DevSiteManagerDeps {
      * `hostServe: frankenphp` site fails with a clear "not available" status.
      */
     resolveFrankenphp?: () => Promise<FrankenphpResolution>;
+    /**
+     * Put the pinned RoadRunner `rr` on this machine (downloading it the first
+     * time) and say where it is (genie#668). Absent ⇒ an Octane site on
+     * RoadRunner fails with a clear "not available" status, rather than Octane
+     * downloading `rr` into the repo.
+     */
+    resolveRoadrunner?: () => Promise<RoadrunnerResolution>;
     /** The environment a spawned site inherits — read for its PATH. Default: process.env. */
     baseEnv?: NodeJS.ProcessEnv;
     /**
@@ -1810,6 +1818,17 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                 const late = frankenphpRefusal(repoRequires, frankenphp.phpVersion);
                 if (late) return { ok: false, error: late };
                 serverEnv = { ...serverEnv, ...pathWithFirst(path.dirname(frankenphp.exe)) };
+            }
+            // OCTANE ON ROADRUNNER finds `rr` the same way, and without one asks to
+            // download it — `vendor/bin/rr get-binary`, which writes the binary into
+            // the user's repo. Genie's own install goes first on PATH instead.
+            if (hostServe.server === 'roadrunner') {
+                if (!deps.resolveRoadrunner) {
+                    return { ok: false, error: 'Octane on RoadRunner is not available in this build (Genie cannot install RoadRunner here).' };
+                }
+                const rr = await deps.resolveRoadrunner();
+                if (!rr.ok) return { ok: false, error: rr.error };
+                serverEnv = { ...serverEnv, ...pathWithFirst(path.dirname(rr.exe)) };
             }
             return {
                 ok: true,

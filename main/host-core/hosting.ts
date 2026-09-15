@@ -39,7 +39,7 @@ import { createServiceEnvSync } from '../dev-server/services/env-sync';
 import { applyEnvBlock } from '../env-store';
 import { createHostProcessRun } from '../dev-server/host-process-run';
 import { createEngineMismatchNote } from '../dev-server/host-engine-probe';
-import { createFrankenphpResolver, createSiteEngineResolver } from '../dev-server/toolchain-manager';
+import { createFrankenphpResolver, createRoadrunnerResolver, createSiteEngineResolver } from '../dev-server/toolchain-manager';
 import { initDevLifecycle } from '../dev-server/lifecycle';
 import type { DevServerLifecycle, DevServerLifecycleDeps } from '../dev-server/lifecycle';
 import { registerDevSiteTools } from '../mcp/dev-site-tools';
@@ -345,6 +345,9 @@ export function buildHostingDeps(ports: HostingPorts): HostingDeps {
         // the toolchain the first time one needs it. The deps are only used to
         // install the Visual C++ runtime on Windows — a direct vendor install that
         // reads no defaults and writes none, so a site start never changes them.
+        // RoadRunner's `rr` for an Octane site on RoadRunner (genie#668), on the
+        // same terms: installed into the toolchain, never downloaded into the repo.
+        resolveRoadrunner: createRoadrunnerResolver(),
         resolveFrankenphp: createFrankenphpResolver({
             readDefaults: ports.readToolchainDefaults ?? (() => undefined),
             writeDefaults: () => {},
