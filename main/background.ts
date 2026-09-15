@@ -221,6 +221,7 @@ import {
     syncRelayHost,
 } from './tynn/relay-host-controller';
 import { readWorkstationIdentity } from './tynn/workstation-identity';
+import { resolveTynnLinkForRow } from './workspace/tynn-link';
 import {
     listPendingQuestions,
     answerPendingQuestion,
@@ -2707,6 +2708,13 @@ app.whenReady().then(async () => {
                     project_name: w.project_name,
                     path: w.path,
                 })),
+            // A shared guest's grant may name a workspace by its Tynn project rather
+            // than this host's id — the same effective link the inventory reports
+            // (genie#687).
+            workspaceTynnProjectId: (id) => {
+                const w = getWorkspace(id);
+                return w ? (resolveTynnLinkForRow(w)?.projectId ?? null) : null;
+            },
             // The protected System Workspace, asked for BY ID — the affordance
             // `listWorkspaces()`'s exclusion leaves open. A paired device gets full
             // access to every workspace on this host, the workstation operator's own

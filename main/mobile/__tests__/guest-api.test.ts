@@ -71,7 +71,7 @@ import {
 } from '../auth';
 import { _resetAuditForTest } from '../audit';
 import { _resetBatonForTest, setLocked } from '../baton';
-import { GUEST_NOT_GRANTED, GUEST_READ_ONLY } from '../guest-access';
+import { GUEST_NOT_GRANTED, GUEST_READ_ONLY, guestMayUseSite } from '../guest-access';
 import type { HostAccessPolicy } from '../../host-core/access-policy';
 
 // --- fixture: one shared workspace, one private one ---------------------------
@@ -108,6 +108,7 @@ const spies = {
 function deps(): MobileDataDeps {
     return {
         listWorkspaces: () => [SHARED, PRIVATE],
+        workspaceTynnProjectId: (id: string) => (id === SHARED.id ? 'proj-shared' : id === PRIVATE.id ? 'proj-private' : null),
         listTerminalSpecs: () => [spec('t-shared', SHARED.id), spec('t-private', PRIVATE.id)],
         listAllProcesses: () => [
             { id: 'p-shared', kind: 'process', label: 'shared web', command: 'npm run dev', workspace: SHARED.project_name, workspaceId: SHARED.id, status: 'running', autostart: false },
@@ -289,6 +290,44 @@ describe('a guest sees only the workspace they were given', () => {
 
         expect(res.status).toBe(200);
         expect(res.json.sites.map((s: { siteId: string }) => s.siteId)).toEqual(['site-shared']);
+    });
+
+    // genie#687: Tynn writes a scope with the workspace's Tynn project id when it has
+    // one, and on a desktop that differs from the host's own workspace id.
+    it('reaches the workspace its grant names by Tynn project id, and only that one', async () => {
+        const byProject = mintGuestSession({
+            policy: policy({ principalId: 'tynn-user-by-project', workspaceScopes: ['workspace:proj-shared'] }),
+            name: 'Pat Project',
+        }).token;
+
+        const res = await call(byProject, 'GET', '/api/terminals');
+
+        expect(res.status).toBe(200);
+        expect(res.body).toMatch(/t-shared/);
+        expect(res.body).not.toMatch(/t-private/);
+        expect((await call(byProject, 'POST', '/api/process/p-private/stop')).status).toBe(404);
+        expect(spies.stopProcess).not.toHaveBeenCalled();
+        expect((await call(byProject, 'POST', '/api/process/p-shared/stop')).status).toBe(200);
+        const sites = await call(byProject, 'GET', '/api/sites/enabled');
+        expect(sites.json.sites.map((s: { siteId: string }) => s.siteId)).toEqual(['site-shared']);
+    });
+
+    it('lets the site proxy through to a granted site of a workspace named by project id', () => {
+        const byProject = policy({ workspaceScopes: ['workspace:proj-shared'] });
+
+        expect(guestMayUseSite(byProject, deps(), { workspaceId: SHARED.id, siteId: 'site-shared' }, { method: 'GET' })).toBe(true);
+        expect(guestMayUseSite(byProject, deps(), { workspaceId: PRIVATE.id, siteId: 'site-private' }, { method: 'GET' })).toBe(false);
+    });
+
+    it('reaches nothing with a project id no workspace here is linked to', async () => {
+        const stranger = mintGuestSession({
+            policy: policy({ principalId: 'tynn-user-elsewhere', workspaceScopes: ['workspace:proj-elsewhere'] }),
+            name: 'Elle Elsewhere',
+        }).token;
+
+        const res = await call(stranger, 'GET', '/api/terminals');
+
+        expect(res.body).not.toMatch(/t-shared|t-private/);
     });
 });
 
