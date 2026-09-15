@@ -199,6 +199,7 @@ import {
     onMcpTopologyChanged,
 } from './mcp/server';
 import { startMcpEndpoint } from './mcp-shuttle/genie-endpoint';
+import { shuttleEnabledFor } from './mcp-shuttle/enabled';
 import {
     genieShuttleSupervisorFactory,
     shuttleStateDir,
@@ -2380,12 +2381,12 @@ app.whenReady().then(async () => {
     if (isE2E()) registerAppsE2E();
     // WHO SERVES THE AGENT MCP PORT (genie#346): the MCP shuttle — a separate
     // process on the standalone Node that outlives this one, so an upgrade never
-    // drops an agent's connection — or, when it is off or cannot run, this process
-    // exactly as before. `startMcpEndpoint` never resolves with the port unserved.
+    // drops an agent's connection. Always; it is not a setting. Only when it
+    // cannot run does this process serve instead, and that is reported as the
+    // failure it is. `startMcpEndpoint` never resolves with the port unserved.
     const mcpGeneration = Date.now();
     const mcpEndpoint = await startMcpEndpoint({
-        shuttleEnabled:
-            getAllSettings().mcp_shuttle === 'on' || (isE2E() && process.env.GENIE_E2E_MCP_SHUTTLE === '1'),
+        shuttleEnabled: shuttleEnabledFor({ e2e: isE2E(), env: process.env }),
         server: {
             adoptShuttleListener: () => adoptShuttleListener(mcpDeps),
             bindInProcess: () => startMcpServer(mcpDeps),
@@ -2410,8 +2411,8 @@ app.whenReady().then(async () => {
             buildManifest(mcpContextFor(''), { genieVersion: app.getVersion(), generation: mcpGeneration }),
         stopRunningShuttle: () => stopShuttleIfRunning(shuttleStateDir(app.getPath('userData'))),
         prepareShuttle: () => stopShuttleOnOtherPort(shuttleStateDir(app.getPath('userData')), mcpDeps.configuredPort()),
-        // §9.1: agents keep working in-process, but lose what the shuttle was turned
-        // on for — so the owner is told, in Settings and as it happens.
+        // §9.1: agents keep working in-process, but lose what the shuttle is for —
+        // surviving an update — so the owner is told, in Settings and as it happens.
         onFallback: (reason) => {
             noteShuttleFallback(reason);
             broadcastToWindows('terminal:host-status', {
