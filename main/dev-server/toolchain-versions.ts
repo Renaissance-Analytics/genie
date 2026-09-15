@@ -70,6 +70,12 @@ export interface EngineInstall {
     /** Bytes on disk. Genie-owned installs only — Genie never walks another
      *  app's tree to put a number next to it. */
     sizeBytes?: number;
+    /**
+     * PHP on Windows only: whether this is a thread-safe (ZTS) build — the one
+     * with `php8ts.dll`. Genie's PHP must be (genie#669): FrankenPHP loads PHP as
+     * a library and needs it. Absent for every other language and platform.
+     */
+    threadSafe?: boolean;
 }
 
 /** Display labels. The UI never shows the internal id. */
@@ -323,10 +329,12 @@ const ALL_PLATFORMS = ['win32', 'darwin', 'linux'] as const;
  * written here; a line with no honest download on a platform is simply ABSENT
  * rather than present-and-broken.
  *
- * - **php** — windows.php.net publishes relocatable NTS builds (NTS is the right
- *   one: the FastCGI worker runs `php-cgi`). macOS/Linux ship no relocatable
- *   official build, so php has no recipe there; Genie says so rather than
- *   offering a download that cannot work.
+ * - **php** — windows.php.net publishes relocatable builds, and Genie takes the
+ *   THREAD-SAFE (ZTS) one (genie#669): FrankenPHP loads PHP as a library and
+ *   needs `php8ts.dll`, and the ZTS zip still carries the `php-cgi.exe` the
+ *   FastCGI worker runs. macOS/Linux ship no relocatable official build, so php
+ *   has no recipe there; Genie says so rather than offering a download that
+ *   cannot work.
  * - **node / go** — official archives on every desktop platform.
  * - **python** — the official Windows installer supports a per-user install into
  *   a target directory with no elevation. macOS/Linux would mean building from
@@ -371,7 +379,8 @@ export function assetFor(recipe: VersionRecipe, ctx: RecipeContext): VersionAsse
         case 'php': {
             // x64 only — windows.php.net publishes no arm64 build.
             if (arch !== 'x64') return undefined;
-            const file = `php-${v}-nts-Win32-${recipe.tag}-x64.zip`;
+            // The thread-safe zip (no `-nts-`) — see TOOLCHAIN_RECIPES.
+            const file = `php-${v}-Win32-${recipe.tag}-x64.zip`;
             return {
                 // Current releases live at the root and MOVE to archives/ when a
                 // patch supersedes them; try both rather than rot on release day.
@@ -447,6 +456,24 @@ export function assetFor(recipe: VersionRecipe, ctx: RecipeContext): VersionAsse
 }
 
 /** Every version Genie can install for a language on THIS machine, newest first. */
+/**
+ * PURE. Whether `php --version` names a thread-safe build.
+ *
+ * PHP prints the build in its banner — `(ZTS Visual C++ 2022 x64)` on Windows,
+ * a bare `(NTS)` on posix. Undefined when the output names neither, so a caller
+ * never mistakes "could not tell" for an answer.
+ */
+export function parsePhpThreadSafety(versionOutput: string): boolean | undefined {
+    const m = /\((ZTS|NTS)\b/.exec(versionOutput);
+    if (!m) return undefined;
+    return m[1] === 'ZTS';
+}
+
+/** The library only a thread-safe Windows PHP build ships (`php8ts.dll`). */
+export function phpThreadSafeDll(version: string): string {
+    return `php${version.split('.')[0]}ts.dll`;
+}
+
 export function recipesFor(tool: LanguageTool, ctx: RecipeContext): VersionRecipe[] {
     return TOOLCHAIN_RECIPES.filter((r) => r.tool === tool && assetFor(r, ctx) !== undefined).sort(
         (a, b) => compareVersionsDesc(a.version, b.version),
@@ -468,6 +495,33 @@ export function addableRecipes(
         selectableInstalls(installs.filter((i) => i.tool === tool)).map((i) => i.version),
     );
     return recipesFor(tool, ctx).filter((r) => !mine.has(r.version));
+}
+
+/**
+ * The installs the Toolchain page offers to REINSTALL as a thread-safe build
+ * (genie#669), by {@link installKey}.
+ *
+ * Only a Genie PHP that is known to be NTS, sits in its own version directory
+ * and still has a recipe: reinstalling replaces that directory in place, so a
+ * legacy flat install (`<userData>/tools/php`) would get a second copy somewhere
+ * else instead, and a version with no recipe has nothing to reinstall from.
+ */
+export function threadSafeReinstallKeys(
+    installs: readonly EngineInstall[],
+    ctx: RecipeContext,
+    root: string,
+): string[] {
+    const recipes = new Set(recipesFor('php', ctx).map((r) => r.version));
+    return installs
+        .filter(
+            (i) =>
+                i.tool === 'php' &&
+                i.source === 'genie' &&
+                i.threadSafe === false &&
+                recipes.has(i.version) &&
+                i.dir === genieVersionDir(root, 'php', i.version, ctx.os),
+        )
+        .map(installKey);
 }
 
 // --- php.ini — Genie owns the CONFIG too ------------------------------------
@@ -558,6 +612,9 @@ export const PHP_VARIABLES_ORDER = 'EGPCS';
  *
  * Every name below was loaded for real out of php-8.4.24-nts-Win32-vs17-x64:
  * `php -m` lists all fourteen and prints no "Unable to load dynamic library".
+ * The whole list was loaded again out of the thread-safe
+ * php-8.4.24-Win32-vs17-x64 Genie installs now (genie#669): every module present,
+ * nothing printed to stderr.
  */
 export const PHP_INI_EXTENSIONS: readonly string[] = [
     'bz2',

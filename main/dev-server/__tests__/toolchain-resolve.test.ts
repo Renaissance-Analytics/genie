@@ -83,8 +83,9 @@ describe('resolveDownloadUrl — nodejs-dist', () => {
  * it installs and owns its own. So this resolves for real, and the two decisions
  * that matter are asserted here:
  *
- *   - **non-thread-safe, x64.** NTS is the FastCGI build, and `php-cgi.exe` is
- *     what Genie's php serve mode spawns — genie#206 was exactly its absence.
+ *   - **thread-safe, x64** (genie#669). FrankenPHP needs the ZTS build, and its
+ *     zip still carries the `php-cgi.exe` Genie's php serve mode spawns —
+ *     genie#206 was exactly that binary's absence.
  *   - **never a line this release has no recipe for.** The patch comes live from
  *     the index (so a superseded file that moved to `archives/` can't 404 us),
  *     but the LINE is capped at what Genie ships support for.
@@ -106,15 +107,26 @@ describe('resolveDownloadUrl — php-windows', () => {
         // Newer than anything TOOLCHAIN_RECIPES ships a recipe for.
         '8.5': {
             version: '8.5.9',
+            'ts-vs17-x64': { zip: { path: 'php-8.5.9-Win32-vs17-x64.zip' } },
             'nts-vs17-x64': { zip: { path: 'php-8.5.9-nts-Win32-vs17-x64.zip' } },
         },
     };
 
-    it('resolves the NON-thread-safe x64 zip — php-cgi.exe is the FastCGI binary (#206)', async () => {
+    it('resolves the THREAD-SAFE x64 zip (#669), which still carries php-cgi.exe (#206)', async () => {
         const url = await resolveDownloadUrl('php-windows', winCtx, async () => releasesJson);
-        // Not the `ts-` build, not the x86 one: the nts x64 archive, which
-        // unpacks flat with php.exe AND php-cgi.exe at its root.
-        expect(url).toBe('https://windows.php.net/downloads/releases/php-8.4.24-nts-Win32-vs17-x64.zip');
+        // Not the `nts-` build, not the x86 one: the ts x64 archive, which
+        // unpacks flat with php.exe, php-cgi.exe and php8ts.dll at its root.
+        expect(url).toBe('https://windows.php.net/downloads/releases/php-8.4.24-Win32-vs17-x64.zip');
+    });
+
+    it('never falls back to an NTS build when a line has no thread-safe one', async () => {
+        const ntsOnly = {
+            '8.4': { version: '8.4.24', 'nts-vs17-x64': { zip: { path: 'php-8.4.24-nts-Win32-vs17-x64.zip' } } },
+            '8.3': { version: '8.3.33', 'ts-vs16-x64': { zip: { path: 'php-8.3.33-Win32-vs16-x64.zip' } } },
+        };
+        expect(await resolveDownloadUrl('php-windows', winCtx, async () => ntsOnly)).toBe(
+            'https://windows.php.net/downloads/releases/php-8.3.33-Win32-vs16-x64.zip',
+        );
     });
 
     it('caps the LINE at the newest php this release has a recipe for, taking its patch live', async () => {
@@ -124,16 +136,16 @@ describe('resolveDownloadUrl — php-windows', () => {
         const url = await resolveDownloadUrl('php-windows', winCtx, async () => releasesJson);
         expect(url).not.toContain('8.5');
         // …and the patch is whatever the index says today, never a pinned one.
-        const moved = { ...releasesJson, '8.4': { ...releasesJson['8.4'], version: '8.4.25', 'nts-vs17-x64': { zip: { path: 'php-8.4.25-nts-Win32-vs17-x64.zip' } } } };
+        const moved = { ...releasesJson, '8.4': { ...releasesJson['8.4'], version: '8.4.25', 'ts-vs17-x64': { zip: { path: 'php-8.4.25-Win32-vs17-x64.zip' } } } };
         expect(await resolveDownloadUrl('php-windows', winCtx, async () => moved)).toContain('8.4.25');
     });
 
     it('reads the toolset out of the index rather than hard-coding vs17', async () => {
         const future = {
-            '8.4': { version: '8.4.24', 'nts-vs18-x64': { zip: { path: 'php-8.4.24-nts-Win32-vs18-x64.zip' } } },
+            '8.4': { version: '8.4.24', 'ts-vs18-x64': { zip: { path: 'php-8.4.24-Win32-vs18-x64.zip' } } },
         };
         const url = await resolveDownloadUrl('php-windows', winCtx, async () => future);
-        expect(url).toBe('https://windows.php.net/downloads/releases/php-8.4.24-nts-Win32-vs18-x64.zip');
+        expect(url).toBe('https://windows.php.net/downloads/releases/php-8.4.24-Win32-vs18-x64.zip');
     });
 
     it('returns null on arm64 — windows.php.net publishes no arm64 build', async () => {
@@ -143,16 +155,18 @@ describe('resolveDownloadUrl — php-windows', () => {
         expect(fetch).not.toHaveBeenCalled();
     });
 
-    it('returns null when the supported line has no x64 nts build', async () => {
+    it('returns null when the supported line has no x64 thread-safe build', async () => {
         const url = await resolveDownloadUrl('php-windows', winCtx, async () => ({
-            '8.4': { version: '8.4.24', 'ts-vs17-x64': { zip: { path: 'php-8.4.24-Win32-vs17-x64.zip' } } },
+            '8.4': { version: '8.4.24', 'nts-vs17-x64': { zip: { path: 'php-8.4.24-nts-Win32-vs17-x64.zip' } } },
         }));
         expect(url).toBeNull();
     });
 
     it('refuses an index entry whose path is not a plain zip filename', async () => {
         const url = await resolveDownloadUrl('php-windows', winCtx, async () => ({
-            '8.4': { version: '8.4.24', 'nts-vs17-x64': { zip: { path: '../../etc/passwd' } } },
+            // On the key that IS read — on an nts key this would pass for the
+            // wrong reason now that nts keys are skipped.
+            '8.4': { version: '8.4.24', 'ts-vs17-x64': { zip: { path: '../../etc/passwd' } } },
         }));
         expect(url).toBeNull();
     });

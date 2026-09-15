@@ -142,8 +142,10 @@ const PHP_WINDOWS_BASE = 'https://windows.php.net/downloads/releases/';
  *     the day a patch supersedes it, so a pinned patch 404s on release day; the
  *     index always names the file currently sitting at the releases root.
  *
- * The build is the 64-bit NON-thread-safe one. NTS is the FastCGI build and its
- * archive carries `php-cgi.exe` — genie#206 was exactly that binary's absence.
+ * The build is the 64-bit THREAD-SAFE one (genie#669): FrankenPHP loads PHP as a
+ * library and needs `php8ts.dll`, and the ZTS archive still carries the
+ * `php-cgi.exe` the FastCGI worker runs — genie#206 was exactly that binary's
+ * absence. A line with no thread-safe build is skipped, never served NTS.
  *
  * Which machines can have php AT ALL is the recipe table's call and is not
  * second-guessed here: windows.php.net publishes no arm64 build, so `recipesFor`
@@ -165,7 +167,7 @@ async function resolvePhpWindows(ctx: AdapterContext, fetchJson: FetchJson): Pro
         .sort(compareVersionsDesc);
 
     for (const line of lines) {
-        const path = ntsX64ZipPath((index as Record<string, unknown>)[line]);
+        const path = tsX64ZipPath((index as Record<string, unknown>)[line]);
         if (path) return PHP_WINDOWS_BASE + path;
     }
     return null;
@@ -181,17 +183,17 @@ function newestSupportedPhpLine(ctx: AdapterContext): string | undefined {
 }
 
 /**
- * The 64-bit non-thread-safe zip inside one release-line entry.
+ * The 64-bit thread-safe zip inside one release-line entry.
  *
- * The toolset token is READ from the key (`nts-vs17-x64`) rather than assumed,
+ * The toolset token is READ from the key (`ts-vs17-x64`) rather than assumed,
  * so the line that eventually ships `vs18` resolves without a code change. A
  * vendor index is still untrusted input: only a plain archive FILENAME is
  * accepted, never a path that could climb out of the releases directory.
  */
-function ntsX64ZipPath(entry: unknown): string | undefined {
+function tsX64ZipPath(entry: unknown): string | undefined {
     if (!entry || typeof entry !== 'object') return undefined;
     for (const [key, value] of Object.entries(entry as Record<string, unknown>)) {
-        if (!/^nts-[\w.]+-x64$/.test(key)) continue;
+        if (!/^ts-[\w.]+-x64$/.test(key)) continue;
         const path = (value as { zip?: { path?: string } })?.zip?.path;
         if (typeof path === 'string' && /^[\w.+-]+\.zip$/.test(path)) return path;
     }

@@ -35,8 +35,10 @@ import {
     joinFor,
     parseToolchainDefaults,
     PHP_OPTIONAL_EXTENSIONS,
+    parsePhpThreadSafety,
     phpIniContents,
     serializeToolchainDefaults,
+    threadSafeReinstallKeys,
     type EngineInstall,
     type LanguageTool,
     type RecipeContext,
@@ -188,8 +190,12 @@ async function probeEngine(tool: LanguageTool, exe: string): Promise<EngineProbe
         const res = await defaultCommandRunner.run(exe, engineVersionArgv(tool), {
             timeoutMs: 10_000,
         });
-        const version = res.code === 0 ? parseToolVersion(res.stdout || res.stderr) : undefined;
-        if (version) return { version };
+        const output = res.stdout || res.stderr;
+        const version = res.code === 0 ? parseToolVersion(output) : undefined;
+        if (version) {
+            const threadSafe = tool === 'php' ? parsePhpThreadSafety(output) : undefined;
+            return { version, ...(threadSafe !== undefined ? { threadSafe } : {}) };
+        }
         return {
             exitCode: res.code,
             detail: (res.stderr || res.stdout || '').trim().slice(0, PROBE_DETAIL_LIMIT),
@@ -234,6 +240,8 @@ export interface ToolchainInstallsInfo {
     installs: EngineInstall[];
     defaults: Partial<Record<LanguageTool, string>>;
     addable: Partial<Record<LanguageTool, string[]>>;
+    /** Installs to offer a thread-safe reinstall for, by `installKey` (genie#669). */
+    reinstallable: string[];
     sites: ToolchainSiteUsage[];
     root: string;
 }
@@ -348,7 +356,14 @@ export async function toolchainInstallsInfo(
         addable[tool] = addableRecipes(tool, ctx, installs).map((r) => r.version);
     }
 
-    return { installs, defaults, addable, sites: deps.listSiteUsage(), root };
+    return {
+        installs,
+        defaults,
+        addable,
+        reinstallable: threadSafeReinstallKeys(installs, ctx, root),
+        sites: deps.listSiteUsage(),
+        root,
+    };
 }
 
 /**
@@ -491,6 +506,23 @@ export async function removeToolchainVersion(
 // onto the 120-second probe default.
 const INSTALL_TIMEOUT_MS = INSTALL_BUDGET_MS;
 
+/** Where a replaced version directory waits to be deleted (genie#669). */
+const REPLACED_DIR = '.replaced';
+
+/** Delete every moved-aside copy that is no longer in use. Never throws. */
+async function sweepReplaced(): Promise<void> {
+    const dir = join(toolchainRoot(), REPLACED_DIR);
+    let entries: string[];
+    try {
+        entries = await readdir(dir);
+    } catch {
+        return;
+    }
+    for (const name of entries) {
+        await rm(join(dir, name), { recursive: true, force: true }).catch(() => {});
+    }
+}
+
 function versionInstallEffects(tool: LanguageTool, deps: ToolchainManagerDeps): VersionInstallEffects {
     return {
         async download(urls) {
@@ -548,6 +580,31 @@ function versionInstallEffects(tool: LanguageTool, deps: ToolchainManagerDeps): 
         },
 
         verify: (exe) => probeEngine(tool, exe),
+
+        async moveAside(dir) {
+            if (!fsSync.existsSync(dir)) return { ok: true, previous: null };
+            // Under the toolchain root but outside every language directory, so
+            // the scan never mistakes a moved-aside copy for an install.
+            const previous = join(toolchainRoot(), REPLACED_DIR, `${tool}-${basename(dir)}-${Date.now()}`);
+            try {
+                await mkdir(dirname(previous), { recursive: true });
+                await rename(dir, previous);
+                return { ok: true, previous };
+            } catch (e) {
+                return { ok: false, error: String(e) };
+            }
+        },
+
+        async restoreAside(previous, dir) {
+            await rm(dir, { recursive: true, force: true }).catch(() => {});
+            await rename(previous, dir);
+        },
+
+        async discardAside() {
+            // Every moved-aside copy, not just this one: a copy that was still
+            // serving when its own install finished is swept by the next.
+            await sweepReplaced();
+        },
 
         /**
          * Install a machine-level prerequisite, if it is not already here.

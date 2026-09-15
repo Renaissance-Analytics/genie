@@ -1,0 +1,60 @@
+name: Hosting (Windows PHP)
+
+# Genie's PHP on Windows is the thread-safe windows.php.net build (genie#669), and
+# only a Windows runner can run it. The Linux hosting lane (ci.yml) uses the
+# distro's php-cgi, so it proves nothing about the zip Genie actually installs.
+#
+# This runs `php-zts-windows.real.test.ts`: download the zip from the URL the
+# recipe names, unpack it the way Genie does, check it is ZTS and loads every
+# extension, then serve executed PHP through the bundled Caddy and its php-cgi.
+#
+# On a CLOCK as well as on a diff: windows.php.net moves a release into
+# archives/ when a patch supersedes it, and that can break the URL with no
+# commit here.
+on:
+  schedule:
+    - cron: '41 5 * * 1'
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'main/dev-server/toolchain-versions.ts'
+      - 'main/dev-server/toolchain-version-install.ts'
+      - 'main/dev-server/toolchain-resolve.ts'
+      - 'main/dev-server/serve-config.ts'
+      - 'main/dev-server/__tests__/php-zts-windows.real.test.ts'
+      - 'scripts/build-service-runtime.mjs'
+      - '.github/workflows/hosting-windows.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  php-windows:
+    # Pinned for the same reason release.yml is: windows-latest's Visual Studio
+    # layout broke node-gyp discovery for the native rebuild in `npm ci`.
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Set up Go (xcaddy builds the bundled Caddy)
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: false
+      - name: Set up Python (node-gyp needs distutils)
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install
+        run: npm ci
+      - name: Build the service runtime (bundled Caddy)
+        env:
+          REQUIRE_HOST_CADDY: '1'
+        run: npm run build:runtime
+      - name: Real Windows PHP (thread-safe build + php-cgi serving)
+        run: npx vitest run --config vitest.hosting.config.mts main/dev-server/__tests__/php-zts-windows.real.test.ts
