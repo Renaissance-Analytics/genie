@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
-import { cp, mkdir, mkdtemp, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, cp, mkdir, mkdtemp, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { defaultCommandRunner, fileExistsSeam, hostToolCommandRunner } from './seams';
 import { INSTALL_BUDGET_MS, INSTALL_RUN_OPTIONS } from './run-budget';
@@ -16,6 +16,8 @@ import {
 } from './toolchain-primitives';
 import { writeCaBundle } from './toolchain-ca';
 import type { ComposerPhp } from './composer-php';
+import { FRANKENPHP_VERSION } from './frankenphp';
+import { ensureFrankenphp, type FrankenphpInstallEffects, type FrankenphpResolution } from './frankenphp-install';
 import { createToolchainPerformDeps } from './toolchain-effects';
 import { createPerformInstall } from './toolchain-perform';
 import { runInstallPlan, type PerformInstall } from './toolchain-install';
@@ -47,6 +49,7 @@ import {
     planVersionInstall,
     planVersionRemoval,
     type EngineProbe,
+    type EnginePrerequisite,
     type VersionInstallEffects,
 } from './toolchain-version-install';
 import { resolveEngineExe, type EngineResolution } from './engine-resolve';
@@ -560,33 +563,7 @@ function versionInstallEffects(tool: LanguageTool, deps: ToolchainManagerDeps): 
          * "exit 3010 means reboot-required, not failure" handling are the ones
          * already proven — not a second copy written for this call site.
          */
-        async ensurePrerequisite(name) {
-            const detected = await detectToolchain({
-                runner: hostToolCommandRunner,
-                platform: process.platform,
-                wanted: [name],
-                // REQUIRED for a library probe: without it the check answers
-                // "no filesystem check available" → not installed → Genie would
-                // download and UAC-prompt for the runtime on every single php
-                // install, including the machines that already have it.
-                fileExists: fileExistsSeam,
-            });
-            // Already there: nothing to do, and no download to spend.
-            if (detected.present.includes(name)) return { ok: true };
-
-            const ctx = machineContext();
-            const result = await runInstallPlan({
-                steps: [planToolUpdate(name, ctx.os, 'direct')],
-                ctx,
-                perform: createToolchainInstallEffect(ctx, deps),
-                approved: true,
-                intent: 'install',
-            });
-            const failed = result.results.find((r) => r.status !== 'succeeded');
-            return failed
-                ? { ok: false, ...(failed.error ? { error: failed.error } : {}) }
-                : { ok: true };
-        },
+        ensurePrerequisite: (name) => ensureMachinePrerequisite(name, deps),
 
         /**
          * Make the proven install FINDABLE.
@@ -620,6 +597,114 @@ function versionInstallEffects(tool: LanguageTool, deps: ToolchainManagerDeps): 
         async removeDir(dir) {
             await rm(dir, { recursive: true, force: true }).catch(() => {});
         },
+    };
+}
+
+/**
+ * Install a machine-level prerequisite, if it is not already here.
+ *
+ * The Visual C++ runtime is the only one so far, and it is why a php install
+ * could unpack perfectly and then produce a binary Windows refuses to start. The
+ * wizard has installed it since beta.252; this page's installer only NAMED it in
+ * an error and left the user to go and download it, which is not something Genie
+ * should ever ask for. The FrankenPHP installer needs the same runtime and goes
+ * through this same function (genie#668), so there is one elevation path.
+ *
+ * Runs through the same plan/adapter/perform machinery as every other install,
+ * so the elevation prompt, the silent switches and the "exit 3010 means
+ * reboot-required, not failure" handling are the ones already proven — not a
+ * second copy written for this call site.
+ */
+async function ensureMachinePrerequisite(
+    name: EnginePrerequisite,
+    deps: ToolchainManagerDeps,
+): Promise<{ ok: boolean; error?: string }> {
+    const detected = await detectToolchain({
+        runner: hostToolCommandRunner,
+        platform: process.platform,
+        wanted: [name],
+        // REQUIRED for a library probe: without it the check answers "no
+        // filesystem check available" → not installed → Genie would download and
+        // UAC-prompt for the runtime on every single php install, including the
+        // machines that already have it.
+        fileExists: fileExistsSeam,
+    });
+    // Already there: nothing to do, and no download to spend.
+    if (detected.present.includes(name)) return { ok: true };
+
+    const ctx = machineContext();
+    const result = await runInstallPlan({
+        steps: [planToolUpdate(name, ctx.os, 'direct')],
+        ctx,
+        perform: createToolchainInstallEffect(ctx, deps),
+        approved: true,
+        intent: 'install',
+    });
+    const failed = result.results.find((r) => r.status !== 'succeeded');
+    return failed ? { ok: false, ...(failed.error ? { error: failed.error } : {}) } : { ok: true };
+}
+
+/**
+ * The FrankenPHP a Genie-served site runs on (genie#668): the pinned official
+ * release, downloaded into the toolchain the first time a site needs it.
+ *
+ * ONE download at a time, shared: several sites starting together at boot all
+ * ask, and three concurrent 160 MB downloads into the same directory would each
+ * tear down the others' half-written install.
+ */
+let frankenphpInFlight: Promise<FrankenphpResolution> | null = null;
+
+export function createFrankenphpResolver(deps: ToolchainManagerDeps): () => Promise<FrankenphpResolution> {
+    return () => {
+        if (!frankenphpInFlight) {
+            frankenphpInFlight = ensureFrankenphp({
+                dir: join(toolchainRoot(), 'frankenphp', FRANKENPHP_VERSION),
+                platform: process.platform,
+                arch: process.arch,
+                effects: frankenphpInstallEffects(deps),
+            }).finally(() => {
+                frankenphpInFlight = null;
+            });
+        }
+        return frankenphpInFlight;
+    };
+}
+
+function frankenphpInstallEffects(deps: ToolchainManagerDeps): FrankenphpInstallEffects {
+    return {
+        exists: (file) => fsSync.existsSync(file),
+        async download(url) {
+            const res = await download(url);
+            return res.ok && res.path ? { ok: true, path: res.path } : { ok: false, error: res.error ?? 'download failed' };
+        },
+        async unzip(archive, dest) {
+            await mkdir(dest, { recursive: true });
+            return extractArchive(archive, 'zip', dest);
+        },
+        async placeBinary(from, to) {
+            await mkdir(dirname(to), { recursive: true });
+            try {
+                await rename(from, to);
+            } catch {
+                // A temp dir on another volume cannot be renamed across it.
+                await cp(from, to);
+            }
+            await chmod(to, 0o755);
+        },
+        async writeFile(file, body) {
+            await mkdir(dirname(file), { recursive: true });
+            await writeFile(file, body, 'utf8');
+        },
+        async version(exe) {
+            const res = await defaultCommandRunner.run(exe, ['version'], { timeoutMs: 30_000 });
+            if (res.code !== 0) throw new Error((res.stderr || res.stdout || `exited ${res.code}`).trim());
+            return res.stdout;
+        },
+        async removeDir(dir) {
+            await rm(dir, { recursive: true, force: true }).catch(() => {});
+        },
+        ensurePrerequisite: (name) => ensureMachinePrerequisite(name, deps),
+        caBundle: (dir) => writeCaBundle(dir, process.platform),
     };
 }
 

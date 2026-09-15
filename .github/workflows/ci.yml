@@ -119,6 +119,30 @@ jobs:
           fi
           sudo apt-get update             -o DPkg::Lock::Timeout=180             -o Acquire::Retries=2             -o Acquire::http::Timeout=15             -o Acquire::https::Timeout=15
           sudo apt-get install -y -o DPkg::Lock::Timeout=180 php-cgi
+      # FrankenPHP (genie#668). `frankenphp.real.test.ts` runs the OFFICIAL binary
+      # against the Caddyfile Genie writes — a config either works on the real
+      # binary or it does not, and a skipped suite reports the same green as a
+      # passing one. Pinned to the version frankenphp.ts installs, and cached on
+      # that file, so a version bump misses by construction and a normal run
+      # never touches GitHub's release CDN.
+      - name: Cache the FrankenPHP binary
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/genie-frankenphp
+          key: frankenphp-${{ runner.os }}-${{ hashFiles('main/dev-server/frankenphp.ts') }}
+      - name: Ensure FrankenPHP (the release frankenphp.ts pins)
+        timeout-minutes: 6
+        run: |
+          set -euo pipefail
+          v=$(node -e "const s=require('fs').readFileSync('main/dev-server/frankenphp.ts','utf8');const m=/FRANKENPHP_VERSION = '([^']+)'/.exec(s);if(!m)process.exit(1);console.log(m[1])")
+          bin="$HOME/.cache/genie-frankenphp/$v/frankenphp"
+          if [ ! -x "$bin" ]; then
+            mkdir -p "$(dirname "$bin")"
+            curl -fsSL --retry 3 --max-time 300 -o "$bin" "https://github.com/php/frankenphp/releases/download/v$v/frankenphp-linux-x86_64"
+            chmod +x "$bin"
+          fi
+          "$bin" version
+          echo "FRANKENPHP_BIN=$bin" >> "$GITHUB_ENV"
       # PINNED, and at 1.25+. This job had no Go setup at all, so it built with
       # whatever the runner image shipped — and on 2026-08-20 that broke outright:
       # a transitive genproto module published the day before now requires
