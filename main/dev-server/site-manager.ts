@@ -464,6 +464,8 @@ export interface DevSiteManagerDeps {
      * `hostServe: frankenphp` site fails with a clear "not available" status.
      */
     resolveFrankenphp?: () => Promise<FrankenphpResolution>;
+    /** The environment a spawned site inherits — read for its PATH. Default: process.env. */
+    baseEnv?: NodeJS.ProcessEnv;
     /**
      * Run a HOST-NATIVE site's dev server as a real HOST process (story #238).
      * Absent ⇒ a `runMode: 'host'` site fails with a clear "not available" status
@@ -1661,10 +1663,32 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
      * explicit override), else what the repo's composer.json requires, else
      * nothing — the machine default.
      */
-    function phpEngineAsk(bin: string, cwd: string, pinned: string | undefined) {
+    function phpEngineAsk(
+        bin: string,
+        cwd: string,
+        pinned: string | undefined,
+        /** The repo's requirement when the caller already read it. */
+        known?: ComposerPhp | null,
+    ) {
         if (pinned) return { tool: 'php' as const, bin, version: pinned };
-        const requires = repoPhpRequirement(cwd);
+        const requires = known === undefined ? repoPhpRequirement(cwd) : known;
         return { tool: 'php' as const, bin, ...(requires ? { requires } : {}) };
+    }
+
+    /**
+     * `{ <PATH key>: <dir first, then the inherited PATH> }` for a spawned site.
+     *
+     * Under the key the environment ALREADY uses: on Windows that is usually
+     * `Path`, and a site env carrying `PATH` beside it would hand the child two
+     * PATHs with no rule for which one wins.
+     */
+    function pathWithFirst(dir: string): Record<string, string> {
+        const base = deps.baseEnv ?? process.env;
+        const win = platform === 'win32';
+        const key = win ? (Object.keys(base).find((k) => k.toUpperCase() === 'PATH') ?? 'Path') : 'PATH';
+        const sep = win ? ';' : ':';
+        const rest = (base[key] ?? '').split(sep).filter((entry) => entry.length > 0 && entry !== dir);
+        return { [key]: [dir, ...rest].join(sep) };
     }
 
     /** What the repo's own composer.json requires of PHP, or null when it says nothing. */
@@ -1754,7 +1778,10 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                     error: 'Octane serving is not available in this build (Genie cannot resolve a managed PHP here).',
                 };
             }
-            const engine = await deps.resolveEngine(phpEngineAsk('php', cwd, hostServe.version));
+            // Read ONCE: the php CLI's version and, on FrankenPHP, the embedded PHP
+            // are both judged against the same composer.json.
+            const repoRequires = repoPhpRequirement(cwd);
+            const engine = await deps.resolveEngine(phpEngineAsk('php', cwd, hostServe.version, repoRequires));
             if (!engine.ok) return { ok: false, error: engine.error };
             // The second port Octane would otherwise DERIVE from the site port —
             // `2019 + (port - 8000)` for FrankenPHP's admin API, `port - 1999` for
@@ -1766,6 +1793,24 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             const canWatch = deps.octaneCanWatch
                 ? deps.octaneCanWatch(cwd)
                 : fs.existsSync(path.join(cwd, 'node_modules', 'chokidar'));
+            // OCTANE ON FRANKENPHP runs the app on FrankenPHP's EMBEDDED PHP, and
+            // Octane finds the binary in the project root or on PATH — otherwise it
+            // prompts to download one, and on Windows refuses outright. So the site
+            // gets Genie's own install first on its PATH, after the same
+            // composer.json check any FrankenPHP site gets.
+            let serverEnv: Record<string, string> = { ...OCTANE_SERVE_ENV };
+            if (hostServe.server === 'frankenphp') {
+                if (!deps.resolveFrankenphp) {
+                    return { ok: false, error: 'Octane on FrankenPHP is not available in this build (Genie cannot install FrankenPHP here).' };
+                }
+                const early = frankenphpRefusal(repoRequires, FRANKENPHP_PHP_VERSION);
+                if (early) return { ok: false, error: early };
+                const frankenphp = await deps.resolveFrankenphp();
+                if (!frankenphp.ok) return { ok: false, error: frankenphp.error };
+                const late = frankenphpRefusal(repoRequires, frankenphp.phpVersion);
+                if (late) return { ok: false, error: late };
+                serverEnv = { ...serverEnv, ...pathWithFirst(path.dirname(frankenphp.exe)) };
+            }
             return {
                 ok: true,
                 command: octaneServeCommand({
@@ -1776,7 +1821,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                     ...(hostServe.server === 'roadrunner' ? { rpcPort: serverPort } : {}),
                     watch: canWatch,
                 }),
-                env: OCTANE_SERVE_ENV,
+                env: serverEnv,
                 ...(serverPort === undefined ? {} : { serverPorts: [serverPort] }),
             };
         }

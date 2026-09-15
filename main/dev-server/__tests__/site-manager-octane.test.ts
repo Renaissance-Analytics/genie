@@ -18,6 +18,7 @@ import { octaneServeCommand, type OctaneServer } from '../octane-serve';
 const NO_RUNTIME: RuntimeDetection = { kind: 'none', probes: [] };
 const WS = { id: 'acme', path: '/work/acme', label: 'acme' };
 const PHP = '/gd/toolchain/php/8.4.24/bin/php';
+const FRANKENPHP_EXE = '/gd/toolchain/frankenphp/1.12.7/frankenphp';
 
 const octaneSite = (name: string, server: OctaneServer, version?: string): DevSiteConfig => ({
     name,
@@ -31,7 +32,14 @@ const octaneSite = (name: string, server: OctaneServer, version?: string): DevSi
 
 function harness(
     sites: DevSites,
-    opts: { canWatch?: boolean; firstPort?: number; platform?: NodeJS.Platform; composer?: unknown } = {},
+    opts: {
+        canWatch?: boolean;
+        firstPort?: number;
+        platform?: NodeJS.Platform;
+        composer?: unknown;
+        frankenphp?: { ok: true; exe: string; phpVersion: string } | { ok: false; error: string };
+        baseEnv?: NodeJS.ProcessEnv;
+    } = {},
 ) {
     const spawns: Array<{ siteId: string; command: string[]; cwd: string; env: Record<string, string> }> = [];
     const up = new Set<string>();
@@ -88,6 +96,8 @@ function harness(
             gaps: [],
         }),
         octaneCanWatch: () => opts.canWatch ?? false,
+        resolveFrankenphp: async () => opts.frankenphp ?? { ok: true, exe: FRANKENPHP_EXE, phpVersion: '8.5.10' },
+        baseEnv: opts.baseEnv ?? { PATH: '/usr/bin:/bin' },
         readComposerJson: (cwd: string) => {
             composerReads.push(cwd.replace(/\\/g, '/'));
             return opts.composer ?? null;
@@ -334,5 +344,61 @@ describe('the PHP a site runs on comes from the REPO (genie#668, owner decision)
         expect(asks).toEqual([
             { tool: 'php', bin: 'php-cgi', requires: { constraint: '>=8.2 <8.4', source: 'require.php' } },
         ]);
+    });
+});
+
+describe('Octane on FrankenPHP uses the FrankenPHP Genie installs (genie#668)', () => {
+    // Octane looks for `frankenphp` in the project root or on PATH and otherwise
+    // prompts to download one — and on Windows refuses outright ("use WSL or
+    // Docker"), though FrankenPHP ships a native Windows build. So Genie puts its
+    // own install first on the site's PATH, and the app — which runs on
+    // FrankenPHP's embedded PHP — is checked against composer.json like any
+    // FrankenPHP site.
+    it("puts Genie's FrankenPHP first on the site's PATH", async () => {
+        const id = devSiteIdFor('acme', 'shop');
+        const h = harness({ [id]: octaneSite('shop', 'frankenphp') }, { baseEnv: { PATH: '/usr/bin:/bin' } });
+        await h.m.start('acme', id);
+        const pathValue = h.spawns[0]?.env.PATH ?? '';
+        expect(pathValue.split(':')[0]).toBe('/gd/toolchain/frankenphp/1.12.7');
+        expect(pathValue).toContain('/usr/bin');
+    });
+
+    it("keeps Windows' own spelling of the PATH key, so the child does not get two", async () => {
+        const id = devSiteIdFor('acme', 'shop');
+        const h = harness(
+            { [id]: octaneSite('shop', 'frankenphp') },
+            { platform: 'win32', baseEnv: { Path: 'C:\\Windows\\system32' } },
+        );
+        await h.m.start('acme', id);
+        const env = h.spawns[0]?.env ?? {};
+        expect(env.PATH).toBeUndefined();
+        expect((env.Path ?? '').split(';')[0]).toBe('/gd/toolchain/frankenphp/1.12.7');
+    });
+
+    it("REFUSES a repo whose composer.json excludes FrankenPHP's PHP", async () => {
+        const id = devSiteIdFor('acme', 'shop');
+        const h = harness({ [id]: octaneSite('shop', 'frankenphp') }, { composer: { require: { php: '<8.5' } } });
+        const status = await h.m.start('acme', id);
+        expect(status.state).toBe('failed');
+        expect(status.error).toContain('<8.5');
+        expect(h.spawns).toHaveLength(0);
+    });
+
+    it("FAILS with the installer's reason when FrankenPHP cannot be installed", async () => {
+        const id = devSiteIdFor('acme', 'shop');
+        const h = harness({ [id]: octaneSite('shop', 'frankenphp') }, { frankenphp: { ok: false, error: 'HTTP 503' } });
+        const status = await h.m.start('acme', id);
+        expect(status.state).toBe('failed');
+        expect(status.error).toContain('HTTP 503');
+    });
+
+    it('POSITIVE CONTROL: RoadRunner and Swoole do not touch FrankenPHP or PATH', async () => {
+        for (const server of ['roadrunner', 'swoole'] as const) {
+            const id = devSiteIdFor('acme', 'shop');
+            const h = harness({ [id]: octaneSite('shop', server) }, { composer: { require: { php: '<8.5' } } });
+            const status = await h.m.start('acme', id);
+            expect(status.state, server).toBe('running');
+            expect(h.spawns[0]?.env.PATH, server).toBeUndefined();
+        }
     });
 });
