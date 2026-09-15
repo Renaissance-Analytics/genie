@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ensureOverlayRoot } from '../lib/overlay-root';
+import { hostSessionRoster } from '../lib/host-session-roster';
 import { DEFAULT_HOTKEYS, type HotkeyBindings } from '../lib/hotkeys';
 import { useGenieHotkeys } from '../lib/use-genie-hotkeys';
 import { ftqNudgeDelivery } from '../lib/ftq-nudge';
@@ -4883,9 +4884,8 @@ function HostSessionOverlay() {
         }
     };
 
-    // The people on the other end — the desktop itself is a participant only while
-    // it holds control, and it's already represented by this window.
-    const users = participants.filter((p) => p.id !== 'desktop');
+    // The people on the other end, with what each guest reaches (genie#681).
+    const users = hostSessionRoster(participants, peers, locked);
     const driver = participants.find((p) => p.id === holder) ?? null;
     const status = locked
         ? 'Paused — you have control'
@@ -4936,40 +4936,58 @@ function HostSessionOverlay() {
                 While the desktop holds the baton, clicking a user hands it to them. */}
             <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                 {users.map((u) => (
-                    <button
-                        key={u.id}
-                        type="button"
-                        disabled={busy || !locked || u.holdsControl}
-                        onClick={() => void act(() => api().mobile.giveControl(u.id))}
-                        title={
-                            u.holdsControl
-                                ? `${u.name} is driving — every action is signed ${u.emoji}`
-                                : locked
-                                  ? `Hand control to ${u.name}`
-                                  : `${u.name} is connected (signs actions ${u.emoji})`
-                        }
-                        style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 4,
-                            background: u.holdsControl
-                                ? 'rgba(255,255,255,0.3)'
-                                : 'rgba(255,255,255,0.1)',
-                            color: '#fff',
-                            border: u.holdsControl
-                                ? '1px solid rgba(255,255,255,0.75)'
-                                : '1px solid rgba(255,255,255,0.25)',
-                            borderRadius: 999,
-                            padding: '2px 8px',
-                            fontSize: 11,
-                            fontWeight: 700,
-                            cursor: locked && !u.holdsControl ? 'pointer' : 'default',
-                        }}
-                    >
-                        <span aria-hidden>{u.emoji}</span>
-                        <span>{u.name}</span>
-                        {u.isOwner && <span title="Workstation owner">★</span>}
-                    </button>
+                    <span key={u.id} style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                        <button
+                            type="button"
+                            disabled={busy || !u.canReceiveControl}
+                            onClick={() => void act(() => api().mobile.giveControl(u.id))}
+                            title={
+                                u.holdsControl
+                                    ? `${u.name} is driving — every action is signed ${u.emoji}`
+                                    : u.readonly
+                                      ? `${u.name} has read-only access and cannot drive`
+                                      : u.canReceiveControl
+                                        ? `Hand control to ${u.name}`
+                                        : `${u.name} is connected (signs actions ${u.emoji})`
+                            }
+                            style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 4,
+                                background: u.holdsControl
+                                    ? 'rgba(255,255,255,0.3)'
+                                    : 'rgba(255,255,255,0.1)',
+                                color: '#fff',
+                                border: u.holdsControl
+                                    ? '1px solid rgba(255,255,255,0.75)'
+                                    : '1px solid rgba(255,255,255,0.25)',
+                                borderRadius: 999,
+                                padding: '2px 8px',
+                                fontSize: 11,
+                                fontWeight: 700,
+                                cursor: u.canReceiveControl ? 'pointer' : 'default',
+                            }}
+                        >
+                            <span aria-hidden>{u.emoji}</span>
+                            <span>{u.name}</span>
+                            {u.isOwner && <span title="Workstation owner">★</span>}
+                            {u.accessLabel && (
+                                <span style={{ fontWeight: 500, opacity: 0.85 }}>{u.accessLabel}</span>
+                            )}
+                        </button>
+                        {u.canDisconnect && (
+                            <button
+                                type="button"
+                                disabled={busy}
+                                aria-label={`Disconnect ${u.name}`}
+                                title={`Disconnect ${u.name}. This ends their live session; their access stays until it is revoked in Tynn.`}
+                                onClick={() => void act(() => api().mobile.disconnectGuest(u.id))}
+                                style={{ ...btn, padding: '1px 6px' }}
+                            >
+                                Disconnect
+                            </button>
+                        )}
+                    </span>
                 ))}
             </span>
             <button
@@ -4989,7 +5007,7 @@ function HostSessionOverlay() {
                 type="button"
                 disabled={busy}
                 style={btn}
-                title="Disconnect the remote session entirely"
+                title="Disconnect everyone, including your own paired devices"
                 onClick={() => void act(() => api().mobile.revokeSessions())}
             >
                 End session

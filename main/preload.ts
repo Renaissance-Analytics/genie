@@ -155,6 +155,8 @@ interface MobileStatus {
         emoji: string;
         isOwner: boolean;
         holdsControl: boolean;
+        /** A read-only guest: on the list, never driving. */
+        readonly?: boolean;
     }>;
     /** The desktop's view of the baton (who is driving, with which emoji). */
     control: {
@@ -428,6 +430,11 @@ const api = {
         giveControl: (principalId: string) =>
             ipcRenderer.invoke('mobile:give-control', principalId) as Promise<
                 MobileStatus & { ok: boolean; error?: string }
+            >,
+        /** End one guest's live session and close their sockets; nobody else's. */
+        disconnectGuest: (principalId: string) =>
+            ipcRenderer.invoke('mobile:disconnect-guest', principalId) as Promise<
+                MobileStatus & { ok: boolean; dropped: number }
             >,
         /** Live changes to whether this computer is reachable over Tynn. */
         onRelay: (cb: (s: RelayHostStatus) => void) => {
