@@ -2164,7 +2164,7 @@ const api = {
                 siteId: string;
                 name: string;
                 genName: string;
-                phase: 'pulling' | 'building' | 'starting' | 'ready' | 'failed';
+                phase: 'pulling' | 'building' | 'starting' | 'ready' | 'failed' | 'stopped';
                 log?: string;
                 error?: string;
             }) => void,

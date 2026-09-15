@@ -852,6 +852,31 @@ describe('startup progress', () => {
         expect(last?.error).toMatch(/port/i);
     });
 
+    it('a container site stopped while waiting to answer ends STOPPED, not stuck on starting', async () => {
+        // The same race as the host-native case in site-manager-stop-while-starting:
+        // recordLive read back the entry a Stop had removed, and threw.
+        const runtime = fakeRuntime();
+        let answer!: (ready: boolean) => void;
+        let probing = false;
+        const events: string[] = [];
+        const m = manager(runtime, undefined, {
+            probeReady: () => {
+                probing = true;
+                return new Promise<boolean>((r) => (answer = r));
+            },
+            onProgress: (p) => events.push(p.phase),
+        });
+        const starting = m.start('acme', SITE_ID);
+        while (!probing) await new Promise((r) => setTimeout(r, 0));
+        await m.stop(SITE_ID, 'user');
+        answer(false);
+
+        const status = await starting;
+        expect(status.state).toBe('stopped');
+        expect(m.list('acme')[0]?.phase).toBeUndefined();
+        expect(events.at(-1)).toBe('stopped');
+    });
+
     it('surfaces the in-flight phase on `list` for a panel opened mid-start', async () => {
         const runtime = fakeRuntime();
         let phaseFromList: string | undefined;

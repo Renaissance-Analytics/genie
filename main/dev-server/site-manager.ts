@@ -103,8 +103,9 @@ export type DevSiteState = 'running' | 'stopped' | 'failed';
  *   starting — the site process is being started and its port probed through Caddy
  *   ready    — terminal: the process is up and the `.gen` answered through Caddy
  *   failed   — terminal: it did not come up, and `error` says why
+ *   stopped  — terminal: a Stop arrived while it was starting, and won
  */
-export type DevSitePhase = 'pulling' | 'building' | 'starting' | 'ready' | 'failed';
+export type DevSitePhase = 'pulling' | 'building' | 'starting' | 'ready' | 'failed' | 'stopped';
 
 /** One live progress tick for a starting site, pushed to the renderer (and the
  *  remote bridge) so a card reflects a start as it happens rather than at the end. */
@@ -940,7 +941,8 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
     const finishProgress = (siteId: string, status: DevSiteStatus): void => {
         const f = inFlight.get(siteId);
         if (!f) return;
-        const phase: DevSitePhase = status.state === 'running' ? 'ready' : 'failed';
+        const phase: DevSitePhase =
+            status.state === 'running' ? 'ready' : status.state === 'stopped' ? 'stopped' : 'failed';
         const log = f.log || undefined;
         if (deps.onProgress) {
             try {
@@ -982,6 +984,18 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
     const live = new Map<string, Live>();
     const lastFailure = new Map<string, DevSiteStatus>();
     const starting = new Map<string, Promise<DevSiteStatus>>();
+    /**
+     * Sites a Stop reached WHILE they were starting.
+     *
+     * A start takes seconds — it spawns, then waits for the site to answer — and a
+     * Stop in that window used to lose. Before the start had recorded anything,
+     * `stop` found nothing live and returned, and the start went on to bring the
+     * site up. During the wait for an answer, `stop` took the site down and the
+     * start then read back the entry Stop had removed and threw, which left its
+     * `starting` phase on the card for good. The start checks this at the point it
+     * records the site, and the Stop wins.
+     */
+    const stopRequested = new Set<string>();
 
     /**
      * A process Genie asked to stop and did NOT get, kept so it stays REACHABLE
@@ -1084,6 +1098,15 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         genName: config?.genName ?? '',
         state: 'failed',
         error,
+    });
+
+    /** How a start that a Stop overtook ends. */
+    const stoppedStatus = (workspaceId: string, siteId: string, config: DevSiteConfig | null): DevSiteStatus => ({
+        siteId,
+        workspaceId,
+        name: config?.name ?? siteId,
+        genName: config?.genName ?? '',
+        state: 'stopped',
     });
 
     /** Every live http site in a workspace, as Caddy vhosts (host + app port,
@@ -1332,6 +1355,12 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             ready: false,
             routes,
         });
+        // A Stop that arrived while this was starting found nothing live to stop.
+        // Now there is: stop it, and end the start there.
+        if (stopRequested.has(siteId)) {
+            await stop(siteId);
+            return stoppedStatus(workspaceId, siteId, config);
+        }
 
         // Point Caddy at every live http site in this workspace, INCLUDING the one
         // just added. A failure means the site is up but unroutable — surfaced as
@@ -1355,11 +1384,13 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                       })
                 : true;
 
+        // Stopped while it was waiting to answer: Stop has already taken it down.
         const entry = live.get(siteId);
-        if (entry) entry.ready = ready;
+        if (!entry) return stoppedStatus(workspaceId, siteId, config);
+        entry.ready = ready;
         changed();
         return {
-            ...statusOf(workspaceId, siteId, config, live.get(siteId)!),
+            ...statusOf(workspaceId, siteId, config, entry),
             ...(caddyError ? { error: caddyError } : {}),
         };
     }
@@ -1408,12 +1439,22 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             ready: false,
             routes,
         });
+        // A Stop that arrived while this was starting found nothing live to stop —
+        // but the site and its worker may already be running. Stop them now, and
+        // end the start there.
+        if (stopRequested.has(siteId)) {
+            await stop(siteId);
+            return stoppedStatus(workspaceId, siteId, config);
+        }
 
         const ready = await probeHostNativeReady(live.get(siteId)!, probeTimeoutMs);
+        // Stopped while it was waiting to answer: Stop has already taken it down.
+        // Reading the entry back here without checking is what threw.
         const entry = live.get(siteId);
-        if (entry) entry.ready = ready;
+        if (!entry) return stoppedStatus(workspaceId, siteId, config);
+        entry.ready = ready;
         changed();
-        return statusOf(workspaceId, siteId, config, live.get(siteId)!);
+        return statusOf(workspaceId, siteId, config, entry);
     }
 
     /**
@@ -2182,18 +2223,38 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             /* the run state is a memory aid, never a reason a start fails */
         }
         const pending = starting.get(siteId);
-        if (pending) return pending;
+        if (pending) {
+            // A start already under way is this start — unless a Stop has since
+            // reached it. Then it is ending, and this Start is a new ask: let the
+            // stopped one finish, then start afresh.
+            if (!stopRequested.has(siteId)) return pending;
+            await pending;
+        }
         // An orphan that has since died must not keep its port out of the pool
         // for the rest of the session (genie#226).
         await pruneOrphans();
         const promise = startOnce(workspaceId, siteId)
+            // A start that THROWS is a failed start, with its reason — never a
+            // rejection that skips the progress below and strands the card on
+            // `starting`.
+            .catch((e: unknown) =>
+                failed(workspaceId, siteId, findSite(workspaceId, siteId)?.config ?? null, messageOf(e)),
+            )
             .then((status) => {
-                if (status.state === 'running') lastFailure.delete(siteId);
-                else lastFailure.set(siteId, status);
+                // A Stop that reached this start decides how it ended, whatever the
+                // start was doing when it noticed.
+                if (stopRequested.has(siteId) && status.state === 'failed') {
+                    status = stoppedStatus(workspaceId, siteId, findSite(workspaceId, siteId)?.config ?? null);
+                }
+                if (status.state === 'failed') lastFailure.set(siteId, status);
+                else lastFailure.delete(siteId);
                 finishProgress(siteId, status);
                 return status;
             })
-            .finally(() => starting.delete(siteId));
+            .finally(() => {
+                starting.delete(siteId);
+                stopRequested.delete(siteId);
+            });
         starting.set(siteId, promise);
         return promise;
     }
@@ -2244,6 +2305,9 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         // A stop clears the remembered failure: the site is off because it was
         // asked to be, which is not the same as being broken.
         lastFailure.delete(siteId);
+        // …and a start still under way is told, so it cannot bring the site up
+        // after this returns. See `stopRequested`.
+        if (starting.has(siteId)) stopRequested.add(siteId);
         const entry = live.get(siteId);
         if (!entry) {
             // Not live (already stopped, or never started) — but a browser-exposed

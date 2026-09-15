@@ -971,9 +971,10 @@ export interface DevSiteInfo {
      *  the Edit form's serve-mode picker prefills. Absent ⇒ the repo's own dev server. */
     hostServe?: DevSiteHostServe;
     /** The transient start stage, present ONLY while a start is in flight:
-     *  `pulling` → `building` → `starting` → `ready`|`failed`. A settled row omits
-     *  it — read `state`/`ready` then. Surfaces observable startup (Gap 2). */
-    phase?: 'pulling' | 'building' | 'starting' | 'ready' | 'failed';
+     *  `pulling` → `building` → `starting` → `ready`|`failed`|`stopped` (a Stop
+     *  arrived mid-start). A settled row omits it — read `state`/`ready` then.
+     *  Surfaces observable startup (Gap 2). */
+    phase?: 'pulling' | 'building' | 'starting' | 'ready' | 'failed' | 'stopped';
     error?: string;
 }
 
