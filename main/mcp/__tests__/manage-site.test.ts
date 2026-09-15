@@ -448,3 +448,53 @@ describe('manageSiteSummary', () => {
         ).toBe('2 sites in this workspace, 1 running.');
     });
 });
+
+describe('manageSite — Laravel Octane (genie#668)', () => {
+    it('offers `octane` as a serve mode, with the servers it can start, and no root required', async () => {
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 3, method: 'tools/list' },
+            ctx({ devServerAvailable: async () => true }),
+        );
+        const tool = (
+            res?.result as { tools: Array<{ name: string; inputSchema: Record<string, unknown> }> }
+        ).tools.find((t) => t.name === 'manageSite');
+        const hostServe = (tool?.inputSchema.properties as Record<string, {
+            properties?: Record<string, { enum?: string[]; description?: string }>;
+            required?: string[];
+        }>).hostServe;
+
+        expect(hostServe?.properties?.mode?.enum).toContain('octane');
+        expect(hostServe?.properties?.server?.enum).toEqual(['frankenphp', 'roadrunner', 'swoole']);
+        // An agent asking for Octane has no document root to give.
+        expect(hostServe?.required).toEqual(['mode']);
+    });
+
+    it('forwards an Octane site to the host', async () => {
+        const manageSite = vi.fn().mockResolvedValue({ ok: true, sites: [] });
+        await call(
+            { action: 'create', name: 'shop', repo: 'shop', hostServe: { mode: 'octane', server: 'swoole' } },
+            { manageSite },
+        );
+        expect(manageSite).toHaveBeenCalledWith(
+            'term-1',
+            expect.objectContaining({ hostServe: { mode: 'octane', server: 'swoole' } }),
+        );
+    });
+});
+
+describe('manageSite — FrankenPHP (genie#668)', () => {
+    it('offers `frankenphp` as a serve mode, and says it runs the PHP it embeds', async () => {
+        const res = await handleMcpMessage(
+            { jsonrpc: '2.0', id: 4, method: 'tools/list' },
+            ctx({ devServerAvailable: async () => true }),
+        );
+        const tool = (
+            res?.result as { tools: Array<{ name: string; inputSchema: Record<string, unknown> }> }
+        ).tools.find((t) => t.name === 'manageSite');
+        const mode = ((tool?.inputSchema.properties as Record<string, { properties?: Record<string, { enum?: string[]; description?: string }> }>)
+            .hostServe?.properties?.mode) ?? {};
+        expect(mode.enum).toContain('frankenphp');
+        expect(mode.description).toMatch(/frankenphp/);
+        expect(mode.description).toMatch(/composer\.json/);
+    });
+});

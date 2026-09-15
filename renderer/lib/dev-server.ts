@@ -11,6 +11,7 @@ import type {
     EngineInstall,
     HostServeConfig,
     LanguageTool,
+    OctaneServer,
 } from './genie';
 
 /**
@@ -217,7 +218,14 @@ export function siteReach(site: DevSiteInfo): SiteReach {
  * to Genie's bundled Caddy so nobody hand-rolls an nginx/Caddy block; the human
  * declares the mode and a `root`, exactly as an agent does via `hostServe`.
  */
-export type ServeMode = 'proxy' | 'static' | 'php';
+export type ServeMode = 'proxy' | 'static' | 'php' | 'frankenphp' | 'octane';
+
+/** Each Octane server's name as its project writes it. */
+export const OCTANE_SERVER_LABELS: Record<OctaneServer, string> = {
+    frankenphp: 'FrankenPHP',
+    roadrunner: 'RoadRunner',
+    swoole: 'Swoole',
+};
 
 /** A site's CURRENT serve mode, for prefilling the Edit picker. No stored
  *  `hostServe` means the repo runs its own dev server — the `proxy` default. */
@@ -236,12 +244,22 @@ export function buildHostServe(
     mode: ServeMode,
     root: string,
     spa: boolean,
-    /** php only: the PINNED engine version. Empty ⇒ follow the machine default,
-     *  which is the ABSENCE of a pin rather than a pin to today's default. */
+    /** php/octane: the PINNED engine version. Empty ⇒ what the repo's composer.json
+     *  requires, else the machine default — the ABSENCE of a pin, not a pin to today's. */
     version?: string,
+    /** octane only: the Octane server. Without one there is nothing to start. */
+    server?: OctaneServer,
 ): HostServeConfig | undefined {
+    if (mode === 'octane') {
+        // No directory: Octane's server is the web server and serves the app itself.
+        if (!server) return undefined;
+        const pinned = version?.trim();
+        return { mode: 'octane', server, ...(pinned ? { version: pinned } : {}) };
+    }
     const dir = root.trim();
     if (mode === 'proxy' || !dir) return undefined;
+    // FrankenPHP runs the PHP it embeds — no pin to carry (genie#668).
+    if (mode === 'frankenphp') return { mode: 'frankenphp', root: dir };
     if (mode === 'php') {
         const pinned = version?.trim();
         return { mode: 'php', root: dir, ...(pinned ? { version: pinned } : {}) };
@@ -290,7 +308,11 @@ export function engineVersionField(opts: {
     const options = [
         {
             value: '',
-            label: opts.defaultVersion ? `Machine default (${opts.defaultVersion})` : 'Machine default',
+            // Unpinned follows the REPO first (genie#668): the PHP its composer.json
+            // requires, and the machine default only when it states none.
+            label: opts.defaultVersion
+                ? `From composer.json, else machine default (${opts.defaultVersion})`
+                : 'From composer.json, else machine default',
         },
         ...versions.map((v) => ({ value: v, label: v })),
     ];
@@ -315,8 +337,13 @@ export function engineVersionField(opts: {
  * switching a site to "run PHP app" with no directory looked like it saved but
  * did nothing (genie #198).
  */
-export function serveConfigIncomplete(mode: ServeMode, root: string, spa: boolean): boolean {
-    return mode !== 'proxy' && !buildHostServe(mode, root, spa);
+export function serveConfigIncomplete(
+    mode: ServeMode,
+    root: string,
+    spa: boolean,
+    server?: OctaneServer,
+): boolean {
+    return mode !== 'proxy' && !buildHostServe(mode, root, spa, undefined, server);
 }
 
 /**
@@ -640,6 +667,15 @@ export function serviceVersionChoice(
  */
 export function siteRunLine(site: DevSiteInfo): string | null {
     const serve = site.hostServe;
+    if (serve?.mode === 'octane') {
+        // Octane has no directory to name — its server serves the app itself.
+        return `Genie runs this Laravel app under Octane (${OCTANE_SERVER_LABELS[serve.server]}${
+            serve.version ? `, PHP ${serve.version}` : ''
+        })`;
+    }
+    if (serve?.mode === 'frankenphp') {
+        return `Genie serves ${serve.root || '.'}/ with FrankenPHP`;
+    }
     if (serve) {
         const root = serve.root || '.';
         return serve.mode === 'php'

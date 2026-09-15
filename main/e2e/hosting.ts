@@ -118,7 +118,7 @@ interface SiteInfo {
     origin?: string;
     localOrigin?: string;
     command?: string[];
-    hostServe?: { mode: 'static' | 'php'; root: string; spa?: boolean; version?: string };
+    hostServe?: { mode: 'static' | 'php' | 'octane' | 'frankenphp'; root?: string; spa?: boolean; version?: string; server?: string };
     browserExposed?: boolean;
 }
 
@@ -580,7 +580,7 @@ interface SiteRequest {
     runMode?: string;
     command?: string[];
     port?: number;
-    hostServe?: { mode: 'static' | 'php'; root: string; spa?: boolean; version?: string } | null;
+    hostServe?: { mode: 'static' | 'php' | 'octane' | 'frankenphp'; root?: string; spa?: boolean; version?: string; server?: string } | null;
     browserExposed?: boolean;
 }
 

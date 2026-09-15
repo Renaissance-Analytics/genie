@@ -458,11 +458,12 @@ test('the site Edit form PINS a php version — and offers only the ones Genie m
     const version = edit
         .locator('label.site-field', { hasText: 'PHP version' })
         .locator('select');
-    // Unpinned ⇒ the site FOLLOWS the machine default, and the control says so
-    // rather than showing a version that could move under it.
+    // Unpinned ⇒ the site FOLLOWS the repo's composer.json, else the machine
+    // default (genie#668), and the control says so rather than showing a version
+    // that could move under it.
     await expect(version).toHaveValue('');
     await expect(version.locator('option')).toHaveText([
-        /Machine default/,
+        /From composer\.json, else machine default/,
         '8.3.33',
         '8.2.33',
     ]);
@@ -478,6 +479,110 @@ test('the site Edit form PINS a php version — and offers only the ones Genie m
     await expect
         .poll(async () => (await readHostingSites(app)).find((s) => s.id === 'site-moic')?.hostServe)
         .toEqual({ mode: 'php', root: 'public', version: '8.2.33' });
+});
+
+test('the site Edit form switches a PHP site to FrankenPHP, keeping its directory (genie#668)', async () => {
+    await seedHostingSites(app, [
+        {
+            id: 'site-labs',
+            name: 'labs',
+            genName: 'labs.hosting-e2e.gen',
+            repo: '',
+            runMode: 'host',
+            kind: 'http',
+            enabled: true,
+            state: 'running',
+            ready: true,
+            hostPort: 49023,
+            hostServe: { mode: 'php', root: 'public' },
+        },
+    ]);
+    await page.reload();
+    await page.waitForLoadState('domcontentloaded');
+    const modal = await openPanel(page);
+
+    await modal.getByRole('button', { name: 'Edit' }).click();
+    const edit = page.locator(MODAL);
+    await expect(edit.getByRole('heading', { name: 'Edit labs' })).toBeVisible();
+
+    const serveAs = edit
+        .locator('label.site-field', { hasText: 'How Genie serves it' })
+        .locator('select');
+    await serveAs.selectOption('frankenphp');
+
+    // FrankenPHP serves the same document root; it runs the PHP it embeds, so
+    // there is no PHP-version control and no Octane server select.
+    await expect(edit.getByLabel('Directory Genie serves')).toHaveValue('public');
+    await expect(edit.getByLabel('Which PHP version this site runs on')).toHaveCount(0);
+    await expect(edit.getByLabel('Which Laravel Octane server Genie starts')).toHaveCount(0);
+
+    await edit.getByRole('button', { name: 'Save changes' }).click();
+    await expect(page.locator(MODAL).getByRole('heading', { name: 'Edit labs' })).toHaveCount(0);
+
+    await expect
+        .poll(async () => (await readHostingSites(app)).find((s) => s.id === 'site-labs')?.hostServe)
+        .toEqual({ mode: 'frankenphp', root: 'public' });
+});
+
+test('the site Edit form switches a PHP site to Laravel Octane — a server, not a directory (genie#668)', async () => {
+    // The component is exercised nowhere else: the renderer has no DOM in unit
+    // tests, so "the server select appears, the directory goes, and what it saves"
+    // is only assertable here.
+    await seedHostingSites(app, [
+        {
+            id: 'site-shop',
+            name: 'shop',
+            genName: 'shop.hosting-e2e.gen',
+            repo: '',
+            runMode: 'host',
+            kind: 'http',
+            enabled: true,
+            state: 'running',
+            ready: true,
+            hostPort: 49022,
+            hostServe: { mode: 'php', root: 'public' },
+        },
+    ]);
+    await page.reload();
+    await page.waitForLoadState('domcontentloaded');
+    const modal = await openPanel(page);
+
+    await modal.getByRole('button', { name: 'Edit' }).click();
+    const edit = page.locator(MODAL);
+    await expect(edit.getByRole('heading', { name: 'Edit shop' })).toBeVisible();
+
+    const serveAs = edit
+        .locator('label.site-field', { hasText: 'How Genie serves it' })
+        .locator('select');
+    await expect(edit.getByLabel('Directory Genie serves')).toBeVisible();
+    await serveAs.selectOption('octane');
+
+    // Octane's server is the web server: the directory field goes, a server
+    // select arrives, defaulting to the one Laravel's docs lead with.
+    await expect(edit.getByLabel('Directory Genie serves')).toHaveCount(0);
+    const server = edit.getByLabel('Which Laravel Octane server Genie starts');
+    await expect(server).toHaveValue('frankenphp');
+    await expect(server.locator('option')).toHaveText(['FrankenPHP', 'RoadRunner', 'Swoole']);
+
+    await server.selectOption('roadrunner');
+    await edit.getByRole('button', { name: 'Save changes' }).click();
+    await expect(page.locator(MODAL).getByRole('heading', { name: 'Edit shop' })).toHaveCount(0);
+
+    // THE state assertion: what was stored is an Octane site on RoadRunner, with
+    // no leftover root from the php config it replaced.
+    await expect
+        .poll(async () => (await readHostingSites(app)).find((s) => s.id === 'site-shop')?.hostServe)
+        .toEqual({ mode: 'octane', server: 'roadrunner' });
+
+    // …and reopening prefills it, so an edit cannot silently turn it back.
+    await modal.getByRole('button', { name: 'Edit' }).click();
+    const reopened = page.locator(MODAL);
+    await expect(reopened.getByRole('heading', { name: 'Edit shop' })).toBeVisible();
+    await expect(
+        reopened.locator('label.site-field', { hasText: 'How Genie serves it' }).locator('select'),
+    ).toHaveValue('octane');
+    await expect(reopened.getByLabel('Which Laravel Octane server Genie starts')).toHaveValue('roadrunner');
+    await reopened.getByRole('button', { name: 'Cancel' }).click();
 });
 
 test('the Services view shows what this workspace uses, and what a stop would really do', async () => {

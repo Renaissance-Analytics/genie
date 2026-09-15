@@ -21,6 +21,15 @@ import {
     phpFastcgiWorkerCommand,
     PHP_FASTCGI_WORKER_ENV,
 } from './serve-config';
+import { octaneServeCommand, OCTANE_SERVE_ENV } from './octane-serve';
+import { composerPhpRequirement, type ComposerPhp } from './composer-php';
+import {
+    FRANKENPHP_PHP_VERSION,
+    frankenphpCaddyfile,
+    frankenphpRefusal,
+    frankenphpRunArgv,
+} from './frankenphp';
+import type { FrankenphpResolution } from './frankenphp-install';
 import type { HostEnvReport } from './services/service-manager';
 import {
     hostBrowserNames as selectHostBrowserNames,
@@ -436,9 +445,27 @@ export interface DevSiteManagerDeps {
         tool: LanguageTool;
         /** The binary inside the install to spawn — `php-cgi` for the worker. */
         bin: string;
-        /** The site's pin. Omitted ⇒ the machine default. */
+        /** The site's pin. Omitted ⇒ what the repo requires, else the machine default. */
         version?: string;
+        /** What the repo's `composer.json` requires, when the site pins nothing and
+         *  the repo says (genie#668). */
+        requires?: ComposerPhp;
     }) => Promise<EngineResolution>;
+    /**
+     * Read a repo's `composer.json`, parsed — null when there is none or it does
+     * not parse. The PHP a site runs on is the repo's to state (genie#668): "read
+     * directly from composer setting in the repo, so not something an agent has to
+     * provide". Default: real fs.
+     */
+    readComposerJson?: (cwd: string) => unknown;
+    /**
+     * Put the pinned FrankenPHP on this machine (downloading it the first time)
+     * and say where it is and which PHP it embeds (genie#668). Absent ⇒ a
+     * `hostServe: frankenphp` site fails with a clear "not available" status.
+     */
+    resolveFrankenphp?: () => Promise<FrankenphpResolution>;
+    /** The environment a spawned site inherits — read for its PATH. Default: process.env. */
+    baseEnv?: NodeJS.ProcessEnv;
     /**
      * Run a HOST-NATIVE site's dev server as a real HOST process (story #238).
      * Absent ⇒ a `runMode: 'host'` site fails with a clear "not available" status
@@ -459,6 +486,13 @@ export interface DevSiteManagerDeps {
      * status. The reverse-proxy (repo-dev-server) path never needs it.
      */
     caddyBin?: string;
+    /**
+     * Can this repo run Octane with `--watch` (genie#668)? Octane keeps the app in
+     * memory, so without it an edit is invisible until a restart — and `--watch`
+     * needs chokidar installed in the repo, or Octane refuses to start at all.
+     * Default: `node_modules/chokidar` exists in the repo.
+     */
+    octaneCanWatch?: (cwd: string) => boolean;
     /**
      * Write a per-site generated web-server config (a Caddyfile) and return its
      * absolute path — so `startHostNativeManaged` can point Genie's Caddy at it.
@@ -672,6 +706,13 @@ interface Live {
      * only ask Caddy, which answers 502 for a dead backend and reads as ready.
      */
     fcgiPort?: number;
+    /**
+     * The ports a `hostServe: octane` site's server binds BESIDES the site port —
+     * FrankenPHP's admin API, RoadRunner's RPC listener (genie#668). Genie
+     * allocates them, so they are held out of every later allocation for as long
+     * as the site is live, exactly as its site port is.
+     */
+    serverPorts?: number[];
     /**
      * How to START THAT WORKER AGAIN — the whole point of genie#305's second
      * half. Noticing the backend died only stops Genie lying about it; the
@@ -964,6 +1005,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
     const livePortSet = () =>
         new Set([
             ...[...live.values()].map((e) => e.caddyHostPort),
+            ...[...live.values()].flatMap((e) => e.serverPorts ?? []),
             ...[...orphans.values()].flatMap((list) =>
                 list.map((o) => o.port).filter((p): p is number => p !== undefined),
             ),
@@ -1332,6 +1374,8 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         fcgiPort?: number,
         /** How to respawn that worker if it dies. See {@link Live.fcgiRevive}. */
         fcgiRevive?: Live['fcgiRevive'],
+        /** An Octane server's other ports. See {@link Live.serverPorts}. */
+        serverPorts?: number[],
     ): Promise<DevSiteStatus> {
         const routes: DevGenSite[] = [
             {
@@ -1352,6 +1396,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             caddyHostPort: route.port,
             ...(fcgiPort === undefined ? {} : { fcgiPort }),
             ...(fcgiRevive === undefined ? {} : { fcgiRevive }),
+            ...(serverPorts === undefined ? {} : { serverPorts }),
             ready: false,
             routes,
         });
@@ -1613,15 +1658,173 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
      * starts the worker as a companion process. Returns a clear failure rather than
      * spawning nothing.
      */
+    /**
+     * The resolver ask for a php site's runtime: its pin when it has one (the
+     * explicit override), else what the repo's composer.json requires, else
+     * nothing — the machine default.
+     */
+    function phpEngineAsk(
+        bin: string,
+        cwd: string,
+        pinned: string | undefined,
+        /** The repo's requirement when the caller already read it. */
+        known?: ComposerPhp | null,
+    ) {
+        if (pinned) return { tool: 'php' as const, bin, version: pinned };
+        const requires = known === undefined ? repoPhpRequirement(cwd) : known;
+        return { tool: 'php' as const, bin, ...(requires ? { requires } : {}) };
+    }
+
+    /**
+     * `{ <PATH key>: <dir first, then the inherited PATH> }` for a spawned site.
+     *
+     * Under the key the environment ALREADY uses: on Windows that is usually
+     * `Path`, and a site env carrying `PATH` beside it would hand the child two
+     * PATHs with no rule for which one wins.
+     */
+    function pathWithFirst(dir: string): Record<string, string> {
+        const base = deps.baseEnv ?? process.env;
+        const win = platform === 'win32';
+        const key = win ? (Object.keys(base).find((k) => k.toUpperCase() === 'PATH') ?? 'Path') : 'PATH';
+        const sep = win ? ';' : ':';
+        const rest = (base[key] ?? '').split(sep).filter((entry) => entry.length > 0 && entry !== dir);
+        return { [key]: [dir, ...rest].join(sep) };
+    }
+
+    /** What the repo's own composer.json requires of PHP, or null when it says nothing. */
+    function repoPhpRequirement(cwd: string): ComposerPhp | null {
+        let composer: unknown = null;
+        try {
+            composer = deps.readComposerJson
+                ? deps.readComposerJson(cwd)
+                : JSON.parse(fs.readFileSync(path.join(cwd, 'composer.json'), 'utf8'));
+        } catch {
+            composer = null;
+        }
+        return composerPhpRequirement(composer);
+    }
+
     async function planHostServe(
         hostServe: HostServeConfig,
         cwd: string,
         sitePort: number,
         siteId: string,
     ): Promise<
-        | { ok: true; command: string[]; worker?: string[]; workerRuns?: string; fcgiPort?: number }
+        | {
+              ok: true;
+              command: string[];
+              worker?: string[];
+              workerRuns?: string;
+              fcgiPort?: number;
+              /** Env the serve mode itself needs, stamped over the site's. */
+              env?: Readonly<Record<string, string>>;
+              /** Ports the server binds besides the site port. See {@link Live.serverPorts}. */
+              serverPorts?: number[];
+          }
         | { ok: false; error: string }
     > {
+        if (hostServe.mode === 'frankenphp') {
+            // FRANKENPHP (genie#668): Caddy with PHP compiled in — ONE process, no
+            // FastCGI worker to lose. It is its own web server, so none of the
+            // bundled-Caddy machinery below applies.
+            const root = resolveServeRoot(cwd, hostServe.root);
+            if (!root) return { ok: false, error: `Invalid serve root ${JSON.stringify(hostServe.root)}.` };
+            if (!deps.resolveFrankenphp || !deps.writeServeConfig || !deps.prepareUploadTmpDir) {
+                return { ok: false, error: 'FrankenPHP serving is not available in this build.' };
+            }
+            // The repo decides its PHP. Checked against the PHP the pinned release
+            // embeds BEFORE anything is fetched — nobody should download 160 MB to
+            // learn their repo cannot run on it — and again against what the
+            // installed binary actually reports.
+            const requires = repoPhpRequirement(cwd);
+            const early = frankenphpRefusal(requires, FRANKENPHP_PHP_VERSION);
+            if (early) return { ok: false, error: early };
+            let uploadTmpDir: string;
+            try {
+                uploadTmpDir = deps.prepareUploadTmpDir(siteId);
+            } catch (e) {
+                return {
+                    ok: false,
+                    error: `Could not create the PHP upload directory for this site, so every file upload would fail before the app saw it: ${messageOf(e)}`,
+                };
+            }
+            const frankenphp = await deps.resolveFrankenphp();
+            if (!frankenphp.ok) return { ok: false, error: frankenphp.error };
+            const late = frankenphpRefusal(requires, frankenphp.phpVersion);
+            if (late) return { ok: false, error: late };
+            const configPath = deps.writeServeConfig(
+                siteId,
+                frankenphpCaddyfile({ sitePort, root, uploadTmpDir }),
+            );
+            return { ok: true, command: frankenphpRunArgv(frankenphp.exe, configPath) };
+        }
+        if (hostServe.mode === 'octane') {
+            // OCTANE (genie#668): the Octane server IS the web server, so none of
+            // the Caddy machinery below applies — a build with no bundled Caddy
+            // still serves these. Resolved first, like php: a site that cannot
+            // name its runtime fails having allocated nothing.
+            if (hostServe.server === 'swoole' && platform === 'win32') {
+                // Refused HERE, at this machine's start, not when the site is
+                // defined: the definition travels in the git-tracked envelope, and
+                // a teammate on macOS or Linux may rightly run it on Swoole.
+                return {
+                    ok: false,
+                    error: "Swoole can't run natively on Windows: it is a PHP extension built only for Linux and macOS, so Genie cannot start this site here. Switch the site to FrankenPHP or RoadRunner, which both run natively on Windows. If the app has to be tested on Swoole, run it in a Linux container yourself (Docker with the swoole extension installed, or WSL); Genie does not provide that container on Windows.",
+                };
+            }
+            if (!deps.resolveEngine) {
+                return {
+                    ok: false,
+                    error: 'Octane serving is not available in this build (Genie cannot resolve a managed PHP here).',
+                };
+            }
+            // Read ONCE: the php CLI's version and, on FrankenPHP, the embedded PHP
+            // are both judged against the same composer.json.
+            const repoRequires = repoPhpRequirement(cwd);
+            const engine = await deps.resolveEngine(phpEngineAsk('php', cwd, hostServe.version, repoRequires));
+            if (!engine.ok) return { ok: false, error: engine.error };
+            // The second port Octane would otherwise DERIVE from the site port —
+            // `2019 + (port - 8000)` for FrankenPHP's admin API, `port - 1999` for
+            // RoadRunner's RPC — which nothing checks is free. Swoole binds none.
+            const serverPort =
+                hostServe.server === 'swoole'
+                    ? undefined
+                    : await allocateFreePort(new Set([...livePortSet(), sitePort]));
+            const canWatch = deps.octaneCanWatch
+                ? deps.octaneCanWatch(cwd)
+                : fs.existsSync(path.join(cwd, 'node_modules', 'chokidar'));
+            // OCTANE ON FRANKENPHP runs the app on FrankenPHP's EMBEDDED PHP, and
+            // Octane finds the binary in the project root or on PATH — otherwise it
+            // prompts to download one, and on Windows refuses outright. So the site
+            // gets Genie's own install first on its PATH, after the same
+            // composer.json check any FrankenPHP site gets.
+            let serverEnv: Record<string, string> = { ...OCTANE_SERVE_ENV };
+            if (hostServe.server === 'frankenphp') {
+                if (!deps.resolveFrankenphp) {
+                    return { ok: false, error: 'Octane on FrankenPHP is not available in this build (Genie cannot install FrankenPHP here).' };
+                }
+                const early = frankenphpRefusal(repoRequires, FRANKENPHP_PHP_VERSION);
+                if (early) return { ok: false, error: early };
+                const frankenphp = await deps.resolveFrankenphp();
+                if (!frankenphp.ok) return { ok: false, error: frankenphp.error };
+                const late = frankenphpRefusal(repoRequires, frankenphp.phpVersion);
+                if (late) return { ok: false, error: late };
+                serverEnv = { ...serverEnv, ...pathWithFirst(path.dirname(frankenphp.exe)) };
+            }
+            return {
+                ok: true,
+                command: octaneServeCommand({
+                    phpExe: engine.exe,
+                    server: hostServe.server,
+                    port: sitePort,
+                    ...(hostServe.server === 'frankenphp' ? { adminPort: serverPort } : {}),
+                    ...(hostServe.server === 'roadrunner' ? { rpcPort: serverPort } : {}),
+                    watch: canWatch,
+                }),
+                env: serverEnv,
+                ...(serverPort === undefined ? {} : { serverPorts: [serverPort] }),
+            };
+        }
         if (!deps.caddyBin || !deps.writeServeConfig) {
             const which = hostServe.mode === 'php' ? 'PHP' : 'Static';
             return {
@@ -1644,11 +1847,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                     error: 'PHP serving is not available in this build (Genie cannot resolve a managed PHP here).',
                 };
             }
-            const engine = await deps.resolveEngine({
-                tool: 'php',
-                bin: 'php-cgi',
-                ...(hostServe.version ? { version: hostServe.version } : {}),
-            });
+            const engine = await deps.resolveEngine(phpEngineAsk('php-cgi', cwd, hostServe.version));
             if (!engine.ok) return { ok: false, error: engine.error };
             // WHERE an upload is spooled (genie#534), resolved on the same terms and
             // for the same reason: a worker left to inherit Genie's temp directory
@@ -1741,6 +1940,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                 readyTimeoutMs,
                 existing.fcgiPort,
                 existing.fcgiRevive,
+                existing.serverPorts,
             );
         }
         live.delete(siteId);
@@ -1764,6 +1964,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         let workerRuns: string | undefined;
         /** The FastCGI port the worker binds, for a `hostServe: php` site. */
         let fcgiPort: number | undefined;
+        let serverPorts: number[] | undefined;
         let portEnv: Record<string, string> = {};
         if (config.hostServe) {
             const planned = await planHostServe(config.hostServe, cwd, port, siteId);
@@ -1772,6 +1973,10 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             worker = planned.worker;
             workerRuns = planned.workerRuns;
             fcgiPort = planned.fcgiPort;
+            serverPorts = planned.serverPorts;
+            // Stamped with the host-owned port env: the serve mode's own settings
+            // are not the repo's to override.
+            portEnv = { ...(planned.env ?? {}) };
         } else {
             const baseCommand = effectiveCommand(config);
             if (!baseCommand) {
@@ -1905,6 +2110,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                       ...(fcgiPort === undefined ? {} : { port: fcgiPort }),
                       attempts: 0,
                   },
+            serverPorts,
         );
     }
 

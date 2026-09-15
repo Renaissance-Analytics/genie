@@ -578,7 +578,8 @@ export interface DevSiteRunOption {
  * config (genie #167/#171). Mirror of main's `HostServeConfig`; `root` is
  * repo-relative (`dist`, `dashboard/dist`, `public`).
  *   - `static` — serve a built directory, `spa` adding the index.html fallback;
- *   - `php`    — serve `public/` via a FastCGI PHP worker (the nginx/Valet model).
+ *   - `php`    — serve `public/` via a FastCGI PHP worker (the nginx/Valet model);
+ *   - `octane` — start the Laravel app under Octane on `server` (genie#668), no root.
  * Absent ⇒ the site runs the repo's OWN dev server, reverse-proxied (proxy mode).
  *
  * `version` PINS the engine (genie#207); omitted, the site follows the machine
@@ -586,7 +587,12 @@ export interface DevSiteRunOption {
  */
 export type HostServeConfig =
     | { mode: 'static'; root: string; spa?: boolean }
-    | { mode: 'php'; root: string; version?: string };
+    | { mode: 'php'; root: string; version?: string }
+    | { mode: 'octane'; server: OctaneServer; version?: string }
+    | { mode: 'frankenphp'; root: string };
+
+/** The servers Laravel Octane starts. Mirror of main's `OctaneServer`. */
+export type OctaneServer = 'frankenphp' | 'roadrunner' | 'swoole';
 
 /** One configured dev site plus whatever is currently true about it. */
 export interface DevSiteInfo {

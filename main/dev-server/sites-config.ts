@@ -4,6 +4,7 @@ import type { DevFramework } from './host-allowlist';
 import type { BuildStep, HostingRunMode, HostingStack, ProductionServer } from './serve-recipe';
 import type { BrowserProtocol, ExposedSurface } from './exposure';
 import { isLanguageTool, type LanguageTool } from './toolchain-versions';
+import { isOctaneServer, type OctaneServer } from './octane-serve';
 
 /**
  * PURE. The persisted per-workspace HOSTED SITE model.
@@ -174,7 +175,11 @@ export interface DevSiteConfig {
  * repo-relative directory (`dist`, `dashboard/dist`, `public`).
  *   - `static` — serve a built directory over `file_server`, `spa` adding the
  *     `index.html` fallback so client-side routes resolve;
- *   - `php`    — serve `public/` with a FastCGI PHP worker (the nginx/Valet model).
+ *   - `php`    — serve `public/` with a FastCGI PHP worker (the nginx/Valet model);
+ *   - `octane` — start the Laravel app under Octane on `server` (genie#668). Not
+ *     Caddy at all: Octane's server is the web server, so there is no `root`;
+ *   - `frankenphp` — serve `public/` with FrankenPHP (genie#668): Caddy with PHP
+ *     compiled in, one process, no FastCGI worker. Runs the PHP it embeds.
  * Absent ⇒ the host-native site runs the repo's OWN dev server, reverse-proxied
  * (the config-less path). See `serve-config.ts`.
  *
@@ -185,7 +190,9 @@ export interface DevSiteConfig {
  */
 export type HostServeConfig =
     | { mode: 'static'; root: string; spa?: boolean }
-    | { mode: 'php'; root: string; version?: string };
+    | { mode: 'php'; root: string; version?: string }
+    | { mode: 'octane'; server: OctaneServer; version?: string }
+    | { mode: 'frankenphp'; root: string };
 
 /** A workspace's dev sites, keyed by {@link devSiteIdFor}. */
 export type DevSites = Record<string, DevSiteConfig>;
@@ -362,10 +369,17 @@ function cleanEngineVersion(v: unknown): string | null {
 }
 
 /** Validate a {@link HostServeConfig}: a known mode + an in-repo root (+ for php,
- *  an optional pinned engine version). */
+ *  an optional pinned engine version). Octane has a server instead of a root. */
 function cleanHostServe(hs: unknown): HostServeConfig | null {
     if (!hs || typeof hs !== 'object') return null;
-    const candidate = hs as HostServeConfig;
+    const candidate = hs as Partial<Record<'mode' | 'root' | 'server' | 'version' | 'spa', unknown>>;
+    if (candidate.mode === 'octane') {
+        // Built field by field, so a `root` passed alongside is dropped rather than
+        // stored as a setting nothing reads.
+        if (!isOctaneServer(candidate.server)) return null;
+        const version = cleanEngineVersion(candidate.version);
+        return { mode: 'octane', server: candidate.server, ...(version ? { version } : {}) };
+    }
     const root = cleanServeRoot(candidate.root);
     if (!root) return null;
     if (candidate.mode === 'static') {
@@ -375,6 +389,9 @@ function cleanHostServe(hs: unknown): HostServeConfig | null {
         const version = cleanEngineVersion(candidate.version);
         return { mode: 'php', root, ...(version ? { version } : {}) };
     }
+    // No version: FrankenPHP runs the PHP it embeds, and the repo's composer.json
+    // is what is checked against it at start (genie#668).
+    if (candidate.mode === 'frankenphp') return { mode: 'frankenphp', root };
     return null;
 }
 
@@ -652,7 +669,9 @@ export function siteEngineUse(site: {
     hostServe?: HostServeConfig;
 }): { genName: string; tool: LanguageTool; version?: string } | null {
     if (site.hostServe) {
-        if (site.hostServe.mode !== 'php') return null;
+        // A static folder runs no engine, and FrankenPHP runs the PHP it EMBEDS —
+        // neither moves when the machine's PHP default changes.
+        if (site.hostServe.mode === 'static' || site.hostServe.mode === 'frankenphp') return null;
         return {
             genName: site.genName,
             tool: 'php',

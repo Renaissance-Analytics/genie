@@ -472,3 +472,95 @@ describe('a stop is the USER’s, and a stop is not an unconfigure (genie#407)',
         expect(db.deleteWorkspaceDevSite).toHaveBeenCalledWith('acme', SITE_ID);
     });
 });
+
+// --- genie#668: a Laravel Octane site ----------------------------------------
+
+describe('hostServe octane (genie#668)', () => {
+    it('CREATES an Octane site host-native, storing the server Genie will start', async () => {
+        const res = await runManageSite(WS, {
+            action: 'create',
+            name: 'shop',
+            repo: 'app',
+            hostServe: { mode: 'octane', server: 'frankenphp', version: '8.4' },
+        });
+
+        expect(res.ok).toBe(true);
+        const stored = store.sites[devSiteIdFor('acme', 'shop')];
+        expect(stored?.hostServe).toEqual({ mode: 'octane', server: 'frankenphp', version: '8.4' });
+        expect(stored?.runMode).toBe('host');
+        // The server is the web server: no dev command is invented alongside it.
+        expect(stored?.command).toBeUndefined();
+        expect(manager.start).toHaveBeenCalled();
+    });
+
+    it('REFUSES an Octane server that does not exist — naming the ones that do — and stores nothing', async () => {
+        // Dropping the unknown value would store a site with NO hostServe, and a
+        // bare create then takes whatever the repo is detected as: a different
+        // serving architecture than the one asked for, reported as success.
+        const res = await runManageSite(WS, {
+            action: 'create',
+            name: 'shop',
+            repo: 'app',
+            hostServe: { mode: 'octane', server: 'nginx' },
+        });
+
+        expect(res.ok).toBe(false);
+        expect(res.error).toMatch(/frankenphp/);
+        expect(res.error).toMatch(/roadrunner/);
+        expect(res.error).toMatch(/swoole/);
+        expect(db.setWorkspaceDevSite).not.toHaveBeenCalled();
+        expect(manager.start).not.toHaveBeenCalled();
+    });
+
+    it('UPDATES a site onto Octane, and refuses a bad server there too', async () => {
+        const ok = await runManageSite(WS, {
+            action: 'update',
+            id: SITE_ID,
+            hostServe: { mode: 'octane', server: 'roadrunner' },
+        });
+        expect(ok.ok).toBe(true);
+        expect(db.setWorkspaceDevSite).toHaveBeenCalledWith(
+            'acme',
+            expect.objectContaining({ hostServe: { mode: 'octane', server: 'roadrunner' }, runMode: 'host' }),
+        );
+
+        db.setWorkspaceDevSite.mockClear();
+        const bad = await runManageSite(WS, {
+            action: 'update',
+            id: SITE_ID,
+            hostServe: { mode: 'octane' },
+        });
+        expect(bad.ok).toBe(false);
+        expect(bad.error).toMatch(/server/);
+        expect(db.setWorkspaceDevSite).not.toHaveBeenCalled();
+    });
+});
+
+describe('hostServe frankenphp (genie#668)', () => {
+    it('CREATES a FrankenPHP site with its document root, host-native, with no dev command', async () => {
+        const res = await runManageSite(WS, {
+            action: 'create',
+            name: 'shop',
+            repo: 'app',
+            hostServe: { mode: 'frankenphp', root: 'public' },
+        });
+        expect(res.ok).toBe(true);
+        const stored = store.sites[devSiteIdFor('acme', 'shop')];
+        expect(stored?.hostServe).toEqual({ mode: 'frankenphp', root: 'public' });
+        expect(stored?.runMode).toBe('host');
+        expect(stored?.command).toBeUndefined();
+    });
+
+    it('UPDATES a php site onto FrankenPHP', async () => {
+        const res = await runManageSite(WS, {
+            action: 'update',
+            id: SITE_ID,
+            hostServe: { mode: 'frankenphp', root: 'public' },
+        });
+        expect(res.ok).toBe(true);
+        expect(db.setWorkspaceDevSite).toHaveBeenCalledWith(
+            'acme',
+            expect.objectContaining({ hostServe: { mode: 'frankenphp', root: 'public' } }),
+        );
+    });
+});
