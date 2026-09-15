@@ -262,6 +262,48 @@ describe('startShuttle — a Genie that does not come back (§9.1)', () => {
         expect(call.json.error?.code).toBe(SHUTTLE_ERROR_CODES.GenieOrphaned);
         expect(Date.now() - started).toBeLessThan(2_000);
     });
+
+    it('still answers when the timer fires a moment BEFORE the clock says the grace is up', async () => {
+        // The timer and the clock are not the same clock. Node schedules timers
+        // on its loop's cached monotonic time and the core measures the grace with
+        // `now()`, so a timer can fire when `now()` says a millisecond or two of
+        // grace is still left. The core then correctly declines to orphan — and
+        // nothing ever asked again, so the waiting call hung for good. It did, on
+        // CI: this suite's test above timed out at 60s on a loaded runner.
+        //
+        // Reproduced deterministically with a clock that reads BEHIND at the first
+        // tick, exactly as a loop-time lag would.
+        const dir = stateDir();
+        fs.writeFileSync(path.join(dir, 'topology.json'), JSON.stringify(topology));
+        let lagNextReadAfter = Number.POSITIVE_INFINITY;
+        let lagged = false;
+        const now = () => {
+            const real = Date.now();
+            if (!lagged && real >= lagNextReadAfter) {
+                lagged = true;
+                return real - 1_000;
+            }
+            return real;
+        };
+        const graceMs = 150;
+        const shuttle = await start(await options(dir, { graceMs, now }));
+        // The request's own tick runs as it arrives, well inside the grace; the
+        // TIMER's tick is the first read this late, and that is the one that lies,
+        // as a timer firing ahead of the clock would.
+        lagNextReadAfter = Date.now() + graceMs - 30;
+
+        const started = Date.now();
+        const call = await post(shuttle.port, {
+            jsonrpc: '2.0',
+            id: 10,
+            method: 'tools/call',
+            params: { name: 'imDone', arguments: {} },
+        });
+
+        expect(lagged, 'the lagging read must actually have happened').toBe(true);
+        expect(call.json.error?.code).toBe(SHUTTLE_ERROR_CODES.GenieOrphaned);
+        expect(Date.now() - started).toBeLessThan(3_000);
+    }, 10_000);
 });
 
 describe('startShuttle — what it says about itself (§9.1)', () => {

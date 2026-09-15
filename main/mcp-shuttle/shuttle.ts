@@ -72,6 +72,13 @@ export interface RunningShuttle {
     close(): Promise<void>;
 }
 
+/**
+ * How soon the orphan timer asks again when it fired before the clock agreed the
+ * grace was up. Short — the gap is milliseconds of clock skew — and only ever
+ * running in that gap: once the core orphans or a Genie attaches, it stops.
+ */
+const ORPHAN_RECHECK_MS = 25;
+
 /** Files in the state directory. */
 export const SHUTTLE_FILES = {
     record: 'shuttle.json',
@@ -220,12 +227,19 @@ export async function startShuttle(opts: StartShuttleOptions): Promise<StartShut
         if (orphanTimer) clearTimeout(orphanTimer);
         orphanTimer = null;
     };
-    const arm = () => {
+    const arm = (delayMs: number = graceMs) => {
         disarm();
         orphanTimer = setTimeout(() => {
             orphanTimer = null;
             inner.tick();
-        }, graceMs);
+            // A timer runs on the event loop's monotonic clock and the grace is
+            // measured with `now()`, so it can fire a moment BEFORE `now()` agrees
+            // the grace is up. The core then rightly declines to orphan — and with
+            // nothing re-armed, a call already parked waited for a Genie that was
+            // never coming back, forever (a CI run hung this way). Ask again shortly
+            // until the core moves on.
+            if (inner.state() === 'detached') arm(ORPHAN_RECHECK_MS);
+        }, delayMs);
         orphanTimer.unref?.();
     };
     const say = (event: Record<string, unknown>) => {
