@@ -1,5 +1,7 @@
 import { generateKeyPairSync, sign, type KeyObject } from 'node:crypto';
 import fs from 'node:fs';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -58,6 +60,9 @@ const written: Array<{ id: string; data: string }> = [];
 const statuses: RelayHostStatus[] = [];
 const members: RelayMemberClient[] = [];
 let appDir = '';
+let upstream: http.Server | null = null;
+let upstreamPort = 0;
+const upstreamHits: string[] = [];
 
 function deps(): MobileDataDeps {
     return {
@@ -129,8 +134,45 @@ async function startServer(): Promise<number> {
         data: deps(),
         confirmPair: async () => true,
         bindIpOverride: '127.0.0.1',
+        siteProxy: {
+            resolveSite: (siteId: string) => {
+                const workspaceId = ({ 'site-shared': SHARED.id, 'site-private': PRIVATE.id } as Record<string, string>)[siteId];
+                return workspaceId && upstreamPort
+                    ? { workspaceId, hostname: `${siteId}.gen`, scheme: 'http' as const, port: upstreamPort, loopback: '127.0.0.1' as const }
+                    : null;
+            },
+        },
     });
     return mobileServerState().port!;
+}
+
+/** A `.gen` site this machine serves, as the site proxy's upstream. */
+async function startUpstream(): Promise<void> {
+    upstream = http.createServer((req, res) => {
+        upstreamHits.push(req.url ?? '');
+        res.writeHead(200, { 'content-type': 'text/plain' });
+        res.end('site ok');
+    });
+    await new Promise<void>((r) => upstream!.listen(0, '127.0.0.1', () => r()));
+    upstreamPort = (upstream.address() as AddressInfo).port;
+}
+
+/** GET a site over the member's relay `site` channel, as the Testing Browser does. */
+function getSite(member: RelayMemberClient, siteId: string, workspaceId: string): Promise<{ status: number; body: string }> {
+    return new Promise((resolve, reject) => {
+        let status = 0;
+        let body = '';
+        const stream = member.openSite(
+            { workspaceId, siteId, method: 'GET', path: `/api/site/${siteId}/hello`, headers: {} },
+            {
+                onResponse: (s) => (status = s),
+                onData: (chunk) => (body += chunk.toString('utf8')),
+                onClose: () => resolve({ status, body }),
+                onError: (message) => (status ? resolve({ status, body }) : reject(new Error(message))),
+            },
+        );
+        stream.end();
+    });
 }
 
 async function startHost(opts: { revalidateMs?: number } = {}): Promise<RelayHostHandle> {
@@ -186,6 +228,10 @@ afterEach(async () => {
     host = null;
     stopMobileServer();
     await relay.close();
+    await new Promise<void>((r) => (upstream ? upstream.close(() => r()) : r()));
+    upstream = null;
+    upstreamPort = 0;
+    upstreamHits.length = 0;
     if (appDir) fs.rmSync(appDir, { recursive: true, force: true });
 });
 
@@ -297,6 +343,22 @@ describe('a desktop Genie as a relay host', () => {
         expect((await ownerMember.rest({ method: 'GET', path: '/api/update/status' })).status).toBe(200);
         expect((await guestMember.rest({ method: 'GET', path: '/api/update/status' })).status).toBe(403);
         expect(listSessions().filter((s) => s.access).map((s) => s.access?.principalId)).toEqual(['user-guest']);
+    });
+
+    // The acceptance path for `.gen` sites: a guest reaches a site their grant names,
+    // over the relay's end-to-end encrypted site channel, and no other.
+    it('lets a guest browse a site the grant names over the encrypted site channel, and not a site it does not', async () => {
+        await startUpstream();
+        await startHost();
+        const { grant, pop } = boundGrant({ cap: 'readonly', sites: { 'site-shared': 'browse' } });
+        const member = await connect(grant, pop);
+
+        const shared = await getSite(member, 'site-shared', SHARED.id);
+        const unnamed = await getSite(member, 'site-private', PRIVATE.id);
+
+        expect(shared).toEqual({ status: 200, body: 'site ok' });
+        expect(unnamed.status).not.toBe(200);
+        expect(upstreamHits).toEqual(['/hello']);
     });
 
     it('never lets a member reach the pairing route or the phone app shell through the relay', async () => {
