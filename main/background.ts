@@ -107,6 +107,7 @@ import {
     writeWorkspaceAgentMcp,
     healTynnMcpEntry,
     syncWorkspaceCodexTynnMcp,
+    setChannelBridgeNode,
 } from './mcp/agent-config';
 import { playAlertSound, setAlertSoundWindowSource } from './notify-sound';
 import { demandWindowAttention, resolveAttentionWindow } from './attention-flash';
@@ -1484,6 +1485,18 @@ app.whenReady().then(async () => {
     // Mark this as the DESKTOP runtime (Electron main). Gates the System
     // workspace's full-filesystem access (files/ipc.ts) — impossible headless.
     markDesktopRuntime();
+    // Agents' AgentInbox channel bridges run on the STANDALONE Node, not on
+    // Genie.exe (genie#346): the updater stops every process in the install
+    // directory, which killed every agent's channel on every update. Set before
+    // anything writes a workspace's .mcp.json, and resolved once — the runtime
+    // does not move while this process lives.
+    {
+        let bridgeNode: string | null | undefined;
+        setChannelBridgeNode(() => {
+            if (bridgeNode === undefined) bridgeNode = resolveShippedRuntime()?.nodePath ?? null;
+            return bridgeNode;
+        });
+    }
 
     // The Testing Browser E2E owns a completely isolated window + loopback
     // fixture and needs none of the normal desktop database/terminal startup.
