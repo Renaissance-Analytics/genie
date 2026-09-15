@@ -93,6 +93,7 @@ import type { SavedPrompt } from '../components/Master/GenieCommandWindow';
 import { ToolchainSetupWizard } from '../components/Master/ToolchainSetupWizard';
 import { checkedAgoLabel, pluginSummaryLine } from '../lib/plugins-view';
 import { tailscalePanelView } from '../lib/tailscale-panel';
+import { relayStatusNote } from '../lib/relay-status-note';
 import {
     engineActionAvailability,
     engineGroups,
@@ -5837,6 +5838,13 @@ function MobileSection({
         void refresh();
     }, []);
 
+    // The relay link settles after a restart returns, so its changes are pushed.
+    useEffect(
+        () => api().mobile.onRelay((relay) => setStatus((prev) => (prev ? { ...prev, relay } : prev))),
+        [],
+    );
+    const relayNote = relayStatusNote(status?.relay, networkAccess.tynn);
+
     // Persist the settings the server reads (mobile_enabled / mobile_port) BEFORE
     // restarting, so the rebind picks up the new values. Used by the toggle and
     // the port input so a change takes effect without a separate Save.
@@ -6018,7 +6026,7 @@ function MobileSection({
             <SettingRow
                 label="Allowed networks"
                 keywords="local lan tailscale tynn network access remote exposure"
-                desc="Choose every transport allowed to reach this workstation. Local has owner priority; LAN is off by default; Tynn uses the authenticated relay and does not open a local socket."
+                desc="Choose every transport allowed to reach this workstation. Local has owner priority; LAN is off by default; Tynn reaches it through the authenticated relay, which connects out to Tynn and proxies onto the Local listener, so it opens no port to the network."
             >
                 <div className="grid gap-2">
                     {([
@@ -6041,6 +6049,10 @@ function MobileSection({
                     ))}
                 </div>
             </SettingRow>
+
+            {relayNote && (
+                <div className={relayNote.tone === 'bad' ? 'set-note bad' : 'set-note'}>{relayNote.text}</div>
+            )}
 
             {status?.tailnetNotDetected && (
                 <div className="set-note bad">
@@ -6065,7 +6077,6 @@ function MobileSection({
                             {listener.network}: {listener.secure ? 'https' : 'http'}://{listener.ip}:{listener.port}
                         </div>
                     ))}
-                    {networkAccess.tynn && <div>Tynn: authenticated relay enabled</div>}
                     {networkAccess.lan && (
                         <div>LAN: awaiting secure certificate enrollment (no plaintext listener)</div>
                     )}

@@ -174,7 +174,15 @@ interface MobileStatus {
         reason: 'keychain-unavailable' | 'decrypt-failed' | 'malformed' | 'read-failed';
         preservedPath: string | null;
     } | null;
+    /** Whether this computer is reachable over Tynn, and why not (genie#680). */
+    relay: RelayHostStatus;
 }
+/** Mirrors `RelayHostPublicStatus` in main/tynn/relay-host-controller.ts. */
+type RelayHostStatus =
+    | { state: 'off' }
+    | { state: 'connecting' }
+    | { state: 'connected'; relay: string }
+    | { state: 'unavailable'; reason: string; message: string };
 /** Who holds the host's baton, as this driver sees it (mirrors main/remote). */
 interface RemoteControlState {
     /** True when SOMEBODY ELSE is driving and this window is view-only. */
@@ -421,6 +429,12 @@ const api = {
             ipcRenderer.invoke('mobile:give-control', principalId) as Promise<
                 MobileStatus & { ok: boolean; error?: string }
             >,
+        /** Live changes to whether this computer is reachable over Tynn. */
+        onRelay: (cb: (s: RelayHostStatus) => void) => {
+            const handler = (_e: unknown, payload: RelayHostStatus) => cb(payload);
+            ipcRenderer.on('mobile:relay', handler);
+            return () => ipcRenderer.off('mobile:relay', handler);
+        },
     },
 
     // Work Mode — Tailscale lifecycle management (status / bring online / install).

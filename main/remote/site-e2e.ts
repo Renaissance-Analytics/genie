@@ -186,6 +186,35 @@ export function completeSiteKey(
     return new SitePayloadCipher(keys.memberToHost, keys.hostToMember);
 }
 
+/**
+ * The HOST half of the site E2E handshake (genie#680) — what a desktop answers when
+ * it is the relay host. Mirrors genie-cloud `src/relay/site-e2e.ts` `acceptSiteKey`,
+ * but signs through a callback so the enrolled host key never leaves the identity
+ * module. The member verifies that signature against the host key Tynn pinned in
+ * its grant, so a relay (or anyone else) cannot stand in for this host.
+ */
+export function acceptSiteKey(
+    init: SiteKeyInit,
+    opts: { sid: string; workstationId: string; sign: (data: Buffer) => Buffer },
+): { accept: SiteKeyAccept; cipher: SitePayloadCipher } {
+    const memberPublic = createPublicKey({
+        key: decodeFixedBase64(init.publicKey, 44, 'member ephemeral key'),
+        type: 'spki',
+        format: 'der',
+    });
+    const { publicKey, privateKey } = generateKeyPairSync('x25519');
+    const hostPublicKey = publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
+    const nonce = decodeFixedBase64(init.nonce, 32, 'site key nonce');
+    const keys = deriveKeys(diffieHellman({ privateKey, publicKey: memberPublic }), nonce, opts.sid, opts.workstationId);
+    const signature = opts
+        .sign(transcript(opts.sid, opts.workstationId, init.publicKey, hostPublicKey, init.nonce))
+        .toString('base64');
+    return {
+        accept: { type: 'site-key-accept', publicKey: hostPublicKey, signature },
+        cipher: new SitePayloadCipher(keys.hostToMember, keys.memberToHost),
+    };
+}
+
 function decodeFixedBase64(value: string, bytes: number, label: string): Buffer {
     if (typeof value !== 'string' || value.length > 128) throw new Error(`invalid ${label}`);
     const decoded = Buffer.from(value, 'base64');

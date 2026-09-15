@@ -369,6 +369,7 @@ import type { BackendKind } from './backend/backend';
 import { openWorkstationById } from './workstation-open';
 import { visibleConnectableWorkstations } from './tynn/connectable-workstations';
 import { readWorkstationIdentity } from './tynn/workstation-identity';
+import { relayHostStatus, syncRelayHost, type RelayHostPublicStatus } from './tynn/relay-host-controller';
 import {
     getAutostart,
     isAutostartSupported,
@@ -1579,6 +1580,7 @@ export function registerIpcHandlers(): void {
             qrDataUrl: string | null;
             needsFirewallRule: boolean;
             pairingStoreIssue: ReturnType<typeof pairingStoreIssue>;
+            relay: RelayHostPublicStatus;
         }
     > => {
         const state = mobileServerState();
@@ -1609,7 +1611,8 @@ export function registerIpcHandlers(): void {
         // Non-null when this run could not read the store holding the PIN and
         // every paired device — the failure that used to be completely silent
         // and left the owner re-pairing without ever learning why (genie#578).
-        return { ...state, pin, qrDataUrl, needsFirewallRule, pairingStoreIssue: pairingStoreIssue() };
+        // Whether this computer is reachable over Tynn, and why not (genie#680, #451).
+        return { ...state, pin, qrDataUrl, needsFirewallRule, pairingStoreIssue: pairingStoreIssue(), relay: relayHostStatus() };
     };
     ipcMain.handle('mobile:status', () => mobileStatus());
     ipcMain.handle('mobile:restart', async (_e, enabled?: boolean) => {
@@ -1617,6 +1620,9 @@ export function registerIpcHandlers(): void {
         // the live flag through so the server reflects the new state.
         if (typeof enabled === 'boolean') setMobileEnabled(enabled);
         await restartMobileServer();
+        // The Allowed networks switches restart through here too: the relay host
+        // follows the Tynn switch and the Local listener it proxies onto.
+        syncRelayHost();
         return mobileStatus();
     });
     ipcMain.handle('remote:set-enabled', async (_e, enabled?: boolean) => {
@@ -1625,6 +1631,7 @@ export function registerIpcHandlers(): void {
         // UI), so it goes through the same restart path.
         if (typeof enabled === 'boolean') setRemoteEnabled(enabled);
         await restartMobileServer();
+        syncRelayHost();
         return mobileStatus();
     });
     ipcMain.handle('mobile:regenerate-pin', async () => {
