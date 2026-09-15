@@ -30,11 +30,15 @@ function effects(over: Partial<VersionInstallEffects> = {}): VersionInstallEffec
         unpack: vi.fn(async () => ({ ok: true as const })),
         runInstaller: vi.fn(async () => ({ ok: true as const })),
         writeFile: vi.fn(async () => {}),
-        verify: vi.fn(async () => ({ version: '8.3.33' })),
+        // php on Windows must report a thread-safe build (genie#669).
+        verify: vi.fn(async () => ({ version: '8.3.33', threadSafe: true })),
         listModules: vi.fn(async () => ({ modules: [...PHP_INI_EXTENSIONS, 'Core', 'PDO'] })),
         removeDir: vi.fn(async () => {}),
         addToPath: vi.fn(async () => {}),
         ensurePrerequisite: vi.fn(async () => ({ ok: true })),
+        moveAside: vi.fn(async () => ({ ok: true as const, previous: null })),
+        restoreAside: vi.fn(async () => {}),
+        discardAside: vi.fn(async () => {}),
         ...over,
     };
 }
@@ -58,7 +62,7 @@ describe('planning an install', () => {
         if (!plan.ok) return;
         expect(plan.dir).toBe(`${ROOT}\\php\\8.3.33`);
         expect(plan.urls[0]).toBe(
-            'https://windows.php.net/downloads/releases/php-8.3.33-nts-Win32-vs16-x64.zip',
+            'https://windows.php.net/downloads/releases/php-8.3.33-Win32-vs16-x64.zip',
         );
         // …and the archive fallback, because a superseded release MOVES.
         expect(plan.urls[1]).toContain('/archives/');
@@ -266,7 +270,10 @@ describe('running an install', () => {
         expect(res).toMatchObject({ ok: false });
         if (!res.ok) expect(res.error).toContain('HTTP 404');
         expect(e.unpack).not.toHaveBeenCalled();
-        expect(e.removeDir).toHaveBeenCalledWith(`${ROOT}\\php\\8.3.33`);
+        // Nothing had been written to the version directory yet, so nothing is
+        // deleted — on a reinstall that directory is the WORKING install (genie#669).
+        expect(e.moveAside).not.toHaveBeenCalled();
+        expect(e.removeDir).not.toHaveBeenCalled();
     });
 
     it('never throws, even when an effect does', async () => {

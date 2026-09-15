@@ -135,14 +135,23 @@ export interface InstallRowView {
     sizeLabel?: string;
     /** Why a foreign row has no actions. Absent on a managed row. */
     note?: string;
+    /** A Genie PHP that is not thread-safe (genie#669): what that means and what
+     *  to do. Absent on every other row. */
+    threadSafeNote?: string;
+    /** Main can replace this install in place with a thread-safe build. */
+    canReinstall: boolean;
 }
 
 export function installRowView(
     install: EngineInstall,
     defaultVersion: string | undefined,
+    /** Main offered a thread-safe reinstall for this install. */
+    reinstallable = false,
 ): InstallRowView {
     const managed = install.source === 'genie';
     const isDefault = managed && install.version === defaultVersion;
+    const needsThreadSafe = managed && install.tool === 'php' && install.threadSafe === false;
+    const canReinstall = needsThreadSafe && reinstallable;
     return {
         key: `${install.tool}|${install.version}|${install.dir}`,
         tool: install.tool,
@@ -160,7 +169,27 @@ export function installRowView(
             : {
                   note: `Installed by ${SOURCE_LABELS[install.source]} — not managed by Genie, so a site cannot use it.`,
               }),
+        ...(needsThreadSafe
+            ? {
+                  threadSafeNote: `Not thread-safe. Genie's PHP has to be, for FrankenPHP and Octane sites. ${
+                      canReinstall
+                          ? 'Reinstall replaces it in place with the thread-safe build.'
+                          : 'Remove it and add a thread-safe version.'
+                  }`,
+              }
+            : {}),
+        canReinstall,
     };
+}
+
+/** The Reinstall dialog's sentence (genie#669). */
+export function reinstallConfirmation(install: EngineInstall): string {
+    const label = LANGUAGE_LABELS[install.tool];
+    return (
+        `Genie downloads the thread-safe ${label} ${install.version} and puts it in place of this one, ` +
+        `keeping the same folder and php.ini. Sites running on it keep serving and pick up the new build ` +
+        `when they next restart. If the new build does not check out, this one is put back.`
+    );
 }
 
 // --- the Languages tab ------------------------------------------------------
@@ -194,6 +223,8 @@ export interface LanguageSectionsInput {
     installs: EngineInstall[];
     defaults: Partial<Record<LanguageTool, string>>;
     addable: Partial<Record<LanguageTool, string[]>>;
+    /** Installs main offers a thread-safe reinstall for, by `tool|version|dir`. */
+    reinstallable?: string[];
     sites: ToolchainSiteUse[];
 }
 
@@ -210,7 +241,13 @@ export function languageSections(input: LanguageSectionsInput): LanguageSection[
         const defaultVersion = input.defaults[tool];
         const rows = input.installs
             .filter((i) => i.tool === tool)
-            .map((i) => installRowView(i, defaultVersion));
+            .map((i) =>
+                installRowView(
+                    i,
+                    defaultVersion,
+                    (input.reinstallable ?? []).includes(`${i.tool}|${i.version}|${i.dir}`),
+                ),
+            );
         const addable = input.addable[tool] ?? [];
         const consumers = input.sites.filter((s) => s.tool === tool);
         return {

@@ -1054,6 +1054,8 @@ export interface EngineInstall {
     source: EngineInstallSource;
     removable: boolean;
     sizeBytes?: number;
+    /** PHP on Windows: whether it is a thread-safe build (genie#669). */
+    threadSafe?: boolean;
 }
 
 /** A site that consumes a language, and whether it PINNED a version. Absent
@@ -1095,6 +1097,8 @@ export interface ToolchainInstallsInfo {
     defaults: Partial<Record<LanguageTool, string>>;
     /** Versions this release can install here, per language, newest first. */
     addable: Partial<Record<LanguageTool, string[]>>;
+    /** Installs to offer a thread-safe reinstall for, by `tool|version|dir`. */
+    reinstallable?: string[];
     /** Sites that consume a language, for the default-change sentence. */
     sites: ToolchainSiteUsage[];
     /** `<userData>/toolchain` — the directory Genie owns end to end. */

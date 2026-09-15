@@ -8,6 +8,7 @@ import {
     formatBytes,
     installRowView,
     languageSections,
+    reinstallConfirmation,
     removeConfirmation,
     sitesFollowingDefault,
     type ToolchainSiteUse,
@@ -101,6 +102,46 @@ describe('the three tabs split the toolchain by how it is MANAGED', () => {
     it('keeps the tab order stable regardless of the order main answers in', () => {
         const updates = [update('composer'), update('git'), update('docker')];
         expect(devToolRows(updates).map((r) => r.name)).toEqual(['git', 'docker', 'composer']);
+    });
+});
+
+/**
+ * Genie's PHP has to be thread-safe (genie#669). An install from before that
+ * change is NTS, and the page SAYS so rather than serving it as if nothing
+ * changed — with a Reinstall where one can replace it in place.
+ */
+describe('a Genie PHP that is not thread-safe says so', () => {
+    const nts = gen('8.4.24', { threadSafe: false });
+    const key = `php|8.4.24|${nts.dir}`;
+
+    it('offers Reinstall when main says it can replace it in place', () => {
+        const [php] = languageSections({ installs: [nts], defaults: {}, addable: {}, reinstallable: [key], sites: [] });
+        const row = php!.rows[0]!;
+        expect(row.threadSafeNote).toMatch(/not thread-safe/i);
+        expect(row.threadSafeNote).toMatch(/FrankenPHP/);
+        expect(row.canReinstall).toBe(true);
+    });
+
+    it('says to remove it and add a thread-safe version when it cannot be reinstalled', () => {
+        const [php] = languageSections({ installs: [nts], defaults: {}, addable: {}, reinstallable: [], sites: [] });
+        const row = php!.rows[0]!;
+        expect(row.canReinstall).toBe(false);
+        expect(row.threadSafeNote).toMatch(/remove it and add/i);
+    });
+
+    it('says nothing about a thread-safe build, or a row that does not report either way', () => {
+        for (const install of [gen('8.4.24', { threadSafe: true }), gen('8.4.24')]) {
+            const row = installRowView(install, undefined);
+            expect(row.threadSafeNote).toBeUndefined();
+            expect(row.canReinstall).toBe(false);
+        }
+    });
+
+    it('asks before reinstalling, and says running sites keep serving until they restart', () => {
+        const message = reinstallConfirmation(nts);
+        expect(message).toMatch(/thread-safe/i);
+        expect(message).toMatch(/8\.4\.24/);
+        expect(message).toMatch(/keep serving/i);
     });
 });
 

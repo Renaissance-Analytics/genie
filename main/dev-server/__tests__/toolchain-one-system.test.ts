@@ -182,13 +182,17 @@ describe('an install Genie reports is an install a new terminal can run', () => 
             unpack: async () => ({ ok: true as const }),
             runInstaller: async () => ({ ok: true as const }),
             writeFile: async () => {},
-            verify: async () => ({ version: '8.4.24' }),
+            // Genie's php on Windows is thread-safe, and says so (genie#669).
+            verify: async () => ({ version: '8.4.24', threadSafe: true }),
             listModules: async () => ({ modules: [...PHP_MODULES] }),
             removeDir: async () => {},
             addToPath: async (dir: string) => {
                 added.push(dir);
             },
             ensurePrerequisite: async () => ({ ok: true as const }),
+            moveAside: async () => ({ ok: true as const, previous: null }),
+            restoreAside: async () => {},
+            discardAside: async () => {},
         };
     }
 
@@ -257,7 +261,7 @@ describe('installing a language installs what that language NEEDS', () => {
             unpack: async () => ({ ok: true as const }),
             runInstaller: async () => ({ ok: true as const }),
             writeFile: async () => {},
-            verify: async () => ({ version: '8.4.24' }),
+            verify: async () => ({ version: '8.4.24', threadSafe: true }),
             listModules: async () => ({ modules: [...PHP_MODULES] }),
             removeDir: async () => {},
             addToPath: async () => {},
@@ -265,6 +269,9 @@ describe('installing a language installs what that language NEEDS', () => {
                 log.push(`prereq:${name}`);
                 return { ok: true as const };
             },
+            moveAside: async () => ({ ok: true as const, previous: null }),
+            restoreAside: async () => {},
+            discardAside: async () => {},
             ...over,
         };
     }

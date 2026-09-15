@@ -66,6 +66,9 @@ export interface VersionInstallPlan {
     /** Modules the installed binary must REPORT for this to count as installed.
      *  Set where {@link configFile} has to actually do something (php). */
     requireModules?: readonly string[];
+    /** The installed binary must report a thread-safe build (php on Windows,
+     *  genie#669). Checked, not assumed from the URL. */
+    requireThreadSafe?: boolean;
     /**
      * Things that must be on the machine before this language can run at all.
      *
@@ -162,6 +165,7 @@ export function planVersionInstall(
                   // …and the config is checked, not assumed: a failed
                   // `extension=` line is silent apart from a stderr warning.
                   requireModules: PHP_REQUIRED_MODULES,
+                  ...(ctx.os === 'win32' ? { requireThreadSafe: true } : {}),
               }
             : {}),
     };
@@ -218,6 +222,20 @@ export interface VersionInstallEffects {
     ensurePrerequisite(
         name: EnginePrerequisite,
     ): Promise<{ ok: boolean; error?: string }>;
+    /**
+     * Move an existing version directory out of the way before the new one is
+     * unpacked; `previous` is where it went, or null when there was none.
+     *
+     * A rename rather than a delete, because the directory may be serving sites:
+     * Windows will not delete a running php-cgi.exe, but it does rename the
+     * directory it runs from, and the running process keeps serving.
+     */
+    moveAside(dir: string): Promise<{ ok: true; previous: string | null } | { ok: false; error: string }>;
+    /** Put a moved-aside directory back where it was. */
+    restoreAside(previous: string, dir: string): Promise<void>;
+    /** Delete a moved-aside directory once the new one has proven itself.
+     *  Best-effort: a copy still in use is left for a later install to sweep. */
+    discardAside(previous: string): Promise<void>;
 }
 
 /** What the installed binary says it loaded, plus anything it grumbled about. */
@@ -245,6 +263,9 @@ export interface EngineProbe {
     exitCode?: number | null;
     /** Its own words (stderr/stdout), or the spawn error. */
     detail?: string;
+    /** php: whether its banner named a thread-safe build — see
+     *  `parsePhpThreadSafety`. Undefined when it did not say. */
+    threadSafe?: boolean;
 }
 
 /**
@@ -311,13 +332,26 @@ export async function installEngineVersion(
     plan: VersionInstallPlan,
     fx: VersionInstallEffects,
 ): Promise<VersionInstallResult> {
+    // Set once the version directory has been taken over. Before that a failure
+    // must not touch it: on a REINSTALL it is the working install.
+    let replacing = false;
+    let previous: string | null = null;
     const fail = async (error: string): Promise<VersionInstallResult> => {
+        if (!replacing) return { ok: false, error };
         // Nothing half-installed survives: the scanner treats a directory with
         // the right binaries as an install, so a partial one is a lie on disk.
         try {
             await fx.removeDir(plan.dir);
         } catch {
             /* the failure below is what matters */
+        }
+        // …and what was there before comes back.
+        if (previous) {
+            try {
+                await fx.restoreAside(previous, plan.dir);
+            } catch {
+                /* the failure below is what matters */
+            }
         }
         return { ok: false, error };
     };
@@ -343,6 +377,15 @@ export async function installEngineVersion(
 
         const dl = await fx.download(plan.urls);
         if (!dl.ok) return fail(dl.error);
+
+        const aside = await fx.moveAside(plan.dir);
+        if (!aside.ok) {
+            return fail(
+                `${LANGUAGE_LABELS[plan.tool]} ${plan.version} is already installed and could not be moved aside to replace it: ${aside.error}. Nothing was changed.`,
+            );
+        }
+        previous = aside.previous;
+        replacing = true;
 
         if (plan.artifact === 'exe') {
             const run = await fx.runInstaller(dl.path, plan.installerArgs ?? []);
@@ -379,6 +422,14 @@ export async function installEngineVersion(
             return fail(describeVerifyFailure(plan, probe));
         }
 
+        if (plan.requireThreadSafe && probe.threadSafe !== true) {
+            return fail(
+                `${LANGUAGE_LABELS[plan.tool]} ${plan.version} ${
+                    probe.threadSafe === false ? 'is not a thread-safe build' : 'did not say whether it is a thread-safe build'
+                }, and Genie's PHP must be thread-safe (FrankenPHP needs it). Nothing was installed.`,
+            );
+        }
+
         // …and for a language whose config has to DO something, that the config
         // did it. A php that starts without openssl cannot `composer install`.
         if (plan.requireModules && plan.requireModules.length > 0) {
@@ -392,6 +443,13 @@ export async function installEngineVersion(
         // worse than none. A PATH failure is not an install failure — the
         // effect swallows its own trouble and says so in its own log.
         await fx.addToPath(plan.binDir);
+        if (previous) {
+            try {
+                await fx.discardAside(previous);
+            } catch {
+                /* best-effort — a later install sweeps what is left */
+            }
+        }
         return { ok: true, tool: plan.tool, version: plan.version, dir: plan.dir };
     } catch (e) {
         return fail(e instanceof Error ? e.message : String(e));

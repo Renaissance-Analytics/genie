@@ -123,9 +123,11 @@ export function defaultToolchainFor(platform: NodeJS.Platform | string): readonl
  *
  * All three, because they fail differently and only the first is obvious.
  * Read out of the IMPORT TABLES of php-8.4.24-nts-Win32-vs17-x64 with the
- * vendor's own `deplister.exe`:
+ * vendor's own `deplister.exe`, and again out of the thread-safe
+ * php-8.4.24-Win32-vs17-x64 Genie installs now (genie#669), with the same result:
  *
- *   - `vcruntime140.dll` — imported by php.exe, php-cgi.exe and php8.dll.
+ *   - `vcruntime140.dll` — imported by php.exe, php-cgi.exe and php8.dll
+ *     (php8ts.dll in the thread-safe build).
  *     Without it nothing starts at all.
  *   - `vcruntime140_1.dll` + `msvcp140.dll` (the C++ standard library) —
  *     imported by `php_intl.dll`, and among the extensions Genie enables, by

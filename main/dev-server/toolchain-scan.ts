@@ -5,6 +5,7 @@ import {
     enginePrimaryBin,
     isLanguageTool,
     joinFor,
+    phpThreadSafeDll,
     sortInstalls,
     type EngineInstall,
     type EngineInstallSource,
@@ -220,6 +221,22 @@ export function foreignRoots(
  * everything under `bin/`). Returns the exe path only when the primary binary
  * AND every companion is present, which is the genie#206 rule.
  */
+/**
+ * php on Windows: whether the build is thread-safe (genie#669), read from the
+ * library only a ZTS build ships. Spread into an install; nothing for any other
+ * language or platform.
+ */
+async function threadSafety(
+    fs: ToolchainFs,
+    tool: LanguageTool,
+    platform: string,
+    dir: string,
+    version: string,
+): Promise<{ threadSafe?: boolean }> {
+    if (tool !== 'php' || platform !== 'win32') return {};
+    return { threadSafe: await fs.isFile(joinFor(platform, dir, phpThreadSafeDll(version))) };
+}
+
 async function locateExecutables(
     fs: ToolchainFs,
     dir: string,
@@ -262,6 +279,7 @@ async function scanGenieInstalls(opts: ScanToolchainOptions): Promise<EngineInst
                 source: 'genie',
                 removable: true,
                 sizeBytes: await fs.dirSize(versionDir),
+                ...(await threadSafety(fs, name, platform, located.dir, version)),
             });
         }
     }
@@ -298,6 +316,7 @@ async function scanLegacyInstalls(opts: ScanToolchainOptions): Promise<EngineIns
             source: 'genie',
             removable: true,
             sizeBytes: await fs.dirSize(located.dir),
+            ...(await threadSafety(fs, name, platform, located.dir, version)),
         });
     }
     return out;

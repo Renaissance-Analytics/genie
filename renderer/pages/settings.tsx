@@ -67,6 +67,7 @@ import {
     devToolRows,
     formatBytes,
     languageSections,
+    reinstallConfirmation,
     removeConfirmation,
     type InstallFailureNotice,
 } from '../lib/toolchain-page';
@@ -4550,7 +4551,8 @@ export function ToolUpdateList({
  *  cost something real — a download, or a directory that is gone. */
 type VersionAsk =
     | { kind: 'add'; tool: LanguageTool; label: string; versions: string[] }
-    | { kind: 'remove'; install: EngineInstall; label: string; message: string };
+    | { kind: 'remove'; install: EngineInstall; label: string; message: string }
+    | { kind: 'reinstall'; install: EngineInstall; label: string; message: string };
 
 /**
  * The Languages tab: php / node / python / go / rust, each with every version on
@@ -4580,6 +4582,7 @@ function LanguagesTab({
         installs: info.installs,
         defaults: info.defaults,
         addable: info.addable,
+        reinstallable: info.reinstallable,
         sites: info.sites,
     });
     return (
@@ -4652,7 +4655,36 @@ function LanguagesTab({
                                         </div>
                                         {row.isDefault && <Badge color="emerald">Default</Badge>}
                                         {!row.managed && <Badge color="zinc">Not managed</Badge>}
+                                        {row.threadSafeNote && (
+                                            <Badge color="amber">Not thread-safe</Badge>
+                                        )}
                                         <div className="ws-engine-actions">
+                                            {row.canReinstall && (
+                                                <Action
+                                                    size="sm"
+                                                    variant="ghost"
+                                                    icon="refresh-cw"
+                                                    disabled={busy !== null}
+                                                    data-testid={`toolchain-reinstall-${row.tool}-${row.version}`}
+                                                    onClick={() => {
+                                                        const install = info.installs.find(
+                                                            (i) =>
+                                                                i.tool === row.tool &&
+                                                                i.version === row.version &&
+                                                                i.dir === row.path,
+                                                        );
+                                                        if (!install) return;
+                                                        onAsk({
+                                                            kind: 'reinstall',
+                                                            install,
+                                                            label: section.label,
+                                                            message: reinstallConfirmation(install),
+                                                        });
+                                                    }}
+                                                >
+                                                    Reinstall
+                                                </Action>
+                                            )}
                                             {row.canSetDefault && (
                                                 <Action
                                                     size="sm"
@@ -4694,6 +4726,11 @@ function LanguagesTab({
                                             )}
                                         </div>
                                     </div>
+                                    {row.threadSafeNote && (
+                                        <Text size="xs" className="text-amber-600">
+                                            {row.threadSafeNote}
+                                        </Text>
+                                    )}
                                     {row.note && (
                                         <Text size="xs" className="text-zinc-500">
                                             {row.note}
@@ -5165,6 +5202,32 @@ export function ToolchainSection() {
                                 onClick={() => void removeVersionNow(ask.install, ask.label)}
                             >
                                 Remove
+                            </Action>
+                        </div>
+                    </div>
+                </Modal>
+            )}
+
+            {/* Reinstall as thread-safe (genie#669): replaces the folder in place. */}
+            {ask?.kind === 'reinstall' && (
+                <Modal open onClose={() => setAsk(null)} size="sm">
+                    <div className="ws-confirm">
+                        <Heading as="h3" size="xs">
+                            Reinstall {ask.label} {ask.install.version} as thread-safe?
+                        </Heading>
+                        <Text size="xs" className="text-zinc-500">
+                            {ask.message}
+                        </Text>
+                        <div className="ws-confirm-actions">
+                            <Action variant="ghost" onClick={() => setAsk(null)}>
+                                Cancel
+                            </Action>
+                            <Action
+                                onClick={() =>
+                                    void addVersionNow(ask.install.tool, ask.label, ask.install.version)
+                                }
+                            >
+                                Reinstall
                             </Action>
                         </div>
                     </div>
