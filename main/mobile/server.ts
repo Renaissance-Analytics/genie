@@ -17,7 +17,7 @@ import {
     type SiteProxyDeps,
 } from './site-proxy';
 import { setEventSockets, setEventSocketFilter, setEventSocketPrincipal, mobileEmit } from './bus';
-import { guestEventPayload, guestMayAttachTerminal, guestMayUseSite } from './guest-access';
+import { guestEventPayload, guestMayAttachTerminal, guestMayUseSite, peerAccess, type PeerAccess } from './guest-access';
 import type { HostAccessPolicy } from '../host-core/access-policy';
 import {
     attachTerminalSocket,
@@ -179,9 +179,11 @@ export interface MobilePeer {
     emoji: string;
     /** True for the one user currently driving. */
     holdsControl: boolean;
+    /** What a guest reaches (genie#681); null for the owner's own device. */
+    access: PeerAccess | null;
 }
 /** Per-events-socket peer info (identity + connect time) for the host overlay. */
-const peerByEventSocket = new Map<WebSocket, Omit<MobilePeer, 'holdsControl'>>();
+const peerByEventSocket = new Map<WebSocket, Omit<MobilePeer, 'holdsControl' | 'access'>>();
 /** The GUEST grant behind an events socket, when it has one (guest-access.ts). */
 const guestPolicyByEventSocket = new Map<WebSocket, HostAccessPolicy>();
 /**
@@ -201,6 +203,18 @@ function trackGuestSocket(token: string, ws: WebSocket): void {
     });
 }
 
+const guestDisconnectListeners = new Set<(principalId: string) => void>();
+
+/**
+ * Hear when the host disconnects a guest, so whatever carries that guest's
+ * connection (the relay host) ends it too, rather than leaving it open onto a
+ * revoked session. Returns the unsubscribe.
+ */
+export function onGuestDisconnected(listener: (principalId: string) => void): () => void {
+    guestDisconnectListeners.add(listener);
+    return () => guestDisconnectListeners.delete(listener);
+}
+
 /**
  * Disconnect one GUEST now: drop every session of that principal and close every
  * socket they have open, so they stop watching and typing at once rather than when
@@ -213,6 +227,7 @@ export function disconnectGuest(principalId: string): number {
         .filter((s) => s.access?.principalId === principalId)
         .map((s) => s.token);
     const dropped = revokeGuestSessions(principalId);
+    for (const listener of [...guestDisconnectListeners]) listener(principalId);
     for (const token of tokens) {
         for (const ws of guestSocketsByToken.get(token) ?? []) {
             try {
@@ -246,10 +261,14 @@ export function endRelaySession(token: string): boolean {
 /** The remotes currently connected to `/ws/events` (drives host presence). */
 export function activeMobilePeers(): MobilePeer[] {
     const roster = new Map(batonRoster().map((p) => [p.id, p]));
-    return [...peerByEventSocket.values()].map((p) => ({
-        ...p,
-        holdsControl: roster.get(p.id)?.holdsControl ?? false,
-    }));
+    return [...peerByEventSocket.entries()].map(([ws, p]) => {
+        const policy = guestPolicyByEventSocket.get(ws);
+        return {
+            ...p,
+            holdsControl: roster.get(p.id)?.holdsControl ?? false,
+            access: policy && deps ? peerAccess(policy, deps.data) : null,
+        };
+    });
 }
 
 // --- static serving --------------------------------------------------------

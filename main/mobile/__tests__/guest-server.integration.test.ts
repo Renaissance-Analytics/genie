@@ -6,7 +6,7 @@ import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { WebSocket } from 'ws';
 
-import { disconnectGuest, mobileEmit, startMobileServer, stopMobileServer, mobileServerState } from '../server';
+import { disconnectGuest, mobileEmit, onGuestDisconnected, startMobileServer, stopMobileServer, mobileServerState } from '../server';
 import { _resetAuthForTest, currentPin, mintGuestSession } from '../auth';
 import { _resetAuditForTest } from '../audit';
 import { _resetBatonForTest } from '../baton';
@@ -280,6 +280,45 @@ describe('disconnecting a guest', () => {
         expect(ownerEvents.readyState).toBe(WebSocket.OPEN);
         otherEvents.close();
         ownerEvents.close();
+    });
+});
+
+// genie#681: the host's banner must tell a guest from the owner's own device, say
+// what each guest reaches, and disconnect one of them without touching the rest.
+describe('who is connected, as the host sees it', () => {
+    it("says what each guest reaches, by workspace name, and marks the owner's device as no guest", async () => {
+        const port = await start();
+        const owner = await pairOwner(port);
+        const guest = mintGuestSession({ policy: policy(), name: 'Sam' }).token;
+        const viewer = mintGuestSession({
+            policy: policy({ principalId: 'tynn-user-viewer', capability: 'readonly', workspaceScopes: ['host:all'] }),
+            name: 'Vic',
+        }).token;
+        const sockets = [
+            await openWs(`ws://127.0.0.1:${port}/ws/events?token=${owner}`),
+            await openWs(`ws://127.0.0.1:${port}/ws/events?token=${guest}`),
+            await openWs(`ws://127.0.0.1:${port}/ws/events?token=${viewer}`),
+        ];
+        await tick(20);
+
+        const peers = mobileServerState().peers;
+        expect(peers.find((p) => p.name === 'Sam')?.access).toEqual({ capability: 'control', workspaces: ['Shared App'] });
+        expect(peers.find((p) => p.name === 'Vic')?.access).toEqual({ capability: 'readonly', workspaces: 'all' });
+        expect(peers.filter((p) => p.access === null)).toHaveLength(1);
+        for (const ws of sockets) ws.close();
+    });
+
+    it("tells whoever carries a guest's connection that the host disconnected them", async () => {
+        await start();
+        mintGuestSession({ policy: policy(), name: 'Sam' });
+        const heard: string[] = [];
+        const stop = onGuestDisconnected((principalId) => heard.push(principalId));
+
+        disconnectGuest('tynn-user-guest');
+        stop();
+        disconnectGuest('tynn-user-guest');
+
+        expect(heard).toEqual(['tynn-user-guest']);
     });
 });
 

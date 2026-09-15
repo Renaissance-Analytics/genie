@@ -461,6 +461,23 @@ export async function gateGuestApi(
     };
 }
 
+/** What a connected guest reaches, as the host's banner shows it (genie#681). */
+export interface PeerAccess {
+    capability: 'control' | 'readonly';
+    /** `all` for every served workspace, now and later; otherwise their names. */
+    workspaces: 'all' | string[];
+}
+
+export function peerAccess(policy: HostAccessPolicy, deps: MobileDataDeps): PeerAccess {
+    const capability = policy.capability === 'control' ? 'control' : 'readonly';
+    if (policy.workspaceScopes.includes('host:all')) return { capability, workspaces: 'all' };
+    const scope = new GuestScope(policy, deps);
+    return {
+        capability,
+        workspaces: deps.listWorkspaces().filter((w) => scope.has(w.id)).map((w) => w.project_name),
+    };
+}
+
 /**
  * Whether a guest may attach to a terminal over `/ws/term`: only one belonging to
  * a workspace they reach. Judged on the terminal's own workspace — never on a tag

@@ -1,5 +1,5 @@
 import { mintGuestSession, mintRelayOwnerSession } from '../../mobile/auth';
-import { endRelaySession } from '../../mobile/server';
+import { endRelaySession, onGuestDisconnected } from '../../mobile/server';
 import { NOT_LISTENING_MESSAGE } from '../../tynn/relay-host-controller';
 import { grantAccessPolicy, verifyMemberGrant, type HostGrant, type TynnJwk } from './grant';
 import { buildTicketHostHello } from './hello';
@@ -149,6 +149,14 @@ export function startRelayHost(deps: RelayHostDeps): RelayHostHandle {
         if (token) endRelaySession(token);
     }
 
+    // The host disconnected a guest from its banner: end their relay sessions too,
+    // so the member is told, rather than left connected to a revoked session.
+    const stopListening = onGuestDisconnected((principalId) => {
+        for (const { sid, grant } of link?.admittedSessions() ?? []) {
+            if (grant.source !== 'owner' && grant.sub === principalId) link?.endSession(sid, 'disconnected by the host');
+        }
+    });
+
     function onLinkState(state: RelayLinkState, detail?: string): void {
         if (stopped) return;
         if (state === 'open' && relayUrl) setStatus({ state: 'connected', relay: relayUrl });
@@ -203,6 +211,7 @@ export function startRelayHost(deps: RelayHostDeps): RelayHostHandle {
         status: () => status,
         stop() {
             stopped = true;
+            stopListening();
             link?.close();
             for (const sid of [...tokens.keys()]) closeSession(sid);
             setStatus({ state: 'stopped' });
