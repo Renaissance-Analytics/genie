@@ -373,7 +373,7 @@ describe('parseIssueWatchSnapshot', () => {
 // --- orchestration (fully faked) ------------------------------------------
 
 function identity(id = 'ws-1'): WorkstationIdentity {
-    return { workstationId: id, authHeader: () => 'Workstation 1:sig' };
+    return { workstationId: id, authHeader: () => 'Workstation 1:sig', sign: () => Buffer.alloc(64), fingerprint: 'fp' };
 }
 
 it('syncs workspace-owned site inventory with workstation authentication', async () => {

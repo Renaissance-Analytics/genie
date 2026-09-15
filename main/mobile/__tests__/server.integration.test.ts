@@ -7,6 +7,7 @@ import { WebSocket } from 'ws';
 import {
     startMobileServer,
     stopMobileServer,
+    restartMobileServer,
     mobileServerState,
     mobileEmit,
     mobileTermFanout,
@@ -1284,6 +1285,33 @@ describe('mobile server (integration, 127.0.0.1)', () => {
             { network: 'local', ip: '127.0.0.1', secure: false },
         ]);
         expect(st.tailnetNotDetected).toBe(false);
+    });
+
+    // genie#685: the Allowed networks switches persist, then restart. The restart
+    // must bind what Settings says NOW, not what it said when the app started.
+    it('rebinds the networks Settings currently allows on restart', async () => {
+        appDir = buildAppDir();
+        let access = { local: true, lan: false, tailscale: false, tynn: false };
+        await startMobileServer({
+            serverVersion: '0.0.0-test',
+            userDataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'genie-mobile-ud-')),
+            appDir,
+            enabled: true,
+            configuredPort: () => 0,
+            networkAccess: () => access,
+            data: deps(),
+            confirmPair: async () => true,
+        });
+        expect(mobileServerState().listeners).toMatchObject([{ network: 'local', ip: '127.0.0.1' }]);
+
+        access = { ...access, local: false };
+        await restartMobileServer();
+        expect(mobileServerState().running).toBe(false);
+        expect(mobileServerState().listeners).toEqual([]);
+
+        access = { ...access, local: true };
+        await restartMobileServer();
+        expect(mobileServerState().listeners).toMatchObject([{ network: 'local', ip: '127.0.0.1' }]);
     });
 });
 
