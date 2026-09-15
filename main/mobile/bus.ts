@@ -24,6 +24,27 @@ let eventSockets: Set<WebSocket> | null = null;
 /** Resolve the principal driving a socket (null = unidentified). Set by server.ts. */
 let principalOfSocket: ((ws: WebSocket) => string | null) | null = null;
 
+/**
+ * Decide what ONE socket receives for a push: the payload (possibly narrowed), or
+ * undefined to withhold it. Set by server.ts, which knows which sockets belong to
+ * a GUEST and judges those by the guest's grant (guest-access.ts). Unset ⇒ every
+ * socket gets every push, as before.
+ */
+export type EventSocketFilter = (ws: WebSocket, type: string, payload: unknown) => unknown;
+let filterForSocket: EventSocketFilter | null = null;
+
+/** Install (or clear, with null) the per-socket push filter. */
+export function setEventSocketFilter(filter: EventSocketFilter | null): void {
+    filterForSocket = filter;
+}
+
+/** The serialized message this socket receives, or null to withhold it. */
+function messageFor(ws: WebSocket, type: string, payload: unknown): string | null {
+    if (!filterForSocket) return JSON.stringify({ type, payload });
+    const narrowed = filterForSocket(ws, type, payload);
+    return narrowed === undefined ? null : JSON.stringify({ type, payload: narrowed });
+}
+
 /** A dashboard push message. `type` discriminates; `payload` is event-specific. */
 export interface MobileEvent {
     type: string;
@@ -53,12 +74,13 @@ export function setEventSocketPrincipal(
 export function mobileEmit(type: string, payload?: unknown): number {
     const sockets = eventSockets;
     if (!sockets || sockets.size === 0) return 0;
-    const msg = JSON.stringify({ type, payload });
     let delivered = 0;
     for (const ws of sockets) {
         // 1 === OPEN. Avoid importing ws's enum just for the constant.
         if (ws.readyState !== 1) continue;
         try {
+            const msg = messageFor(ws, type, payload);
+            if (msg === null) continue;
             ws.send(msg);
             delivered += 1;
         } catch {
@@ -86,7 +108,8 @@ export function mobileEmitEach(
         if (ws.readyState !== 1) continue;
         try {
             const principalId = principalOfSocket ? principalOfSocket(ws) : null;
-            ws.send(JSON.stringify({ type, payload: payloadFor(principalId) }));
+            const msg = messageFor(ws, type, payloadFor(principalId));
+            if (msg !== null) ws.send(msg);
         } catch {
             /* socket went away mid-send — the close handler drops it */
         }

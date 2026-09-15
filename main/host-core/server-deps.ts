@@ -113,6 +113,9 @@ export function buildHostServerDeps(
             const spec = terminalId ? getTerminalSpec(terminalId) : null;
             const wsForNotice = spec ? workspaceIdOfSpec(spec) : null;
             mobileEmit('notify:imdone', {
+                // The id, not just the name, so a GUEST socket is sent the notice only
+                // for a workspace it reaches (guest-access.ts `guestEventPayload`).
+                workspaceId: wsForNotice,
                 label: spec?.label,
                 workspace: wsForNotice ? getWorkspace(wsForNotice)?.project_name ?? null : null,
                 // provider + NAME only — the chat id is addressing, never display.
