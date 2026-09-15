@@ -23,6 +23,9 @@ on:
       - 'main/dev-server/toolchain-resolve.ts'
       - 'main/dev-server/serve-config.ts'
       - 'main/dev-server/__tests__/php-zts-windows.real.test.ts'
+      - 'main/dev-server/roadrunner.ts'
+      - 'main/dev-server/roadrunner-install.ts'
+      - 'main/dev-server/__tests__/roadrunner.real.test.ts'
       - 'scripts/build-service-runtime.mjs'
       - '.github/workflows/hosting-windows.yml'
 
@@ -58,3 +61,7 @@ jobs:
         run: npm run build:runtime
       - name: Real Windows PHP (thread-safe build + php-cgi serving)
         run: npx vitest run --config vitest.hosting.config.mts main/dev-server/__tests__/php-zts-windows.real.test.ts
+      # RoadRunner's Windows release is a zip holding rr.exe, whose banner reads
+      # "rr.exe version" — the half the Linux lane cannot exercise (genie#668).
+      - name: Real RoadRunner install (Windows archive + banner)
+        run: npx vitest run --config vitest.hosting.config.mts main/dev-server/__tests__/roadrunner.real.test.ts

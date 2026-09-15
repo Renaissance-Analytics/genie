@@ -19,6 +19,7 @@ const NO_RUNTIME: RuntimeDetection = { kind: 'none', probes: [] };
 const WS = { id: 'acme', path: '/work/acme', label: 'acme' };
 const PHP = '/gd/toolchain/php/8.4.24/bin/php';
 const FRANKENPHP_EXE = '/gd/toolchain/frankenphp/1.12.7/frankenphp';
+const RR_EXE = '/gd/toolchain/roadrunner/2025.1.15/roadrunner-2025.1.15-linux-amd64/rr';
 
 const octaneSite = (name: string, server: OctaneServer, version?: string): DevSiteConfig => ({
     name,
@@ -38,6 +39,8 @@ function harness(
         platform?: NodeJS.Platform;
         composer?: unknown;
         frankenphp?: { ok: true; exe: string; phpVersion: string } | { ok: false; error: string };
+        roadrunner?: { ok: true; exe: string } | { ok: false; error: string };
+        noRoadrunner?: boolean;
         baseEnv?: NodeJS.ProcessEnv;
     } = {},
 ) {
@@ -97,6 +100,9 @@ function harness(
         }),
         octaneCanWatch: () => opts.canWatch ?? false,
         resolveFrankenphp: async () => opts.frankenphp ?? { ok: true, exe: FRANKENPHP_EXE, phpVersion: '8.5.10' },
+        ...(opts.noRoadrunner
+            ? {}
+            : { resolveRoadrunner: async () => opts.roadrunner ?? { ok: true as const, exe: RR_EXE } }),
         baseEnv: opts.baseEnv ?? { PATH: '/usr/bin:/bin' },
         readComposerJson: (cwd: string) => {
             composerReads.push(cwd.replace(/\\/g, '/'));
@@ -392,13 +398,56 @@ describe('Octane on FrankenPHP uses the FrankenPHP Genie installs (genie#668)', 
         expect(status.error).toContain('HTTP 503');
     });
 
-    it('POSITIVE CONTROL: RoadRunner and Swoole do not touch FrankenPHP or PATH', async () => {
+    it('POSITIVE CONTROL: RoadRunner and Swoole do not touch FrankenPHP', async () => {
         for (const server of ['roadrunner', 'swoole'] as const) {
             const id = devSiteIdFor('acme', 'shop');
             const h = harness({ [id]: octaneSite('shop', server) }, { composer: { require: { php: '<8.5' } } });
             const status = await h.m.start('acme', id);
             expect(status.state, server).toBe('running');
-            expect(h.spawns[0]?.env.PATH, server).toBeUndefined();
+            expect(h.spawns[0]?.env.PATH ?? '', server).not.toContain('frankenphp');
+        }
+    });
+});
+
+describe('Octane on RoadRunner uses the rr Genie installs (genie#668)', () => {
+    // Octane looks for `rr` in the project root or on PATH and otherwise asks to
+    // download one, and `vendor/bin/rr get-binary` then drops the binary INTO the
+    // user's repo. Genie installs the pinned release and puts it first on PATH.
+    it("puts Genie's rr first on the site's PATH", async () => {
+        const id = devSiteIdFor('acme', 'shop');
+        const h = harness({ [id]: octaneSite('shop', 'roadrunner') }, { baseEnv: { PATH: '/usr/bin:/bin' } });
+        const status = await h.m.start('acme', id);
+        expect(status.state).toBe('running');
+        const pathValue = h.spawns[0]?.env.PATH ?? '';
+        expect(pathValue.split(':')[0]).toBe('/gd/toolchain/roadrunner/2025.1.15/roadrunner-2025.1.15-linux-amd64');
+        expect(pathValue).toContain('/usr/bin');
+    });
+
+    it("FAILS with the installer's reason when rr cannot be installed", async () => {
+        const id = devSiteIdFor('acme', 'shop');
+        const h = harness({ [id]: octaneSite('shop', 'roadrunner') }, { roadrunner: { ok: false, error: 'HTTP 503' } });
+        const status = await h.m.start('acme', id);
+        expect(status.state).toBe('failed');
+        expect(status.error).toContain('HTTP 503');
+        expect(h.spawns).toHaveLength(0);
+    });
+
+    it('refuses rather than letting Octane download rr into the repo, in a build that cannot install it', async () => {
+        const id = devSiteIdFor('acme', 'shop');
+        const h = harness({ [id]: octaneSite('shop', 'roadrunner') }, { noRoadrunner: true });
+        const status = await h.m.start('acme', id);
+        expect(status.state).toBe('failed');
+        expect(status.error).toMatch(/RoadRunner/);
+        expect(h.spawns).toHaveLength(0);
+    });
+
+    it('POSITIVE CONTROL: FrankenPHP and Swoole do not touch rr', async () => {
+        for (const server of ['frankenphp', 'swoole'] as const) {
+            const id = devSiteIdFor('acme', 'shop');
+            const h = harness({ [id]: octaneSite('shop', server) }, { noRoadrunner: true });
+            const status = await h.m.start('acme', id);
+            expect(status.state, server).toBe('running');
+            expect(h.spawns[0]?.env.PATH ?? '', server).not.toContain('roadrunner');
         }
     });
 });
