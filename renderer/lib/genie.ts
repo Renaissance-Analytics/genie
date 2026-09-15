@@ -588,7 +588,8 @@ export interface DevSiteRunOption {
 export type HostServeConfig =
     | { mode: 'static'; root: string; spa?: boolean }
     | { mode: 'php'; root: string; version?: string }
-    | { mode: 'octane'; server: OctaneServer; version?: string };
+    | { mode: 'octane'; server: OctaneServer; version?: string }
+    | { mode: 'frankenphp'; root: string };
 
 /** The servers Laravel Octane starts. Mirror of main's `OctaneServer`. */
 export type OctaneServer = 'frankenphp' | 'roadrunner' | 'swoole';

@@ -481,6 +481,49 @@ test('the site Edit form PINS a php version — and offers only the ones Genie m
         .toEqual({ mode: 'php', root: 'public', version: '8.2.33' });
 });
 
+test('the site Edit form switches a PHP site to FrankenPHP, keeping its directory (genie#668)', async () => {
+    await seedHostingSites(app, [
+        {
+            id: 'site-labs',
+            name: 'labs',
+            genName: 'labs.hosting-e2e.gen',
+            repo: '',
+            runMode: 'host',
+            kind: 'http',
+            enabled: true,
+            state: 'running',
+            ready: true,
+            hostPort: 49023,
+            hostServe: { mode: 'php', root: 'public' },
+        },
+    ]);
+    await page.reload();
+    await page.waitForLoadState('domcontentloaded');
+    const modal = await openPanel(page);
+
+    await modal.getByRole('button', { name: 'Edit' }).click();
+    const edit = page.locator(MODAL);
+    await expect(edit.getByRole('heading', { name: 'Edit labs' })).toBeVisible();
+
+    const serveAs = edit
+        .locator('label.site-field', { hasText: 'How Genie serves it' })
+        .locator('select');
+    await serveAs.selectOption('frankenphp');
+
+    // FrankenPHP serves the same document root; it runs the PHP it embeds, so
+    // there is no PHP-version control and no Octane server select.
+    await expect(edit.getByLabel('Directory Genie serves')).toHaveValue('public');
+    await expect(edit.getByLabel('Which PHP version this site runs on')).toHaveCount(0);
+    await expect(edit.getByLabel('Which Laravel Octane server Genie starts')).toHaveCount(0);
+
+    await edit.getByRole('button', { name: 'Save changes' }).click();
+    await expect(page.locator(MODAL).getByRole('heading', { name: 'Edit labs' })).toHaveCount(0);
+
+    await expect
+        .poll(async () => (await readHostingSites(app)).find((s) => s.id === 'site-labs')?.hostServe)
+        .toEqual({ mode: 'frankenphp', root: 'public' });
+});
+
 test('the site Edit form switches a PHP site to Laravel Octane — a server, not a directory (genie#668)', async () => {
     // The component is exercised nowhere else: the renderer has no DOM in unit
     // tests, so "the server select appears, the directory goes, and what it saves"

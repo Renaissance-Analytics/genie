@@ -493,6 +493,19 @@ describe('the serve-mode picker (proxy | static | php)', () => {
     });
 });
 
+describe('the serve-mode picker — FrankenPHP (genie#668)', () => {
+    it('reads a FrankenPHP site as frankenphp', () => {
+        expect(serveModeOf({ ...SITE, hostServe: { mode: 'frankenphp', root: 'public' } })).toBe('frankenphp');
+    });
+
+    it('builds a FrankenPHP hostServe from its directory — and never carries a PHP pin, a server or the SPA flag', () => {
+        expect(buildHostServe('frankenphp', ' public ', true, '8.3', 'swoole')).toEqual({ mode: 'frankenphp', root: 'public' });
+        expect(buildHostServe('frankenphp', '', false)).toBeUndefined();
+        expect(serveConfigIncomplete('frankenphp', '', false)).toBe(true);
+        expect(serveConfigIncomplete('frankenphp', 'public', false)).toBe(false);
+    });
+});
+
 describe('the serve-mode picker — Laravel Octane (genie#668)', () => {
     it('reads an Octane site as octane', () => {
         expect(serveModeOf({ ...SITE, hostServe: { mode: 'octane', server: 'roadrunner' } })).toBe('octane');
@@ -718,6 +731,13 @@ describe('siteRunLine', () => {
         expect(siteRunLine(site({ hostServe: { mode: 'static', root: 'dist', spa: true } }))).toMatch(
             /SPA|single-page/i,
         );
+    });
+
+    it('describes a FrankenPHP site by its directory and server (genie#668)', () => {
+        const line = siteRunLine(site({ hostServe: { mode: 'frankenphp', root: 'public' } }));
+        expect(line).toMatch(/public\//);
+        expect(line).toMatch(/FrankenPHP/);
+        expect(line).not.toMatch(/FastCGI|static/);
     });
 
     it('describes an Octane site by its server, not by a directory it does not have (genie#668)', () => {

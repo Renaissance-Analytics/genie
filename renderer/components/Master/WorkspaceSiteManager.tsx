@@ -1007,6 +1007,7 @@ function EditSiteForm({
  * is why both agents and humans kept reaching for it by default.
  */
 const SERVE_MODES: { value: ServeMode; label: string }[] = [
+    { value: 'frankenphp', label: 'Genie serves a PHP app with FrankenPHP (point at public/)' },
     { value: 'php', label: 'Genie serves a PHP app (point at public/) — recommended' },
     { value: 'static', label: 'Genie serves a built folder (static / SPA) — recommended' },
     { value: 'octane', label: 'Genie runs a Laravel Octane app (FrankenPHP, RoadRunner or Swoole)' },
@@ -1116,11 +1117,13 @@ function ServeModeFields({
                     <Input
                         value={root}
                         onValueChange={onRoot}
-                        placeholder={mode === 'php' ? 'public' : 'dist'}
+                        placeholder={mode === 'php' || mode === 'frankenphp' ? 'public' : 'dist'}
                         aria-label="Directory Genie serves"
                     />
                     <small className="site-field-hint">
-                        {mode === 'php'
+                        {mode === 'frankenphp'
+                            ? 'Repo-relative DOCUMENT ROOT — for Laravel and most PHP apps that is public/, not the app root. FrankenPHP serves it in ONE process, with no FastCGI worker, on the PHP it embeds (8.5); a repo whose composer.json excludes that PHP is refused at start, naming the PHP mode instead. The first start downloads FrankenPHP.'
+                            : mode === 'php'
                             ? 'Repo-relative DOCUMENT ROOT — for Laravel and most PHP apps that is public/, not the app root. Genie serves exactly this directory and hands .php to a FastCGI worker (the nginx/Valet model). No command, no hand-written web-server config. Pointing it at the app root would publish .env and .git.'
                             : 'Repo-relative built folder — Genie serves it with its own file server. No dev command, no hand-written web-server config.'}
                     </small>

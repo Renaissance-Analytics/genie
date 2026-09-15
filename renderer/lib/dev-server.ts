@@ -218,7 +218,7 @@ export function siteReach(site: DevSiteInfo): SiteReach {
  * to Genie's bundled Caddy so nobody hand-rolls an nginx/Caddy block; the human
  * declares the mode and a `root`, exactly as an agent does via `hostServe`.
  */
-export type ServeMode = 'proxy' | 'static' | 'php' | 'octane';
+export type ServeMode = 'proxy' | 'static' | 'php' | 'frankenphp' | 'octane';
 
 /** Each Octane server's name as its project writes it. */
 export const OCTANE_SERVER_LABELS: Record<OctaneServer, string> = {
@@ -258,6 +258,8 @@ export function buildHostServe(
     }
     const dir = root.trim();
     if (mode === 'proxy' || !dir) return undefined;
+    // FrankenPHP runs the PHP it embeds — no pin to carry (genie#668).
+    if (mode === 'frankenphp') return { mode: 'frankenphp', root: dir };
     if (mode === 'php') {
         const pinned = version?.trim();
         return { mode: 'php', root: dir, ...(pinned ? { version: pinned } : {}) };
@@ -670,6 +672,9 @@ export function siteRunLine(site: DevSiteInfo): string | null {
         return `Genie runs this Laravel app under Octane (${OCTANE_SERVER_LABELS[serve.server]}${
             serve.version ? `, PHP ${serve.version}` : ''
         })`;
+    }
+    if (serve?.mode === 'frankenphp') {
+        return `Genie serves ${serve.root || '.'}/ with FrankenPHP`;
     }
     if (serve) {
         const root = serve.root || '.';
