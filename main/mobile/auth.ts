@@ -77,6 +77,12 @@ export interface MobileSession {
      * (`guest-access.ts`). Absent ⇒ a paired device, which is the owner's own.
      */
     access?: HostAccessPolicy;
+    /**
+     * Minted for ONE relay session and never written to disk (the relay host sets
+     * it for the owner's own grant; every guest session is ephemeral already). A
+     * persisted copy would outlive the session and the grant that admitted it.
+     */
+    ephemeral?: boolean;
 }
 
 /**
@@ -198,7 +204,7 @@ function persist(): void {
         // Paired devices only. A guest session lives exactly as long as the relay
         // session that minted it; written down, it would survive the revocation
         // that is supposed to end it, and come back on the next boot.
-        sessions: [...state.sessions.values()].filter((s) => !s.access),
+        sessions: [...state.sessions.values()].filter((s) => !s.access && !s.ephemeral),
     };
     const enc = encryptSecretResult(JSON.stringify(payload));
     if (!enc.ok) {
@@ -507,6 +513,35 @@ export function mintGuestSession(opts: {
     };
     state.sessions.set(token, session);
     return session;
+}
+
+/**
+ * Mint a session for the host OWNER arriving over the relay with their own Tynn
+ * grant (`src: owner`) — the owner's own device, so no access policy, but minted
+ * for this one relay session and never persisted (genie#680).
+ */
+export function mintRelayOwnerSession(opts: { userId: string; name: string }): MobileSession {
+    if (!state) throw new Error('mobile auth is not initialised');
+    const token = crypto.randomBytes(32).toString('hex');
+    const session: MobileSession = {
+        id: crypto.randomUUID(),
+        token,
+        ip: '',
+        createdAt: Date.now(),
+        label: opts.name,
+        identity: { userId: opts.userId, name: opts.name, role: 'owner' },
+        ephemeral: true,
+    };
+    state.sessions.set(token, session);
+    return session;
+}
+
+/** Drop one session by its token (a relay session closed). Returns whether it existed. */
+export function revokeSessionToken(token: string): boolean {
+    if (!state) return false;
+    const existed = state.sessions.delete(token);
+    if (existed) persist();
+    return existed;
 }
 
 /**

@@ -2,6 +2,8 @@ import { createPublicKey, verify } from 'node:crypto';
 
 import { describe, expect, it, vi } from 'vitest';
 
+import * as secretsStore from '../../secrets/store';
+
 import {
     clearWorkstationIdentity,
     buildWorkstationAuthHeader,
@@ -88,6 +90,25 @@ describe('readWorkstationIdentity', () => {
         expect(readWorkstationIdentity(() => ({ id: 'ws-1' }))).toBeNull();
         expect(readWorkstationIdentity(() => ({ keyEnc: 'blob' }))).toBeNull();
     });
+
+    // genie#680: as a relay host, this machine signs its relay hello and the site
+    // E2E handshake with the enrolled key — without the key ever leaving here.
+    it('signs with the enrolled key and names its fingerprint, without exposing the key', () => {
+        const { privateKeyPem, publicKeySpkiB64 } = generateHostKeypair();
+        const { setSecretEncryptor } = secretsStore;
+        setSecretEncryptor({ isAvailable: () => true, encrypt: (b: Buffer) => b, decrypt: (b: Buffer) => b });
+        try {
+            const keyEnc = Buffer.from(privateKeyPem, 'utf8').toString('base64');
+            const identity = readWorkstationIdentity(() => ({ id: 'ws-1', keyEnc }))!;
+
+            const data = Buffer.from('genie-relay-host-hello\nws-1.fp.n.1');
+            expect(verify(null, data, publicKeyFromSpkiB64(publicKeySpkiB64), identity.sign(data))).toBe(true);
+            expect(identity.fingerprint).toBe(fingerprintSpki(publicKeySpkiB64));
+            expect(JSON.stringify(identity)).not.toContain('PRIVATE KEY');
+        } finally {
+            setSecretEncryptor(null);
+        }
+    });
 });
 
 describe('ensureLocalWorkstation', () => {
@@ -110,7 +131,7 @@ describe('ensureLocalWorkstation', () => {
         const backend = fakeBackend();
         const store = vi.fn();
         const res = await ensureLocalWorkstation(backend, {
-            readIdentity: () => ({ workstationId: 'ws-existing', authHeader: () => 'Workstation 1:sig' }),
+            readIdentity: () => ({ workstationId: 'ws-existing', authHeader: () => 'Workstation 1:sig', sign: () => Buffer.alloc(64), fingerprint: 'fp' }),
             storeIdentity: store,
         });
         expect(res).toEqual({ status: 'exists', workstationId: 'ws-existing' });
