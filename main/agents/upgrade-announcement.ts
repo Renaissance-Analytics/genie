@@ -136,7 +136,18 @@ export type McpConnectionEvidence = 'attached' | 'unknown';
 function connectionSentence(
     evidence: McpConnectionEvidence,
     servers: readonly string[],
+    kept: readonly string[] = [],
 ): string {
+    // The shuttle carried the upgrade (genie#346): the process behind the endpoint
+    // was never replaced, and saying it was is how an agent ends up repairing a
+    // connection that works.
+    if (kept.length > 0) {
+        return (
+            `Genie's MCP endpoint stayed up through the upgrade — it is served by Genie's ` +
+            `background service, which an upgrade does not restart — so ${namedServers(kept)} ` +
+            `${kept.length === 1 ? 'was' : 'were'} kept.`
+        );
+    }
     const named = namedServers(servers);
     const endpoint = named
         ? `The upgrade replaced the process behind Genie's MCP endpoint. ${named} ${servers.length === 1 ? 'connects' : 'connect'} to it.`
@@ -195,7 +206,8 @@ export function formatAgentUpgradeMessage(
     const summary = changes.length > 0
         ? ` What changed:\n${changes.map((change) => `- ${change}`).join('\n')}`
         : '';
-    return `Genie upgraded to v${version}.${summary}\n\n${connectionSentence(evidence, recovery.strategy.servers)} ${recoveryInstruction(recovery)}\n\nOnce \`genie\` answers again: if this terminal predates AMS, call agentUpgrade and follow its ordered migration guide.\n\n${upgradeNoticeMode(mode)}\n\nThis is a system notice; no reply is needed.`;
+    const instruction = recoveryInstruction(recovery);
+    return `Genie upgraded to v${version}.${summary}\n\n${connectionSentence(evidence, recovery.strategy.servers, recovery.strategy.kept)}${instruction ? ` ${instruction}` : ''}\n\nOnce \`genie\` answers again: if this terminal predates AMS, call agentUpgrade and follow its ordered migration guide.\n\n${upgradeNoticeMode(mode)}\n\nThis is a system notice; no reply is needed.`;
 }
 
 /** One agent the announcement may reach. */

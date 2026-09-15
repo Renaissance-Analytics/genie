@@ -107,6 +107,7 @@ import {
     writeWorkspaceAgentMcp,
     healTynnMcpEntry,
     syncWorkspaceCodexTynnMcp,
+    setChannelBridgeNode,
 } from './mcp/agent-config';
 import { playAlertSound, setAlertSoundWindowSource } from './notify-sound';
 import { demandWindowAttention, resolveAttentionWindow } from './attention-flash';
@@ -199,6 +200,7 @@ import {
     onMcpTopologyChanged,
 } from './mcp/server';
 import { startMcpEndpoint } from './mcp-shuttle/genie-endpoint';
+import { shuttleEnabledFor } from './mcp-shuttle/enabled';
 import {
     genieShuttleSupervisorFactory,
     shuttleStateDir,
@@ -1355,7 +1357,7 @@ function reportWorkstationResetFailures(failures: ResetFailure[]): void {
  *
  * Best-effort throughout: an upgrade notice must never be able to block boot.
  */
-function announceUpgradeToAgents(): void {
+function announceUpgradeToAgents(opts: { endpointKept: boolean }): void {
     try {
         const currentVersion = app.getVersion();
         const previousVersion = getAllSettings().agent_upgrade_announced_version;
@@ -1414,11 +1416,26 @@ function announceUpgradeToAgents(): void {
                     // then landed in the same box, the two sharing one line.
                     const info = agentInboxBroker.getInfo(agentId);
                     const terminalId = info?.terminalId;
+                    // What the repair depends on (genie#346): whether the shuttle
+                    // carried the endpoint through the upgrade, and whether THIS
+                    // agent's channel has already re-registered with this process.
+                    const context = {
+                        endpointKept: opts.endpointKept,
+                        channelBound: harnessTransportRegistry.isVerified(agentId),
+                    };
                     // No terminal to reach: the agent is still told how to
-                    // reconnect itself rather than left to discover dead tools.
-                    if (!terminalId) return MANUAL_RECOVERY;
+                    // reconnect itself rather than left to discover dead tools —
+                    // unless nothing was cut, which is then what it is told.
+                    if (!terminalId) {
+                        return opts.endpointKept
+                            ? { strategy: reconnectStrategy(null, context), applied: false }
+                            : MANUAL_RECOVERY;
+                    }
                     const spec = getTerminalSpec(terminalId);
-                    const strategy = reconnectStrategy(spec?.meta?.agent as string | undefined);
+                    const strategy = reconnectStrategy(spec?.meta?.agent as string | undefined, context);
+                    // Every connection this agent has lived through the upgrade:
+                    // type nothing, restart nothing.
+                    if (strategy.kind === 'kept') return { strategy, applied: true };
                     if (strategy.kind === 'command') {
                         // Through the nudge machinery: it holds the keyboard,
                         // submits properly, replays anything typed during the
@@ -1483,6 +1500,18 @@ app.whenReady().then(async () => {
     // Mark this as the DESKTOP runtime (Electron main). Gates the System
     // workspace's full-filesystem access (files/ipc.ts) — impossible headless.
     markDesktopRuntime();
+    // Agents' AgentInbox channel bridges run on the STANDALONE Node, not on
+    // Genie.exe (genie#346): the updater stops every process in the install
+    // directory, which killed every agent's channel on every update. Set before
+    // anything writes a workspace's .mcp.json, and resolved once — the runtime
+    // does not move while this process lives.
+    {
+        let bridgeNode: string | null | undefined;
+        setChannelBridgeNode(() => {
+            if (bridgeNode === undefined) bridgeNode = resolveShippedRuntime()?.nodePath ?? null;
+            return bridgeNode;
+        });
+    }
 
     // The Testing Browser E2E owns a completely isolated window + loopback
     // fixture and needs none of the normal desktop database/terminal startup.
@@ -2380,12 +2409,12 @@ app.whenReady().then(async () => {
     if (isE2E()) registerAppsE2E();
     // WHO SERVES THE AGENT MCP PORT (genie#346): the MCP shuttle — a separate
     // process on the standalone Node that outlives this one, so an upgrade never
-    // drops an agent's connection — or, when it is off or cannot run, this process
-    // exactly as before. `startMcpEndpoint` never resolves with the port unserved.
+    // drops an agent's connection. Always; it is not a setting. Only when it
+    // cannot run does this process serve instead, and that is reported as the
+    // failure it is. `startMcpEndpoint` never resolves with the port unserved.
     const mcpGeneration = Date.now();
     const mcpEndpoint = await startMcpEndpoint({
-        shuttleEnabled:
-            getAllSettings().mcp_shuttle === 'on' || (isE2E() && process.env.GENIE_E2E_MCP_SHUTTLE === '1'),
+        shuttleEnabled: shuttleEnabledFor({ e2e: isE2E(), env: process.env }),
         server: {
             adoptShuttleListener: () => adoptShuttleListener(mcpDeps),
             bindInProcess: () => startMcpServer(mcpDeps),
@@ -2410,8 +2439,8 @@ app.whenReady().then(async () => {
             buildManifest(mcpContextFor(''), { genieVersion: app.getVersion(), generation: mcpGeneration }),
         stopRunningShuttle: () => stopShuttleIfRunning(shuttleStateDir(app.getPath('userData'))),
         prepareShuttle: () => stopShuttleOnOtherPort(shuttleStateDir(app.getPath('userData')), mcpDeps.configuredPort()),
-        // §9.1: agents keep working in-process, but lose what the shuttle was turned
-        // on for — so the owner is told, in Settings and as it happens.
+        // §9.1: agents keep working in-process, but lose what the shuttle is for —
+        // surviving an update — so the owner is told, in Settings and as it happens.
         onFallback: (reason) => {
             noteShuttleFallback(reason);
             broadcastToWindows('terminal:host-status', {
@@ -2434,7 +2463,7 @@ app.whenReady().then(async () => {
     // nothing to connect to without one, and a harness channel cannot
     // re-register itself against a port nobody is on.
     // Fire-and-forget: it schedules its own work and never blocks boot.
-    announceUpgradeToAgents();
+    announceUpgradeToAgents({ endpointKept: mcpEndpoint?.keptAgentConnections() ?? false });
 
     // Wire the operator's OWN workspace the way every other workspace is wired.
     // Without this it had no `.mcp.json`, no `.agents/skills/` and no Codex

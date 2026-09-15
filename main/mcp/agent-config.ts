@@ -70,9 +70,43 @@ function claudeChannelBridgePath(workspacePath: string): string {
     return path.join(workspacePath, '.agents', '_genie', 'agentinbox-claude-channel.cjs');
 }
 
+/**
+ * Where Genie's STANDALONE Node lives, for the channel bridge to run on — set once
+ * at boot from the shipped runtime (genie#346). Null until then, and in a build
+ * that ships none.
+ */
+let channelBridgeNode: (() => string | null) | null = null;
+
+/** Wire the standalone Node the channel bridge runs on. `null` unsets it. */
+export function setChannelBridgeNode(resolve: (() => string | null) | null): void {
+    channelBridgeNode = resolve;
+}
+
+/**
+ * The binary an agent's AgentInbox channel bridge runs on.
+ *
+ * NOT `process.execPath` whenever there is any alternative. That is `Genie.exe`,
+ * and on Windows the updater stops every process under the install directory
+ * before it swaps the files — so a bridge running on it died with every update,
+ * and a killed stdio server does not come back until a person reconnects it. The
+ * standalone Node is materialised under user data exactly so an update cannot
+ * reach it; the pty host and the MCP shuttle already run there.
+ */
+function channelBridgeCommand(): { command: string; electron: boolean } {
+    let node: string | null = null;
+    try {
+        node = channelBridgeNode?.() ?? null;
+    } catch {
+        node = null;
+    }
+    if (node) return { command: node, electron: false };
+    return { command: process.execPath, electron: Boolean(process.versions.electron) };
+}
+
 export function claudeChannelEntry(workspacePath: string, url: string): JsonObj {
+    const { command, electron } = channelBridgeCommand();
     return {
-        command: process.execPath,
+        command,
         args: [claudeChannelBridgePath(workspacePath)],
         env: {
             GENIE_MCP_URL: url,
@@ -83,7 +117,7 @@ export function claudeChannelEntry(workspacePath: string, url: string): JsonObj 
             // default keeps an agent run outside Genie from receiving the literal
             // `${GENIE_TERMINAL_ID}`.
             GENIE_TERMINAL_ID: '${GENIE_TERMINAL_ID:-}',
-            ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
+            ...(electron ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
         },
     };
 }

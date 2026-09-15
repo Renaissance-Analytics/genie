@@ -239,17 +239,19 @@ test('a quit that leaves no terminal running takes the shuttle with it', async (
     });
 });
 
-test('turning the shuttle off stops the one left running, and Genie serves the port itself', async () => {
-    // A shuttle outlives a killed Genie. Booting with the setting off must stop it —
-    // otherwise this Genie loses the bind, falls back to a temporary port no
-    // .mcp.json names, and every agent dials a shuttle with no Genie behind it.
+test('a Genie that serves agents itself stops the shuttle left running, and serves the same port', async () => {
+    // A shuttle outlives a killed Genie. A Genie that does not use it — every E2E
+    // launch that did not opt in, which is how the specs after this one run — must
+    // stop it. Otherwise this Genie loses the bind, falls back to a temporary port
+    // no .mcp.json names, and every agent dials a shuttle with no Genie behind it.
+    // (In the product the shuttle is always used; there is no setting to turn off.)
     test.setTimeout(180_000);
     await withDiagnostics(async () => {
-        const { url, shuttle } = await bootWithShuttle('a Genie with the shuttle on');
+        const { url, shuttle } = await bootWithShuttle('a Genie through the shuttle');
         await killGenie('that Genie');
         expect(alive(shuttle.pid), 'its shuttle is left running').toBe(true);
 
-        ({ app } = await step('launch a Genie with the shuttle off', 60_000, () => launchGenieE2E('issuewatch')));
+        ({ app } = await step('launch a Genie that serves in-process', 60_000, () => launchGenieE2E('issuewatch')));
         const offUrl = await step('read its endpoint', 15_000, () => endpointUrl(app!));
 
         await step('the leftover shuttle is stopped', 15_000, () =>

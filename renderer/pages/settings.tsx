@@ -805,8 +805,6 @@ export default function SettingsPage() {
                 onSyncChange={(target, on) =>
                     patch({ [`mcp_sync_${target}`]: on ? 'on' : 'off' })
                 }
-                shuttle={s.mcp_shuttle === 'on'}
-                onShuttleChange={(on) => patch({ mcp_shuttle: on ? 'on' : 'off' })}
             />
 
                             </SearchGroup>
@@ -2437,8 +2435,6 @@ function AgentMcpSection({
     syncCodex,
     syncAgents,
     onSyncChange,
-    shuttle,
-    onShuttleChange,
 }: {
     /** Remote/host window — the Agent-MCP CONFIG (port + sync toggles) is the
      *  host's (host-sourced via the settings bridge), but the live server
@@ -2451,9 +2447,6 @@ function AgentMcpSection({
     syncCodex: boolean;
     syncAgents: boolean;
     onSyncChange: (target: 'claude' | 'cursor' | 'codex' | 'agents', on: boolean) => void;
-    /** Serve agent MCP through the shuttle (genie#346). */
-    shuttle: boolean;
-    onShuttleChange: (on: boolean) => void;
 }) {
     const [state, setState] = useState<McpServerState | null>(null);
     const [push, setPush] = useState<ServerPushDiagnostics | null>(null);
@@ -2601,16 +2594,9 @@ function AgentMcpSection({
                 </div>
             )}
 
-            {!restricted && (
-                <SettingRow
-                    label="Keep agents connected through Genie updates"
-                    desc="Agents reach Genie through a small background service that stays running when Genie updates or restarts, so their connection is not dropped. Takes effect the next time Genie starts."
-                    keywords="mcp shuttle update restart connection agents keep connected background service"
-                >
-                    <Switch checked={shuttle} onCheckedChange={(v: boolean) => onShuttleChange(v)} />
-                </SettingRow>
-            )}
-            {!restricted && shuttle && state?.shuttleFallback && (
+            {/* No switch (genie#346): agents are always served through the shuttle.
+                What a person needs to see is the session it could NOT run. */}
+            {!restricted && state?.shuttleFallback && (
                 <div className="set-note warn">
                     The background service could not run this session, so Genie is
                     serving agents itself and an update will drop their connections.{' '}
