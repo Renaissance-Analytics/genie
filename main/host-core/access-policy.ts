@@ -80,18 +80,31 @@ export function policyAllowsSite(
     return { allowed: true };
 }
 
+/**
+ * The available workspaces a policy reaches. Tynn writes a workspace scope with
+ * either of a workspace's ids: this host's own, or the Tynn project it is linked to,
+ * which differs on a desktop (genie#687). `tynnProjectIdOf` resolves the second; it
+ * is asked only about workspaces no scope names directly.
+ */
 export function visibleWorkspaceIds(
     policy: HostAccessPolicy,
     availableWorkspaceIds: Iterable<string>,
+    tynnProjectIdOf?: (workspaceId: string) => string | null,
 ): Set<string> {
     const available = new Set(availableWorkspaceIds);
     if (policy.revokedAt !== undefined) return new Set();
     if (policy.workspaceScopes.includes('host:all')) return available;
-    return new Set(
+    const named = new Set(
         policy.workspaceScopes
             .filter((scope): scope is `workspace:${string}` => scope.startsWith('workspace:'))
-            .map((scope) => scope.slice('workspace:'.length))
-            .filter((id) => available.has(id)),
+            .map((scope) => scope.slice('workspace:'.length)),
+    );
+    return new Set(
+        [...available].filter((id) => {
+            if (named.has(id)) return true;
+            const projectId = tynnProjectIdOf?.(id);
+            return !!projectId && named.has(projectId);
+        }),
     );
 }
 
