@@ -1735,16 +1735,48 @@ agents for workspaces; never perform their project work yourself.
 `;
 }
 
-/** Focused Genie workflow skills installed beside the base routing skill. */
-export function genieCoreSkills(): Record<string, string> {
-    const skill = (name: string, description: string, body: string): string => `---
+/**
+ * Focused Genie workflow skills installed beside the base routing skill.
+ *
+ * `agent` picks the harness the files are written for. Only Claude Code documents
+ * `disable-model-invocation`; Codex skills take a name and description, so a skill
+ * meant to be run by the user alone says so in its description there instead.
+ */
+export function genieCoreSkills(agent: 'codex' | 'claude' = 'codex'): Record<string, string> {
+    const skill = (
+        name: string,
+        description: string,
+        body: string,
+        opts: { userInvokedOnly?: boolean } = {},
+    ): string => `---
 name: ${name}
 description: ${description}
----
+${opts.userInvokedOnly && agent === 'claude' ? 'disable-model-invocation: true\n' : ''}---
 
 ${body}
 `;
     return {
+        'genie-handoff': skill(
+            'genie-handoff',
+            'Run only when the user invokes it — write a handoff through imDone, then stop so the terminal can be restarted.',
+            `# Hand off and stop
+
+The user ran this to restart you cleanly — for an upgrade, a fresh context or a
+permission change. It is a stop, not one more task.
+
+1. **Do not start new work.** Leave the current step where it is; do not commit,
+   push, merge or release anything the user has not already asked for. If an
+   operation is mid-flight, let it settle or leave it and say so.
+2. **Call \`imDone\`** with \`terminalId\` set to \`GENIE_TERMINAL_ID\` and a
+   \`handoff\` for the next run of this agent: what you were doing, what is
+   half-finished (uncommitted changes, branches, open PRs, background jobs or
+   subagents still running), questions still waiting on an answer, and what to
+   do first. The rules for its content are \`genieGuide\` topic \`imdone\`.
+3. **Read the response.** If it says the handoff was not saved, print the handoff
+   in this terminal so the user can keep it.
+4. **End your turn.** No further tool calls and no questions.`,
+            { userInvokedOnly: true },
+        ),
         'genie-orientation': skill(
             'genie-orientation',
             'Use when entering, reinitializing, or learning a Genie workspace.',
@@ -1984,7 +2016,7 @@ function syncAgentSkills(
 ): void {
     try {
         const root = path.join(workspacePath, ...SKILL_ROOTS[agent]);
-        const coreSkills = { genie: genieCodexSkill(), ...genieCoreSkills() };
+        const coreSkills = { genie: genieCodexSkill(), ...genieCoreSkills(agent) };
         const codexSessionHook = path.join(
             root,
             'genie',

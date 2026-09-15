@@ -54,6 +54,18 @@ The MCP server is enabled per workspace and runs on a fixed loopback port (see
 | **setEnv / checkEnv** | Reads or upserts a key in a workspace `.env` (preserving comments). |
 | **genieGuide** | Returns the full usage guide, so the agent knows when and how to use all of the above. |
 
+## Restarting an agent cleanly — `/genie-handoff`
+
+Before you restart an agent's terminal (a fresh context, a permission change, an
+upgrade), type **`/genie-handoff`** in it. The agent stops starting new work,
+writes a handoff through `imDone` (what it was doing, what's half-finished, what
+comes next) and ends its turn. The next run of that agent picks the handoff up at
+launch.
+
+Genie installs the skill into every workspace for Claude Code
+(`.claude/skills/`) and Codex (`.agents/skills/`). In Claude Code only you can
+run it; the agent never loads it on its own.
+
 ## Automated or Manual — how Genie talks to an agent
 
 Every agent is either **Automated** or **Manual**, set on its `AGENT.md` and

@@ -69,6 +69,9 @@ Genie automatically syncs a small routing skill plus focused skills for
 capability in use; call
 \`genieGuide\` when the complete protocol is needed.
 
+\`genie-handoff\` is the USER's: they run it to have you write a handoff through
+\`imDone\` and stop, so the terminal can be restarted. Never run it yourself.
+
 ## Reading a result — \`ok\` is the verdict, not \`isError\`
 
 Every tool answers with **text plus a trailing JSON block**. No tool declares an
