@@ -90,7 +90,7 @@ describe('every setting belongs to exactly one tier', () => {
  * workstation setting.
  *
  * The converse is deliberately NOT asserted: a workstation setting need not be
- * host-sourced. Startup, updates and the quick-capture hotkey configure the
+ * host-sourced. Startup, updates and the feedback hotkey configure the
  * client's own machine and are hidden in a remote window rather than streamed
  * from the host — they are still workstation-tier, just not host-sourced.
  */

@@ -127,7 +127,7 @@ export const NAV_GROUPS: NavGroup[] = [
  *     (remote-bridge.ts) — see HOST_SOURCED_SETTINGS_KEYS.
  *  3. HOST-MACHINE-ONLY / wrong-scoped — HIDDEN. Everything else configures the
  *     CLIENT's own machine / app launch / connections / Work-Mode role (General's
- *     primary-workspace folder picker, Startup, Quick-capture hotkey, Work Mode,
+ *     primary-workspace folder picker, Startup, Feedback hotkey, Work Mode,
  *     Connections, Devices, Updates), meaningless or mis-targeted in a driving
  *     window, so it stays hidden.
  */

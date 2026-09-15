@@ -61,21 +61,18 @@ Notes you may encounter:
   (register a GitHub App at `github.com/settings/apps/new` with *Enable Device
   Flow* ticked).
 
-## Quick capture (issues)
+## Feedback
 
-Genie can pop a small always-on-top **Capture an issue** window to file an issue
-against a project without switching context.
+**Send feedback** files into a Tynn project's feedback list, where it can be
+triaged or turned into a wish.
 
-- Open it with the **Quick capture hotkey** you set in
-  **[Settings](08-settings.md)** (an Electron accelerator like
-  `CommandOrControl+Shift+W`).
-- Pick a **project** (the dropdown spans every backend you're signed in to; if
-  Genie knows your current workspace's project, it's pre-selected).
-- Type into **"What needs to happen?"** and press **Enter** to send
-  (**Shift+Enter** for a newline). **Esc** cancels.
-
-The issue is filed against the selected project's backend, and the window hides
-on success.
+- Open it with the **Feedback hotkey** you set in
+  **[Settings](08-settings.md)** (default **Ctrl + Shift + W**, ⌘ + Shift + W on
+  macOS), from the tray's **Send feedback…**, or from a workspace's menu.
+- The hotkey opens it for the workspace you're in, with that workspace's Tynn
+  project selected. Pick another **Project** to send it somewhere else; a
+  workspace with no Tynn project asks you to choose.
+- Your Genie version and workspace are attached automatically.
 
 ## Inbox
 

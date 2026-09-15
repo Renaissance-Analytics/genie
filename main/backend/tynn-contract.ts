@@ -175,12 +175,6 @@ export const TYNN_ENDPOINTS: readonly TynnEndpoint[] = [
     },
     {
         method: 'POST',
-        path: '/api/v1/issues',
-        caller: 'main/backend/tynn.ts',
-        breaks: 'The global quick-capture hotkey files nothing — genie#411, the bug this file exists for.',
-    },
-    {
-        method: 'POST',
         path: '/api/v1/feedback',
         caller: 'main/backend/tynn.ts',
         breaks: 'Feedback about Genie itself never reaches Tynn. The PATH is frozen by Tynn on purpose: installed desktops post here and their release is not ours to control.',

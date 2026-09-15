@@ -385,6 +385,7 @@ import { raiseAskE2E, seedAskE2E } from './e2e/ask';
 import { seedTynnImportE2E } from './e2e/tynn-import';
 import { seedWorkspaceCreateE2E } from './e2e/workspace-create';
 import { seedMasterE2E } from './e2e/master';
+import { requestFeedback } from './feedback-open';
 import { seedFlowsE2E } from './e2e/flows';
 
 /**
@@ -534,7 +535,6 @@ if (!gotLock) {
 }
 
 let mainWindow: BrowserWindow | null = null;
-let captureWindow: BrowserWindow | null = null;
 let settingsWindow: BrowserWindow | null = null;
 /** The restriction the current settingsWindow was built for (the ?remote=1 URL
  *  flag is fixed at load, so a mode change needs a fresh window). */
@@ -565,6 +565,15 @@ const terminalWindows = new Set<BrowserWindow>();
 
 export function getMainWindow(): BrowserWindow | null {
     return mainWindow;
+}
+
+/**
+ * Bring the master window forward and open Feedback for its active workspace
+ * (genie#675) — the global hotkey and the tray's "Send feedback…".
+ */
+export function openFeedbackWindow(): void {
+    showMasterWindow();
+    requestFeedback(masterWindow);
 }
 
 /**
@@ -808,10 +817,6 @@ export function showTerminalWindow(): void {
     win.on('closed', () => terminalWindows.delete(win));
 }
 
-export function getCaptureWindow(): BrowserWindow | null {
-    return captureWindow;
-}
-
 export function getSettingsWindow(): BrowserWindow | null {
     return settingsWindow;
 }
@@ -921,20 +926,6 @@ export function showFlowEditorWindow(flowId: string, connKey: string | null = nu
         if (flowEditorWindows.get(key) === win) flowEditorWindows.delete(key);
     });
     win.once('ready-to-show', () => win.focus());
-}
-
-export function showCaptureWindow(): void {
-    if (!captureWindow || captureWindow.isDestroyed()) {
-        captureWindow = createCaptureWindow();
-    }
-    captureWindow.show();
-    captureWindow.focus();
-}
-
-export function hideCaptureWindow(): void {
-    if (captureWindow && !captureWindow.isDestroyed()) {
-        captureWindow.hide();
-    }
 }
 
 function createMainWindow(): BrowserWindow {
@@ -1148,39 +1139,6 @@ function createKnowledgeWindow(): BrowserWindow {
     }
 
     win.once('ready-to-show', () => win.show());
-    return win;
-}
-
-function createCaptureWindow(): BrowserWindow {
-    const win = new BrowserWindow({
-        width: 480,
-        height: 200,
-        show: false,
-        frame: false,
-        alwaysOnTop: true,
-        resizable: false,
-        skipTaskbar: true,
-        webPreferences: {
-            preload: path.join(__dirname, 'preload.js'),
-            contextIsolation: true,
-            nodeIntegration: false,
-            sandbox: false,
-        },
-    });
-
-    if (isDev) {
-        win.loadURL('http://localhost:8888/capture');
-    } else {
-        win.loadFile(path.join(__dirname, 'capture.html'));
-    }
-
-    // Hide on blur — capture is a transient flow.
-    win.on('blur', () => {
-        if (!win.webContents.isDevToolsOpened()) {
-            win.hide();
-        }
-    });
-
     return win;
 }
 
@@ -2235,7 +2193,7 @@ app.whenReady().then(async () => {
     // (Settings → General) OR the OS launched Genie at sign-in (autostart passes
     // `--autostart` / macOS wasOpenedAtLogin) — an auto-start should never ambush
     // the user with a window on every boot. In both cases the window opens on the
-    // first tray click / quick-capture hotkey. E2E opened its own harness window
+    // first tray click / feedback hotkey. E2E opened its own harness window
     // above. Shown here — right after IPC + the terminal backend are ready, before
     // the MCP/mobile servers — so it appears promptly and no later async step hides it.
     //
@@ -3444,12 +3402,4 @@ app.on('before-quit', () => {
     // What is not stopped here is re-ADOPTED on the next boot (`onBoot`), which
     // is the half of the pair that makes leaving them running safe rather than
     // merely convenient.
-});
-
-// Bridge for getting the active project context (used by capture window).
-ipcMain.handle('app:get-current-project', async () => {
-    // Capture window uses this to pre-select the project. Defaults to the
-    // last-opened workspace, then to primary's project, then null.
-    const { getLastOpenedProject } = require('./workspace/last-opened');
-    return getLastOpenedProject();
 });

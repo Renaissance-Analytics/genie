@@ -3718,19 +3718,10 @@ export interface GenieApi {
             slug?: string;
             is_gapp?: boolean;
         }) => Promise<TynnProject>;
-        /** File what the global quick-capture hotkey caught, as an ISSUE
-         *  (`POST /api/v1/issues`). Tynn's separate Wish intake is retired. */
-        captureIssue: (
-            projectId: string,
-            content: string,
-            backendKind?: BackendKind,
-        ) => Promise<{ id: string; backend: BackendKind }>;
-        /** File feedback about GENIE ITSELF into a Tynn project (Tynn #249).
-         *  Distinct from captureIssue at the wire — feedback posts to
-         *  `/api/v1/feedback`, quick capture to `/api/v1/issues` — and those
-         *  paths are a contract with already-installed desktops. Never throws:
-         *  it resolves with `ok:false` and a reason, so a form can show what
-         *  went wrong instead of dying. */
+        /** File feedback into a Tynn project (Tynn #249), posted to
+         *  `/api/v1/feedback` — a path that is a contract with already-installed
+         *  desktops. Never throws: it resolves with `ok:false` and a reason, so a
+         *  form can show what went wrong instead of dying. */
         submitFeedback: (
             projectId: string,
             message: string,
@@ -3835,8 +3826,8 @@ export interface GenieApi {
         get: () => Promise<string>;
     };
     app: {
-        hideCapture: () => Promise<{ ok: boolean }>;
-        getCurrentProject: () => Promise<{ id: string; name: string } | null>;
+        /** True once when the Feedback hotkey fired while this page was loading. */
+        claimPendingFeedback: () => Promise<boolean>;
         /** The user's home directory (roots the synthetic System Workspace). */
         homeDir: () => Promise<string>;
         genieOsWorkspace: () => Promise<{ path: string }>;
@@ -4639,6 +4630,7 @@ export interface GenieApi {
         ) => () => void;
         /** The tray "Task Manager…" item asks the master window to open it. */
         openTaskManager: (cb: () => void) => () => void;
+        openFeedback: (cb: () => void) => () => void;
         /** Issue Watch: per-workspace unread counts (by type) + per-workspace
          *  worst read detail (bucket + raw HTTP status/message, so the flyout
          *  can explain a silent-empty pill precisely) + whether the GitHub

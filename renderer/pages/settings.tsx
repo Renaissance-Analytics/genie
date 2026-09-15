@@ -605,14 +605,14 @@ export default function SettingsPage() {
                 </SettingRow>
             </SetSection>
 
-            {/* Startup + the quick-capture hotkey configure THIS machine's app
+            {/* Startup + the feedback hotkey configure THIS machine's app
                 launch — hidden in a remote window (wrong-scoped when driving another
                 machine). */}
             {!restricted && (
                 <SetSection title="Startup" desc="What Genie does on launch">
                     <SettingRow
                         label="Start minimized to the tray"
-                        desc="Off by default — Genie opens its window on launch. Turn on to start in the tray only; the window opens on the first tray click or the quick-capture hotkey."
+                        desc="Off by default — Genie opens its window on launch. Turn on to start in the tray only; the window opens on the first tray click or the feedback hotkey."
                         keywords="startup start minimized tray launch window boot"
                     >
                         <Switch
@@ -626,11 +626,11 @@ export default function SettingsPage() {
             )}
 
             {!restricted && (
-                <SetSection title="Quick capture hotkey" desc="Global shortcut to pop the capture window">
+                <SetSection title="Feedback hotkey" desc="Global shortcut to send feedback for the active workspace">
                     <SettingRow
                         label="Accelerator"
                         desc="Electron accelerator string, e.g. CommandOrControl+Shift+W"
-                        keywords="quick capture hotkey accelerator global shortcut keybinding"
+                        keywords="feedback hotkey accelerator global shortcut keybinding quick capture"
                         vertical
                     >
                         <Input

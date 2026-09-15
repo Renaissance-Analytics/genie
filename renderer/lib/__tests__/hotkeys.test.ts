@@ -20,7 +20,7 @@ import { hotkeyActionFor, matchesAccelerator, type KeyChord } from '../hotkeys';
  * PANEL has focus. Not when Genie is in the background, not when another app has
  * focus, and not in Genie's own settings, editors or modals.
  *
- * `globalShortcut` (what main/shortcuts.ts uses for quick-capture) cannot express
+ * `globalShortcut` (what main/shortcuts.ts uses for the feedback hotkey) cannot express
  * this — it is an OS-wide grab that fires with Genie minimised. Electron's
  * `before-input-event` is window-scoped, which removes the background case, but
  * still fires for every focused surface in the window. Hence this predicate.
