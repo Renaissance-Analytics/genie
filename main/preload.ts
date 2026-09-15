@@ -124,9 +124,7 @@ interface TestingBrowserState {
  * no `eval` — the renderer's only path into the OS is this object.
  *
  * Naming notes:
- *   - `tynn.*` channels are historic. They now fan out across whichever
- *     backends are signed in (Tynn + Aionima). Aionima-specific config
- *     lives under `aionima.*`.
+ *   - `tynn.*` channels carry the Tynn backend.
  */
 
 /** The `mobile:status` payload (mirrors MobileStatus in renderer/lib/genie.ts). */
@@ -189,13 +187,12 @@ interface RemoteControlState {
 
 const api = {
     auth: {
-        startSignIn: (kind?: 'tynn' | 'aionima') =>
-            ipcRenderer.invoke('auth:start-sign-in', kind),
+        startSignIn: (_kind?: 'tynn') => ipcRenderer.invoke('auth:start-sign-in'),
         redeemCode: (code: string) =>
             ipcRenderer.invoke('auth:redeem-code', code) as Promise<{ ok: boolean }>,
-        signOut: (kind: 'tynn' | 'aionima' = 'tynn') =>
+        signOut: (kind: 'tynn' = 'tynn') =>
             ipcRenderer.invoke('auth:sign-out', kind),
-        whoami: (kind?: 'tynn' | 'aionima') =>
+        whoami: (kind?: 'tynn') =>
             ipcRenderer.invoke('auth:whoami', kind),
         summary: () => ipcRenderer.invoke('app:signed-in-summary'),
     },
@@ -662,13 +659,6 @@ const api = {
             }>,
     },
 
-    aionima: {
-        getConfig: () => ipcRenderer.invoke('auth:aionima-config'),
-        setConfig: (patch: { host?: string; token?: string | null }) =>
-            ipcRenderer.invoke('auth:aionima-set', patch),
-        hostInfo: () => ipcRenderer.invoke('aionima-host:get'),
-    },
-
     github: {
         status: () => ipcRenderer.invoke('github:status'),
         startDevice: () => ipcRenderer.invoke('github:device:start'),
@@ -1014,13 +1004,13 @@ const api = {
             projectId: string,
             message: string,
             meta: Record<string, string> = {},
-            backendKind: 'tynn' | 'aionima' = 'tynn',
+            backendKind: 'tynn' = 'tynn',
         ) =>
             ipcRenderer.invoke('tynn:submit-feedback', projectId, message, meta, backendKind),
         captureIssue: (
             projectId: string,
             content: string,
-            backendKind: 'tynn' | 'aionima' = 'tynn',
+            backendKind: 'tynn' = 'tynn',
         ) =>
             ipcRenderer.invoke(
                 'tynn:capture-issue',
@@ -1031,7 +1021,7 @@ const api = {
         inbox: () => ipcRenderer.invoke('tynn:inbox'),
         openInBrowser: (
             path: string,
-            backendKind: 'tynn' | 'aionima' = 'tynn',
+            backendKind: 'tynn' = 'tynn',
         ) => ipcRenderer.invoke('tynn:open-in-browser', path, backendKind),
         // Auto-provisioning: link a workspace to a Tynn project, read its
         // provision status (no mint), or provision/refresh (mint + write config).
@@ -1751,7 +1741,7 @@ const api = {
     on: {
         authChanged: (
             cb: (payload: {
-                backend?: 'tynn' | 'aionima';
+                backend?: 'tynn';
                 signedIn: boolean;
             }) => void,
         ) => {

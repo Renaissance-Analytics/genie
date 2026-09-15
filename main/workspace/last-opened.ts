@@ -10,7 +10,7 @@ import { listWorkspaces, getAllSettings } from '../db';
 export function getLastOpenedProject(): {
     id: string;
     name: string;
-    backend: 'tynn' | 'aionima';
+    backend: 'tynn' | 'none';
 } | null {
     const all = listWorkspaces();
     if (all.length === 0) return null;
@@ -20,7 +20,7 @@ export function getLastOpenedProject(): {
         return {
             id: recent.project_id ?? recent.tynn_project_id,
             name: recent.project_name ?? recent.tynn_project_name,
-            backend: (recent.backend ?? 'tynn') as 'tynn' | 'aionima',
+            backend: (recent.backend ?? 'tynn') as 'tynn' | 'none',
         };
     }
 
@@ -31,7 +31,7 @@ export function getLastOpenedProject(): {
             return {
                 id: match.project_id ?? match.tynn_project_id,
                 name: match.project_name ?? match.tynn_project_name,
-                backend: (match.backend ?? 'tynn') as 'tynn' | 'aionima',
+                backend: (match.backend ?? 'tynn') as 'tynn' | 'none',
             };
         }
     }
@@ -40,6 +40,6 @@ export function getLastOpenedProject(): {
     return {
         id: first.project_id ?? first.tynn_project_id,
         name: first.project_name ?? first.tynn_project_name,
-        backend: (first.backend ?? 'tynn') as 'tynn' | 'aionima',
+        backend: (first.backend ?? 'tynn') as 'tynn' | 'none',
     };
 }

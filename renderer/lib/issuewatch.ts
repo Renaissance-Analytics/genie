@@ -221,7 +221,7 @@ export function feedItemByline(
  *
  * The `backend` check is what makes the `id` fallback safe. Falling back is
  * necessary — older rows leave `tynn_project_id` empty and ARE keyed by the
- * project id — but on its own it cannot tell those rows apart from an Aionima
+ * project id — but on its own it cannot tell those rows apart from a no-backend
  * workspace, whose `id` is a local identifier Tynn has never issued. Without the
  * check every such workspace would offer a link that resolves to nothing.
  *

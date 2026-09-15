@@ -1,6 +1,5 @@
 import type { Backend, BackendKind, BackendProject, BackendUser } from './backend';
 import { TynnBackend } from './tynn';
-import { AionimaBackend } from './aionima';
 
 /**
  * One instance per backend kind, lazily created. The renderer never
@@ -9,18 +8,13 @@ import { AionimaBackend } from './aionima';
  */
 
 let tynn: TynnBackend | null = null;
-let aionima: AionimaBackend | null = null;
 
 export function getTynnBackend(): TynnBackend {
     return (tynn ??= new TynnBackend());
 }
 
-export function getAionimaBackend(): AionimaBackend {
-    return (aionima ??= new AionimaBackend());
-}
-
-export function backendOfKind(kind: BackendKind): Backend {
-    return kind === 'aionima' ? getAionimaBackend() : getTynnBackend();
+export function backendOfKind(_kind: BackendKind): Backend {
+    return getTynnBackend();
 }
 
 /**
@@ -32,8 +26,6 @@ export function allConfiguredBackends(): Backend[] {
     const out: Backend[] = [];
     const t = getTynnBackend();
     if (t.host()) out.push(t);
-    const a = getAionimaBackend();
-    if (a.isConfigured()) out.push(a);
     return out;
 }
 

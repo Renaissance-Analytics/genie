@@ -60,7 +60,7 @@ function repoPath(repo: string | undefined): string {
 export type GappSourceLayout = 'staging' | 'envelope';
 
 /**
- * The file that makes a folder an envelope — the Aionima envelope config and repo
+ * The file that makes a folder an envelope — the envelope config and repo
  * registry. Genie writes one into every workspace it creates and `scaffoldApp`
  * writes none, so its presence is the folder STATING which layout it has.
  *

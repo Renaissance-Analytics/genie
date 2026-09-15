@@ -253,7 +253,7 @@ function CtxItem({
 }
 
 function workspaceIcon(ws: WorkspaceRow, size = 14) {
-    if (ws.backend === 'aionima') return <IconCpu size={size} />;
+    if (ws.backend === 'none') return <IconCpu size={size} />;
     if (ws.shape === 'agi') return <IconBox size={size} />;
     return <IconGlobe size={size} />;
 }

@@ -108,13 +108,13 @@ describe('syncGappDevWorkspaces', () => {
     });
 
     it('a GApp workspace Genie created for an INSTALLED app is never touched', () => {
-        // Installed-app + dev-install workspaces are `backend: 'aionima'` and their
+        // Installed-app + dev-install workspaces are `backend: 'none'` and their
         // `tynn_project_id` holds a MANIFEST id, not a Tynn ULID. If that ever
         // resolved as a link, an app id colliding with a project id would style
         // somebody's installed app as a development workspace.
         makeWorkspace({
             id: 'app-widget',
-            backend: 'aionima',
+            backend: 'none',
             project_id: 'com.example.widget',
             tynn_project_id: 'com.example.widget',
         });

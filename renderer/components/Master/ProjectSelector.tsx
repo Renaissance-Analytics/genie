@@ -197,7 +197,7 @@ export default function ProjectSelector({
 
 function workspaceIcon(ws: WorkspaceRow | undefined, size = 14) {
     if (!ws) return <IconBox size={size} />;
-    if (ws.backend === 'aionima') return <IconCpu size={size} />;
+    if (ws.backend === 'none') return <IconCpu size={size} />;
     if (ws.shape === 'agi') return <IconBox size={size} />;
     return <IconGlobe size={size} />;
 }

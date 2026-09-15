@@ -10,16 +10,15 @@ const MIGRATABLE_PROJECT_SCHEMAS = new Set([
 ]);
 
 /**
- * Shared config between Genie and the Aionima AGI gateway. Unknown
- * fields are preserved verbatim on write so neither tool clobbers the
- * other's state. See `docs/agi-format.md` for the format contract.
+ * The envelope's shared config. Unknown fields are preserved verbatim on
+ * write so no tool clobbers another's state. See `docs/agi-format.md` for the format contract.
  */
 
 /**
  * A member repo of the envelope. Every member is a git SUBMODULE under
  * `repos/<name>` (path), pinned via gitlink to an exact commit; `branch`
  * records which branch `git submodule update --remote` advances the pin
- * along. Exactly one member is the `host` (the primary repo Aionima
+ * along. Exactly one member is the `host` (the primary repo the envelope
  * containerizes + builds); the rest are `package`s the host consumes via
  * the published npm/composer registry, so nothing in any build config
  * needs rewriting.

@@ -307,7 +307,9 @@ export function buildHostServerDeps(
             }
             // A workspace not connected to a Tynn project has nowhere to file to,
             // and saying so is better than filing into a project nobody expects.
-            const projectId = ws.tynn_project_id ?? ws.project_id ?? '';
+            // A `none` workspace (System, a GApp) may hold a MANIFEST id in
+            // `tynn_project_id`; that is never a Tynn project (genie#679).
+            const projectId = ws.backend === 'tynn' ? (ws.tynn_project_id ?? ws.project_id ?? '') : '';
             if (!projectId) {
                 return {
                     ok: false,
@@ -315,7 +317,7 @@ export function buildHostServerDeps(
                 };
             }
             try {
-                const result = await backendOfKind(ws.backend === 'aionima' ? 'aionima' : 'tynn').submitFeedback(
+                const result = await backendOfKind('tynn').submitFeedback(
                     projectId,
                     message,
                     {

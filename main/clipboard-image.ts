@@ -8,7 +8,7 @@
  *   - **Windows / macOS** put a real image on the OS clipboard and Claude Code
  *     reads it natively on Ctrl+V — the native, no-temp-file experience. Keep it.
  *   - **Linux** does NOT reliably hand Claude Code a clipboard image: a headless
- *     host (Genie Cloud / the Aionima Virtual Workstation) has no display and no
+ *     host (Genie Cloud / a Virtual Workstation) has no display and no
  *     clipboard at all, and even a HEADED X11/Wayland desktop needs `xclip` /
  *     `wl-paste` and the right `image/png` target for the CLI to see it — which it
  *     frequently can't. `clipboard.writeImage` still returns without throwing, so

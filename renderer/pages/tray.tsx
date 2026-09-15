@@ -128,14 +128,12 @@ function PreloadWaitingScreen({ elapsed }: { elapsed: number }) {
 
 function TrayInner() {
     const [tynnUser, setTynnUser] = useState<BackendUser | null>(null);
-    const [aionimaUser, setAionimaUser] = useState<BackendUser | null>(null);
     const [checking, setChecking] = useState(true);
     const [rows, setRows] = useState<WorkspaceRow[]>([]);
     const [tynnHost, setTynnHost] = useState('https://tynn.ai');
-    const [aionimaHost, setAionimaHost] = useState('');
     const [adding, setAdding] = useState(false);
 
-    const anyConnected = !!tynnUser || !!aionimaUser;
+    const anyConnected = !!tynnUser;
 
     const refresh = async () => {
         const list = await api().workspaces.list();
@@ -143,20 +141,15 @@ function TrayInner() {
     };
 
     const refreshAuth = async () => {
-        const [t, a] = await Promise.all([
-            api().auth.whoami('tynn'),
-            api().auth.whoami('aionima'),
-        ]);
+        const t = await api().auth.whoami('tynn');
         setTynnUser(t as BackendUser | null);
-        setAionimaUser(a as BackendUser | null);
-        return !!t || !!a;
+        return !!t;
     };
 
     useEffect(() => {
         (async () => {
             try {
                 setTynnHost(await api().tynnHost.get());
-                setAionimaHost(await api().aionima.hostInfo());
                 const anySignedIn = await refreshAuth();
                 if (anySignedIn) await refresh();
             } catch {
@@ -195,7 +188,7 @@ function TrayInner() {
         );
     }
 
-    const subtitle = subtitleFor(tynnUser, aionimaUser);
+    const subtitle = subtitleFor(tynnUser);
 
     return (
         <div className="surface">
@@ -225,7 +218,6 @@ function TrayInner() {
             ) : (
                 <SignInPrompt
                     tynnHost={tynnHost}
-                    aionimaHost={aionimaHost}
                     onSignedIn={async () => {
                         await refreshAuth();
                         await refresh();
@@ -245,14 +237,7 @@ function TrayInner() {
     );
 }
 
-function subtitleFor(
-    tynn: BackendUser | null,
-    aionima: BackendUser | null,
-): string {
-    if (tynn && aionima) {
-        return `Signed in to Tynn (${tynn.name}) + Aionima (${aionima.name})`;
-    }
+function subtitleFor(tynn: BackendUser | null): string {
     if (tynn) return `Signed in to Tynn as ${tynn.name}`;
-    if (aionima) return `Signed in to Aionima as ${aionima.name}`;
-    return 'Tynn + Aionima workspace companion';
+    return 'Tynn workspace companion';
 }

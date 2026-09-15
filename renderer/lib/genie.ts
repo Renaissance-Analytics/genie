@@ -61,7 +61,10 @@ export type {
     SidecarAction,
 };
 
-export type BackendKind = 'tynn' | 'aionima';
+export type BackendKind = 'tynn';
+
+/** What a workspace is backed by: Tynn, or `none` (System and GApp workspaces). */
+export type WorkspaceBackend = 'tynn' | 'none';
 
 /** A Genie tool presented as a droppable step. Derived from the capability model. */
 export interface FlowNodeKindView {
@@ -240,7 +243,7 @@ export interface OwnerOption {
 
 export interface WorkspaceRow {
     id: string;
-    backend: BackendKind;
+    backend: WorkspaceBackend;
     project_id: string;
     project_name: string;
     /** Mirrored from project_id / project_name for v1 schema reads. */
@@ -1797,11 +1800,6 @@ export interface ShellDetection {
     args: string[];
 }
 
-export interface AionimaConfig {
-    host?: string;
-    token?: string | null;
-}
-
 export interface InboxPayload {
     count: number;
     events: Array<{
@@ -2394,7 +2392,7 @@ export interface ConvertPlanOpts {
     parent_path: string;
     repos: AgiPlanRepo[];
     knowledge: AgiPlanKnowledge[];
-    /** `submodule_name` of the host (primary) member — the repo Aionima builds/hosts. */
+    /** `submodule_name` of the host (primary) member — the repo the envelope builds/hosts. */
     primary?: string;
     remote?:
         | { kind: 'none' }
@@ -3508,16 +3506,6 @@ export interface GenieApi {
             workstationId: string,
             name: string,
         ) => Promise<{ ok: boolean; connKey?: string; error?: string }>;
-    };
-    aionima: {
-        getConfig: () => Promise<AionimaConfig>;
-        setConfig: (patch: AionimaConfig) => Promise<{
-            config: AionimaConfig;
-            user: BackendUser | null;
-            /** Probe failure detail when user is null (e.g. bad host / network). */
-            error?: string;
-        }>;
-        hostInfo: () => Promise<string>;
     };
     /** System clipboard via Electron main (reliable; the renderer's
      *  navigator.clipboard fails silently in a sandboxed window). */
@@ -5081,7 +5069,7 @@ export function processSpecWorkspace<W extends { id: string }>(
 }
 
 /**
- * A workspace does NOT require a Tynn/Aionima project — associating one is
+ * A workspace does NOT require a Tynn project — associating one is
  * optional. When absent, `project_id`/`project_name` are empty, so display the
  * folder's leaf name instead of a blank. (The System Workspace keeps its own
  * non-empty project fields, so this only ever fills in for project-less rows.)

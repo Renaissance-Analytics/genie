@@ -78,7 +78,7 @@ export function seedRepoE2E(): RepoSeed {
     if (getWorkspace(WORKSPACE_ID)) removeWorkspace(WORKSPACE_ID);
     addWorkspace({
         id: WORKSPACE_ID,
-        backend: 'aionima',
+        backend: 'none',
         project_id: WORKSPACE_ID,
         project_name: WORKSPACE_NAME,
         tynn_project_id: WORKSPACE_ID,

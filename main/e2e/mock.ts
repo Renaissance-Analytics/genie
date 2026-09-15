@@ -83,7 +83,7 @@ export function isE2EMaster(): boolean {
 /**
  * The signed-in identity the master harness sees. ONE backend connected and the
  * other not — the smallest state that gets past the page's sign-in gate, and a
- * shape the app really produces (most users connect Tynn or Aionima, not both).
+ * shape the app really produces.
  */
 const E2E_MASTER_USER = {
     backend: 'tynn' as const,
@@ -198,7 +198,7 @@ export interface E2EState {
      * harness has to own one — the E2E profile's real database has no row for
      * the pinned `e2e-workspace` id.
      */
-    workspaces: { id: string; tynn_project_id: string; backend: 'tynn' | 'aionima' }[];
+    workspaces: { id: string; tynn_project_id: string; backend: 'tynn' | 'none' }[];
     /** Call counters — let a test assert e.g. "status was polled ≥ N times". */
     calls: { githubStatus: number; deviceStart: number; recheck: number };
     /** External URLs the flyout tried to open (kept inert; recorded for asserts). */

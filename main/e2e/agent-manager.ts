@@ -96,7 +96,7 @@ export function seedAgentManagerE2E(): AgentManagerSeed {
     if (!getWorkspace(WORKSPACE_ID)) {
         addWorkspace({
             id: WORKSPACE_ID,
-            backend: 'aionima',
+            backend: 'none',
             project_id: WORKSPACE_ID,
             project_name: WORKSPACE_NAME,
             tynn_project_id: WORKSPACE_ID,

@@ -300,9 +300,8 @@ function specWorkspaceId(s: TerminalSpec): string | null {
 function MasterInner() {
     const [authChecked, setAuthChecked] = useState(false);
     const [signedIn, setSignedIn] = useState(false);
-    const [hosts, setHosts] = useState<{ tynn: string; aionima: string }>({
+    const [hosts, setHosts] = useState<{ tynn: string }>({
         tynn: 'https://tynn.ai',
-        aionima: '',
     });
     const [workspaces, setWorkspaces] = useState<WorkspaceRow[]>([]);
     const [specs, setSpecs] = useState<TerminalSpec[]>([]);
@@ -1260,14 +1259,9 @@ function MasterInner() {
     }, []);
 
     const refreshAuth = useCallback(async () => {
-        const [t, a, tHost, aHostInfo] = await Promise.all([
-            api().auth.whoami('tynn'),
-            api().auth.whoami('aionima'),
-            api().tynnHost.get(),
-            api().aionima.hostInfo(),
-        ]);
-        setHosts({ tynn: tHost, aionima: aHostInfo });
-        const any = !!(t as BackendUser | null) || !!(a as BackendUser | null);
+        const [t, tHost] = await Promise.all([api().auth.whoami('tynn'), api().tynnHost.get()]);
+        setHosts({ tynn: tHost });
+        const any = !!(t as BackendUser | null);
         setSignedIn(any);
         return any;
     }, []);
@@ -2129,8 +2123,9 @@ function MasterInner() {
     const openProjectInBrowser = useCallback(
         (workspaceId: string) => {
             const ws = workspacesById.get(workspaceId);
-            if (!ws) return;
-            void api().tynn.openInBrowser('/dashboard', ws.backend);
+            // A `none` workspace (System, a GApp) has no service dashboard to open.
+            if (!ws || ws.backend !== 'tynn') return;
+            void api().tynn.openInBrowser('/dashboard', 'tynn');
         },
         [workspacesById],
     );
@@ -2229,7 +2224,6 @@ function MasterInner() {
                         <div style={{ maxWidth: 720, width: '100%' }}>
                             <SignInPrompt
                                 tynnHost={hosts.tynn}
-                                aionimaHost={hosts.aionima}
                                 onSignedIn={async () => {
                                     await refreshAuth();
                                     await refresh();

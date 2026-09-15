@@ -41,7 +41,7 @@ set `Tynn host` in Settings to `https://tynn.test` (or wherever your Herd instan
 Open an issue and agree the approach **before** opening a PR for:
 
 - Anything changing the on-disk format of `.agi` envelopes or `project.json`. The format is
-  shared across the Aionima ecosystem — it can't change unilaterally.
+  published from `Civicognita/shared-schemas` — it can't change unilaterally.
 - Schema migrations in `main/db.ts`. The migration runner is append-only by design and
   unforgiving; a migration that ships wrong is very hard to walk back off users' machines.
 - The multi-attach pty manager. The invariants are subtle — refcounting owners across

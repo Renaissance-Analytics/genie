@@ -27,7 +27,7 @@ renders these same pages with a navigable sidebar.
 9. **[Settings](08-settings.md)** — every setting, explained.
 10. **[Updates](09-updates.md)** — how auto-update works and what to expect.
 11. **[Sign in & integrations](10-sign-in-and-integrations.md)** — Tynn,
-    Aionima, GitHub, and quick capture.
+    GitHub, and quick capture.
 12. **[Plugins & marketplaces](11-plugins.md)** — the bundled plugins,
     installing from the Official tab / marketplaces / a repo URL, capability
     grants, plugin editor tabs, agent tools, signing & Developer Mode.

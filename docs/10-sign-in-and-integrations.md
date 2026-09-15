@@ -1,7 +1,7 @@
 # Sign In & Integrations
 
-Genie is **backend-agnostic**: it can connect to **Tynn** and/or **Aionima** for
-your project work, and to **GitHub** for creating `.agi` repositories. All of
+Genie connects to **Tynn** for your project work, and to **GitHub** for creating
+`.agi` repositories. All of
 this lives in **Settings** (the gear in the title bar).
 
 ## Tynn (browser sign-in)
@@ -18,19 +18,6 @@ Tynn is signed in through your browser:
 **Sign out** clears the session. Under **Advanced**, a **Tynn host override**
 lets you point Genie at a self-hosted or staging Tynn (blank = the environment
 default — `tynn.test` in dev, `tynn.ai` when installed).
-
-## Aionima (token sign-in)
-
-Aionima is a local/LAN AGI gateway, signed in with a bearer token:
-
-1. In Settings → **Aionima**, set the **Aionima host** (e.g.
-   `http://192.168.0.144:3100` — the machine running AGI).
-2. Mint a **Bearer token** in your Aionima dashboard and paste it in.
-3. Click **Save + test**. Genie probes the host immediately and shows
-   **Connected as &lt;your name&gt;** on success, or a "couldn't reach" message
-   otherwise.
-
-**Disconnect** clears the token.
 
 ## GitHub (GitHub App — device flow + install)
 
@@ -92,5 +79,4 @@ on success.
 
 ## Inbox
 
-When signed in, Genie can surface a merged **inbox** across your connected
-backends, so items from Tynn and Aionima show up together.
+When signed in, Genie surfaces your Tynn **inbox**.

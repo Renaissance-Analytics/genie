@@ -59,7 +59,7 @@ export interface AddWorkspacePlan {
     link?: {
         projectId?: string;
         projectName?: string;
-        backend?: 'tynn' | 'aionima';
+        backend?: 'tynn' | 'none';
         gappDev?: boolean;
     };
     /** A container repo to point `origin` at. Never required. */

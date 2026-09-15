@@ -1,6 +1,6 @@
 /**
- * A `Backend` is one of the systems Genie shuttles between — currently
- * Tynn (SaaS) or Aionima (local LAN AGI). Each implementation:
+ * A `Backend` is a work-management system Genie connects to — Tynn. Each
+ * implementation:
  *
  *   - Holds its own credentials (session cookies, bearer token).
  *   - Resolves "who am I" against its own identity model.
@@ -14,15 +14,21 @@
  * the user has connected.
  */
 
-export type BackendKind = 'tynn' | 'aionima';
+export type BackendKind = 'tynn';
+
+/**
+ * What a WORKSPACE is backed by: Tynn, or `none` — the System workspace and
+ * installed or dev GApps, which no work-management service stands behind. A
+ * `none` row may carry a GApp MANIFEST id in `tynn_project_id`; nothing reads that
+ * as a Tynn link, because only a `tynn` row can be one (genie#679).
+ */
+export type WorkspaceBackend = 'tynn' | 'none';
 
 export interface BackendUser {
     backend: BackendKind;
     id: string;
     name: string;
     email?: string;
-    /** Aionima sub-users / dashboard users have a kind; Tynn does not. */
-    kind?: string;
 }
 
 export interface BackendProject {

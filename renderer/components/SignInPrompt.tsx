@@ -4,23 +4,16 @@ import { api, type BackendUser } from '../lib/genie';
 
 interface Props {
     tynnHost: string;
-    aionimaHost: string;
     /** Called whenever any backend transitions to signed-in. */
     onSignedIn: () => void;
 }
 
-/**
- * Two-backend sign-in surface. Either Tynn (browser handoff via
- * genie://oauth/callback) or Aionima (host + token from Settings).
- *
- * Genie works in any combination — Tynn-only, Aionima-only, or both.
- */
-export default function SignInPrompt({ tynnHost, aionimaHost, onSignedIn }: Props) {
+/** Sign in to Tynn (browser handoff via genie://oauth/callback). */
+export default function SignInPrompt({ tynnHost, onSignedIn }: Props) {
     const [waitingTynn, setWaitingTynn] = useState(false);
     const [tynnUrl, setTynnUrl] = useState<string | null>(null);
     const [signedIn, setSignedIn] = useState<Record<string, BackendUser | null>>({
         tynn: null,
-        aionima: null,
     });
     const [error, setError] = useState<string | null>(null);
 
@@ -36,9 +29,8 @@ export default function SignInPrompt({ tynnHost, aionimaHost, onSignedIn }: Prop
 
     const refresh = async () => {
         const tynn = (await api().auth.whoami('tynn')) as BackendUser | null;
-        const aionima = (await api().auth.whoami('aionima')) as BackendUser | null;
-        setSignedIn({ tynn, aionima });
-        if (tynn || aionima) onSignedIn();
+        setSignedIn({ tynn });
+        if (tynn) onSignedIn();
         if (tynn) setWaitingTynn(false);
     };
 
@@ -67,11 +59,11 @@ export default function SignInPrompt({ tynnHost, aionimaHost, onSignedIn }: Prop
                     Connect Genie
                 </Heading>
                 <Text size="sm" className="mt-1 block text-zinc-500">
-                    Connect Tynn, Aionima, or both — Genie shuttles between them.
+                    Connect Tynn to get started.
                 </Text>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3">
                 <BackendCard
                     name="Tynn"
                     subtitle="SaaS project management"
@@ -95,27 +87,6 @@ export default function SignInPrompt({ tynnHost, aionimaHost, onSignedIn }: Prop
                         return r.ok;
                     }}
                 />
-
-                <BackendCard
-                    name="Aionima"
-                    subtitle="Local LAN AGI gateway"
-                    host={aionimaHost || 'Not configured'}
-                    icon="cpu"
-                    iconBgClass="bg-violet-500"
-                    user={signedIn.aionima}
-                    onSignIn={openSettings}
-                    onSignOut={async () => {
-                        await api().auth.signOut('aionima');
-                        await refresh();
-                    }}
-                    busy={false}
-                    cta={
-                        aionimaHost
-                            ? 'Reconnect in Settings'
-                            : 'Configure host + token in Settings'
-                    }
-                    onEditHost={openSettings}
-                />
             </div>
 
             {error && (
@@ -125,8 +96,7 @@ export default function SignInPrompt({ tynnHost, aionimaHost, onSignedIn }: Prop
             )}
 
             <Text size="xs" className="text-center leading-relaxed text-zinc-400">
-                Tynn signs you in through your browser. Aionima uses a host + token
-                you set in Settings.
+                Tynn signs you in through your browser.
             </Text>
         </div>
     );

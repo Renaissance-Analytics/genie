@@ -2837,6 +2837,24 @@ export function runMigrations(
                 `);
             },
         },
+        {
+            // AIONIMA IS RETIRED (genie#679). Aionima now runs as an agent TUI inside
+            // Genie like any other, so its backend integration is gone.
+            //
+            // `backend = 'aionima'` also marked the workspaces NO service stands
+            // behind — the System workspace, installed and dev GApps — and a GApp
+            // keeps its MANIFEST id in `tynn_project_id`. Those rows become `none`,
+            // never `tynn`: only a `tynn` row can resolve as a Tynn link, and that
+            // is what keeps a manifest id from being read as a Tynn project.
+            //
+            // `backend_connections` only ever held Aionima's host and bearer token.
+            // Dropped, so the token does not outlive the feature on disk.
+            version: 77,
+            runner: (db) => {
+                db.exec(`UPDATE workspaces SET backend = 'none' WHERE backend = 'aionima'`);
+                db.exec(`DROP TABLE IF EXISTS backend_connections`);
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -3716,7 +3734,8 @@ export interface WorkspaceAgentRow {
 
 export interface WorkspaceRow {
     id: string;
-    backend: 'tynn' | 'aionima';
+    /** See `WorkspaceBackend`: Tynn, or `none` for System and GApp workspaces. */
+    backend: 'tynn' | 'none';
     project_id: string;
     project_name: string;
     /** Legacy mirrors — kept populated for backwards-compat with v1 schema readers. */
@@ -3849,7 +3868,7 @@ export function ensureSystemWorkspaceRow(
             shape, path, editor, editor_cmd, start_cmd, env_file, last_opened_at,
             created_by_genie, sort_order, mcp_enabled, assignment_managed, sacred_name,
             workstation_operator)
-         VALUES (@id, 'aionima', '', 'System', '', 'System', 'agi', @path,
+         VALUES (@id, 'none', '', 'System', '', 'System', 'agi', @path,
                  NULL, NULL, NULL, NULL, NULL, 1, -1, 1, 0, NULL, 1)
          ON CONFLICT(id) DO UPDATE SET
             path = excluded.path,
@@ -4449,7 +4468,7 @@ export function addWorkspace(
     },
 ): WorkspaceRow {
     // Mirror project_id / project_name into the legacy tynn_* columns
-    // because they're declared NOT NULL on v1 — even Aionima rows have to
+    // because they're declared NOT NULL on v1 — even `none` rows have to
     // populate them.
     const full = {
         ...row,
@@ -5701,42 +5720,6 @@ export function setForkUpstream(
                checked_at     = excluded.checked_at`,
         )
         .run(owner, repo, isFork ? 1 : 0, upstreamOwner, upstreamRepo, checkedAt);
-}
-
-// Backend connection helpers --------------------------------------------
-
-export interface BackendConfig {
-    host?: string;
-    token?: string | null;
-}
-
-export function getAionimaConfig(): BackendConfig {
-    const row = getDb()
-        .prepare<[string], { host: string | null; token: string | null } | undefined>(
-            'SELECT host, token FROM backend_connections WHERE backend = ?',
-        )
-        .get('aionima');
-    if (!row) return { host: undefined, token: undefined };
-    return { host: row.host ?? undefined, token: row.token ?? undefined };
-}
-
-export function setAionimaConfig(patch: BackendConfig): BackendConfig {
-    const existing = getAionimaConfig();
-    const next: BackendConfig = {
-        host: patch.host !== undefined ? patch.host : existing.host,
-        token: patch.token !== undefined ? patch.token : existing.token,
-    };
-    getDb()
-        .prepare(
-            `INSERT INTO backend_connections (backend, host, token, updated_at)
-             VALUES (?, ?, ?, ?)
-             ON CONFLICT(backend) DO UPDATE SET
-               host = excluded.host,
-               token = excluded.token,
-               updated_at = excluded.updated_at`,
-        )
-        .run('aionima', next.host ?? null, next.token ?? null, new Date().toISOString());
-    return next;
 }
 
 // Terminal spec helpers -------------------------------------------------

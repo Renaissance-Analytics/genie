@@ -180,7 +180,7 @@ export function installIO(): AppInstallIO {
             });
             const row = addWorkspace({
                 id: `app-${manifest.slug}-${Date.now().toString(36)}`,
-                backend: 'aionima',
+                backend: 'none',
                 project_id: manifest.id,
                 project_name: manifest.name,
                 tynn_project_id: manifest.id,
@@ -215,7 +215,7 @@ export function installIO(): AppInstallIO {
             }
             const row = addWorkspace({
                 id: `appdev-${manifest.slug}-${Date.now().toString(36)}`,
-                backend: 'aionima',
+                backend: 'none',
                 project_id: manifest.id,
                 project_name: manifest.name,
                 tynn_project_id: manifest.id,
@@ -718,7 +718,7 @@ export function previewIO(): PreviewIO {
             // delete their project.
             const row = addWorkspace({
                 id: `preview-${randomUUID()}`,
-                backend: 'aionima',
+                backend: 'none',
                 // The PREVIEW app id, not a random one and not the app's own.
                 // `project_id` is what `buildTerminalEnv` looks Tynn-managed
                 // provider credentials up by, so this is the line that decides a

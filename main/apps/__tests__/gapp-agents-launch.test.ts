@@ -133,7 +133,7 @@ function installApp(): Installed {
 
     addWorkspace({
         id: workspaceId,
-        backend: 'aionima',
+        backend: 'none',
         project_id: appId,
         project_name: 'Trader',
         tynn_project_id: appId,

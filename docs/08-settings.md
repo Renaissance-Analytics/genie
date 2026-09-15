@@ -143,10 +143,10 @@ orientation again.
 
 ## Integrations & more
 
-The Settings window also hosts the **Tynn**, **Aionima**, and **GitHub** sign-in
+The Settings window also hosts the **Tynn** and **GitHub** sign-in
 sections, the **Updater** configuration, and more — covered on their own pages:
 
-- **[Sign in & integrations](10-sign-in-and-integrations.md)** — Tynn, Aionima,
+- **[Sign in & integrations](10-sign-in-and-integrations.md)** — Tynn,
   GitHub, and quick capture.
 - **[Updates](09-updates.md)** — the Updater section.
 - **[Plugins & marketplaces](11-plugins.md)** — the **Plugins** section
