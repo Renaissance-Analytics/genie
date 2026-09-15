@@ -644,14 +644,14 @@ export interface DevSiteInfo {
      *  prefill the serve-mode picker. Absent ⇒ it runs the repo's own dev server. */
     hostServe?: HostServeConfig;
     /** The transient start stage, present ONLY while a start is in flight (Gap 2):
-     *  `pulling → building → starting → ready|failed`. A settled row omits it. */
+     *  `pulling → building → starting → ready|failed|stopped`. A settled row omits it. */
     phase?: DevSitePhase;
     error?: string;
 }
 
 /** The transient stages a starting site passes through (Gap 2) — surfaced live so
  *  a card shows progress the instant Start is clicked, not only when it finishes. */
-export type DevSitePhase = 'pulling' | 'building' | 'starting' | 'ready' | 'failed';
+export type DevSitePhase = 'pulling' | 'building' | 'starting' | 'ready' | 'failed' | 'stopped';
 
 /** One live START tick for a dev site, pushed over `on.devSiteProgress`. */
 export interface DevSiteProgress {

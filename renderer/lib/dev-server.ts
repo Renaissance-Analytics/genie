@@ -7,6 +7,7 @@ import type {
     DevServiceInfo,
     DevSiteInfo,
     DevSitePhase,
+    DevSiteProgress,
     DevSiteRunOption,
     EngineInstall,
     HostServeConfig,
@@ -65,6 +66,53 @@ export function siteIsStarting(site: DevSiteInfo): boolean {
     return site.phase === 'pulling' || site.phase === 'building' || site.phase === 'starting';
 }
 
+/** The live start progress a card overlays onto its row (Gap 2): the transient
+ *  phase plus the streaming build/pull log. Keyed by siteId in the panel. */
+export type SiteProgress = { phase: DevSitePhase; log?: string; error?: string };
+
+/**
+ * PURE. Fold one start tick into the panel's progress map.
+ *
+ * A start that ENDED leaves the map — whether it came up (`ready`) or a Stop won
+ * (`stopped`) — so the card falls back to the row's settled state. Only `ready`
+ * used to, and a start ended by Stop left the card drawing `starting` for good.
+ * A `failed` start stays, so its reason shows in place.
+ */
+export function applySiteProgress(
+    current: Readonly<Record<string, SiteProgress>>,
+    tick: Pick<DevSiteProgress, 'siteId' | 'phase' | 'log' | 'error'>,
+): Record<string, SiteProgress> {
+    if (tick.phase === 'ready' || tick.phase === 'stopped') {
+        const { [tick.siteId]: _ended, ...rest } = current;
+        return rest;
+    }
+    return {
+        ...current,
+        [tick.siteId]: {
+            phase: tick.phase,
+            ...(tick.log !== undefined ? { log: tick.log } : {}),
+            ...(tick.error !== undefined ? { error: tick.error } : {}),
+        },
+    };
+}
+
+/** A site card's lifecycle buttons, in order. */
+export type SiteCardAction = 'restart' | 'stop' | 'start' | 'retry';
+
+/**
+ * PURE. Which lifecycle buttons a site card offers.
+ *
+ * A start in flight offers STOP. It used to offer only a Start button labelled
+ * "Starting…", so a start could not be stopped until the site had been marked
+ * live — and the reported site sat on Starting with nothing under it to press.
+ */
+export function siteCardActions(site: DevSiteInfo): SiteCardAction[] {
+    if (site.state === 'running') return ['restart', 'stop'];
+    if (siteIsStarting(site)) return ['stop'];
+    if (site.state === 'failed') return ['retry'];
+    return ['start'];
+}
+
 /** A short badge for the current start stage — what the card chips while it comes up. */
 export function sitePhaseBadge(phase: DevSitePhase): string {
     switch (phase) {
@@ -78,22 +126,34 @@ export function sitePhaseBadge(phase: DevSitePhase): string {
             return 'Ready';
         case 'failed':
             return 'Failed';
+        case 'stopped':
+            return 'Stopped';
     }
 }
 
-/** The full sentence under the card for the current start stage. */
-export function sitePhaseLabel(phase: DevSitePhase): string {
+/**
+ * The full sentence under the card for the current start stage.
+ *
+ * A HOST site (`runMode: 'host'`) runs no container, so it is never told one is
+ * starting — the reported card read "Starting the container…" on a host-native
+ * PHP site.
+ */
+export function sitePhaseLabel(phase: DevSitePhase, runMode?: string): string {
     switch (phase) {
         case 'pulling':
             return 'Preparing the container — pulling the image if it is not already cached…';
         case 'building':
             return 'Building — running the production build. Its log is streaming below.';
         case 'starting':
-            return 'Starting the container and waiting for the server to answer…';
+            return runMode === 'host'
+                ? 'Starting, and waiting for the server to answer…'
+                : 'Starting the container and waiting for the server to answer…';
         case 'ready':
             return 'Serving.';
         case 'failed':
             return 'Failed to start.';
+        case 'stopped':
+            return 'Stopped before it finished starting.';
     }
 }
 
@@ -109,7 +169,7 @@ export function siteStatusTone(site: DevSiteInfo): DevTone {
 
 export function siteStatusLabel(site: DevSiteInfo): string {
     // While starting, the phase IS the status — say which stage it is in.
-    if (siteIsStarting(site)) return sitePhaseLabel(site.phase!);
+    if (siteIsStarting(site)) return sitePhaseLabel(site.phase!, site.runMode);
     if (site.phase === 'failed' || site.state === 'failed') {
         return site.error ? `Failed — ${site.error}` : 'Failed to start.';
     }

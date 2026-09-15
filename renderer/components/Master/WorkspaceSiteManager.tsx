@@ -21,7 +21,6 @@ import {
     type DevServiceCatalogEntry,
     type DevServiceInfo,
     type DevSiteInfo,
-    type DevSitePhase,
     type DevSiteRunOption,
     type LanguageTool,
     type OctaneServer,
@@ -29,6 +28,7 @@ import {
     type WorkspaceRow,
 } from '../../lib/genie';
 import {
+    applySiteProgress,
     buildHostServe,
     canOpenInBrowser,
     engineVersionField,
@@ -49,6 +49,7 @@ import {
     serviceStatusTone,
     serviceTitle,
     serviceVersionChoice,
+    siteCardActions,
     siteIsStarting,
     sitePhaseBadge,
     siteListensOn,
@@ -56,11 +57,9 @@ import {
     siteRunLine,
     siteStatusLabel,
     siteStatusTone,
+    type SiteProgress,
 } from '../../lib/dev-server';
 
-/** The live start progress the card overlays onto its row (Gap 2): the transient
- *  phase plus the streaming build/pull log. Keyed by siteId in the panel. */
-type SiteProgress = { phase: DevSitePhase; log?: string; error?: string };
 
 /**
  * The WORKSPACE SITE MANAGER — the human view over the Hosting Manager, and
@@ -184,22 +183,9 @@ export default function WorkspaceSiteManager({
     useEffect(() => {
         return api().on.devSiteProgress((p) => {
             if (p.workspaceId !== workspace.id) return;
-            setProgress((cur) => {
-                if (p.phase === 'ready') {
-                    // Settled: drop the transient entry and let the row (now
-                    // refreshed via devServerChanged) show the serving state.
-                    const { [p.siteId]: _done, ...rest } = cur;
-                    return rest;
-                }
-                return {
-                    ...cur,
-                    [p.siteId]: {
-                        phase: p.phase,
-                        ...(p.log !== undefined ? { log: p.log } : {}),
-                        ...(p.error !== undefined ? { error: p.error } : {}),
-                    },
-                };
-            });
+            // A start that ended — up, or stopped — leaves the map and the row
+            // (refreshed via devServerChanged) shows its settled state.
+            setProgress((cur) => applySiteProgress(cur, p));
         });
     }, [workspace.id]);
 
@@ -613,9 +599,10 @@ function SiteCard({
                 >
                     Open in Genie Browser
                 </Action>
-                {view.state === 'running' ? (
-                    <>
+                {siteCardActions(view).map((action) =>
+                    action === 'restart' ? (
                         <Action
+                            key={action}
                             size="sm"
                             variant="ghost"
                             icon="rotate-cw"
@@ -624,7 +611,10 @@ function SiteCard({
                         >
                             Restart
                         </Action>
+                    ) : action === 'stop' ? (
+                        // Offered while a start is in flight too — see siteCardActions.
                         <Action
+                            key={action}
                             size="sm"
                             variant="ghost"
                             icon="square"
@@ -633,21 +623,18 @@ function SiteCard({
                         >
                             Stop
                         </Action>
-                    </>
-                ) : (
-                    <Action
-                        size="sm"
-                        variant="ghost"
-                        icon="play"
-                        disabled={busy || !hasRuntime}
-                        onClick={() => onAction({ action: 'start' })}
-                    >
-                        {starting
-                            ? `${view.phase ? sitePhaseBadge(view.phase) : 'Starting'}…`
-                            : view.state === 'failed'
-                              ? 'Retry'
-                              : 'Start'}
-                    </Action>
+                    ) : (
+                        <Action
+                            key={action}
+                            size="sm"
+                            variant="ghost"
+                            icon="play"
+                            disabled={busy || !hasRuntime}
+                            onClick={() => onAction({ action: 'start' })}
+                        >
+                            {action === 'retry' ? 'Retry' : 'Start'}
+                        </Action>
+                    ),
                 )}
                 <Action
                     size="sm"

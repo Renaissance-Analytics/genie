@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+    applySiteProgress,
     buildHostServe,
     serveConfigIncomplete,
     canOpenInBrowser,
@@ -21,6 +22,7 @@ import {
     serviceStatusTone,
     serviceTitle,
     serviceVersionChoice,
+    siteCardActions,
     siteIsStarting,
     sitePhaseBadge,
     sitePhaseLabel,
@@ -29,7 +31,7 @@ import {
     siteStatusLabel,
     siteStatusTone,
 } from '../dev-server';
-import type { DevServiceInfo, DevSiteInfo, EngineInstall } from '../genie';
+import type { DevServiceInfo, DevSiteInfo, DevSiteProgress, EngineInstall } from '../genie';
 
 /**
  * The Site Manager's DECISIONS (Tynn #234 P4), separated from its wiring.
@@ -201,10 +203,77 @@ describe('startup progress surfaces in the view model', () => {
         expect(sitePhaseLabel('building')).toMatch(/build/i);
     });
 
+    it('never tells a HOST site it is starting a container — it has none', () => {
+        // The reported card read "Starting the container and waiting for the server
+        // to answer…" on a host-native PHP site, which runs no container at all.
+        const host = siteStatusLabel({ ...SITE, runMode: 'host', state: 'stopped', phase: 'starting' });
+        expect(host).toMatch(/waiting for the server to answer/i);
+        expect(host).not.toMatch(/container/i);
+        // Control: a container site still says so.
+        expect(siteStatusLabel({ ...SITE, runMode: 'explicit', state: 'stopped', phase: 'starting' })).toMatch(
+            /container/i,
+        );
+    });
+
     it('lights the rail amber while a site is starting, not idle', () => {
         expect(railSitesTone([{ ...SITE, state: 'stopped', phase: 'building' }], 'acme')).toBe(
             'starting',
         );
+    });
+});
+
+describe('siteCardActions — what the card lets you do with a site', () => {
+    it('offers Restart and Stop on a running site', () => {
+        expect(siteCardActions({ ...SITE, state: 'running' })).toEqual(['restart', 'stop']);
+    });
+
+    it('offers STOP while a start is in flight — not a Start button that only reads "Starting…"', () => {
+        // The reported card: a start sat on Starting, and the one button under it
+        // was a Start labelled "Starting…". The only way to stop it was to wait for
+        // the site to be marked live.
+        for (const phase of ['pulling', 'building', 'starting'] as const) {
+            expect(siteCardActions({ ...SITE, state: 'stopped', phase }), phase).toEqual(['stop']);
+        }
+    });
+
+    it('offers Retry on a failed site and Start on a stopped one', () => {
+        expect(siteCardActions({ ...SITE, state: 'failed' })).toEqual(['retry']);
+        expect(siteCardActions({ ...SITE, state: 'stopped', phase: undefined })).toEqual(['start']);
+    });
+});
+
+describe('applySiteProgress — the card follows a start to its END, whichever end', () => {
+    const tick = (siteId: string, phase: DevSiteProgress['phase'], extra: Partial<DevSiteProgress> = {}) => ({
+        workspaceId: 'acme',
+        siteId,
+        name: 'docs',
+        genName: 'prism.gen',
+        phase,
+        ...extra,
+    });
+
+    it('carries an in-flight phase, with its log', () => {
+        expect(applySiteProgress({}, tick('s1', 'starting', { log: 'booting' }))).toEqual({
+            s1: { phase: 'starting', log: 'booting' },
+        });
+    });
+
+    it('drops the entry when the start ends READY', () => {
+        expect(applySiteProgress({ s1: { phase: 'starting' }, s2: { phase: 'building' } }, tick('s1', 'ready'))).toEqual({
+            s2: { phase: 'building' },
+        });
+    });
+
+    it('drops the entry when a Stop ended the start — the card must not stay on Starting', () => {
+        // The reported bug's renderer half: only `ready` cleared the entry, so a
+        // start that ended any other way left the card drawing `starting`.
+        expect(applySiteProgress({ s1: { phase: 'starting' } }, tick('s1', 'stopped'))).toEqual({});
+    });
+
+    it('keeps a FAILED start on the card, with its reason', () => {
+        expect(applySiteProgress({ s1: { phase: 'starting' } }, tick('s1', 'failed', { error: 'port in use' }))).toEqual({
+            s1: { phase: 'failed', error: 'port in use' },
+        });
     });
 });
 
