@@ -402,6 +402,26 @@ export class AgentInboxBroker {
         this.workspaceAccess = fn;
     }
 
+    /**
+     * Is a workspace HIBERNATING (genie#672)? Its agents are asleep: they do not
+     * list, and nothing can message them until the user wakes it. Absent ⇒ never.
+     */
+    private hibernation: ((workspaceId: string) => boolean) | null = null;
+
+    setHibernationResolver(fn: (workspaceId: string) => boolean): void {
+        this.hibernation = fn;
+    }
+
+    /** An agent whose workspace is asleep. Unanswerable reads as awake. */
+    private asleep(agent: AgentInboxAgent): boolean {
+        if (!this.hibernation) return false;
+        try {
+            return this.hibernation(agent.workspaceId) === true;
+        } catch {
+            return false;
+        }
+    }
+
     /** Test seam for the wake-on-DM clock. */
     setClock(now: () => number): void {
         this.now = now;
@@ -1259,6 +1279,8 @@ export class AgentInboxBroker {
     /** Whether `target` appears in `caller`'s directory at all. */
     private visible(caller: AgentInboxAgent, target: AgentInboxAgent): boolean {
         if (caller.agentId === target.agentId) return true; // always sees itself
+        // "Only active agents are in the inbox" (genie#672).
+        if (this.asleep(target)) return false;
         if (target.scope === 'hidden') return false;
         if (!this.workspaceAllows(caller.workspaceId, target.workspaceId)) return false;
         // An agent is always discoverable by peers in its own workspace. Across
@@ -1350,7 +1372,8 @@ export class AgentInboxBroker {
 
     /** Every agent (the human panel's directory — the human sees all, no scope). */
     directory(): AgentInboxAgentInfo[] {
-        return [...this.agents.values()].map((a) => this.toInfo(a));
+        // A hibernating workspace's agents are asleep and not listed (genie#672).
+        return [...this.agents.values()].filter((a) => !this.asleep(a)).map((a) => this.toInfo(a));
     }
 
     /**
@@ -1536,6 +1559,14 @@ export class AgentInboxBroker {
         if (input.toAgentId) {
             const target = this.agents.get(input.toAgentId);
             if (!target) return { ok: false, error: `No agent "${input.toAgentId}".` };
+            // Asleep (genie#672): refused from every sender — nothing is queued for
+            // a wake, which starts the workspace fresh.
+            if (this.asleep(target)) {
+                return {
+                    ok: false,
+                    error: `${target.label} is asleep: its workspace is hibernating, so it cannot be messaged until someone wakes it.`,
+                };
+            }
             // Agent senders may only DM a peer REACHABLE at send time (workspace
             // tier AND the target's own scope). Re-checked here rather than
             // trusted from a possibly-stale `list`. The human panel owns the
@@ -1808,6 +1839,31 @@ export class AgentInboxBroker {
         const cleared = Math.max(inMemory, persisted);
         if (cleared > 0) this.emit({ type: 'cleared', scope: 'dm', key: normalized });
         return { ok: true, cleared };
+    }
+
+    /**
+     * Delete every DM these agents sent or received — the HIBERNATION purge
+     * (genie#672): "On hibernation, delete all agent dms for agents in the
+     * hibernating workspace." Their queued inbox goes too; a wake starts fresh.
+     * Returns how many messages went.
+     */
+    purgeAgents(agentIds: readonly string[]): number {
+        const ids = new Set(agentIds);
+        let cleared = 0;
+        for (const [key, log] of [...this.dmLogs]) {
+            const sep = key.indexOf('|');
+            if (!ids.has(key.slice(0, sep)) && !ids.has(key.slice(sep + 1))) continue;
+            cleared += log.length;
+            this.dmLogs.delete(key);
+            this.emit({ type: 'cleared', scope: 'dm', key });
+        }
+        let persisted = 0;
+        for (const id of ids) {
+            const agent = this.agents.get(id);
+            if (agent) agent.inbox = agent.inbox.filter((m) => m.kind !== 'dm');
+            persisted += this.store.deleteDmsFor(id);
+        }
+        return Math.max(cleared, persisted);
     }
 
     /**

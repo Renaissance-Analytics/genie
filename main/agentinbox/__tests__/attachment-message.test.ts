@@ -83,6 +83,9 @@ function makeStore(): AgentInboxStore & { rows: AgentInboxMessage[] } {
         deleteDmThread() {
             return 0;
         },
+        deleteDmsFor() {
+            return 0;
+        },
         getMessage(id) {
             return rows.find((m) => m.id === id) ?? null;
         },

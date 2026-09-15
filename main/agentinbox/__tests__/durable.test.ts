@@ -75,6 +75,14 @@ function makeStore(): AgentInboxStore & { rows: AgentInboxMessage[]; cursors: Ma
             }
             return before - rows.length;
         },
+        deleteDmsFor(agentId) {
+            const before = rows.length;
+            for (let i = rows.length - 1; i >= 0; i--) {
+                const m = rows[i];
+                if (m.kind === 'dm' && (m.from === agentId || m.to === agentId)) rows.splice(i, 1);
+            }
+            return before - rows.length;
+        },
         getMessage(id) {
             return rows.find((m) => m.id === id) ?? null;
         },

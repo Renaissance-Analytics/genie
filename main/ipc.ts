@@ -71,6 +71,8 @@ import { syncGappDevWorkspaces } from './workspace/gapp-dev-sync';
 import { syncSacredWorkspaces } from './workspace/sacred-sync';
 import { validateSimpleWorkspace } from './workspace/create-simple';
 import { openWorkspace } from './workspace/open';
+import { hibernateWorkspace, wakeWorkspace } from './workspace/hibernation';
+import { hibernationDeps } from './workspace/hibernation-service';
 import { cloneRepo } from './workspace/clone';
 import { relaunchOptions } from './self-restart';
 import { readRememberedPasswordStore } from './secrets/password-store-memo';
@@ -1044,6 +1046,21 @@ export function registerIpcHandlers(): void {
         rebuildMenu();
         return { ok: true };
     });
+    // HIBERNATE / WAKE (genie#672) — a person's act from the workspace menu. The
+    // order and the refusals live in workspace/hibernation.ts; every surface that
+    // shows the workspace, its agents or its sites is told when it lands.
+    const hibernationChanged = () => {
+        rebuildMenu();
+        broadcastWorkspacesChanged();
+        broadcastAgentsChanged();
+        broadcastDevServerChanged();
+    };
+    ipcMain.handle('workspaces:hibernate', (_e, id: string) =>
+        hibernateWorkspace(String(id ?? ''), hibernationDeps(hibernationChanged)),
+    );
+    ipcMain.handle('workspaces:wake', (_e, id: string) =>
+        wakeWorkspace(String(id ?? ''), hibernationDeps(hibernationChanged)),
+    );
     ipcMain.handle('workspaces:touch', (_e, id: string) => {
         touchWorkspace(id);
         rebuildMenu();

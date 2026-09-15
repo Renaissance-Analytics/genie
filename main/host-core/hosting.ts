@@ -92,6 +92,9 @@ export interface HostingPorts {
     /** Which container runtime, and is it usable — resolved per action so
      *  installing Docker mid-session needs no restart. */
     resolveRuntime: () => Promise<ResolvedRuntimeLike>;
+    /** Is this workspace HIBERNATING (genie#672)? Nothing in it starts until it is
+     *  woken. Absent ⇒ never — a shell with no hibernation keeps today's behaviour. */
+    isWorkspaceHibernated?: (workspaceId: string) => boolean;
     listWorkspaces: () => DevWorkspace[];
     workspaceFor: (workspaceId: string) => DevWorkspace | null;
     devSitesFor: (workspaceId: string) => DevSites;
@@ -211,6 +214,7 @@ export function buildHostingDeps(ports: HostingPorts): HostingDeps {
         listWorkspaces: ports.listWorkspaces,
         devServicesFor: ports.devServicesFor,
         engineAdmin: ports.engineAdmin,
+        ...(ports.isWorkspaceHibernated ? { isWorkspaceHibernated: ports.isWorkspaceHibernated } : {}),
         ...(ports.hostWebSockets ? { hostWebSockets: ports.hostWebSockets } : {}),
         ...(ports.confirmImagePull ? { confirmImagePull: ports.confirmImagePull } : {}),
         // REQUIRED for engines with no in-container check (Mailpit/Meilisearch/
@@ -278,6 +282,7 @@ export function buildHostingDeps(ports: HostingPorts): HostingDeps {
         resolveRuntime: ports.resolveRuntime,
         listWorkspaces: ports.listWorkspaces,
         devSitesFor: ports.devSitesFor,
+        ...(ports.isWorkspaceHibernated ? { isWorkspaceHibernated: ports.isWorkspaceHibernated } : {}),
         ...envSpecific,
         ...(ports.confirmImagePull ? { confirmImagePull: ports.confirmImagePull } : {}),
         // A site gets its workspace's services as env — asking for them ENSURES
@@ -372,6 +377,7 @@ export function buildHostingDeps(ports: HostingPorts): HostingDeps {
         // only orchestrates whatever is live.
         sites: () => devSiteManager(),
         services: () => devServiceManager(),
+        ...(ports.isWorkspaceHibernated ? { isHibernated: ports.isWorkspaceHibernated } : {}),
         ...envSpecific,
     };
 

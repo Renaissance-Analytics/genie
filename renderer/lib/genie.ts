@@ -241,6 +241,18 @@ export interface OwnerOption {
     label: string;
 }
 
+export type HibernateResult =
+    | {
+          ok: true;
+          handoffs: Array<{ agent: string; saved: boolean }>;
+          stoppedTerminals: number;
+          purgedMessages: number;
+          errors: string[];
+      }
+    | { ok: false; error: string };
+
+export type WakeResult = { ok: true; errors: string[] } | { ok: false; error: string };
+
 export interface WorkspaceRow {
     id: string;
     backend: WorkspaceBackend;
@@ -253,6 +265,9 @@ export interface WorkspaceRow {
     /** A user-set workspace icon. NULL/absent falls back to the workspace's
      *  INITIALS — see lib/workspace-avatar. */
     icon?: string | null;
+    /** When this workspace was put to sleep (epoch ms), or null/absent when it is
+     *  awake (genie#672). Nothing in it runs until a person wakes it. */
+    hibernated_at?: number | null;
     path: string;
     editor: string | null;
     editor_cmd: string | null;
@@ -3575,6 +3590,11 @@ export interface GenieApi {
         ) => Promise<WorkspaceRow | undefined>;
         remove: (id: string) => Promise<{ ok: boolean }>;
         touch: (id: string) => Promise<{ ok: boolean }>;
+        /** Put a whole workspace to sleep (genie#672). Resolves once every agent
+         *  has answered its handoff request (bounded) and everything is stopped. */
+        hibernate: (id: string) => Promise<HibernateResult>;
+        /** Wake a hibernating workspace: everything enabled comes back. */
+        wake: (id: string) => Promise<WakeResult>;
         /** Persist a new sidebar order (full ordered list of workspace ids). */
         reorder: (ids: string[]) => Promise<{ ok: boolean }>;
         /** The workspace's own mark. ONE glyph; '' clears it back to the

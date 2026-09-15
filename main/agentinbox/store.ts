@@ -42,6 +42,9 @@ export interface AgentInboxStore {
     /** Wipe a DM thread's persisted history — BOTH directions of the pair
      *  (genie #64). Returns rows deleted. Cursors untouched, as above. */
     deleteDmThread(a: string, b: string): number;
+    /** Wipe every DM an agent sent or received — the hibernation purge
+     *  (genie#672). Returns rows deleted. Cursors untouched, as above. */
+    deleteDmsFor(agentId: string): number;
     /** One persisted message by id, attachments hydrated — the lookup behind
      *  `saveAttachment`'s authorization check (who was this message FOR?). The
      *  broker's own logs are capped, so an older message must come from here. */
@@ -89,6 +92,9 @@ export const noopAgentInboxStore: AgentInboxStore = {
         return 0;
     },
     deleteDmThread() {
+        return 0;
+    },
+    deleteDmsFor() {
         return 0;
     },
     getMessage() {
@@ -307,6 +313,11 @@ export const dbAgentInboxStore: AgentInboxStore = {
                     AND ((from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?))`,
             )
             .run(a, b, b, a).changes;
+    },
+    deleteDmsFor(agentId) {
+        return getDb()
+            .prepare(`DELETE FROM whisper_messages WHERE kind = 'dm' AND (from_id = ? OR to_id = ?)`)
+            .run(agentId, agentId).changes;
     },
     getMessage(id) {
         const row = getDb()

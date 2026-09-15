@@ -201,6 +201,12 @@ export interface DevServiceManagerDeps {
     /** Which runtime, and is it usable. Called per action, so installing Docker
      *  mid-session works without a restart. */
     resolveRuntime: () => Promise<ResolvedRuntimeLike>;
+    /**
+     * Is this workspace HIBERNATING (genie#672)? Nothing in a sleeping workspace
+     * starts on its own — not at boot, not on open, not from a caller — until the
+     * user wakes it. Absent ⇒ never.
+     */
+    isWorkspaceHibernated?: (workspaceId: string) => boolean;
     /** Bundled Host-native Pusher service. Required for the `websockets` engine. */
     hostWebSockets?: {
         acquire: (app: { id: string; key: string; secret: string }) => Promise<{
@@ -780,6 +786,16 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
         }
     }
 
+    /** See {@link DevServiceManagerDeps.isWorkspaceHibernated}. A predicate that
+     *  throws reads as awake: an unanswerable question must not hold services down. */
+    function isHibernated(workspaceId: string): boolean {
+        try {
+            return deps.isWorkspaceHibernated?.(workspaceId) === true;
+        } catch {
+            return false;
+        }
+    }
+
     async function acquireOnce(
         workspaceId: string,
         serviceId: string,
@@ -794,6 +810,17 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
             );
         }
         const { config } = found;
+        // A sleeping workspace holds nothing (genie#672): the refusal is here, in
+        // the one place every acquire passes, so no caller can start an engine for
+        // it — a site start, a reconcile, a terminal composing its env.
+        if (isHibernated(workspaceId)) {
+            return failed(
+                workspaceId,
+                serviceId,
+                config,
+                'This workspace is hibernating. Wake it to start its services.',
+            );
+        }
 
         const spec = engineSpecFor(config.engine);
         const engineKey = engineKeyFor(config.engine, config.version);
@@ -1426,6 +1453,9 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
         /** An engine we could not READ. Same treatment: owed, not skipped. */
         let unread = false;
         for (const workspace of deps.listWorkspaces()) {
+            // A hibernated workspace is not a holder, even of an engine that is
+            // still running for everyone else (genie#672).
+            if (isHibernated(workspace.id)) continue;
             for (const [serviceId, config] of Object.entries(deps.devServicesFor(workspace.id))) {
                 if (!config.enabled || live.has(serviceId)) continue;
                 const engineKey = engineKeyFor(config.engine, config.version);
@@ -1476,6 +1506,7 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
      * Docker was the one guaranteed never to come up.
      */
     async function acquireHostNative(workspaceId: string): Promise<void> {
+        if (isHibernated(workspaceId)) return;
         for (const [serviceId, config] of Object.entries(deps.devServicesFor(workspaceId))) {
             if (!config.enabled || live.has(serviceId)) continue;
             if (engineSpecFor(config.engine).runtime !== 'host') continue;

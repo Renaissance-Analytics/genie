@@ -137,6 +137,9 @@ export interface DevServerLifecycleDeps {
     image?: string;
     mountTarget?: string;
     hostIds?: HostIds | null;
+    /** Is this workspace HIBERNATING (genie#672)? A sleeping workspace's open
+     *  warms and starts nothing. Absent ⇒ never. */
+    isHibernated?: (workspaceId: string) => boolean;
 }
 
 /** Why a workspace open did not warm a sandbox. Never an error — every one of
@@ -146,6 +149,8 @@ export type SandboxSkipReason =
     | 'no-runtime'
     /** The workspace has no dev sites and no dev services. */
     | 'not-used-here'
+    /** The workspace is hibernating (genie#672): nothing starts until it wakes. */
+    | 'hibernating'
     /** The row is gone (removed between the click and this call). */
     | 'unknown-workspace'
     /** The sandbox itself declined — a missing image, an unmountable path. */
@@ -161,6 +166,20 @@ export interface OpenResult {
 export interface DevServerLifecycle {
     onWorkspaceOpen(workspaceId: string): Promise<OpenResult>;
     onWorkspaceRemove(workspaceId: string): Promise<TeardownResult>;
+    /**
+     * Put a workspace's dev server to sleep (genie#672): the same release, stop
+     * and sweep as a remove — services released (an engine nobody else holds
+     * stops with it), sites stopped, the sandbox swept — with every definition
+     * kept for the wake.
+     */
+    onWorkspaceHibernate(workspaceId: string): Promise<TeardownResult>;
+    /**
+     * Bring a woken workspace's dev server back, as a fresh boot would: every
+     * enabled service, the sandbox, and every enabled site (except one the user
+     * stopped). Call AFTER the hibernation flag is cleared — every start refuses
+     * while it is set. Never throws.
+     */
+    onWorkspaceWake(workspaceId: string): Promise<void>;
     /**
      * Re-attach to everything already running, then resume what did not
      * survive. Boot only. Never throws.
@@ -191,8 +210,64 @@ export function createDevServerLifecycle(deps: DevServerLifecycleDeps): DevServe
         }
     };
 
-    return {
+    /** See {@link DevServerLifecycleDeps.isHibernated}. Throwing reads as awake. */
+    const isHibernated = (workspaceId: string): boolean => {
+        try {
+            return deps.isHibernated?.(workspaceId) === true;
+        } catch {
+            return false;
+        }
+    };
+
+    /** Release, stop, sweep — a remove, and a hibernation (genie#672). */
+    async function teardown(workspaceId: string): Promise<TeardownResult> {
+        const errors: string[] = [];
+
+        // 1. RELEASE the services FIRST. A shared engine carries no
+        //    workspace label, so the sweep below will not touch it — which
+        //    is right, and is exactly why the refcount has to be corrected
+        //    here instead. Releasing also detaches the engine from this
+        //    workspace's network, without which the network cannot be
+        //    removed at all.
+        const services = deps.services();
+        if (services) {
+            for (const row of services.list(workspaceId)) {
+                try {
+                    await services.release(workspaceId, row.serviceId);
+                } catch (e) {
+                    errors.push(messageOf(e));
+                }
+            }
+        }
+
+        // 2. STOP the sites. The sweep would remove their containers
+        //    anyway, but the manager would keep them in `live` — and
+        //    `genSites()` would keep advertising a removed workspace's site
+        //    to the Testing Browser, which then resolves a name to a dead
+        //    port rather than to nothing.
+        const sites = deps.sites();
+        if (sites) {
+            for (const row of sites.list(workspaceId)) {
+                try {
+                    await sites.stop(row.siteId);
+                } catch (e) {
+                    errors.push(messageOf(e));
+                }
+            }
+        }
+
+        // 3. SWEEP whatever still carries the label — the dev container, and
+        //    anything P5 adds later with no change here.
+        const { runtime } = await deps.resolveRuntime();
+        if (!runtime) return { removedContainers: 0, removedNetwork: false, errors };
+        const result = await teardownWorkspaceSandbox(workspaceId, { runtime });
+        return { ...result, errors: [...errors, ...result.errors] };
+    }
+
+    const lifecycle: DevServerLifecycle = {
         async onWorkspaceOpen(workspaceId) {
+            // Opening a sleeping workspace is looking at it, not waking it (genie#672).
+            if (isHibernated(workspaceId)) return { ensured: false, reason: 'hibernating' };
             if (!usesDevServer(workspaceId)) return { ensured: false, reason: 'not-used-here' };
             const workspace = deps.workspaceFor(workspaceId);
             if (!workspace) return { ensured: false, reason: 'unknown-workspace' };
@@ -250,48 +325,42 @@ export function createDevServerLifecycle(deps: DevServerLifecycleDeps): DevServe
                 : { ensured: false, reason: 'sandbox-failed', message: result.message };
         },
 
-        async onWorkspaceRemove(workspaceId) {
-            const errors: string[] = [];
+        onWorkspaceRemove: teardown,
 
-            // 1. RELEASE the services FIRST. A shared engine carries no
-            //    workspace label, so the sweep below will not touch it — which
-            //    is right, and is exactly why the refcount has to be corrected
-            //    here instead. Releasing also detaches the engine from this
-            //    workspace's network, without which the network cannot be
-            //    removed at all.
+        onWorkspaceHibernate: teardown,
+
+        async onWorkspaceWake(workspaceId) {
+            // Every enabled service, container engines included. Open never starts a
+            // database; a wake is the user asking for the workspace back as it is
+            // configured, which is exactly what this does.
             const services = deps.services();
             if (services) {
-                for (const row of services.list(workspaceId)) {
+                let configured: DevServices = {};
+                try {
+                    configured = deps.devServicesFor(workspaceId);
+                } catch {
+                    configured = {};
+                }
+                for (const [serviceId, config] of Object.entries(configured)) {
+                    if (!config.enabled) continue;
                     try {
-                        await services.release(workspaceId, row.serviceId);
-                    } catch (e) {
-                        errors.push(messageOf(e));
+                        await services.acquire(workspaceId, serviceId);
+                    } catch {
+                        /* one engine that will not start must not keep the rest asleep */
                     }
                 }
             }
-
-            // 2. STOP the sites. The sweep would remove their containers
-            //    anyway, but the manager would keep them in `live` — and
-            //    `genSites()` would keep advertising a removed workspace's site
-            //    to the Testing Browser, which then resolves a name to a dead
-            //    port rather than to nothing.
-            const sites = deps.sites();
-            if (sites) {
-                for (const row of sites.list(workspaceId)) {
-                    try {
-                        await sites.stop(row.siteId);
-                    } catch (e) {
-                        errors.push(messageOf(e));
-                    }
-                }
+            // The sandbox, host-native engines and any owed adoption: open's work.
+            try {
+                await lifecycle.onWorkspaceOpen(workspaceId);
+            } catch {
+                /* ditto */
             }
-
-            // 3. SWEEP whatever still carries the label — the dev container, and
-            //    anything P5 adds later with no change here.
-            const { runtime } = await deps.resolveRuntime();
-            if (!runtime) return { removedContainers: 0, removedNetwork: false, errors };
-            const result = await teardownWorkspaceSandbox(workspaceId, { runtime });
-            return { ...result, errors: [...errors, ...result.errors] };
+            try {
+                await deps.sites()?.resumeEnabledSites(workspaceId);
+            } catch {
+                /* ditto */
+            }
         },
 
         async onBoot(opts) {
@@ -338,6 +407,7 @@ export function createDevServerLifecycle(deps: DevServerLifecycleDeps): DevServe
             }
         },
     };
+    return lifecycle;
 }
 
 /** The workspace network name, re-exported so a caller can name what teardown

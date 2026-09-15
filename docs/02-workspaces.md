@@ -76,8 +76,39 @@ envelope's own metadata files.
 - **Add Panel** — choose a terminal, files, agent, or plugin panel.
 - **Open project in browser** — opens the project's dashboard in your browser
   (uses the workspace's backend).
+- **Hibernate workspace** — puts the whole workspace to sleep (see below).
 - **Remove from Genie** — removes the workspace from Genie. *The folder on disk
   is not touched.* Any terminal specs attached to it become unattached.
+
+## Hibernating a workspace
+
+A workspace you are not working in still costs something: its agents hold
+terminals, its background processes and scheduled tasks keep running, and its
+dev sites keep their database and cache engines up. **Hibernate workspace** in
+the context menu stops all of it at once.
+
+Hibernating is a *shutdown*, and it runs in that order:
+
+1. **Every running agent is asked to save a handoff**, exactly as it is asked
+   before an upgrade — all of them at once, each wait bounded, so a quiet agent
+   cannot hold the shutdown open.
+2. **The workspace is marked asleep.** From this moment nothing in it starts:
+   terminals, agents, sites and services are all refused until it is woken.
+3. **Everything running stops** — terminals and agent panels, background
+   processes, scheduled tasks, dev sites. Shared engines (Postgres, Redis, …)
+   lose this workspace's hold, and an engine no other workspace is using stops
+   with it, so nothing burns resources for a workspace nobody is in.
+4. **Its agents leave AgentInbox.** A hibernating workspace's agents are asleep:
+   they are not listed, they cannot be messaged, and their direct messages are
+   deleted.
+
+A hibernating workspace is **grey in the sidebar, with three z's** in front of
+its agents, and its floor says it is asleep with a **Wake workspace** button.
+
+It stays asleep through restarts, upgrades and crash recovery — that is the
+point of it. Only **Wake workspace** (the context menu, or the button on its
+floor) brings it back, and waking starts everything that is enabled, as a fresh
+boot of Genie would.
 
 ## Removing a workspace
 

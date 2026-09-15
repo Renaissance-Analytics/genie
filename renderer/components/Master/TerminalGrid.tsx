@@ -8,6 +8,7 @@ import {
 } from 'react';
 import TerminalPanel from './TerminalPanel';
 import AgentPanel from './AgentPanel';
+import type { ReactNode } from 'react';
 import { agentForSpec } from '../../lib/agent-for-spec';
 import type { AgentRecordSpec, AgentRuntimeSpec } from '../../lib/ams-grid';
 import type { RestartMode } from '../../../main/agents/restart-options';
@@ -51,6 +52,9 @@ interface Props {
      * so their PTYs survive a workspace switch (Decision 1: keep-alive).
      */
     backgroundSpecs?: TerminalSpec[];
+    /** Shown INSTEAD of the Add tiles when the active workspace has no visible
+     *  panels — a hibernating workspace says so here (genie#672). */
+    emptyState?: ReactNode;
     workspacesById: Map<string, WorkspaceRow>;
     /** The active workspace's registered agents and their TUIs. An agent panel
      *  needs the RECORD to know which agent it shows; without it the driver
@@ -136,6 +140,7 @@ export default function TerminalGrid({
     onRuntimesChanged,
     specs,
     backgroundSpecs = [],
+    emptyState,
     workspacesById,
     activeWorkspaceId,
     focusId,
@@ -238,6 +243,7 @@ export default function TerminalGrid({
             panelDrag={panelDrag}
             background={backgroundSpecs}
             empty={empty}
+            emptyState={emptyState}
             workspacesById={workspacesById}
             activeWorkspaceId={activeWorkspaceId ?? null}
             focusId={focusId}
@@ -276,6 +282,9 @@ interface ResizableGridProps {
     background: TerminalSpec[];
     /** True when the active workspace has no visible panels. */
     empty: boolean;
+    /** Drawn in place of the Add tiles for that empty state, when the caller has
+     *  something truer to say — see {@link FloorState.hibernated}. */
+    emptyState?: ReactNode;
     workspacesById: Map<string, WorkspaceRow>;
     activeWorkspaceId: string | null;
     focusId: string | null;
@@ -316,6 +325,7 @@ const ResizableGrid = ({
     ordered,
     background,
     empty,
+    emptyState,
     workspacesById,
     activeWorkspaceId,
     focusId,
@@ -602,7 +612,8 @@ const ResizableGrid = ({
                 the panel `.map()` above stays mounted in the SAME parent, so the
                 off-workspace background panels don't remount when switching
                 to/from an empty workspace. */}
-            {empty && (
+            {empty && emptyState}
+            {empty && !emptyState && (
                 <div className="addtile-overlay">
                     <div className="addtile-group">
                         <button

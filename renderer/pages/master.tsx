@@ -55,6 +55,12 @@ import GithubCapabilitiesFlyout from '../components/Master/GithubCapabilitiesFly
 import TynnHealthIndicator from '../components/Master/TynnHealthIndicator';
 import { useGithubCapabilities } from '../lib/githubCapabilities';
 import { issueWatchBadge } from '../lib/issuewatch';
+import {
+    awakeSpecs,
+    hibernateOutcome,
+    isHibernated,
+    wakeOutcome,
+} from '../lib/workspace-hibernation';
 import { gappLaunchLabel, gappLaunchTargets } from '../lib/gapp-launch';
 import { terminalTypeById, type TerminalTypeId } from '../lib/terminal-types';
 import SignInPrompt from '../components/SignInPrompt';
@@ -1395,26 +1401,35 @@ function MasterInner() {
     // headless services — they never surface in the main grid.
     const selectedSpecs = useMemo(
         () =>
-            workspaceSurfaceSpecs(specs).filter(
-                (s) =>
-                    s.type !== 'process' &&
-                    specWorkspaceId(s) === activeWorkspaceId &&
-                    selected.has(s.id),
+            // A HIBERNATING workspace mounts no panel (genie#672): main refuses
+            // the pty, so a mounted panel would be an error card where the floor
+            // should say the workspace is asleep.
+            awakeSpecs(
+                workspaceSurfaceSpecs(specs).filter(
+                    (s) =>
+                        s.type !== 'process' &&
+                        specWorkspaceId(s) === activeWorkspaceId &&
+                        selected.has(s.id),
+                ),
+                workspacesById,
             ),
-        [specs, selected, activeWorkspaceId],
+        [specs, selected, activeWorkspaceId, workspacesById],
     );
 
     // Selected views in OTHER workspaces — rendered mounted-hidden so their
     // PTYs survive a workspace switch (Decision 1: keep-alive).
     const backgroundSpecs = useMemo(
         () =>
-            workspaceSurfaceSpecs(specs).filter(
-                (s) =>
-                    s.type !== 'process' &&
-                    specWorkspaceId(s) !== activeWorkspaceId &&
-                    selected.has(s.id),
+            awakeSpecs(
+                workspaceSurfaceSpecs(specs).filter(
+                    (s) =>
+                        s.type !== 'process' &&
+                        specWorkspaceId(s) !== activeWorkspaceId &&
+                        selected.has(s.id),
+                ),
+                workspacesById,
             ),
-        [specs, selected, activeWorkspaceId],
+        [specs, selected, activeWorkspaceId, workspacesById],
     );
 
     /**
@@ -1464,6 +1479,13 @@ function MasterInner() {
         async (workspaceId: string, type: ViewType = 'terminal') => {
             const ws = workspacesById.get(workspaceId);
             if (!ws) return;
+            // A sleeping workspace opens nothing (genie#672). Caught here rather
+            // than at the pty: a spec created now would sit invisible until the
+            // workspace woke and then spawn a panel nobody asked for.
+            if (isHibernated(ws)) {
+                setToast(`${ws.project_name} is hibernating. Wake it first.`);
+                return;
+            }
             // A System-Workspace PANEL or PROCESS persists UNATTACHED
             // (workspace_id: null) with a `meta.system` tag, and must: an
             // attached panel resolves its tabs against the workspace path, so a
@@ -2158,6 +2180,61 @@ function MasterInner() {
         [workspacesById],
     );
 
+    // HIBERNATE / WAKE a whole workspace (genie#672). The confirm says what it
+    // costs — every terminal and agent in it stops — because it is not undone by
+    // a restart: only a person waking it brings it back.
+    const [hibernationBusy, setHibernationBusy] = useState<
+        Record<string, 'hibernating' | 'waking'>
+    >({});
+    const setBusy = useCallback((id: string, state: 'hibernating' | 'waking' | null) => {
+        setHibernationBusy((prev) => {
+            const next = { ...prev };
+            if (state) next[id] = state;
+            else delete next[id];
+            return next;
+        });
+    }, []);
+    const hibernateWorkspaceRow = useCallback(
+        async (workspaceId: string) => {
+            const ws = workspacesById.get(workspaceId);
+            if (!ws) return;
+            const ok = await showPrompt({
+                title: `Hibernate ${ws.project_name}?`,
+                body: 'Its agents are asked to save a handoff first. Then every terminal, process, scheduled task, site and service in this workspace stops — and stays stopped through restarts and upgrades until you wake it.',
+                confirmLabel: 'Hibernate',
+            });
+            if (ok === null) return;
+            setBusy(workspaceId, 'hibernating');
+            try {
+                const res = await api().workspaces.hibernate(workspaceId);
+                setToast(hibernateOutcome(ws.project_name, res).text);
+            } catch (e) {
+                setToast(e instanceof Error ? e.message : String(e));
+            } finally {
+                setBusy(workspaceId, null);
+                await refresh();
+            }
+        },
+        [workspacesById, refresh, setBusy],
+    );
+    const wakeWorkspaceRow = useCallback(
+        async (workspaceId: string) => {
+            const ws = workspacesById.get(workspaceId);
+            if (!ws) return;
+            setBusy(workspaceId, 'waking');
+            try {
+                const res = await api().workspaces.wake(workspaceId);
+                setToast(wakeOutcome(ws.project_name, res).text);
+            } catch (e) {
+                setToast(e instanceof Error ? e.message : String(e));
+            } finally {
+                setBusy(workspaceId, null);
+                await refresh();
+            }
+        },
+        [workspacesById, refresh, setBusy],
+    );
+
     const removeWorkspaceRow = useCallback(async (workspaceId: string) => {
         const ok = await showPrompt({
             title: 'Remove project from Genie',
@@ -2190,8 +2267,13 @@ function MasterInner() {
 
     // Enforce max_views: count only the ACTIVE workspace's visible views.
     // When at the cap, the Add affordances disable with a hint to raise it.
-    const atMaxViews = selectedSpecs.length >= maxViews;
-    const maxViewsReason = `Max views reached (${maxViews}) — raise it in Settings`;
+    const activeIsHibernating = isHibernated(
+        activeWorkspaceId ? workspacesById.get(activeWorkspaceId) : undefined,
+    );
+    const atMaxViews = selectedSpecs.length >= maxViews || activeIsHibernating;
+    const maxViewsReason = activeIsHibernating
+        ? 'This workspace is hibernating. Wake it to open terminals.'
+        : `Max views reached (${maxViews}) — raise it in Settings`;
 
     // Global keyboard shortcut: ⌘/Ctrl + , opens Settings. Fires on a WINDOW
     // keydown listener, so it works anywhere — including while a terminal is
@@ -2379,6 +2461,7 @@ function MasterInner() {
                         onAddPluginPanel={(workspaceId, panel) =>
                             void addPluginPanel(workspaceId, panel)
                         }
+                        hibernationBusy={hibernationBusy}
                     />
                 </div>
                 <div className="gright">
@@ -2499,6 +2582,17 @@ function MasterInner() {
                         onReorder={reorderSpecs}
                         projectCount={projectsActive.size}
                         activeCount={activeIds.size}
+                        hibernated={(() => {
+                            const ws = activeWorkspaceId
+                                ? workspacesById.get(activeWorkspaceId)
+                                : undefined;
+                            if (!ws || !isHibernated(ws)) return undefined;
+                            return {
+                                name: ws.project_name,
+                                waking: hibernationBusy[ws.id] === 'waking',
+                                onWake: () => void wakeWorkspaceRow(ws.id),
+                            };
+                        })()}
                     />
                 </div>
             </div>
@@ -2657,6 +2751,10 @@ function MasterInner() {
                         onSiteManager={() => setSiteManagerWsId(ws.id)}
                         onProcessManager={() => setProcessManagerWsId(ws.id)}
                         onFeedback={() => setFeedbackWsId(ws.id)}
+                        hibernated={isHibernated(ws)}
+                        busy={hibernationBusy[ws.id] ?? null}
+                        onHibernate={() => void hibernateWorkspaceRow(ws.id)}
+                        onWake={() => void wakeWorkspaceRow(ws.id)}
                         onRemove={() => void removeWorkspaceRow(ws.id)}
                     />
                 );

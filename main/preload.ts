@@ -810,6 +810,11 @@ const api = {
             ipcRenderer.invoke('workspaces:update', id, patch),
         remove: (id: string) => ipcRenderer.invoke('workspaces:remove', id),
         touch: (id: string) => ipcRenderer.invoke('workspaces:touch', id),
+        /** Put a whole workspace to sleep (genie#672): agents asked for handoffs,
+         *  then every terminal, process, schedule, site and service stopped. */
+        hibernate: (id: string) => ipcRenderer.invoke('workspaces:hibernate', id),
+        /** Wake it: everything enabled comes back, as on a fresh boot. */
+        wake: (id: string) => ipcRenderer.invoke('workspaces:wake', id),
         reorder: (ids: string[]) => ipcRenderer.invoke('workspaces:reorder', ids),
         /** The workspace's own mark. One glyph; '' clears it back to the
          *  initials. Rejects longer input rather than truncating. */
