@@ -5,13 +5,8 @@ import { projectPickerOptions } from '../project-picker';
  * Labels for a project picker.
  *
  * Every row used to read `[TYNN] The Ripple Effect`, on every project, in every
- * picker. The tag exists to tell two BACKENDS apart (`tynn` and `aionima`) — but
- * when every project in the list comes from the same one it distinguishes
- * nothing, and twenty rows of `[TYNN]` is a column of noise the eye has to skip
- * before it reaches the name it is looking for.
- *
- * So the tag earns its place: shown when the list actually mixes backends, gone
- * when it does not.
+ * picker. The tag told two backends apart; Tynn is now the only one (genie#679),
+ * so there is nothing for a tag to distinguish and a row is labelled by its NAME.
  */
 const tynn = (id: string, name: string, owner?: string) => ({
     id,
@@ -20,7 +15,7 @@ const tynn = (id: string, name: string, owner?: string) => ({
     ...(owner ? { owner_name: owner } : {}),
 });
 
-describe('a picker whose projects all come from one backend', () => {
+describe('a project picker', () => {
     it('shows the NAME alone — the tag would distinguish nothing', () => {
         const options = projectPickerOptions([
             tynn('1', 'The Ripple Effect'),
@@ -31,8 +26,8 @@ describe('a picker whose projects all come from one backend', () => {
     });
 
     it('keeps the value as the project id, so nothing about selection changes', () => {
-        const options = projectPickerOptions([tynn('abc', 'Aionima')]);
-        expect(options[0]).toEqual({ value: 'abc', label: 'Aionima' });
+        const options = projectPickerOptions([tynn('abc', 'Impact Hub')]);
+        expect(options[0]).toEqual({ value: 'abc', label: 'Impact Hub' });
     });
 
     it('treats a project with NO backend as the default one', () => {
@@ -48,19 +43,16 @@ describe('a picker whose projects all come from one backend', () => {
     });
 });
 
-describe('a picker whose projects come from DIFFERENT backends', () => {
-    it('tags every row, so the two are told apart', () => {
+describe('no backend tag, whatever a row says', () => {
+    it('never prefixes a row — there is one backend, so a tag distinguishes nothing', () => {
+        // A payload from an older Genie can still carry another backend string;
+        // it must not bring the `[…]` column back.
         const options = projectPickerOptions([
             tynn('1', 'The Ripple Effect'),
-            { id: '2', name: 'Some Envelope', backend: 'aionima' as const },
+            { id: '2', name: 'Some Envelope', backend: 'legacy' },
         ]);
 
-        // Tagged on BOTH, not just the odd one out: a bare name beside a tagged
-        // one reads as "untagged means the other thing", which is a guess.
-        expect(options.map((o) => o.label)).toEqual([
-            '[TYNN] The Ripple Effect',
-            '[AIONIMA] Some Envelope',
-        ]);
+        expect(options.map((o) => o.label)).toEqual(['The Ripple Effect', 'Some Envelope']);
     });
 });
 
@@ -121,17 +113,5 @@ describe('the Genie App marker', () => {
         );
 
         expect(options[0]!.label).toBe('AI Trader · Aaron Johnson (Genie App)');
-    });
-
-    it('composes with the backend tag when the list mixes backends', () => {
-        const options = projectPickerOptions([
-            { ...tynn('1', 'AI Trader'), isGapp: true },
-            { id: '2', name: 'Some Envelope', backend: 'aionima' as const },
-        ]);
-
-        expect(options.map((o) => o.label)).toEqual([
-            '[TYNN] AI Trader (Genie App)',
-            '[AIONIMA] Some Envelope',
-        ]);
     });
 });

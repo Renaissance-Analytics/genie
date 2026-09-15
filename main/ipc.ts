@@ -44,9 +44,6 @@ import {
     touchWorkspace,
     updateWorkspace,
     WorkspaceRow,
-    getAionimaConfig,
-    setAionimaConfig,
-    BackendConfig,
     createTerminalSpec,
     deleteTerminalSpec,
     getTerminalSpec,
@@ -364,7 +361,6 @@ import {
     allConfiguredBackends,
     backendOfKind,
     fetchMergedInbox,
-    getAionimaBackend,
     getTynnBackend,
     listAllProjects,
     signedInBackends,
@@ -382,11 +378,9 @@ import {
 /**
  * Wire every typed channel exposed by preload.ts to its main-side handler.
  *
- * Two backends ride through this layer: Tynn (session-cookied web app)
- * and Aionima (locally-hosted AGI gateway). Most channels fan out across
- * whichever backends the user has connected; a `backendKind` parameter
- * pins the call to one backend for surfaces (capture, sign-out) where
- * the target is explicit.
+ * Tynn (a session-cookied web app) is the backend that rides through this
+ * layer. A `backendKind` parameter remains on the channels that name their
+ * target (capture, sign-out).
  */
 /**
  * Make Genie's own toolchain win on PATH for everything Genie spawns.
@@ -722,12 +716,8 @@ export function agentRecordSetAvatar(agentId: string, avatar: string | null) {
 
 export function registerIpcHandlers(): void {
     // --- Auth -----------------------------------------------------------
-    ipcMain.handle('auth:start-sign-in', async (_e, kind?: BackendKind) => {
-        // Tynn uses the browser-handoff (genie://) flow. Aionima signs in
-        // by configuring host + token in Settings → see auth:aionima-set.
-        if (kind === 'aionima') {
-            return { ok: false, message: 'Configure Aionima host + token in Settings.' };
-        }
+    ipcMain.handle('auth:start-sign-in', async () => {
+        // Tynn's browser-handoff (genie://) flow.
         const { url } = await startSignIn();
         return { ok: true, url };
     });
@@ -749,20 +739,6 @@ export function registerIpcHandlers(): void {
         }
         return out;
     });
-
-    // Aionima connection management (manual paste-host + paste-token
-    // path today; will swap to the pairing flow once
-    // https://github.com/Civicognita/agi/issues/178 Q5.2a is answered).
-    ipcMain.handle('auth:aionima-config', () => getAionimaConfig());
-    ipcMain.handle(
-        'auth:aionima-set',
-        async (_e, patch: BackendConfig) => {
-            const next = setAionimaConfig(patch);
-            const { user, error } = await getAionimaBackend().probe();
-            broadcast('auth:changed', { backend: 'aionima', signedIn: !!user });
-            return { config: next, user, error };
-        },
-    );
 
     // --- Settings -------------------------------------------------------
     ipcMain.handle('settings:get', () => getAllSettings());
@@ -1013,7 +989,7 @@ export function registerIpcHandlers(): void {
         }
         const r = addWorkspace({
             ...row,
-            backend: (row.backend ?? 'tynn') as 'tynn' | 'aionima',
+            backend: row.backend === 'none' ? 'none' : 'tynn',
         });
         // MCP is ON by default for new workspaces — write the genie server into
         // its Claude (.mcp.json) + Cursor (.cursor/mcp.json) config so agents
@@ -2325,9 +2301,8 @@ export function registerIpcHandlers(): void {
         if (moved || sacredMoved) broadcastWorkspacesChanged();
         return projects;
     });
-    // Project CREATION is Tynn-specific (the Aionima backend has no create
-    // API), so these route straight to the Tynn backend rather than fanning
-    // out. Used by the Add-workspace "Create new project" form.
+    // Project CREATION goes straight to the Tynn backend. Used by the
+    // Add-workspace "Create new project" form.
     ipcMain.handle('tynn:owner-options', async () =>
         getTynnBackend().ownerOptions(),
     );
@@ -2498,7 +2473,6 @@ export function registerIpcHandlers(): void {
 
     // --- Backend hosts (renderer footer / sign-in hint) ----------------
     ipcMain.handle('tynn-host:get', () => getTynnBackend().host());
-    ipcMain.handle('aionima-host:get', () => getAionimaBackend().host());
 
     // --- App lifecycle --------------------------------------------------
     ipcMain.handle('app:hide-capture', () => {

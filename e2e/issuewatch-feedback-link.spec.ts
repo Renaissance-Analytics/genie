@@ -29,14 +29,14 @@ test.afterAll(async () => {
 async function scriptFeedback(
     application: ElectronApplication,
     feedback: number,
-    ws: { tynn_project_id: string; backend: 'tynn' | 'aionima' },
+    ws: { tynn_project_id: string; backend: 'tynn' | 'none' },
 ) {
     await application.evaluate(
         (
             {},
             args: {
                 feedback: number;
-                ws: { tynn_project_id: string; backend: 'tynn' | 'aionima' };
+                ws: { tynn_project_id: string; backend: 'tynn' | 'none' };
             },
         ) => {
             const state = (globalThis as Record<string, any>).__GENIE_E2E__.state;
@@ -72,10 +72,10 @@ test('the feedback notice opens the project feedback in Tynn', async () => {
 });
 
 test('a workspace with no Tynn project shows the notice but offers no dead link', async () => {
-    // Same count, but an Aionima-backed workspace — its id is local, so there is
+    // Same count, but a workspace with no backend — its id is local, so there is
     // no Tynn project to open. The notice must still report the tally (it is
     // true, and it comes from the server) without presenting itself as a door.
-    await scriptFeedback(app, 5, { tynn_project_id: '', backend: 'aionima' });
+    await scriptFeedback(app, 5, { tynn_project_id: '', backend: 'none' });
     await page.reload();
 
     await expect(page.getByText(/5 unresolved pieces of project feedback/i)).toBeVisible();

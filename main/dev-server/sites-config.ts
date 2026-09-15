@@ -277,7 +277,7 @@ function isAbsolutePathToken(token: string): boolean {
  * Strip a machine-specific absolute toolchain path out of a stored command
  * (genie #199).
  *
- * A site's `command` is committed to `project.json` — the SHARED, cloned Aionima
+ * A site's `command` is committed to `project.json` — the SHARED, cloned
  * envelope — so an absolute path like `C:\Users\x\.config\herd\bin\php84\php.exe`
  * (a workaround for Herd exposing `php` as an unspawnable `.bat` shim) is dead on
  * anyone else's machine. When argv[0] is an ABSOLUTE path to a KNOWN toolchain

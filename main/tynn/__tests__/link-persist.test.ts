@@ -105,12 +105,12 @@ describe('pickTynnLink — project.json vs the durable workspace row', () => {
         ).toEqual({ projectId: '01ROW', project: 'Row Proj' });
     });
 
-    it('ignores a non-tynn (aionima) row', () => {
+    it('ignores a non-tynn (none) row', () => {
         expect(
             pickTynnLink({
                 projectJsonTynn: undefined,
                 hasTynnKey: false,
-                row: { backend: 'aionima', tynnProjectId: '01ROW' },
+                row: { backend: 'none', tynnProjectId: '01ROW' },
             }),
         ).toBeNull();
     });

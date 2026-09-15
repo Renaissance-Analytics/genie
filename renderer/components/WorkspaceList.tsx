@@ -86,12 +86,6 @@ export default function WorkspaceList({ rows, onOpen, onRemove, onAdd }: Props) 
                                     {/* Backend badge only when a project is actually
                                         associated — a project-less workspace shows none. */}
                                     {hasProjectAssociation(w) &&
-                                        (w.backend ?? 'tynn') === 'aionima' && (
-                                            <Badge color="emerald" size="sm" variant="soft">
-                                                Aionima
-                                            </Badge>
-                                        )}
-                                    {hasProjectAssociation(w) &&
                                         (w.backend ?? 'tynn') === 'tynn' && (
                                             <Badge color="blue" size="sm" variant="soft">
                                                 Tynn

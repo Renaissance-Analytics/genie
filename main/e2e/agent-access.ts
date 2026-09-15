@@ -42,7 +42,7 @@ function ensureWorkspace(id: string, name: string, order: number): void {
     if (getWorkspace(id)) return;
     addWorkspace({
         id,
-        backend: 'aionima',
+        backend: 'none',
         project_id: id,
         project_name: name,
         tynn_project_id: id,

@@ -1,10 +1,9 @@
 # `.agi` envelope format
 
 The `.agi` envelope is a git-based workspace format that wraps one or
-more source repositories alongside a shared `.ai/` knowledge zone. The
-format is read and written by both Genie (this client) and the Aionima
-AGI gateway; both tools preserve unknown fields on write so neither
-clobbers the other's state.
+more source repositories alongside a shared `.ai/` knowledge zone. Genie
+preserves unknown fields on write, so a tool that adds its own does not have
+them clobbered.
 
 ## Folder skeleton
 

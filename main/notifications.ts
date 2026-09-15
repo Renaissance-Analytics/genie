@@ -4,7 +4,7 @@ import { fetchMergedInbox } from './backend/registry';
 
 /**
  * Inbox poller — every 60s sum unread counts across every signed-in
- * backend (Tynn + Aionima) and update the tray badge. Native
+ * backend (Tynn) and update the tray badge. Native
  * notifications are intentionally OFF: agents produce a high volume of
  * activity that would feel like spam as toasts. Revisit once Tynn ships
  * a "notable events" surface that's filtered by intent rather than

@@ -23,7 +23,7 @@ export function syncSacredWorkspaces(projects: readonly SacredProject[]): number
         // `resolveTynnLinkForRow` honours project.json over the durable row --
         // including the empty `tynn: {}` an explicit unlink writes -- and returns
         // null for a workspace whose backend is not Tynn, which keeps
-        // installed-app workspaces out: they are `backend: 'aionima'` and their
+        // installed-app workspaces out: they are `backend: 'none'` and their
         // `tynn_project_id` holds a MANIFEST id, not a Tynn ULID.
         tynnProjectId: resolveTynnLinkForRow(row)?.projectId ?? null,
     }));

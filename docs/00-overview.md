@@ -3,7 +3,7 @@
 Genie is a **workstation for people and software agents** — a
 tray-resident window that gives every project you work on its own set of live
 terminals, coding agents, and file editors, all in one place. It signs in to
-your work backend (Tynn or Aionima) so you can jump from a shell straight to
+your work backend (Tynn) so you can jump from a shell straight to
 your project management.
 
 ## What Genie is for
@@ -24,7 +24,7 @@ your project management.
 - **Reach beyond this machine.** Connect to another machine's Genie over your
   tailnet, or to a Genie Cloud Workstation, and drive its terminals and files as
   if they were local.
-- **Signed in to your work.** Connect Tynn or Aionima to capture issues and
+- **Signed in to your work.** Connect Tynn to capture issues and
   reach your projects, and connect GitHub to create `.agi` repositories and
   watch their issues, PRs, and Dependabot alerts.
 

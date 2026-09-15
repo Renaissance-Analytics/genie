@@ -131,7 +131,7 @@ function seedWorkspace(id: string, name: string, order: number): string {
     if (getWorkspace(id)) removeWorkspace(id);
     addWorkspace({
         id,
-        backend: 'aionima',
+        backend: 'none',
         project_id: id,
         project_name: name,
         tynn_project_id: id,
@@ -174,7 +174,7 @@ export function seedMasterE2E(): MasterSeed {
     //
     // The project.json link is not decoration. `pickTynnLink` resolves a link from
     // the workspace ROW only when its backend is 'tynn', and this fixture is
-    // 'aionima' so nothing here reaches out to a backend. A `tynn` block on disk
+    // 'none' so nothing here reaches out to a backend. A `tynn` block on disk
     // resolves regardless of backend, which gives the row a link WITHOUT a
     // network. That matters because the master window now nudges the project list
     // on focus: with no link at all, the sync would read "unlinked" and clear the

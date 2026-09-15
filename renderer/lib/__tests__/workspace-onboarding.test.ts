@@ -48,8 +48,8 @@ describe('managed workspace entry points', () => {
     // it happens to know, and the flow asks for the rest. See
     // add-workspace.test.ts.
 
-    it('never offers a plain-folder or Aionima-owned workspace', () => {
-        expect(JSON.stringify(ADD_WORKSPACE_SOURCES)).not.toMatch(/simple|plain folder|Aionima/i);
+    it('never offers a plain-folder workspace', () => {
+        expect(JSON.stringify(ADD_WORKSPACE_SOURCES)).not.toMatch(/simple|plain folder/i);
     });
 
     /**

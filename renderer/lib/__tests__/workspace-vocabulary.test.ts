@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 /**
  * The main UX does not teach the storage format (genie#432).
  *
- * Genie stores a workspace as an Aionima `.agi` envelope. That is true, it is
+ * Genie stores a workspace as a `.agi` envelope. That is true, it is
  * documented, and it is the right word in `docs/` and in code. It is the wrong
  * word in the product: the Add-workspace modal HEADED itself "Upgrade to .agi
  * envelope", so the first thing a new user read while making their first

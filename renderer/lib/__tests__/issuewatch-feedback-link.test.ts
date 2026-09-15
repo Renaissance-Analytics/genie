@@ -47,7 +47,7 @@ describe('feedbackPathForWorkspace', () => {
     });
 
     it('offers nothing for a workspace that is not Tynn-backed', () => {
-        // The fallback above makes this check load-bearing: an Aionima
+        // The fallback above makes this check load-bearing: a no-backend
         // workspace's `id` is a LOCAL identifier, so without the backend test it
         // would be dressed up as a Tynn project id and linked to a page that
         // cannot resolve.
@@ -55,7 +55,7 @@ describe('feedbackPathForWorkspace', () => {
             feedbackPathForWorkspace({
                 id: 'local-only-id',
                 tynn_project_id: '',
-                backend: 'aionima',
+                backend: 'none',
             }),
         ).toBeNull();
     });

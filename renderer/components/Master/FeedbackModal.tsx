@@ -31,7 +31,10 @@ export default function FeedbackModal({
     const [error, setError] = useState<string | null>(null);
     const [sentId, setSentId] = useState<string | null>(null);
 
-    const projectId = workspace.tynn_project_id || workspace.project_id || '';
+    // A `none` workspace (System, a GApp) may hold a manifest id here; that is
+    // never a Tynn project, so there is nowhere to file (genie#679).
+    const projectId =
+        workspace.backend === 'none' ? '' : workspace.tynn_project_id || workspace.project_id || '';
 
     const send = async () => {
         const text = message.trim();
@@ -42,7 +45,7 @@ export default function FeedbackModal({
             projectId,
             text,
             { workspace: workspace.project_name },
-            workspace.backend === 'aionima' ? 'aionima' : 'tynn',
+            'tynn',
         );
         setSending(false);
         if (res.ok) {

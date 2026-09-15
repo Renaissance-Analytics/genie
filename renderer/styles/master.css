@@ -116,9 +116,8 @@
 
     --host-tynn: #0ea5e9;
     --host-desktop: #a1a1aa;
-    --host-aionima: #8b5cf6;
 
-    /* Aionima .agi envelope mark — a 1px gold border + matching badge, so an
+    /* .agi envelope mark — a 1px gold border + matching badge, so an
        envelope reads as gold rather than the indigo --agent treatment it used
        to borrow. A single muted gold reads on both the white and near-black
        theme backgrounds (it's only ever a hairline border / soft fill). */
@@ -3064,7 +3063,7 @@ button.iw-feedback-note.as-link:hover {
     animation: agent-pulse-breathe 1.6s ease-in-out infinite;
 }
 
-/* The per-row host badge (text "tynn"/"local"/"aionima") was removed — the
+/* The per-row host badge (text "tynn"/"local") was removed — the
    gold Tynn glyph (.srow-tynn, terminal rows only) is the only host signal.
    Its .host/.host.* styles were deleted with it so the label can't reappear. */
 

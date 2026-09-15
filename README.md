@@ -18,7 +18,7 @@ surfaces in one desktop app.
   project, sharing live PTYs with TheFloor so you can mirror a running
   shell to a second monitor.
 - **Workspace upgrades** — wrap an existing folder (or a folder full
-  of sub-repos) as an Aionima `{slug}.agi` envelope: each sub-repo
+  of sub-repos) as a `{slug}.agi` envelope: each sub-repo
   becomes a git submodule under `repos/`; loose knowledge folders
   (`plans/`, `docs/`, `k/`, etc.) migrate into `.ai/`.
 - **Genie OSA** — a built-in full-authority workstation operator with its own

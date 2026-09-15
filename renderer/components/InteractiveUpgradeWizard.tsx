@@ -173,7 +173,7 @@ export default function InteractiveUpgradeWizard({
     // monorepo becomes ONE submodule (the legacy single-repo behaviour).
     const [monorepoMode, setMonorepoMode] = useState<'explode' | 'wrap'>('explode');
     // Monorepo explode only: submodule_name of the HOST (primary) member —
-    // the repo Aionima builds. The rest are packages it consumes from the
+    // the repo the workspace builds. The rest are packages it consumes from the
     // registry. Defaults to the first included member.
     const [primaryName, setPrimaryName] = useState<string>('');
 
@@ -1259,7 +1259,7 @@ function ReposStep({
 
             {showPrimaryPicker && (
                 <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
-                    Pick the <strong>host</strong> — the one repo Aionima builds and
+                    Pick the <strong>host</strong> — the one repo the workspace builds and
                     hosts. The rest become <strong>packages</strong> the host consumes
                     from the npm/composer registry (nothing in any build config is
                     rewritten). The workspace name defaults to the host’s name.

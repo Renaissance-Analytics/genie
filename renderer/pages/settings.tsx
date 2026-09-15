@@ -898,8 +898,6 @@ export default function SettingsPage() {
 
             <GitHubSection />
 
-            <AionimaSection />
-
                             </SearchGroup>
                         )}
                         {show('devices') && (
@@ -1442,121 +1440,6 @@ function TynnSection({
                     />
                 </SettingRow>
             )}
-        </SetSection>
-    );
-}
-
-/**
- * Aionima connection — separate save flow because it probes the
- * configured host immediately so the user gets a "Connected as X" or
- * "Failed to reach" signal without leaving the page. Bearer-token paste
- * is the placeholder UX; a proper pairing flow lands when
- * https://github.com/Civicognita/agi/issues/178 Q5.2a is answered.
- */
-function AionimaSection() {
-    const [host, setHost] = useState('');
-    const [token, setToken] = useState('');
-    const [user, setUser] = useState<{ name: string; email?: string } | null>(null);
-    const [busy, setBusy] = useState(false);
-    const [status, setStatus] = useState<string | null>(null);
-
-    useEffect(() => {
-        api()
-            .aionima.getConfig()
-            .then((c) => {
-                setHost(c.host ?? '');
-                setToken(c.token ?? '');
-            });
-        api()
-            .auth.whoami('aionima')
-            .then((u) => setUser((u as any) ?? null));
-    }, []);
-
-    const save = async () => {
-        setBusy(true);
-        setStatus(null);
-        try {
-            const res = await api().aionima.setConfig({
-                host: host.trim() || undefined,
-                token: token.trim() || null,
-            });
-            setUser(res.user as any);
-            setStatus(
-                res.user
-                    ? `Connected as ${res.user.name}`
-                    : res.error
-                      ? `Couldn't reach Aionima: ${res.error}`
-                      : 'Saved — could not reach Aionima with that host + token.',
-            );
-        } catch (e: unknown) {
-            setStatus(e instanceof Error ? e.message : String(e));
-        } finally {
-            setBusy(false);
-        }
-    };
-
-    const disconnect = async () => {
-        setBusy(true);
-        await api().aionima.setConfig({ token: null });
-        setToken('');
-        setUser(null);
-        setStatus('Disconnected.');
-        setBusy(false);
-    };
-
-    return (
-        <SetSection
-            title="Aionima"
-            desc="Local LAN AGI gateway"
-            status={user ? `Connected as ${user.name}` : undefined}
-            statusColor="var(--emerald-600)"
-            statusIcon={user ? 'check' : undefined}
-        >
-            <SettingRow
-                label="Aionima host"
-                desc="e.g. http://192.168.0.144:3100 (the machine running AGI)"
-                keywords="aionima host agi gateway lan ip address"
-                vertical
-            >
-                <Input
-                    value={host}
-                    onValueChange={setHost}
-                    placeholder="http://192.168.0.144:3100"
-                />
-            </SettingRow>
-            <SettingRow
-                label="Bearer token"
-                desc="Mint a token in your Aionima dashboard and paste it here."
-                keywords="aionima bearer token auth paste dashboard"
-                vertical
-            >
-                <Input
-                    value={token}
-                    onValueChange={setToken}
-                    placeholder="(paste token)"
-                />
-            </SettingRow>
-            <div className="set-actions">
-                <Action color="blue" icon="check" onClick={save} disabled={busy}>
-                    {busy ? 'Saving…' : 'Save + test'}
-                </Action>
-                {user && (
-                    <Action variant="ghost" onClick={disconnect} disabled={busy}>
-                        Disconnect
-                    </Action>
-                )}
-                {status && (
-                    <Text
-                        size="xs"
-                        style={{
-                            alignSelf: 'center',
-                            color: user ? 'var(--emerald-600)' : 'var(--fg-3)',
-                        }}
-                    >
-                        {status}
-                    </Text>
-                )}
-            </div>
         </SetSection>
     );
 }

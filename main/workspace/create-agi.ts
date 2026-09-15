@@ -143,7 +143,7 @@ function readmeTemplate(name: string, slug: string, suffix: EnvelopeSuffix = 'ag
     const folder = envelopeFolderName(slug, suffix);
     return `# ${name}
 
-This is a **\`.${suffix}\` envelope** — an Aionima project monorepo that bundles
+This is a **\`.${suffix}\` envelope** — a project monorepo that bundles
 one or more code repositories together with shared knowledge, planning,
 and scratch space. Created with Genie.
 
@@ -189,7 +189,7 @@ For the agent-oriented version of this guide, see \`AGENTS.md\`
 function agentsTemplate(name: string, suffix: EnvelopeSuffix = 'agi'): string {
     return `# AGENTS.md — ${name} (.${suffix} envelope)
 
-You are working inside a **\`.${suffix}\` envelope**: an Aionima project monorepo.
+You are working inside a **\`.${suffix}\` envelope**: a project monorepo.
 \`CLAUDE.md\` is a symlink to this file.
 
 ## Structure
@@ -636,7 +636,7 @@ export interface ConvertPlanOpts {
     repos: AgiPlanRepo[];
     knowledge: AgiPlanKnowledge[];
     /**
-     * `submodule_name` of the host (primary) member — the repo Aionima
+     * `submodule_name` of the host (primary) member — the repo the envelope
      * builds/hosts. The rest are packages it consumes from the registry.
      * When omitted (or not matching any repo) and there's exactly one
      * repo, that lone repo is treated as the host; with multiple repos and

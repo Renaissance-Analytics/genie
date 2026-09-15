@@ -19,7 +19,7 @@ import crypto from 'node:crypto';
  * stable across restarts AND IP changes. It is advertised on `/api/ping` and is
  * the PRIMARY identity for connKey / token / known-host; the Tailscale IP (and the
  * MagicDNS name) are demoted to a refreshable DIAL ADDRESS. It is carrier-
- * independent by design so the same identity works over relay / Aionima later.
+ * independent by design so the same identity works over the relay too.
  */
 
 /** The persisted-id filename under `userData`. */
