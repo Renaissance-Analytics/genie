@@ -5,6 +5,7 @@ import { audit } from './audit';
 import { isLocked } from './baton';
 import { sessionFromAuthHeader, validateSession } from './auth';
 import type { SiteScheme } from '../sites/gen-url';
+import type { HostAccessPolicy } from '../host-core/access-policy';
 
 /**
  * HOST-side reverse proxy for `.gen` dev sites (design §2 + §3(a)).
@@ -145,7 +146,21 @@ export interface SiteProxyInfo {
      *  (`https://<magic-dns>:<port>` over a Tailscale cert, else
      *  `http://<ip>:<port>`). Drives the `Location`/scheme header rewrites. */
     proxyOrigin: string;
+    /** Judges a GUEST session against the resolved site (see {@link GuestSiteCheck}). */
+    authorizeGuest?: GuestSiteCheck;
 }
+
+/**
+ * May this GUEST use this resolved site with this request? A guest is someone the
+ * host was shared with; its grant names the workspaces and sites it reaches
+ * (guest-access.ts). Absent ⇒ every guest is refused — a guest is never proxied
+ * without a decision.
+ */
+export type GuestSiteCheck = (
+    policy: HostAccessPolicy,
+    site: { workspaceId: string; siteId: string },
+    request: { method?: string; websocket?: boolean },
+) => boolean;
 
 // --- pure helpers (unit-testable) ------------------------------------------
 
@@ -434,6 +449,15 @@ export async function handleSiteProxy(
         sendError(res, 404, 'unknown or disabled site');
         return true;
     }
+    // 3b. A GUEST reaches only the sites its grant names, on workspaces it reaches;
+    //     anything else answers like an unknown site.
+    if (
+        session.access &&
+        !info.authorizeGuest?.(session.access, { workspaceId: site.workspaceId, siteId: parsed.siteId }, { method: req.method })
+    ) {
+        sendError(res, 404, 'unknown or disabled site');
+        return true;
+    }
     // 4. Audit the first hit per site.
     recordOpen(parsed.siteId, site.hostname, session.token);
 
@@ -514,7 +538,7 @@ export async function handleSiteProxyUpgrade(
     socket: Duplex,
     head: Buffer,
     deps: SiteProxyDeps,
-    info: { originAllowed: (req: http.IncomingMessage) => boolean },
+    info: { originAllowed: (req: http.IncomingMessage) => boolean; authorizeGuest?: GuestSiteCheck },
 ): Promise<boolean> {
     const parsed = parseSiteProxyUrl(req.url);
     if (!parsed) {
@@ -539,6 +563,15 @@ export async function handleSiteProxyUpgrade(
     }
     const site = await deps.resolveSite(parsed.siteId);
     if (!site) {
+        rejectSocket(socket, 404);
+        return true;
+    }
+    // A live socket into a site is interaction: a GUEST needs the site named with
+    // `interact`, and `control` (guest-access.ts `guestMayUseSite`).
+    if (
+        session.access &&
+        !info.authorizeGuest?.(session.access, { workspaceId: site.workspaceId, siteId: parsed.siteId }, { method: req.method, websocket: true })
+    ) {
         rejectSocket(socket, 404);
         return true;
     }

@@ -12,7 +12,8 @@ import {
     type MobileSession,
 } from './auth';
 import { audit, type AuditActor } from './audit';
-import { authorizeDrive, controlViewFor, joinControl, requestControl } from './baton';
+import { authorizeDrive, controlViewFor, isLocked, joinControl, requestControl } from './baton';
+import { gateGuestApi, GUEST_NOT_GRANTED } from './guest-access';
 import type { EnabledGenSite } from '../remote';
 import { isHeadless } from '../runtime-mode';
 import { isUsableGrid } from '../terminal/size-tracker';
@@ -911,8 +912,8 @@ function buildState(deps: MobileDataDeps, principalId: string | null = null) {
  * pairing confirm needs. Token auth + kill-switch + audit are enforced here.
  */
 export async function handleApi(
-    req: http.IncomingMessage,
-    res: http.ServerResponse,
+    incomingReq: http.IncomingMessage,
+    incomingRes: http.ServerResponse,
     pathname: string,
     deps: MobileDataDeps,
     info: {
@@ -927,10 +928,21 @@ export async function handleApi(
         dnsName?: string | null;
     },
 ): Promise<boolean> {
+    // Reassigned for a GUEST session below: the guest gate hands back a request
+    // whose body it has already read, and a response that narrows listings.
+    let req = incomingReq;
+    let res = incomingRes;
     const method = req.method ?? 'GET';
 
     // --- /api/pair — the ONLY unauthed data route -------------------------
     if (pathname === '/api/pair') {
+        // A GUEST asking to pair would be asking the desktop to confirm a new OWNER
+        // device — and the prompt would name no one. Pairing is for the owner's own
+        // devices; a guest's access comes only from its grant.
+        if (sessionFromAuthHeader(req.headers['authorization'])?.access) {
+            sendJson(res, 403, { error: GUEST_NOT_GRANTED });
+            return true;
+        }
         if (method !== 'POST') {
             sendJson(res, 405, { error: 'method not allowed' });
             return true;
@@ -990,6 +1002,14 @@ export async function handleApi(
     if (!session) {
         sendJson(res, 401, { error: 'unauthorised' });
         return true;
+    }
+    // A GUEST (someone this host was shared with) is judged by its grant before any
+    // route runs — see guest-access.ts. The owner's own devices carry no policy.
+    if (session.access) {
+        const gate = await gateGuestApi(req, res, pathname, deps, session.access);
+        if (gate.refused) return true;
+        req = gate.req;
+        res = gate.res;
     }
     const principal = sessionPrincipal(session);
     const actor = actorOf(session);
@@ -1070,7 +1090,13 @@ export async function handleApi(
     // READ: naming a host's dev sites is sensitive on a locked machine (§5). An
     // empty set on a host that predates the feature.
     if (pathname === '/api/sites/enabled' && method === 'GET') {
-        if (guardControl()) return true;
+        // The kill-switch, not the baton: this is a READ. Gating it on the baton
+        // made merely LISTING sites claim control, and refused it to a read-only
+        // guest outright (baton.ts never lets one drive).
+        if (isLocked()) {
+            sendJson(res, 423, { error: 'the desktop has control', control: controlViewFor(principal.id) });
+            return true;
+        }
         if (!deps.listEnabledSites) {
             sendJson(res, 200, { sites: [] });
             return true;

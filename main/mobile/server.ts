@@ -16,7 +16,9 @@ import {
     SITE_PROXY_PREFIX,
     type SiteProxyDeps,
 } from './site-proxy';
-import { setEventSockets, setEventSocketPrincipal, mobileEmit } from './bus';
+import { setEventSockets, setEventSocketFilter, setEventSocketPrincipal, mobileEmit } from './bus';
+import { guestEventPayload, guestMayAttachTerminal, guestMayUseSite } from './guest-access';
+import type { HostAccessPolicy } from '../host-core/access-policy';
 import {
     attachTerminalSocket,
     mobileTermFanout,
@@ -28,6 +30,8 @@ import { isUsableGrid } from '../terminal/size-tracker';
 import { sanitizeReplay } from '../terminal/replay';
 import {
     initAuth,
+    listSessions,
+    revokeGuestSessions,
     validateSession,
     sessionPrincipal,
     type ConfirmPairHook,
@@ -176,6 +180,50 @@ export interface MobilePeer {
 }
 /** Per-events-socket peer info (identity + connect time) for the host overlay. */
 const peerByEventSocket = new Map<WebSocket, Omit<MobilePeer, 'holdsControl'>>();
+/** The GUEST grant behind an events socket, when it has one (guest-access.ts). */
+const guestPolicyByEventSocket = new Map<WebSocket, HostAccessPolicy>();
+/**
+ * Every live socket a GUEST session opened (`/ws/events` + `/ws/term`), by token.
+ * A socket authenticates once, at upgrade — so revoking the session alone would
+ * leave a disconnected guest still watching and typing. See {@link disconnectGuest}.
+ */
+const guestSocketsByToken = new Map<string, Set<WebSocket>>();
+
+function trackGuestSocket(token: string, ws: WebSocket): void {
+    const set = guestSocketsByToken.get(token) ?? new Set<WebSocket>();
+    set.add(ws);
+    guestSocketsByToken.set(token, set);
+    ws.once('close', () => {
+        set.delete(ws);
+        if (set.size === 0) guestSocketsByToken.delete(token);
+    });
+}
+
+/**
+ * Disconnect one GUEST now: drop every session of that principal and close every
+ * socket they have open, so they stop watching and typing at once rather than when
+ * a socket next reconnects. The owner's devices and other guests are untouched.
+ * Returns how many sessions were dropped. (Their durable access lives in Tynn; this
+ * ends the live connection.)
+ */
+export function disconnectGuest(principalId: string): number {
+    const tokens = listSessions()
+        .filter((s) => s.access?.principalId === principalId)
+        .map((s) => s.token);
+    const dropped = revokeGuestSessions(principalId);
+    for (const token of tokens) {
+        for (const ws of guestSocketsByToken.get(token) ?? []) {
+            try {
+                ws.close(4403, 'access ended');
+            } catch {
+                /* already closing */
+            }
+        }
+        guestSocketsByToken.delete(token);
+    }
+    return dropped;
+}
+
 /** The remotes currently connected to `/ws/events` (drives host presence). */
 export function activeMobilePeers(): MobilePeer[] {
     const roster = new Map(batonRoster().map((p) => [p.id, p]));
@@ -321,6 +369,15 @@ export function proxyOriginForRequest(
     return `${secure ? 'https' : 'http'}://${host}:${port}`;
 }
 
+/** The site proxy's GUEST check, judged against this host's own workspaces. */
+function authorizeGuestSite(
+    policy: HostAccessPolicy,
+    site: { workspaceId: string; siteId: string },
+    request: { method?: string; websocket?: boolean },
+): boolean {
+    return !!deps && guestMayUseSite(policy, deps.data, site, request);
+}
+
 async function handle(
     req: http.IncomingMessage,
     res: http.ServerResponse,
@@ -349,6 +406,7 @@ async function handle(
     if (deps.siteProxy && pathname.startsWith(SITE_PROXY_PREFIX)) {
         await handleSiteProxy(req, res, deps.siteProxy, {
             proxyOrigin: proxyOriginForRequest(req, boundDnsName),
+            authorizeGuest: authorizeGuestSite,
         });
         return;
     }
@@ -415,6 +473,13 @@ function attachWebSocket(srv: http.Server | https.Server): void {
     // Let the bus personalise control:changed — each client is told whether IT is
     // driving, which is a different answer per recipient.
     setEventSocketPrincipal((ws) => peerByEventSocket.get(ws)?.id ?? null);
+    // A GUEST socket receives only pushes about what its grant reaches; the owner's
+    // devices receive everything, as before.
+    setEventSocketFilter((ws, type, payload) => {
+        const policy = guestPolicyByEventSocket.get(ws);
+        if (!policy) return payload;
+        return deps ? guestEventPayload(policy, deps.data, type, payload) : undefined;
+    });
 
     srv.on('upgrade', (req, socket, head) => {
         const url = new URL(req.url ?? '/', `http://${boundIp ?? '127.0.0.1'}`);
@@ -426,7 +491,10 @@ function attachWebSocket(srv: http.Server | https.Server): void {
         // accepting a Bearer that the shared `?token=` gate below can't, so it
         // must branch FIRST. Only when wired.
         if (deps?.siteProxy && pathname.startsWith(SITE_PROXY_PREFIX)) {
-            void handleSiteProxyUpgrade(req, socket, head, deps.siteProxy, { originAllowed });
+            void handleSiteProxyUpgrade(req, socket, head, deps.siteProxy, {
+                originAllowed,
+                authorizeGuest: authorizeGuestSite,
+            });
             return;
         }
 
@@ -444,8 +512,15 @@ function attachWebSocket(srv: http.Server | https.Server): void {
             // The dashboard socket IS the user's presence: opening it puts them on
             // the connected-users list (so others can hand them the baton), closing
             // it takes them off and frees the baton if they were driving.
-            const principal = sessionPrincipal(validateSession(token)!);
+            const session = validateSession(token)!;
+            const principal = sessionPrincipal(session);
             socketServer.handleUpgrade(req, socket, head, (ws) => {
+                // Registered BEFORE the socket joins the set, so no push can reach a
+                // guest socket unfiltered.
+                if (session.access) {
+                    guestPolicyByEventSocket.set(ws, session.access);
+                    trackGuestSocket(session.token, ws);
+                }
                 eventSockets.add(ws);
                 peerByEventSocket.set(ws, {
                     ip,
@@ -458,6 +533,7 @@ function attachWebSocket(srv: http.Server | https.Server): void {
                 const drop = () => {
                     eventSockets.delete(ws);
                     peerByEventSocket.delete(ws);
+                    guestPolicyByEventSocket.delete(ws);
                     // Only release presence once this user's LAST socket is gone —
                     // a second tab/window shouldn't drop them off the roster.
                     const stillHere = [...peerByEventSocket.values()].some(
@@ -486,6 +562,15 @@ function attachWebSocket(srv: http.Server | https.Server): void {
                 socket.destroy();
                 return;
             }
+            // A GUEST attaches only to a terminal in a workspace its grant reaches —
+            // judged on the terminal's own workspace, never on a tag the client sent.
+            // Outside it, the terminal does not exist.
+            const guestPolicy = validateSession(token)?.access;
+            if (guestPolicy && !guestMayAttachTerminal(guestPolicy, deps.data, terminalId)) {
+                socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
+                socket.destroy();
+                return;
+            }
             // `client=desktop` marks a remote GENIE WINDOW (as opposed to the phone
             // web client). A desktop window is a full-size driver whose viewport IS
             // the terminal, so it sizes the pty authoritatively; a phone is a viewer
@@ -493,6 +578,7 @@ function attachWebSocket(srv: http.Server | https.Server): void {
             // phone-safe behavior.
             const isDesktopClient = url.searchParams.get('client') === 'desktop';
             socketServer.handleUpgrade(req, socket, head, (ws) => {
+                if (guestPolicy) trackGuestSocket(token!, ws);
                 attachTerminalSocketAndDrive(ws, terminalId, token!, isDesktopClient);
             });
             return;
@@ -572,6 +658,9 @@ function attachTerminalSocketAndDrive(
                 name: principal.name,
             });
         } else if (msg.type === 'resize') {
+            // The pty is shared with everyone watching it; a read-only guest's
+            // viewport does not get to reflow it for the people driving.
+            if (session.access?.capability === 'readonly') return;
             const cols = Number(msg.cols);
             const rows = Number(msg.rows);
             if (isDesktopClient) {
