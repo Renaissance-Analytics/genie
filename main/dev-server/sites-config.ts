@@ -177,7 +177,9 @@ export interface DevSiteConfig {
  *     `index.html` fallback so client-side routes resolve;
  *   - `php`    — serve `public/` with a FastCGI PHP worker (the nginx/Valet model);
  *   - `octane` — start the Laravel app under Octane on `server` (genie#668). Not
- *     Caddy at all: Octane's server is the web server, so there is no `root`.
+ *     Caddy at all: Octane's server is the web server, so there is no `root`;
+ *   - `frankenphp` — serve `public/` with FrankenPHP (genie#668): Caddy with PHP
+ *     compiled in, one process, no FastCGI worker. Runs the PHP it embeds.
  * Absent ⇒ the host-native site runs the repo's OWN dev server, reverse-proxied
  * (the config-less path). See `serve-config.ts`.
  *
@@ -189,7 +191,8 @@ export interface DevSiteConfig {
 export type HostServeConfig =
     | { mode: 'static'; root: string; spa?: boolean }
     | { mode: 'php'; root: string; version?: string }
-    | { mode: 'octane'; server: OctaneServer; version?: string };
+    | { mode: 'octane'; server: OctaneServer; version?: string }
+    | { mode: 'frankenphp'; root: string };
 
 /** A workspace's dev sites, keyed by {@link devSiteIdFor}. */
 export type DevSites = Record<string, DevSiteConfig>;
@@ -386,6 +389,9 @@ function cleanHostServe(hs: unknown): HostServeConfig | null {
         const version = cleanEngineVersion(candidate.version);
         return { mode: 'php', root, ...(version ? { version } : {}) };
     }
+    // No version: FrankenPHP runs the PHP it embeds, and the repo's composer.json
+    // is what is checked against it at start (genie#668).
+    if (candidate.mode === 'frankenphp') return { mode: 'frankenphp', root };
     return null;
 }
 
@@ -663,7 +669,9 @@ export function siteEngineUse(site: {
     hostServe?: HostServeConfig;
 }): { genName: string; tool: LanguageTool; version?: string } | null {
     if (site.hostServe) {
-        if (site.hostServe.mode === 'static') return null;
+        // A static folder runs no engine, and FrankenPHP runs the PHP it EMBEDS —
+        // neither moves when the machine's PHP default changes.
+        if (site.hostServe.mode === 'static' || site.hostServe.mode === 'frankenphp') return null;
         return {
             genName: site.genName,
             tool: 'php',

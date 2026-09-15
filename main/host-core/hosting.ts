@@ -39,7 +39,7 @@ import { createServiceEnvSync } from '../dev-server/services/env-sync';
 import { applyEnvBlock } from '../env-store';
 import { createHostProcessRun } from '../dev-server/host-process-run';
 import { createEngineMismatchNote } from '../dev-server/host-engine-probe';
-import { createSiteEngineResolver } from '../dev-server/toolchain-manager';
+import { createFrankenphpResolver, createSiteEngineResolver } from '../dev-server/toolchain-manager';
 import { initDevLifecycle } from '../dev-server/lifecycle';
 import type { DevServerLifecycle, DevServerLifecycleDeps } from '../dev-server/lifecycle';
 import { registerDevSiteTools } from '../mcp/dev-site-tools';
@@ -341,6 +341,15 @@ export function buildHostingDeps(ports: HostingPorts): HostingDeps {
         // PATH lookup that produced genie#206 — and a host with no stored default
         // still resolves, to the newest managed install.
         resolveEngine: createSiteEngineResolver(ports.readToolchainDefaults ?? (() => undefined)),
+        // FrankenPHP for a `hostServe: frankenphp` site (genie#668), downloaded into
+        // the toolchain the first time one needs it. The deps are only used to
+        // install the Visual C++ runtime on Windows — a direct vendor install that
+        // reads no defaults and writes none, so a site start never changes them.
+        resolveFrankenphp: createFrankenphpResolver({
+            readDefaults: ports.readToolchainDefaults ?? (() => undefined),
+            writeDefaults: () => {},
+            listSiteUsage: () => [],
+        }),
         // Engine-version validation (goal item 4, interim): warn at a host-native
         // start when the repo declares a php/node/go/python version the host runtime
         // doesn't match. Composed from the repo's declared version + a host probe.

@@ -535,3 +535,32 @@ describe('hostServe octane (genie#668)', () => {
         expect(db.setWorkspaceDevSite).not.toHaveBeenCalled();
     });
 });
+
+describe('hostServe frankenphp (genie#668)', () => {
+    it('CREATES a FrankenPHP site with its document root, host-native, with no dev command', async () => {
+        const res = await runManageSite(WS, {
+            action: 'create',
+            name: 'shop',
+            repo: 'app',
+            hostServe: { mode: 'frankenphp', root: 'public' },
+        });
+        expect(res.ok).toBe(true);
+        const stored = store.sites[devSiteIdFor('acme', 'shop')];
+        expect(stored?.hostServe).toEqual({ mode: 'frankenphp', root: 'public' });
+        expect(stored?.runMode).toBe('host');
+        expect(stored?.command).toBeUndefined();
+    });
+
+    it('UPDATES a php site onto FrankenPHP', async () => {
+        const res = await runManageSite(WS, {
+            action: 'update',
+            id: SITE_ID,
+            hostServe: { mode: 'frankenphp', root: 'public' },
+        });
+        expect(res.ok).toBe(true);
+        expect(db.setWorkspaceDevSite).toHaveBeenCalledWith(
+            'acme',
+            expect.objectContaining({ hostServe: { mode: 'frankenphp', root: 'public' } }),
+        );
+    });
+});

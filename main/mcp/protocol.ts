@@ -881,14 +881,15 @@ export interface ProvisionWorkspacesResult {
 export type DevSiteHostServe =
     | { mode: 'static'; root: string; spa?: boolean }
     | { mode: 'php'; root: string; version?: string }
-    | { mode: 'octane'; server: 'frankenphp' | 'roadrunner' | 'swoole'; version?: string };
+    | { mode: 'octane'; server: 'frankenphp' | 'roadrunner' | 'swoole'; version?: string }
+    | { mode: 'frankenphp'; root: string };
 
 /**
  * A serve mode as a CALLER sends it — loose, because it arrives as JSON. The host
  * narrows it to {@link DevSiteHostServe} and refuses what it cannot narrow.
  */
 export interface ManageSiteHostServe {
-    mode: 'static' | 'php' | 'octane';
+    mode: 'static' | 'php' | 'octane' | 'frankenphp';
     root?: string;
     spa?: boolean;
     version?: string;
@@ -2433,9 +2434,9 @@ const MANAGE_SITE_TOOL = {
                 properties: {
                     mode: {
                         type: 'string',
-                        enum: ['static', 'php', 'octane'],
+                        enum: ['static', 'php', 'frankenphp', 'octane'],
                         description:
-                            '`static` serves a built directory (SPA-aware); `php` serves `public/` via a FastCGI worker; `octane` starts a Laravel app under Laravel Octane on `server` (needs `laravel/octane` in the app) — no `root`.',
+                            '`static` serves a built directory (SPA-aware); `php` serves `public/` via a FastCGI worker on the PHP the repo\'s composer.json requires; `frankenphp` serves `public/` with FrankenPHP — one process, no FastCGI worker — on the PHP it embeds (8.5), refused for a repo whose composer.json excludes that PHP; `octane` starts a Laravel app under Laravel Octane on `server` (needs `laravel/octane` in the app) — no `root`.',
                     },
                     server: {
                         type: 'string',
@@ -2446,7 +2447,7 @@ const MANAGE_SITE_TOOL = {
                     root: {
                         type: 'string',
                         description:
-                            'static/php (required for those): the repo-RELATIVE DOCUMENT ROOT — served exactly as given. A built front end (`dist`, `dashboard/dist`) for static; for php the web root, which for Laravel and most PHP apps is `public/` and NOT the app root — pointing it at the app root would publish `.env` and `.git`.',
+                            'static/php/frankenphp (required for those): the repo-RELATIVE DOCUMENT ROOT — served exactly as given. A built front end (`dist`, `dashboard/dist`) for static; for php the web root, which for Laravel and most PHP apps is `public/` and NOT the app root — pointing it at the app root would publish `.env` and `.git`.',
                     },
                     spa: {
                         type: 'boolean',

@@ -23,6 +23,13 @@ import {
 } from './serve-config';
 import { octaneServeCommand, OCTANE_SERVE_ENV } from './octane-serve';
 import { composerPhpRequirement, type ComposerPhp } from './composer-php';
+import {
+    FRANKENPHP_PHP_VERSION,
+    frankenphpCaddyfile,
+    frankenphpRefusal,
+    frankenphpRunArgv,
+} from './frankenphp';
+import type { FrankenphpResolution } from './frankenphp-install';
 import type { HostEnvReport } from './services/service-manager';
 import {
     hostBrowserNames as selectHostBrowserNames,
@@ -451,6 +458,12 @@ export interface DevSiteManagerDeps {
      * provide". Default: real fs.
      */
     readComposerJson?: (cwd: string) => unknown;
+    /**
+     * Put the pinned FrankenPHP on this machine (downloading it the first time)
+     * and say where it is and which PHP it embeds (genie#668). Absent ⇒ a
+     * `hostServe: frankenphp` site fails with a clear "not available" status.
+     */
+    resolveFrankenphp?: () => Promise<FrankenphpResolution>;
     /**
      * Run a HOST-NATIVE site's dev server as a real HOST process (story #238).
      * Absent ⇒ a `runMode: 'host'` site fails with a clear "not available" status
@@ -1650,6 +1663,12 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
      */
     function phpEngineAsk(bin: string, cwd: string, pinned: string | undefined) {
         if (pinned) return { tool: 'php' as const, bin, version: pinned };
+        const requires = repoPhpRequirement(cwd);
+        return { tool: 'php' as const, bin, ...(requires ? { requires } : {}) };
+    }
+
+    /** What the repo's own composer.json requires of PHP, or null when it says nothing. */
+    function repoPhpRequirement(cwd: string): ComposerPhp | null {
         let composer: unknown = null;
         try {
             composer = deps.readComposerJson
@@ -1658,8 +1677,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         } catch {
             composer = null;
         }
-        const requires = composerPhpRequirement(composer);
-        return { tool: 'php' as const, bin, ...(requires ? { requires } : {}) };
+        return composerPhpRequirement(composer);
     }
 
     async function planHostServe(
@@ -1681,6 +1699,41 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
           }
         | { ok: false; error: string }
     > {
+        if (hostServe.mode === 'frankenphp') {
+            // FRANKENPHP (genie#668): Caddy with PHP compiled in — ONE process, no
+            // FastCGI worker to lose. It is its own web server, so none of the
+            // bundled-Caddy machinery below applies.
+            const root = resolveServeRoot(cwd, hostServe.root);
+            if (!root) return { ok: false, error: `Invalid serve root ${JSON.stringify(hostServe.root)}.` };
+            if (!deps.resolveFrankenphp || !deps.writeServeConfig || !deps.prepareUploadTmpDir) {
+                return { ok: false, error: 'FrankenPHP serving is not available in this build.' };
+            }
+            // The repo decides its PHP. Checked against the PHP the pinned release
+            // embeds BEFORE anything is fetched — nobody should download 160 MB to
+            // learn their repo cannot run on it — and again against what the
+            // installed binary actually reports.
+            const requires = repoPhpRequirement(cwd);
+            const early = frankenphpRefusal(requires, FRANKENPHP_PHP_VERSION);
+            if (early) return { ok: false, error: early };
+            let uploadTmpDir: string;
+            try {
+                uploadTmpDir = deps.prepareUploadTmpDir(siteId);
+            } catch (e) {
+                return {
+                    ok: false,
+                    error: `Could not create the PHP upload directory for this site, so every file upload would fail before the app saw it: ${messageOf(e)}`,
+                };
+            }
+            const frankenphp = await deps.resolveFrankenphp();
+            if (!frankenphp.ok) return { ok: false, error: frankenphp.error };
+            const late = frankenphpRefusal(requires, frankenphp.phpVersion);
+            if (late) return { ok: false, error: late };
+            const configPath = deps.writeServeConfig(
+                siteId,
+                frankenphpCaddyfile({ sitePort, root, uploadTmpDir }),
+            );
+            return { ok: true, command: frankenphpRunArgv(frankenphp.exe, configPath) };
+        }
         if (hostServe.mode === 'octane') {
             // OCTANE (genie#668): the Octane server IS the web server, so none of
             // the Caddy machinery below applies — a build with no bundled Caddy

@@ -282,6 +282,7 @@ function narrowHostServe(hs: ManageSiteHostServe | null | undefined): HostServeC
             ? { mode: 'octane', server: hs.server, ...(hs.version ? { version: hs.version } : {}) }
             : undefined;
     }
+    if (hs.mode === 'frankenphp') return { mode: 'frankenphp', root: hs.root ?? '' };
     return hs.mode === 'php'
         ? // The pin rides through as given; `sanitizeDevSitePatch` is what decides a
           // string is a version, so one validator owns that rule (genie#207).
