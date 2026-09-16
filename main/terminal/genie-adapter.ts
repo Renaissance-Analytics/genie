@@ -32,6 +32,7 @@ import {
     TERMINAL_RECOVER_CHANNEL,
     TERMINAL_RECOVERY_STATUS_CHANNEL,
 } from './recovery-channels';
+import { reconcileProcesses } from './process-supervisor';
 
 /**
  * Genie adapter — the COMPOSITION ROOT for the terminal subsystem.
@@ -304,6 +305,10 @@ export function buildHostRecoveryDeps(
         // Tell the renderer to remount these panes; the remount's terminal:create
         // rejoins the fresh backend and replays scrollback (master.tsx enableSpec).
         reattach: (ids) => broadcastToWindows(TERMINAL_RECOVER_CHANNEL, { ids }),
+        // Processes are headless — no pane, so no remount broadcast can reach
+        // them. The supervisor asks the fresh backend who is actually alive
+        // (genie#655).
+        reattachProcesses: () => reconcileProcesses(),
         emitStatus: (state) =>
             broadcastToWindows(TERMINAL_RECOVERY_STATUS_CHANNEL, { state }),
     };

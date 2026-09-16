@@ -310,3 +310,41 @@ describe('manageProcess restart — kill() returning false is not a restart', ()
         expect(getProcessStatuses()['p-live']).toBe('running');
     });
 });
+
+/**
+ * `logs` — the evidence of WHY a process stopped (genie#655).
+ *
+ * The owner, on three queue workers that were gone while Genie reported them
+ * running: "**When** the workers exited, or why. `manageProcess` has no log
+ * action, so there was nothing to read." The supervisor has kept the tail of
+ * every process's output all along; nothing agent-facing could reach it.
+ */
+describe('manageProcess logs', () => {
+    it('hands back the output the process died printing', async () => {
+        proc('p-log', 'php artisan queue:work');
+        nextSpawnDiesWith = 255;
+        nextSpawnSays = 'PHP Fatal error: Allowed memory size exhausted\n';
+        await manageProcessForMcp('term-1', { action: 'start', id: 'p-log' }, SETTLE);
+
+        const res = await manageProcessForMcp('term-1', { action: 'logs', id: 'p-log' });
+
+        expect(res.ok).toBe(true);
+        expect(res.log).toMatch(/Allowed memory size exhausted/);
+        // The command it was launched with is in there too — a wrong cwd or a
+        // missing binary reads the same as a crash without it.
+        expect(res.log).toMatch(/php artisan queue:work/);
+    });
+
+    it('refuses an id that is not a process in this workspace, like every other action', async () => {
+        const res = await manageProcessForMcp('term-1', { action: 'logs', id: 'nope' });
+        expect(res.ok).toBe(false);
+        expect(res.error).toMatch(/No process/);
+    });
+
+    it('says so plainly when a process has printed nothing, rather than returning empty', async () => {
+        proc('p-quiet', 'sleep 100');
+        const res = await manageProcessForMcp('term-1', { action: 'logs', id: 'p-quiet' });
+        expect(res.ok).toBe(true);
+        expect(res.log).toMatch(/nothing|no output/i);
+    });
+});

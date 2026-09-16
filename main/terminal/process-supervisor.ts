@@ -628,6 +628,100 @@ export function startAutostartProcesses(onlyWorkspaceId?: string): void {
     }
 }
 
+/**
+ * Make the status map agree with the pty BACKEND (genie#655).
+ *
+ * The owner: "`manageProcess list` reports three supervised processes as
+ * `status: \"running\"` … but none of them exist on the host", with queued jobs
+ * sitting unclaimed and no signal anywhere. Status is written at spawn and at
+ * the pty's EXIT EVENT, so a process whose pty disappears WITHOUT one is
+ * remembered as running for as long as Genie stays up — and a pty-host loss
+ * does exactly that to every process at once, because recovery re-attaches the
+ * `terminal` specs a window can remount and a headless process has no pane.
+ *
+ * So this asks the backend instead of remembering, in both directions:
+ *
+ *   - a process the map calls `running` with NO pty is routed through
+ *     {@link onProcessPtyExit} as a crash, so `restart_on_exit`, the backoff and
+ *     the user's pause all still decide what happens next — one exit path, not a
+ *     second opinion;
+ *   - a process with a LIVE pty that the map does not know is adopted as
+ *     running, which is the same lie the other way up: a launch that reattached
+ *     to a surviving host skips the spawn, so nothing ever wrote a status and
+ *     the list reported `stopped` for a process that is up.
+ *
+ * Cheap and side-effect-free when nothing has changed, so it is safe to run on a
+ * heartbeat as well as after a host loss.
+ */
+export function reconcileProcesses(): void {
+    for (const spec of listTerminalSpecs()) {
+        if (spec.type !== 'process' || !spec.meta?.command) continue;
+        // A scheduled task is one-shot: process-scheduler.ts owns when it runs
+        // and what its last run says, and between runs "no pty" is correct.
+        if (isScheduled(spec)) continue;
+        // A sleeping workspace's processes are meant to be down (genie#672), and
+        // nothing may start them until it is woken.
+        if (inHibernatingWorkspace(spec)) continue;
+
+        const st = procs.get(spec.id);
+        if (isProcessLive(spec.id)) {
+            // A kill in flight has no pty for a moment; that is not a status.
+            if (st?.restartRequested || st?.userStopped) continue;
+            if (st?.status !== 'running') setStatus(spec.id, 'running');
+            continue;
+        }
+        // Not live and never started here: there is nothing to correct. Bringing
+        // it up is startAutostartProcesses' decision, not a sweep's.
+        if (!st || st.status !== 'running') continue;
+        recordProcessOutput(
+            spec.id,
+            '\n[genie] this process is no longer running, and Genie never saw it exit — ' +
+                'the pty backend has no process for it (a pty-host loss does this to every ' +
+                'process at once). Treating it as a crash.\n',
+        );
+        // `-1`: an exit nobody observed is not a clean one, and saying 0 would
+        // send a crashed service down the "exited normally" path.
+        onProcessPtyExit(spec.id, { exitCode: -1 });
+    }
+}
+
+/** How often the sweep below runs. Long enough to be free, short enough that a
+ *  status nobody asked about is never stale for long. */
+export const PROCESS_RECONCILE_MS = 30_000;
+
+/** The running heartbeat, so a second call replaces rather than stacks. */
+let reconcileTimer: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Run {@link reconcileProcesses} on a heartbeat, and return the stop function.
+ *
+ * The reported failure had no observer: "queued work sits unclaimed with no
+ * signal anywhere that the workers are gone". Nobody opens the Processes panel
+ * to find out that supervision has stopped supervising — so the check cannot
+ * wait to be asked. Idempotent: calling it again replaces the timer.
+ */
+export function startProcessReconcile(
+    intervalMs: number = PROCESS_RECONCILE_MS,
+): () => void {
+    stopProcessReconcile();
+    const timer = setInterval(() => {
+        try {
+            reconcileProcesses();
+        } catch {
+            /* best-effort — a sweep that throws must not kill the heartbeat */
+        }
+    }, intervalMs);
+    // Never hold the process open for a sweep.
+    if (typeof timer.unref === 'function') timer.unref();
+    reconcileTimer = timer;
+    return stopProcessReconcile;
+}
+
+export function stopProcessReconcile(): void {
+    if (reconcileTimer) clearInterval(reconcileTimer);
+    reconcileTimer = null;
+}
+
 /** Forget a deleted process (called when its spec is removed). */
 export function forgetProcess(specId: string): void {
     const st = procs.get(specId);
