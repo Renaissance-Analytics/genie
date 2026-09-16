@@ -42,6 +42,7 @@ const body = () => page.locator('.ask-body');
 const content = () => page.locator('.ask-q-content').first();
 const chip = () => page.locator('.ask-file-chip').first();
 const pane = () => page.locator('.ask-file-pane');
+const submit = () => page.getByRole('button', { name: 'Submit' });
 
 /** Does this element's own box overflow what it shows? */
 async function overflows(locator: ReturnType<typeof page.locator>): Promise<boolean> {
@@ -109,10 +110,26 @@ test.afterAll(async () => {
     await app?.close();
 });
 
-test('a long question grows, and only the body scrolls', async () => {
+test('a long question scrolls without pushing Submit out of the viewport', async () => {
     // The fixture question is long on purpose. If this is false the rest of the
     // test proves nothing — a question that fits cannot demonstrate growth.
     expect(await overflows(body())).toBe(true);
+
+    // The primary action must remain reachable even when the question is taller
+    // than the fixed-height window. CSS visibility alone is not enough: the
+    // regression leaves Submit rendered, but below the clipped viewport.
+    await expect(submit()).toBeVisible();
+    await expect(submit()).toBeInViewport();
+
+    // Overflow must belong to a body that can actually move, rather than content
+    // extending through an unconstrained box while the frame clips its footer.
+    const bodyScrollTop = await body().evaluate((el) => {
+        el.scrollTop = el.scrollHeight;
+        const moved = el.scrollTop;
+        el.scrollTop = 0;
+        return moved;
+    });
+    expect(bodyScrollTop).toBeGreaterThan(0);
 
     // The question body is NOT clipped: it is as tall as its text, and the one
     // scrollbar in the column belongs to `.ask-body` around it. Before #272 this
