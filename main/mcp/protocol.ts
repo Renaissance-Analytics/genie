@@ -10,7 +10,7 @@ import { guideTopics, guideIndex, guideFor } from './guide-topics';
  * terminal is known from the endpoint. ctx carries that resolved id.
  */
 
-import { GENIE_MCP_GUIDE, GENIE_PROTOCOL_BRIEF } from './guide';
+import { GENIE_MCP_GUIDE, genieProtocolBrief } from './guide';
 import { agentTuis } from '../agents/registry';
 import { agentUpgradeGuide } from '../agents/upgrade-guide';
 import type { UpgradeCaller } from '../agents/upgrade-guide';
@@ -4114,7 +4114,10 @@ export async function handleMcpMessage(
                 // what stops work stalling, and where to get the rest. The full
                 // manual is `genieGuide`, on demand, so an agent that never
                 // needs it never pays for it.
-                instructions: GENIE_PROTOCOL_BRIEF,
+                // The protocol FOR THIS WORKSTATION's OS (owner) — Genie is installed
+                // on one machine, and an agent needs that machine's conventions, not a
+                // menu of every platform's.
+                instructions: genieProtocolBrief(),
             });
 
         case 'notifications/initialized':

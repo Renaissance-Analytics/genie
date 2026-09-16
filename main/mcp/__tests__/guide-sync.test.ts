@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { GENIE_AGENTS_BRIEF, GENIE_MCP_GUIDE } from '../guide';
+import { GENIE_AGENTS_BRIEF, GENIE_MCP_GUIDE, genieProtocolBrief } from '../guide';
 import { agentRef, isAgentTui } from '../../agents/identity';
 import { planHandoff } from '../../agents/handoff';
 import { agentBootPrompt } from '../../agents/boot-prompt';
@@ -530,6 +530,18 @@ describe('the protocol is stated once', () => {
         }
     });
 
+    it('tells every agent to write paths the way THIS workstation writes them', async () => {
+        // Reported friction: an agent handed the user a path in its own shell's
+        // dialect, on a machine that does not speak it. A path a person cannot
+        // paste is a stalled turn, and the agent cannot see that it stalled — so
+        // this belongs in the protocol every agent gets at connect, not in a
+        // reference nobody reads until they already know to ask.
+        const res = await handle({ jsonrpc: '2.0', id: 1, method: 'initialize' });
+        const instructions = (res?.result as { instructions: string }).instructions;
+        expect(instructions).toMatch(/workstation/i);
+        expect(instructions).toMatch(/path/i);
+    });
+
     it('keeps the full manual reachable on demand', () => {
         expect(GENIE_MCP_GUIDE.length).toBeGreaterThan(20_000);
     });
@@ -912,5 +924,67 @@ describe('the protocol states the handoff rule (genie#614)', () => {
         const stale = /system[- ]workspace[^.]{0,40}no project folder/i;
         expect(`${description}\n${handoff}`).not.toMatch(stale);
         expect(imDoneTopic()).not.toMatch(stale);
+    });
+});
+
+/**
+ * THREE PROTOCOLS, AND THE WORKSTATION'S OS PICKS ONE (owner).
+ *
+ * A protocol that lists every OS's conventions makes each agent choose, which is
+ * the guess that produced the friction in the first place — an agent handing the
+ * user a path their machine does not speak. Genie knows which machine it is
+ * installed on, so it serves the protocol FOR that machine: one OS named, one
+ * path shape shown, and the shell caveat that is true there.
+ *
+ * These pin the three apart. A shared body is fine — it is one source of truth,
+ * which is why the drift these files exist to catch cannot happen — but what
+ * reaches an agent must be that machine's protocol and no other's.
+ */
+describe('the protocol is written for the OS Genie is installed on', () => {
+    const win = genieProtocolBrief('win32');
+    const mac = genieProtocolBrief('darwin');
+    const linux = genieProtocolBrief('linux');
+
+    it('serves a DIFFERENT protocol per platform', () => {
+        expect(new Set([win, mac, linux]).size).toBe(3);
+    });
+
+    it('names Windows, shows a Windows path, and names no other OS', () => {
+        expect(win).toContain('Windows');
+        expect(win).toContain('C:\\');
+        expect(win).not.toContain('macOS');
+        expect(win).not.toContain('Linux');
+    });
+
+    it('names macOS, shows a POSIX path, and names no other OS', () => {
+        expect(mac).toContain('macOS');
+        expect(mac).toContain('/Users/');
+        expect(mac).not.toContain('Windows');
+        expect(mac).not.toContain('C:\\');
+    });
+
+    it('names Linux, shows a POSIX path, and names no other OS', () => {
+        expect(linux).toContain('Linux');
+        expect(linux).toContain('/home/');
+        expect(linux).not.toContain('Windows');
+        expect(linux).not.toContain('C:\\');
+    });
+
+    it('keeps every protocol saying the same NON-OS things', () => {
+        // Positive control on the shared body: tailoring must not fork the rules.
+        // If one platform's protocol loses `imDone`, that is drift, not tailoring.
+        for (const brief of [win, mac, linux]) {
+            for (const must of ['imDone', 'ForceTheQuestion', 'connectToGenie', 'genieGuide', 'agentinbox']) {
+                expect(brief).toContain(must);
+            }
+        }
+    });
+
+    it('hands a connecting agent THIS machine’s protocol', async () => {
+        // The wiring, which can be wrong while all three texts are right.
+        const ctx = makeCtx();
+        const res = await handleMcpMessage({ jsonrpc: '2.0', id: 1, method: 'initialize' }, ctx);
+        const instructions = (res?.result as { instructions: string }).instructions;
+        expect(instructions).toBe(genieProtocolBrief(process.platform));
     });
 });

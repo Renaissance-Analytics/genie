@@ -1058,7 +1058,64 @@ multi-project workspace, an agent that waits silently is an agent that's stuck.
  * Keep it that way. Anything that is reference rather than protocol belongs in
  * `GENIE_MCP_GUIDE`; a guide-sync test holds this under half its size.
  */
-export const GENIE_PROTOCOL_BRIEF = `# Genie
+/**
+ * THE WORKSTATION'S OWN DIALECT — what differs between the three protocols.
+ *
+ * Genie is installed on ONE machine, so an agent connecting to it needs that
+ * machine's conventions, not a menu of every OS's. A protocol that lists all
+ * three makes each agent pick, and picking is what produced the reported
+ * friction: a path handed to the user that their machine does not speak.
+ */
+function workstationDialect(platform: NodeJS.Platform): { os: string; paths: string } {
+    if (platform === 'win32') {
+        return {
+            os: 'Windows',
+            paths:
+                '**This workstation runs Windows, so write paths the way Windows does.** A\n' +
+                'path you hand the user, put in a command for them to run, or write into a file\n' +
+                'looks like `C:\\Projects\\thing` — drive letter, backslashes. Your own terminal\n' +
+                'here is often Git Bash, so a path for a command YOU run may need\n' +
+                '`/c/Projects/thing`: that dialect is your shell\'s, never the person\'s. A path in\n' +
+                'the wrong one is a command they cannot run, and you will not see them stall over\n' +
+                'it. `connectToGenie` reports this workspace\'s real paths — quote those rather\n' +
+                'than translating by hand.',
+        };
+    }
+    if (platform === 'darwin') {
+        return {
+            os: 'macOS',
+            paths:
+                '**This workstation runs macOS, so write paths the way macOS does.** A path you\n' +
+                'hand the user, put in a command for them to run, or write into a file is POSIX —\n' +
+                '`/Users/you/Projects/thing`, forward slashes, `~` for home. Drive letters and\n' +
+                'backslashes mean nothing here, and a path in a shape this machine does not use is\n' +
+                'a command they cannot run, which you will not see them stall over.\n' +
+                '`connectToGenie` reports this workspace\'s real paths — quote those rather than\n' +
+                'translating by hand.',
+        };
+    }
+    return {
+        os: 'Linux',
+        paths:
+            '**This workstation runs Linux, so write paths the way Linux does.** A path you\n' +
+            'hand the user, put in a command for them to run, or write into a file is POSIX —\n' +
+            '`/home/you/Projects/thing`, forward slashes, `~` for home. Drive letters and\n' +
+            'backslashes mean nothing here, and a path in a shape this machine does not use is\n' +
+            'a command they cannot run, which you will not see them stall over.\n' +
+            '`connectToGenie` reports this workspace\'s real paths — quote those rather than\n' +
+            'translating by hand.',
+    };
+}
+
+/**
+ * The protocol FOR THIS MACHINE (owner: "genie should use three different
+ * protocols and whatever os the workstation is determines which protocol to
+ * use"). One shared body — the rules that are the same everywhere, so they
+ * cannot drift apart — with the workstation's own dialect written into it.
+ */
+export function genieProtocolBrief(platform: NodeJS.Platform = process.platform): string {
+    const dialect = workstationDialect(platform);
+    return `# Genie
 
 You are running inside **Genie** — a desktop UX hosting many projects at once,
 each with its own terminals, editors and background processes. You are **one of
@@ -1121,6 +1178,8 @@ Genie Apps, driving terminals and other agents, workspaces — is in
 the running Genie version first. Harness-specific setup (your on-finish hook)
 is there too, not here.
 
+${dialect.paths}
+
 **Engineering standard — NO BANDAIDS, EVER.** Fix the ROOT CAUSE, never paper
 over a symptom. Don't mask a vulnerable transitive dependency with an overrides
 pin when the real fix is updating the dependency that pulls it; don't swallow an
@@ -1129,6 +1188,7 @@ is a hidden bug, and it WILL resurface.
 
 **The rule:** any time you'd otherwise stop, print, and wait — reach for the
 matching tool instead.`;
+}
 
 /**
  * The AGENTS.md / CLAUDE.md block: a POINTER, never a third copy.
