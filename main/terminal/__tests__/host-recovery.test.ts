@@ -35,6 +35,7 @@ function deps(over: Partial<HostRecoveryDeps> = {}): {
         snapshotAffected: (ids) => { order.push(`snapshot:${ids.join(',')}`); },
         respawn: async () => { order.push('respawn'); return { host: true }; },
         reattach: (ids) => { order.push(`reattach:${ids.join(',')}`); },
+        reattachProcesses: () => { order.push('processes'); },
         emitStatus: (s) => { order.push(`status:${s}`); status.push(s); },
         ...over,
     };
@@ -55,6 +56,11 @@ describe('recoverFromHostLoss', () => {
             'status:recovering',
             'respawn',
             'reattach:t-1,t-2',
+            // The HEADLESS half (genie#655). `reattach` is a broadcast to the
+            // renderer, and a supervised process has no pane to remount — so
+            // without this step the queue workers that died with the host stay
+            // dead while the supervisor still reports them running.
+            'processes',
             'status:recovered',
         ]);
         expect(status).toEqual(['recovering', 'recovered']);

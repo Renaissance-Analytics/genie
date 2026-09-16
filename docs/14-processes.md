@@ -39,3 +39,31 @@ you'll see *"Nothing running — no processes or terminals across any workspace.
 > The Task Manager is a cross-workspace view over the same supervisor the
 > per-workspace Processes feature uses — stopping something here stops it
 > everywhere.
+
+## What "running" means
+
+A process's status is what Genie has **observed**, not what it intended. It is
+written when the process is spawned and when its pty exits — so anything that
+takes a process away *without* an exit (a pty-host loss takes every one of them
+at once) would leave it remembered as running, with its queue unclaimed and no
+signal anywhere.
+
+Genie therefore re-checks the processes it believes are running against the pty
+backend, every half minute and after any pty-host recovery. A process that is
+gone is treated as a crash: it is reported as such, a line saying so is written
+into its log, and — unless you stopped it, or turned its restart off — it is
+started again with the usual backoff. A process that is *alive* but that this
+Genie never started (a host that survived a restart) is adopted rather than
+reported stopped.
+
+## Reading why a process stopped
+
+Genie keeps the tail of every process's output. Hover a process in the
+Processes panel for its log, or ask for it from an agent:
+
+```
+manageProcess { action: "logs", id: "<id from list>" }
+```
+
+Read that before restarting anything — a crash says why in its last few lines,
+and "restart it and see" throws that evidence away.

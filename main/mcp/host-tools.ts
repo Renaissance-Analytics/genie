@@ -861,7 +861,8 @@ export async function manageProcessForMcp(
             case 'enable':
             case 'disable':
             case 'delete':
-            case 'run-now': {
+            case 'run-now':
+            case 'logs': {
                 // `id` is the field `list` reports and the schema's primary name;
                 // `processId` is the back-compat alias (issue #7). The MCP layer
                 // folds one into the other, but a DIRECT caller may set either, so
@@ -877,6 +878,21 @@ export async function manageProcessForMcp(
                         ok: false,
                         error: `No process "${id ?? ''}" in this workspace. Use action "list" to see ids.`,
                         processes: listFor(),
+                    };
+                }
+                if (req.action === 'logs') {
+                    // READ-ONLY, and ungated: reading why a service stopped is
+                    // not an action on it, and an agent that cannot read the
+                    // reason is the agent that restarts things blindly (#655).
+                    const log = getProcessLog(target.id);
+                    return {
+                        ok: true,
+                        processes: listFor(),
+                        affectedId: target.id,
+                        log: log.trim()
+                            ? log
+                            : `"${target.label}" has printed nothing since Genie last started it — ` +
+                              'there is no output to show. A process that has never run has no log at all.',
                     };
                 }
                 if (req.action === 'enable' || req.action === 'disable') {

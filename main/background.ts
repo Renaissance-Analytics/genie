@@ -228,6 +228,7 @@ import { listAllProcesses } from './terminal/process-list';
 import { getTerminalSize, recordTerminalSize } from './terminal/size-tracker';
 import {
     startAutostartProcesses,
+    startProcessReconcile,
     startProcess,
     stopProcess,
     restartProcess,
@@ -2248,6 +2249,12 @@ app.whenReady().then(async () => {
     // which is where the ordering seam is) and calls this afterwards as the
     // catch-all for anything configured that the roster did not carry.
     if (!drainRestorePending) startAutostartProcesses();
+    // Keep the supervisor's idea of what is running HONEST (genie#655). Status
+    // is written at spawn and at a pty's exit event, so anything that takes a
+    // process's pty without one — a pty-host loss most of all — leaves it
+    // remembered as running for as long as Genie stays up, with nothing
+    // claiming its queue. The sweep asks the backend instead of remembering.
+    startProcessReconcile();
     // Re-arm every approved SCHEDULED task (a process spec with meta.schedule).
     // This is what makes a schedule survive quit/crash/auto-update: the timers
     // died with the process, the specs did not, so each is armed forward from

@@ -1332,6 +1332,10 @@ export interface HostRecoveryDeps {
     /** Re-create each id on the fresh backend so the renderer replays its snapshot
      *  and binds input to a live pty again. Best-effort per id. */
     reattach(ids: string[]): void;
+    /** The HEADLESS half (genie#655): supervised processes died with the host and
+     *  have no pane to remount, so the supervisor re-derives their status from
+     *  the fresh backend and brings back the ones that should be running. */
+    reattachProcesses(): void;
     /** Surface the recovery state to the renderer (the banner). */
     emitStatus(state: 'recovering' | 'recovered' | 'degraded'): void;
 }
@@ -1385,6 +1389,13 @@ export async function recoverFromHostLoss(
             deps.reattach(ids);
         } catch {
             /* best-effort per the contract; one failed id can't sink the rest */
+        }
+        // AFTER the respawn, like the panes: a process started against the dead
+        // backend would be spawned into nothing.
+        try {
+            deps.reattachProcesses();
+        } catch {
+            /* best-effort — a failed sweep must not sink the terminals' recovery */
         }
         const outcome: 'recovered' | 'degraded' = host ? 'recovered' : 'degraded';
         try {
