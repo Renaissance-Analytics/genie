@@ -103,6 +103,14 @@ test('hibernating a workspace greys it, marks it with three z\'s, and really sto
 });
 
 test('the floor of a sleeping workspace says so, and is the way to wake it', async () => {
+    // POSITIVE CONTROL, and the reason it is first: the OTHER workspace still
+    // opens its panel while its neighbour sleeps — hibernating one workspace
+    // must not disturb the rest — and it proves this window mounts panels at
+    // all, so the "no panel" assertion below cannot pass on a dead window.
+    await railRow(seed.peerName).locator('.pname').click();
+    const peerPanel = page.locator('.tpanel').filter({ hasText: seed.peerTerminalLabel });
+    await expect(peerPanel).toBeVisible();
+
     await railRow(seed.workspaceName).locator('.pname').click();
 
     const floor = page.locator('.hibernated-floor');
@@ -111,12 +119,9 @@ test('the floor of a sleeping workspace says so, and is the way to wake it', asy
     // Its own panels are UNMOUNTED: a mounted one asks main for a pty as it
     // mounts, and in a sleeping workspace that is refused.
     await expect(page.locator('.tpanel').filter({ hasText: seed.terminalLabel })).toHaveCount(0);
-    // But only its own. Another workspace's panels stay mounted (hidden) behind
-    // this floor so their ptys survive the switch — hibernating one workspace
-    // must not disturb the rest.
-    await expect(
-        page.locator('.tpanel').filter({ hasText: seed.peerTerminalLabel }),
-    ).toHaveCount(1);
+    // The peer's stays mounted behind this floor (hidden, off-workspace) so its
+    // pty survives the switch.
+    await expect(peerPanel).toHaveCount(1);
 
     // The menu offers waking, and stops offering the things a sleeping workspace
     // cannot do.
@@ -131,4 +136,13 @@ test('the floor of a sleeping workspace says so, and is the way to wake it', asy
     });
     await expect(page.locator('.ws-zzz')).toHaveCount(0);
     await expect(floor).toHaveCount(0);
+
+    // Awake means its work comes back: the panel mounts again and its terminal
+    // is running, which is the whole point of waking rather than un-greying.
+    await expect(page.locator('.tpanel').filter({ hasText: seed.terminalLabel })).toBeVisible({
+        timeout: 30_000,
+    });
+    await expect
+        .poll(async () => await readLiveTerminals(app), { timeout: 30_000 })
+        .toContain(seed.terminalId);
 });
