@@ -435,9 +435,10 @@ describe('max_views clamps the restored panel set (#577)', () => {
     });
 
     it('breaks recency ties on the workspace panel order, so a reconnect restores the SAME panels', () => {
-        // `last_opened_at` is null on every spec here — the common case, since the
-        // renderer never calls `terminalSpec.touch`. The cap must still pick a
-        // stable set rather than whatever order the array happened to arrive in.
+        // `last_opened_at` is null on every spec here — a workspace whose panels
+        // have not been opened since main began stamping them (genie#585). The
+        // cap must still pick a stable set rather than whatever order the array
+        // happened to arrive in.
         const specs = [
             spec('third', 'A', { sort_order: 2 }),
             spec('first', 'A', { sort_order: 0 }),

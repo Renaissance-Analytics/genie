@@ -48,7 +48,6 @@ import {
     deleteTerminalSpec,
     getTerminalSpec,
     listTerminalSpecs,
-    touchTerminalSpec,
     reorderTerminalSpecs,
     updateTerminalSpec,
     TerminalSpecRow,
@@ -1985,10 +1984,6 @@ export function registerIpcHandlers(): void {
         return deleteTerminalSpec(id);
     });
     ipcMain.handle('terminal-spec:get', (_e, id: string) => getTerminalSpec(id));
-    ipcMain.handle('terminal-spec:touch', (_e, id: string) => {
-        touchTerminalSpec(id);
-        return { ok: true };
-    });
     // Grid drag-reorder — the full ordered spec-id list for one workspace.
     // Broadcast so any OTHER window showing the same workspace (a Stage window)
     // re-lists and picks up the new order instead of holding a stale one.

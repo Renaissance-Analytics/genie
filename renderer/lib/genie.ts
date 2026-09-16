@@ -4076,7 +4076,6 @@ export interface GenieApi {
         update: (id: string, patch: Partial<TerminalSpec>) => Promise<TerminalSpec | null>;
         remove: (id: string) => Promise<boolean>;
         get: (id: string) => Promise<TerminalSpec | null>;
-        touch: (id: string) => Promise<{ ok: boolean }>;
         /**
          * Persist the grid's drag-reorder. `ids` is the full ordered list of
          * spec ids for ONE workspace; each index becomes that spec's

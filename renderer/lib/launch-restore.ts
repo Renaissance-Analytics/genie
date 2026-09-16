@@ -30,12 +30,13 @@ function isGridPanel(spec: TerminalSpec): boolean {
 /**
  * Rank panels for the cap: MOST-RECENTLY-ACTIVE first.
  *
- * `last_opened_at` is the recency signal, but note it is only written by
- * `terminal-spec:touch`, which nothing in the renderer calls today — so in
- * practice most specs carry `null` and the rank falls through to the workspace's
- * own panel order (`sort_order`, what the grid draws, then id). That fallthrough
- * is the point, not an accident: the cap must pick the SAME panels on every
- * reconnect, and array arrival order is not stable enough to decide it.
+ * `last_opened_at` is the recency signal: main stamps it whenever a panel is
+ * opened — a window mounting a pane, or an agent/remote/mobile client opening
+ * one (genie#585). A spec that has not been opened since that shipped still
+ * carries `null` and falls through to the workspace's own panel order
+ * (`sort_order`, what the grid draws, then id). That fallthrough is the point,
+ * not an accident: the cap must pick the SAME panels on every reconnect, and
+ * array arrival order is not stable enough to decide it.
  */
 function comparePanelRank(a: TerminalSpec, b: TerminalSpec): number {
     if (a.last_opened_at !== b.last_opened_at) {

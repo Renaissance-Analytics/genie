@@ -2703,6 +2703,10 @@ export async function handleApi(
                 sendJson(res, 200, { ok: deleteTerminalSpec(String(d.id ?? '')) });
                 return true;
             }
+            // Kept although no client of THIS version calls it: the host stamps
+            // `last_opened_at` itself when a panel is opened (genie#585), but an
+            // older remote window still posts here and the write is still the
+            // right one. It is a client contract, not internal plumbing.
             if (pathname === '/api/desktop/terminal-spec/touch') {
                 touchTerminalSpec(String(d.id ?? ''));
                 sendJson(res, 200, { ok: true });

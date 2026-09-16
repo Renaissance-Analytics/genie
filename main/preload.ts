@@ -1175,7 +1175,6 @@ const api = {
             ipcRenderer.invoke('terminal-spec:update', id, patch),
         remove: (id: string) => ipcRenderer.invoke('terminal-spec:delete', id),
         get: (id: string) => ipcRenderer.invoke('terminal-spec:get', id),
-        touch: (id: string) => ipcRenderer.invoke('terminal-spec:touch', id),
         /** Persist the grid's drag-reorder: the full ordered spec-id list for
          *  one workspace (index → sort_order). */
         reorder: (ids: string[]) => ipcRenderer.invoke('terminal-spec:reorder', ids),
